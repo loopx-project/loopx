@@ -9,6 +9,7 @@ import subprocess
 import sys as _sys
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 # Keep the historical exports and caller patch points, but select the OS
@@ -43,6 +44,9 @@ if "loopx.extensions.process_runtime" in _sys.modules:
         globals()[_name] = getattr(_sys.modules["loopx.extensions.process_runtime"], _name)
 
 
+_RUNNING_CHECK_SECONDS = 1.0
+
+
 class GuardedHostBridge:
     """Keep at most one transient output frame while stdin is backpressured."""
 
@@ -54,6 +58,7 @@ class GuardedHostBridge:
         self._stop_reading = threading.Event()
         self.requested = self.cancelled = self.not_launched = False
         self.result: dict[str, Any] | None = None
+        self._next_running_check = 0.0
         self.reader = threading.Thread(target=self._read, name="loopx-host-bridge-reader", daemon=True)
         self.reader.start()
 
@@ -73,11 +78,22 @@ class GuardedHostBridge:
         finally:
             self._publish(None)
 
-    def next(self, *, deadline: float | None = None) -> dict[str, Any] | None:
-        try:
-            item = self.pending.get(timeout=None if deadline is None else max(0, deadline - time.monotonic()))
-        except queue.Empty:
-            raise TimeoutError("managed Host bridge launch deadline expired") from None
+    def next(self, *, deadline: float | None = None,
+             check_running: Callable[[], None] | None = None) -> dict[str, Any] | None:
+        while True:
+            read_until = deadline
+            if check_running is not None:
+                if time.monotonic() >= self._next_running_check:
+                    check_running()
+                    self._next_running_check = time.monotonic() + _RUNNING_CHECK_SECONDS
+                read_until = self._next_running_check
+            try:
+                item = self.pending.get(timeout=None if read_until is None else max(0, read_until - time.monotonic()))
+            except queue.Empty:
+                if check_running is None:
+                    raise TimeoutError("managed Host bridge launch deadline expired") from None
+            else:
+                break
         if isinstance(item, BaseException):
             raise item
         if item is None:

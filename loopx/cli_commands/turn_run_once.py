@@ -100,7 +100,7 @@ def execute_turn_run_once(
             # Cached-result recovery still requires the current Goal lifetime.
             goal_admission = FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path, goal_id=args.goal_id,
-                planned_goal_ref=goal_ref,
+                planned_goal_ref=goal_ref, agent_id=args.agent_id,
             )
         project, raw_argv, task_validator, execution_context = prepare_turn_host_request(
             args, payload, native_host_runner=native_host_runner,
@@ -366,7 +366,10 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
-                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {}),
+                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {
+                    "task_lease_idempotency_key": execution_context.get("task_lease_proof", {}).get("idempotency_key"),
+                    "task_lease_expected_version": execution_context.get("task_lease_proof", {}).get("expected_version"),
+                }),
             )
             if completion.get("ok") is not True:
                 return completion
@@ -879,6 +882,7 @@ def execute_turn_run_once(
             automation_id=args.automation_id,
             manual_reason=args.manual_interval_bypass_reason,
             on_admitted=on_managed_start_admitted,
+            request_id=settlement_identity.effect_id if args.host == "codex-cli" else None,
         )
 
         execution_started = bool(args.execute)

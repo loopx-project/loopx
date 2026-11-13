@@ -446,7 +446,7 @@ def _write_provider_files(
         if event not in managed_events:
             path.unlink(missing_ok=True)
             continue
-        path.write_text(_hook_script(event), encoding="utf-8")
+        path.write_text(_hook_script(event), encoding="utf-8", newline="\n")
         path.chmod(0o755)
     ssh_command = hooks_dir.parent / SSH_COMMAND_NAME
     if ssh_command.is_symlink():
@@ -459,6 +459,7 @@ def _write_provider_files(
                 else None
             ),
             encoding="utf-8",
+            newline="\n",
         )
         ssh_command.chmod(0o755)
     else:

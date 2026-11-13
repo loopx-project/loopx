@@ -556,6 +556,15 @@ loopx todo claim \
   --agent-id codex-main-control
 ```
 
+The command shown by quota for an ordinary managed claim uses `--thin`.
+The JSON receipt keeps the claim operation ID, next actions and projection
+status. When the display is current and has omitted fields, read the per-Todo
+details with `projection_outbox.detail_command`, a preview pinned to the
+reported provider revision. Run it before the revision advances; if it has advanced,
+read the current Todo or projection rather than claiming again. Explicit
+claims without `--thin` keep their full output. Pending or failed projections
+still return their recovery diagnostics inline.
+
 Old projects that do not yet have `coordination.registered_agents` are
 intentionally blocked when an agent tries to claim work. The CLI error includes
 the `register-agent --agent-id <agent-id> --execute` command so the agent or

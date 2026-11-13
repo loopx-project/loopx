@@ -7,18 +7,27 @@ import "./attached-agent-conversations.css";
 
 export type Binding = {agent_id: string; thread_id: string; binding_ref: string};
 type Message = ConversationRecord;
+type TurnModel = {model: string; reasoning_effort: string | null};
 type Snapshot = {messages?: Message[]; before?: number | null; after?: number; has_more?: boolean; reset?: boolean; source_ref?: string; history_size?: number; revision: string; unchanged?: boolean; connected?: boolean; can_reply?: boolean; activity: {state: string}};
+type TurnModelReadback = {revision: string; turn_model: TurnModel | null};
 type Submission = {operation_id: string; text: string; status?: string};
 type LiveRecords = {identity: string; records: Message[]};
 type LiveObservation = {kind: "records"; revision: number; records: Message[]} |
   {kind: "unavailable"; retry: boolean};
 
 class ConversationRequestError extends Error {
-  constructor(message: string, readonly unsubmittedOperation?: string, readonly httpStatus?: number) {super(message);}
+  constructor(
+    message: string,
+    readonly unsubmittedOperation?: string,
+    readonly httpStatus?: number,
+    readonly interruptedSuccessfulResponse = false,
+  ) {super(message);}
 }
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {...options, signal: AbortSignal.timeout(6_000)});
+  const timeout = AbortSignal.timeout(6_000);
+  const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const response = await fetch(url, {...options, signal});
   // Read the body as text first: a service failure can answer with an HTML or
   // empty body, and the caller still needs the HTTP status to decide whether
   // the read is retryable. Parsing first would surface a SyntaxError instead.
@@ -26,11 +35,9 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
   try {
     body = await response.text();
   } catch {
-    // The headers arrived, so the status is already known even though the body
-    // did not. Drop the status here and a stalled 503 body looks like a plain
-    // transport failure while a truncated 403 body looks retryable; the caller
-    // must classify on this status, not on how the body read failed.
-    throw new ConversationRequestError("Conversation unavailable", undefined, response.status);
+    // Preserve rejected statuses even when their bodies drop. A successful
+    // response interrupted in transit is different from a complete invalid body.
+    throw new ConversationRequestError("Conversation unavailable", undefined, response.status, response.ok);
   }
   let value: Record<string, unknown> | null = null;
   try {value = body ? JSON.parse(body) as Record<string, unknown> : null;} catch {value = null;}
@@ -47,7 +54,8 @@ function interruptedRead(failure: unknown): boolean {
 }
 
 export function retryableRead(failure: unknown): boolean {
-  return interruptedRead(failure) || (failure instanceof ConversationRequestError && (failure.httpStatus ?? 0) >= 500);
+  return interruptedRead(failure) || (failure instanceof ConversationRequestError &&
+    (failure.interruptedSuccessfulResponse || (failure.httpStatus ?? 0) >= 500));
 }
 
 export function readFailureMessage(failure: unknown, zh: boolean): string {
@@ -88,6 +96,7 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [turnModelReadback, setTurnModelReadback] = useState<{query: string; model: TurnModel | null} | null>(null);
   const [before, setBefore] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [bindingReadRejected, setBindingReadRejected] = useState(false);
@@ -137,6 +146,33 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
   // Connection/registration alone is never an activity observation.
   const liveActive = liveEnabled && !liveUnavailable && !readingHistory;
   const query = new URLSearchParams({goal_id: goalId, agent_id: binding.agent_id, binding_ref: binding.binding_ref});
+  const activeRevision = snapshot?.activity.state === "turn_open" ? snapshot.revision : null;
+  const modelQuery = activeRevision === null ? null
+    : new URLSearchParams({...Object.fromEntries(query), turn_model: "1", revision: activeRevision}).toString();
+  useEffect(() => {
+    if (modelQuery === null || bindingReadRejected) return;
+    const controller = new AbortController();
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const read = async (attempt: number) => {
+      try {
+        const result = await request<TurnModelReadback>(
+          `/api/chat/codex-attached?${modelQuery}`, {signal: controller.signal},
+        );
+        if (!controller.signal.aborted && result.revision === activeRevision) {
+          setTurnModelReadback({query: modelQuery, model: result.turn_model});
+        }
+      } catch (failure) {
+        if (!controller.signal.aborted && attempt < 3 && retryableRead(failure)) {
+          retry = setTimeout(() => void read(attempt + 1), 1_000);
+        }
+      }
+    };
+    void read(1);
+    return () => {
+      controller.abort();
+      clearTimeout(retry);
+    };
+  }, [modelQuery, activeRevision, bindingReadRejected]);
 
   function stopOnRejectedRead(failure: unknown): boolean {
     if (!(failure instanceof ConversationRequestError) || ![401, 403, 409].includes(failure.httpStatus ?? 0)) return false;
@@ -367,11 +403,36 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
     if (draggingScroll.current && Math.abs(delta) > 1) scrollIntent(Math.sign(delta));
     else if (scrollDirection.current) pageAtEdge(scrollDirection.current);
   }
-  async function loadContent(record: Message, offset: number): Promise<ContentPage> {
+  async function loadContent(record: Message, offset: number, signal: AbortSignal): Promise<ContentPage> {
+    const current = generation.current;
+    const source = history.current?.source;
+    const ensureCurrent = () => {
+      signal.throwIfAborted();
+      if (!source || rejectedRead.current || current !== generation.current || source !== history.current?.source) {
+        throw new Error(zh ? "原记录已变化，请重新打开这条记录。" : "The original record changed; reopen it to continue.");
+      }
+    };
     const params = new URLSearchParams(query);
     params.set("entry_id", record.id); params.set("content_offset", String(offset));
-    params.set("source_ref", history.current?.source ?? ""); params.set("content_ref", record.content_ref ?? "");
-    return request<ContentPage>(`/api/chat/codex-attached?${params}`);
+    params.set("source_ref", source ?? ""); params.set("content_ref", record.content_ref ?? "");
+    const read = async () => {
+      ensureCurrent();
+      const page = await request<ContentPage>(`/api/chat/codex-attached?${params}`, {signal});
+      ensureCurrent();
+      return page;
+    };
+    try {
+      return await read();
+    } catch (failure) {
+      if (!retryableRead(failure)) throw failure;
+      // Retry only this read: the binding, record fingerprint and offset stay fixed.
+      try {
+        return await read();
+      } catch (retryFailure) {
+        if (!retryableRead(retryFailure)) throw retryFailure;
+        throw new Error(zh ? "暂时无法继续读取，已读内容保留。" : "Could not read more of this record. Existing text is retained.");
+      }
+    }
   }
 
   async function send() {
@@ -433,6 +494,17 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
     try {sessionStorage.removeItem(cacheKey); sessionStorage.removeItem(`${cacheKey}:draft`); receiptGeneration.current++; setSubmission(null); setDraft(""); setError(""); setRecoveryError("");}
     catch {setError(zh ? "无法清理回复回执。" : "Reply recovery could not be cleared.");}
   }
+  const turnModel = turnModelReadback?.query === modelQuery ? turnModelReadback.model : null;
+  const turnProfile = turnModel
+    ? [`${zh ? "本轮模型" : "Turn model"} ${turnModel.model}`, turnModel.reasoning_effort].filter(Boolean).join(" · ")
+    : (zh ? "本轮模型未读取" : "Turn model unavailable");
+  const connectionStatus = !snapshot
+    ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable")
+    : snapshot.can_reply
+      ? (zh ? "原会话可回复" : "Original conversation accepts replies")
+      : activeRevision !== null
+        ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App")
+        : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed");
   const connectionMessage = bindingReadRejected
     ? (zh ? "无法验证原会话的绑定或访问权限。" : "This conversation's binding or access could not be verified.")
     : error;
@@ -441,7 +513,17 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
 
       {recoveryError ? <p role="alert">{recoveryError} <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已在原 App 核对，清理本页回执" : "Checked in original App; clear this receipt"}</button></p> : null}
       {sendNotice ? <p role="status">{sendNotice}</p> : null}
-        <div className="attached-connection-status"><div><div className="attached-conversation-source">Codex App <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}><p>{zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}</p></ContextHelp></div>{!bindingReadRejected ? <p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p> : null}</div>
+        <div className="attached-connection-status"><div>
+          <div className="attached-conversation-source">
+            Codex App <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}>
+              <p>{zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}</p>
+            </ContextHelp>
+          </div>
+          {!bindingReadRejected ? <p role="status">
+            <span>{connectionStatus}</span>
+            {activeRevision !== null ? <>{" · "}<span>{turnProfile}</span></> : null}
+          </p> : null}
+        </div>
         <button type="button" className="attached-conversation-open" aria-label={zh ? "在 Codex App 中打开" : "Open in Codex App"}
           title={zh ? "在 Codex App 中打开" : "Open in Codex App"} aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}><ExternalLink size={18} aria-hidden="true" /></button></div>
         {openRequested ? <p role="status">{zh ? "已请求打开原会话，请在 Codex App 中查看。" : "Requested opening the original conversation; check Codex App."}</p> : null}

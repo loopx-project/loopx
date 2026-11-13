@@ -1355,6 +1355,8 @@ export function PersonalWorkspacePage({
   const retryingSteering = retainedSteering && retainedSteering.sessionId === conversationSessionId
     && retainedSteering.text.trim() === composer.trim() ? retainedSteering : undefined;
   const composerBlocked = Boolean(workspaceConversations?.entryGate) || steering || (!(retryingSteering || queueTurnId) && (sending || conversationTurnRunning));
+  const historyBlocksSend = Boolean(conversationHistoryState?.sendBlocked
+    || (originalConversation && conversationHistoryState?.phase === "unavailable"));
   const quickPromptBlocked = Boolean(workspaceConversations?.entryGate) || Boolean(originalConversation && !originalConversation.session?.resumable) || steering || sending || conversationTurnRunning;
   // The Goal overview is for reading; its composer folds to one line until asked for.
   const [overviewComposerOpen, setOverviewComposerOpen] = useState(false);
@@ -2406,7 +2408,7 @@ export function PersonalWorkspacePage({
     if (modelSettingsSaving[composerDraftKey]) return;
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
-    if (!message || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || conversationHistoryState?.sendBlocked) return;
+    if (!message || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || historyBlocksSend) return;
     // A retained uncertain request must be durably recovered before any new
     // dispatch. Restoring its text alone cannot turn it into a fresh send.
     if (conversationSessionId && !readSteeringRequest(composerDraftKey)) {
@@ -3014,7 +3016,8 @@ export function PersonalWorkspacePage({
               <ManagerHomeBoard goals={workspaceGoals} attention={model.userTodos} onSelectAttention={openAttention}
                 onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
-                runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
+                runtimeReadiness={readOnly || originalSourceUnresolved ? undefined : runtimeReadiness}
+                recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})} />
             ) : (
               <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly}
@@ -3066,7 +3069,7 @@ export function PersonalWorkspacePage({
             {conversationHistoryState && conversationHistoryState.phase !== "ready" ? (
               <div className={conversationHistoryState.phase === "loading" ? "sr-only" : "personal-history-notice"} role="status">
                 <div><span>{t(`history.${conversationHistoryState.phase}`)}</span>
-                  {conversationHistoryState.sendBlocked && conversationHistoryState.phase !== "loading"
+                  {historyBlocksSend && conversationHistoryState.phase !== "loading"
                     ? <span>{t("history.currentSessionRecovering")}</span> : null}</div>
                 {conversationHistoryState.phase !== "loading" ? <button type="button"
                   disabled={conversationHistoryState.reading} onClick={conversationHistoryState.retry}>
@@ -3222,7 +3225,7 @@ export function PersonalWorkspacePage({
                   setActionFeedback(cause instanceof Error ? cause.message : (locale === "zh-CN" ? "停止失败，请查看当前回合。" : "Stop failed. Check the current turn.")))}>
                 <Square size={16}/>
               </button> : null}
-              <button className="personal-composer-send" aria-label={t("composer.send")} disabled={modelSettingsSaving[composerDraftKey] || (!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
+              <button className="personal-composer-send" aria-label={t("composer.send")} disabled={modelSettingsSaving[composerDraftKey] || (!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || historyBlocksSend} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
               </div>
             </div>
 

@@ -100,6 +100,7 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
 const CANONICAL_CONSUMERS = [
   "control_plane/effect_program.ts",
   "control_plane/agents/supervisor_event_append.ts",
+  "control_plane/capabilities/benchmark_cli_source_activation.ts",
   "control_plane/capabilities/change_quality_validation.ts",
   "control_plane/capabilities/content_media.ts",
   "control_plane/capabilities/content_media_generation.ts",
@@ -131,6 +132,8 @@ const CANONICAL_CONSUMERS = [
   "control_plane/coordination/local_authority_migration.ts",
   "control_plane/coordination/local_authority_shadow.ts",
   "control_plane/coordination/local_authority_shadow_outbox.ts",
+  "control_plane/coordination/remote_authority_contract.ts",
+  "control_plane/coordination/remote_authority_policy.ts",
   "control_plane/coordination/reviewed_promotion_plan.ts",
   "control_plane/coordination/runtime_shadow.ts",
   "control_plane/coordination/shadow_drain_files.ts",

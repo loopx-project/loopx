@@ -78,7 +78,8 @@ def entry(tmp_path, monkeypatch):
         internet=False, game_mode=False, submit_paths=["solver.py"],
         work=SimpleNamespace(agent_query="Synthetic task"),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
-    backend = SimpleNamespace(image_exists=lambda image: True, native_goal_receipt=None,
+    backend = SimpleNamespace(observe_local_images=lambda **keys: {},
+                              registration_options=lambda provider: {}, native_goal_receipt=None,
                               execution_receipt={"exit_code": 0, "execution_started": True})
     monkeypatch.setattr(run, "RecordingDockerBackend", lambda **kwargs: backend)
     trial = tmp_path / "runs" / "attempt" / "task"
@@ -86,20 +87,22 @@ def entry(tmp_path, monkeypatch):
             "--run-id", "attempt", "--worker", "official", "--m", "fixture",
             "--effort", "high", "--judge-url", "http://localhost:9999"]
 
-    def invoke(binding: Path | None = None, *, evidence: str = "drained") -> int:
+    def invoke(binding: Path | None = None, *, evidence: str = "drained", segment_count: int = 1) -> int:
         def finish(**kwargs):
             assert kwargs["run_id"] == "attempt" and kwargs["task_spec"].task_id == "task"
             assert "managed_run" not in kwargs and "admission_receipt" not in kwargs
             if evidence == "exception":
                 raise RuntimeError("native provider failed")
             (trial / "started_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
-            now = time.time()
-            segment = {
-                "index": 1, "status": "normal_exit", "finished_at": time.time(),
-                "started_at": now - 100 if evidence == "predates_admission" else now,
-                "terminal_observed": evidence != "unconfirmed_solver", "native_exit_code": 0,
-            }
-            execution = {"schema_version": 1, "status": "normal_exit", "segments": [segment]}
+            segments = []
+            for index in range(1, segment_count + 1):
+                now = time.time()
+                segments.append({
+                    "index": index, "status": "normal_exit", "finished_at": time.time(),
+                    "started_at": now - 100 if evidence == "predates_admission" else now,
+                    "terminal_observed": evidence != "unconfirmed_solver", "native_exit_code": 0,
+                })
+            execution = {"schema_version": 1, "status": "normal_exit", "segments": segments}
             native._write_solver_execution(trial, execution)
             history = {"run_id": "attempt", "entries": []}
             if evidence == "pending":
@@ -140,7 +143,7 @@ def _replay(trial: Path, *, execute: bool = False) -> subprocess.CompletedProces
                           capture_output=True, text=True, timeout=30)
 
 
-@pytest.mark.parametrize("stage", ["drained", "pending", "write_failure",
+@pytest.mark.parametrize("stage", ["drained", "large_solver_history", "pending", "write_failure",
     "receipt_before_replace", "receipt_after_replace", "receipt_persistent"])
 def test_managed_terminal_flows_from_runner_to_controller(tmp_path, entry, capsys, monkeypatch, stage):
     trial, invoke, drain = entry
@@ -195,7 +198,10 @@ def test_managed_terminal_flows_from_runner_to_controller(tmp_path, entry, capsy
                 return write_json_atomic(path, payload, **kwargs)
 
             patch.setattr(managed_run, "write_json_atomic", fail_terminal_receipt_once)
-        assert invoke(_binding_file(tmp_path, admission), evidence=stage) == 0
+        segment_count = 5500 if stage in {"large_solver_history", "receipt_persistent"} else 1
+        assert invoke(_binding_file(tmp_path, admission), evidence=stage, segment_count=segment_count) == 0
+    if segment_count > 1:
+        assert all((trial / name).stat().st_size > 1 << 20 for name in ("solver_execution.json", "final_result.json"))
     runtime = json.loads(capsys.readouterr().out)
     assert runtime["status"] == "terminal" and runtime["best_score"] == 4
     assert GOAL not in json.dumps(runtime) and str(project) not in json.dumps(runtime)

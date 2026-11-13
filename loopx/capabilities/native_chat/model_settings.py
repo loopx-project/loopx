@@ -112,7 +112,7 @@ def inspect_agent_model_options(controller: ChatRuntimeController, agent_id: str
     if capability is None or not capability.get("available"):
         raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
     if agent_id == "codex":
-        defaults = load_codex_chat_defaults(controller.coordination_runtime_root) if goal_id else {}
+        defaults = load_codex_chat_defaults(controller.store.root.parent) if goal_id else {}
         home = codex_profile_home(controller.codex_home, defaults)
         models = providers.codex_model_options(controller.codex_bin, codex_home=home)
         if models is None:

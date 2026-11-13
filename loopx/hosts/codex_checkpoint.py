@@ -23,6 +23,7 @@ from pathlib import Path
 from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_stderr
 from typing import Any
 
+from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
 from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport, native_checkpoint_reader
 
 
@@ -117,6 +118,30 @@ def _native_store_components(home: Path) -> list[dict[str, str]]:
     return members
 
 
+def _native_observation_fingerprint(home: Path, *, deadline: float) -> dict[str, str | None]:
+    """Bind an isolated observation to unchanged physical native-store bytes."""
+    sources = [home / 'config.toml', *(Path(m['source_path']) for m in _native_store_components(home))]
+    for source in tuple(sources):
+        if source.suffix == '.sqlite':
+            sources.extend(p for suffix in ('-wal', '-journal')
+                           if (p := Path(str(source) + suffix)).exists())
+    fingerprint = {}
+    for source in sources:
+        for entry in [source, *sorted(source.rglob('*'))] if source.is_dir() else [source]:
+            if entry.is_symlink() or entry.resolve(strict=True) != entry:
+                raise ValueError('Native failure observation requires physical source members')
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Failed native recovery readback window closed')
+            if entry.is_dir():
+                fingerprint[str(entry.relative_to(home))] = None
+            elif entry.is_file():
+                with entry.open('rb') as stream:
+                    fingerprint[str(entry.relative_to(home))] = hashlib.file_digest(stream, 'sha256').hexdigest()
+            else:
+                raise ValueError('Native failure observation requires regular source members')
+    return fingerprint
+
+
 @contextmanager
 def _idle_native_reader(env: dict[str, str], *, timeout: float, deadline: float,
                         sealed_store_paths: tuple[str, ...] | None = None):
@@ -188,52 +213,105 @@ def native_idle_turn(env: dict[str, str], session_id: str, *, process_started_at
                 "visible_history_sha256": hashlib.sha256(encoded).hexdigest()}
 
 
+def native_failure_error_digest(error: Any, *, cli_projection: bool = False) -> str:
+    """Hash the Codex error object without interpreting or retaining its prose.
+
+    The CLI can omit app-server's optional null fields and catch-all `other`
+    discriminator. Its comparison projection drops only those protocol
+    defaults; the raw native object is separately sealed without that projection.
+    """
+    if not isinstance(error, dict) or not isinstance(error.get('message'), str) or not error['message'].strip():
+        raise ValueError('Returned native failure requires its error object')
+    value = dict(error)
+    if cli_projection:
+        for key in ('codexErrorInfo', 'additionalDetails', 'misalignment'):
+            if value.get(key) is None or (key == 'codexErrorInfo' and value[key] == 'other'):
+                value.pop(key, None)
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+                                    allow_nan=False).encode()).hexdigest()
+
+
 def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: str,
                        process_started_at: float, process_stopped_at: float,
+                       returned_error_sha256: str | None = None,
                        timeout: float = 30) -> dict[str, Any]:
-    """Read a retained quota-failed cursor without rewriting it as completed.
+    """Read a retained failed cursor without rewriting it as completed.
 
     The caller independently proves the exact Host returned and explicitly
-    requests recovery after repairing its provider allowance. This observation
-    neither starts/resumes a native Thread nor supplies a checkpoint certificate.
+    requests recovery after an operator repair. Non-quota failures also require
+    the exact returned error digest and a precise provider rollout cursor.
+    This observation starts no Turn and supplies no checkpoint.
     """
     from loopx.control_plane.turn_driver.codex_cli import _codex_error_info_category
+    from loopx.control_plane.turn_driver.host_failure import require_host_failure_kind
+    from .codex_rollout_file import read_failed_turn_cursor
 
-    if (failure_kind != "quota_exhausted" or not session_id
+    require_host_failure_kind(failure_kind)
+    if ((returned_error_sha256 is None and failure_kind != "quota_exhausted") or not session_id
+            or (returned_error_sha256 is not None and (not isinstance(returned_error_sha256, str)
+                or BARE_SHA256_PATTERN.fullmatch(returned_error_sha256) is None))
             or any(type(x) not in (int, float) or not math.isfinite(x)
                    for x in (process_started_at, process_stopped_at, timeout))
             or process_started_at > process_stopped_at or timeout <= 0):
-        raise ValueError("Failed native recovery requires its quota failure and process window")
+        raise ValueError("Failed native recovery requires its returned failure and process window")
     deadline = time.monotonic() + timeout
-    with native_checkpoint_reader(env, timeout=timeout, deadline=deadline) as transport:
+    home = Path(env['CODEX_HOME']) if returned_error_sha256 is not None else None
+    original = _native_observation_fingerprint(home, deadline=deadline) if home is not None else {}
+    observer = (_idle_native_reader(env, timeout=timeout, deadline=deadline) if home is not None
+                else native_checkpoint_reader(env, timeout=timeout, deadline=deadline))
+    with observer as transport:
         def request(method, params):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("Failed native recovery readback window closed")
             transport.response_timeout_sec = remaining
             return transport.request(method, params)
-        _native_thread_readback(request, env, session_id)
+        thread = _native_thread_readback(request, env, session_id)
+        cursor = None
+        if home is not None:
+            source = thread.get('path')
+            rollout = Path(source) if isinstance(source, str) else None
+            if rollout is None or not rollout.is_relative_to(home):
+                raise ValueError('Failed native rollout must be in the original store')
+            relative = rollout.relative_to(home)
+            if (not relative.parts or relative.parts[0] not in ('sessions', 'archived_sessions')
+                    or original.get(str(relative)) is None):
+                raise ValueError('Failed native rollout must be a retained source file')
+            cursor = read_failed_turn_cursor(rollout, session_id=session_id, workspace=env['LOOPX_PROJECT'],
+                process_started_at=process_started_at, process_stopped_at=process_stopped_at, deadline=deadline)
         turns = _retained_history(request, session_id)
         tail = turns[-1]
         error = tail.get("error")
-        category, structured = _codex_error_info_category(
-            error.get("codexErrorInfo") if isinstance(error, dict) else None)
+        error_digest = native_failure_error_digest(error) if returned_error_sha256 is not None else None
+        error_projection = (native_failure_error_digest(error, cli_projection=True)
+                            if returned_error_sha256 is not None else None)
+        category, structured = _codex_error_info_category(error.get('codexErrorInfo') if isinstance(error, dict) else None)
         start, end = tail.get("startedAt"), tail.get("completedAt")
-        if (tail.get("status") != "failed" or not structured or category != failure_kind
+        end_bound = process_stopped_at if cursor is not None else math.ceil(process_stopped_at)
+        if (tail.get("status") != "failed"
+                or (cursor is not None and tail.get('id') != cursor['turn_id'])
+                or (returned_error_sha256 is not None and error_projection != returned_error_sha256)
+                or (returned_error_sha256 is None and (not structured or category != failure_kind))
                 or any(type(value) not in (int, float) or not math.isfinite(value)
                        for value in (start, end))
-                or not math.floor(process_started_at) <= start <= end <= math.ceil(process_stopped_at)):
+                or not math.floor(process_started_at) <= start <= end <= end_bound):
             raise ValueError("Native failure differs from the original returned Host")
+        effect_turns = turns if returned_error_sha256 is not None else [tail]
         if any(item.get("status") in {"inProgress", "running", "pending"}
-               for item in tail.get("items", [])):
+               for turn in effect_turns for item in turn.get("items", [])):
             raise ValueError("Failed native cursor still has pending effects")
         encoded = json.dumps(turns, sort_keys=True, separators=(",", ":")).encode()
         if json.dumps(_retained_history(request, session_id), sort_keys=True,
                       separators=(",", ":")).encode() != encoded:
             raise ValueError("Failed native history advanced during readback")
-        return {"session_id": session_id, "turn_id": tail["id"], "status": "failed",
+        result = {"session_id": session_id, "turn_id": tail["id"], "status": "failed",
                 "failure_kind": failure_kind, "turn_count": len(turns),
+                **({'error_sha256': error_digest, 'returned_error_sha256': error_projection,
+                    'rollout_cursor': cursor} if cursor is not None else {}),
                 "visible_history_sha256": hashlib.sha256(encoded).hexdigest()}
+    if home is not None and _native_observation_fingerprint(home, deadline=deadline) != original:
+        raise ValueError('Failed native source changed during isolated readback')
+    return result
 
 
 def _guard_cli_arguments(command: str, guard: dict) -> list[str]:
@@ -291,16 +369,21 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
         except (SystemExit, ValueError) as error:
             raise ValueError("native pending guard arguments are invalid") from error
     args = arguments(item.get("command", ""))
-    # Older sealed interrupted guards were captured with mandatory envelopes.
-    # New captures bind the explicit execution mode; neither format opts in.
+    # Older sealed guards could omit the then-mandatory envelope flag.
+    # Missing complete mode is historical off, never inferred from the command.
     turn_envelope = guard.get("turn_envelope", True)
+    complete_turn = guard.get("complete_turn", False)
     if not isinstance(turn_envelope, bool):
         raise ValueError("native pending guard envelope mode must be boolean")
+    if not isinstance(complete_turn, bool):
+        raise ValueError("native pending guard complete mode must be boolean")
+    if turn_envelope and complete_turn:
+        raise ValueError("native pending guard has incompatible envelope and complete modes")
     expected = {"command": "quota", "quota_command": "should-run", "format": "json",
                 "registry": guard["registry"], "runtime_root": guard["runtime_root"],
                 "goal_id": guard["goal_id"], "agent_id": guard["agent_id"],
                 "turn_instance_id": guard["turn_instance_id"], "turn_envelope": turn_envelope,
-                "decision_output_root": guard["capture_root"],
+                "complete_turn": complete_turn, "decision_output_root": guard["capture_root"],
                 "decision_output_dir": None, "decision_handoff_socket": guard["socket_path"],
                 "codex_context_dir": guard.get("codex_context_dir"),
                 "codex_context_root": guard.get("codex_context_root"),
@@ -323,7 +406,7 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
         raise ValueError("native pending guard call identity differs")
 
 
-def _native_thread_readback(request, env: dict[str, str], session_id: str) -> None:
+def _native_thread_readback(request, env: dict[str, str], session_id: str) -> dict[str, Any]:
     readback = request("thread/read", {"threadId": session_id, "includeTurns": False})
     if readback.get("thread", {}).get("id") != session_id:
         raise ValueError("native checkpoint session identity mismatch")
@@ -331,6 +414,7 @@ def _native_thread_readback(request, env: dict[str, str], session_id: str) -> No
     if (not workspace.is_absolute() or workspace.resolve(strict=True) != workspace or
             readback["thread"].get("cwd") != str(workspace)):
         raise ValueError("native checkpoint session workspace differs from the declared code basis")
+    return readback['thread']
 
 
 def native_completed_cursor(env: dict[str, str], session_id: str, *,

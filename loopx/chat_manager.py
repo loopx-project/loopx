@@ -1009,9 +1009,34 @@ def manager_session_model_allocation(
     persisted binding, including a restart's original service environment.
     """
     previous = session.get("manager_executor_allocation")
+    defaults = steward_machine_defaults(controller)
+    if previous is None:
+        # Native bound conversations created before allocation persistence still
+        # belong to machine settings. Adopt concrete choices at the same idle
+        # boundary, preserving unset fields and the existing endpoint/history.
+        endpoint = session.get("agent_id")
+        if (session.get("goal_id") != MANAGER_AGENT_GOAL_ID or defaults is None
+                or defaults.get("status") != "ready"
+                or _machine_default_text(defaults, "executor_endpoint") != endpoint
+                or not any(_machine_default_text(defaults, name) for name in
+                           ("executor_model", "executor_reasoning_effort"))):
+            return None
+        proposed = manager_executor_allocation(controller, endpoint, machine_defaults=defaults,
+            environ=operator_credential_resolution(controller)["environ"])
+        if proposed["executor_endpoint"] != endpoint:
+            return None
+        if not proposed["configured_model"]:
+            if not session.get("agent_model_id"):
+                return None
+            proposed["model"] = session["agent_model_id"]
+            proposed["model_source"] = "session_binding"
+        if not proposed["configured_reasoning_effort"]:
+            if not session.get("agent_reasoning_effort"):
+                return None
+            proposed["reasoning_effort"] = session["agent_reasoning_effort"]
+        return proposed
     if not isinstance(previous, Mapping):
         return None
-    defaults = steward_machine_defaults(controller)
     if (defaults is None or defaults.get("status") != "ready"
             or defaults.get("configuration_revision") == previous.get("configuration_revision")):
         return None
@@ -1072,7 +1097,8 @@ def manager_session_model_allocation(
 #     native history. Merely removing it from new prompts leaves old upstream
 #     conversations overfull and unable to compact before their next request.
 # 22: resolve role shorthand by subject evidence; a past handoff is not ownership.
-MANAGER_CONTEXT_VERSION = 22
+# 23: source-neutral discovery and task-search tools reach existing conversations.
+MANAGER_CONTEXT_VERSION = 23
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any
@@ -1083,8 +1109,9 @@ MANAGED_SKILL_MARKER_V2 = "<!-- loopx-managed-manager-skill:v2 -->"
 MANAGED_SKILL_MARKER_V3 = "<!-- loopx-managed-manager-skill:v3 -->"
 MANAGED_SKILL_MARKER_V4 = "<!-- loopx-managed-manager-skill:v4 -->"
 MANAGED_SKILL_MARKER_V5 = "<!-- loopx-managed-manager-skill:v5 -->"
-MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3, MANAGED_SKILL_MARKER_V4, MANAGED_SKILL_MARKER_V5)
-MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V5
+MANAGED_SKILL_MARKER_V6 = "<!-- loopx-managed-manager-skill:v6 -->"
+MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3, MANAGED_SKILL_MARKER_V4, MANAGED_SKILL_MARKER_V5, MANAGED_SKILL_MARKER_V6)
+MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V6
 
 
 def manager_skill_text() -> str:

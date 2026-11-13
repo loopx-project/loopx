@@ -143,6 +143,21 @@ export const goalHierarchyScenario = {
         "opening a scoped workspace reads its recursive subtree without opening unrelated Goal state");
       assert.equal(new URL(page.url()).searchParams.get("rootGoalId"), "research");
       assertResearchFocus();
+      const scopedCalibration = page.url();
+      const unscopedGraphBookmark = new URL(scopedCalibration);
+      unscopedGraphBookmark.searchParams.delete("research_goal");
+      unscopedGraphBookmark.searchParams.delete("research_analysis_goal");
+      await page.goto(unscopedGraphBookmark.href, {waitUntil: "networkidle"});
+      await row("graph").locator(".personal-goal-link").click();
+      await page.waitForURL(target => target.searchParams.get("goalId") === "graph");
+      const unscopedQuery = new URL(page.url()).searchParams;
+      assert.equal(unscopedQuery.get("research_lens"), null,
+        "switching Goals clears an unscoped research lens instead of applying it to the destination Goal");
+      assert.equal(unscopedQuery.get("research_node"), null,
+        "switching Goals clears unscoped research node bookmarks together with the lens");
+      await page.goto(scopedCalibration, {waitUntil: "networkidle"});
+      await row("calibration").locator('[aria-current="page"]').waitFor();
+      assertResearchFocus();
       await assertTreeLayout();
       await page.screenshot({path: resolve(outputDir, "goal-hierarchy-focused.png"), animations: "disabled"});
       await page.getByRole("button", {name: "调整 Goal 顺序", exact: true}).click();

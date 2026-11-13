@@ -108,14 +108,12 @@ def _bound_bank(folder: Path, reference: dict) -> dict:
 
 
 def _phase_budget(raw: bytes, native: dict) -> dict:
-    """Adapt the existing SForge integer phase clock, not quota authority.
-
-    Native capture owns this time. The declared physical Host file owns its
-    deadline. Neither fact qualifies complete Host/research-state capture.
-    """
-    if len(raw) > 64 or not re.fullmatch(rb"[0-9]+\n?", raw):
-        raise ValueError("Host phase deadline must be an integer epoch file")
-    epoch = int(raw)
+    """Read the physical Host clock at the native capture time."""
+    if len(raw) > 64 or not re.fullmatch(rb"[0-9]+(?:\.[0-9]+)?\n?", raw):
+        raise ValueError("Host phase deadline must contain epoch seconds")
+    # Fresh SForge phases write integer seconds. The continuation scheduler
+    # publishes its existing floating-point deadline, including fractions.
+    epoch = float(raw) if b"." in raw else int(raw)
     captured = native.get("captured_at_epoch")
     if (not 0 < epoch < 2 ** 53 or type(captured) not in (int, float) or
             not math.isfinite(captured) or captured <= 0):

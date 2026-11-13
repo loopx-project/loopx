@@ -3139,7 +3139,7 @@ now includes target main `1cba745f5` while retaining the original proposal ances
 The report calendar CLI smoke still fails on that integrated source because it
 reads the retired `turn_envelope` carrier. Its `None` replan assertion also
 belongs to the old projected adapter: the complete source retains competing
-advice while the typed controller owns final capability precedence.
+advice; final capability precedence remains with the existing typed controller.
 
 The smoke now gives the single `work_contract` directly to the existing controller.
 Across plan, dry-run and executing generic/Codex CLI calls, it checks the same
@@ -3352,3 +3352,495 @@ required validation and fresh ready=true still govern merge. The original task
 and I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install, PostgreSQL host/wheel, full-cost and adoption gaps
 remain open.
+
+### 2026-11-11 — Integrated main packaged release qualification
+
+The complete Linux Release Artifacts
+[run 42905934918](https://github.com/loopx-project/loopx/actions/runs/42905934918)
+(attempt 1, from [#8531](https://github.com/loopx-project/loopx/pull/8531))
+qualifies the integrated source at `main@b89a574b05a3e7d5920a8e7184476dfb7b041790`.
+The bundle's product, browser-fixture and workflow commit are all
+`3606315c86f907961b0c26d4f1a1dad6bbaed8cf`, with no fixture overrides; its
+complete tracked tree equals that merged main tree. This supplies the missing
+packaged qualification after the kernel and release-pipeline integration.
+
+Offline verification of final artifact `13807484684` checks the downloaded ZIP
+against GitHub's SHA-256, every package/runtime file against `RELEASE-SOURCES.json`,
+and the checksum manifest against both packages. All three browser receipts bind
+to candidate artifact `13806066680` and the same release-source digest. Comparing
+them with the actual source catalog and partition selector confirms exactly
+86 unique passing scenarios across 29/29/28 entries. Team, craft, command-palette
+and navigation companions pass. The producer also passes clean-wheel install,
+sdist rebuild, installed frontend, DSH install shape and runtime qualification,
+including upgrade, doctor, skills, frontend HTTP, license notices, operation
+without frontend build tools and restoration after activation failure.
+
+The completed ordinary packaged M2 observation retains 200 items, five switches
+with three samples each and 15 long-task windows. Its five medians are
+336.34/313.05/441.09/200.01/194.94 ms; the maximum is 601.68 ms, with no sample
+over the 1,000 ms target. The existing ordinary median <1,000 ms and every-sample
+<2,000 ms rules pass without a threshold change. This is neither a new
+coverage-enabled measurement nor a cost or kernel-attribution comparison;
+historical frozen failures and their raw observations retain their original status.
+
+This evidence qualifies the named integrated Linux packaged source, not later
+product changes. The pull-request run skips attestation, release upload and PyPI
+publication; no public release or current installed-host upgrade is established.
+It does not establish all other CI results or complete CI/marginal cost. The
+original task and I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel, installed-host and adoption
+gaps remain open. The next qualification stays with those original owners and
+acceptance boundaries; the minimal-kernel effort is not complete.
+
+### 2026-11-11 — Canonical snapshot failure provenance
+
+Paged and complete snapshot reads distinguish a rejected persisted Todo contract
+(`canonical_snapshot_projection_invalid`) from malformed request arguments. The
+existing typed validator still rejects unknown manifests and invalid record
+digests, preserves the original reason and returns no partial rows or legacy
+fallback. Historical supported manifests remain readable. This is a diagnostic
+correction in the existing source transport owner; it grants no forward
+compatibility to older readers and does not upgrade an installed runtime.
+
+Real File/SQLite RPC and CLI regressions, plus an isolated PostgreSQL read,
+qualify the failure boundary without rewriting authority. The original
+installed-host qualification and full-cost/adoption gaps remain open.
+
+
+### 2026-11-12 — Standalone core artifact and installation diagnosis
+
+The opt-in `packages/loopx-core` source builder reuses tracked runtime sources
+and produces an independently installed wheel without Chat, web assets, the
+canary fleet or the full CLI facade. It retains existing built-in capability
+and host compatibility imports. This is the core-artifact prerequisite for
+R1/M3; it does not qualify the complete minimal closure or publish a release.
+
+The installed journey uses the existing generic CLI host, independent artifact
+validation and canonical hard leases. The original admitted key/version travels
+through the shared TypeScript preparation and checked Turn context to the
+existing completion owner. Process loss resumes the confirmed result; replay
+does not invoke the host or debit quota again. A renewed/released lease or an
+invalid artifact refuses completion without state or quota effects.
+
+Deep installation diagnosis now selects the actual distribution's RECORD and
+required entrypoints. A healthy core passes; an unrecorded launcher or missing
+runtime file remains a failure. Ordinary distributions still require their full
+CLI. Core supports the advertised history action through its existing handler
+and parses global version options without the omitted facade. The installed
+qualification covers default SQLite and explicitly configured File hard leases;
+help/import remain usable without Node, while governed work retains the existing
+Node prerequisite. Ordinary-distribution CLI and installation parity have their
+own matched checks. The package-smoke lane executes the installed qualification.
+
+Preserve D1-D7 and all original milestones, historical failures and acceptance
+boundaries. Workspace/meta-package publication, complete install/load/context
+closure, independent Standard packages, other host/platform adoption, matched
+model effectiveness and complete costs remain open. This synthetic task and
+recovery evidence establishes neither model benefit nor an installed-host upgrade.
+
+### 2026-11-12 — Replan consumes only required Todo views
+
+The replan writeback caller now requests its two role summaries and complete
+Agent terminal rows through the existing quota read transaction. The existing
+TypeScript display owner accepts an explicit subset; omitted selection retains
+all three ordinary quota views. User source-summary rows, unused Agent views
+and prepared Vision wait facts are not generated for this caller. Source
+references, complete supplied-source fallback and provider error diagnostics
+retain their existing owners. No storage, lease, scheduler or quota-debit rule
+changes.
+
+Against immutable base `0abd0dc27`, candidate code `46f844e9d` uses the same
+disposable mixed-state fixtures and six alternating pairs per workload on real
+File/default-SQLite. SQLite replan qualification medians at 320/3,500 extra
+Agent Todos are 93.2→83.3 ms and 612.3→572.0 ms; canonical-read plus
+qualification medians are 139.4→130.0 ms and 900.9→857.0 ms. Strict refresh
+dry-run rejection medians are 142.4→135.1 ms and 934.4→911.8 ms. At zero extra
+Todos that refresh median is 28.9→29.3 ms; retain this observation without a
+noise or causality claim. Up to 128 User rows are included. Normalized
+obligations and rejection details match; counting fewer RPCs alone is not the
+acceptance oracle. Seventy focused production-provider and transport checks
+pass, including complete terminal tails, stale/missing sources and ordinary
+display defaults.
+
+Preserve #8624's original negative SQLite qualification (83.0→91.2 ms and
+605.9→704.1 ms) at its original head and criteria. This new scoped result
+qualifies the consumed replan read cost; full CLI process, durable writeback,
+model and end-to-end outcome costs are not inferred from these timings. The
+complete minimal load/context closure, R1/M3, independent Standard packages,
+workspace/meta publication and installed-host adoption remain open.
+
+
+### 2026-11-12 — Dashboard source acceptance executes its backend journeys
+
+Source coverage now executes the existing first-Goal and runtime-readiness
+journeys through the real disposable Chat service. Both source and packaged
+lanes already prepare the verified Chat bundle. Declared backend journeys
+require successful backend assertions before a PASS receipt; an early return
+cannot qualify them. Scenarios with other legitimate coverage boundaries keep
+their existing behavior. The shared browser proxy adds EPIPE to its existing
+three-attempt GET/HEAD socket recovery, recognizes typed errno or the first
+Playwright socket-error line, and never retries an HTTP write or arbitrary prose.
+Research-record search checks bind help dismissal to its current keyboard trigger
+and require the selected query to survive dismissal.
+
+On immutable source `eedfc5e24`, local macOS/Node26 qualification passes all
+86 scenarios across three non-overlapping 29/29/28 partitions with a common
+catalog and source tree, verified backend-readback markers and nonempty merged
+coverage. The passing partitions take 1,943.74 seconds; earlier failed runs,
+setup and repair remain separate records. This is validation cost, with no
+complete model/service/human cost comparison.
+
+The matched 200-item M2 pair retains all 15 samples and long-task windows.
+Ordinary medians are 225.77/172.99/310.77/128.45/146.52 ms, maximum 366.08 ms;
+coverage medians are 328.21/371.20/332.49/174.73/173.02 ms, maximum 421.22 ms.
+Both have zero samples above the 1-second target. Full-suite coverage M2 also
+passes: medians 325.35/270.28/326.59/164.22/166.47 ms, maximum 463.88 ms.
+The real 1,200 ms repeated Board delay is correctly rejected by ordinary
+qualification (slow median 1491.77 ms, maximum 1519.98 ms; all 15
+samples/windows retained). Existing strict-boundary and missing-sample tests
+pass without a budget change.
+
+Earlier failed source partitions (EPIPE, query loss and temporary-directory
+failure) remain recorded separately, as do historical frozen 1.162-second
+failures and cancelled runs. This repairs
+source-acceptance execution and its bounded transport recovery, with no render
+threshold, kernel runtime or authority change. The first-Goal fixture uses an
+exit-only Agent: registration and honest failed-Turn recovery do not prove
+natural-language task completion or model benefit. Complete minimal closure,
+R1/M3, workspace/meta publication, installed-host adoption and full-cost
+acceptance remain open.
+
+### 2026-11-13 — Standalone natural-language startup reaches existing owners
+
+The independently installed core now routes `start-goal`,
+`bootstrap-command-pack`, `register-agent` and `bind-agent-thread` to the
+ordinary product's existing registrars and handlers. Previously all four
+required the omitted full CLI facade. The goal preview preserves exact text,
+remains read-only and exposes the same ordered bootstrap, identity, Todo and
+host/guard transaction. Fresh registration, collision rejection, global/source
+readback and bound-session reuse execute against the default SQLite authority.
+No new engine, model service, authority rule or capability activation is added.
+The ordinary installation retains its complete-parser diagnostic fallback;
+invalid standalone arguments retain the existing explicit unavailable failure.
+
+Installed qualification passes 16 checks, including the guided identity journey
+and existing SQLite/File execution, rejected artifacts, renewed/released lease
+refusal and confirmed-result recovery/replay. Eight focused comparisons match
+the ordinary parser and preview. The original baseline independently installed
+wheel refuses natural-language startup; the repaired wheel executes it. These
+are executable behavioral deltas, not help-text-only delivery.
+
+A separate isolated generic-CLI task was performed by the current host model:
+create a reusable inventory generator and JSON/Markdown reports from source
+catalog/movement files, with exact decimal valuation and excluded records. Its
+independent validator accepts the result. Killing the driver after its typed
+result was journaled, then resuming the original key, completes the Todo and
+records one settlement without invoking the model again; a further replay has
+no state or quota effects. An earlier pre-work attempt expired while awaiting
+model input; its unknown-outcome recovery rejection remains recorded. There
+were two host transport dispatches in total and one confirmed model result;
+this is not a claim of one dispatch across the entire experiment.
+
+A three-pair local loading census (macOS arm64, Python 3.13.5, Node 26.0.0,
+new Python processes with ordinary filesystem/bytecode caches, plus two warm
+calls per process) observes 8 core modules for top-level help and 186 for guided
+help/preview. The direct ordinary full-facade comparison loads 1,151/1,164
+modules. Preview includes two subprocess events and nine Python socket audit
+events, so process/IPC costs must remain in the closure inventory. Different
+source/install cache and launch conditions, three samples, Python-only audit
+coverage and unavailable model-token counters prevent a performance or complete
+V10 claim. This does not approve D2 or a minimal preset.
+
+The source-regression attempt that exhausted local disk remains failed; its
+recovered run is recorded separately. Complete minimal install/load/context
+closure, initial/revised/compacted/lost-ACK context qualification, supported host
+adoption, full V1–V5/V10, R1/M3, Standard/workspace/meta splitting and complete
+costs remain open. Rollback the routing slice while retaining task authority and
+reconciling original attempts. Existing exact-head review, premerge and bilingual
+requirements, original failures, budgets and separate research/release authority
+remain in force.
+
+### 2026-11-13 — Startup metadata isolation and installed context recovery
+
+Default goal-start help and preview previously imported issue-fix execution,
+candidate preflight and repository analysis merely to render command hints.
+The existing command templates now have a capability-owned metadata module;
+bootstrap and catalog consumers use it, while the workflow module preserves
+its existing Python import API and an explicit issue-fix route retains its complete preflight
+contract. Independently installed base/head startup output is byte-identical;
+default help/preview load 186→171 LoopX modules and the explicit route 186→179.
+Module counts alone establish a narrower loading boundary, not a speed claim.
+
+Thirty alternating installed base/head pairs per workload on macOS arm64,
+Python 3.13.5 and ordinary OS/bytecode caches observe first-entry median/p95
+of 314.73/362.55→181.25/303.01 ms for help and
+542.36/670.44→311.08/572.66 ms for preview. Two subsequent calls per process
+have warm medians 0.66→0.54 ms and 11.83→8.94 ms. Median peak RSS is
+43.22→32.46 MB and 46.05→36.18 MB. All complete outputs match;
+preview remains 52,727 bytes. Retain the head preview maximum 1,092.15 ms.
+First entry includes imports; this is neither OS-cold nor full V10 qualification.
+Source regression passes 348 checks with one native Windows/PowerShell skip;
+the final installed wheel passes 20 checks. Earlier failed attempts remain.
+
+Installed CLI qualification exercises the existing context-project/read/hook
+owners with complete source or explicit recovery: off keeps original values,
+partial delivery and lost ACK cannot establish a baseline, unchanged/revised
+views preserve complete constraints, standalone PostCompact invalidates the
+baseline, and a changed captured file is refused. Warm transport may choose
+full when complete delta framing would cost more. The test runs against the
+original installed core as well; it qualifies the existing installed protocol
+and supplies a regression boundary rather than introducing another context
+owner. Native events are fixtures, not evidence of model retention or adoption.
+
+Instrumented SQLite/File Turn witnesses retain Python, actual Node-loader and
+RPC observations. The selected Turn entry still loads 525 Python modules,
+including 111 capability modules; its Node runtime retains eager shared typed
+support. Complete work contracts and transport costs remain in the inventory.
+This diagnostic does not qualify endpoint/network completeness, OS-cold cost,
+model tokens or the full minimal composition. Keep earlier failed checks and
+the separate startup/context boundary; full V1–V5/V10, R1/M3, independent
+Standard/workspace packages, installed-host adoption and complete original-goal
+regression remain open under their existing owners and acceptance.
+
+The installation gate exposed a project-skill supporting-example link that left
+the installed bundle. The link now resolves to the byte-verified public source
+at an immutable revision; the procedure, consent and check-scope clauses remain
+unchanged. It is an on-demand supporting reference, not a runtime fetch or new
+authority. Preserve the earlier failed installation gate and disk-limited base
+replays separately from the repaired-head validation.
+
+### 2026-11-13 — Installed context regression enters the package lane
+
+The standalone core lane now invokes `tests/test_core_distribution.py` and
+`tests/control_plane/test_installed_core_context.py` together, and both pull
+request and main-push filters observe the context suite. The previous lane
+omitted that suite despite its local qualification. An independent workflow
+check rejects the unchanged base for all three omissions and accepts the
+repaired command and filters. The clean Python 3.11.15 wheel's 1,885 tracked
+runtime files match the source bytes; the installed artifact remains separate
+from the source test environment.
+
+Additional macOS arm64/Python 3.13.5/Node 26 observations use the same installed
+core 2.3.0 and isolated SQLite/File complete-Turn fixtures, with synthetic Hosts
+and usage telemetry disabled. The two selected Turn processes still load 525
+LoopX Python modules, including 111 capability modules, and issue 220/221 Effect
+RPCs. All 1,024 observed Python connect/address-resolution events target
+loopback; the two Node listeners and their DNS lookups also use loopback. Four
+Node processes, including the Host supervisors, load 247 distinct files. The
+observer's own local-connection and named-import subprocess controls pass;
+the earlier incomplete observer remains separate from this checked observation.
+
+These observations identify local RPC traffic in this fixture; they do not
+establish OS-wide network completeness, ordinary telemetry behavior, model
+context adoption, paired performance or full costs. This delivery closes the
+installed protocol's CI coverage gap without selecting D2/D5 or a minimal
+preset. Real Host initial/revised/compacted/lost-ACK adoption, complete V1–V5/V10,
+R1/M3, Standard/workspace publication and original-goal regression remain open.
+Preserve the earlier failures, frozen budgets and unchanged governance owners.
+
+### 2026-11-13 — Managed Codex preparation respects start admission
+
+The existing built-in Codex CLI route can prepare an eligible hard-lease Todo
+through the exact ordinary claim advertised by its typed decision. The caller
+then rereads the same Todo and requires ready before Host launch. This removes
+the separate manual claim step; it does not select a new host or grant authority.
+The prior proposal at `d4348db14d51952a74247e3003768a2f969c7216` still wrote a
+lease and Turn receipt before invalid validator input or cadence waiting was
+rejected. The repaired route validates the existing Host arguments and obtains
+start admission from the same TypeScript cadence owner before those writes,
+then reserves the exact Turn binding before the ordinary claim. Start admission
+runs inside the existing cross-runtime Turn binding lock, so a competing caller
+cannot reserve one Todo's interval and then let a different binding win.
+
+Preparation and execution reuse the settlement effect identity for the start
+reservation. A claim acknowledgement lost before journal creation can therefore
+recover its already confirmed lease and original unstarted reservation. The
+existing transaction-key reservation is retained as an exact recovery fallback
+for historical Codex journals; a started request cannot use that fallback to
+run again. An uncertain claim reports unknown state effects instead of asserting
+that nothing was written. A successful claim receipt remains visible if the
+subsequent Host step fails. The existing spend precheck refuses a fresh claim
+for a settled Turn even after its lease is released, directing recovery to the
+recorded journal. No new persisted schema or governance owner is added.
+
+Real source CLI checks on isolated File and SQLite reject malformed validator
+JSON/argv and scheduled waits with unchanged leases, Turn receipts, journals
+and Host calls. The same independent oracles fail on the prior proposal.
+Interruption after the ordinary claim recovers with one Host attempt and one
+settlement; recorded-key replay has no effects. Installed core qualification
+uses the same existing package lane and synthetic Codex transport, with an
+independent artifact validator and result readback.
+
+This is an executable-start prerequisite for V2/V3/V4, not whole R1 acceptance.
+The Host is synthetic: actual model adoption, complete V1–V5/V10, default
+closure, paired complete costs, progressive product control, R1/M3 and original
+Goal regression remain unqualified. Keep the nine original requirements,
+previous failed attempts and frozen budget failures; no minimal preset,
+provider default, package publication or paid operation is promoted here.
+
+### 2026-11-13 — Full Turn defers unselected provider implementations
+
+The installed core Turn previously loaded BM25 and OpenViking while resolving
+Reward Memory configuration, and loaded the anti-entropy inspector even when
+retirement governance was disabled. Context-provider exports and the existing
+builtin builder registry now resolve implementations on explicit use. A pure
+OpenViking scope owner is shared by binding normalization and the provider;
+the original URI grammar, public aliases and Python serialization identity are
+retained. Anti-entropy still uses the existing typed activation and applicable
+basis; its feedback builder resolves only after those checks. No capability,
+provider default, authority, claim, stop or settlement rule is added or relaxed.
+
+The 12 fresh-process checks cover registry rejections/custom builders, real
+local BM25 retrieval, binding classification, disabled/enabled retirement and
+attribute/from/star exports. The original 11-check corpus fails five loading
+oracles on immutable base `441c6077e7c5c8e896ea79562761fd483baf157e`, while its
+six export checks pass. Sixteen URI success/rejection cases and protocol-4
+pickle bytes match between installed base and candidate; cross-version reads
+pass both ways. Definitions move to the pure scope source file: declaration
+source introspection is not preserved by the original-module alias.
+
+The final independent Python 3.11 core wheel contains 1886 runtime files that
+match source bytes (SHA256
+`bc36c92dd437b9418e21031e185fefd04984c91a30169cbd866a3c712d92b4fa`).
+Source capability regression passes 628 cases. Real isolated File and SQLite
+execution commits a checked artifact and one settlement; original-key replay
+has no Host, state or quota effects. Instrumented full-Turn module counts,
+including the package root, change from 525 to 516 on execution and 438 to 432
+on replay; capability counts change from 111 to 102 and 56 to 50. Execution
+RPC counts remain 221/220 and replay remains 11. The unselected OpenViking,
+BM25 and anti-entropy inspection implementations disappear from those paths.
+These counts describe the observed Python path, not the complete minimal closure.
+
+Matched installed observations use macOS 27 arm64, Python 3.11.15, Node 26.0.0
+and five
+alternating base/candidate pairs per backend and phase. Each invocation starts
+a new Python process. Before first execution, the isolated managed RPC server
+is normally stopped and must restart; completed-Turn replay reuses that server.
+Setup and independent readback are outside timing; OS, bytecode and compilation
+caches are not reset. Nearest-rank p95 is the maximum of five samples.
+
+| Backend / phase | Wall median / p95 ms, base → candidate | Median invocation RSS MiB, base → candidate |
+| --- | --- | --- |
+| SQLite / fresh execution | 2922.5 / 3561.9 → 3006.8 / 4139.9 | 81.81 → 81.25 |
+| SQLite / completed-Turn replay | 809.6 / 948.6 → 889.0 / 1415.0 | 44.73 → 44.42 |
+| File / fresh execution | 2858.7 / 3005.5 → 2862.5 / 2985.0 | 81.09 → 81.36 |
+| File / completed-Turn replay | 645.4 / 679.7 → 692.5 / 773.9 | 44.73 → 44.28 |
+
+All 40 invocations preserve the same independent result/effect fingerprint;
+stdout sizes remain 4002 bytes for execution and 4548 for replay. The candidate
+has slower SQLite medians and a higher tail: no latency or complete-cost
+improvement is qualified. Invocation RSS excludes the persistent Node server;
+zero block-I/O counters do not prove zero file access. Separate controlled
+observers verify Python import/open/process/loopback events and Node module/
+loopback/exit events, but do not provide OS-wide closure, complete IPC/I/O or
+model-token, service-cost and human-attention accounting. The Host remains
+synthetic. Full V1–V5/V10, real model adoption/recovery, progressive product
+control, R1/M3, independent Standard packages and original-goal regression remain
+open. Preserve all nine original requirements and earlier frozen failures.
+
+### 2026-11-13 — TraeX continuation consumes its runtime thread
+
+The public `start-goal` entry now reads TraeX's `TRAECLI_THREAD_ID` through the
+existing host-thread adapter. A verified `traex-cli` binding reuses its Agent
+without another `--thread-id` or `--agent-id`; an explicit thread still takes
+precedence. Missing, new, foreign-host and conflicting contexts retain the
+existing identity fences. Trae App keeps its separate binding scope.
+
+Matched isolated File/SQLite CLI checks cover source, the standalone core built
+from `09886ba7a`, and the candidate core: 36 calls retain exact objective text,
+registry/state bytes and canonical provider revision across ordinary entry,
+explicit control/override, unknown context and replay. The base still loses the
+ambient thread; both repaired entrypoints reuse the bound Agent. Source
+regression passes 215 cases, including foreign-host and conflict refusal;
+the installed core/recovery/context suite passes 23 on Python 3.11.15, with
+source on Python 3.13.5 and Node 26.0.0. All 1,887 packaged runtime files match
+the reviewed source bytes. Initial fixture setup failures remain failed attempts.
+
+TraeX activation guidance reads native Goal tools or current host context first,
+preserves an active original objective on continuation, and retains user stops.
+Only an authorized fresh start with no existing native Goal may create one;
+the visible `/goal` fallback remains for unavailable tools/context. This is an
+entry and instruction repair, not proof that a model adopted the guidance.
+No new lifecycle owner, model execution, preset or installed-host release is
+introduced. Full R1/V1–V5/V10, progressive control, complete cost evidence and
+the original-goal regression remain open; all original failures are retained.
+
+### 2026-11-13 — Original record reads stop when their disclosure closes
+
+The optional attached-work conversation retries an interrupted detail read once
+at the same source, record and character offset. Closing either the record or
+its work-activity group cancels that read, including its hidden retry; reopening
+retains the loaded text and position for an explicit continuation. The existing
+HTTP reader, fingerprints and native-input boundary remain the owners.
+
+The unrepaired candidate's real HTTP/browser negative case issued a second read
+after closure. Source and an isolated Python 3.11 wheel now qualify both closure
+boundaries, interrupted-success recovery, denied-body refusal and complete
+Unicode readback through the real LoopX reader with a synthetic Desktop peer.
+This qualifies optional record reading, not model-context retention, managed
+V4/R1, split-package M3, installed-App adoption or complete costs. The original
+Goal regression, acceptance gaps, authority and frozen failures remain intact.
+
+### 2026-11-13 — Standalone continuation retains its installation
+
+Standalone startup previously returned an ambient `loopx` command even when
+the caller selected an isolated core interpreter. Executing that complete
+command could import another installation through PATH/PYTHONPATH. Earlier
+installed tests discarded the executable and replayed its arguments, hiding
+the failure. Core-generated commands now retain the same environment's Python
+with `-I -m loopx.entrypoint` through the existing invocation owner. An explicit
+global `--cli-bin` and ordinary-distribution defaults retain their behavior;
+invalid arguments retain complete parser diagnostics. Multi-Goal selection
+uses the same command renderer.
+
+Core module diagnosis verifies its actual imported distribution, recorded
+module and present recorded console entrypoints. Version/catalog/help probes
+use the same isolated module invocation, so a foreign PYTHONPATH cannot
+silently change the artifact being checked. Missing or redirected module
+records, absent console records/files, unrecorded launchers and missing runtime
+files remain failures. The installed qualification executes whole returned
+activation and diagnosis commands, with a foreign-package sentinel and an
+explicit-route control, alongside existing SQLite/File recovery and context
+checks. This repairs command provenance without adding a lifecycle, authority,
+configuration or protocol owner.
+
+Full R1/V1–V5/V10, real model recovery/adoption, progressive product control,
+minimal dependency closure, M3/Standard/workspace/meta packaging and complete
+cost acceptance remain open. This does not upgrade an installed host, start a
+model service or establish effectiveness from protocol fixtures. Preserve all
+nine original requirements, the original-Goal regression and earlier failures.
+
+### 2026-11-13 — Successful work records a fresh checkpoint on the same route
+
+The generic Host result boundary previously required a fresh Vision to use
+`material_replan` and `replan_required`. A successful task retaining its route
+could only reuse an unchanged reason, even when it had new outcome evidence.
+An explicit `path_delta_mode: unchanged` now accepts the existing Vision packet
+with `path_delta.outcome: continue` or `no_change`, without an unchanged reason.
+The existing TypeScript Vision, task, validation and settlement owners still
+decide durable effects. Material replans, stop decisions, malformed packets and
+conflicting declarations retain their refusal. Omitted modes retain legacy
+inference; generic and Codex guidance describe the same boundary.
+
+One existing isolated inventory task used the current model's tools through a
+stdio adapter and a Python 3.11 standalone core artifact on SQLite. Revised
+inputs yielded quantities 22/10/5 and value 185.25, versus 172.25 previously.
+Independent checks verified the 13.00 reconciliation, all six excluded rows,
+reusable generator and preservation of all five original files. After the
+normalized result was journaled, SIGKILL interrupted the driver and validator.
+The original Turn resumed at validation without invoking the Host, completed
+the Todo and spent once; completed replay added no Host, writeback or spend.
+The initial invalid completion/replan reply and three resume setup refusals
+remain failed attempts. There were two Host dispatches and one model work pass;
+the rejected reply was not treated as confirmed work.
+
+Source executor/driver checks and Codex/dsh regression pass. Installed File and
+SQLite checks retain legacy completion and qualify both fresh checkpoint
+outcomes plus replay; the initial oversized inline test command failed its
+existing bound, then the fixture used an ordinary script path. No command
+budget, authority, default or historical receipt was changed. This qualifies
+the touched success/checkpoint and recovery path, not full V1–V5/V10 or R1.
+Complete context retention, minimal closure, progressive product control,
+comparable complete costs, M3/Standard/workspace delivery and the original-Goal
+regression remain open. All nine original requirements and frozen failures
+remain intact; no installed host or model service was upgraded.

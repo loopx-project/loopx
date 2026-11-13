@@ -8,9 +8,19 @@ import {outputDir, repoRoot} from "./fixture.mjs";
 import {startHistoryOwner} from "./research-history.mjs";
 
 async function readEmptyScope(page, results, message) {
-  await results.getByRole('button',{name:'No matches in loaded records',exact:true}).focus();
+  const search = results.getByRole('searchbox');
+  const query = await search.inputValue();
+  const trigger = results.getByRole('button',{name:'No matches in loaded records',exact:true});
+  await trigger.focus();
+  // Enter opens the help even when the trigger retained focus after an earlier
+  // dismissal; focusing an already focused element does not fire onFocus.
+  await trigger.press('Enter');
   await page.getByRole('tooltip').getByText(message,{exact:true}).waitFor();
-  await page.keyboard.press('Escape');
+  // Bind dismissal to the current trigger after rendering. A global Escape
+  // can reach the search input and clear the filter instead of only the help.
+  await trigger.press('Escape');
+  await page.getByRole('tooltip').waitFor({state:'hidden'});
+  assert.equal(await search.inputValue(), query, 'Dismissing scope help preserves the selected query');
 }
 
 export const researchRecordSearchScenario = {
@@ -231,6 +241,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(await results.locator("li").count(), 1);
       const stale = await download();
       assert.equal(stale.coverage.refresh_failed, true);
+      assert.equal(await history.locator(".research-phase").count(), 3, "A failed refresh retains the last complete time range");
       assert.match(await report(), /Failed; previously read records retained/);
       await comparisonSummary.click();
       await comparison.getByRole("combobox", {name: "Compare with"}).waitFor();
@@ -253,7 +264,23 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       // Fresh interrupted load searches only the explicitly partial snapshot.
       await page.route("**/api/chat/explore-results?*", route => new URL(route.request().url()).searchParams.has("cursor")
         ? route.fulfill({status: 503, json: {error: "Synthetic page interruption"}}) : route.continue());
-      await page.reload();
+      const periodBookmark = new URL(page.url());
+      periodBookmark.searchParams.set("research_goal", "synthetic-record-search");
+      periodBookmark.searchParams.set("research_phase", "2");
+      await page.goto(periodBookmark.href);
+      const readError = history.locator(".research-history-read-error");
+      const coverage = history.locator(".research-history-coverage");
+      await readError.waitFor();
+      await history.locator(".research-axis").waitFor();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await page.screenshot({path: resolve(outputDir, `research-history-partial-${width}.png`), animations: "disabled"});
+      }
+      assert.match(await coverage.innerText(), /Loaded records \(local time\).*40 \/ 79/);
+      assert.match(await readError.locator(":scope > div > strong").innerText(), /Only part of the history loaded/);
+      assert.equal(await history.locator(".research-phase, .research-phase-divider").count(), 0,
+        "Incomplete pages cannot define the full history's periods");
+      assert.equal(new URL(page.url()).searchParams.get("research_phase"), "2", "An incomplete read keeps the requested period");
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       await search.fill("amber-v1");
       await readEmptyScope(page, results, "No matches in the loaded records; the remaining history is not verified.");
@@ -270,10 +297,29 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert(partial.records.length > 0 && partial.records.length < 79);
       await search.fill("amber-v1");
       await page.unroute("**/api/chat/explore-results?*");
-      await history.getByRole("button", {name: "Refresh history", exact: true}).click();
+      await readError.getByRole("button", {name: "Retry", exact: true}).press("Enter");
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
+      assert(await coverage.evaluate(element => element === document.activeElement), "Keyboard retry leaves focus on the updated coverage");
+      assert.match(await coverage.innerText(), /Recorded time \(local\).*79 \/ 79/);
+      const phases = history.locator(".research-phase");
+      assert.equal(await phases.count(), 3);
+      assert.equal(await phases.nth(2).getAttribute("aria-pressed"), "true", "Recovery applies the original period bookmark");
       await page.goto(url.replace("synthetic-record-search", "synthetic-other-research"));
-      await history.getByRole("button", {name: "Search research records", exact: true}).click();
+      const openOtherSearch = history.getByRole("button", {name: "Search research records", exact: true});
+      await openOtherSearch.evaluate(button => {
+        // Hold the frame from this one search activation until the reader moves focus.
+        button.addEventListener("click", () => {
+          const schedule = window.requestAnimationFrame;
+          const frames = [];
+          window.__loopxHeldSearchFrames = frames;
+          window.requestAnimationFrame = callback => {
+            frames.push(callback);
+            return -frames.length;
+          };
+          setTimeout(() => {window.requestAnimationFrame = schedule;}, 0);
+        }, {once: true});
+      });
+      await openOtherSearch.click();
       await results.getByRole("status", {name: "4 matches in 4 loaded records · 3 entries", exact: true}).waitFor();
       assert.equal(await search.inputValue(), "", "Another Goal starts with its own search scope");
       assert.doesNotMatch(await results.innerText(), /amber|Earlier negative/);
@@ -281,7 +327,15 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       const groupSummary = grouped.locator(":scope > summary");
       assert.match(await groupSummary.innerText(), /Refuted.*Resolved.*2 records/);
       assert.equal(await results.locator(".research-record-entry").count(), 3, "Identical titles and times leave independent attempts and absent links separate");
-      await groupSummary.press("Enter");
+      await groupSummary.focus();
+      await page.evaluate(() => {
+        const frames = window.__loopxHeldSearchFrames ?? [];
+        delete window.__loopxHeldSearchFrames;
+        frames.forEach(callback => callback(performance.now()));
+      });
+      assert(await groupSummary.evaluate(element => element === document.activeElement),
+        "Delayed search autofocus leaves the already focused record in control");
+      await page.keyboard.press("Enter");
       const groupHistory = grouped.locator(".research-record-group-history");
       await groupHistory.waitFor();
       assert.match(await grouped.innerText(), /The alternative missed the target\./);

@@ -55,7 +55,13 @@ def _subprocess_failure_detail(completed: subprocess.CompletedProcess[str]) -> s
         ("stdout", completed.stdout),
         ("stderr", completed.stderr),
     ):
-        bounded = _bounded_failure_output(value or "")
+        if value is None:
+            # A decoder failure in CPython's reader thread leaves the stream
+            # unset instead of raising here, so the decode must not be reported
+            # as the CLI having printed nothing.
+            details.append(f"{label}=<not decoded as UTF-8>")
+            continue
+        bounded = _bounded_failure_output(value)
         if bounded:
             details.append(f"{label}={bounded}")
     return "; ".join(details) or "no diagnostic output"
@@ -120,10 +126,16 @@ def _heartbeat_task_body(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     if completed.returncode != 0:
         raise SystemExit(
             f"loopx heartbeat-prompt failed ({completed.returncode}): "
+            f"{_subprocess_failure_detail(completed)}"
+        )
+    if completed.stdout is None:
+        raise SystemExit(
+            f"loopx heartbeat-prompt output could not be decoded as UTF-8: "
             f"{_subprocess_failure_detail(completed)}"
         )
     try:
@@ -405,11 +417,17 @@ def _load_scheduler_hint(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
     )
     if completed.returncode != 0:
         raise SystemExit(
             f"loopx should-run failed ({completed.returncode}): "
+            f"{_subprocess_failure_detail(completed)}"
+        )
+    if completed.stdout is None:
+        raise SystemExit(
+            f"loopx should-run output could not be decoded as UTF-8: "
             f"{_subprocess_failure_detail(completed)}"
         )
     try:
@@ -477,6 +495,7 @@ def _run_ack(loopx: str, ack_args: list[str]) -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     if completed.returncode != 0:
         raise SystemExit(

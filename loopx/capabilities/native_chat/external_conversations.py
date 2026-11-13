@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ...chat_actions import goal_workspace_ref
+from ...chat_ingress import STEWARD_BINDING_ADOPTION_PENDING, ensure_external_admission_scope, resolve_external_admission_source
 from ...chat_store import _atomic_write_json, _read_json, RESUMABLE_SESSION_STATES
 from ...chat_attachments import normalize_chat_image_attachments
 from ...control_plane.quota.automation_cadence_readback import (
@@ -352,14 +353,18 @@ class ChatExternalConversations:
     def _quota_pending_inputs(self, row: dict[str, Any]) -> dict[str, Any]:
         store = self.controller.store
         turn = store.load_turn(row["session_id"], row["turn_id"])
+        session = store.load_session(row["session_id"])
+        # Keep the full request/response evidence. The related Session and
+        # Turn need only identity, lifecycle and result for this read.
         return {
             "request": {key: value for key, value in row.items() if key != "attachments"},
-            "current_session": store.load_session(row["session_id"]),
-            # Pending-work semantics use status/response, not image bytes.
-            # Accepted Chat images can exceed the ordinary Core message limit;
-            # retain them in the canonical Turn, outside this read-only view.
-            "pending_observation": {"turn": ({key: value for key, value in turn.items() if key != "attachments"}
-                                             if turn is not None else None), "stop_observed": False},
+            "current_session": ({key: session[key] for key in ("session_id", "status") if key in session}
+                                if session is not None else None),
+            "pending_observation": {
+                "turn": ({key: turn[key] for key in ("session_id", "turn_id", "client_turn_id", "status",
+                    "error_code", "response") if key in turn} if turn is not None else None),
+                "stop_observed": False,
+            },
         }
 
     def quota_backlog_pending(self, row: dict[str, Any], *,
@@ -1396,17 +1401,9 @@ class ChatExternalConversations:
         # it must not hold up other messages while native cancellation runs.
         with exclusive_file_lock(path, operation="admit_external_chat_request"):
             with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"):
-                # Resolve after waiting for both fences, including exact replay.
-                # A lock-external provider probe cannot authorize the write and
-                # would duplicate this fresh authority check on every request.
-                selected = self.bindings.resolve(binding_id=binding_id, **source,
-                    **({"include_observation": True} if source_preflight is not None else {}))
-                # Earlier provider IO and App observations cannot authorize
-                # admission. Validate against this fresh selection inside both fences,
-                # before creating or replaying any canonical request.
-                if source_preflight is not None:
-                    if source_preflight(deepcopy(selected)) is not None:
-                        raise ValueError("source preflight must complete verification or raise")
+                # Resolve and verify the source inside both fences before
+                # creating or replaying any canonical request.
+                selected = resolve_external_admission_source(self.bindings, binding_id, source, source_preflight)
                 expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
                             "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
                 recovering_request = path.exists()
@@ -1426,7 +1423,8 @@ class ChatExternalConversations:
                            "created_at": datetime.now(timezone.utc).isoformat()}
                     _atomic_write_json(path, row)
                 try:
-                    row = self._admit_prepared(path, row, selected, recovering_request=recovering_request)
+                    row = self._admit_prepared(path, row, selected, recovering_request=recovering_request,
+                                              source_preflight=source_preflight)
                 except ValueError:
                     self._reject_prepared(path, row)
                     raise
@@ -1444,13 +1442,19 @@ class ChatExternalConversations:
     @staticmethod
     def _reject_prepared(path: Path, row: dict[str, Any]) -> None:
         # Definitive command/grant denials must not retry indefinitely.
+        if row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+            row.pop("response_code")
         row.update(status="rejected", response="原授权或命令格式不可用，本条未进入执行队列；请用 /agents 或 /project 查看可用入口。")
         _atomic_write_json(path, row)
 
     def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any],
-                        *, recovering_request: bool = False) -> dict[str, Any]:
+                        *, recovering_request: bool = False,
+                        source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         controller = self.controller
-        self.bindings.ensure_delivery_scope(selected)
+        selected = ensure_external_admission_scope(self.bindings, selected, path, row, source_preflight=source_preflight)
+        held_for_binding = row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
+        if held_for_binding:
+            row.pop("response_code")
         if not row.get("routing_recorded"):
             choices = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
                 and item["source"]["source_ref"] == row["source"]["source_ref"]
@@ -1461,6 +1465,7 @@ class ChatExternalConversations:
         if row["command"] in {"agents", "select_agent", "select_project"}:
             row["agent_target"] = None
         target = row.get("agent_target")
+        steward_candidate = None
         if target:
             authority = self.bindings.resolve_agent_target(selected, target)
             row["agent_audience"] = authority["audience"]
@@ -1482,10 +1487,11 @@ class ChatExternalConversations:
                               if item.get("status") in RESUMABLE_SESSION_STATES]
                 if candidates:
                     latest = max(candidates, key=lambda item: str(item.get("created_at") or ""))
-                    candidate = controller.store.load_session(latest["session_id"])
-                    if candidate and candidate.get("manager_executor_allocation", {}).get("selection_policy") == "flexible":
-                        self.bindings.session_context(candidate["steward_context"], session=candidate)
-                        current = candidate
+                    steward_candidate = controller.store.load_session(latest["session_id"])
+                    allocation = (steward_candidate or {}).get("manager_executor_allocation")
+                    if isinstance(allocation, dict) and allocation.get("selection_policy") == "flexible":
+                        self.bindings.session_context(steward_candidate["steward_context"], session=steward_candidate)
+                        current = steward_candidate
         if row["command"] in {"status", "help"} and not target:
             # Observation must retain failed/closed originals. Admission still
             # uses the resumable selector and never resumes from this snapshot.
@@ -1510,8 +1516,14 @@ class ChatExternalConversations:
                 row.update(status="accepted", turn_id=turn["turn_id"])
                 _atomic_write_json(path, row)
                 return row
+            if held_for_binding and current.get("status") == "closed":
+                raise ValueError("the original steward Session is unavailable for admission")
+            steward_candidate = current
         from ...control_plane.effect_runtime import effect_runtime_result
         observations = {}
+        if (row["command"] is None and steward_candidate and selected["binding"]["context_kind"] == "steward"
+                and steward_candidate.get("executor_endpoint_id") != selected["binding"]["executor_endpoint_id"]):
+            observations.update(steward_adoption_session=steward_candidate, context=selected["context"])
         if (row["command"] == "stop" and current and not current.get("active_turn_id")
                 and not row.get("target_recorded") and not target):
             # Freeze canonical candidates before any fallible native inventory
@@ -1536,6 +1548,11 @@ class ChatExternalConversations:
             "current_session": current, "binding": selected["binding"],
             "agent_target": target, **observations})
         operation = plan["operation"]
+        if operation == "hold_steward_binding":
+            row.update(session_id=plan["session_id"], response_code=STEWARD_BINDING_ADOPTION_PENDING)
+            if not held_for_binding:
+                _atomic_write_json(path, row)
+            return row
         if operation == "select_recipient":
             if selected["binding"]["context_kind"] != "project":
                 raise ValueError("Agent selection requires the project assistant")

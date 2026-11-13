@@ -936,6 +936,70 @@ def test_default_turn_cli_blocks_native_launch_after_canonical_goal_stop(
     assert not any(row.get("classification") == "quota_slot_spent" for row in rows)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="ordinary Codex exec interrupt on POSIX")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_default_turn_cli_interrupts_running_native_exec_after_goal_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    import io
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import redirect_stdout
+
+    from loopx.cli import main as cli_main
+    from loopx.control_plane.goals.activation_service import set_goal_activation_state
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.test_loopx_turn_driver import _write_live_fixture
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    started, interrupted = project / "host-started", project / "host-interrupted"
+    executable = write_python_host_fixture(tmp_path / "codex-fixture", f'''#!{sys.executable}
+import signal, sys, time
+from pathlib import Path
+
+def on_interrupt(_signum, _frame):
+    Path({str(interrupted)!r}).touch()
+    sys.exit(1)
+
+assert sys.argv[1] == "exec"
+signal.signal(signal.SIGINT, on_interrupt)
+Path({str(started)!r}).touch()
+time.sleep(30)
+''')
+
+    def stop_running_goal():
+        deadline = time.monotonic() + 12
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert started.exists(), "ordinary native Host never launched"
+        return set_goal_activation_state(
+            registry_path=registry, goal_id="loopx-turn-fixture", state="stopped",
+            reason="Owner stopped the running fixture", actor_kind="owner", execute=True,
+        )
+
+    output = io.StringIO()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stopped = executor.submit(stop_running_goal)
+        with redirect_stdout(output):
+            code = cli_main([
+                "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+                "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+                "--host", "codex-cli", "--project", str(project), "--codex-bin", str(executable),
+                "--codex-sandbox", "read-only", "--no-global-sync", "--iteration-context", "fresh",
+                "--turn-instance-id", "cancel-running-native-exec", "--timeout-seconds", "20",
+                "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]), "--execute",
+            ])
+        assert stopped.result()["readback"]["verified"]
+    payload = json.loads(output.getvalue())
+    assert code == 1 and payload["error_code"] == "goal_stopped", payload
+    assert interrupted.exists()
+    assert not _session_files(runtime)
+    index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+    rows = [json.loads(line) for line in index.read_text().splitlines()] if index.exists() else []
+    assert not any(row.get("classification") == "quota_slot_spent" for row in rows)
+
+
 @pytest.mark.parametrize("context", ["fresh", "resume"])
 @pytest.mark.parametrize("change", ["stop", "replace"])
 def test_source_goal_change_after_session_selection_prevents_host_launch(

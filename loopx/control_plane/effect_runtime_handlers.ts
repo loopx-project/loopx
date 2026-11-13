@@ -28,6 +28,7 @@ import {
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
 import {
   optionalNonEmptyString as optionalString,
+  requireBoolean,
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
   requireStringLiteral,
@@ -270,6 +271,7 @@ export function createEffectRuntimeHandlers(
     ["turn.controller", lazyHandler(() => import("./turn_driver/loop_controller.ts"), ({controllerRequest}) => controllerRequest)],
     ["turn_journal.write", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({commitTurnJournal}) => commitTurnJournal)],
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
+    ["turn_journal.find_instance", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalByInstance}) => findTurnJournalByInstance)],
     ["turn_journal.observed_capabilities", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({readTurnJournalCapabilities}) => readTurnJournalCapabilities)],
     ["todo.priority.plan", lazyHandler(() => import("./todos/priority.ts"), ({evaluateTodoPriority}) => evaluateTodoPriority)],
     ["todo.read", lazyHandler(() => import("./todos/read_transport.ts"), ({readTodoRuntime}) => readTodoRuntime)],
@@ -289,6 +291,7 @@ export function createEffectRuntimeHandlers(
     ["benchmark.trajectory.qualify", lazyHandler(() => import("./capabilities/trajectory_assessment.ts"), ({qualifyTrajectoryAssessment}) => qualifyTrajectoryAssessment)],
     ["benchmark.trajectory.continuation", lazyHandler(() => import("./capabilities/trajectory_assessment_continuation.ts"), ({compareTrajectoryAssessments}) => compareTrajectoryAssessments)],
     ["benchmark.terminal-followthrough.prepare", lazyHandler(() => import("./capabilities/benchmark_terminal_followthrough.ts"), ({prepareBenchmarkTerminalFollowthrough}) => prepareBenchmarkTerminalFollowthrough)],
+    ["benchmark.cli_source_activation", lazyHandler(() => import("./capabilities/benchmark_cli_source_activation.ts"), ({qualifyCliSourceActivation}) => qualifyCliSourceActivation)],
     ["agent.preferences", lazyHandler(() => import("./capabilities/agent_preferences.ts"), ({agentPreferences}) => agentPreferences)],
     ["todo.archive.capture_dependencies", lazyHandler(() => Promise.all([import("./todos/archive_capture.ts"), import("./coordination/source_transfer.ts")]), ([{captureArchivedTodoDependencies}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies))],
     ["agent.supervisor.plan_append", lazyHandler(() => import("./agents/supervisor_event_append.ts"), ({planSupervisorEventAppend}) => planSupervisorEventAppend)],
@@ -331,6 +334,7 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./work_items/action_portfolio.ts"), ({reconcileRetainedActionSelection}) => reconcileRetainedActionSelection),
     ],
     ["todo.context.page", lazyHandler(() => import("./todos/context_projection.ts"), ({projectTodoContextPage}) => projectTodoContextPage)],
+    ["manager.discovery.project", lazyHandler(() => import("../capabilities/manager_context/discovery_projection.ts"), ({projectAgentDiscovery}) => projectAgentDiscovery)],
     ["work_item.task_graph.status", lazyHandler(() => import("./work_items/task_graph.ts"), ({projectStatusTaskGraph}) => projectStatusTaskGraph)],
     ["work_item.task_graph.goal_topology", lazyHandler(() => import("./work_items/task_graph.ts"), ({projectGoalTaskMap}) => projectGoalTaskMap)],
     ["work_item.refresh_recommendation.resolve", lazyHandler(() => import("./work_items/refresh_recommendation.ts"), ({resolveRefreshRecommendation}) => resolveRefreshRecommendation)],
@@ -475,6 +479,7 @@ export function createEffectRuntimeHandlers(
     ["capabilities.pr_review.conclusion.select", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({selectPrReviewConclusion}) => selectPrReviewConclusion)],
     ["capabilities.pr_review.configuration", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({prReviewConfiguration}) => prReviewConfiguration)],
     ["capabilities.pr_review.order", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({orderPrReviewQueue}) => orderPrReviewQueue)],
+    ["material_lifecycle.plan_wave_rerank", lazyHandler(() => import("./capabilities/material_wave_ranking.ts"), ({planMaterialWaveRerank}) => planMaterialWaveRerank)],
     ["coordination.runtime_shadow.outbox_read", lazyHandler(() => import("./coordination/local_authority_shadow.ts"), ({readLocalAuthorityShadow}) => readLocalAuthorityShadow)],
     ["coordination.runtime_shadow.drain", lazyHandler(() => import("./coordination/shadow_drain.ts"), ({drainShadowOutbox}) => drainShadowOutbox)],
     ["coordination.cold_source.import", lazyHandler(() => Promise.all([import("./coordination/cold_source_import.ts"), import("./coordination/source_transfer.ts")]), ([{executeColdSourceImport}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.cold_source.import", executeColdSourceImport))],
@@ -483,6 +488,9 @@ export function createEffectRuntimeHandlers(
       (params) => effectProgramFromOrderedSteps(
         Array.isArray(params.ordered_steps) ? params.ordered_steps : [],
         typeof params.execution_mode === "string" ? params.execution_mode : null,
+        Object.hasOwn(params, "include_raw")
+          ? requireBoolean(params.include_raw, "include_raw")
+          : true,
       ),
     ],
     [

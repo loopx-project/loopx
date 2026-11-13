@@ -226,6 +226,13 @@ def read_turn_plan_work(plan: Mapping[str, Any]) -> dict[str, Any]:
     return _wire_mapping(plan.get("turn_envelope"))
 
 
+def read_recorded_turn_plan_lineage(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Check a recorded plan with the same source reader as journal inspection."""
+    tokens = source_number_tokens(plan.get("work_contract"))
+    return _turn_envelope_result("recorded_plan_lineage", plan=plan,
+        **({"source_number_tokens": tokens} if tokens else {}))
+
+
 def turn_host_lineage(request: Mapping[str, Any]) -> dict[str, str]:
     """Read identity from the complete owner, with historical request decoding."""
     checked = complete_turn_host_source(turn_plan_host_source(request), operation="complete_host_lineage")
@@ -283,14 +290,24 @@ def compose_turn_decision(
     payload: Mapping[str, Any], *, scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
+    composed_settlement: bool = False,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
-        scheduler_execution_args=args, source_edits=True)
+        scheduler_execution_args=args, source_edits=True,
+        **({"composed_settlement": composed_settlement} if composed_settlement is not False else {}))
     return _apply_context_projection_changes(source, result)
+
+
+def is_legacy_saved_quota_decision(payload: Mapping[str, Any]) -> bool:
+    """Recognize saved raw/v0 carriers that predate complete-source checking."""
+    return (
+        "contract_binding" not in payload
+        and payload.get("schema_version", TURN_ENVELOPE_SCHEMA_VERSION) == TURN_ENVELOPE_SCHEMA_VERSION
+    )
 
 
 def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:
@@ -428,11 +445,12 @@ def prepare_progressive_context(context: Mapping[str, Any], *, source_reference:
 def update_native_context_lifecycle(state: Mapping[str, Any], event: Mapping[str, Any], *,
                                     new_epoch: str, pages: list[dict[str, Any]],
                                     pages_verified: bool = False,
-                                    resume_verified: bool = False) -> dict[str, Any]:
+                                    resume_verified: bool = False,
+                                    resume_sections: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Native IO adapter; the shared typed owner reduces continuity assumptions."""
     return _turn_envelope_result("native_context_lifecycle", state=dict(state),
         event=dict(event), new_epoch=new_epoch, pages=pages, pages_verified=pages_verified,
-        resume_verified=resume_verified)
+        resume_verified=resume_verified, **({"resume_sections": dict(resume_sections)} if resume_sections else {}))
 
 
 def restore_context_delivery(

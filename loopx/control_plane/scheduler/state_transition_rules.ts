@@ -10,6 +10,7 @@ import {
   normalizeSchedulerHostUpdateFailures,
   normalizeSchedulerRrule,
   retainedSchedulerHostUpdateFailures,
+  requireSchedulerTimestampMilliseconds,
   rruleForMinutes,
   schedulerRruleIntervalMinutes,
   schedulerTimestampMilliseconds,
@@ -359,15 +360,38 @@ function schedulerProgressionIntervalElapsed(
   schedulerState: JsonObject,
   currentTime: string,
 ): boolean {
-  const updatedAt = schedulerTimestampMilliseconds(schedulerState.updated_at);
-  const current = schedulerTimestampMilliseconds(currentTime);
   const appliedInterval = schedulerRruleIntervalMinutes(
     schedulerState.last_applied_rrule,
   );
-  if (updatedAt === null || current === null || appliedInterval === null) {
-    return true;
-  }
+  // Missing interval or blank updated_at stays elapsed. A present illegal
+  // calendar is rejected instead of rolled or treated as elapsed.
+  if (appliedInterval === null) return true;
+  const updatedAt = requireSchedulerTimestampMilliseconds(
+    schedulerState.updated_at,
+    "updated_at",
+  );
+  if (updatedAt === null) return true;
+  const current = requireSchedulerTimestampMilliseconds(
+    currentTime,
+    "current_time",
+  );
+  if (current === null) return true;
   return current >= updatedAt + appliedInterval * 60_000;
+}
+
+// evaluateCadence reads the old clock only after identity matches and the
+// same-identity path is comparing the applied interval. An obsolete receipt
+// must not block identity_reset, an unacknowledged retry, or a held initial.
+function cadenceConsumesAppliedInterval(
+  statePresent: boolean,
+  identityMatches: boolean,
+  hasHostUpdateFailures: boolean,
+  currentCadenceAcknowledged: boolean,
+  advanceSameIdentity: boolean,
+): boolean {
+  if (!statePresent || !identityMatches) return false;
+  if (hasHostUpdateFailures && !currentCadenceAcknowledged) return false;
+  return advanceSameIdentity;
 }
 
 function monitorRruleAppliedWithinStaleTolerance(
@@ -400,6 +424,7 @@ function evaluateBackoff(request: JsonObject): SchedulerBackoffTransitionResult 
     "identity_signature",
   );
   const currentTime = requiredString(request.current_time, "current_time");
+  requireSchedulerTimestampMilliseconds(currentTime, "current_time");
   const cadenceClass = requiredString(request.cadence_class, "cadence_class");
   const staleToleranceMinutes = requiredInteger(
     request.stale_tolerance_minutes,
@@ -428,23 +453,33 @@ function evaluateBackoff(request: JsonObject): SchedulerBackoffTransitionResult 
     : "";
   const currentCadenceAcknowledged = Boolean(appliedTargetRrule) &&
     normalizeSchedulerRrule(lastAppliedRrule) === appliedTargetRrule;
+  const statePresent = Object.keys(schedulerState).length > 0;
+  const identityMatches = statePresent &&
+    schedulerState.reset_token === resetToken &&
+    schedulerState.identity_signature === identitySignature;
+  const advanceSameIdentity = requiredBoolean(
+    request.advance_same_identity,
+    "advance_same_identity",
+  );
+  const hasHostUpdateFailures = allHostUpdateFailures.length > 0;
+  const appliedIntervalElapsed = cadenceConsumesAppliedInterval(
+    statePresent,
+    identityMatches,
+    hasHostUpdateFailures,
+    currentCadenceAcknowledged,
+    advanceSameIdentity,
+  )
+    ? schedulerProgressionIntervalElapsed(schedulerState, currentTime)
+    : false;
   const cadence = evaluateCadence({
     progression_size: progressionMinutes.length,
-    state_present: Object.keys(schedulerState).length > 0,
-    identity_matches: Object.keys(schedulerState).length > 0 &&
-      schedulerState.reset_token === resetToken &&
-      schedulerState.identity_signature === identitySignature,
+    state_present: statePresent,
+    identity_matches: identityMatches,
     applied_index: appliedIndex,
     current_cadence_acknowledged: currentCadenceAcknowledged,
-    advance_same_identity: requiredBoolean(
-      request.advance_same_identity,
-      "advance_same_identity",
-    ),
-    applied_interval_elapsed: schedulerProgressionIntervalElapsed(
-      schedulerState,
-      currentTime,
-    ),
-    has_host_update_failures: allHostUpdateFailures.length > 0,
+    advance_same_identity: advanceSameIdentity,
+    applied_interval_elapsed: appliedIntervalElapsed,
+    has_host_update_failures: hasHostUpdateFailures,
   });
   const currentIndex = cadence.current_index;
   const currentInterval = progressionMinutes[currentIndex];

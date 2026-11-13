@@ -13,6 +13,28 @@ from .quota_request import (
 )
 
 
+def normalize_context_list_args(argv: list[str]) -> list[str]:
+    """Translate only an explicit JSON pointer after the existing flag."""
+    normalized = []
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--":
+            normalized.extend(argv[index:])
+            break
+        if arg.startswith("--list="):
+            normalized.extend(("--list", "--select=" + arg.removeprefix("--list=")))
+        else:
+            normalized.append(arg)
+            if arg == "--list" and index + 1 < len(argv):
+                pointer = argv[index + 1]
+                if pointer == "" or pointer.startswith("/"):
+                    normalized.append("--select=" + pointer)
+                    index += 1
+        index += 1
+    return normalized
+
+
 def register_quota_command(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
@@ -193,7 +215,8 @@ def register_quota_command(
         choices=["interactive", "isolated_headless", "hosted_automation"],
         help="Execution mode paired with --host-surface and --scheduler-owner.",
     )
-    quota_parser.add_argument(
+    turn_view = quota_parser.add_mutually_exclusive_group()
+    turn_view.add_argument(
         "--turn-envelope",
         action="store_true",
         help=(
@@ -201,6 +224,9 @@ def register_quota_command(
             "The default full decision remains unchanged."
         ),
     )
+    turn_view.add_argument("--complete-turn", action="store_true",
+        help="For JSON quota should-run, explicitly consume the complete v1 Turn contract and its shared exact-Turn settlement. "
+             "The legacy --turn-envelope and unselected output keep their existing versions. Context/Delta delivery remain independent.")
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(
         "--decision-output-dir",
@@ -253,7 +279,8 @@ def register_quota_command(
         help="For context-read or enabled native JSON context-project: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
              "Selected detail pages never acknowledge full-context retention; omit for unchanged full capture reads.")
     quota_parser.add_argument("--list", dest="list_fields", action="store_true",
-        help="For context-read: list immediate fields at the selected pointers (root by default), "
+        help="For context-read: list immediate fields at the selected pointers (root by default). "
+             "An optional exact JSON pointer is shorthand for --list --select POINTER; repeat to list related parents, "
              "with exact pointers, types and sizes. Does not read bodies or establish a delta baseline.")
     quota_parser.add_argument("--list-depth", type=int,
         help="For context-read --list: expand 1 to 8 levels in one index (default: 1). "

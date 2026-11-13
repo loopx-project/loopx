@@ -32,6 +32,7 @@ _APPEND_EVENTS = {"task_started", "task_complete", "item_completed", "token_coun
 _IO_CHUNK_BYTES = 64 * 1024
 # Bound one decoded protocol record, not the history or the replay interval.
 _MAX_RECORD_BYTES = 16 * 1024 * 1024
+_MAX_SELECTED_REPLAY_READS = 32
 _SHELL_OUTPUT = re.compile(r"\AChunk ID: [^\r\n]+\nWall time: [0-9.]+ seconds\n"
     r"Process exited with code 0\n(?:Original token count: [0-9]+\n)?Output:\n(.*)\Z", re.DOTALL)
 
@@ -65,7 +66,7 @@ def _snapshot(event: dict[str, Any]) -> Iterator[tuple[dict[str, Any], BinaryIO]
                 or meta.get("history_mode") != "paginated"
                 or meta.get("cli_version") not in (
                     "0.153.4", "0.162.1", "0.163.0-alpha.11.1", "0.163.0-alpha.11.2",
-                    "0.166.0-alpha.5.1")
+                    "0.166.0-alpha.5.1", "0.167.0-alpha.3.2")
                 or not event.get("model") or not event.get("permission_mode")):
             raise ValueError("unqualified native replay metadata")
         stream.seek(info.st_size - 1)
@@ -152,7 +153,7 @@ def _read_pages(output: object) -> list[dict[str, Any]]:
 
 
 def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
-             event: dict[str, Any]) -> bool:
+             event: dict[str, Any], *, selected: bool = False) -> bool:
     from .decision_capture import capture_page_range, read_context_capture_file
 
     if any(anchor.get(k) != snapshot.get(k) for k in
@@ -203,7 +204,7 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
             for group in groups:
                 seen_pages[_digest(group)] += 1
                 for page in group:
-                    if page.get("sha256") != reference["sha256"]:
+                    if selected or page.get("sha256") != reference["sha256"]:
                         continue
                     span = capture_page_range(page, raw=body, digest=reference["sha256"])
                     if span is None:
@@ -216,7 +217,7 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
         if start > cursor:
             return False
         cursor = max(cursor, stop)
-    return seen_pages == expected_pages and cursor == len(body)
+    return seen_pages == expected_pages and (selected or cursor == len(body))
 
 
 def _append_only(record: dict[str, Any], event: dict[str, Any]) -> bool:
@@ -286,6 +287,68 @@ def native_resume_verified(state: dict[str, Any], event: dict[str, Any]) -> bool
         return verified
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return False
+
+
+def native_resume_sections(state: dict[str, Any], event: dict[str, Any]) -> dict[str, str]:
+    """Verify replay of exact selected outputs without claiming a whole capture read."""
+    anchor = state.get("selected_resume")
+    if (event.get("source") != "resume" or not isinstance(anchor, dict)
+            or state.get("session_id") != event.get("session_id") or state.get("cwd") != event.get("cwd")
+            or anchor.get("scope") != state.get("read_scope") or anchor.get("epoch") != state.get("context_epoch")
+            or anchor.get("read_source") != state.get("source_recovery")
+            or not isinstance(anchor.get("sections"), dict)):
+        return {}
+    try:
+        with _snapshot(event) as (facts, stream):
+            return anchor["sections"] if _matches(anchor, facts, stream, event, selected=True) else {}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return {}
+
+
+def checkpoint_native_selection(state: dict[str, Any], updated: dict[str, Any],
+                                event: dict[str, Any], raw_pages: list[dict[str, Any]],
+                                verified_pages: list[dict[str, Any]]) -> None:
+    """Record bounded, self-contained selections after literal byte verification."""
+    if len(raw_pages) != 1 or len(verified_pages) != 1:
+        return
+    raw, page = raw_pages[0], verified_pages[0]
+    sections, source = page.get("read_sections"), state.get("source_recovery")
+    scope, epoch, call = state.get("read_scope"), state.get("context_epoch"), event.get("tool_use_id")
+    consumed = updated.get("consumed_pointers", {})
+    if (not (raw.get("schema_version") == "context_capture_selection_page_v1"
+            or "selected_pointers" in raw and "selection_sha256" in raw)
+            or page.get("ok") is not True or page.get("offset") != 0 or page.get("eof") is not True
+            or page.get("read_sections_inherited") or not isinstance(sections, dict) or not sections
+            or not isinstance(source, dict) or page.get("source_sha256") != source.get("sha256")
+            or not isinstance(scope, dict) or not epoch or scope.get("context_epoch") != epoch
+            or not isinstance(call, str) or not call or not isinstance(consumed, dict)
+            or any(consumed.get(pointer) != digest for pointer, digest in sections.items())):
+        return
+    receipt = {"call_id": call, "pages_sha256": _digest(raw_pages)}
+    previous = state.get("selected_resume")
+    if (isinstance(previous, dict) and previous.get("scope") == scope
+            and previous.get("epoch") == epoch and previous.get("read_source") == source
+            and all(previous.get(k) == event.get(k) for k in ("model", "permission_mode"))
+            and previous.get("path") == event.get("transcript_path")
+            and isinstance(previous.get("reads"), list) and isinstance(previous.get("sections"), dict)
+            and all(isinstance(read, dict) for read in previous["reads"])
+            and len(previous["reads"]) < _MAX_SELECTED_REPLAY_READS):
+        if any(read.get("call_id") == call for read in previous["reads"]):
+            return
+        updated["selected_resume"] = {**previous, "reads": [*previous["reads"], receipt],
+            "sections": {**previous["sections"], **sections}}
+        return
+    try:
+        with _snapshot(event) as (facts, stream):
+            end = facts["observed_bytes"]
+            start = _reader_start(stream, end, raw_pages)
+            if not 0 < start < end:
+                return
+            anchor = {**facts, "reader_start": start, "reader_sha256": _region_digest(stream, start, end),
+                "read_source": source, "reads": [receipt], "sections": sections, "scope": scope, "epoch": epoch}
+        updated["selected_resume"] = anchor
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return
 
 
 def checkpoint_native_read(state: dict[str, Any], updated: dict[str, Any],

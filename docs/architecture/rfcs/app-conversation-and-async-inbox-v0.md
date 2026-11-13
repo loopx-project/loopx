@@ -162,6 +162,14 @@ remain unavailable. There is no fallback to ordinary steward/project history,
 Session creation, executor change or model reconfiguration on this entry.
 Group audiences retain their existing boundary.
 
+When an owner-private steward Session has adopted an executor and its
+binding still names the previous executor, a newly captured ordinary message
+stays prepared against that exact Session. The existing reply worker waits
+for the binding and Session to agree, then revalidates the original source
+before queueing the request. Closing the Session before admission ends that
+request without creating a replacement. Previously rejected requests retain
+their recorded outcome.
+
 For a private Lark reply, the adapter keeps the thread ID from the verified
 provider context when the incoming event omits it. This lets the App show the
 original body, exact quote and verified thread excerpt together. Redelivery
@@ -1767,6 +1775,18 @@ new history message. The child is published only after the exact policy, source,
 queued Turn and imported suffix are verified. An unknown fork or injection
 leaves the original binding and history intact. Unverified legacy or changed
 authority retains the existing context migration path.
+
+Before opening a Codex adapter for an accepted queued Turn, Core records the
+first routing choice in that Turn's `native_context_preparation` metadata.
+The immutable observation names the planned native
+`thread/start`, `thread/resume` or `thread/fork`, prior thread, planned history
+message count, and the migration, settings and checkpoint conditions used by
+the current controller. It contains no transcript, host path or account data.
+Healthy in-process reuse adds no restoration observation. This is planned
+preparation, not proof that native IO, compaction or business work succeeded;
+the normal native and terminal records remain authoritative for those facts.
+It does not change lifecycle events or pre-dispatch recovery evidence. Older
+Turns without this observation remain unknown and are not rewritten.
 
 Discovery uses the local enabled binding and the same typed candidate planner,
 without provider identity IO for every historical failure. This is a queue hint;

@@ -97,6 +97,81 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
     assert agenda(root, registry, "unrelated")["items"] == []
 
 
+@pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_context_first_read import read_selection
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TURN_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
+        _run_cli, _spend_run_count, _write_fixture,
+    )
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    with state.open("a", encoding="utf-8") as stream:
+        stream.write("\n- [ ] [P2] Verify a different source.\n"
+            f"  <!-- loopx:todo todo_id=todo_other_source status=open claimed_by={AGENT_ID} "
+            "task_class=advancement_task action_kind=validate -->\n")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    request_ids = set()
+    for index in range(23):
+        result = deliver(runtime, registry, session={"session_id": "source", "channel_id": "manager"},
+            turn={"client_turn_id": f"synthetic-review-{index}", "origin": "web", "message":
+                "Compare the original requirements with the retained report before claiming a result."},
+            request={"goal_id": GOAL_ID, "agent_id": AGENT_ID})
+        request_ids.add(result["request_id"])
+
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    console = Path(sysconfig.get_path("scripts")) / "loopx"
+    assert console.is_file(), "Install this checkout's console with uv sync --extra test."
+    code, view = _run_cli(registry, runtime, "--cli-bin", str(console), "quota", "should-run", "--codex-app",
+        "--context-delivery", "on", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", TURN_ID, "--decision-output-root", str(captures), cwd=project)
+    assert code == 0 and view["mode"] == "full", view
+    _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+    path = Path(reference["path"])
+    original = path.read_bytes()
+    channel = json.loads(original)["interaction_contract"]["agent_channel"]
+    index, = (i for i, row in enumerate(channel["work_context"]["sources"]) if row.get("kind") == "operator_inbox")
+    address = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/unfinished_delegations"
+    _, first = read_selection(view["first_read_command"])
+    if "remaining_read_command" in view:
+        _, remaining = read_selection(view["remaining_read_command"])
+        first.update(remaining)
+    cli = "/interaction_contract/cli_channel"
+    assert first[cli + "/selection_required"] is True
+    assert first[cli + "/spend_allowed_now"] is False
+    assert first["/interaction_contract/agent_channel/delivery_allowed"] is False
+    assert address not in first and address + "/items" not in first
+    assert first[address + "/incoming_count"] == len(request_ids) == 23
+    assert first[address + "/omitted_count"] > 0
+    read, = (row for row in first["/interaction_contract/agent_channel/required_reads"] if row.get("kind") == "operator_inbox")
+    command = shlex.split(read["command"])
+    assert command[0] == str(console)
+    cursor, seen = None, set()
+    while True:
+        result = subprocess.run([*command, *(["--cursor", cursor] if cursor else [])],
+            cwd=project, capture_output=True, text=True, encoding="utf-8", timeout=40)
+        assert result.returncode == 0, result.stderr
+        page = json.loads(result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
+        page_ids = {item["request_id"] for item in page["items"]}
+        assert page["ok"] and page_ids and page_ids <= request_ids - seen
+        seen.update(page_ids)
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert seen == request_ids
+    _, saved = read_selection(view["recovery"]["command"] + " --select " + shlex.quote(address))
+    assert saved[address] == channel["work_context"]["sources"][index]["content"]["unfinished_delegations"]
+    assert path.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("delivery", ["host_envelope", pytest.param("native_files",
     marks=pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX"))])
@@ -238,10 +313,43 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert rows[queued["request_id"]]["step"] == "await_return_delivery"
         assert rows[queued["request_id"]]["pending_return_count"] == 1
         assert rows[peer["request_id"]]["step"] == "consume_peer_result"
-        assert any("manager-inbox read" in item["command"] for item in required_reads)
+        manager_read = next(item for item in required_reads if item["hook_id"] == "manager.context_inbox")
+        assert "manager-inbox read" in manager_read["command"]
+        assert ("--format markdown" in manager_read["command"]) == (delivery == "native_files")
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
+    if delivery == "native_files":
+        result = subprocess.run(shlex.split(manager_read["command"]), cwd=tmp_path, env=environment,
+            capture_output=True, text=True, encoding="utf-8", timeout=90)
+        assert result.returncode == 0, result.stderr
+        body = result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n")
+        rendered = json.loads(body)
+        common = rendered.pop("shared_item_guidance", {})
+        rendered["items"] = [{**common, **row} for row in rendered["items"]]
+        # Both commands perform the same scoped read. Each reports its own
+        # observation clock; all supplied values and cursor facts must agree.
+        for view in (inbox, rendered):
+            view["unfinished_delegations"].pop("observed_at")
+        assert rendered == inbox
     assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
+
+
+def test_inbox_markdown_keeps_different_or_missing_guidance_on_each_item():
+    from loopx.cli_commands.manager_inbox import _read_markdown
+
+    items = [
+        {"instruction": "Read the complete source.", "next_action": "Continue this request.", "message": "Original."},
+        {"instruction": "Read the complete source.", "next_action": "Wait for the original return.", "revision": 2},
+        {"instruction": "Read the complete source.", "unavailable": True},
+    ]
+    source = {"ok": True, "items": items, "has_more": True, "next_cursor": "scoped-next"}
+    body = _read_markdown(source).split("\n```json\n", 1)[1].removesuffix("\n```")
+    view = json.loads(body)
+    common = view.pop("shared_item_guidance")
+    assert common == {"instruction": "Read the complete source."}
+    assert all("instruction" not in item for item in view["items"])
+    view["items"] = [{**common, **item} for item in view["items"]]
+    assert view == source
 
 
 def test_real_overflow_keeps_total_and_full_read_route(flow):

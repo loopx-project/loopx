@@ -29,6 +29,11 @@
     "examples/coordination/sqlite-capacity.ts",
     "examples/coordination/local-provider-comparison.ts",
     "examples/coordination/sqlite-authority-migration.ts",
+    "examples/coordination/remote-authority-service.ts",
+    "examples/coordination/remote-authority-client.ts",
+    "tests/control_plane_ts/remote_authority.test.ts",
+    "tests/control_plane_ts/remote_authority.integration.test.ts",
+    "tests/control_plane_ts/remote_authority_fixture.ts",
     "tests/control_plane_ts/sqlite_capacity.test.ts",
     "tests/control_plane_ts/local_provider_comparison.test.ts",
     "tests/control_plane_ts/effect_program.test.ts",
@@ -49,6 +54,8 @@
     "tests/control_plane_ts/sqlite_authority_consumer_lag.test.ts",
     "tests/control_plane_ts/sqlite_authority_consumer_process.ts",
     "tests/control_plane_ts/sqlite_authority_backup_lineage.test.ts",
+    "tests/control_plane_ts/sqlite_authority_concurrent_cas.test.ts",
+    "tests/control_plane_ts/sqlite_authority_concurrent_writer.ts",
     "tests/control_plane_ts/sqlite_runtime_admission.test.ts",
     "tests/control_plane_ts/local_authority_provider.test.ts",
     "tests/control_plane_ts/sqlite_authority_process.ts",
@@ -121,6 +128,7 @@
     "tests/control_plane_ts/test_python_runtime.test.ts",
     "tests/control_plane_ts/direction_authority.test.ts",
     "tests/control_plane_ts/direction_baseline.test.ts",
+    "tests/control_plane_ts/material_wave_ranking.test.ts",
     "tests/control_plane_ts/zcode*.test.ts"
   ]
 }

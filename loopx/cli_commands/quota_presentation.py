@@ -3,9 +3,36 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.turn_envelope import build_turn_envelope, project_captured_replan_cli_view
+from ..control_plane.scheduler.execution_context import SchedulerExecutionContextResolution
+
+
+def _compose_explicit_turn_context(payload: dict[str, object], args: argparse.Namespace, *,
+                                   scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+                                   capture_directory: Path | None,
+                                   native_context: bool) -> dict[str, object]:
+    """Select the existing complete source before capture, preserving a failed guard."""
+    if not getattr(args, "complete_turn", False) or not isinstance(payload.get("interaction_contract"), Mapping):
+        return payload
+    from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+    from ..control_plane.quota.error_codes import QuotaDecisionTransportError
+    from ..control_plane.quota.turn_envelope import compose_turn_decision
+
+    try:
+        return compose_turn_decision(payload, scheduler_execution_context=scheduler_context,
+            composed_settlement=True)
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+        from .quota_capture import capture_decision
+
+        # Admission already happened. Keep its source/receipt; never emit a
+        # false v1, discard the receipt or rerun the guard to recover context.
+        capture_decision(capture_directory, payload, args=args, native_context=native_context)
+        raise QuotaDecisionTransportError(
+            "Complete Turn context could not be composed. Read the saved original decision and receipt; do not rerun admission."
+        ) from exc
 
 
 def _project_native_cli_settlement(payload: dict[str, object]) -> dict[str, object]:
@@ -122,6 +149,8 @@ def _project_quota_cli_payload(
     )
 
     reject_retired_quota_format(payload)
+    if getattr(args, "complete_turn", False) and payload.get("schema_version") == "loopx_turn_envelope_v1":
+        return payload
     if payload.get("ok") is False and not isinstance(payload.get("interaction_contract"), Mapping):
         if (not bool(getattr(args, "turn_envelope", False))
                 and getattr(args, "quota_command", None) == "monitor-poll"

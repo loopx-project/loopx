@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import re
 import threading
-from typing import Any
+from typing import Any, Iterator
 import uuid
 from weakref import WeakValueDictionary
 
@@ -825,32 +825,27 @@ class ChatSessionStore(ChatIngressStore):
                 candidates.append(payload)
         return candidates
 
-    def list_sessions(
-        self,
-        *,
-        goal_id: str | None = None,
-        agent_id: str | None = None,
-        channel_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
+    def list_sessions(self, *, goal_id: str | None = None, agent_id: str | None = None,
+                      channel_id: str | None = None) -> list[dict[str, Any]]:
+        metadata = self.iter_session_metadata(goal_id=goal_id, agent_id=agent_id, channel_id=channel_id)
+        rows = (self.public_session(payload) for _, payload in metadata)
+        return sorted(rows, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+
+    def iter_session_metadata(self, *, goal_id: str | None = None, agent_id: str | None = None,
+                              channel_id: str | None = None) -> Iterator[tuple[Path, dict[str, Any]]]:
+        """Read discoverable Session records without reading transcript versions."""
         for path in self.sessions_root.glob("*/session.json"):
             try:
                 payload = _read_json(path)
             except UnicodeDecodeError:
-                # Discovery can skip damaged metadata, just as malformed JSON.
-                # Direct Session/Turn reads stay strict: unreadable queued work
-                # must never become false evidence that a conversation is idle.
+                # Direct Session reads remain strict. Discovery skips damaged metadata.
                 continue
-            if payload.get("schema_version") != CHAT_SESSION_SCHEMA_VERSION:
+            if (payload.get("schema_version") != CHAT_SESSION_SCHEMA_VERSION
+                    or (goal_id and payload.get("goal_id") != goal_id)
+                    or (agent_id and payload.get("agent_id") != agent_id)
+                    or (channel_id and _session_channel(payload) != channel_id)):
                 continue
-            if goal_id and payload.get("goal_id") != goal_id:
-                continue
-            if agent_id and payload.get("agent_id") != agent_id:
-                continue
-            if channel_id and _session_channel(payload) != channel_id:
-                continue
-            rows.append(self.public_session(payload))
-        return sorted(rows, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+            yield path, payload
 
     def append_message(
         self,
@@ -1492,12 +1487,32 @@ class ChatSessionStore(ChatIngressStore):
                 "delta_count", "sse_reconnect_count", "expires_at", "host_claim_id",
                 "completion_id", "loopx_execution", "loopx_request",
                 "collaboration_answer",
+                "native_context_preparation",
             }
             unknown = set(changes) - allowed
             if unknown:
                 raise ValueError(f"unsupported chat turn fields: {sorted(unknown)}")
             if expected_statuses is not None and payload.get("status") not in expected_statuses:
                 return None
+            if "native_context_preparation" in changes:
+                observation = changes["native_context_preparation"]
+                flags = {"native_checkpoint_requested", "working_checkpoint_available", "manager_context_migration",
+                    "provider_context_migration", "project_context_migration", "manager_profile_changed",
+                    "settings_changed", "executor_reallocated", "isolated_answer_review"}
+                fields = flags | {"schema_version", "planned_method", "source_thread_id", "history_message_count",
+                    "manager_context_version", "required_manager_context_version"}
+                if (payload.get("status") != "queued" or payload.get("upstream_turn_id")
+                        or not isinstance(observation, dict) or set(observation) != fields
+                        or observation.get("schema_version") != "codex_native_context_preparation_v0"
+                        or observation.get("planned_method") not in {"thread/start", "thread/resume", "thread/fork"}
+                        or not isinstance(observation.get("source_thread_id"), str) or not observation["source_thread_id"]
+                        or any(type(observation.get(key)) is not bool for key in flags)
+                        or any(type(observation.get(key)) is not int or observation[key] < 0
+                            for key in ("history_message_count", "required_manager_context_version"))
+                        or observation.get("manager_context_version") is not None
+                            and type(observation["manager_context_version"]) is not int
+                        or payload.get("native_context_preparation", observation) != observation):
+                    raise ValueError("native context preparation is an immutable queued-Turn observation")
             if "collaboration_answer" in changes:
                 answer = changes["collaboration_answer"]
                 if (payload.get("origin") != "peer" or not isinstance(payload.get("collaboration_request"), dict)

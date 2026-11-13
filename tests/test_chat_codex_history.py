@@ -455,3 +455,101 @@ def test_controller_keeps_history_out_of_repeated_codex_objective(monkeypatch, t
     assert result is sentinel
     assert starts[0]["objective"] == "Stable objective"
     assert starts[0]["history"] == history
+
+
+@pytest.mark.parametrize("transition", ["cold-resume", "model-change", "context-version"])
+@pytest.mark.parametrize("startup_fails", [False, True])
+def test_native_context_route_survives_startup_failure_and_store_reopen(
+    conversation, monkeypatch, transition, startup_fails,
+):  # noqa: F811
+    import json
+    from loopx.chat_store import ChatSessionStore
+    from loopx.chat_manager import MANAGER_CONTEXT_VERSION
+    from test_chat_manager_model_adoption import Adapter
+
+    root, store, runtime, session, starts = conversation
+    sid = session["session_id"]
+    original_native = session["upstream_thread_id"]
+    store.append_message(sid, role="user", text="Private earlier requirement")
+    store.append_message(sid, role="agent", text="Private earlier answer")
+    if transition == "model-change":
+        configure(root, model="gpt-6.1-sol", effort="high")
+    elif transition == "context-version":
+        session = store.update_session(sid, manager_context_version=MANAGER_CONTEXT_VERSION - 1)
+    runtime.adapters.pop(sid).close_session()
+    turn, _ = store.create_turn(sid, client_turn_id="next-input", message="Current private question")
+    session = store.update_session(sid, active_turn_id=turn["turn_id"], status="busy")
+    before = store.messages(sid)
+    observations = []
+
+    def start(**kwargs):
+        # Inspect a separately opened production store before upstream IO.
+        stored = ChatSessionStore(root).load_turn(sid, turn["turn_id"])
+        if stored.get("native_context_preparation"):
+            observations.append(stored["native_context_preparation"])
+        if startup_fails:
+            raise chat_agent.CodexChatAgentError("Native startup failed", error_code="resume_failed", gate=None)
+        return Adapter(len(starts))
+
+    monkeypatch.setattr(runtime, "_start_adapter", start)
+    if startup_fails:
+        with pytest.raises(chat_agent.CodexChatAgentError, match="could not be restored"):
+            runtime._ensure_adapter(session, work_dir=root, objective="manager")
+    else:
+        runtime._ensure_adapter(session, work_dir=root, objective="manager")
+    assert len(observations) == 1
+    route = observations[0]
+    assert route["source_thread_id"] == original_native
+    assert route["planned_method"] == ("thread/resume" if transition == "cold-resume" else "thread/start")
+    assert route["history_message_count"] == (0 if transition == "cold-resume" else 2)
+    assert route["manager_context_migration"] is (transition != "cold-resume")
+    assert route["provider_context_migration"] is False
+    assert route["project_context_migration"] is False
+    assert route["native_checkpoint_requested"] is (transition == "cold-resume")
+    assert "private" not in json.dumps(route).lower()
+    assert not store.load_turn(sid, turn["turn_id"]).get("upstream_turn_id")
+    assert store.messages(sid) == before
+    runtime.close()
+
+
+def test_healthy_adapter_reuse_does_not_record_a_native_restart(conversation):  # noqa: F811
+    root, store, runtime, session, starts = conversation
+    sid = session["session_id"]
+    turn, _ = store.create_turn(sid, client_turn_id="next-input", message="Keep working")
+    session = store.update_session(sid, active_turn_id=turn["turn_id"], status="busy")
+    adapter = runtime._ensure_adapter(session, work_dir=root, objective="manager")
+    assert adapter is starts[0][1] and len(starts) == 1
+    assert "native_context_preparation" not in store.load_turn(sid, turn["turn_id"])
+    runtime.close()
+
+
+@pytest.mark.parametrize("fault", ["replace", "extra-body", "bad-method", "bad-flag", "negative-count", "started", "terminal"])
+def test_native_context_observation_cannot_rewrite_prior_facts(conversation, fault):  # noqa: F811
+    root, store, runtime, session, _ = conversation
+    sid = session["session_id"]
+    runtime.adapters.pop(sid).close_session()
+    turn, _ = store.create_turn(sid, client_turn_id="original-input", message="Keep original work")
+    session = store.update_session(sid, active_turn_id=turn["turn_id"], status="busy")
+    runtime._ensure_adapter(session, work_dir=root, objective="manager")
+    first = store.load_turn(sid, turn["turn_id"])["native_context_preparation"]
+    changed = dict(first)
+    if fault == "replace":
+        changed["source_thread_id"] = "different-thread"
+    elif fault == "extra-body":
+        changed["transcript"] = "must not be captured"
+    elif fault == "bad-method":
+        changed["planned_method"] = "turn/start"
+    elif fault == "bad-flag":
+        changed["native_checkpoint_requested"] = "true"
+    elif fault == "negative-count":
+        changed["history_message_count"] = -1
+    elif fault == "started":
+        store.update_turn(sid, turn["turn_id"], upstream_turn_id="native-started")
+    else:
+        store.update_turn(sid, turn["turn_id"], status="failed")
+    before = store.load_turn(sid, turn["turn_id"])
+    with pytest.raises(ValueError, match="immutable queued-Turn observation"):
+        store.update_turn(sid, turn["turn_id"], native_context_preparation=changed)
+    assert store.load_turn(sid, turn["turn_id"]) == before
+    assert [e["kind"] for e in store.events_after(sid, turn["turn_id"], None)] == ["turn.queued"]
+    runtime.close()

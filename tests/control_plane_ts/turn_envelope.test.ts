@@ -18,12 +18,13 @@ import {
   turnEnvelopeScopedSettlementIdentity,
 } from "../../loopx/control_plane/quota/turn_envelope.ts";
 import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
-import {settlementIdentityPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {settlementIdentityPayload, settlementPlanPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import { TURN_ENVELOPE_SECTION_TARGETS } from "../../loopx/control_plane/quota/turn_envelope_budget.ts";
 import { projectPeerOrchestration } from "../../loopx/control_plane/quota/peer_orchestration.ts";
 import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes}
   from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
+import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
 
 test("complete captures reuse progressive presentation only after source validation", () => {
   const source = payload();
@@ -332,6 +333,72 @@ function completeAcceptanceRead(source: JsonObject, outcomeRef = ""): JsonObject
   return outcomeRef ? read : {outcomes: (read.acceptance_index as JsonObject | undefined)?.outcomes};
 }
 
+test("both replan readers surface an opted-in reversal for the bound task only", () => {
+  const conflict = {todo_id: "todo-1", source_finding_id: "finding-1",
+    comparison_candidate_ref: "candidate:outcome-best", proxy_order_reversed: true,
+    proxy_comparison_scope: "validation:screen-slice", comparison_finding_ids: ["finding-2", "finding-3"],
+    fidelity_status: "order_reversed", paired_candidates: 4, counterevidence_refs: ["result:counter"]};
+  const other = {...conflict, todo_id: "todo-foreign", comparison_candidate_ref: "candidate:foreign"};
+  const cases = [
+    {cues: [other, conflict], scoped: true},
+    {cues: [other], scoped: false},
+    {cues: [{...conflict, proxy_order_reversed: false}], scoped: false},
+    {cues: [], scoped: false},
+    {cues: [conflict], selectionRequired: true, scoped: false},
+    {cues: [conflict], unbound: true, scoped: false},
+    {cues: [conflict], unavailable: true, scoped: false},
+  ];
+  for (const {cues, scoped, selectionRequired, unbound, unavailable} of cases) {
+    const source = payload(), interaction = source.interaction_contract as JsonObject;
+    const cli = interaction.cli_channel as JsonObject;
+    if (!unbound) cli.settlement_plan = settlementPlanPayload(turnScopedCliSettlementPlan({
+      identity: {goal_id: source.goal_id, agent_id: source.agent_id, todo_id: "todo-1", turn_instance_id: "turn"},
+      delivery_batch_scale_choices: ["implementation"], command_templates: {
+        todo_claim: "claim", todo_completion: "completion", durable_writeback: "writeback",
+        quota_spend: "spend", terminal_closeout: "terminal",
+      },
+    }));
+    cli.selection_required = selectionRequired ?? false;
+    Object.assign(source, {
+      effective_action: "autonomous_replan_required", normal_delivery_allowed: false,
+      replan_read_path: "/capture/original.json",
+      replan_action_packet: {schema_version: "replan_action_packet_v0", decision: "replan_required",
+        obligation_id: "original-obligation"},
+      autonomous_replan_obligation: {schema_version: "autonomous_replan_obligation_v0",
+        obligation_id: "original-obligation", replan_context: {schema_version: "replan_context_v0",
+        obligation_id: "original-obligation", context_id: "original-context",
+        explore_basis: {availability: unavailable ? "unavailable" : "available",
+          revision: "captured", work_yardsticks: cues},
+      }},
+    });
+    const captured = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+    const before = structuredClone(captured);
+    const source_hash = (captured.contract_binding as JsonObject).content_hash;
+    const read = evaluateTurnEnvelope({operation: "replan_view", payload: captured, source_hash, stage: "review"});
+    const explore = (read.capabilities as JsonObject).explore as JsonObject;
+    const opening = evaluateTurnEnvelope({operation: "context_select", context: captured, initial_read: true});
+    const cuesInOpening = (opening.selections as {pointer: string}[])
+      .filter(row => row.pointer.includes("/explore_basis/work_yardsticks/"));
+    if (scoped) {
+      assert.deepEqual(explore.work_yardstick_reversal, {
+        todo_id: "todo-1", source_finding_id: "finding-1", comparison_candidate_ref: "candidate:outcome-best",
+        proxy_order_reversed: true, proxy_comparison_scope: "validation:screen-slice",
+        fidelity_status: "order_reversed", paired_candidates: 4, comparison_finding_ids: ["finding-2", "finding-3"],
+      });
+      assert.match(String(explore.read_action), /--replan-stage explore$/);
+      const prefix = "/autonomous_replan_obligation/replan_context/explore_basis/work_yardsticks/1/";
+      assert.deepEqual(cuesInOpening.map(row => row.pointer),
+        Object.keys(explore.work_yardstick_reversal as JsonObject).map(field => prefix + field));
+      const detail = evaluateTurnEnvelope({operation: "replan_view", payload: captured, source_hash, stage: "explore"});
+      assert.deepEqual((detail.explore_basis as JsonObject).work_yardsticks, cues);
+    } else {
+      assert.ok(!Object.hasOwn(explore, "work_yardstick_reversal"));
+      assert.equal(cuesInOpening.length, 0);
+    }
+    assert.deepEqual(captured, before);
+  }
+});
+
 test("complete acceptance lookup shares exact content across registered carriers and retains revisions", () => {
   const one = {id: "shared", owner_agent_id: "peer", objective: "Original", revision: 1,
     requirements: [{id: "a", planning_satisfied: false, status: "unverified", description: "Full a"},
@@ -409,6 +476,15 @@ test("task text commitment has one selected-Todo carrier without changing legacy
     assert.notEqual((oldEnvelope.action_signature as JsonObject).source_hash,
       (envelope.action_signature as JsonObject).source_hash);
   }
+});
+
+test("complete settlement transport is explicit, typed and never rewrites a saved complete source", () => {
+  const request = {operation: "compose_complete", payload: payload(), scheduler_execution_args: ""};
+  const complete = evaluateTurnEnvelope(request);
+  assert.deepEqual(evaluateTurnEnvelope({...request, composed_settlement: false}), complete);
+  for (const composed_settlement of [null, 0, 1, "true", {}, []])
+    assert.throws(() => evaluateTurnEnvelope({...request, composed_settlement}), /must be a boolean/);
+  assert.deepEqual(evaluateTurnEnvelope({...request, payload: complete, composed_settlement: true}), complete);
 });
 
 function payload(): Record<string, unknown> {

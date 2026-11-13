@@ -260,6 +260,7 @@ button {
 .hero-copy {
   position: relative;
   z-index: 2;
+  min-width: 0;
   max-width: 590px;
 }
 
@@ -298,6 +299,8 @@ body[data-language="zh"] .hero h1 {
 
 .hero-title-line {
   display: block;
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 .hero-accent {
@@ -1805,10 +1808,14 @@ body.dialog-open {
   }
 
   .site-header {
+    grid-template-columns: minmax(0, 1fr) auto;
     height: 64px;
   }
 
   .header-download {
+    justify-content: center;
+    width: 40px;
+    flex: 0 0 40px;
     padding: 0 12px;
   }
 
@@ -1817,12 +1824,24 @@ body.dialog-open {
   }
 
   .header-download-compact {
-    display: inline;
+    display: none;
   }
 
   .hero {
     min-height: 0;
     padding: 48px 0 56px;
+  }
+
+  .hero-copy,
+  .hero-system {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .hero-copy > *,
+  .hero-system > * {
+    max-width: 100%;
   }
 
   .hero h1 {

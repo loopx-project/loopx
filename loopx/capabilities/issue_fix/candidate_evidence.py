@@ -9,9 +9,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .candidate_preflight import ISSUE_FIX_CANDIDATE_PREFLIGHT_INPUT_SCHEMA_VERSION
+from .github_public import MAINTAINER_ASSOCIATIONS
 from .metadata_preview import normalise_github_issue_reference
-
-_MAINTAINER_ASSOCIATIONS = {"COLLABORATOR", "MEMBER", "OWNER"}
 
 _CLOSING_PULL_REQUESTS_QUERY = """
 query($owner:String!,$name:String!,$number:Int!,$endCursor:String) {
@@ -348,7 +347,7 @@ def build_public_github_candidate_preflight_input(
         url = str(comment.get("url") or "").strip()
         if not url:
             raise ValueError(f"maintainer_comments[{index}].url is required")
-        if association in _MAINTAINER_ASSOCIATIONS:
+        if association in MAINTAINER_ASSOCIATIONS:
             revision = str(comment.get("updatedAt") or "").strip()
             if not revision:
                 raise ValueError(

@@ -14,7 +14,7 @@ from ..coordination.shadow_management import (
     runtime_artifact_lock_target,
     shadow_maintenance_lock_target,
 )
-from ..effect_runtime import EffectRuntimeConflict, effect_runtime_result
+from ..effect_runtime import EffectRuntimeConflict, EffectRuntimeRejected, effect_runtime_result
 from .turn_journal_runtime import (
     write_turn_journal,
 )
@@ -129,14 +129,12 @@ def load_loopx_turn_plan_from_journal(
     )
     if transaction.get("turn_key") != turn_key or journal.get("turn_key") != turn_key:
         raise ValueError("LoopX Turn resume journal has mismatched turn lineage")
-    from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_host_lineage
+    from ..quota.turn_envelope import read_recorded_turn_plan_lineage
 
-    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION or "work_contract" in plan:
-        # Recorded transitional plans must check their supplied complete source,
-        # just like current plans. Only source-absent history uses raw identity.
-        identity = turn_host_lineage(plan)
-    else:
-        identity = cast(dict[str, Any], plan.get("turn_envelope")) if isinstance(plan.get("turn_envelope"), dict) else {}
+    try:
+        identity = read_recorded_turn_plan_lineage(plan)
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
     if identity.get("goal_id") != goal_id or journal.get("goal_id") != goal_id:
         raise ValueError("LoopX Turn resume journal belongs to another goal")
     if agent_id is not None and identity.get("agent_id") != agent_id:
@@ -155,15 +153,29 @@ def find_loopx_turn_key_by_settlement_identity(
 ) -> str | None:
     """Find one validated history; unreadable or conflicting history blocks retry."""
 
+    return _find_turn_key("turn_journal.find_settlement", {
+        "runtime_root": str(runtime_root.resolve()),
+        "goal_id": goal_id,
+        "agent_id": agent_id,
+        "todo_id": todo_id,
+        "turn_instance_id": turn_instance_id,
+        **({"request_subject": dict(request_subject)} if request_subject is not None else {}),
+    })
+
+
+def find_loopx_turn_key_by_instance(
+    runtime_root: Path, *, goal_id: str, agent_id: str, turn_instance_id: str,
+) -> str | None:
+    """Recover a unique original journal locator after a lost reply."""
+    return _find_turn_key("turn_journal.find_instance", {
+        "runtime_root": str(runtime_root.resolve()),
+        "goal_id": goal_id, "agent_id": agent_id, "turn_instance_id": turn_instance_id,
+    })
+
+
+def _find_turn_key(method: str, params: dict[str, Any]) -> str | None:
     try:
-        payload = effect_runtime_result("turn_journal.find_settlement", {
-            "runtime_root": str(runtime_root.resolve()),
-            "goal_id": goal_id,
-            "agent_id": agent_id,
-            "todo_id": todo_id,
-            "turn_instance_id": turn_instance_id,
-            **({"request_subject": dict(request_subject)} if request_subject is not None else {}),
-        })
+        payload = effect_runtime_result(method, params)
     except EffectRuntimeConflict as exc:
         # Preserve the public ambiguity exception; the native owner also
         # rejects incomplete history rather than authorizing a fresh Turn.

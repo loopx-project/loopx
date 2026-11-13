@@ -264,6 +264,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("receipt-bound replan facts are malformed");
   }
   let original: JsonObject | null = null;
+  let openVisionReview: JsonObject | null = null;
   let delta: JsonObject | null = null;
   let historicalAckRecorded = false;
   for (const value of request.transition_candidates) {
@@ -280,7 +281,19 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       historicalAckRecorded = true;
       break;
     }
-    if (obligation.obligation_id !== selected || !requiredSemanticOutcomes(obligation).includes("new_runnable_successor")) continue;
+    if (obligation.obligation_id !== selected) continue;
+    if (request.guard_scoped && candidate.reconstructed_vision_review === true &&
+        obligation.schema_version === "autonomous_replan_obligation_v0" && obligation.required === true &&
+        typeof request.agent_id === "string" && request.agent_id.trim() &&
+        obligation.agent_id === request.agent_id && obligation.resolution_mode == null &&
+        obligation.capability_guard == null) {
+      const kinds = triggerKinds(obligation);
+      if (kinds.some(kind => VISION_TRIGGERS.has(kind)) &&
+          kinds.every(kind => VISION_TRIGGERS.has(kind) || kind === "goal_outcome_uncovered")) {
+        openVisionReview = obligation;
+      }
+    }
+    if (!requiredSemanticOutcomes(obligation).includes("new_runnable_successor")) continue;
     const result = projectTurnTransition({guard_scoped: request.guard_scoped,
       selected_obligation_id: selected, transition_candidates: [candidate],
       stride_strategy: request.stride_strategy, goal_id: request.goal_id,
@@ -330,6 +343,12 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   if (request.guard_scoped && current?.legacy_obligation_id === selected &&
       triggerKinds(current).some(kind => ACCEPTANCE_HOLD_TRIGGERS.has(kind))) {
     return {obligation: {...current, obligation_id: selected, selection_binding: "heartbeat_receipt"}};
+  }
+  // Another review may own the live frontier while the canonical Vision
+  // gaps still reconstruct the admitted review. Keep its full checks and
+  // require a fresh qualifying outcome before settlement.
+  if (openVisionReview !== null) {
+    return {obligation: {...openVisionReview, selection_binding: "heartbeat_receipt"}};
   }
   // Work-link maintenance can remove this frontier-only review before its
   // writeback. The exact receipt retains its typed kind, never raw task prose

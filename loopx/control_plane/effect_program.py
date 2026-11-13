@@ -802,19 +802,20 @@ def effect_program_from_ordered_steps(
     ordered_steps: Sequence[Mapping[str, Any]],
     *,
     execution_mode: str | None = None,
+    include_raw: bool = True,
 ) -> EffectProgram:
-    """Map existing `guided_transaction.ordered_steps` onto an effect program."""
+    """Map ordered steps onto an effect program, including source fields by default."""
 
-    payload = effect_runtime_result(
-        "effect.program_from_ordered_steps",
-        {
-            "ordered_steps": [
-                dict(step) if isinstance(step, Mapping) else step
-                for step in ordered_steps
-            ],
-            "execution_mode": execution_mode,
-        },
-    )
+    params: dict[str, object] = {
+        "ordered_steps": [
+            dict(step) if isinstance(step, Mapping) else step
+            for step in ordered_steps
+        ],
+        "execution_mode": execution_mode,
+    }
+    if not include_raw:
+        params["include_raw"] = False
+    payload = effect_runtime_result("effect.program_from_ordered_steps", params)
     if not isinstance(payload, Mapping) or not isinstance(payload.get("steps"), list):
         raise RuntimeError("TypeScript Effect Program shape mismatch")
     steps = tuple(

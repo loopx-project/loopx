@@ -36,22 +36,21 @@ const setupPrompts: Record<Language, string> = {
 
 Do not clone LoopX. Follow the README Quick Start to use the no-clone installer and \`loopx doctor\`, then reuse or \`loopx connect/bootstrap\` the current project state.
 
-After setup, first report the project connection status, current user gate, top agent todo, next safe action, and available commands.
+After setup, first report whether the project is connected, then ask me for one natural-language goal unless I already included it.
 
-Then I will use \`/loopx <complex task>\` to begin real work.
-When you receive \`/loopx <goal text>\`, first provide a concise ordered plan, then write it as P0/P1/P2 todos so I can see what needs to be done, what is blocked by a gate, and what the next safe action is.`,
+When you receive \`/loopx <goal text>\`, first provide a concise ordered plan, save that plan as ordered LoopX Todos, then read back the current work, any decision that needs me, and the next safe action.
+
+Keep LoopX internal terms behind advanced or debugging explanations unless a decision requires them.`,
   zh: `把当前项目接入 LoopX: https://github.com/loopx-project/loopx
 
 不要 clone LoopX；按 README Quick Start 使用 no-clone installer、
 \`loopx doctor\`，复用或 \`loopx connect/bootstrap\` 当前项目状态。
 
-接入后先汇报：项目连接状态、当前 user gate、top agent todo、
-next safe action，以及可用命令。
+接入后先汇报项目是否已连接；如果我还没有给目标，就先问我要一个自然语言目标。
 
-然后我会直接用 \`/loopx <复杂任务>\` 开始真实工作。
-收到 \`/loopx <goal text>\` 后，先给出简洁有序计划，再把它写成
-P0/P1/P2 todos，让我能看到当前要做什么、什么被 gate 卡住、
-下一步安全动作是什么。`,
+收到 \`/loopx <goal text>\` 后，先给出简洁有序计划，把计划按顺序保存为 LoopX 待办，再读回当前要做什么、哪里需要我判断、下一步安全动作是什么。
+
+LoopX 内部机制术语默认放在高级或调试说明里，只有决策需要时再展开。`,
 };
 
 const shellSetupCommand = `curl -fsSL https://loopx-project.github.io/loopx/install.sh | bash
@@ -69,13 +68,13 @@ const macAppGuideUrl = "https://github.com/loopx-project/loopx/blob/main/apps/de
 const content = {
   en: {
     nav: ["Product", "Workflow", "Learn"],
-    eyebrow: "The control plane for long-running AI agents",
+    eyebrow: "Start long-running agent work with one goal",
     title: {
-      first: "Long-running agents.",
-      secondPrefix: "Lasting ",
-      secondAccent: "progress",
+      first: "Tell your agent the outcome.",
+      secondPrefix: "Keep ",
+      secondAccent: "progress visible",
     },
-    body: "Turn complex work into durable goals, coordinated tasks, and reviewable results. LoopX keeps your agents moving across sessions. You keep the judgment.",
+    body: "Use the agent you already trust. LoopX turns one natural-language goal into durable work, needed decisions, and verifiable results behind the scenes, so the next session can continue without making you learn LoopX internals first.",
     copy: "Get started",
     mac: {
       download: "Download for Mac",
@@ -84,57 +83,57 @@ const content = {
       guide: "Install and first launch",
     },
     setup: {
-      eyebrow: "Set up LoopX",
-      title: "Choose how you want to start.",
-      body: "Use your current agent for the guided path, or copy the shell commands for a manual setup.",
-      agentTitle: "Agent setup",
-      agentBody: "Give the complete setup prompt to Codex, Claude Code, OpenCode, TraeX, Pi, or another shell-capable agent.",
-      shellTitle: "Shell setup",
-      shellBody: "Install LoopX, check the CLI, and connect the current project yourself.",
+      eyebrow: "Goal-first setup",
+      title: "Start from the outcome.",
+      body: "Give your current agent one setup prompt, then send the goal. Prefer the shell? Install LoopX manually.",
+      agentTitle: "Guided agent start",
+      agentBody: "Ask Codex, Claude Code, OpenCode, TraeX, Pi, or another shell-capable agent to connect this project and keep the machinery behind the scenes.",
+      shellTitle: "Manual shell setup",
+      shellBody: "Install LoopX, check the CLI, and connect the current project when an agent cannot run the setup for you.",
       copy: "Copy",
       copied: "Copied",
       close: "Close setup",
     },
     demo: "See in action",
     panel: {
-      label: "ONE GOAL · ACROSS SESSIONS",
+      label: "ONE OUTCOME · ACROSS SESSIONS",
       title: "Ship the next release",
       status: "On track",
-      running: "Agent work",
-      researcher: "Research and implementation",
-      gate: "Human gate",
-      gateBody: "Merge needs your approval",
-      waiting: "Waiting",
-      evidence: "Evidence",
-      evidenceBody: "Validation and handoff written",
-      complete: "Complete",
+      running: "Work in progress",
+      researcher: "Research and implementation underway",
+      gate: "Your decision",
+      gateBody: "Approve the release when ready",
+      waiting: "Needs you",
+      evidence: "Verified result",
+      evidenceBody: "Checks and handoff written",
+      complete: "Saved",
       next: "Next safe action",
-      nextBody: "Keep independent tasks moving while review waits",
+      nextBody: "Continue work that does not depend on approval",
     },
     proof: [
-      ["Explicit authority", "Agents move fast without silently taking control."],
-      ["Durable state", "The next session resumes from governed state, not memory."],
-      ["Reviewable evidence", "Every transition leaves a result another person can verify."],
+      ["No vocabulary tax", "Start from the outcome; open LoopX details only when they matter."],
+      ["Durable work", "The next session resumes from governed state, not memory."],
+      ["Verifiable results", "Every transition leaves a result another person can check."],
     ],
-    sectionEyebrow: "One governed lifecycle",
-    sectionTitle: "Long-running work stays legible.",
-    sectionBody: "The runtime executes. LoopX preserves the control state that lets the work continue safely across sessions, hosts, and providers.",
+    sectionEyebrow: "One goal-first lifecycle",
+    sectionTitle: "Useful work can start before the machinery is familiar.",
+    sectionBody: "Your runtime executes. LoopX preserves the durable state that lets the work continue safely across sessions, hosts, and providers.",
     steps: [
-      ["01", "Lifetime goal", "One durable direction"],
-      ["02", "Authority gate", "A concrete decision"],
-      ["03", "Agent lanes", "Scoped continuation"],
-      ["04", "Evidence", "A validated outcome"],
-      ["05", "Next run", "Recoverable progress"],
+      ["01", "One goal", "A natural-language outcome"],
+      ["02", "Plan", "Visible work to do"],
+      ["03", "Decision", "A concrete choice"],
+      ["04", "Proof", "A validated result"],
+      ["05", "Resume", "Recoverable progress"],
     ],
     capabilities: {
-      eyebrow: "Across providers, runtimes, and hosts",
-      title: "One governed loop across agent runtimes.",
-      body: "Codex, Claude Code, OpenCode, TraeX, Pi, and custom runners can share one stateful goal lifecycle while each agent stays inside an explicit scope.",
+      eyebrow: "Simple by default, durable underneath",
+      title: "A natural entry backed by durable state.",
+      body: "Codex, Claude Code, OpenCode, TraeX, Pi, and custom runners can share one durable lifecycle. First contact starts with one goal; advanced surfaces expose ownership, scheduling, recovery, and protocols when needed.",
       items: [
-        ["01", "Durable state", "Goals, decisions, todos, claims, quota, run history, and handoffs survive session boundaries."],
-        ["02", "Cross-runtime", "Change the executor or host without reconstructing the objective from chat history."],
-        ["03", "Gate aware", "A blocked P0 stays visible while independent P1 and P2 lanes continue safely."],
-        ["04", "Outcome driven", "Every run writes validation, ownership, review, and handoff evidence into the next loop."],
+        ["01", "Goal-first entry", "Start from a natural-language outcome; LoopX records durable work as the plan becomes concrete."],
+        ["02", "Cross-runtime continuity", "Change the executor or host without reconstructing the objective from chat history."],
+        ["03", "Decision-aware progress", "A blocked decision stays visible while independent safe work can continue."],
+        ["04", "Reviewable outcomes", "Every run writes validation, ownership, review, and handoff evidence into the next loop."],
       ],
     },
     explore: {
@@ -153,11 +152,11 @@ const content = {
     },
     learn: {
       eyebrow: "Developer book",
-      title: "Choose your path into LoopX.",
+      title: "Go deeper when you are ready.",
       body: "A bilingual, protocol-first guide for developers who want to understand the control plane, connect a real project, or contribute along the right ownership boundary.",
       open: "Open the Developer Book",
       cards: [
-        ["01", "Understand the control plane", "Build the model from sessions and Goals through durable state, authority, governed turns, and recovery.", "Start with foundations"],
+        ["01", "Understand the kernel", "Build the model from sessions and Goals through durable state, authority, governed turns, and recovery.", "Start with foundations"],
         ["02", "Connect an existing project", "Let your agent establish the Goal, identity, Host, and Git boundary, then verify the result.", "Follow project onboarding"],
         ["03", "Contribute to LoopX", "Trace protocols to source ownership, choose the right contribution surface, validate it, and prepare a focused PR.", "Open the contribution map"],
       ],
@@ -178,23 +177,23 @@ const content = {
     },
     quickstart: {
       eyebrow: "Manual fallback",
-      title: "Prefer the shell? Install LoopX manually.",
-      body: "Use this path when your current agent cannot run shell commands. The same official installer registers lightweight command entries for supported hosts.",
+      title: "Need the terminal path? Install LoopX manually.",
+      body: "Use this when your current agent cannot run shell commands or you want to inspect each step. The default product path still starts from one goal.",
       guide: "Read the Quick Start",
       inspect: "Inspect installer",
       setup: "Setup options",
     },
-    footer: "Keep the loop moving. Keep the judgment human.",
+    footer: "Start with the goal. Keep the judgment human.",
   },
   zh: {
     nav: ["产品", "工作方式", "学习"],
-    eyebrow: "长程 AI Agent 的有状态控制面",
+    eyebrow: "从一个目标开始长程 Agent 工作",
     title: {
-      first: "让 Agent 持续推进。",
-      secondPrefix: "让目标成为",
-      secondAccent: "结果",
+      first: "告诉 Agent 你想完成什么。",
+      secondPrefix: "让进展",
+      secondAccent: "持续可见",
     },
-    body: "把复杂工作变成持久的目标、协同的任务和可审查的成果。跨越会话，Agent 接着做；关键判断，始终由你掌握。",
+    body: "继续使用你已经信任的 Agent。LoopX 在背后把一个自然语言目标变成持久工作、需要你判断的决策和可验证结果，让下一轮会话可以接着推进，而不要求你先学会 LoopX 内部机制。",
     copy: "开始使用",
     mac: {
       download: "下载 Mac App",
@@ -203,57 +202,57 @@ const content = {
       guide: "安装与首次启动",
     },
     setup: {
-      eyebrow: "设置 LoopX",
-      title: "选择你的开始方式。",
-      body: "让当前 Agent 完成引导式接入，或复制 Shell 命令手动安装。",
-      agentTitle: "Agent 接入",
-      agentBody: "把完整设置指令交给 Codex、Claude Code、OpenCode、TraeX、Pi 或其他具备 Shell 能力的 Agent。",
-      shellTitle: "Shell 接入",
-      shellBody: "手动安装 LoopX、检查 CLI，并连接当前项目。",
+      eyebrow: "目标优先的设置",
+      title: "从结果开始。",
+      body: "把设置提示交给当前 Agent，然后直接发送目标；需要手动路径时，再使用 Shell。",
+      agentTitle: "Agent 引导启动",
+      agentBody: "让 Codex、Claude Code、OpenCode、TraeX、Pi 或其他具备 Shell 能力的 Agent 连接当前项目，并把机制细节默认放在幕后。",
+      shellTitle: "手动 Shell 设置",
+      shellBody: "当 Agent 不能替你执行 Shell 时，手动安装 LoopX、检查 CLI，并连接当前项目。",
       copy: "复制",
       copied: "已复制",
       close: "关闭设置",
     },
     demo: "查看实战",
     panel: {
-      label: "一个目标 · 跨越多轮会话",
+      label: "一个结果 · 跨越多轮会话",
       title: "交付下一个版本",
       status: "进展正常",
-      running: "Agent 执行",
-      researcher: "研究与实现",
-      gate: "Human Gate",
-      gateBody: "合并前，等待你的批准",
-      waiting: "等待中",
-      evidence: "Evidence",
-      evidenceBody: "验证与交接已写回",
-      complete: "已完成",
+      running: "正在推进",
+      researcher: "研究与实现正在进行",
+      gate: "需要你判断",
+      gateBody: "版本准备好后由你批准",
+      waiting: "等你决定",
+      evidence: "已验证结果",
+      evidenceBody: "检查与交接已写回",
+      complete: "已保存",
       next: "下一步安全动作",
-      nextBody: "审批等待中，继续推进不依赖审批的任务",
+      nextBody: "继续推进不依赖审批的工作",
     },
     proof: [
-      ["显式权限", "Agent 快速推进，但不会静默接管用户权力。"],
-      ["持久状态", "下一轮从受治理状态恢复，而不是依赖聊天记忆。"],
+      ["无术语门槛", "先描述结果；LoopX 细节只在需要决策或调试时展开。"],
+      ["持久工作", "下一轮从受治理状态恢复，而不是依赖聊天记忆。"],
       ["可审查证据", "每次状态变化都留下可供他人验证的结果。"],
     ],
-    sectionEyebrow: "一个受治理的生命周期",
-    sectionTitle: "让长程工作始终清晰可读。",
-    sectionBody: "Runtime 负责执行；LoopX 保存跨会话、Host 与 Provider 安全推进所需的控制状态。",
+    sectionEyebrow: "一个目标优先的生命周期",
+    sectionTitle: "先开始有用工作，再按需理解内核。",
+    sectionBody: "Runtime 负责执行；LoopX 保存跨会话、Host 与 Provider 安全推进所需的持久状态。",
     steps: [
-      ["01", "长期目标", "一个持久方向"],
-      ["02", "权限 Gate", "一个具体判断"],
-      ["03", "Agent 线路", "有边界地继续"],
-      ["04", "Evidence", "一个验证结果"],
-      ["05", "下一轮运行", "可恢复地推进"],
+      ["01", "一个目标", "自然语言结果"],
+      ["02", "计划", "可见的待办"],
+      ["03", "判断", "一个具体选择"],
+      ["04", "证明", "一个验证结果"],
+      ["05", "恢复", "可继续的进展"],
     ],
     capabilities: {
-      eyebrow: "跨 Provider、Runtime 与 Host",
-      title: "一套受治理的闭环，连接不同 Agent Runtime。",
-      body: "Codex、Claude Code、OpenCode、TraeX、Pi 与自定义 Runner 可以共享同一套有状态目标生命周期，同时让每个 Agent 保持明确边界。",
+      eyebrow: "默认简单，内核完整",
+      title: "自然入口背后，是持久状态。",
+      body: "Codex、Claude Code、OpenCode、TraeX、Pi 与自定义 Runner 可以共享同一套持久生命周期。第一次接触从一个目标开始；需要时，高级界面再展开 ownership、调度、恢复与协议。",
       items: [
-        ["01", "持久状态", "目标、用户决策、Todo、Claim、Quota、运行历史与交接不会随会话结束而丢失。"],
-        ["02", "跨运行时", "更换执行器或 Host 时，无需从聊天记录重建长期目标。"],
-        ["03", "Gate-aware", "P0 等待决策时保持可见，独立的 P1、P2 线路可以安全继续。"],
-        ["04", "结果驱动", "每轮运行都把验证、归属、审查和交接证据写入下一轮闭环。"],
+        ["01", "目标优先入口", "从自然语言结果开始；随着计划具体化，LoopX 记录可持续推进的工作。"],
+        ["02", "跨运行时连续性", "更换执行器或 Host 时，无需从聊天记录重建长期目标。"],
+        ["03", "决策可见的进展", "需要你判断的事项保持可见，不依赖它的安全工作可以继续。"],
+        ["04", "可审查结果", "每轮运行都把验证、归属、审查和交接证据写入下一轮闭环。"],
       ],
     },
     explore: {
@@ -272,11 +271,11 @@ const content = {
     },
     learn: {
       eyebrow: "开发者手册",
-      title: "选择你的 LoopX 学习路径。",
+      title: "准备深入时，再打开内核。",
       body: "为想要理解控制面、接入真实项目或在正确 ownership 边界上贡献的开发者准备的系统性双语协议指南。",
       open: "打开开发者手册",
       cards: [
-        ["01", "理解控制面", "从会话与目标出发，逐步建立对持久状态、权限、治理回合与恢复的完整认知。", "从基础开始"],
+        ["01", "理解内核", "从会话与目标出发，逐步建立对持久状态、权限、治理回合与恢复的完整认知。", "从基础开始"],
         ["02", "接入已有项目", "让 Agent 建立 Goal、身份、Host 与 Git 边界，然后验证结果。", "跟随项目接入指南"],
         ["03", "贡献 LoopX", "从协议追踪到源码归属，选择正确的贡献面，验证后提交聚焦的 PR。", "打开贡献地图"],
       ],
@@ -297,13 +296,13 @@ const content = {
     },
     quickstart: {
       eyebrow: "手动备用方案",
-      title: "更习惯终端？可以手动安装 LoopX。",
-      body: "当你使用的 Agent 无法执行 Shell 命令时使用这条路径。同一官方安装器会为受支持的 Host 注册轻量命令入口。",
+      title: "需要终端路径？可以手动安装 LoopX。",
+      body: "当你的 Agent 无法执行 Shell 命令，或你想逐步检查安装时使用这条路径。默认产品路径仍然从一个目标开始。",
       guide: "阅读快速开始",
       inspect: "查看安装脚本",
       setup: "设置方式",
     },
-    footer: "让闭环持续运转，让判断始终属于人。",
+    footer: "从目标开始，让判断始终属于人。",
   },
 } as const;
 
@@ -349,7 +348,7 @@ function ControlPlane({ language }: { language: Language }) {
           <Target size={18} strokeWidth={1.8} />
         </div>
         <div>
-          <small>{language === "en" ? "ACTIVE GOAL" : "当前目标"}</small>
+          <small>{language === "en" ? "CURRENT GOAL" : "当前目标"}</small>
           <strong>{panel.title}</strong>
         </div>
         <StatusPill tone="ok">{panel.status}</StatusPill>
@@ -364,7 +363,7 @@ function ControlPlane({ language }: { language: Language }) {
             <Code2 size={17} />
           </div>
           <div className="row-copy">
-            <small>P0 · {panel.running}</small>
+            <small>{language === "en" ? "NOW" : "当前"} · {panel.running}</small>
             <strong>{panel.researcher}</strong>
           </div>
           <div className="progress-track">
@@ -377,7 +376,7 @@ function ControlPlane({ language }: { language: Language }) {
             <UserRoundCheck size={17} />
           </div>
           <div className="row-copy">
-            <small>GATE · {panel.gate}</small>
+            <small>{language === "en" ? "DECISION" : "判断"} · {panel.gate}</small>
             <strong>{panel.gateBody}</strong>
           </div>
           <StatusPill tone="waiting">{panel.waiting}</StatusPill>
@@ -457,10 +456,10 @@ const terminalCases = {
     },
     lines: [
       ["GOAL", "Ship the focused fix and preserve reusable knowledge.", "交付聚焦修复，并保留可复用知识。", "ACTIVE", "active"],
-      ["P0", "Focused PR delivery · bounded diff and validation", "聚焦式 PR 交付 · 有边界的改动与验证", "RUNNING", "running"],
-      ["GATE", "Reviewer authority · approve the focused change", "审查权限 · 批准聚焦改动", "WAITING", "waiting"],
-      ["P1", "Repository knowledge and terminal resume remain available", "仓库知识与终端恢复保持可用", "READY", "ready"],
-      ["EVIDENCE", "Merge/open result linked to the next reusable discovery", "合并 / 开放结果连接到下一轮可复用发现", "WRITTEN", "written"],
+      ["NOW", "Focused PR delivery · bounded diff and validation", "聚焦式 PR 交付 · 有边界的改动与验证", "RUNNING", "running"],
+      ["DECISION", "Reviewer authority · approve the focused change", "审查权限 · 批准聚焦改动", "WAITING", "waiting"],
+      ["SUPPORT", "Repository knowledge and terminal resume remain available", "仓库知识与终端恢复保持可用", "READY", "ready"],
+      ["PROOF", "Merge/open result linked to the next reusable discovery", "合并 / 开放结果连接到下一轮可复用发现", "WRITTEN", "written"],
       ["NEXT", "Review the focused diff, then continue the capability lane.", "先审查聚焦改动，再继续能力沉淀线路。", "SAFE", "safe"],
     ],
   },
@@ -472,15 +471,15 @@ const terminalCases = {
     command: "$ loopx status --goal-id auto-ml",
     image: mlEvidenceUrl,
     imageTitle: {
-      en: "Evidence branches remain visible until promotion or stop.",
-      zh: "证据分支保持可见，直到晋级或停止。",
+      en: "Result branches remain visible until promotion or stop.",
+      zh: "结果分支保持可见，直到晋级或停止。",
     },
     lines: [
       ["BASELINE", "Matched candidate and evaluation contract locked.", "匹配候选项与评估契约已锁定。", "MATCHED", "active"],
       ["BRANCHES", "Positive · Negative · Invalid lineage · Running replicate", "正向 · 负向 · 无效谱系 · 运行中复现", "VISIBLE", "ready"],
-      ["P1", "Replicate capacity stays bounded while evidence accumulates", "证据持续积累，同时保持复现容量有界", "RUNNING", "running"],
-      ["EVIDENCE", "Negative results and invalid lineages remain traceable", "负向结果和无效谱系持续可追溯", "WRITTEN", "written"],
-      ["P0 GATE", "Promote or stop after the running replicate completes", "运行中复现完成后，决定晋级或停止", "WAITING", "waiting"],
+      ["SUPPORT", "Replicate capacity stays bounded while evidence accumulates", "证据持续积累，同时保持复现容量有界", "RUNNING", "running"],
+      ["PROOF", "Negative results and invalid lineages remain traceable", "负向结果和无效谱系持续可追溯", "WRITTEN", "written"],
+      ["DECISION", "Promote or stop after the running replicate completes", "运行中复现完成后，决定晋级或停止", "WAITING", "waiting"],
       ["NEXT", "Compare replicate evidence, then record the decision.", "比较复现证据，再记录最终决策。", "SAFE", "safe"],
     ],
   },

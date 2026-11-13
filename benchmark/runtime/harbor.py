@@ -43,12 +43,13 @@ _AGENT_ID = "benchmark-agent"
 
 
 # Non-LoopX workers stage only these paths; keep this list closed over the
-# loopx-internal import closure of native_codex_goal.py (see the import test).
+# native Host and process-cleanup imports (see the staged-source test).
 NATIVE_GOAL_SOURCE_PATHS = (
     "benchmark/runtime",
     "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
     "loopx/capabilities/benchmark_toolkit/native_codex_process.py",
     "loopx/control_plane/turn_driver/codex_stdio.py",
+    "loopx/extensions/process_runtime.py",
 )
 
 
@@ -82,6 +83,7 @@ class BenchmarkCodex(CodexOffline):
         goal_id=_GOAL_ID,
         agent_id=_AGENT_ID,
         defer_codex_home=False,
+        complete_turn=False,
         **kwargs,
     ):
         if "research_loop" in kwargs:
@@ -102,6 +104,7 @@ class BenchmarkCodex(CodexOffline):
             turn_envelope,
             context_delivery,
             native_child_limit,
+            complete_turn=complete_turn,
         )
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
@@ -191,7 +194,7 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("provider_request_admission requires the Responses wire API")
 
     def _turn_envelope_receipt(self) -> dict:
-        return {**turn_envelope_receipt(explicit=self.execution.turn_envelope),
+        return {**turn_envelope_receipt(explicit=self.execution.turn_envelope, complete=self.execution.complete_turn),
                 **({"native_child_limit": self.execution.native_child_limit}
                    if self.execution.native_child_limit is not None else {}),
                 **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}
@@ -690,6 +693,7 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
+                "LOOPX_COMPLETE_TURN": "1" if self.execution.complete_turn else "0",
                 "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
                 # A trial's explicit None must not inherit a container opt-in.
                 "LOOPX_NATIVE_CHILD_LIMIT": (

@@ -41,6 +41,9 @@ requires a new registration and preserves the prior version. It does not change
 the model prompt, analysis key or scoring owner. Source changes preserve the
 registered reading and cited snapshot with a historical warning. Language
 switches show the saved original with a notice, without inventing a translation.
+Each citation in a case study has a direct link to that occurrence in its saved
+version. Opening it uses the same source reader as a citation selected on the
+page. Closing returns to the citation and restores its chapter address.
 Rendering uses the existing Markdown renderer and host-owned components, with
 no executable HTML. Porthole is not a runtime dependency of this reader.
 
@@ -1042,33 +1045,36 @@ checkpoint reads are qualified separately from this presentation example.
 ![Scoped interpretation and usage reader](../development/assets/research-analysis/summary.png)
 
 
-### Observe an unfinished final Turn
+### Observe usage across an interruption
 
-For a captured run that stopped mid-Turn, the curator may explicitly add
+For a capture with an unfinished or interrupted Turn, the curator may add
 `--include-incomplete-usage` to the same registration command, together with
 `--usage-jsonl` and `--usage-session-id`. This reads persisted counters without
 running a model or changing the solver. The default complete-session contract
 above remains unchanged.
 
 The opt-in method is `codex_observed_session_counters_v1`. Its totals include
-observed counters in the final unfinished Turn. `completed_turns` and `turns`
-still contain only measured completions; `incomplete_turn` identifies the final
-open interval, source lines, observation count and observed delta. With no
-counter in that interval its `usage` is null, never an invented zero. With no
-measured counters anywhere registration fails. Duplicate snapshots do not add
-usage. Both methods reject wrong identity, forks, missing prefixes, gaps, resets,
-unmatched completions and malformed JSONL. Cancellation without a completion
-remains incomplete; recovery that starts another Turn without closing the prior
-one remains unsupported. This opt-in is not a relaxed integrity qualification.
+persisted counters in interrupted Turns and the final open interval. A native
+`turn_aborted` event with the active Turn's ID closes that interval for
+observation. A later Turn can then contribute its own counters in the same
+session. `interrupted_turns` preserves the interruption boundary, source lines
+and observed delta. `incomplete_turn` describes an interval still open at the
+end of the capture. Both record `usage: null` when the interval has no counters.
+`completed_turns` and `turns` contain measured completions only.
 
-The Research workbench's existing Sources and usage disclosure shows the
-unfinished interval and its persisted input/output next to the capture totals,
-with complete cost unknown. No extra owner confirmation or model run is needed
-to read these facts. An unfinished interval ends at the last supported observed
-event, not at an inferred process death. Observed time includes tools and waits;
-unpersisted requests, later activity, model prices, evaluator costs and operator
-attention remain unknown. Do not sum overlapping captures or repeated pack
-registrations: the pack is a versioned diagnostic, not a billing ledger.
+Registration fails if the capture has no measured counters. Both methods reject
+wrong identities, forks, missing prefixes, counter gaps or resets, and malformed
+JSONL. Starting a new Turn still requires a matching prior terminal event.
+An abort without a Turn ID cannot close that interval. The complete-session mode
+rejects a captured interruption.
+
+In Research → Sources and usage → **Find time and input hotspots**, interrupted
+intervals appear in chronological order as incomplete. Their recorded counts
+participate in the selected range, and **Counter evidence** shows the verified
+native boundary. Observed time includes tools and waits. Unpersisted requests,
+later activity, model prices, evaluator costs and operator attention remain
+unknown. Overlapping captures and repeated registrations can include the same
+usage. Each pack is a versioned diagnostic.
 
 The original source hash and historical/unavailable handling also apply to this
 mode. Select a capture-free or default complete-session pack to stop using it;

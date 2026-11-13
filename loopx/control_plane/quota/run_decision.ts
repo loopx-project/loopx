@@ -18,6 +18,7 @@ interface RunFacts {
   automation_prompt_upgrade_required: boolean;
   replan_required: boolean;
   replan_applies: boolean;
+  replan_settlement_pending: boolean;
   goal_health_ok: boolean;
   inbox_reply_due: boolean;
   inbox_material_review_due: boolean;
@@ -69,6 +70,8 @@ function decodeRunFacts(params: JsonObject): RunFacts {
     automation_prompt_upgrade_required: requireBoolean(params.automation_prompt_upgrade_required, "automation_prompt_upgrade_required"),
     replan_required: requireBoolean(params.replan_required, "replan_required"),
     replan_applies: requireBoolean(params.replan_applies, "replan_applies"),
+    replan_settlement_pending: params.replan_settlement_pending === undefined ? false
+      : requireBoolean(params.replan_settlement_pending, "replan_settlement_pending"),
     goal_health_ok: requireBoolean(params.goal_health_ok, "goal_health_ok"),
     inbox_reply_due: requireBoolean(params.inbox_reply_due, "inbox_reply_due"),
     inbox_material_review_due: requireBoolean(params.inbox_material_review_due, "inbox_material_review_due"),
@@ -139,6 +142,15 @@ function applyGoalOverrides(facts: RunFacts, decision: RunDecision): void {
   decision.replan_decision_allowed = !inboxPriority && facts.replan_required && facts.replan_applies
     && facts.goal_health_ok && !facts.workspace_guard && !facts.automation_prompt_upgrade_required;
   if (decision.replan_decision_allowed) {
+    if (facts.replan_settlement_pending) {
+      // A covered frontier can stop new work before its original receipt has
+      // settled. Finish that receipt before applying derived terminal stop.
+      clearExecutionLanes(decision);
+      decision.should_run = true;
+      decision.effective_action = EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED;
+      decision.reason = "verified replan writeback requires settlement for the original Turn";
+      return;
+    }
     decision.normal_delivery_allowed = false;
     decision.recovery_delivery_allowed = false;
     decision.should_run = true;

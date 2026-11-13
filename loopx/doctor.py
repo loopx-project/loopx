@@ -20,14 +20,15 @@ from .control_plane.runtime.promotion_readiness import (
 )
 from .control_plane.runtime.time import chronology_key
 from .install_contract import (
-    _powershell_literal,
     NO_CLONE_INSTALL_URL,
     local_install_command,
     no_clone_upgrade_command,
+    powershell_literal,
 )
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import (
     PythonInstallOwner,
+    installed_loopx_distribution,
     python_distribution_upgrade_command,
     resolve_python_install_owner,
 )
@@ -123,7 +124,7 @@ def command_release_root(command_realpath: Path | None) -> Path | None:
 
 
 def current_script_invocation_path() -> Path | None:
-    """Return the active LoopX executable when invoked through its console script."""
+    """Return the active console script or installed standalone-core module."""
     if not sys.argv or not sys.argv[0]:
         return None
     path = Path(sys.argv[0]).expanduser()
@@ -135,6 +136,12 @@ def current_script_invocation_path() -> Path | None:
         path = path.absolute()
     if path.exists() and path.name.lower() in {"loopx", "loopx.exe"}:
         return path
+    if path == Path(__file__).with_name("entrypoint.py").resolve():
+        # Module invocation is the core's isolated continuation route. Verify
+        # the imported distribution before replacing ambient PATH discovery.
+        installed = python_distribution_install(Path(__file__).resolve())
+        if installed.get("distribution_name") == "loopx-core":
+            return path
     return None
 
 
@@ -142,7 +149,7 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
     """Identify a wheel/sdist install that owns the imported LoopX module."""
 
     try:
-        installed = distribution("loopx")
+        installed = installed_loopx_distribution(distribution)
     except PackageNotFoundError:
         return {"available": False}
     installer = (installed.read_text("INSTALLER") or "").strip() or "unknown"
@@ -168,6 +175,8 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
         "installer": owner.manager,
         "installer_environment": owner.environment,
         "root": str(Path(cast(Path, installed.locate_file(""))).resolve()),
+        **({"distribution_name": "loopx-core"}
+           if getattr(installed, "name", "loopx") == "loopx-core" else {}),
     }
 
 
@@ -316,6 +325,7 @@ def build_install_freshness(
         owner=distribution_owner,
         python_executable=sys.executable,
         doctor_command=f"loopx doctor{doctor_agent_arg}",
+        distribution_name=str((distribution_install or {}).get("distribution_name") or "loopx"),
     ) if distribution_owner else no_clone_command
     manifest_source_git_commit = manifest_source.get("git_commit")
     manifest_source_revision = (
@@ -727,7 +737,11 @@ def collect_doctor(
     loopx_path = resolve_command_path("loopx")
     invocation_path = current_script_invocation_path()
     loopx_canary_path = resolve_command_path("loopx-canary")
-    command_path_primary = loopx_path or invocation_path
+    command_path_primary = (
+        invocation_path
+        if invocation_path == Path(__file__).with_name("entrypoint.py").resolve()
+        else loopx_path or invocation_path
+    )
     canary_path = loopx_canary_path
     command_path = command_path_primary
     command_realpath = command_path.resolve() if command_path else None
@@ -770,7 +784,7 @@ def collect_doctor(
         skills = inspect_skill_facades(skill_roots[0])
         project_skill = skills["loopx"]
         home_arg = (
-            _powershell_literal(selected_zcode_home)
+            powershell_literal(selected_zcode_home)
             if os.name == "nt"
             else shlex.quote(str(selected_zcode_home))
         )

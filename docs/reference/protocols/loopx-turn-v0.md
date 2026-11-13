@@ -623,6 +623,12 @@ check. Retryable Host failures also carry a content-free
 Host invocation, and the TypeScript recovery decision rejects another
 invocation after the declared bounded budget. Backoff is an outer-scheduler
 hint; `run-once` never sleeps in-process or silently changes the selected model.
+The default `run-once` Markdown readback shows every recorded Host failure's
+kind, retryability and attempt, plus the retry ceiling and backoff when present.
+These are the existing journal facts, not permission to launch another attempt:
+even a retryable class may have exhausted its budget. Replaying the original
+Turn exposes the same diagnostics without re-running the Host. JSON and the
+admission policy are unchanged; raw provider messages are not added to readback.
 A dangling prepared effect remains owned by the existing provider
 readback protocol; the recovery decision only records that the readback is the
 next required check and does not claim general exactly-once execution.
@@ -772,8 +778,13 @@ result unchanged: `path_delta_mode`, `agent_vision_json`, and
 `path_delta_mode: "material_replan"`, `result_kind: "replan_required"`, and a
 JSON-encoded `goal_vision_replan_contract_v0` packet whose
 `goal_path_delta_v0.outcome` is `replan`; it must not also claim an unchanged
-reason. An unchanged path uses `path_delta_mode: "unchanged"`, no vision
-packet, and a bounded `vision_unchanged_reason`. The Turn executor remains the
+reason. An unchanged path uses `path_delta_mode: "unchanged"` with either a
+bounded `vision_unchanged_reason` to reuse the current checkpoint, or a fresh
+vision packet whose `goal_path_delta_v0.outcome` is `continue` or `no_change`.
+The fresh packet carries evidence for progress or completion while retaining
+the route; it must not also declare `vision_unchanged_reason`. A fresh packet
+requires an explicit path mode: omitting it retains the legacy inference of
+`material_replan`. The Turn executor remains the
 owner of packet parsing, bounds, and semantic validation. These declarations do
 not grant write or Goal authority, and legacy hosts that omit both path-delta
 fields retain their prior compatibility behavior. For material results, an
@@ -1103,12 +1114,16 @@ Turn-start context, inbox synchronization and recall. It does not mint a new
 TurnEnvelope for recovery. The existing actor/Goal-lifetime checks, typed
 journal/session recovery decision, provider revalidation and post-writeback
 recovery still apply; `--retry-failed-turn` retains its existing bounded policy.
-A new invocation without a resume key continues through fresh admission.
+If the reply containing the key was lost, `--resume-turn-instance-id ID` resolves
+the unique journal for the original Goal, Agent and instance before entering
+that same path. Missing, unreadable or ambiguous history stops recovery before
+Host invocation. Use a fresh instance ID for a new admission.
 
 中文：显式 resume 先读原计划，不为恢复另建一次选任务、TurnEnvelope 或 Turn-start
 上下文、inbox 同步和 recall。原身份／Goal 生命周期、journal／Session 恢复、provider
-当前校验与写回后恢复流程保持；失败重试仍受既有有界策略约束。无 resume key 的新轮次
-继续走完整 fresh 准入。
+当前校验与写回后恢复流程保持；失败重试仍受既有有界策略约束。若包含 key 的回包丢失，可用
+`--resume-turn-instance-id ID` 按原 Goal、Agent 和轮次定位唯一 journal，再进入相同
+恢复流程。历史缺失、不可读或不唯一时停在 Host 调用前。新准入使用新轮次 ID。
 
 ## Adapter Requirements
 

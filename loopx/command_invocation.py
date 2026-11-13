@@ -9,7 +9,7 @@ import sys
 from typing import Iterator, Mapping, Sequence
 
 
-_loopx_cli_bin: ContextVar[str] = ContextVar("loopx_cli_bin", default="loopx")
+_loopx_cli_bin: ContextVar[tuple[str, ...]] = ContextVar("loopx_cli_bin", default=("loopx",))
 
 
 def validate_cli_bin(value: str) -> str:
@@ -20,9 +20,17 @@ def validate_cli_bin(value: str) -> str:
 
 
 @contextmanager
-def loopx_cli_route(cli_bin: str | None) -> Iterator[None]:
+def loopx_cli_route(
+    cli_bin: str | None, *, default_argv: Sequence[str] | None = None,
+) -> Iterator[None]:
     """Bind only this invocation's command rendering; retain no host policy."""
-    token = _loopx_cli_bin.set(cli_bin if cli_bin is not None else "loopx")
+    program = cli_bin if cli_bin is not None else "loopx"
+    route = tuple(default_argv) if cli_bin is None and default_argv is not None else (
+        (program,) if program == "loopx" else (program, "--cli-bin", program)
+    )
+    if not route:
+        raise ValueError("the default CLI invocation must not be empty")
+    token = _loopx_cli_bin.set(route)
     try:
         yield
     finally:
@@ -30,7 +38,11 @@ def loopx_cli_route(cli_bin: str | None) -> Iterator[None]:
 
 
 def loopx_cli_argv(cli_bin: str | None = None) -> list[str]:
-    program = validate_cli_bin(cli_bin if cli_bin is not None else _loopx_cli_bin.get())
+    if cli_bin is None:
+        route = _loopx_cli_bin.get()
+        validate_cli_bin(route[0])
+        return list(route)
+    program = validate_cli_bin(cli_bin)
     # The executable selects this process; the option preserves that selection
     # when its returned commands start another process. Neither grants authority.
     return [program] if program == "loopx" else [program, "--cli-bin", program]

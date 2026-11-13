@@ -2441,7 +2441,7 @@ M0 pin 修复已在 CI 通过，同一记录中的提案 head 也通过真实 Po
 kernel、TypeScript、浏览器和 Stage 2C 检查。组合源码现已接入目标 main
 `1cba745f5`，并保留原提案祖先。报告 calendar CLI smoke 在组合源码上仍失败，
 因为它直接读取已退役的 `turn_envelope` 字段。replan 必须为 `None` 的断言也属于
-旧 projection adapter：完整源保留竞争建议，最终 capability 优先级由 typed
+旧 projection adapter：完整源保留竞争建议；最终 capability 优先级仍由现有 typed
 controller 决定。
 
 smoke 现在将单一 `work_contract` 直接交给现有 controller，在 plan、dry-run、
@@ -2612,3 +2612,388 @@ artifact id 将最终 `build` 门绑定到成功的分片回执。门禁导入�
 I3/minor-release、M1/#8011、R0/V10/R1、D2/D5/D6/D3、
 context/model/split-install、PostgreSQL host/wheel、完整成本和 adoption
 缺口继续开放。
+
+### 2026-11-11 — 整合主线的打包发行资格
+
+完整 Linux Release Artifacts
+[run 42905934918](https://github.com/loopx-project/loopx/actions/runs/42905934918)
+（attempt 1，来自 [#8531](https://github.com/loopx-project/loopx/pull/8531)）
+验证了整合源码 `main@b89a574b05a3e7d5920a8e7184476dfb7b041790`。
+Bundle 的 product、browser-fixture 与 workflow commit 均为
+`3606315c86f907961b0c26d4f1a1dad6bbaed8cf`，没有 fixture override；其完整
+tracked tree 与该已合入 main 相同。这补上了内核和发行流水线整合后的 packaged
+资格缺口。
+
+对最终产物 `13807484684` 的离线核验将下载 ZIP 与 GitHub 的 SHA-256 比较，
+将每个 package/runtime 文件与 `RELEASE-SOURCES.json` 比较，并校验两份包的
+checksum manifest。三个 browser receipt 均绑定 candidate artifact
+`13806066680` 和同一个 release-source digest。与真实源码 catalog 和分片
+selector 比较后，确认 29/29/28 条目恰好覆盖 86 个唯一通过场景。
+Team、craft、command-palette 和 navigation companion 通过。Producer 还通过
+干净 wheel 安装、sdist 重建、已安装 frontend、DSH 安装形态和 runtime 资格，
+覆盖 upgrade、doctor、skills、frontend HTTP、license notices、无需 frontend
+build tools 运行，以及 activation 失败后的恢复。
+
+这次已完成的普通 packaged M2 观察保留 200 项、五种切换各三个样本和十五个
+long-task window。五个中位数为 336.34/313.05/441.09/200.01/194.94 ms，
+最大值 601.68 ms，没有样本超过 1,000 ms 目标。现有普通 median <1,000 ms
+和每个样本 <2,000 ms 的规则通过，未修改阈值。这不是新的带覆盖率测量，
+也不是成本或内核归因对照；历史冻结失败及其原始观察保留原有状态。
+
+该证据验证指定整合源码的 Linux packaged 路径，不覆盖后续产品改动。
+此次 pull-request 运行跳过 attestation、release upload 和 PyPI 发布，
+不能据此宣称已公开发布或当前 installed-host 已升级，也不证明其他全部 CI
+结果或完整 CI／边际成本。原任务以及 I3/minor-release、M1/#8011、R0/V10/R1、
+D2/D5/D6/D3、context/model/split-install、PostgreSQL host/wheel、
+installed-host 和 adoption 缺口继续开放。后续资格仍由这些原 owner 和验收
+边界承接；最小化内核工作尚未全部完成。
+
+### 2026-11-11 — Canonical snapshot 失败来源
+
+分页和完整 snapshot 读取将持久化 Todo 契约被拒绝
+（`canonical_snapshot_projection_invalid`）与请求参数无效区分开。现有 typed
+validator 仍拒绝未知字段清单和无效记录摘要，保留原始原因，不返回部分记录或
+legacy fallback；已支持的历史字段清单仍可读取。这是既有源传输入口的诊断
+修正，不授予旧 reader 前向兼容能力，也不升级已安装 runtime。
+
+真实 File/SQLite RPC 与 CLI 回归，以及隔离 PostgreSQL 读取，验证该失败边界
+且不重写 authority。原 installed-host 资格、完整成本和 adoption 缺口继续开放。
+
+
+### 2026-11-12 — 独立 core 产物与安装诊断
+
+可选的 `packages/loopx-core` 源码构建器复用 tracked 运行时源码，生成可独立安装的
+wheel，省略 Chat、web 资源、canary 集群及完整 CLI facade。它仍保留现有内建能力
+和宿主兼容导入。这是 R1/M3 的 core 产物前提，不代表完整最小闭包已合格，也不
+发布发行版本。
+
+安装后任务沿用 generic CLI 宿主、独立产物验收及 canonical 硬租约。最初准入的
+key/version 经共享 TypeScript preparation 和已校验的 Turn context 传入既有
+完成 owner。进程丢失后恢复已确认结果；重放不再次调用宿主或扣额。租约更新／
+释放或产物无效时拒绝完成，不产生状态写入和扣额。
+
+深度安装诊断按实际发行物的 RECORD 和必要入口检查。健康 core 通过，未登记的
+启动器或缺失运行文件仍失败；普通发行物仍要求完整 CLI。core 通过现有 handler
+执行目录列出的 history action，并在缺少完整 facade 时解析全局版本选项。安装
+资格覆盖默认 SQLite 和显式配置的 File 硬租约；无 Node 时可导入和查看帮助，
+受治理任务保留既有 Node 前提。普通发行物的 CLI 和安装兼容有独立配对检查。
+package-smoke 工作流执行这套安装后验证。
+
+保留 D1-D7、原有里程碑、历史失败与验收边界。workspace/meta 发行、完整安装／
+加载／context 闭包、独立 Standard 包、其他宿主／平台采用、配对模型效果和完整
+成本仍开放。合成任务与恢复证据不证明模型收益，也不代表已升级当前宿主。
+
+### 2026-11-12 — Replan 只消费所需 Todo 视图
+
+Replan 写回调用方现在通过既有 quota 读取事务取得两个角色摘要及完整 Agent
+terminal 行。既有 TypeScript 显示 owner 接受显式视图子集；省略选择时仍保留普通
+quota 的全部三种视图。该调用方不再生成 User source-summary 行、未消费的 Agent
+视图及预建 Vision 等待事实。来源引用、完整内联来源回退及 provider 错误诊断仍由
+既有 owner 处理；存储、lease、scheduler 及 quota 扣额规则保持原语义。
+
+以不可变基线 `0abd0dc27` 对照候选代码 `46f844e9d`，复用同一隔离混合状态夹具，
+在真实 File／默认 SQLite 上每种负载执行六组交替配对。额外 320／3,500 条 Agent
+Todo 时，SQLite replan 资格检查中位数为 93.2→83.3 ms、612.3→572.0 ms；包含
+canonical 读取与资格检查的中位数为 139.4→130.0 ms、900.9→857.0 ms。严格 refresh
+dry-run 拒绝路径的中位数为 142.4→135.1 ms、934.4→911.8 ms。零条额外 Todo 时，
+该 refresh 中位数为 28.9→29.3 ms；保留这项观测，不推断噪声或因果。夹具包含
+最多 128 条 User 行。归一化后的义务及拒绝详情一致；减少 RPC 次数本身不能作为
+验收依据。70 项聚焦生产 provider 与传输检查通过，覆盖完整 terminal 尾部、
+过期／缺失来源及普通显示默认值。
+
+保留 #8624 原 head 及原标准下的 SQLite 负面资格结果（83.0→91.2 ms、
+605.9→704.1 ms）。这份新范围结果只证明所消费 replan 读取的成本资格；不能从
+这些计时推断完整 CLI 进程、持久写回、模型及端到端成果成本。完整最小加载／
+上下文闭包、R1/M3、独立 Standard 包、workspace／meta 发布及安装宿主采用仍未
+完成。
+
+
+### 2026-11-12 — Dashboard 源码验收执行真实后端旅程
+
+源码 coverage 现在通过真实的一次性 Chat 服务执行既有首次 Goal 和运行就绪旅程。
+源码与打包分线均已准备经校验的 Chat bundle。声明需要后端的旅程必须完成真实后端
+断言后才能记录 PASS，提前返回不能满足该条件；其他有合理 coverage 边界的场景
+保留原有行为。共用浏览器代理在既有至多三次 GET/HEAD socket 恢复中纳入 EPIPE，
+仅识别类型化 errno 或 Playwright 首行 socket 错误，不重试 HTTP 写请求或任意诊断文字。
+研究记录搜索检查将提示关闭绑定当前键盘按钮，并要求关闭后保留原查询。
+
+固定源码 `eedfc5e24` 在本地 macOS/Node26 下完成全部 86 场景资格：三个互不重叠的
+29/29/28 分片共享同一完整场景目录和源码 tree，后端读回标记及非空合并 coverage 均已核对。
+本次通过的分片用时 1,943.74 秒；此前失败运行、准备和修复仍分开记录。这是验证成本，
+不构成完整模型、服务和人工成本比较。
+
+同版本 200 项 M2 对照保留全部 15 个样本和长任务窗口。普通模式五组中位数为
+225.77/172.99/310.77/128.45/146.52 ms，最大 366.08 ms；coverage 模式为
+328.21/371.20/332.49/174.73/173.02 ms，最大 421.22 ms，两者超过 1 秒目标的
+样本数均为 0。完整分片中的 coverage M2 也通过：中位数
+325.35/270.28/326.59/164.22/166.47 ms，最大 463.88 ms。真实注入 1,200 ms 的重复看板
+停顿被普通资格正确拒绝：慢组中位数 1491.77 ms、最大 1519.98 ms，全部 15 个
+样本和窗口仍保留。既有严格边界及缺失样本负例通过，预算未变。
+
+此前源码分片的 EPIPE、查询丢失和临时目录失败分别保留记录；历史冻结的 1.162 秒失败
+及已取消运行也保持原判定。
+本项修复源码验收执行与有界传输恢复，不改变渲染阈值、内核运行时或 authority。
+首次 Goal 夹具使用退出式 Agent：登记及如实显示失败 Turn 的恢复不证明自然语言任务
+完成或模型收益。完整最小闭包、R1/M3、workspace/meta 发布、安装宿主采用及完整成本
+验收仍保持开放。
+
+### 2026-11-13 — 独立发行版的自然语言启动到达既有 owner
+
+独立安装的 core 现在将 `start-goal`、`bootstrap-command-pack`、
+`register-agent` 和 `bind-agent-thread` 路由到普通产品既有的 registrar 与
+handler。此前四条命令都依赖被排除的完整 CLI facade。目标预览保留完整原文，
+保持只读，并返回同一套有序的 bootstrap、身份、Todo 与 host/guard 事务。
+新身份注册、冲突拒绝、global/source 回读和绑定会话复用在默认 SQLite authority
+上真实执行。没有新增 engine、模型服务、权限规则或 capability 激活。
+普通安装仍保留完整 parser 的诊断 fallback；独立 core 的非法参数仍返回既有明确
+unavailable 错误。
+
+安装验证通过 16 项检查，覆盖 guided 身份旅程及既有 SQLite/File 执行、产物拒绝、
+续租/释放后的完成拒绝和已确认结果恢复/重放。八项聚焦对照与普通 parser 和预览
+一致。原始独立安装基线 wheel 拒绝自然语言启动，修复 wheel 能执行这条路径。
+这是真实可执行的行为差异，不是仅修改帮助文案。
+
+另一个隔离 generic-CLI 任务由当前 host 模型实际完成：依据 catalog/movement
+源文件生成可复用库存脚本及 JSON/Markdown 报告，保留精确小数计价和排除记录。
+独立 validator 接受结果。typed result 已入 journal 后杀掉 driver，再用原始 key
+恢复，可完成 Todo 并只结算一次，且不再次调用模型；再次重放无状态或额度副作用。
+更早一次任务前尝试在等待模型输入期间过期，其 unknown-outcome 恢复拒绝仍保留。
+整个实验共两次 host transport dispatch、一个已确认模型结果，不能宣称全实验
+只 dispatch 一次。
+
+三对本地 loading census 使用 macOS arm64、Python 3.13.5、Node 26.0.0，
+新 Python 进程保留普通文件系统/bytecode 缓存，每进程再运行两次 warm 调用。
+core 顶层帮助加载 8 个模块，guided 帮助/预览加载 186 个；直接普通 full-facade
+对照为 1,151/1,164 个。预览出现两次 subprocess 和九次 Python socket audit
+事件，process/IPC 成本必须保留在闭包清单。源码/安装的缓存与启动条件不同、仅三
+个样本、仅 Python audit 范围及缺失模型 token 计数，使其不能支持性能或完整
+V10 结论，也不批准 D2 或 minimal preset。
+
+源码回归因本地磁盘耗尽而中止的尝试仍为失败，恢复后的运行单独记录。
+完整最小 install/load/context 闭包、initial/revised/compacted/lost-ACK 上下文
+资格、受支持 host 采用、完整 V1–V5/V10、R1/M3、Standard/workspace/meta 拆包
+和完整成本仍未完成。回滚路由切片时保留 task authority 并协调原始尝试。
+既有 exact-head 评审、premerge、双语要求、原始失败、预算及独立研究/发布授权
+继续有效。
+
+### 2026-11-13 — 启动元数据隔离与安装上下文恢复
+
+默认目标启动的帮助和预览此前只是为了渲染命令提示，就导入 issue-fix 执行、
+candidate preflight 和仓库分析。既有命令模板现在放在 capability 自有的元数据
+模块；bootstrap 与 catalog 消费它，workflow 模块保留原 Python 导入接口，显式
+issue-fix 路由仍带完整 preflight 契约。独立安装 base/head 的启动输出逐字节一致；
+默认帮助/预览的 LoopX 模块加载为 186→171，显式路由为 186→179。
+模块数量本身只证明加载边界缩小，不是速度收益结论。
+
+macOS arm64、Python 3.13.5、普通 OS/bytecode 缓存下，每项 workload 运行
+30 对交替的独立安装 base/head，首次入口的中位数/p95 为帮助
+314.73/362.55→181.25/303.01 ms，预览 542.36/670.44→311.08/572.66 ms。
+每进程随后两次调用的 warm 中位数为 0.66→0.54 ms 和 11.83→8.94 ms；
+峰值 RSS 中位数为 43.22→32.46 MB 和 46.05→36.18 MB。全部完整输出一致，
+预览仍为 52,727 字节。保留 head 预览最大值 1,092.15 ms。首次入口包含导入，
+本记录不属于 OS-cold 或完整 V10 资格。源码回归通过 348 项，1 项因缺少原生
+Windows/PowerShell 环境跳过；最终安装 wheel 通过 20 项。早期失败尝试仍保留。
+
+安装 CLI 验证通过既有 context-project/read/hook owner 交付完整源或明确恢复：
+关闭功能时保留原始值；部分交付和丢 ACK 不能建立基线；未变化/修订视图保留完整
+约束；独立 PostCompact 使基线失效；捕获文件被修改时拒绝读取。完整 delta framing
+更贵时，warm 传输可选择 full。同一测试也在原独立 core 安装上运行，资格化既有
+安装协议并补充回归边界，不新增上下文 owner。原生事件为夹具，不证明模型保留
+上下文或宿主采用。
+
+带追踪的 SQLite/File Turn witness 保留 Python、真实 Node loader 和 RPC 观察。
+选定 Turn 入口仍加载 525 个 Python 模块，其中 111 个 capability 模块；Node
+runtime 仍保留 eager 的共享 typed 支持。完整 work contract 与传输成本继续保留
+在清单中。本诊断不资格化 endpoint/网络完整性、OS-cold 成本、模型 token 或完整
+最小组合。保留早期检查失败及独立的启动/上下文边界；完整 V1–V5/V10、R1/M3、
+独立 Standard/workspace 包、安装宿主采用及覆盖原始目标的完整回归仍由既有
+owner 和验收约束保持开放。
+
+安装门暴露了 project skill 的支持示例链接离开安装包的问题。链接现在指向经字节
+核验的公开源文件，并固定不可变 revision；原流程、同意边界和检查范围条款保持
+原义。它是按需支持资料，不是 runtime fetch 或新 authority。早期安装门失败和
+受磁盘限制的 base 重放，与修复 head 的验证分别保留。
+
+### 2026-11-13 — 安装上下文回归进入 package lane
+
+独立 core lane 现在一起执行 `tests/test_core_distribution.py` 和
+`tests/control_plane/test_installed_core_context.py`，pull request 与 main push
+的路径过滤器也都观察上下文测试。此前该测试虽通过本地资格验证，lane 却未执行。
+独立 workflow 检查在未改动的 base 上因这三处遗漏拒绝，在修复后的命令和过滤器上
+通过。干净 Python 3.11.15 wheel 的 1,885 个 tracked runtime 文件与源码字节一致；
+安装产物继续与源码测试环境隔离。
+
+补充观察在 macOS arm64/Python 3.13.5/Node 26 上，使用同一独立 core 2.3.0、
+隔离 SQLite/File 完整 Turn 夹具、合成 Host，并关闭使用遥测。两个选定 Turn
+进程仍加载 525 个 LoopX Python 模块，其中 111 个 capability 模块，发出
+220/221 次 Effect RPC。观察到的 1,024 次 Python 连接/地址解析事件均指向
+loopback；两个 Node listener 及其 DNS lookup 也使用 loopback。包含 Host
+supervisor 在内的四个 Node 进程加载 247 个不同文件。观察器自身的本地连接与
+named-import 子进程对照通过；早期不完整观察器与本次核验后的观察分别保留。
+
+这些观察识别了此夹具中的本地 RPC 流量，不证明 OS 全域网络完整性、普通遥测
+行为、模型上下文采用、配对性能或完整成本。本交付补齐安装协议的 CI 覆盖缺口，
+不选择 D2/D5 或最小 preset。真实 Host 的 initial/revised/compacted/lost-ACK
+采用、完整 V1–V5/V10、R1/M3、Standard/workspace 发布及原始目标回归继续开放。
+保留早期失败、冻结预算和未变的治理 owner。
+
+### 2026-11-13 — 托管 Codex 准备遵守启动准入
+
+现有内置 Codex CLI 路径可对符合条件的 hard-lease Todo 执行 typed 决策公布的
+精确普通领取，随后重读同一 Todo，确认 ready 才启动 Host。这消除了调用方单独
+手工领取的步骤，没有选择新的 Host，也没有授予额外权限。此前提案
+`d4348db14d51952a74247e3003768a2f969c7216` 在拒绝无效 validator 输入或调度
+等待之前仍会写入 lease 和 Turn 回执。修复路径先校验现有 Host 参数，通过同一
+TypeScript cadence owner 取得启动准入，再原子保留精确 Turn 绑定并执行普通领取。
+启动准入回调位于既有跨 runtime Turn 绑定锁内；竞争请求不能先占用另一 Todo 的
+启动预约，再让不同绑定获胜。
+
+准备与执行使用 settlement effect identity 复用同一启动预约。因此，普通领取的
+ACK 在 journal 建立前丢失时，可恢复已确认的 lease 和原有未启动预约。历史 Codex
+journal 使用的 transaction-key 预约保留精确恢复兼容分支；已启动请求不能借该
+分支重复执行。领取结果不确定时，状态副作用报告为 unknown，不能宣称没有写入；领取成功但
+后续 Host 步骤失败时，结果保留已确认的领取写入。
+已结算的原 Turn 即使 lease 后来被释放，也通过现有 spend precheck
+拒绝再次领取，并引导原 journal 回读。没有新增持久化 schema 或治理 owner。
+
+隔离 File 和 SQLite 的真实源码 CLI 检查表明，无效 validator JSON/argv 和调度
+等待均保持 lease、Turn 回执、journal 与 Host 调用不变；同一独立 oracle 在此前
+提案上失败。普通领取后中断可恢复为一次 Host 执行、一次结算，原 journal key
+重放没有副作用。独立 core 安装验证复用现有 package lane 与合成 Codex transport，
+使用独立产物 validator 和结果回读。
+
+这仅交付 V2/V3/V4 的可执行启动前置，不等于完整 R1 验收。Host 为合成 transport，
+实际模型采用、完整 V1–V5/V10、默认闭包、配对完整成本、渐进产品控制、R1/M3 与
+原始 Goal 回归仍未验收。保留原九项要求、此前失败尝试和冻结预算失败；本次没有
+推广 minimal preset、provider 默认、包发布或付费操作。
+
+### 2026-11-13 — 完整 Turn 延后加载未选择的 Provider 实现
+
+此前独立 core 的已安装 Turn 在解析 Reward Memory 配置时加载 BM25 和
+OpenViking，并在退休治理关闭时加载 anti-entropy 检查器。现在 context-provider
+公开导出和原 builtin builder registry 在明确使用时解析实现。绑定归一化与实际
+provider 共用纯 OpenViking scope owner，原 URI 语法、公开别名与 Python 序列化
+身份保留。Anti-entropy 仍使用原 typed 激活规则和适用 basis，通过这些检查后才
+解析 feedback builder。没有新增或放宽 capability、provider 默认值、authority、
+claim、stop 或 settlement 规则。
+
+12 项新进程检查覆盖 registry 拒绝／custom builder、真实本地 BM25 检索、绑定
+分类、关闭／开启退休治理，以及 attribute/from/star 导出。原 11 项检查在不可变
+基线 `441c6077e7c5c8e896ea79562761fd483baf157e` 上有五项加载 oracle 失败，
+六项公开导出检查通过。两个安装版本的 16 类 URI 成功／拒绝结果与 protocol-4
+pickle 字节一致，跨版本双向读取通过。定义移到纯 scope 源文件，旧模块别名
+不能保留声明源码的 introspection 行为。
+
+最终独立 Python 3.11 core wheel 的 1886 个 runtime 文件与源码字节一致，SHA256
+为 `bc36c92dd437b9418e21031e185fefd04984c91a30169cbd866a3c712d92b4fa`。
+源码 capability 回归通过 628 项。真实隔离 File 与 SQLite 执行提交已检查产物，
+且只结算一次；原 key 重放没有 Host、state 或 quota 副作用。含 package root 的
+受控完整 Turn 模块数在执行时由 525 降到 516，重放由 438 降到 432；capability
+模块数分别由 111 降到 102、56 降到 50。执行 RPC 数仍为 221/220，重放仍为 11。
+这些路径中不再出现未选择的 OpenViking、BM25 和 anti-entropy 检查实现。计数只
+描述已观测的 Python 路径，不能代表完整最小闭包。
+
+配对安装测量使用 macOS 27 arm64、Python 3.11.15、Node 26.0.0，每个 backend、
+阶段各交替运行
+五对基线／候选。每次调用启动新 Python 进程；首次执行前通过原 owner 正常停止
+隔离的 managed RPC server，使其重新启动，已完成 Turn 重放则复用该 server。
+准备与独立回读不计入耗时，OS、bytecode 和 compilation cache 不重置。
+Nearest-rank p95 等于五个样本的最大值。
+
+| Backend／阶段 | Wall 中位数／p95 ms，基线 → 候选 | 调用 RSS 中位数 MiB，基线 → 候选 |
+| --- | --- | --- |
+| SQLite／首次执行 | 2922.5 / 3561.9 → 3006.8 / 4139.9 | 81.81 → 81.25 |
+| SQLite／已完成 Turn 重放 | 809.6 / 948.6 → 889.0 / 1415.0 | 44.73 → 44.42 |
+| File／首次执行 | 2858.7 / 3005.5 → 2862.5 / 2985.0 | 81.09 → 81.36 |
+| File／已完成 Turn 重放 | 645.4 / 679.7 → 692.5 / 773.9 | 44.73 → 44.28 |
+
+40 次调用的独立结果／副作用指纹一致，stdout 大小保持首次执行 4002 bytes、
+重放 4548 bytes。候选 SQLite 中位数较慢、尾延迟较高，本轮不取得延迟或完整成本
+改善资格。调用 RSS 不包含持久 Node server，block-I/O 计数为零也不能证明没有
+文件访问。独立受控 observer 验证 Python import/open/process/loopback 事件，以及
+Node module/loopback/exit 事件，但不能提供 OS 级完整闭包、完整 IPC/I/O、model
+token、service cost 或人工注意力核算。Host 仍为 synthetic。完整 V1–V5/V10、
+真实模型采用／恢复、渐进产品控制、R1/M3、独立 Standard packages 与原目标回归
+仍开放，保留原九项要求和此前冻结失败。
+
+### 2026-11-13 — TraeX 续接读取运行时线程
+
+公开 `start-goal` 入口现在通过既有 host-thread adapter 读取 TraeX 的
+`TRAECLI_THREAD_ID`。已验证的 `traex-cli` 绑定自动复用原 Agent，无需再次
+传入 `--thread-id` 或 `--agent-id`；显式线程仍优先。缺失、新线程、跨 Host 与
+冲突上下文保留既有身份边界，Trae App 的绑定作用域仍独立。
+
+隔离真实 File/SQLite CLI 对照覆盖源码、从 `09886ba7a` 构建的独立 core 与
+候选 core：36 次调用在普通入口、显式对照／覆盖、未知上下文及重放中保留
+目标原文、registry/state 字节与 canonical provider revision。基线仍丢失
+ambient thread，两个修复后入口均复用已绑定 Agent。源码回归通过 215 项，
+包含跨 Host 与冲突拒绝；已安装 core／恢复／context suite 在 Python 3.11.15
+通过 23 项，源码使用 Python 3.13.5，Node 为 26.0.0。1,887 个打包 runtime
+文件均与评审源码字节一致。最初夹具设置失败继续保留为失败尝试。
+
+TraeX 激活指引先读取原生 Goal 工具或当前 Host 上下文，在续接时保留已有
+active Goal 的原始目标和用户停止状态。仅当获授权的新启动确认不存在原生
+Goal 时才可创建；工具／上下文不可用时仍保留可见 `/goal` 手工恢复路径。
+这取得入口与指令修复证据，不能证明模型采用了指引。未新增生命周期 owner、
+模型执行、preset 或已安装 Host 发布。完整 R1/V1–V5/V10、渐进控制、完整成本
+证据与原目标回归仍开放，保留全部原始失败。
+
+### 2026-11-13 — 原记录的披露关闭后停止续读
+
+可选的原工作会话在详情响应中断时，只按同一来源、记录与字符偏移重试一次。
+关闭单条记录或其工作过程分组，会取消该读取及隐藏重试；重新展开保留已读文字
+与位置，由用户显式继续。原 HTTP reader、指纹校验与原生输入边界仍承担各自职责。
+
+未修复候选的真实 HTTP／浏览器反例在关闭后发出了第二次读取。源码与隔离的
+Python 3.11 wheel 现已通过真实 LoopX reader 和合成 Desktop peer，验证两层关闭、
+成功响应断流恢复、拒绝响应断流不重试及完整 Unicode 回读。这只资格化可选记录
+读取，不证明模型上下文保留、受管理 V4／R1、拆包 M3、已安装 App 采用或完整成本。
+原目标回归、未完成验收、权限边界与冻结失败全部保持。
+
+### 2026-11-13 — 独立 core 续接保留原安装
+
+此前即使调用者选择隔离的 core interpreter，独立启动仍返回环境中的 `loopx`
+命令；执行完整命令可能通过 PATH/PYTHONPATH 导入其他安装。旧安装测试丢弃
+executable 后重放参数，掩盖了失败。Core 生成的命令现在通过既有 invocation
+owner 保留同一环境的 Python，并使用 `-I -m loopx.entrypoint`。显式全局
+`--cli-bin` 与普通发行默认行为保持；非法参数保留完整 parser 诊断。
+多 Goal 选择也复用同一命令 renderer。
+
+Core module 诊断核验实际导入的 distribution、记录中的 module，以及真实存在
+且有记录的 console 入口。Version/catalog/help probe 使用同一隔离 module
+调用，foreign PYTHONPATH 无法静默改变被检查的 artifact。缺失或重定向的 module
+记录、缺失 console 记录／文件、未记录 launcher 与缺失 runtime 文件仍拒绝。
+安装资格测试执行完整的返回激活与诊断命令，使用 foreign-package sentinel 和
+显式 route 对照，并覆盖既有 SQLite/File 恢复与 context 检查。本轮修复命令来源，
+不新增生命周期、权限、配置或 protocol owner。
+
+完整 R1/V1–V5/V10、真实模型恢复／采用、渐进产品控制、最小依赖闭包、
+M3/Standard/workspace/meta 拆包与完整成本验收仍开放。本轮不升级已安装 Host、
+启动模型服务或从协议夹具推断效果。原九项要求、原 Goal 回归及此前失败全部保留。
+
+### 2026-11-13 — 成功工作在同一路线上记录新检查点
+
+Generic Host result 边界此前要求新 Vision 使用 `material_replan` 与
+`replan_required`。即使已有新成果证据，保留路线的成功任务也只能复用 unchanged
+reason。现在显式 `path_delta_mode: unchanged` 可携带既有 Vision packet，
+其 `path_delta.outcome` 必须为 `continue` 或 `no_change`，且不能同时声明
+unchanged reason。既有 TypeScript Vision、任务、验证与结算 owner 仍决定持久
+效果；material replan、停止决定、非法 packet 与矛盾声明继续拒绝。省略 mode
+保持旧推断，generic 与 Codex 指导说明同一边界。
+
+一个既有隔离库存任务通过 stdio adapter 使用当前模型工具，以及 Python 3.11
+standalone core artifact 与 SQLite。更正输入得到数量 22/10/5、价值 185.25，
+此前为 172.25。独立检查核验了 13.00 差额、全部六条排除记录、可复用生成器与
+五份原文件保持不变。Normalized result 写入 journal 后，SIGKILL 中断 driver
+与 validator。原 Turn 从 validation 恢复，没有再次调用 Host，完成 Todo 并
+只结算一次；完成后的 replay 没有增加 Host、writeback 或 spend。
+首次非法 completion/replan reply 与三次 resume setup 拒绝保留为失败。
+实际有两次 Host dispatch、一次模型工作；被拒绝的 reply 未冒充已确认工作。
+
+源码 executor/driver 检查与 Codex/dsh 回归通过。安装态 File、SQLite 检查保留
+legacy completion，并核验两种新 checkpoint outcome 与 replay；首次过长的
+inline 测试命令触发既有上限，夹具随后采用普通 script path。未改命令预算、
+权限、默认行为或历史 receipt。本轮只资格化所触及的成功／检查点与恢复路径，
+不关闭完整 V1–V5/V10 或 R1。完整 context retention、最小闭包、渐进产品控制、
+可比完整成本、M3/Standard/workspace 交付与原 Goal 回归仍开放。原九项要求和
+冻结失败全部保留；没有升级已安装 Host 或模型服务。
