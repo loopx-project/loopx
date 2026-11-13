@@ -23,6 +23,7 @@ from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
 from .chat.todo_actions import ChatTodoActionMixin
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
+from .control_plane.goals.activation import goal_is_stopped
 from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal
 from .control_plane.goals.configure_goal_service import (
@@ -1632,7 +1633,8 @@ class ChatActionService(
                     },
                 )
             agent_id = parameters.get("agent_id")
-            if agent_id and not isinstance(steps.get("todo_assigned"), dict):
+            start_execution = parameters.get("start_execution") is True
+            if agent_id and not start_execution and not isinstance(steps.get("todo_assigned"), dict):
                 update_goal_todo(
                     registry_path=self.registry_path,
                     goal_id=str(parameters["goal_id"]),
@@ -1659,7 +1661,7 @@ class ChatActionService(
                 "canonical_receipt": canonical_receipt,
             }
             turn_result = None
-            if parameters.get("start_execution"):
+            if start_execution:
                 if self.runtime_controller is None:
                     raise ValueError("Chat Runtime Controller is unavailable")
                 execution_agent_id = str(
@@ -1675,28 +1677,69 @@ class ChatActionService(
                     turn_id = _opaque(execution_step.get("turn_id"), field="turn_id")
                     created = False
                 else:
-                    goal = self._goal(str(parameters["goal_id"]))
+                    goal_id = str(parameters["goal_id"])
+                    owner = str(parameters["agent_id"])
+                    goal = self._goal(goal_id)
+                    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+                        raise ValueError("The Task's Goal is no longer active")
                     project = Path(str(goal.get("repo") or ".")).expanduser().resolve()
                     if not project.is_dir():
                         raise ValueError("the Goal project root is unavailable")
-                    self._agent_eligibility(execution_agent_id, project=project)
-                    session, _resumed = self.runtime_controller.open_session(
-                        goal_id=str(parameters["goal_id"]),
-                        agent_id=execution_agent_id,
-                        work_dir=project,
-                        objective=str(parameters["text"]),
-                        mode="resume_latest",
-                        channel_id=f"task.{todo_id}",
-                        agent_goal_id=str(parameters["goal_id"]),
-                    )
-                    session_id = _opaque(session.get("session_id"), field="session_id")
-                    turn, created = self.runtime_controller.submit_turn(
-                        session_id=session_id,
-                        client_turn_id=f"task-start-{proposal_id}",
-                        message=str(parameters["text"]),
-                        work_dir=project,
-                        objective=str(parameters["text"]),
-                    )
+                    channel_id = f"task.{todo_id}"
+                    client_turn_id = f"task-start-{proposal_id}"
+                    opened = steps.get("task_session_opened")
+                    session_id = None
+                    turn = None
+                    if opened is not None:
+                        session_id = _opaque(opened.get("session_id"), field="session_id")
+                        session = self.runtime_controller.store.load_session(session_id)
+                        if (session is None or session.get("goal_id") != goal_id
+                                or session.get("agent_id") != execution_agent_id or session.get("channel_id") != channel_id):
+                            raise ValueError("The original Task Session is unavailable")
+                        observed = self.runtime_controller.store.turn_for_client(session_id, client_turn_id)
+                        if observed and (observed.get("started_at") or observed.get("upstream_turn_id")):
+                            turn = observed
+
+                    created = False
+                    if turn is None:
+                        self._agent_eligibility(execution_agent_id, project=project)
+                        if parameters.get("endpoint_id") and self._resolve_goal_agent(goal_id, execution_agent_id) != owner:
+                            raise ValueError("The reviewed Agent endpoint now belongs to another Goal Agent")
+                        claim_operation_id = f"chat-task-start:{proposal_id}"
+                        claim = update_goal_todo(
+                            registry_path=self.registry_path, goal_id=goal_id, todo_id=todo_id,
+                            claimed_by=owner, agent_id=owner, claim_only=True, manage_execution=True,
+                            claim_operation_id=claim_operation_id, dry_run=False,
+                        )
+                        if claim["handoff_mode"] == "soft_claim" and claim["status"] in {"recovered", "replayed"}:
+                            # A soft-claim receipt records a past assignment.
+                            # Let the same owner recheck it without acquiring or changing it.
+                            current = update_goal_todo(
+                                registry_path=self.registry_path, goal_id=goal_id, todo_id=todo_id,
+                                claimed_by=owner, agent_id=owner, claim_only=True, manage_execution=True,
+                                dry_run=True,
+                            )
+                            if current["changed"]:
+                                raise ValueError("The reviewed Task assignment changed before launch")
+                        if not isinstance(steps.get("todo_assigned"), dict):
+                            self.store.save_checkpoint(
+                                proposal_id, step="todo_assigned",
+                                receipt={"todo_id": todo_id, "agent_id": owner},
+                            )
+                        if session_id is None:
+                            session, _resumed = self.runtime_controller.open_session(
+                                goal_id=goal_id, agent_id=execution_agent_id, work_dir=project,
+                                objective=str(parameters["text"]), mode="resume_latest",
+                                channel_id=channel_id, agent_goal_id=goal_id,
+                            )
+                            session_id = _opaque(session.get("session_id"), field="session_id")
+                            self.store.save_checkpoint(
+                                proposal_id, step="task_session_opened", receipt={"session_id": session_id},
+                            )
+                        turn, created = self.runtime_controller.submit_turn(
+                            session_id=session_id, client_turn_id=client_turn_id, message=str(parameters["text"]),
+                            work_dir=project, objective=str(parameters["text"]),
+                        )
                     turn_id = _opaque(turn.get("turn_id"), field="turn_id")
                     self.store.save_checkpoint(
                         proposal_id,
