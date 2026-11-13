@@ -968,6 +968,44 @@ def test_history_compaction_requires_its_native_item_and_terminal_turn(tmp_path,
     assert calls == ["thread/compact/start"]
 
 
+@pytest.mark.parametrize("observation,expected", [
+    ("current", 280000), ("missing", None), ("billable", None), ("invalid", None), ("small-window", 0),
+])
+def test_history_compaction_only_uses_the_recomputed_context_size(tmp_path, monkeypatch, observation, expected):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="history-thread", work_dir=tmp_path, response_timeout_sec=1)
+    thread, turn = "history-thread", "compact-turn"
+    item = {"id": "compact-item", "type": "contextCompaction"}
+
+    def emit(method, **params):
+        session.messages.put({"method": method, "params": {"threadId": thread, **params}})
+
+    def usage(total, *, input_tokens=0, window=475000):
+        emit("thread/tokenUsage/updated", turnId=turn, tokenUsage={"modelContextWindow": window, "last": {
+            "totalTokens": total, "inputTokens": input_tokens, "outputTokens": 0,
+            "cachedInputTokens": 0, "reasoningOutputTokens": 0,
+        }})
+
+    def write(packet):
+        session.messages.put({"id": packet["id"], "result": {}})
+        emit("turn/started", turn={"id": turn})
+        usage(1)  # An earlier thread snapshot can precede the compaction item.
+        emit("item/started", turnId=turn, item=item)
+        if observation != "missing":
+            usage(101, input_tokens=100)
+        if observation == "current":
+            usage(100000)
+        elif observation == "invalid":
+            usage(100000, window=True)
+        elif observation == "small-window":
+            usage(399999, window=400000)
+        emit("item/completed", turnId=turn, item=item)
+        emit("turn/completed", turn={"id": turn, "status": "completed"})
+
+    monkeypatch.setattr(session, "_write", write)
+    assert session.compact_history() == expected
+
+
 @pytest.mark.parametrize("fault", [None, "older", "host-other", "active", "tool", "answer", "correction",
     "foreign", "unknown", "changed-error", "policy", "usage", "unauthorized", "http401"])
 def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp_path, monkeypatch, fault):
