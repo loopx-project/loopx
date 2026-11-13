@@ -189,6 +189,8 @@ class RunIndexSnapshot:
     raw_count: int
     digest: str | None
     invalid_count: int = 0
+    # Rows that are not text at all, so even their goal and kind are unknown.
+    undecodable_count: int = 0
 
 
 def now_local() -> str:
@@ -334,6 +336,7 @@ def load_index_snapshot(
     positions: dict[tuple[str, str, str], int] = {}
     raw_count = 0
     invalid_count = 0
+    undecodable_count = 0
     digest = hashlib.sha256()
 
     with stream:
@@ -347,6 +350,7 @@ def load_index_snapshot(
                 # unparseable row instead of failing every reader of the index.
                 raw_count += 1
                 invalid_count += 1
+                undecodable_count += 1
                 continue
             if not line.strip():
                 continue
@@ -381,6 +385,7 @@ def load_index_snapshot(
         raw_count=raw_count,
         digest=f"sha256:{digest.hexdigest()}",
         invalid_count=invalid_count,
+        undecodable_count=undecodable_count,
     )
 
 
@@ -419,7 +424,7 @@ def collect_history(
         read_builtin_goal_machine_configuration,
         project_goal_with_builtin_machine_configuration,
     )
-    from .quota import goal_quota_with_spend_ledger
+    from .quota import goal_quota_with_spend_ledger, quota_with_unreadable_index_rows
 
     if registry is None:
         registry = load_registry(registry_path)
@@ -505,6 +510,10 @@ def collect_history(
 
         adapter = cast(dict[str, Any], meta.get("adapter")) if isinstance(meta.get("adapter"), dict) else {}
         quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
+        if quota is not None and index_snapshot.undecodable_count:
+            # The undecodable rows may be the spend or void events the projection
+            # just summed without them; report that instead of an exact count.
+            quota = quota_with_unreadable_index_rows(quota, index_snapshot.undecodable_count)
         goal_record: dict[str, Any] = {
             "id": current_goal_id,
             **goal_parent_fields(meta),

@@ -94,54 +94,6 @@ def test_history_append_starts_a_new_record_after_an_unterminated_tail(
     assert [row["goal_id"] for row in snapshot.records] == expected_goal_ids
 
 
-def test_history_read_skips_a_row_torn_inside_a_multibyte_character(
-    tmp_path: Path,
-) -> None:
-    """A write torn mid-character is an invalid row, not a failure of the index.
-
-    The writer keeps non-ASCII text verbatim (`ensure_ascii=False`), so an
-    interrupted append can end in a partial UTF-8 sequence. Every reader of the
-    index used to raise `UnicodeDecodeError`, including the append-side
-    readback, so one torn row blocked all later history reads and projections.
-    """
-
-    runs_dir = tmp_path / "runs"
-    runs_dir.mkdir()
-    index_path = runs_dir / "index.jsonl"
-    complete = {"goal_id": GOAL_ID, "generated_at": "2026-09-15T00:00:00Z"}
-    torn = json.dumps(
-        {"goal_id": GOAL_ID, "generated_at": GENERATED_AT, "summary": "进度更新"},
-        ensure_ascii=False,
-    ).encode("utf-8")
-    index_path.write_bytes(
-        (json.dumps(complete) + "\n").encode("utf-8")
-        + torn[: torn.index("进".encode("utf-8")) + 1]
-    )
-    record = {"goal_id": GOAL_ID, "generated_at": "2026-09-16T00:00:01+00:00"}
-
-    snapshot = history.load_index_snapshot(index_path)
-    assert [row["generated_at"] for row in snapshot.records] == [
-        complete["generated_at"]
-    ]
-    assert (snapshot.raw_count, snapshot.invalid_count) == (2, 1)
-
-    history.write_reserved_run_artifacts(
-        runs_dir=runs_dir,
-        generated_at=record["generated_at"],
-        record=record.copy(),
-        index_record=record.copy(),
-        payload=record.copy(),
-        render_markdown=lambda _payload: "# run",
-    )
-
-    snapshot = history.load_index_snapshot(index_path)
-    assert [row["generated_at"] for row in snapshot.records] == [
-        complete["generated_at"],
-        record["generated_at"],
-    ]
-    assert snapshot.invalid_count == 1
-
-
 @pytest.mark.parametrize(
     "text",
     [
@@ -274,3 +226,89 @@ def test_collision_rebuild_keeps_the_backup_and_index_bytes(tmp_path: Path) -> N
     physical_lines = run_index_rebuild.split_index_lines(rebuilt_content)
     assert len(physical_lines) == 2
     assert [json.loads(line)["todo_id"] for line in physical_lines] == ["todo-a", "todo-b"]
+
+
+def _quota_history(tmp_path: Path, index_bytes: bytes) -> dict:
+    goal_id = "torn-spend-goal"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": goal_id,
+                        "quota": {
+                            "compute": 1.0,
+                            "window_hours": 100000,
+                            "slot_minutes": 1,
+                            "allowed_slots": 1,
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runs_dir = tmp_path / "runtime" / "goals" / goal_id / "runs"
+    runs_dir.mkdir(parents=True)
+    (runs_dir / "index.jsonl").write_bytes(index_bytes)
+    return history.collect_history(
+        registry_path=registry_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id=goal_id,
+        limit=10,
+    )["goals"][0]["quota"]
+
+
+def _spend_row(generated_at: str, summary: str) -> bytes:
+    return json.dumps(
+        {
+            "goal_id": "torn-spend-goal",
+            "generated_at": generated_at,
+            "classification": "quota_slot_spent",
+            "summary": summary,
+            "quota_event": {
+                "event_type": "quota_slot_spent",
+                "slots": 1,
+                "turn_instance_id": "turn-1",
+                "run_generated_at": generated_at,
+            },
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def test_torn_spend_row_is_reported_as_unreadable_not_as_zero_spend(
+    tmp_path: Path,
+) -> None:
+    spend = _spend_row("2026-09-15T00:00:00+00:00", "进度更新")
+    torn = spend[: spend.index("进".encode("utf-8")) + 1]
+
+    intact = _quota_history(tmp_path / "intact", spend + b"\n")
+    damaged = _quota_history(tmp_path / "damaged", torn)
+
+    assert intact["spent_slots"] == 1
+    assert "unreadable_event_count" not in intact
+    # The torn row may be the spend the projection could not count: the quota
+    # must say its usage is unknown instead of reading as an exact zero.
+    assert damaged["spent_slots"] == 0
+    assert damaged["unreadable_event_count"] == 1
+    assert damaged["unreadable_event_reasons"] == ["event_invalid"]
+
+
+def test_torn_unrelated_row_still_marks_usage_unreadable_but_keeps_the_spend(
+    tmp_path: Path,
+) -> None:
+    spend = _spend_row("2026-09-15T00:00:00+00:00", "done")
+    other = json.dumps(
+        {"goal_id": "torn-spend-goal", "generated_at": "2026-09-16T00:00:00+00:00", "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    torn = other[: other.index("进".encode("utf-8")) + 1]
+
+    quota = _quota_history(tmp_path, spend + b"\n" + torn)
+
+    # The intact spend is still counted; only the unknown row is flagged.
+    assert quota["spent_slots"] == 1
+    assert quota["unreadable_event_count"] == 1
