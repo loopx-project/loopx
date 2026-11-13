@@ -329,6 +329,7 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
         "--turn-instance-id",
         "vision-read",
         "--context-delivery", "off",
+        "--complete-turn",
         "--decision-output-dir",
         str(capture),
         cwd=project,

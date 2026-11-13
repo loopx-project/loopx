@@ -166,7 +166,7 @@ def test_real_capture_shares_authoring_and_refuses_invalid_recovery_without_effe
     capture = tmp_path / "captured"
     code, source = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", SELECTED_REPLAN_TODO_ID,
-        "--turn-instance-id", turn, "--decision-output-dir", str(capture), cwd=project)
+        "--turn-instance-id", turn, "--complete-turn", "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, source
     assert json.loads((capture / "decision.json").read_text()) == source
     contract = source["replan_action_packet"]["writeback_contract"]

@@ -2,6 +2,7 @@
 from copy import deepcopy
 from functools import partial
 import json
+import shlex
 
 import pytest
 
@@ -251,7 +252,7 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
 
     def first_read(*args):
         view = call("quota", "should-run", "--codex-app", "--context-delivery", "auto",
-                    "--goal-id", GOAL, "--agent-id", AGENT, *args)
+                    "--complete-turn", "--goal-id", GOAL, "--agent-id", AGENT, *args)
         assert view["schema_version"] == "context_capture_navigation_v1"
         page = run_reader(view["first_read_command"])
         chunks = bytearray()
@@ -278,30 +279,37 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
          "--document", str(document), "--expected-provider-revision", before["provider_revision"],
          "--operation-id", "source-requirements", "--execute")
     expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
-    reader, guard = first_read("--turn-instance-id", "turn-acceptance-sharing")
+    _, guard = first_read("--turn-instance-id", "turn-acceptance-sharing",
+        "--decision-output-dir", str(tmp_path / "original-acceptance"))
     assert guard["/effective_action"] == "autonomous_replan_required"
     assert guard["/normal_delivery_allowed"] is False
     assert "/replan_action_packet/writeback" not in guard
-    assert guard["/replan_action_packet/required_outcome"] == "semantic_delta"
-    assert guard["/replan_action_packet/planning_guidance"]
-    assert "blocked" in guard["/replan_action_packet/allowed_terminal"]
-    basis = "/autonomous_replan_obligation"
-    assert guard[basis + "/obligation_id"] == guard["/heartbeat_receipt/settlement_identity/replan_obligation_id"]
-    assert guard[basis + "/replan_context/context_id"]
-    assert guard[basis + "/triggers/0/kind"]
-    assert guard[basis + "/stop_condition"]
-    assert basis + "/replan_context/evidence" not in guard
-    # The complete contract exposes the source by its first-read JSON pointer,
-    # not by a second replan-view packet. Select its body from that same capture.
-    path, = (key.removesuffix("/id") for key, value in guard.items()
-             if key.endswith("/id") and "/outcome_requirements/outcomes/" in key and value == "export")
-    command = reader + " --select " + path
-    def read_original():
-        page = run_reader(command)
-        assert page["ok"] and page["offset"] == 0 and page["eof"]
-        return selected_context_values(page["content"])[path]
-
+    review_command = guard["/replan_action_packet/review"]
+    assert "Read review state" in guard["/replan_action_packet/guidance"]
+    review = run_reader(review_command)
+    identity = guard["/heartbeat_receipt/settlement_identity"]
+    assert review["obligation_id"] == identity["replan_obligation_id"]
+    assert review["context_id"] and review["triggers"] and review["planning_guidance"]
+    # The original typed writer retains the outcome and stop conditions
+    # while the review indexes each independently readable outcome.
+    writer_command = shlex.split(review_command)
+    writer_command[writer_command.index("--replan-stage") + 1] = "writeback"
+    writer = run_reader(shlex.join(writer_command))
+    assert writer["required_outcome"] == "semantic_delta"
+    assert "blocked" in writer["allowed_terminal"]
     original = expected["outcome_requirements"]["outcomes"][0]
+    source_reader = guard["/context_details/command_template"].replace(" --select '<pointer>'", "")
+    stop_pointer = "/autonomous_replan_obligation/stop_condition"
+    stop = run_reader(source_reader + " --select " + stop_pointer)
+    assert selected_context_values(stop["content"])[stop_pointer]
+    index_view = review["acceptance_index"]
+    outcome_ref, = review["core_goal"]["outcome_requirements_index"]["outcome_refs"]
+    command = index_view["read_action_template"].replace("{outcome_ref}", outcome_ref)
+    def read_original():
+        outcome = run_reader(command)
+        assert outcome["source_hash"] == review["source_hash"] and outcome["outcome_ref"] == outcome_ref
+        return outcome["outcome"]
+
     assert read_original() == original
 
     # A later linked revision must reach the selected caller intact.
@@ -454,7 +462,7 @@ def test_inline_cli_delivers_complete_acceptance_for_selection_and_replan(tmp_pa
          "--document", str(document), "--expected-provider-revision", before["provider_revision"],
          "--operation-id", "source-requirements", "--execute")
     expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
-    guard = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT,
+    guard = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--complete-turn", "--goal-id", GOAL, "--agent-id", AGENT,
                  "--turn-instance-id", "turn-acceptance-sharing")
     assert guard["effective_action"] == "autonomous_replan_required"
     ref = "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract"
@@ -480,11 +488,11 @@ def test_inline_cli_delivers_complete_acceptance_for_selection_and_replan(tmp_pa
          "--document", str(document), "--expected-provider-revision", revision,
          "--operation-id", "link-export", "--execute")
     expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
-    planning = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT,
+    planning = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--complete-turn", "--goal-id", GOAL, "--agent-id", AGENT,
                     "--turn-instance-id", "turn-export-planning")
     assert planning["planning_horizon"]["core_goal"]["acceptance_contract"] == expected
     assert planning["agent_todo_summary"]["goal_acceptance_contract_ref"] == "$.planning_horizon.core_goal.acceptance_contract"
-    selected = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT,
+    selected = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--complete-turn", "--goal-id", GOAL, "--agent-id", AGENT,
                     "--todo-id", added["todo_id"], "--turn-instance-id", "turn-export-delivery")
     assert selected["normal_delivery_allowed"] is True
     sources = selected["interaction_contract"]["agent_channel"]["work_context"]["sources"]

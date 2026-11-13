@@ -352,18 +352,14 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                 assert presentation_path.is_relative_to(native.resolve())
                 staged = json.loads(presentation_bytes)
                 staged_packet = staged["replan_action_packet"]
-                expected_hash = (source["contract_binding"]["content_hash"]
-                                 if turn_envelope else _canonical_digest(source))
-                for stage in ("review", "writeback"):
-                    argv = shlex.split(staged_packet[stage])
-                    assert argv[argv.index("--decision-file") + 1] == str(view_path)
-                    assert argv[argv.index("--source-hash") + 1] == expected_hash
                 added = {"/replan_action_packet/review": staged_packet["review"],
                          "/replan_action_packet/guidance": staged_packet["guidance"]}
+                selection_source = source
                 if turn_envelope:
                     detail = shlex.split(staged["context_details"]["command_template"])
                     assert Path(detail[detail.index("--capture-file") + 1]).read_bytes() == raw
                     assert detail[detail.index("--capture-sha256") + 1] == hashlib.sha256(raw).hexdigest()
+                    added["/context_details"] = staged["context_details"]
                     added["/context_details"] = staged["context_details"]
                     # Transport may reorder equivalent CLI flags. Check the
                     # executable selection and every other control exactly.
@@ -380,7 +376,16 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                     displayed_cli = {**cli, "selection_command": {**selection_command,
                         "command_args_template": shown_template}}
                     assert staged["interaction_contract"]["cli_channel"] == displayed_cli
+                    selection_source = {**source, "interaction_contract": {
+                        **source["interaction_contract"], "cli_channel": displayed_cli}}
+                expected_hash = (source["contract_binding"]["content_hash"]
+                                 if turn_envelope else _canonical_digest(source))
+                for stage in ("review", "writeback"):
+                    argv = shlex.split(staged_packet[stage])
+                    assert argv[argv.index("--decision-file") + 1] == str(view_path)
+                    assert argv[argv.index("--source-hash") + 1] == expected_hash
             else:
+                selection_source = source
                 assert presentation_path == view_path and presentation_bytes == raw
             chunks, offset = [], 0
             while True:
@@ -409,10 +414,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                 if row["pointer"] in added:
                     assert row["value"] == added[row["pointer"]]
                     continue
-                if replan and turn_envelope and row["pointer"] == "/interaction_contract/cli_channel":
-                    assert row["value"] == displayed_cli
-                    continue
-                expected = source
+                expected = selection_source
                 for token in row["pointer"].split("/")[1:]:
                     token = token.replace("~1", "/").replace("~0", "~")
                     expected = expected[int(token)] if isinstance(expected, list) else expected[token]
