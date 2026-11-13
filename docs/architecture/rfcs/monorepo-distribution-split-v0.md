@@ -3879,6 +3879,19 @@ or spend. Source and installed Host checks use synthetic providers separately
 from this native-model task; the initial compatibility failures and the
 pre-fix dangling-reference counterexample remain negative evidence.
 
+Broader Ark adapter regression initially failed eight SDK model-input checks
+while 817 other cases passed. Those checks still expected `work_contract` in
+the model presentation, so their subsequent original-receipt replay assertions
+were not reached. The counterpart uses the shared task/source parity oracle,
+requires unchanged operator input and its original receipt binding, and rejects
+the model-view version before any provider call. Complete-source historical
+v0/v1 input and running/completed replay remain in the matrix. The optional CI
+command exits on the first test failure so its traceback precedes the existing
+ten-minute deadline; passing runs retain the complete case selection. Equal
+baseline/head cancellations at that deadline did not establish unrelatedness
+or semantic success. SDK HTTP fixtures qualify transport and recovery rather
+than live cloud-model adoption.
+
 This qualifies a task-presentation slice of V4/R1. Full model-context retention,
 minimal default closure, progressive product control, comparable complete costs,
 V1–V5/V10, R1/M3, Standard/workspace publication and original-Goal regression

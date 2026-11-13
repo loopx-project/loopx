@@ -3023,6 +3023,15 @@ Warm median/p95 为 9.31/11.27 ms 对 9.02/10.26 ms；较早候选批次为
 不调用 Host、不 writeback、不 spend。源码与安装态 Host 检查使用合成 provider，
 与该原生模型任务分开；最初兼容性失败和修复前悬空引用反例保留为负面证据。
 
+更广的 Ark adapter 回归最初有八项 SDK 模型输入检查失败、817 项通过。旧检查仍
+要求模型呈现含有 `work_contract`，其后的原 receipt 回放断言没有执行。配套检查
+复用任务／来源 parity oracle，要求操作方原输入及其 receipt binding 不变，并在
+任何 provider 调用前拒绝把模型视图版本用作来源。矩阵保留携带完整来源的历史
+v0/v1 输入及 running/completed 回放。可选 CI 命令在首个测试失败后退出，让
+traceback 在既有十分钟上限前显现；通过路径仍选择完整用例。基线与候选同在该
+上限取消，不能证明失败无关或语义成功。SDK HTTP 夹具资格化 transport 与恢复，
+不构成真实云端模型采用证据。
+
 本轮只资格化 V4/R1 的任务呈现切片。完整模型上下文保留、默认最小闭包、渐进
 产品控制、可比完整成本、V1–V5/V10、R1/M3、Standard/workspace 发布与原 Goal
 回归仍开放。原九项要求和冻结失败全部保留；没有升级已安装 Host 或模型服务。
