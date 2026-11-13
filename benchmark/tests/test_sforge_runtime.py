@@ -714,14 +714,17 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
     assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
-    assert receipt.get('complete_turn') is (True if complete else None)
+    assert receipt.get('complete_turn') is (None if enabled else True)
     assert receipt.get('turn_envelope') is (True if enabled else None)
-    if not enabled:
+    if enabled:
+        assert 'complete_turn_source' not in receipt
+    else:
+        assert receipt['complete_turn_source'] == ('explicit' if complete else 'default')
         assert 'turn_envelope' not in receipt
     from types import SimpleNamespace
     context = SimpleNamespace()
     worker.runtime._populate_context(context)
-    assert context.metadata.get('complete_turn') is (True if complete else None)
+    assert context.metadata.get('complete_turn') is (None if enabled else True)
     assert context.metadata.get('turn_envelope') is (True if enabled else None)
     if not enabled:
         assert 'turn_envelope' not in context.metadata

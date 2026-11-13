@@ -628,12 +628,9 @@ def test_checkpoint_preflight_selection_inherits_native_transport(
         body = capture_before_replan(env, receipt, "Current work.")
     original_guard = (wake / "checkpoint-start-guard.json").read_bytes()
     captured_source = json.loads(original_guard)
-    if display == "ordinary":
-        assert "schema_version" not in captured_source and "contract_binding" not in captured_source
-    else:
-        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
-        assert_complete_turn_decision(captured_source)
+    assert_complete_turn_decision(captured_source)
     if enabled:
         command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
         source = Path(command[command.index("--capture-file") + 1])
@@ -695,6 +692,8 @@ def test_checkpoint_preflight_selection_inherits_native_transport(
     argv = shlex.split(selection["route_prefix"] + " " + selection["command_args_template"].format(todo_id=TODO_ID))
     from loopx.cli import build_parser
     parsed = build_parser().parse_args(argv[1:])
+    assert parsed.complete_turn is (display != "envelope")
+    assert parsed.turn_envelope is (display == "envelope")
     assert (parsed.context_delivery == "on") is enabled
     assert parsed.codex_context_dir == (str(native) if enabled else None)
     assert parsed.max_page_output_bytes == (page_limit if enabled else None)
@@ -746,7 +745,8 @@ def test_checkpoint_preflight_selection_inherits_native_transport(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_checkpoint_preflight_requires_its_explicit_complete_source(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("display", ["ordinary", "complete", "envelope"])
+def test_checkpoint_preflight_rejects_an_unbound_current_source(tmp_path, monkeypatch, provider, display):
     import subprocess
 
     from benchmark.runtime.checkpoint import capture_before_replan
@@ -768,20 +768,19 @@ def test_checkpoint_preflight_requires_its_explicit_complete_source(tmp_path, mo
     cli.chmod(0o700)
     env = {**os.environ, "LOOPX_CLI": str(cli), "LOOPX_PROJECT": str(project),
         "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
-        "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID, "LOOPX_COMPLETE_TURN": "1",
-        "LOOPX_TURN_ENVELOPE": "0", "LOOPX_CONTEXT_DELIVERY": "off",
+        "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID, "LOOPX_COMPLETE_TURN": str(int(display == "complete")),
+        "LOOPX_TURN_ENVELOPE": str(int(display == "envelope")), "LOOPX_CONTEXT_DELIVERY": "off",
         "LOOPX_WAKE_LOG_DIR": str(wake.parent), "LOOPX_CHECKPOINT_REQUEST": str(request)}
     run = subprocess.run
 
     def substituted_capture(argv, **kwargs):
         result = run(argv, **kwargs)
-        if "--complete-turn" in argv:
-            root = Path(argv[argv.index("--decision-output-root") + 1])
-            [source] = root.glob("decision-*/decision.json")
-            original = json.loads(source.read_bytes())
-            assert original.pop("schema_version") == "loopx_turn_envelope_v1"
-            assert original.pop("contract_binding")
-            source.write_text(json.dumps(original))
+        root = Path(argv[argv.index("--decision-output-root") + 1])
+        [source] = root.glob("decision-*/decision.json")
+        original = json.loads(source.read_bytes())
+        original.pop("schema_version", None)
+        original.pop("contract_binding", None)
+        source.write_text(json.dumps(original))
         return result
 
     monkeypatch.setattr("benchmark.runtime.checkpoint.subprocess.run", substituted_capture)

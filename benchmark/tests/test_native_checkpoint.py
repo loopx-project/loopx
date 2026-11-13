@@ -1018,7 +1018,10 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(
 @pytest.mark.skipif(os.name != "posix", reason="Exercises the private Host Unix rendezvous")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("mode_matches", [True, False], ids=["retained", "switched"])
-def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path, monkeypatch, provider, mode_matches):
+@pytest.mark.parametrize("explicit", [False, True], ids=["default", "explicit"])
+def test_held_complete_guard_checkpoint_binds_original_settlement_mode(
+    tmp_path, monkeypatch, provider, mode_matches, explicit,
+):
     """Exercise the worker, real quota guard and checkpoint store with fixed native history."""
     from copy import deepcopy
     from pathlib import Path
@@ -1028,7 +1031,7 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
 
     from benchmark.runtime.checkpoint import held_quota_decision
     from benchmark.runtime.checkpoint_wake import CheckpointWake
-    from benchmark.runtime.codex import turn_envelope_receipt
+    from benchmark.runtime.codex import explicit_turn_display, turn_envelope_receipt
     from benchmark.runtime.worker import heartbeat_body
     from loopx.control_plane.effect_runtime import effect_runtime_result
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
@@ -1063,13 +1066,14 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
            "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
            "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CHECKPOINT_REQUEST": str(declaration),
            "LOOPX_CONTEXT_DELIVERY": "off", "LOOPX_TURN_ENVELOPE": "0",
-           "LOOPX_COMPLETE_TURN": "1"}
+           "LOOPX_COMPLETE_TURN": "1" if explicit else "0"}
     session = CodexAgentSession(env, context="resume", sandbox="read-only", receipt={})
     _store_codex_cli_session(runtime, lineage=session.lineage, session_scope="agent",
         session_id="fixture-session", goal_ref=session.goal_ref, session_profile_digest=session.digest)
     receipt = {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID,
         "session": {"session_id": "fixture-session"},
-        **turn_envelope_receipt(explicit=False, complete=True)}
+        **turn_envelope_receipt(explicit_turn_display(env))}
+    assert receipt["complete_turn_source"] == ("explicit" if explicit else "default")
     (tmp_path / "wakes" / TURN_ID).mkdir(parents=True)
 
     with CheckpointWake(env, receipt) as host:

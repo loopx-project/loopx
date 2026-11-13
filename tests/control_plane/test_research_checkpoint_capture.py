@@ -41,6 +41,7 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
     import subprocess
     import sys
 
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -76,7 +77,7 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
         result = actual_run(argv, **kwargs)
         if "should-run" in argv:
             assert "--prepared-capture-reference" in argv and "--defer-context-presentation" in argv
-            assert ("--complete-turn" in argv) is complete
+            assert "--complete-turn" in argv
             response = json.loads(result.stdout)
             observed.append(response)
             if changed_reference:
@@ -100,12 +101,7 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
         assert (wake / "checkpoint-start-guard.json").read_bytes() == original_bytes
         original_packet = json.loads(original_bytes)
         assert original_packet["heartbeat_receipt"]["turn_instance_id"] == turn
-        if complete:
-            from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-
-            assert_complete_turn_decision(original_packet)
-        else:
-            assert "schema_version" not in original_packet and "contract_binding" not in original_packet
+        assert_complete_turn_decision(original_packet)
         if replan:
             selected = actual_run(command, cwd=project, env=env, capture_output=True, text=True, check=True)
             page = json.loads(selected.stdout)
@@ -118,7 +114,7 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
             assert review_packet["planning_guidance"] == original_packet["replan_action_packet"]["planning_guidance"]
             assert actions["/heartbeat_receipt"] == original_packet["heartbeat_receipt"]
             native = json.loads((context / "session.json").read_bytes())
-            assert native["recovery"]["target"]["surface"] == ("complete_turn" if complete else "quota_packet")
+            assert native["recovery"]["target"]["surface"] == "complete_turn"
             assert native["recovery"]["target"]["capture_id"] == digest
         assert source == original
         assert digest == observed[0]["capture_sha256"] == hashlib.sha256(original_bytes).hexdigest()

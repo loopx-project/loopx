@@ -220,9 +220,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("fresh_replan checkpoint trigger requires a heartbeat execute wake")
     started = time.monotonic()
     guard_path = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
-    # Use the CLI's original-decision capture, including with TurnEnvelope off.
-    # The checkpoint selector needs the full source; the model consumes the
-    # ordinary CLI projection of those same bytes, never a second guard.
+    # The selector and the model both use the original CLI guard. The explicit
+    # compatibility display can still render v0 from that signed source.
     capture_root = Path(tempfile.mkdtemp(prefix="checkpoint-start-", dir=guard_path.parent))
     command = [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
                "--runtime-root", env["LOOPX_RUNTIME_ROOT"], "quota", "should-run",
@@ -231,7 +230,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--available-capability", "shell", "--available-capability", "filesystem_write"]
     display = explicit_turn_display(env)
     native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
-    if display.complete_turn:
+    if display.uses_complete_heartbeat_guard:
         command.append("--complete-turn")
     elif display.turn_envelope:
         command.append("--turn-envelope")
@@ -264,12 +263,9 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("checkpoint requires a successful original quota guard")
     if native_context and projected.get("capture_sha256") != guard_digest:
         raise ValueError("checkpoint prepared capture differs from the original guard; do not replay the guard")
-    # This process owns the guard invocation and knows which source it asked
-    # for. Never infer legacy compatibility from the capture's version fields.
-    # Explicit complete and legacy-envelope displays both capture signed C1.
+    # A fresh guard always captures signed C1, including for the v0 display.
     intent = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
-        agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"],
-        allow_legacy_source=not (display.complete_turn or display.turn_envelope))
+        agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"])
     # A previous preflight on this wake may already have allowed model work,
     # even if its optional attempt marker (or final receipt) could not be saved.
     # Such reentry can verify an existing point, but cannot capture a later one.

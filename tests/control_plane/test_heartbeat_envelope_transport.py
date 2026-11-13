@@ -309,6 +309,7 @@ def private_handoff(request):
 def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     tmp_path, monkeypatch, provider, enabled, private_handoff, context_delivery,
 ):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -347,6 +348,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     guard = next(line for line in block.splitlines() if 'quota should-run' in line)
     guard = guard.replace('${LOOPX_TURN:?}', TURN_ID)
     argv = shlex.split(guard)
+    assert ("--complete-turn" in argv) is not enabled
     result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True)
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
@@ -394,6 +396,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         captures = list(root.glob('*/decision.json'))
         assert len(captures) == 1
         full = json.loads(captures[0].read_text())
+        assert_complete_turn_decision(full)
         if enabled:
             assert_original_contract_view(first, full)
             if not context_delivery and private_handoff is None:
@@ -413,6 +416,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     else:
         assert not root.exists()
         full = first
+        assert_complete_turn_decision(full)
     selection = full['interaction_contract']['cli_channel']['selection_command']
     command = selection['route_prefix'] + ' ' + selection['command_args_template'].replace(
         '{todo_id}', ALTERNATIVE_TODO_ID)
@@ -424,6 +428,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert len(paths) == 2
         assert json.loads(captures[0].read_text()) == full
         selected_full = json.loads(next(p for p in paths if p != captures[0]).read_text())
+        assert_complete_turn_decision(selected_full)
         if enabled:
             assert_original_contract_view(selected, selected_full)
             cli = (selected['writeback'] if selected['schema_version'] == 'loopx_turn_envelope_v0'
@@ -434,6 +439,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
             assert 'action_signature' not in selected
     else:
         selected_full = selected
+        assert_complete_turn_decision(selected_full)
     identity = selected_full['heartbeat_receipt']['settlement_identity']
     assert identity['todo_id'] == ALTERNATIVE_TODO_ID
     assert identity['turn_instance_id'] == TURN_ID

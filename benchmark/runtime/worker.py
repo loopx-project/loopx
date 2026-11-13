@@ -14,7 +14,9 @@ from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 
-from benchmark.runtime.codex import Execution, explicit_turn_display, prepare_codex_home, process_environment
+from benchmark.runtime.codex import (
+    Execution, explicit_turn_display, prepare_codex_home, process_environment, turn_envelope_receipt,
+)
 
 from benchmark.runtime.scheduler import PHASE_WORK_RESERVE_SECONDS as PHASE_WORK_RESERVE_SECONDS
 from benchmark.runtime.scheduler import phase_work_reserve
@@ -106,12 +108,12 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         command += ["--decision-output-root", str(root)]
         if display.turn_envelope:
             command += ["--turn-envelope"]
-        if display.complete_turn:
-            command += ["--complete-turn"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
         if context_dir:
             command += ["--context-delivery", "on", "--codex-context-dir", context_dir]
+    if not native_goal and display.uses_complete_heartbeat_guard:
+        command += ["--complete-turn"]
     result = subprocess.run(
         command,
         cwd=env["LOOPX_PROJECT"],
@@ -585,10 +587,7 @@ def run_once(env: dict[str, str]) -> dict:
         "task_entry": execution.task_entry,
         **({"execution_observation": observation_producer}
            if observation_producer is not None else {}),
-        **({"turn_envelope": True, "turn_envelope_source": "explicit"}
-           if execution.turn_envelope else {}),
-        **({"complete_turn": True, "complete_turn_source": "explicit"}
-           if execution.complete_turn else {}),
+        **turn_envelope_receipt(execution),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),

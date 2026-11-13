@@ -176,10 +176,13 @@ a complete-mode binding cannot verify a pending command that uses
 `--complete-turn`. Historical ordinary and envelope guards remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
 
-Preflight, live handoff and native checkpoint recovery use the current context
-reader's complete-source validator before selecting a replan point. A matching
-file digest cannot replace validation of the contract it contains. Older
-unversioned quota originals retain their receipt and scope checks.
+New heartbeat work uses the complete C1 guard by default, with context delivery
+on or off. The explicit v0 display still reads a signed C1 source. An omitted
+display flag does not by itself add a checkpoint or capture directory. The
+worker and trial receipts record whether C1 was selected explicitly or by default.
+Preflight and live handoff require the signed source before selecting a replan
+point. Native checkpoint recovery can still read previously recorded unversioned
+originals with their receipt and scope checks.
 
 The host-side checkpoint preflight captures the complete original decision.
 With context delivery enabled, its prompt supplies `quota context-project`
