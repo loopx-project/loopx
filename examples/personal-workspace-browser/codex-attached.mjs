@@ -633,7 +633,7 @@ async function runConversation(browser, uncertain) {
     await toolResult.getByRole('alert').waitFor();
     assert.equal(await toolResult.locator('pre').textContent(), prefix);
     assert.equal(detailRequests.length, 1, 'A denied detail read must not retry when its body is lost');
-    for (const boundary of ['record', 'activity']) {
+    for (const [boundary, reopenImmediately] of [['record', false], ['activity', false], ['record', true], ['activity', true]]) {
       const before = detailRequests.length;
       await page.request.post(new URL('/fixture/content-body-hold',url).href);
       const headers = page.waitForResponse(response => {
@@ -643,13 +643,22 @@ async function runConversation(browser, uncertain) {
       await readMore.click();
       const pending = await headers;
       assert.equal(pending.status(), 200, 'The original read has received its success headers');
+      const requestCanceled = page.waitForEvent('requestfailed', request => request === pending.request());
       const disclosure = boundary === 'record' ? toolResult.locator(':scope > details') :
         toolResult.locator('xpath=ancestor::details[contains(@class,"attached-record-group")]');
       const summary = disclosure.locator(':scope > summary');
-      await summary.click();
-      assert.equal(await disclosure.evaluate(node => node.open), false);
+      if (reopenImmediately) {
+        await disclosure.evaluate(node => {
+          node.open = false;
+          node.open = true;
+        });
+      } else {
+        await summary.press('Enter');
+        assert.equal(await disclosure.evaluate(node => node.open), false);
+      }
       await page.request.post(new URL('/fixture/content-body-release',url).href);
-      await summary.click();
+      assert.match((await requestCanceled).failure()?.errorText ?? '', /ERR_ABORTED/);
+      if (!reopenImmediately) await summary.press('Enter');
       await readMore.waitFor();
       assert.equal(await readMore.isEnabled(), true, 'Reopening permits an explicit read at the retained position');
       assert.equal(detailRequests.length, before + 1, `Closing ${boundary} prevents a hidden retry`);
@@ -662,7 +671,7 @@ async function runConversation(browser, uncertain) {
       const text = document.querySelector(`article[data-record-id="${CSS.escape(id)}"] pre`)?.textContent;
       return text != null && text !== previous;
     }, {id: recordId, previous: prefix});
-    assert.equal(detailRequests.length, 5, 'A dropped success body recovers with one read after the explicit click');
+    assert.equal(detailRequests.length, 7, 'A dropped success body recovers with one read after the explicit click');
     assert.equal(new Set(detailRequests).size, 1, 'All three requests keep the original binding, record and offset');
     assert.equal(await toolResult.getByRole('alert').count(), 0);
     page.off('request', observeDetail);
