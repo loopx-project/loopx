@@ -530,7 +530,8 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
 def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
                                 surface: str = "quota_packet",
                                 selection_command_args_template: str | None = None,
-                                captured_decision_path: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+                                captured_decision_path: str | None = None,
+                                replan_reader_argv: list[str] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Publish the complete current source before optional stateless presentation.
 
     The typed owner applies the shrink guard. This neither creates a native
@@ -545,6 +546,7 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
         **({"selection_command_args_template": selection_command_args_template}
             if selection_command_args_template is not None else {}),
         **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}),
+        **({"replan_reader_argv": replan_reader_argv} if replan_reader_argv is not None else {}),
         "source_path": source["path"],
         "command_template": source["command"] + " --select '<pointer>'",
     })
