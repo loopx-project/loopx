@@ -655,7 +655,8 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         "--goal-id", "fixture", "--agent-id", "worker", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)])
     original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"},
         "heartbeat_receipt": {"turn_instance_id": "original-turn", "status": "committed"}}
-    monkeypatch.setattr(quota, "handoff_decision", lambda *args: ({"scope": "host-request"}, "digest"))
+    monkeypatch.setattr(quota, "handoff_decision",
+        lambda *args, capture_sha256: ({"scope": "host-request"}, capture_sha256))
     monkeypatch.setattr(quota, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
 
     def competing(*args, **kwargs):
