@@ -3035,3 +3035,36 @@ traceback 在既有十分钟上限前显现；通过路径仍选择完整用例�
 本轮只资格化 V4/R1 的任务呈现切片。完整模型上下文保留、默认最小闭包、渐进
 产品控制、可比完整成本、V1–V5/V10、R1/M3、Standard/workspace 发布与原 Goal
 回归仍开放。原九项要求和冻结失败全部保留；没有升级已安装 Host 或模型服务。
+
+### 2026-11-14 — 独立安装的后继恢复保留原结算
+
+真实依赖的后继任务可以在 replan 准入后创建。新增依赖不能抹去原生命周期来源，
+导致该 Turn 无法结算。现在只有精确绑定原 review、owner/actor 一致、更新时间
+明确晚于准入的后继才允许重建原来源；既有 trigger/digest 检查继续生效。
+既有 runnable-successor ACK 随后可结算原 Turn，无需改写已完成 Todo。
+缺失或非法 ACK 保留生命周期恢复；执行后继仍须新准入。空 operation inbox
+同时延迟加载可选 workspace action-store；已有 action store 缺少 provider
+继续显式失败。
+
+当前原生模型通过 stdio、独立构建的 Python 3.11 core 和 SQLite，在既有隔离
+任务内执行。正常创建后继、写回 Vision 和原 replan 结算恢复了受阻路径。
+完整初始及未改任务读取产生可复用库存 close/check 工具与核验后的 JSON/Markdown：
+14 笔流水、六条排除记录、价值 185.25。错误的 185.26 候选被拒绝，原产物未覆盖。
+Controller 生成的修订在新任务／来源交付前对模型封存，新增六行。独立核验全部
+20 笔流水、九条排除记录、数量 31/7/7、价值 250.20 和 64.95 差额；原截止日、
+Decimal 规则和此前产物全部保留。
+
+模型拒绝用旧任务执行修订，读取完整当前要求与输入。这证明模型的来源选择决定，
+不构成自动拒绝过期输入的 gate。修订调用方的 JSON 回复被暂不读取后，精确的
+已提交 journal 恢复没有新增 Host、writeback 或 spend；历史消费计数仍为一次。
+初次原始 adapter 回复在产生效果前因 result binding 失败；受支持的同 Turn
+retry 复用既有 result builder。初始有两次 Host 调用、一次产物实现，最终只
+写回／消费一次；保留该修复成本。Generic bridge 没有持久 provider session id。
+这些检查资格化完整任务恢复和已提交结果 replay；自动 provider 线程保留及单独
+控制的真实 compaction 用例仍未测。
+
+源码恢复回归和新独立安装回归覆盖所触及的生命周期及可选 import 路径，包括
+非法 owner、时间、binding、ACK fallback 和已有但不可用的 provider。此前
+失败测试保留为负面证据，原验收仍开放。完整 V1–V5/V10、R1/M3、默认闭包、
+渐进产品控制、可比完整成本、Standard/workspace 交付和原 Goal 回归仍开放。
+没有升级已安装 Host、启动模型服务、改写 authority history 或改变冻结预算。
