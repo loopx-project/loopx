@@ -3928,7 +3928,7 @@ export function DashboardPage() {
       hash: search.goalId === goalId ? keepCaseChapterHash : undefined,
       search: (current) => {
         const currentSearch = current as Partial<typeof search>;
-        const keepResearch = Boolean(currentSearch.research_goal) || currentSearch.goalId === goalId;
+        const keepResearch = (currentSearch.research_goal ?? currentSearch.goalId) === goalId;
         return ({
           ...current,
           ...(keepResearch ? {} : clearedResearchSearch),
