@@ -396,6 +396,20 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
         assert writer["allowed_terminal"] == source["replan_action_packet"]["allowed_terminal"]
 
+        for limit in (80, 96):
+            denied = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
+            assert denied["ok"] is False and "command" not in denied
+            reason = denied["reason"].lower()
+            assert "budget" in reason and "retry" in reason and "read" in reason
+        # Below the compact reason, preserve the process error and diagnostic
+        # without emitting a partial JSON response.
+        for limit in (12, 13):
+            args = shlex.split(f"{writer_command} --max-page-output-bytes {limit}")
+            denied = subprocess.run(args, cwd=fixture["project"], capture_output=True, timeout=30)
+            assert denied.returncode == 1 and len(denied.stdout) <= limit
+            assert b"output budget" in denied.stderr
+            assert denied.stdout == (b'{"ok":false}\n' if limit == 13 else b"")
+
         output_limit = 1450
         bounded = read(f"{writer_command} --max-page-output-bytes {output_limit}", output_limit=output_limit)
         assert bounded["source_hash"] == writer["source_hash"]
@@ -443,6 +457,11 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
             for command in (packet["review"], writer_command):
                 rejected = read(command, expected=1)
                 assert rejected["ok"] is False and "capture digest mismatch" in rejected["reason"]
+            for limit in (80, 96, 256):
+                rejected = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
+                assert rejected["ok"] is False and "command" not in rejected
+                reason = rejected["reason"].lower()
+                assert "digest" in reason and "restore" in reason
         finally:
             path.write_bytes(raw)
         assert read(writer_command) == writer
