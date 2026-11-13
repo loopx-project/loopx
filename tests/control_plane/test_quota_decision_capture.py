@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import shlex
 import subprocess
 from unittest.mock import patch
@@ -10,7 +11,7 @@ import pytest
 
 from loopx.cli_commands.quota_capture import capture_decision, prepare_decision_capture
 from loopx.control_plane.quota.error_codes import QuotaCommandValidationError
-from tests.control_plane.host_process_fixture import assert_host_task_context
+from tests.control_plane.host_process_fixture import assert_host_task_context, write_python_host_fixture
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture, read_fixture_todos,
 )
@@ -527,6 +528,9 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
                        '--decision-output-dir', str(capture), '--decision-handoff-socket', str(endpoint)]
             if native_context:
                 command += ['--context-delivery', 'on', '--codex-context-dir', str(context)]
+            bounded_refusal = native_context and release != 'exact'
+            if bounded_refusal:
+                command += ['--max-page-output-bytes', '1700']
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   text=True, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2]), **({'LOOPX_CONTEXT_DELIVERY': 'on', 'LOOPX_EXECUTION_MODE': 'heartbeat'} if native_context else {})}) as process:
                 try:
@@ -557,7 +561,21 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
                         assert not stderr
                     else:
                         assert process.returncode != 0
-                        assert 'Do not blindly rerun' in stderr + stdout
+                        if bounded_refusal:
+                            assert len(stdout.encode()) <= 1700
+                            failure = json.loads(stdout)
+                            assert failure['error_code'] == 'quota_decision_transport_failed'
+                            reference = failure['captured_decision']
+                            assert reference['sha256'] == digest
+                            if release == 'changed_capture':
+                                assert 'cannot be verified' in failure['reason']
+                                assert 'command' not in failure and 'command' not in reference
+                                assert hashlib.sha256((capture / 'decision.json').read_bytes()).hexdigest() != digest
+                            else:
+                                assert failure.get('command') or reference['command']
+                                assert (capture / 'decision.json').read_bytes() == original
+                        else:
+                            assert 'Do not blindly rerun' in stderr + stdout
                         if native_context:
                             assert list(context.iterdir()) == []
                     assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
@@ -798,9 +816,12 @@ def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('turn_envelope', [False, True])
+@pytest.mark.parametrize('output_limit', [None, 1700])
 def test_native_recovery_failure_keeps_original_receipt_and_capture(
-    tmp_path, monkeypatch, capsys, provider, turn_envelope,
+    tmp_path, monkeypatch, capsys, provider, turn_envelope, output_limit,
 ):
+    import hashlib
+
     from loopx.cli import main
     from loopx.control_plane.quota.error_codes import QuotaDecisionTransportError
     from loopx.control_plane.turn_driver import codex_context
@@ -836,19 +857,53 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
         '--context-delivery', 'on', '--codex-context-dir', str(context),
         '--decision-output-root', str(captures)]
     args.append('--turn-envelope' if turn_envelope else '--complete-turn')
+    if output_limit is not None:
+        args += ['--max-page-output-bytes', str(output_limit)]
+        parent = tmp_path / ('package-' + 'x' * 180)
+        parent.mkdir()
+        launcher = write_python_host_fixture(parent / 'loopx', '#!/usr/bin/env python3\n'
+            'from loopx.cli import main\nraise SystemExit(main())\n')
+        args[:0] = ['--cli-bin', str(launcher)]
     code = main(args)
-    failure = json.loads(capsys.readouterr().out)
+    output = capsys.readouterr().out
+    failure = json.loads(output)
     assert code == 1 and failure['ok'] is False
     assert failure['error_code'] == 'quota_decision_transport_failed'
-    assert failure['status'] == 'decision_transport_failed'
     saved = list(captures.glob('*/decision.json'))
     assert len(saved) == len(attempts) == 1
     assert saved[0].read_bytes() == attempts[0]
     original = json.loads(attempts[0])
     assert original['ok'] is True
-    assert failure['heartbeat_receipt'] == original['heartbeat_receipt']
-    assert failure['rollout_event'] == original['rollout_event']
-    assert failure['captured_decision'] == {'path': str(saved[0])}
+    if output_limit is None:
+        assert failure['status'] == 'decision_transport_failed'
+        assert failure['heartbeat_receipt'] == original['heartbeat_receipt']
+        assert failure['rollout_event'] == original['rollout_event']
+        assert failure['captured_decision'] == {'path': str(saved[0])}
+    else:
+        assert len(output.encode()) <= output_limit
+        reference = failure['captured_decision']
+        assert reference['sha256'] == hashlib.sha256(attempts[0]).hexdigest()
+        command = shlex.split(failure.get('command') or reference['command'])
+        assert command[:3] == [str(launcher), '--cli-bin', str(launcher)]
+        pages = bytearray()
+        while True:
+            page = subprocess.run(command, cwd=project, capture_output=True, check=True, timeout=30,
+                env={**os.environ, 'LOOPX_USAGE_PING': '0', 'PYTHONPATH': str(Path(__file__).resolve().parents[2])})
+            assert len(page.stdout) <= failure.get('recovery_page_output_bytes', output_limit)
+            view = json.loads(page.stdout)
+            assert view['ok'] and view['offset'] == len(pages)
+            pages.extend(view['content'].encode())
+            if view['eof']:
+                assert len(pages) == view['total_bytes']
+                break
+            assert view['content'] and view['next_offset'] == len(pages)
+            command = shlex.split(view['next_command'])
+        recovery = json.loads(pages)
+        if 'selections' in recovery:
+            recovery = {row['pointer'].lstrip('/'): row['value'] for row in recovery['selections']}
+        assert recovery['heartbeat_receipt'] == original['heartbeat_receipt']
+        assert recovery['rollout_event'] == original['rollout_event']
+        assert saved[0].read_bytes() == attempts[0]
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
     assert state.read_bytes() == original_state

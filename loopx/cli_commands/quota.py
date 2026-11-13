@@ -106,7 +106,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
             "QUOTA_EVENT_KINDS",
             "captured_quota_failure_view",
             "quota_composition_failure_view",
-            "quota_decision_transport_failure_payload",
+            "quota_captured_transport_failure_view",
             "quota_failure_payload",
             "quota_validation_failure_payload",
             "should_log_quota",
@@ -462,6 +462,7 @@ def _emit_quota_result(
     raw_envelope, legacy_view = False, None
     delivery_request = None
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+    captured_digest = None
     try:
         if args.quota_command == "should-run" and complete_source:
             from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
@@ -517,8 +518,9 @@ def _emit_quota_result(
         # The guard already ran. Report that typed fact with the durable receipt
         # and saved decision, never a new collection failure that could replace
         # the capture (an inline reentry runs inside the caller's guard).
-        failure = _export("quota_decision_transport_failure_payload")(
+        failure = _export("quota_captured_transport_failure_view")(
             args, payload, exc, capture_directory=capture_directory,
+            capture_sha256=captured_digest, reader_argv=reader_argv, runtime_root=runtime_root,
         )
         print_payload(failure, args.format, _quota_renderer(args))
         return 1
@@ -596,8 +598,9 @@ def _emit_quota_presentation(
                 )
             # The original receipt survives even when the selected presentation
             # is a Turn envelope without the quota packet's receipt fields.
-            failure = _export("quota_decision_transport_failure_payload")(
+            failure = _export("quota_captured_transport_failure_view")(
                 args, captured_payload, exc, capture_directory=capture_directory,
+                capture_sha256=captured_digest, reader_argv=reader_argv, runtime_root=runtime_root,
             )
             print_payload(failure, args.format, _quota_renderer(args))
             return 1

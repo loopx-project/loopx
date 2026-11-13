@@ -275,14 +275,14 @@ def captured_quota_failure_view(
     max_page_output_bytes: int | None = None,
     capture_sha256: str | None = None,
     reader_argv: list[str] | None = None,
-    captured_payload: Mapping[str, object] | None = None,
     runtime_root: Path | None = None,
+    captured_payload: Mapping[str, object] | None = None,
+    capture_bytes: bytes | None = None,
 ) -> dict[str, object]:
-    """Bound an opted-in refusal without entering native delivery continuity.
+    """Bound a failure using the saved decision and its original receipt.
 
-    The rejected decision remains immutable diagnostic detail. Its current
-    error, receipt and recovery are useful input; unrelated Goal history is not
-    a prerequisite for following that recovery. No field is silently truncated.
+    A composition rejection saves its diagnostic. A later presentation failure
+    retains the admitted decision and points to its receipt for recovery.
     """
     from ..control_plane.turn_driver.decision_capture import (
         context_capture_read_command, native_context_page_budget, write_initial_context_read_reference,
@@ -295,8 +295,10 @@ def captured_quota_failure_view(
     if max_page_output_bytes is not None:
         limit = min(limit, max_page_output_bytes)
     saved = capture_directory / "decision.json"
-    original = saved.read_bytes()
+    original = saved.read_bytes() if capture_bytes is None else capture_bytes
+    source = payload if captured_payload is None else captured_payload
     digest = capture_sha256 or hashlib.sha256(original).hexdigest()
+    original_decision = source.get("ok") is True
     page_size = max(256, min(page_bytes, limit))
     fields = ("ok", "goal_id", "decision", "should_run", "error_code", "diagnostic_code", "error", "reason",
               "recommended_action", "heartbeat_receipt", "rollout_event", "host_poll_receipt", "action_selection_conflict")
@@ -309,11 +311,16 @@ def captured_quota_failure_view(
     result["captured_decision"] = {**reference,
         "command": context_capture_read_command(saved, digest,
             page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
-    result["instruction"] = (
-        "The guard refused this request. Follow its recovery using the original Turn identity. "
-        "The saved decision is optional diagnostic detail; read only facts needed for recovery. "
-        "This response does not establish a context baseline or grant execution authority."
-    )
+    compact_instruction = "Read the original failure and Turn receipt before recovery. Do not rerun admission."
+    if original_decision:
+        compact_instruction = "Read the saved decision for the original Turn. Do not rerun admission."
+        result["instruction"] = compact_instruction
+    else:
+        result["instruction"] = (
+            "The guard refused this request. Follow its recovery using the original Turn identity. "
+            "The saved decision is optional diagnostic detail; read only facts needed for recovery. "
+            "This response does not establish a context baseline or grant execution authority."
+        )
 
     def fits(value: dict[str, object]) -> bool:
         return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
@@ -323,10 +330,15 @@ def captured_quota_failure_view(
     ):
         # Pin the small diagnostic selection so long launcher/capture paths and
         # repeated --select arguments do not crowd out the recovery command.
-        source = payload if captured_payload is None else captured_payload
-        paths = [[key] for key in (*fields, "composition_error") if key in source]
-        if isinstance(cli, Mapping) and "next_cli_actions" in cli:
+        recovery_fields = (
+            ("heartbeat_receipt", "rollout_event", "host_poll_receipt")
+            if original_decision else (*fields, "composition_error")
+        )
+        paths = [[key] for key in recovery_fields if key in source]
+        if not original_decision and isinstance(cli, Mapping) and "next_cli_actions" in cli:
             paths.append(["interaction_contract", "cli_channel", "next_cli_actions"])
+        if not paths:
+            paths = [["ok"]]
         pointers = ["/" + "/".join(path) for path in paths]
         selections = [{"path": path, "pointer": pointer} for path, pointer in zip(paths, pointers, strict=True)]
         try:
@@ -336,7 +348,7 @@ def captured_quota_failure_view(
             reader, selected = None, None
         result = {"ok": False, "captured_decision": reference,
             **{key: payload[key] for key in ("error_code", "diagnostic_code") if key in payload},
-            "instruction": "Read the original failure and Turn receipt before recovery. Do not rerun admission.",
+            "instruction": compact_instruction,
             "command": context_capture_read_command(saved, digest, reference_file=reader,
                 page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
         read_size, read_limit = page_size, limit
@@ -370,6 +382,8 @@ def captured_quota_failure_view(
         if not fits(result):
             # The command or pinned descriptor already carries the capture path.
             result["captured_decision"] = {"sha256": digest}
+        if original_decision and "reason" in payload and fits({**result, "reason": payload["reason"]}):
+            result["reason"] = payload["reason"]
         if not fits(result):
             # Even an impossibly small envelope must keep the original failure
             # and locator. Report why the requested output size cannot be met.
@@ -458,6 +472,45 @@ def quota_decision_transport_failure_payload(
         if key in committed:
             payload[key] = committed[key]
     return payload
+
+
+def quota_captured_transport_failure_view(
+    args: argparse.Namespace, committed: dict[str, object], error: QuotaDecisionTransportError, *,
+    capture_directory: Path | None, capture_sha256: str | None,
+    reader_argv: list[str], runtime_root: Path | None,
+) -> dict[str, object]:
+    """Report a delivery failure without replacing the previously committed capture."""
+    failure = quota_decision_transport_failure_payload(
+        args, committed, error, capture_directory=capture_directory,
+    )
+    output_limit = getattr(args, "max_page_output_bytes", None)
+    if output_limit is None or capture_directory is None or capture_sha256 is None:
+        return failure
+    from ..control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    saved = capture_directory / "decision.json"
+    try:
+        _, original, source = read_context_capture_file(str(saved), capture_sha256, private=True)
+    except (OSError, ValueError):
+        pass
+    else:
+        return captured_quota_failure_view(
+            failure, capture_directory=capture_directory, max_page_output_bytes=output_limit,
+            capture_sha256=capture_sha256, reader_argv=reader_argv,
+            runtime_root=runtime_root, captured_payload=source, capture_bytes=original,
+        )
+    # The Host can change the file after guard publication. The expected digest
+    # remains that of the original and there is no reader for the changed bytes.
+    result = {"ok": False, "error_code": error.error_code, "captured_decision": {
+        "path": str(saved), "sha256": capture_sha256,
+    }, "reason": "The saved decision cannot be verified against its original SHA-256.",
+        "instruction": "Restore the original capture and inspect its Turn receipt. Do not rerun admission."}
+    for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
+        if key in failure:
+            candidate = {**result, key: failure[key]}
+            if len(json.dumps(candidate, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= output_limit:
+                result = candidate
+    return result
 
 
 def quota_validation_failure_payload(
