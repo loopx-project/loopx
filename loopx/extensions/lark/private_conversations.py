@@ -822,10 +822,13 @@ class LarkPrivateConversations:
 
     @effect_runtime_request_scope()
     def admit(self, profile: str, event: dict[str, Any], *,
-              defer_background_stop: bool = False, history_review: bool = False) -> dict[str, Any]:
+              defer_background_stop: bool = False, history_review: bool = False,
+              expected_binding_id: str | None = None) -> dict[str, Any]:
         record_event_timing(profile, str(event.get("message_id") or ""), "admission_started")
         try:
             binding = self._binding(profile)
+            if expected_binding_id is not None and binding["binding_id"] != expected_binding_id:
+                return {"status": "audience_rejected"}
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
             if history_review and (binding.get("context_kind") != "steward"
                     or binding.get("audience", "owner") != "owner" or event.get("chat_type") != "p2p"):

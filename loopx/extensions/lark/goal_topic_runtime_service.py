@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import logging
 from pathlib import Path
+from subprocess import Popen
 import threading
 import time
 from typing import Any
@@ -30,6 +31,7 @@ ProfilePoller = Callable[[str, threading.Event], None]
 ManagerRouteReconciler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 ProfileWorkerFingerprint = tuple[str, str, str, tuple[str, ...]]
 ProfileWorker = tuple[threading.Event, threading.Thread, ProfileWorkerFingerprint]
+MessageConsumer = tuple[threading.Event, Popen[str], threading.Event]
 
 
 class LarkGoalTopicRuntimeService:
@@ -55,6 +57,7 @@ class LarkGoalTopicRuntimeService:
         self.manager_route_reconciler = manager_route_reconciler
         self._lock = threading.Lock()
         self._workers: dict[str, ProfileWorker] = {}
+        self._message_consumers: dict[str, MessageConsumer] = {}
         self._health: dict[str, dict[str, Any]] = {}
         self._closed = threading.Event()
         self._delivery_wakeup = threading.Event()
@@ -128,14 +131,23 @@ class LarkGoalTopicRuntimeService:
                 if ingress is not None and ingress.done():
                     try:
                         for profile in ingress.result():
-                            # Stop only this service's existing live worker.
-                            # Its finally/refresh path releases the App lease
-                            # before starting its replacement; Core work and
-                            # historical messages are never replayed.
                             with self._lock:
                                 worker = self._workers.get(profile)
-                                if worker is not None:
-                                    worker[0].set()
+                                current = self._message_consumers.get(profile)
+                            if worker is None or current is None or current[0] is not worker[0]:
+                                continue
+                            stop, process, requested = current
+                            if stop.is_set() or requested.is_set() or process.poll() is not None:
+                                continue
+                            # End this message pipe and let it drain under the
+                            # existing App lease. Stopping the worker discards
+                            # transient events already read by the stream.
+                            requested.set()
+                            try:
+                                process.terminate()
+                            except OSError:
+                                requested.clear()
+                                logging.getLogger(__name__).warning("Lark message consumer could not reconnect")
                     except Exception:
                         logging.getLogger(__name__).warning("Private Chat source observation is unavailable")
                     ingress = None
@@ -241,10 +253,12 @@ class LarkGoalTopicRuntimeService:
                 on_error=lambda: logging.getLogger(__name__).warning(
                     "Private Chat delivery discovery is pending"))
 
-    def _admit_private(self, profile: str, event: dict[str, Any]) -> dict[str, Any]:
+    def _admit_private(self, profile: str, event: dict[str, Any], *,
+                       expected_binding_id: str | None = None) -> dict[str, Any]:
         if self._closed.is_set():
             raise RuntimeError("Lark conversation service is closed")
-        result = self.private_conversations.admit(profile, event, defer_background_stop=True)
+        options = {"expected_binding_id": expected_binding_id} if expected_binding_id is not None else {}
+        result = self.private_conversations.admit(profile, event, defer_background_stop=True, **options)
         # Admission owns persistence and authorization. Only after it returns
         # may the existing reply worker look for its durable work; duplicates
         # and denied inputs still cannot manufacture a pending journal entry.
@@ -308,9 +322,14 @@ class LarkGoalTopicRuntimeService:
             if self.action_service is not None
             else ()
         )
+        app_ref = str(profile_config.get("bot_app_id") or "")
+        binding_id = str(profile_config.get("binding_id") or "")
+        # A same-App replacement changes which workspace receives live input.
+        # Keep the App lease identity, but retire the old worker on refresh.
+        worker_ref = f"{app_ref}:{binding_id}" if app_ref and binding_id else app_ref or binding_id
         return (
             str(profile_config.get("cli_bin") or "lark-cli"),
-            str(profile_config.get("bot_app_id") or profile_config.get("binding_id") or ""),
+            worker_ref,
             str(profile_config.get("consumer_ref") or ""),
             callback_chats,
         )
@@ -411,12 +430,36 @@ class LarkGoalTopicRuntimeService:
                             profile_config=profile_config,
                         )
 
-                    profile_config = (
-                        runtime._active_profile_configs(self.snapshot_provider()).get(
-                            profile
-                        )
-                        or {}
+                    snapshot = self.snapshot_provider()
+                    profile_config = runtime._active_profile_configs(snapshot).get(profile) or {}
+                    private_profiles = snapshot.get("private_profiles")
+                    private_binding = private_profiles.get(profile) if isinstance(private_profiles, Mapping) else None
+                    binding_id = private_binding.get("binding_id") if isinstance(private_binding, Mapping) else None
+                    reconnect_requested = threading.Event()
+                    private_admitter = self._admit_private if self.private_conversations is not None else None
+                    bound_owner = (
+                        private_admitter is not None
+                        and isinstance(binding_id, str) and bool(binding_id)
+                        and isinstance(private_binding, Mapping)
+                        and private_binding.get("audience") == "owner"
                     )
+                    if bound_owner:
+                        def admit_bound_private(profile_name: str, event: dict[str, Any]) -> dict[str, Any]:
+                            # An event read by the old stream cannot follow a
+                            # same-App rebind while it waits for admission.
+                            return self._admit_private(profile_name, event, expected_binding_id=binding_id)
+
+                        private_admitter = admit_bound_private
+
+                    def start_consumer(args: list[str]) -> Popen[str]:
+                        process = runtime._default_process_factory(args)
+                        if args[3:6] == ["event", "consume", "im.message.receive_v1"]:
+                            with self._lock:
+                                worker = self._workers.get(profile)
+                                if worker is not None and worker[0] is stop:
+                                    self._message_consumers[profile] = (stop, process, reconnect_requested)
+                        return process
+
                     # A bot App can have several local profile aliases and Chat
                     # servers can use different runtime roots or ports. The
                     # consumer lease must therefore be machine/App scoped.
@@ -447,28 +490,34 @@ class LarkGoalTopicRuntimeService:
                                 route, self.runtime_controller
                             )
 
-                        result = runtime.stream_lark_goal_topic_profile(
-                            profile=profile,
-                            snapshot_provider=self.snapshot_provider,
-                            stop=stop,
-                            runtime_root=self.runtime_root,
-                            answer=answer,
-                            # The listener checks current binding eligibility
-                            # per event; a later saved Session must not require
-                            # replacing a consumer with an active reply.
-                            capture_mention=capture,
-                            private_admitter=(self._admit_private
-                                if self.private_conversations is not None else None),
-                            proposal_deliverer=deliver_proposals,
-                            review_callback_handler=(
-                                handle_review_callback
-                                if self.action_service is not None and profile in runtime._active_group_profile_configs(self.snapshot_provider())
-                                else None
-                            ),
-                            health_sink=lambda update: self._update_health(
-                                profile, **dict(update)
-                            ),
-                        )
+                        process_options = {"process_factory": start_consumer} if bound_owner else {}
+                        try:
+                            result = runtime.stream_lark_goal_topic_profile(
+                                profile=profile,
+                                snapshot_provider=self.snapshot_provider,
+                                stop=stop,
+                                runtime_root=self.runtime_root,
+                                answer=answer,
+                                # Recheck binding eligibility per event, including
+                                # events drained from an old provider connection.
+                                capture_mention=capture,
+                                private_admitter=private_admitter,
+                                proposal_deliverer=deliver_proposals,
+                                review_callback_handler=(
+                                    handle_review_callback
+                                    if self.action_service is not None and profile in runtime._active_group_profile_configs(self.snapshot_provider())
+                                    else None
+                                ),
+                                health_sink=lambda update: self._update_health(
+                                    profile, **dict(update)
+                                ),
+                                **process_options,
+                            )
+                        finally:
+                            with self._lock:
+                                current = self._message_consumers.get(profile)
+                                if current is not None and current[0] is stop:
+                                    del self._message_consumers[profile]
                     if result.get("status") == "configuration_removed":
                         self._update_health(
                             profile,
@@ -480,16 +529,18 @@ class LarkGoalTopicRuntimeService:
                     if stop.is_set():
                         break
                     restart_count += 1
+                    error_code = result.get("error_code")
+                    requested_disconnect = (
+                        reconnect_requested.is_set()
+                        and error_code == "lark_event_source_disconnected"
+                    )
                     self._update_health(
                         profile,
                         status="retrying",
                         error_code=(
                             None
-                            if result.get("ok") is True
-                            else str(
-                                result.get("error_code")
-                                or "lark_event_listener_failed"
-                            )
+                            if result.get("ok") is True or requested_disconnect
+                            else str(error_code or "lark_event_listener_failed")
                         ),
                         restart_count=restart_count,
                     )

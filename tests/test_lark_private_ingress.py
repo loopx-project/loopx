@@ -192,37 +192,149 @@ def test_stale_or_unreadable_health_is_not_verified(source_monitor):
     assert f.monitor.health(f.binding["binding_id"])["status"] == "unavailable"
 
 
-def test_default_scanner_reconnects_only_its_owned_live_worker(tmp_path, monkeypatch):
-    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+@pytest.mark.parametrize("transition", ["reconnect", "shutdown", "revoke", "rebind_during_reconnect"])
+def test_live_private_ingress_across_listener_transition(ordinary, tmp_path, monkeypatch, transition):  # noqa: F811
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
 
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark import goal_topic_runtime_service as lifecycle
+    from loopx.extensions.lark.conversation_identity import identity_ref
+    from test_lark_private_conversations import connect
+
+    store, controller, provider, transport = connect(ordinary)
+    profile = "notes-app"
+    binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == profile)
+    config = transport.profiles()[profile]
+    active = True
+    first, second, third = [provider.event(profile, key, f"Live request {key}")
+                           for key in ("first", "second", "third")]
+    in_admission, release, waiting, received_third = (threading.Event() for _ in range(4))
     clock = [0.0]
-    monkeypatch.setattr("loopx.extensions.lark.goal_topic_runtime_service.time.monotonic", lambda: clock[0])
-    observed = []
-    source = SimpleNamespace(observe=lambda **_kwargs: observed.append(True) or ["owner-app"])
+    admitted = []
+    consumers = []
 
-    def pending():
-        clock[0] = 61
-        return []
+    def admit(profile_name, event, **kwargs):
+        if event["message_id"] == first["message_id"]:
+            in_admission.set()
+            assert release.wait(8)
+        result = transport.admit(profile_name, event, **kwargs)
+        admitted.append((event["message_id"], result["status"]))
+        if event["message_id"] == third["message_id"]:
+            received_third.set()
+        return result
 
-    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
-        runtime_controller=object(), private_conversations=SimpleNamespace(pending_delivery_paths=pending, ingress=source))
-    own, other = threading.Event(), threading.Event()
-    service._workers = {"owner-app": (own, threading.current_thread(), ("", "", ())),
-                        "other-app": (other, threading.current_thread(), ("", "", ()))}
-    waited = threading.Event()
-    waits = 0
+    owner = SimpleNamespace(admit=admit, pending_delivery_paths=lambda: [],
+                            ingress=SimpleNamespace(observe=lambda **_: [profile, "unowned-app"]))
+    service = lifecycle.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {"private_profiles": {profile: config}} if active else {},
+        runtime_root=store.root.parent, runtime_controller=controller, private_conversations=owner)
+    monkeypatch.setattr(lifecycle, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    def wait(_seconds):
-        nonlocal waits
-        waits += 1
-        if own.is_set() or waits >= 100:
-            service._closed.set()
-        else:
-            waited.wait(0.01)
+    class Consumer:
+        def __init__(self, initial):
+            self.initial = initial
+            self.exited, self.waited = threading.Event(), threading.Event()
+            self.stdout = self.lines()
 
-    monkeypatch.setattr(service._delivery_wakeup, "wait", wait)
-    service._reconcile_private()
-    assert observed == [True] and own.is_set() and not other.is_set()
+        def lines(self):
+            yield "[event] ready event_key=im.message.receive_v1\n"
+            if self.initial:
+                yield json.dumps(first)
+                assert in_admission.wait(8)
+                yield json.dumps(second)
+                waiting.set()  # The reader advanced past submission of the second line.
+            else:
+                if transition == "reconnect":
+                    yield json.dumps({**second, "event_id": "synthetic_provider_redelivery"})
+                yield json.dumps(third)
+            assert self.exited.wait(8)
+            yield "[event] exited (reason: signal)\n"
+
+        def poll(self):
+            return 0 if self.exited.is_set() else None
+
+        def terminate(self):
+            self.exited.set()
+
+        def wait(self, timeout=None):
+            assert self.exited.is_set()
+            self.waited.set()
+            return 0
+
+    def spawn(args):
+        assert args[3:6] == ["event", "consume", "im.message.receive_v1"]
+        if consumers:
+            assert len(consumers) == 1 and consumers[0].waited.is_set()
+        consumer = Consumer(not consumers)
+        consumers.append(consumer)
+        return consumer
+
+    stream = runtime.stream_lark_goal_topic_profile
+
+    def isolated_stream(**kwargs):
+        kwargs.setdefault("process_factory", spawn)
+        return stream(**kwargs)
+
+    monkeypatch.setattr(runtime, "_default_process_factory", spawn)
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", isolated_stream)
+    service.start()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            assert waiting.wait(8)
+            if transition in ("reconnect", "rebind_during_reconnect"):
+                clock[0] = 61
+                service._delivery_wakeup.set()
+            elif transition == "shutdown":
+                pool.submit(service.close)
+            else:
+                active = False
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+                service.refresh()
+            assert consumers[0].exited.wait(8)
+            assert len(consumers) == 1
+            if transition == "rebind_during_reconnect":
+                projects = transport.bindings.projects
+                other = tmp_path / "other-workspace"
+                other.mkdir()
+                projects.roots.append((other, other))
+                target = next(x for x in projects.available() if x["workspace_path"] == str(other))
+                replacement = transport.bindings.configure(transport_ref=profile, project_ref=target["project_ref"],
+                                                           executor_endpoint_id="codex")
+                assert replacement["binding_id"] != binding["binding_id"]
+                config = transport.profiles()[profile]
+            release.set()
+            if transition in ("reconnect", "rebind_during_reconnect"):
+                assert received_third.wait(8)
+            else:
+                assert consumers[0].waited.wait(8)
+        finally:
+            release.set()
+            service.close()
+            controller.close()
+
+    second_ref = identity_ref(binding["provider_ref"], second["message_id"])
+    if transition == "reconnect":
+        assert [event_id for event_id, _ in admitted[:2]] == [first["message_id"], second["message_id"]]
+        assert consumers[0].waited.is_set() and len(consumers) == 2
+        assert [event_id for event_id, _ in admitted].count(second["message_id"]) == 2
+        original = transport.core.read_request(second_ref)
+        assert original["source"]["source_ref"] == transport.core.read_request(
+            identity_ref(binding["provider_ref"], first["message_id"]))["source"]["source_ref"]
+        messages = store.messages(original["session_id"])
+        assert sum(m.get("text") == second["content"] for m in messages) == 1
+    elif transition == "rebind_during_reconnect":
+        assert admitted[:2] == [(first["message_id"], "audience_rejected"),
+                               (second["message_id"], "audience_rejected")]
+        assert not (transport.core.root / f"{second_ref}.json").exists()
+        assert not (transport.root / f"{second_ref}.json").exists()
+        third_ref = identity_ref(binding["provider_ref"], third["message_id"])
+        assert transport.core.read_request(third_ref)["binding_id"] == replacement["binding_id"]
+        assert consumers[0].waited.is_set() and len(consumers) == 2
+    else:
+        assert not any(event_id == second["message_id"] for event_id, _ in admitted)
+        assert len(consumers) == 1
 
 
 def test_unknown_failed_capture_is_not_replayed(source_monitor):
