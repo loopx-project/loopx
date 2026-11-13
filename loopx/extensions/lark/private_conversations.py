@@ -229,6 +229,7 @@ class LarkPrivateConversations:
         self.bindings = self.core.bindings
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
         self.reaction_feedback = reaction_feedback
+        self.steward_callback_readiness: dict[tuple[str, str], Callable[[], bool]] = {}
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._delivery_discovery = PrivateDeliveryDiscovery(self.root)

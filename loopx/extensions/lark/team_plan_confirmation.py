@@ -26,7 +26,7 @@ from .card_callback import (
     read_callback_card_content as _read_callback_card_content,
     update_callback_card as _update_callback_card,
 )
-from .event_collector_runtime import EVENT_DIAGNOSTIC_PREFIX
+from .event_collector_runtime import EVENT_DIAGNOSTIC_PREFIX, EVENT_READY_PREFIX
 from .goal_channel_contracts import (
     binding_for_goal,
     bindings_for_goal,
@@ -77,34 +77,108 @@ class TeamPlanReviewCallbackStream:
     def __init__(
         self,
         *,
-        process: Any,
-        thread: threading.Thread,
-        stop: threading.Event,
-        required: bool = True,
+        args: list[str],
+        process_factory: ProcessFactory,
+        parent_stop: threading.Event,
+        handler: Callable[[str], None],
+        profile: str,
+        required: bool,
     ) -> None:
-        self.process = process
-        self.thread = thread
-        self.stop = stop
         self.required = required
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._process: Any = None
+        self._ready = threading.Event()
+        self._parent_stop = parent_stop
+        self._thread = threading.Thread(
+            target=self._consume, args=(args, process_factory, handler),
+            name=f"loopx-lark-review-callback-{profile}", daemon=True,
+        )
+
+    def _stopping(self) -> bool:
+        return self._stop.is_set() or self._parent_stop.is_set()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def ready(self) -> bool:
+        if self._stopping() or not self._ready.is_set():
+            return False
+        with self._lock:
+            return (
+                not self._stopping() and self._ready.is_set()
+                and self._process is not None and self._process.poll() is None
+            )
 
     def disconnected(self) -> bool:
-        # Missing card subscriptions must not take a private message-only
-        # listener offline. Existing group review routes still reconnect.
-        return self.required and self.process.poll() is not None
+        # Group review routes retain the parent listener's reconnect policy.
+        if not self.required:
+            return False
+        with self._lock:
+            return not self._thread.is_alive() or (
+                self._process is not None and self._process.poll() is not None
+            )
+
+    def _consume(
+        self, args: list[str], process_factory: ProcessFactory, handler: Callable[[str], None],
+    ) -> None:
+        retry_seconds = 1.0
+        while not self._stopping():
+            observed_ready = False
+            try:
+                with self._lock:
+                    if self._stopping():
+                        return
+                    process = self._process = process_factory(args)
+                for line in process.stdout or ():
+                    if self._stopping():
+                        return
+                    stripped = line.strip()
+                    if stripped.startswith(EVENT_READY_PREFIX):
+                        observed_ready = True
+                        self._ready.set()
+                    elif stripped.startswith("[event] exited "):
+                        self._ready.clear()
+                    elif not stripped.startswith(EVENT_DIAGNOSTIC_PREFIX):
+                        handler(line)
+            except OSError:
+                logging.getLogger(__name__).debug("Lark review callback consumer unavailable")
+            finally:
+                self._close_process()
+            if self.required or self._stopping():
+                return
+            # Keep the message consumer and its App lease while recovering a
+            # private callback subscription. Back off if it never registers.
+            if observed_ready:
+                retry_seconds = 1.0
+            self._stop.wait(retry_seconds)
+            retry_seconds = min(2 * retry_seconds, 30.0)
 
     def terminate(self) -> None:
-        self.stop.set()
-        if self.process.poll() is None:
-            self.process.terminate()
+        self._stop.set()
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                self._process.terminate()
+
+    def _close_process(self) -> None:
+        self._ready.clear()
+        with self._lock:
+            process = self._process
+            if process is None:
+                return
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+            self._process = None
 
     def close(self) -> None:
-        self.terminate()
-        try:
-            self.process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=3)
-        self.thread.join(timeout=1)
+        self._stop.set()
+        self._close_process()
+        self._thread.join(timeout=1)
 
 
 def active_profile_chat_ids(snapshot: Mapping[str, Any], profile: str) -> list[str]:
@@ -159,6 +233,7 @@ def start_team_plan_review_callback_stream(
     process_factory: ProcessFactory,
     parent_stop: threading.Event,
     handler: ReviewCallbackHandler,
+    availability_sink: Callable[[Callable[[], bool]], None] | None = None,
 ) -> TeamPlanReviewCallbackStream | None:
     """Start the filtered callback consumer paired with a message stream."""
 
@@ -178,78 +253,49 @@ def start_team_plan_review_callback_stream(
             f"| .schema_version) == {json.dumps(TRIAGE_CARD_ACTION)})"
         )
         chat_filter = f"{chat_filter} or {steward_filter}" if chat_filter else steward_filter
-    process = process_factory(
-        [
-            cli_bin,
-            "--profile",
-            profile,
-            "event",
-            "consume",
-            "card.action.trigger",
-            "--as",
-            "bot",
-            "--timeout",
-            "30m",
-            "--max-events",
-            "0",
-            "--jq",
-            f"select({chat_filter})",
-        ]
-    )
-    local_stop = threading.Event()
 
-    def consume() -> None:
-        stdout = process.stdout
-        if stdout is None:
+    def dispatch(callback_line: str) -> None:
+        try:
+            callback_event = json.loads(callback_line)
+        except json.JSONDecodeError:
             return
-        for callback_line in stdout:
-            if local_stop.is_set() or parent_stop.is_set():
+        if not isinstance(callback_event, Mapping):
+            return
+        raw_action = callback_event.get("action_value")
+        try:
+            action = json.loads(raw_action) if isinstance(raw_action, str) else raw_action
+        except json.JSONDecodeError:
+            return
+        if not isinstance(action, Mapping):
+            return
+        schema = action.get("schema_version")
+        if schema == TRIAGE_CARD_ACTION:
+            if not private_steward:
                 return
-            stripped = callback_line.strip()
-            if stripped.startswith(EVENT_DIAGNOSTIC_PREFIX):
-                continue
-            try:
-                callback_event = json.loads(callback_line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(callback_event, Mapping):
-                continue
-            raw_action = callback_event.get("action_value")
-            try:
-                callback_action = (
-                    json.loads(raw_action)
-                    if isinstance(raw_action, str)
-                    else raw_action
-                )
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(callback_action, Mapping):
-                continue
-            schema = callback_action.get("schema_version")
-            if schema == TRIAGE_CARD_ACTION:
-                if not private_steward:
-                    continue
-            elif schema != TEAM_PLAN_CARD_ACTION_SCHEMA_VERSION or callback_event.get("chat_id") not in chat_ids:
-                continue
-            try:
-                handler({**callback_event, "action_value": callback_action} if schema == TRIAGE_CARD_ACTION else callback_event)
-            except (OSError, RuntimeError, TypeError, ValueError):
-                logging.getLogger(__name__).warning(
-                    "Lark manager review callback was rejected"
-                )
+            callback_event = {**callback_event, "action_value": action}
+        elif schema != TEAM_PLAN_CARD_ACTION_SCHEMA_VERSION or callback_event.get("chat_id") not in chat_ids:
+            return
+        try:
+            handler(callback_event)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            logging.getLogger(__name__).warning("Lark manager review callback was rejected")
 
-    thread = threading.Thread(
-        target=consume,
-        name=f"loopx-lark-review-callback-{profile}",
-        daemon=True,
-    )
-    thread.start()
-    return TeamPlanReviewCallbackStream(
-        process=process,
-        thread=thread,
-        stop=local_stop,
+    stream = TeamPlanReviewCallbackStream(
+        args=[
+            cli_bin, "--profile", profile, "event", "consume", "card.action.trigger",
+            "--as", "bot", "--timeout", "30m", "--max-events", "0", "--jq",
+            f"select({chat_filter})",
+        ],
+        process_factory=process_factory,
+        parent_stop=parent_stop,
+        handler=dispatch,
+        profile=profile,
         required=bool(chat_ids),
     )
+    if availability_sink is not None:
+        availability_sink(stream.ready)
+    stream.start()
+    return stream
 
 
 def proposal_ids_after_turn(

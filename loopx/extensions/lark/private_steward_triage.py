@@ -26,6 +26,7 @@ from .presentation.triage_card import (
     build_steward_triage_card,
     build_steward_triage_menu,
     build_steward_triage_projects,
+    steward_triage_without_buttons,
 )
 from .private_ingress import private_source_text
 
@@ -246,7 +247,7 @@ def _render(
     if operation == "invalid":
         card = build_steward_triage_menu(button)
         card["elements"].insert(0, {"tag": "div", "text": {
-            "tag": "plain_text", "content": "无法识别项目参数。请点选查询。",
+            "tag": "plain_text", "content": "无法识别项目参数。",
         }})
         return card
     goals = tuple(action.get("goals", action.get("goal", "")).split())
@@ -349,6 +350,14 @@ def reconcile(transport: LarkPrivateConversations, path: Path) -> int:
                 previous = stamp.get("send_started_at")
                 if previous and now - datetime.fromisoformat(previous) >= _SEND_RETRY_WINDOW:
                     return retire("provider_delivery_receipt_unknown")
+                if not previous and _buttons(stamp["card"]):
+                    key = (record["profile"], current["observation"]["bot_app_id"])
+                    ready = transport.steward_callback_readiness.get(key)
+                    if ready is None or not ready():
+                        stamp["card"] = steward_triage_without_buttons(
+                            stamp["card"], query_result=stamp["action"]["operation"] == "query",
+                        )
+                # After a send starts, keep the exact payload for UUID retries.
                 stamp.setdefault("send_started_at", now.isoformat())
                 _atomic_write_json(path, record)
                 sent = call(transport.runner, lark_args(cli_bin=transport.cli_bin, profile=record["profile"], tail=[

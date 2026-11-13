@@ -462,6 +462,12 @@ class LarkGoalTopicRuntimeService:
                                 route, self.runtime_controller
                             )
 
+                        def register_callback_probe(probe: Callable[[], bool]) -> None:
+                            readiness = self.private_conversations.steward_callback_readiness
+                            key = (profile, app_id)
+                            readiness[key] = probe
+                            leases.callback(readiness.pop, key)
+
                         result = runtime.stream_lark_goal_topic_profile(
                             profile=profile,
                             snapshot_provider=self.snapshot_provider,
@@ -475,6 +481,9 @@ class LarkGoalTopicRuntimeService:
                             private_admitter=(self._admit_private
                                 if self.private_conversations is not None else None),
                             proposal_deliverer=deliver_proposals,
+                            callback_availability_sink=(
+                                register_callback_probe if private_steward_callbacks else None
+                            ),
                             review_callback_handler=(
                                 handle_review_callback
                                 if private_steward_callbacks or (

@@ -1,7 +1,9 @@
 """Isolated private Lark ingress with real bound Core and synthetic provider wire."""
 from __future__ import annotations
 
+import hashlib
 import json
+import queue
 import threading
 import time
 from pathlib import Path
@@ -15,6 +17,7 @@ from loopx.extensions.lark import private_steward_triage
 from loopx.extensions.lark.conversation_identity import identity_ref
 from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
 from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+from loopx.file_lock import try_exclusive_file_lock
 
 
 def fixture_card_provider(provider, transport, monkeypatch):
@@ -70,6 +73,7 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
     registry["goals"] = [{"id": "demo-a"}, {"id": "demo-b"}]
     runtime.registry_path.write_text(json.dumps(registry))
     profile = "steward-app"
+    transport.steward_callback_readiness[(profile, provider.profile_apps[profile])] = lambda: True
     event = provider.event(profile, "before-menu", "Ordinary text still goes to the original agent.")
     assert transport.admit(profile, event)["status"] == "durably_accepted"
     original = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
@@ -230,7 +234,9 @@ def test_private_callback_consumer_dispatches_the_steward_action_on_its_original
     assert observed == [{**event, "action_value": action}]
 
 
-def test_direct_private_queries_read_the_real_canonical_provider(steward, monkeypatch):  # noqa: F811
+def test_private_callback_recovers_without_restarting_messages(steward, monkeypatch):  # noqa: F811
+    from loopx.extensions.lark import goal_topic_runtime
+
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "control_plane"))
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -252,12 +258,138 @@ def test_direct_private_queries_read_the_real_canonical_provider(steward, monkey
     }])
     initialize_canonical_authority(authority, "demo-a", seed, state_path=state, provider="sqlite")
     writes, _ = fixture_card_provider(provider, transport, monkeypatch)
-    event = provider.event("steward-app", "canonical-gate", "/gates")
-    assert transport.admit("steward-app", event)["status"] == "triage_queued"
-    assert transport.reconcile() == 1
-    result = json.loads(provider.messages[writes[-1]]["body"]["content"])
-    assert result["header"]["title"]["content"] == "待我处理"
-    assert "Decide whether to accept the prepared report" in json.dumps(result, ensure_ascii=False)
-    assert "全部正常" not in json.dumps(result, ensure_ascii=False)
+    profile = "steward-app"
+    app_id = provider.profile_apps[profile]
+    ready_key = profile, app_id
+    app_lease = hashlib.sha256(app_id.encode()).hexdigest()[:32]
+    lock_path = workspace.parent / "lark-consumers" / app_lease
+    profiles = transport.profiles()
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {"private_profiles": profiles}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport,
+    )
+
+    class Consumer:
+        def __init__(self, event_key):
+            self.event_key = event_key
+            self.lines = queue.Queue()
+            self.ended = threading.Event()
+            self.stdout = iter(self.lines.get, None)
+
+        def emit(self, payload):
+            self.lines.put(json.dumps(payload) + "\n")
+
+        def ready(self):
+            self.lines.put(f"[event] ready event_key={self.event_key}\n")
+
+        def poll(self):
+            return 0 if self.ended.is_set() else None
+
+        def wait(self, timeout=None):
+            assert self.ended.wait(timeout)
+            return 0
+
+        def terminate(self):
+            self.ended.set()
+            self.lines.put(None)
+
+    messages = Consumer("im.message.receive_v1")
+    children = []
+    failed_spawn = threading.Event()
+    callbacks = queue.Queue()
+
+    def start(args):
+        if messages.event_key in args:
+            children.append(messages)
+            return messages
+        assert "card.action.trigger" in args
+        if not failed_spawn.is_set():
+            failed_spawn.set()
+            raise OSError("callback consumer could not start")
+        child = Consumer("card.action.trigger")
+        children.append(child)
+        callbacks.put(child)
+        return child
+
+    def stream(**kwargs):
+        return stream_lark_goal_topic_profile(**kwargs, process_factory=start)
+
+    def eventually(predicate):
+        deadline = time.monotonic() + 8
+        while not predicate():
+            assert time.monotonic() < deadline
+            threading.Event().wait(0.01)
+
+    def available():
+        probe = transport.steward_callback_readiness.get(ready_key)
+        return probe is not None and probe()
+
+    def request(name, command):
+        previous = len(writes)
+        event = provider.event(profile, name, command)
+        messages.emit(event)
+        path = transport.root / f"{identity_ref(binding['provider_ref'], event['message_id'])}.json"
+        eventually(lambda: path.exists() and json.loads(path.read_text()).get("status") == "delivered")
+        assert len(writes) == previous + 1
+        message_id = writes[-1]
+        assert provider.messages[message_id]["chat_id"] == event["chat_id"]
+        return json.loads(provider.messages[message_id]["body"]["content"]), message_id
+
+    def assert_gate(card):
+        assert card["header"]["title"]["content"] == "待我处理"
+        assert "Decide whether to accept the prepared report" in json.dumps(card, ensure_ascii=False)
+        assert "全部正常" not in json.dumps(card, ensure_ascii=False)
+
+    def isolate_consumer_lock(path, **kwargs):
+        assert path.name == app_lease
+        return try_exclusive_file_lock(lock_path, **kwargs)
+
+    monkeypatch.setattr(goal_topic_runtime, "stream_lark_goal_topic_profile", stream)
+    monkeypatch.setattr("loopx.extensions.lark.goal_topic_runtime_service.try_exclusive_file_lock", isolate_consumer_lock)
+    service.start()
+    try:
+        messages.ready()
+        assert failed_spawn.wait(5)
+        first = callbacks.get(timeout=5)
+        menu, _ = request("before-callback-ready", "/triage")
+        assert not buttons(menu)
+        assert all(cmd in json.dumps(menu) for cmd in ("/gates", "/todos", "/triage all"))
+        first.ready()
+        eventually(available)
+        menu, _ = request("live-menu", "/triage")
+        assert set(buttons(menu)) == {"待我处理", "任务速览", "总览"}
+        first.terminate()
+        assert not available()
+        fallback, _ = request("callback-outage", "/triage")
+        assert not buttons(fallback)
+        result, _ = request("canonical-gate", "/gates")
+        assert_gate(result)
+        assert not buttons(result)
+        with try_exclusive_file_lock(lock_path, operation="competing_listener") as lease:
+            assert lease is None
+
+        second = callbacks.get(timeout=5)
+        second.ready()
+        eventually(available)
+        menu, menu_id = request("recovered-menu", "/triage")
+        action = buttons(menu)["待我处理"]
+        callback = event_for(menu_id, action, suffix="recovered")
+        second.emit(callback)
+        ref = identity_ref(action["request"], callback["event_id"])
+        path = transport.root / f"{ref}.json"
+        eventually(lambda: path.exists() and json.loads(path.read_text()).get("status") == "delivered")
+        result_id = writes[-1]
+        assert provider.messages[result_id]["chat_id"] == callback["chat_id"]
+        assert_gate(json.loads(provider.messages[result_id]["body"]["content"]))
+        assert children == [messages, first, second]
+        assert messages.poll() is None
+        health = service.health_snapshot()[profile]
+        assert health["status"] == "listening" and health["restart_count"] == 0
+    finally:
+        service.close()
+    assert not transport.steward_callback_readiness
+    assert all(child.poll() is not None for child in children)
+    with try_exclusive_file_lock(lock_path, operation="next_listener") as lease:
+        assert lease is not None
     assert not store.list_sessions() and not capture.exists()
-    assert not (transport.core.root / f"{identity_ref(binding['provider_ref'], event['message_id'])}.json").exists()
+    assert not list(transport.core.root.glob("*.json"))
