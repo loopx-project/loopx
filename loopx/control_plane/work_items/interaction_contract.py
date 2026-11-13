@@ -47,7 +47,7 @@ from ..todos.contract import (
     normalize_todo_replan_obligation_id,
 )
 from ..todos.todo_semantics import todo_item_task_class
-from ..todos.user_gate import has_only_open_user_actions, open_todo_count
+from ..todos.user_gate import has_only_open_user_actions, open_todo_count, open_user_gate_todo_items
 from ..todos.write_hint import build_capability_resolution_writeback_actions
 from .autonomous_replan_obligation import (
     build_autonomous_replan_cli_actions,
@@ -460,6 +460,35 @@ def _due_monitor_cli_actions(
         f"--result-hash {required_environment_arg(AUXILIARY_MONITOR_RESULT_HASH_ENV)} --execute",
         "The poll advances next_due_at from cadence and settles this Monitor Turn without "
         "refresh-state or quota spend. Yield; independent work requires a fresh guarded Turn.",
+    ]
+
+
+def _monitor_user_gate_handoff_actions(
+    payload: Mapping[str, object], *, runtime_root: str | None, registry_path: str | None,
+) -> list[str]:
+    prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path, host_shell=True)
+    identity = payload.get("agent_identity")
+    actor = str(identity.get("agent_id") or "<registered-agent>") if isinstance(identity, Mapping) else "<registered-agent>"
+    return [
+        (
+            "Before settling the Monitor poll, reconcile a User gate whose prerequisite was observed, "
+            "even when the observation is unchanged. Read the exact gate and validate its condition. "
+            "Only record an already-authorized prerequisite or an actual owner decision; "
+            "a changed hash never grants approval. If an owner decision is still missing, surface that action and wait."
+        ),
+        (
+            "For that verified, authorized gate only: "
+            f"{prefix} --format json todo complete --goal-id {shlex.quote(str(payload.get('goal_id') or '<GOAL_ID>'))}"
+            f" --role user --todo-id '<verified-user-gate-id>' --agent-id {shlex.quote(actor)}"
+            " --decision-outcome approve --evidence '<verified prerequisite evidence>'"
+        ),
+        (
+            "This is a separate User lifecycle completion, without the Monitor's Turn or claim proof. "
+            "The gate's own authority and lease checks still apply, including supported auto-acquire/release. "
+            "Read unblock_resume; remaining prerequisites keep the target blocked. Then settle this Monitor "
+            "with the poll below and yield. Independent delivery needs a fresh guarded Turn; do not rebind this Turn. "
+            "Retire the Monitor only when its declared stop condition is met."
+        ),
     ]
 
 
@@ -1436,6 +1465,14 @@ def _build_interaction_cli_channel(
     work_lane = payload.get("work_lane_contract")
     if not isinstance(work_lane, Mapping):
         work_lane = {}
+    if primary_monitor is not None and turn_instance_id and open_user_gate_todo_items(payload.get("user_todo_summary")):
+        # Keep the Monitor instruction first; reconcile the gate before the poll settles this Turn.
+        actions = channel["next_cli_actions"]
+        channel["next_cli_actions"] = [
+            *actions[:1],
+            *_monitor_user_gate_handoff_actions(payload, runtime_root=runtime_root, registry_path=registry_path),
+            *actions[1:],
+        ]
     auxiliary_monitor = work_lane.get("auxiliary_monitor_poll")
     if not isinstance(auxiliary_monitor, Mapping):
         auxiliary_monitor = None
