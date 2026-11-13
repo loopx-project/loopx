@@ -151,7 +151,7 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
         state_path=state, provider=provider)
     original_state = state.read_bytes()
     capture = tmp_path / "captured"
-    capture_args = ("--codex-app", "--turn-instance-id", "task-title-read",
+    capture_args = ("--codex-app", "--complete-turn", "--turn-instance-id", "task-title-read",
         "--decision-output-dir", str(capture)) if captured else ()
     code, full = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, *capture_args, cwd=project)
@@ -313,7 +313,7 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
     fixture._initialize_fixture_authority(project, runtime, provider=provider)
     binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
     capture = tmp_path / "captured"
-    rc, guard = fixture._run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+    rc, guard = fixture._run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--complete-turn",
         *binding, "--todo-id", fixture.TODO_ID, "--turn-instance-id", "guidance-read",
         "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0, guard

@@ -65,8 +65,8 @@ def _writeback_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     return ScriptedExecToolAction(command=command)
 
 
-def _spend_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-    # An ordinary Todo completion supplies the remaining manual settlement plan.
+def _spend_action(request: Mapping[str, Any], *, from_guard: bool = False) -> ScriptedExecToolAction:
+    # Prefer the plan returned by ordinary Todo completion.
     for message in reversed(request["messages"]):
         if message["role"] != "tool":
             continue
@@ -78,6 +78,10 @@ def _spend_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
         if plan:
             step = next(row for row in plan["ordered_steps"] if row["kind"] == "quota_spend")
             return ScriptedExecToolAction(step["command_template"])
+    if from_guard:
+        plan = _latest_quota_packet(request)["interaction_contract"]["cli_channel"]["settlement_plan"]
+        step = next(row for row in plan["ordered_steps"] if row["kind"] == "quota_spend")
+        return ScriptedExecToolAction(step["command_template"].replace('"${LOOPX_TURN:?}"', "turn-test-001"))
     # Negative probe for a spend attempted before the host allows it.
     return ScriptedExecToolAction("loopx quota spend-slot")
 
@@ -149,19 +153,17 @@ def _reentry_quota_read(request: Mapping[str, Any]) -> ScriptedExecToolAction:
 
 @pytest.mark.parametrize("cat_options", ["", "-- "])
 @pytest.mark.parametrize("batch_read", [False, True])
-@pytest.mark.parametrize("ordinary_completion", [False, True])
+@pytest.mark.parametrize(("ordinary_completion", "complete"), [
+    (False, False), (True, False), (False, True),
+], ids=["ordinary-inline-validation", "ordinary-todo-validation", "complete-inline-validation"])
 def test_real_tool_loop_settles_final_todo_after_spend(
-    tmp_path: Path, cat_options: str, batch_read: bool, ordinary_completion: bool,
+    tmp_path: Path, cat_options: str, batch_read: bool, ordinary_completion: bool, complete: bool,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
+    guard = fixture.quota_guard_command.replace('"${LOOPX_TURN:?}"', "turn-test-001")
     transport = ScriptedDoubaoExecTransport(
         [
-            ScriptedExecToolAction(
-                command=fixture.quota_guard_command.replace(
-                    '"${LOOPX_TURN:?}"',
-                    "turn-test-001",
-                )
-            ),
+            ScriptedExecToolAction(command=guard + (" --complete-turn" if complete else "")),
             ScriptedExecToolAction(command=(
                 f"cat {cat_options}.codex/goals/terminal-settlement-fixture/ACTIVE_GOAL_STATE.md "
                 "fixture/settlement-proof.json"
@@ -169,7 +171,7 @@ def test_real_tool_loop_settles_final_todo_after_spend(
             )),
             *([partial(_completion_action, kind="validation")] if ordinary_completion else []),
             _writeback_action,
-            *([_spend_action] if ordinary_completion else []),
+            *([] if complete else [partial(_spend_action, from_guard=not ordinary_completion)]),
             _completion_action,
         ]
     )
@@ -188,7 +190,7 @@ def test_real_tool_loop_settles_final_todo_after_spend(
         "quota_should_run",
         "delivery_validation",
         *(["todo_completion"] if ordinary_completion else []),
-        *(["durable_writeback", "quota_spend"] if ordinary_completion else ["settle_turn"]),
+        *(["settle_turn"] if complete else ["durable_writeback", "quota_spend"]),
         "terminal_closeout",
     ]
     assert receipt["settlement_receipt_steps"] == [

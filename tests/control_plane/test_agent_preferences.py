@@ -76,7 +76,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     assert rc == 0 and empty["current"]["items"] == [], empty
     rc, off = _run_cli(registry, runtime, "quota", "should-run", *scope)
     assert rc == 0, off
-    for payload in [off, _run_cli(registry, runtime, "quota", "should-run", *scope)[1]]:
+    for payload in [off, _run_cli(registry, runtime, "quota", "should-run", "--complete-turn", *scope)[1]]:
         assert "semantic_preference.agent_context" not in json.dumps(payload)
         assert "semantic-preference agent" not in json.dumps(payload)
         assert "preferences" not in payload["interaction_contract"]["agent_channel"]["work_context"]["instruction"]
@@ -98,7 +98,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     assert rc == 0 and written["status"] == "applied", written
     rc, fresh = call("read")
     assert rc == 0 and fresh["current"]["items"][0]["statement"] == "Ask designated-reviewer before merging.", fresh
-    rc, quota = _run_cli(registry, runtime, "quota", "should-run", *scope)
+    rc, quota = _run_cli(registry, runtime, "quota", "should-run", "--complete-turn", *scope)
     assert rc == 0, quota
     reads = quota["turn_start_capability_hook_dispatch"]["required_reads"]
     assert any(x["kind"] == "agent_preferences" for x in reads), quota["turn_start_capability_hook_dispatch"]
@@ -234,7 +234,7 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
     assert rendered_context["unavailable_context"] == unavailable
     assert "discard affected cached context" in prompt and "Independent work retains" in prompt
     assert "Use a reviewer." not in prompt and "{broken" not in prompt
-    rc, quota_envelope = _run_cli(registry, runtime, "quota", "should-run", *scope, "--turn-envelope")
+    rc, quota_envelope = _run_cli(registry, runtime, "quota", "should-run", *scope, "--complete-turn")
     assert rc == 0, quota_envelope
     assert_complete_turn_decision(quota_envelope)
     # The complete source retains the failed hook; the existing executor

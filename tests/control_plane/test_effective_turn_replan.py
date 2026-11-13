@@ -272,18 +272,24 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     assert authoring["schema_version"] == "goal_vision_replan_contract_v0"
     if threshold_override is None and device_count is None:
         rc, envelope = _run_cli(
-            registry, runtime, "quota", "should-run", "--codex-app", "--turn-envelope",
+            registry, runtime, "quota", "should-run", "--codex-app", "--complete-turn",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", "effective-turn-next",
         )
         assert rc == 0, envelope
         assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
-        # Both CLI spellings now emit the same complete contract. Historical
-        # adapters still reconstruct the authoring body from that capture.
-        assert envelope["schema_version"] == selected["schema_version"] == "loopx_turn_envelope_v1"
-        assert envelope["replan_action_packet"]["writeback_contract"] == contract
+        # The explicitly complete decision retains the original replan
+        # identity and authoring, without changing the ordinary source.
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, build_turn_envelope
+
+        assert "schema_version" not in selected and "contract_binding" not in selected
+        assert_complete_turn_decision(envelope)
+        bound_writer = envelope["replan_action_packet"]["writeback_contract"]
+        assert {key: value for key, value in bound_writer.items()
+                if key not in {"successor_binding_args", "successor_settlement"}} == contract
+        assert shlex.split(bound_writer["successor_binding_args"]) == ["--turn-instance-id", "effective-turn-next"]
+        assert "before ending; do not run the successor" in bound_writer["successor_settlement"]
         assert envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
-        from loopx.control_plane.quota.turn_envelope import build_turn_envelope
         assert build_turn_envelope(envelope)["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
     vision_path = tmp_path / "periodic-vision.json"
     vision = json.loads(json.dumps(authoring["minimal_example"]))

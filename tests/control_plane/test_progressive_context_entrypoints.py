@@ -50,7 +50,7 @@ def test_progressive_activation_does_not_require_native_continuity(profile):
 
 @pytest.mark.parametrize("host", [(), ("--runtime-profile", "generic_cli"), ("--trae_app",), ("--antigravity_app",)])
 @pytest.mark.parametrize("output_format", ["json", "markdown"])
-def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acceptance_goal, host, output_format):
+def test_generic_read_only_cli_preserves_default_and_opt_in_without_admission(acceptance_goal, host, output_format):
     import os
     import sys
 
@@ -66,10 +66,8 @@ def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acc
         # This case exercises the omitted model-facing option instead.
         response = run_source_cli(["--registry", str(registry), "--runtime-root", str(runtime),
             "--format", output_format, *arguments], env=environment, check=False, timeout=30)
-        text = response.stdout
-        if output_format == "markdown":
-            text = text.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
-        return response.returncode, json.loads(text)
+        assert response.returncode == 0, response.stdout + response.stderr
+        return response.stdout
 
     for i in range(8):
         document.write_text(json.dumps({"outcome_id": "export", "owner_agent_id": "agent-a",
@@ -82,8 +80,16 @@ def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acc
         assert code == 0, result
     before = cli("inspect")[1]
     args = ("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a", *host)
-    code, packet = guard(*args)
-    assert code == 0, packet
+    if output_format == "markdown":
+        inline = guard(*args)
+        assert inline.startswith("# LoopX Quota Should Run\n")
+        assert "Stop before publication." in inline and "Prior supporting observation" in inline
+        assert "quota context-read" not in inline
+        shown = guard(*args, "--turn-envelope")
+        packet = json.loads(shown.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+    else:
+        packet = json.loads(guard(*args))
+    assert packet["ok"] is True, packet
     required = required_document(packet)
     assert "heartbeat_receipt" not in required, "plain observation must not invent a work Turn"
     assert "target" not in packet, "stateless presentation must not invent native continuity"
@@ -94,9 +100,13 @@ def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acc
     assert "Stop before publication." in json.dumps(required)
     assert "Prior supporting observation" not in json.dumps(required)
     assert "Prior supporting observation" in json.dumps(source)
-    code, off = guard(*args, "--context-delivery", "off")
-    assert code == 0 and "context_details" not in off and "reference_file" not in off
-    assert "Prior supporting observation" in json.dumps(off)
+    off = guard(*args, "--context-delivery", "off")
+    assert "Prior supporting observation" in off
+    if output_format == "json":
+        assert {"context_details", "reference_file", "contract_binding"}.isdisjoint(json.loads(off))
+    else:
+        assert off.startswith("# LoopX Quota Should Run\n")
+        assert "Stop before publication." in off and "quota context-read" not in off
     assert cli("inspect")[1] == before, "presentation must not mutate acceptance or its provider revision"
 
 

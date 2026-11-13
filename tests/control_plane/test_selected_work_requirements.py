@@ -146,7 +146,7 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
     assert packet["requires_user_action"] is True
     assert packet["scoped_user_gate_fallback"]["selected_executable"]["todo_id"] == "todo_inspect"
     assert channel["work_context"]["complete"] is True
-    envelope = guard("--turn-envelope")
+    envelope = guard("--complete-turn")
     assert envelope["interaction_contract"]["agent_channel"]["work_context"]["user_todos"] == channel["work_context"]["user_todos"]
     assert state.read_text() == state_text
     # Canonical tasks still exist: the full Goal source must fail closed,
@@ -213,18 +213,19 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
         packet.pop("_returncode", None)
         return packet
 
-    envelope = guard("--turn-envelope")
+    envelope = guard("--complete-turn")
     before = state.read_bytes()
     # Run the actual default product prompt, including its native capture
     # transport. Read only this invocation's complete current source.
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
         "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(cli_bin),
+        "--context-delivery", "auto",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and generated["ok"], generated
     body = generated["task_body"]
     assert "work_context" in body
     script = re.search(r"```sh\n(.*?)\n```", body, re.S).group(1)
-    assert "--turn-envelope" not in script
+    assert "--turn-envelope" not in script and "--complete-turn" not in script
     assert "--context-delivery on" not in script and "--decision-output-root" in script
     env = {
         **os.environ,
@@ -350,7 +351,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert fresh["selected_todo"]["todo_id"] == "todo_cursor_work"
     fresh_reads = fresh["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     assert fresh_reads[-1]["content"]["todo"]["text"] == replacement
-    fresh_envelope = guard("--turn-envelope")
+    fresh_envelope = guard("--complete-turn")
     assert fresh_envelope["interaction_contract"]["agent_channel"]["work_context"]["sources"][-1]["content"]["todo"]["text"] == replacement
     fresh_plan = native_plan("requirements-next-turn")
     fresh_prompt = _prompt(build_loopx_turn_host_request(fresh_plan))
@@ -492,6 +493,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
 
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
         "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(Path(sys.executable).parent / "loopx"),
+        "--context-delivery", "auto",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and generated["ok"], generated
     script = re.search(r"```sh\n(.*?)\n```", generated["task_body"], re.S).group(1)
@@ -519,7 +521,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     assert json.dumps(context).count(note) == 1
 
     code, turn = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a",  "--turn-envelope",
+        "--agent-id", "agent-a", "--complete-turn", "--context-delivery", "off",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
     turn = json.loads(read_cli_context_for_oracle(json.dumps(turn))[0])

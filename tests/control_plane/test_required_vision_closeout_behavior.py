@@ -42,6 +42,17 @@ def _packet(request: Mapping[str, Any]) -> dict[str, Any]:
                         value[row["pointer"].removeprefix("/")] = row["value"]
             if "replan_action_packet" in value:
                 packet = value
+            elif value.get("stage") == "writeback" and packet:
+                action = packet["replan_action_packet"]
+                assert value["obligation_id"] == action["obligation_id"]
+                packet["replan_action_packet"] = {
+                    **action, "stride_control": value["stride_control"],
+                    "writeback_contract": value["writeback_contract"],
+                }
+                original_cli = packet["interaction_contract"]["cli_channel"]
+                packet["interaction_contract"]["cli_channel"] = {
+                    **original_cli, **value["writeback"],
+                }
     if packet:
         return packet
     raise AssertionError("quota was not observed")
@@ -125,7 +136,7 @@ def _read_current_vision(request: Mapping[str, Any]) -> ScriptedExecToolAction:
         " --select /interaction_contract/cli_channel")
 
 
-def _vision_transport(actions: list[Any]) -> ScriptedDoubaoExecTransport:
+def _vision_transport(actions: list[Any], *, exhaust_before_spend: bool | None = None) -> ScriptedDoubaoExecTransport:
     remaining = list(actions)
 
     def choose(request: Mapping[str, Any]) -> Any:
@@ -136,6 +147,22 @@ def _vision_transport(actions: list[Any]) -> ScriptedDoubaoExecTransport:
             value = None
         if isinstance(value, dict) and value.get("schema_version") == "context_capture_navigation_v1":
             return _read_current_vision(request)
+        if isinstance(value, dict) and value.get("schema_version") == "context_capture_selection_page_v1":
+            if not value.get("eof"):
+                return ScriptedExecToolAction(value["next_command"])
+            action = _packet(request)["replan_action_packet"]
+            if isinstance(action.get("review"), str):
+                return ScriptedExecToolAction(action["review"])
+        if isinstance(value, dict) and value.get("stage") == "review":
+            action = _packet(request)["replan_action_packet"]
+            if isinstance(action.get("writeback"), str):
+                return ScriptedExecToolAction(action["writeback"])
+        if exhaust_before_spend is not None and len(remaining) == 3:
+            # Leave the last three calls for authoring, writeback and spend.
+            # Count delivered reader calls too; staged paths need less padding.
+            call = sum(message["role"] == "tool" for message in request["messages"]) + 1
+            if call < 38 + int(exhaust_before_spend):
+                return ScriptedExecToolAction("printf inspected")
         if not remaining:
             return ScriptedAssistantAction("No further scripted action.")
         action = remaining.pop(0)
@@ -442,16 +469,12 @@ def test_native_host_does_not_qualify_unproven_closeout(tmp_path: Path, invalid:
 def test_budget_boundary_still_requires_the_final_spend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, context_mode: str, passed: bool) -> None:
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_mode)
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
-    prefix: list[Any] = [ScriptedExecToolAction(fixture.quota_guard_command)]
-    if context_mode == "on":
-        prefix.append(_read_current_vision)
-    prefix.append(ScriptedExecToolAction("cat fixture/permission-config.json"))
-    closeout = [vision_patch_action, projected_refresh, projected_spend]
     # The only difference is whether spend would be call 40 or call 41.
-    padding = 40 - len(prefix) - len(closeout) + int(not passed)
-    transport = ScriptedDoubaoExecTransport([
-        *prefix, *[ScriptedExecToolAction("printf inspected")] * padding, *closeout,
-    ])
+    transport = _vision_transport([
+        ScriptedExecToolAction(fixture.quota_guard_command),
+        ScriptedExecToolAction("cat fixture/permission-config.json"),
+        vision_patch_action, projected_refresh, projected_spend,
+    ], exhaust_before_spend=not passed)
     result = DoubaoReplanSemanticActionBehaviorActor(
         api_key="test-only-placeholder", transport=transport,
     ).qualify(qualification_id="native-vision-closeout", fixture_root=tmp_path / "actor", required_vision=True)

@@ -61,7 +61,13 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
         code, applied = configure(registry, runtime, tmp_path, "on", delta="auto")
         assert code == 0 and applied["readback_verified"], applied
     off = cli("quota", "should-run", *alias, "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
-    source = next(row["content"] for row in off["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    if legacy_spelling:
+        assert off["schema_version"] == "loopx_turn_envelope_v0"
+        work_context = off["work_context"]
+    else:
+        assert "schema_version" not in off and "contract_binding" not in off
+        work_context = off["interaction_contract"]["agent_channel"]["work_context"]
+    source = next(row["content"] for row in work_context["sources"]
         if row.get("source") == "goal_acceptance")
     assert "outcome_context" not in source
     assert len(source["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]) == 2

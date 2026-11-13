@@ -33,8 +33,10 @@ def test_feature_off_and_failed_wakes_do_not_read_request_or_settlement(monkeypa
 
 @pytest.mark.skipif(os.name != "posix", reason="native benchmark uses the POSIX source launcher")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize(("changed_reference", "replan"), [(False, False), (True, False), (False, True)])
-def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, provider, changed_reference, replan):
+@pytest.mark.parametrize(("changed_reference", "replan", "complete"), [
+    (False, False, False), (True, False, False), (False, True, False), (False, True, True),
+])
+def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, provider, changed_reference, replan, complete):
     import shlex
     import subprocess
     import sys
@@ -64,6 +66,7 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
         "LOOPX_PYTHON": sys.executable, "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID, "LOOPX_WAKE_LOG_DIR": str(wakes),
         "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "on",
+        "LOOPX_COMPLETE_TURN": str(int(complete)), "LOOPX_TURN_ENVELOPE": "0",
         "LOOPX_CODEX_CONTEXT_DIR": str(context), "LOOPX_EXECUTION_MODE": "heartbeat",
         "CODEX_THREAD_ID": session}
     observed = []
@@ -73,6 +76,7 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
         result = actual_run(argv, **kwargs)
         if "should-run" in argv:
             assert "--prepared-capture-reference" in argv and "--defer-context-presentation" in argv
+            assert ("--complete-turn" in argv) is complete
             response = json.loads(result.stdout)
             observed.append(response)
             if changed_reference:
@@ -96,6 +100,12 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
         assert (wake / "checkpoint-start-guard.json").read_bytes() == original_bytes
         original_packet = json.loads(original_bytes)
         assert original_packet["heartbeat_receipt"]["turn_instance_id"] == turn
+        if complete:
+            from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+            assert_complete_turn_decision(original_packet)
+        else:
+            assert "schema_version" not in original_packet and "contract_binding" not in original_packet
         if replan:
             selected = actual_run(command, cwd=project, env=env, capture_output=True, text=True, check=True)
             page = json.loads(selected.stdout)
@@ -108,7 +118,7 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
             assert review_packet["planning_guidance"] == original_packet["replan_action_packet"]["planning_guidance"]
             assert actions["/heartbeat_receipt"] == original_packet["heartbeat_receipt"]
             native = json.loads((context / "session.json").read_bytes())
-            assert native["recovery"]["target"]["surface"] == "complete_turn"
+            assert native["recovery"]["target"]["surface"] == ("complete_turn" if complete else "quota_packet")
             assert native["recovery"]["target"]["capture_id"] == digest
         assert source == original
         assert digest == observed[0]["capture_sha256"] == hashlib.sha256(original_bytes).hexdigest()
@@ -137,7 +147,7 @@ def test_checkpoint_handoff_checks_the_original_contract_before_capture(tmp_path
     root.mkdir(mode=0o700)
     code, source = cli._run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, "--turn-instance-id", cli.TURN_ID,
-        "--context-delivery", "off", "--decision-output-dir", str(original_dir), cwd=project)
+        "--complete-turn", "--context-delivery", "off", "--decision-output-dir", str(original_dir), cwd=project)
     assert code == 0 and source["schema_version"] == "loopx_turn_envelope_v1"
     original = original_dir / "decision.json"
     original_bytes = original.read_bytes()

@@ -153,7 +153,7 @@ def test_progress_cli_reads_policy_with_context_delivery(
         "cwd": str(fixture["project"]), "hook_event_name": "SessionStart", "source": "startup"})
     try:
         presented = call_progress_cli(
-            fixture, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            fixture, "quota", "should-run", "--codex-app", "--complete-turn", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", TURN, "--todo-id", TODO,
             "--context-delivery", context_delivery,
             "--codex-context-dir", str(native), "--decision-output-root", str(captures),
@@ -212,7 +212,7 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
     journal.mkdir(mode=0o700)
     try:
         code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-            "quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+            "quota", "should-run", "--codex-app", "--complete-turn", "--goal-id", GOAL, "--agent-id", AGENT,
             "--todo-id", TODO, "--turn-instance-id", TURN, "--decision-output-dir", str(capture),
             "--context-delivery", "on", "--delta-delivery", "auto", "--codex-context-dir", str(journal),
             "--prepared-capture-reference", "--defer-context-presentation"])
@@ -481,7 +481,7 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
         return call_progress_cli(fixture, *args, expected_code=expected_code)
 
     def guard(turn: str, *, todo: str | None = TODO, capture: Path | None = None) -> dict:
-        return call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        return call("quota", "should-run", "--codex-app", "--complete-turn", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", turn,
             *(["--todo-id", todo] if todo else []),
             *(["--decision-output-dir", str(capture)] if capture is not None else []))
