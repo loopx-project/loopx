@@ -769,16 +769,18 @@ def _read_recovery_on_limited_host(command, *, project, limit, retry_page=False)
     ("collection", 4096), ("capture", 4096), ("registration", 4096),
     ("publication", 4096), ("publication", 900), ("console", 900), ("wrapper", 900),
     ("long_route", 900), ("long_route", 650), ("long_route", 550), ("long_route", 256),
-    ("long_no_capture", 650),
+    ("long_no_capture", 650), ("long_named", 650), ("long_named", 900),
+    ("long_reference_io", 900), ("unresolved_cli", 900),
 ], ids=["collection", "capture", "registration", "publication", "tight-opening",
         "installed-console", "explicit-wrapper", "strict-900", "strict-650",
-        "no-page-room", "no-room", "strict-before-capture"])
+        "no-page-room", "no-room", "strict-before-capture", "named-650", "named-900",
+        "short-reference-unwritable", "unresolved-cli"])
 def test_inline_replan_failure_reports_the_actual_receipt(
     tmp_path, monkeypatch, capsys, provider, failure_stage, limit,
 ):
     from loopx.cli import main
     from loopx.cli_commands import quota
-    from loopx.control_plane.turn_driver import codex_context
+    from loopx.control_plane.turn_driver import codex_context, decision_capture
     from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -812,11 +814,23 @@ def test_inline_replan_failure_reports_the_actual_receipt(
         missing = max(1, 227 - len(os.fsencode(release_prefix / "scripts" / "loopx")))
         launcher = release_prefix.with_name(release_prefix.name + "a" * missing) / "scripts" / "loopx"
         launcher.parent.mkdir(parents=True)
-        launcher.symlink_to(Path(__file__).resolve().parents[2] / "scripts" / "loopx")
+        release = Path(__file__).resolve().parents[2] / "scripts" / "loopx"
+        if failure_stage == "long_reference_io":
+            launcher.write_text(f'#!/bin/sh\nexec {shlex.quote(str(release))} "$@"\n')
+            launcher.chmod(0o700)
+        else:
+            launcher.symlink_to(release)
         monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
         cli_prefix = ["--cli-bin", str(launcher)]
         capture = tmp_path / ("capture " + "x" * 150) / ("nested " + "x" * 120) / "original"
         capture.parent.mkdir(parents=True)
+    if failure_stage == "long_named":
+        launcher = launcher.rename(launcher.with_name("lxqa"))
+        original_path = os.environ["PATH"]
+        monkeypatch.setenv("PATH", str(launcher.parent) + os.pathsep + original_path)
+        cli_prefix = ["--cli-bin", launcher.name]
+    if failure_stage == "unresolved_cli":
+        cli_prefix = ["--cli-bin", str(tmp_path / "missing-launcher")]
     native = tmp_path / "native"
     native.mkdir(mode=0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "fixture-inline-replan")
@@ -854,9 +868,18 @@ def test_inline_replan_failure_reports_the_actual_receipt(
         raise RuntimeError("fixture private capture detail")
 
     with monkeypatch.context() as patch:
+        if failure_stage == "long_reference_io":
+            write_reference = decision_capture.write_context_read_reference
+
+            def refuse_short_reference(*args, reference_file=None, **kwargs):
+                if reference_file is not None and reference_file.name == "r":
+                    raise PermissionError("fixture short reference cannot be written")
+                return write_reference(*args, reference_file=reference_file, **kwargs)
+
+            patch.setattr(decision_capture, "write_context_read_reference", refuse_short_reference)
         if failure_stage == "registration":
             patch.setattr(codex_context, "record_native_claim_source", fail_registration)
-        elif failure_stage in {"publication", "console", "wrapper", "long_route"}:
+        elif failure_stage in {"publication", "console", "wrapper", "long_route", "long_named", "long_reference_io"}:
             patch.setattr(codex_context, "prepare_codex_context", fail_publication)
         elif failure_stage in {"capture", "long_no_capture"}:
             patch.setattr(quota, "_prepare_quota_result_context", fail_capture)
@@ -873,7 +896,7 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     assert len(stdout.encode()) <= limit and "fixture private" not in stdout
     saved = capture / "decision.json"
     assert _spend_run_count(runtime) == 0
-    if limit in {256, 550}:
+    if limit in {256, 550} or failure_stage == "unresolved_cli":
         assert "no guard" in reply["reason"].lower()
         assert _heartbeat_receipt_count(runtime, turn) == 0 and not saved.exists()
         return
@@ -910,20 +933,34 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     assert saved.read_bytes() == original
     if limit == 4096:
         assert reply["heartbeat_receipt"] == receipt
-    if failure_stage == "long_route":
-        reader = shlex.split(reply["command"])
-        assert reader[0] == cli_prefix[1]
+    if failure_stage in {"long_route", "long_named", "long_reference_io"}:
+        read_limit = limit
+        if failure_stage == "long_reference_io":
+            locator = reply["captured_decision"]
+            assert locator == {"path": str(saved), "sha256": sha256(original).hexdigest()}
+            # A wider channel can carry a reader for this full capture path.
+            read_limit = 4096
+            reader = [str(launcher), "--cli-bin", str(launcher), "--format", "json", "quota", "context-read",
+                "--capture-file", locator["path"], "--capture-sha256", locator["sha256"],
+                "--max-page-output-bytes", str(read_limit)]
+        else:
+            reader = shlex.split(reply["command"])
+            _, pinned = read_context_read_reference(reader[reader.index("--reference-file") + 1])
+            assert Path(pinned["path"]).resolve() == saved.resolve()
+            assert pinned["sha256"] == sha256(original).hexdigest()
+        assert reader[0] == str(launcher)
         assert "Do not rerun" in reply["instruction"]
-        _, pinned = read_context_read_reference(reader[reader.index("--reference-file") + 1])
-        assert Path(pinned["path"]).resolve() == saved.resolve()
-        assert pinned["sha256"] == sha256(original).hexdigest()
+        if failure_stage == "long_named":
+            monkeypatch.setenv("PATH", original_path)
         selection = _read_recovery_on_limited_host(
             [*reader, "--select", "/heartbeat_receipt", "--select", "/interaction_contract/cli_channel/next_cli_actions"],
-            project=project, limit=limit, retry_page=True,
+            project=project, limit=read_limit, retry_page=failure_stage != "long_reference_io",
         )
         values = {item["pointer"]: item["value"] for item in selection["selections"]}
         assert values["/heartbeat_receipt"] == receipt
         actions = values["/interaction_contract/cli_channel/next_cli_actions"]
+        if failure_stage == "long_named":
+            assert shlex.split(actions[0])[0] == str(launcher)
         _settle_replan_from_captured_actions(project, registry, runtime, turn, actions, receipt["settlement_identity"])
         assert saved.read_bytes() == original and _heartbeat_receipt_count(runtime, turn) == 1
         return
