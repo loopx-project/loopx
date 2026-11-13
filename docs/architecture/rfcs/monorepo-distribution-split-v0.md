@@ -3637,3 +3637,43 @@ installed protocol's CI coverage gap without selecting D2/D5 or a minimal
 preset. Real Host initial/revised/compacted/lost-ACK adoption, complete V1–V5/V10,
 R1/M3, Standard/workspace publication and original-goal regression remain open.
 Preserve the earlier failures, frozen budgets and unchanged governance owners.
+
+### 2026-11-13 — Managed Codex preparation respects start admission
+
+The existing built-in Codex CLI route can prepare an eligible hard-lease Todo
+through the exact ordinary claim advertised by its typed decision. The caller
+then rereads the same Todo and requires ready before Host launch. This removes
+the separate manual claim step; it does not select a new host or grant authority.
+The prior proposal at `d4348db14d51952a74247e3003768a2f969c7216` still wrote a
+lease and Turn receipt before invalid validator input or cadence waiting was
+rejected. The repaired route validates the existing Host arguments and obtains
+start admission from the same TypeScript cadence owner before those writes,
+then reserves the exact Turn binding before the ordinary claim. Start admission
+runs inside the existing cross-runtime Turn binding lock, so a competing caller
+cannot reserve one Todo's interval and then let a different binding win.
+
+Preparation and execution reuse the settlement effect identity for the start
+reservation. A claim acknowledgement lost before journal creation can therefore
+recover its already confirmed lease and original unstarted reservation. The
+existing transaction-key reservation is retained as an exact recovery fallback
+for historical Codex journals; a started request cannot use that fallback to
+run again. An uncertain claim reports unknown state effects instead of asserting
+that nothing was written. A successful claim receipt remains visible if the
+subsequent Host step fails. The existing spend precheck refuses a fresh claim
+for a settled Turn even after its lease is released, directing recovery to the
+recorded journal. No new persisted schema or governance owner is added.
+
+Real source CLI checks on isolated File and SQLite reject malformed validator
+JSON/argv and scheduled waits with unchanged leases, Turn receipts, journals
+and Host calls. The same independent oracles fail on the prior proposal.
+Interruption after the ordinary claim recovers with one Host attempt and one
+settlement; recorded-key replay has no effects. Installed core qualification
+uses the same existing package lane and synthetic Codex transport, with an
+independent artifact validator and result readback.
+
+This is an executable-start prerequisite for V2/V3/V4, not whole R1 acceptance.
+The Host is synthetic: actual model adoption, complete V1–V5/V10, default
+closure, paired complete costs, progressive product control, R1/M3 and original
+Goal regression remain unqualified. Keep the nine original requirements,
+previous failed attempts and frozen budget failures; no minimal preset,
+provider default, package publication or paid operation is promoted here.

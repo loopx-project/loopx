@@ -11,9 +11,13 @@ import shlex
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from ...command_invocation import current_loopx_cli_argv
+if TYPE_CHECKING:
+    from ..quota.effect_program import SettlementIdentity
+
+from ...command_invocation import command_argv, current_loopx_cli_argv
+from ...turn_identity import mint_turn_instance_id, normalize_turn_instance_id
 from ..content_digest import BARE_SHA256_PATTERN
 
 
@@ -100,10 +104,21 @@ def compact_execution_preparation_request(
 def _default_runner(
     command: Sequence[str], *, cwd: Path, timeout: float,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        list(command), cwd=str(cwd), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=timeout,
+    completed = subprocess.run(
+        list(command), cwd=str(cwd), capture_output=True, text=False,
+        timeout=timeout,
         check=False,
+    )
+    # The receipt is protocol data and must decode exactly.  Stderr is only
+    # diagnostic output from the launcher; an unrelated invalid byte there
+    # must not turn a valid receipt into a failed preparation.
+    stdout = (completed.stdout or b"").decode("utf-8", errors="strict")
+    stderr = (completed.stderr or b"").decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(
+        completed.args,
+        completed.returncode,
+        stdout,
+        stderr,
     )
 
 
@@ -116,13 +131,17 @@ def _run_json(
     timeout: float,
     runner: CommandRunner,
 ) -> dict[str, Any]:
-    command = [
-        *current_loopx_cli_argv(),
-        "--registry", str(registry_path),
-        *(["--runtime-root", str(runtime_root)] if runtime_root is not None else []),
-        "--format", "json",
-        *arguments,
-    ]
+    route = current_loopx_cli_argv()
+    command = command_argv(
+        Path(route[0]),
+        [
+            *route[1:],
+            "--registry", str(registry_path),
+            *(["--runtime-root", str(runtime_root)] if runtime_root is not None else []),
+            "--format", "json",
+            *arguments,
+        ],
+    )
     completed = runner(command, cwd=cwd, timeout=timeout)
     try:
         payload = json.loads(completed.stdout or "{}")
@@ -150,6 +169,195 @@ def prepared_capture_reference(payload: Mapping[str, Any], digest: str) -> dict[
         "heartbeat_receipt": {"turn_instance_id": heartbeat.get("turn_instance_id")} if isinstance(heartbeat, Mapping) else None,
         "capture_sha256": digest,
     }
+
+
+class ExecutionPreparationClaimFailed(ValueError):
+    """The decision's advertised managed claim was refused before delivery."""
+
+    code = "turn_execution_preparation_claim_failed"
+    execution_effects = {
+        "host_invoked": False, "state_written": None,
+        "scheduler_acknowledged": False, "quota_spent": False,
+    }
+
+
+def _exact_identity(value: object) -> str | None:
+    """Keep a decision identity exact; display normalization cannot stand in for it."""
+    if isinstance(value, str) and value and value == value.strip():
+        return value
+    return None
+
+
+def builtin_execution_preparation_claim(
+    decision: Mapping[str, Any],
+    *,
+    agent_id: str,
+    registry_path: Path,
+    runtime_root: Path,
+    cwd: Path,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
+    runner: CommandRunner | None = None,
+    timeout: float = 30,
+    admit_start: Callable[[SettlementIdentity], bool] | None = None,
+    on_claim: Callable[[Mapping[str, Any]], None] | None = None,
+) -> str | None:
+    """Execute the exact ordinary claim a decision advertised for a Host.
+
+    The decision stays the owner of readiness: this adapter runs only the
+    claim the decision already published as Host-executable, then the caller
+    re-reads the same decision and must observe the same Todo ready.  A
+    preparation this adapter does not recognise is left untouched so its
+    original typed wait keeps its meaning.
+    """
+
+    preparation = decision.get("execution_preparation")
+    selected = decision.get("selected_todo")
+    if not isinstance(preparation, Mapping) or not isinstance(selected, Mapping):
+        return None
+    if preparation.get("state") != "claim_required":
+        return None
+    claim = preparation.get("claim")
+    if not isinstance(claim, Mapping) or claim.get("host_execution_allowed") is not True:
+        return None
+    identity = decision.get("agent_identity")
+    declared_agent = decision.get("agent_id")
+    selected_agent = selected.get("agent_id")
+    identity_agent = identity.get("agent_id") if isinstance(identity, Mapping) else None
+    goal_id = _exact_identity(decision.get("goal_id"))
+    caller_agent_id = _exact_identity(agent_id)
+    preparation_agent_id = _exact_identity(preparation.get("agent_id"))
+    todo_id = _exact_identity(preparation.get("todo_id"))
+    selected_todo_id = _exact_identity(selected.get("todo_id"))
+    selected_agent_id = _exact_identity(selected_agent)
+    identity_agent_id = _exact_identity(identity_agent)
+    # An absent declaration may fall back to the composed identity contract.
+    # A present declaration that needed trimming is not the same identity.
+    decision_agent_id = (
+        _exact_identity(declared_agent) if declared_agent is not None else identity_agent_id
+    )
+    expected_claim = [
+        "todo", "claim", "--goal-id", goal_id, "--todo-id", todo_id,
+        "--agent-id", caller_agent_id, "--claimed-by", caller_agent_id,
+    ]
+    if (
+        preparation.get("schema_version") != "execution_preparation_v0"
+        or preparation.get("delivery_allowed") is not False
+        or decision.get("normal_delivery_allowed") is not False
+        or decision.get("should_run") is not True
+        or not goal_id
+        or not caller_agent_id
+        or not decision_agent_id
+        or not preparation_agent_id
+        or not todo_id
+        or selected_todo_id != todo_id
+        or decision_agent_id != caller_agent_id
+        or preparation_agent_id != caller_agent_id
+        or (selected_agent is not None and selected_agent_id != caller_agent_id)
+        or (identity_agent is not None and identity_agent_id != caller_agent_id)
+        or claim.get("cli_args") != expected_claim
+        or not registry_path.is_absolute()
+        or not runtime_root.is_absolute()
+        or not cwd.is_absolute()
+    ):
+        return None
+    heartbeat = decision.get("heartbeat_receipt")
+    # Resolve one Turn identity before reading a receipt or running the claim.
+    # The transaction plan applies the same normalization, so a padded or
+    # invalid identity must be refused here; otherwise the claim could lease a
+    # different Todo before planning rejects the mismatch.
+    exact_turn_instance_id = normalize_turn_instance_id(turn_instance_id)
+    if exact_turn_instance_id is None and isinstance(heartbeat, Mapping):
+        receipt_turn_instance_id = heartbeat.get("turn_instance_id")
+        if isinstance(receipt_turn_instance_id, str):
+            exact_turn_instance_id = normalize_turn_instance_id(
+                receipt_turn_instance_id
+            )
+    if exact_turn_instance_id is None and admit_start is not None:
+        exact_turn_instance_id = mint_turn_instance_id(prefix="turn")
+    if exact_turn_instance_id is not None:
+        # The receipt lookup and the ordinary claim are separate operations.
+        # Reserve the exact Turn binding before the claim can create a lease for
+        # a different Todo. The reservation owner serializes this write with every
+        # later guard, and planning re-reads the same identity after the claim.
+        from ..quota.effect_program import SettlementBindingKind, SettlementIdentity
+        from ..quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
+        from ..quota.turn_envelope import turn_envelope_scoped_settlement_identity
+
+        raw_identity = turn_envelope_scoped_settlement_identity(
+            decision, turn_instance_id=exact_turn_instance_id,
+        )
+        # A blocked pre-claim decision has no completed transaction to project.
+        # The ordinary Todo claim already fixes the remaining identity fields,
+        # so derive the same settlement binding directly and compare it with
+        # the receipt before the claim can create a lease.
+        settlement_identity = (
+            SettlementIdentity.from_runtime_payload(raw_identity)
+            if raw_identity is not None
+            else SettlementIdentity(
+                goal_id=goal_id,
+                agent_id=caller_agent_id,
+                todo_id=todo_id,
+                turn_instance_id=exact_turn_instance_id,
+            )
+        )
+        if (
+            settlement_identity.goal_id != goal_id
+            or settlement_identity.agent_id != caller_agent_id
+            or settlement_identity.turn_instance_id != exact_turn_instance_id
+            or settlement_identity.binding_kind is not SettlementBindingKind.TODO
+            or settlement_identity.binding_id != todo_id
+        ):
+            raise ValueError("execution preparation identity does not match its ordinary claim")
+        class StartDeferred(Exception):
+            pass
+
+        def before_bind() -> None:
+            from ..quota.settlement import read_quota_spend_precheck
+
+            original = read_quota_spend_precheck(
+                runtime_root, goal_id=goal_id, agent_id=caller_agent_id, todo_id=todo_id,
+                turn_instance_id=exact_turn_instance_id, allow_unbound_binding=True,
+                registry_path=registry_path, goal_ref=goal_ref,
+            )
+            if original is not None and original.spend_run_present:
+                raise ValueError(
+                    "This Turn is already settled; use --resume-turn-instance-id "
+                    f"{exact_turn_instance_id} to read its confirmed journal before new work"
+                )
+            if admit_start is not None and not admit_start(settlement_identity):
+                raise StartDeferred
+        # The receipt owner serializes this reservation with every later guard
+        # binding.  Reserving the Turn before the ordinary claim closes the
+        # check-to-claim race: a conflicting Todo either wins here or is refused
+        # here, so the losing caller cannot acquire a lease first.
+        try:
+            ensure_turn_heartbeat_settlement_receipt(
+                runtime_root,
+                settlement_identity,
+                semantic_replan_guard_scoped=False,
+                semantic_replan_obligation_id=None,
+                goal_ref=goal_ref,
+                **({"before_bind": before_bind} if admit_start is not None else {}),
+            )
+        except StartDeferred:
+            return None
+    try:
+        claim_receipt = _run_json(
+            expected_claim,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            cwd=cwd,
+            timeout=timeout,
+            runner=runner or _default_runner,
+        )
+    except (OSError, subprocess.SubprocessError, RuntimeError, UnicodeDecodeError) as exc:
+        raise ExecutionPreparationClaimFailed(
+            f"managed claim for Todo {todo_id} was refused before delivery: {exc}"
+        ) from exc
+    if on_claim is not None:
+        on_claim(claim_receipt)
+    return todo_id
 
 
 def _native_claim_operation_id(request: Mapping[str, Any]) -> str:

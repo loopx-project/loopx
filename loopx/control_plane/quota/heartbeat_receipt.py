@@ -1,7 +1,7 @@
 from __future__ import annotations
 from .effective_action import EffectiveAction
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ...file_lock import exclusive_cross_runtime_file_lock
@@ -205,6 +205,7 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_obligation_id: str | None,
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    before_bind: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     """Idempotently bind a Turn-created quota guard to its settlement identity.
 
@@ -242,13 +243,18 @@ def ensure_turn_heartbeat_settlement_receipt(
             identity.binding_id,
             identity.effect_id,
         )
+        observed = _receipt_settlement_identity(effective) if effective is not None else None
+        if observed is not None and observed != expected:
+            raise HeartbeatReceiptIdentityConflictError(
+                "Turn heartbeat receipt belongs to another settlement identity"
+            )
+        if before_bind is not None:
+            # The existing cross-runtime binding lock serializes the competing
+            # identity before transport-specific start admission. Its owner may
+            # refuse admission without writing a receipt or claiming work.
+            before_bind()
         if effective is not None:
-            observed = _receipt_settlement_identity(effective)
             if observed is not None:
-                if observed != expected:
-                    raise HeartbeatReceiptIdentityConflictError(
-                        "Turn heartbeat receipt belongs to another settlement identity"
-                    )
                 effective_details = effective.get("details")
                 effective_details = (
                     effective_details
