@@ -6,7 +6,7 @@ import {isDeepStrictEqual} from "node:util";
 import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import {reusableTurnContext} from "../capability_hooks.ts";
-import type {JsonObject} from "../effect_program.ts";
+import {SETTLEMENT_IDENTITY_SCHEMA_VERSION, settlementIdentityFromPlan, type JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, hasUnboundActionSelection, selectedWorkTodoId}
@@ -43,15 +43,32 @@ function orderedSettlementSteps(plan: JsonObject | null | undefined): unknown[] 
 
 function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
     plan: JsonObject | null | undefined): JsonObject | undefined {
-  const cli = jsonObject(interaction.cli_channel), prepared = jsonObject(cli?.execution_preparation);
-  const identity = jsonObject(plan?.identity);
-  return context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && jsonObject(interaction.agent_channel)?.delivery_allowed === true && cli?.selection_required !== true
-    && prepared?.state === "ready" && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
-    && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
-    && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
-    && isDeepStrictEqual(identity, jsonObject(jsonObject(context.heartbeat_receipt)?.settlement_identity))
-    ? identity : undefined;
+  const cli = jsonObject(interaction.cli_channel), selected = jsonObject(context.selected_todo);
+  const receipt = jsonObject(context.heartbeat_receipt), identity = jsonObject(plan?.identity);
+  if (!cli || context.effective_action !== EffectiveAction.NORMAL_RUN || context.normal_delivery_allowed !== true
+      || jsonObject(interaction.agent_channel)?.delivery_allowed !== true || cli.selection_required === true
+      || typeof identity?.effect_id !== "string" || !identity.effect_id || typeof identity.todo_id !== "string"
+      || selected?.todo_id !== identity.todo_id || !isDeepStrictEqual(identity, jsonObject(receipt?.settlement_identity)))
+    return undefined;
+
+  const prepared = jsonObject(cli.execution_preparation);
+  if (prepared?.state === "ready" && prepared.todo_id === identity.todo_id) return identity;
+
+  // A soft claim has no lease preparation record. The current committed Todo
+  // receipt already binds its plan; preserve any other or conflicting route.
+  const identityAgent = jsonObject(context.agent_identity)?.agent_id;
+  if (Object.hasOwn(cli, "execution_preparation") || Object.hasOwn(context, "execution_preparation")
+      || cli.turn_binding_required === true || context.ok !== true || context.should_run !== true
+      || jsonObject(context.goal_boundary)?.handoff_mode !== "soft_claim"
+      || jsonObject(interaction.user_channel)?.action_required !== false || cli.spend_after_validation !== true
+      || receipt?.closeout_required !== true || receipt.settlement_binding_owed === true
+      || (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed")
+      || identity.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION || identity.goal_id !== context.goal_id
+      || identity.agent_id !== (context.agent_id ?? identityAgent)
+      || (identityAgent !== undefined && identity.agent_id !== identityAgent)
+      || identity.turn_instance_id !== receipt.turn_instance_id) return undefined;
+  const bound = settlementIdentityFromPlan({settlement_plan: plan});
+  return bound.failure === null && bound.value.binding_kind === "todo" ? identity : undefined;
 }
 
 /** Reorder the opening for an exact dated Todo reentry. The saved capture

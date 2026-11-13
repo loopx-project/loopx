@@ -1942,7 +1942,8 @@ def test_native_first_read_identifies_already_observed_vision_authoring(tmp_path
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("complete", [False, True], ids=["ordinary", "complete"])
+def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, monkeypatch, provider, complete):
     from test_codex_context_lifecycle import deliver, setup
     from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture
 
@@ -1972,7 +1973,7 @@ def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, 
     def bind(turn):
         unbound = call("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
             "--turn-instance-id", turn, "--context-delivery", "on", "--codex-context-dir", str(native),
-            "--decision-output-root", str(captures))
+            "--decision-output-root", str(captures), *(["--complete-turn"] if complete else []))
         unbound_page, facts = read(unbound, receipt_path, selection)
         assert facts[receipt_path]["turn_instance_id"] == turn
         assert facts[receipt_path]["settlement_binding_owed"] is True
@@ -1992,7 +1993,13 @@ def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, 
     index, = (i for i, step in enumerate(first_plan["ordered_steps"]) if step["kind"] == "durable_writeback")
     step = f"{settlement}/ordered_steps/{index}"
     authoring = step + "/vision_authoring"
-    original_page, original = read(first, authoring)
+    precondition = step + "/precondition"
+    _, cold = read_selection(first["first_read_command"])
+    assert cli + "/next_cli_actions" not in cold
+    assert cold[precondition] == first_plan["ordered_steps"][index]["precondition"]
+    _, fallback_actions = read(first, cli + "/next_cli_actions")
+    assert first_plan["ordered_steps"][index]["command_template"] in fallback_actions[cli + "/next_cli_actions"]
+    original_page, original = read(first, authoring, precondition)
     assert original[authoring] == first_plan["ordered_steps"][index]["vision_authoring"]
     deliver(native, event, [original_page])
     # Settle the original admitted Turn so that the next guard exercises
@@ -2023,6 +2030,8 @@ def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, 
     command = step + "/semantic_closeout_command_template"
     current_page, facts = read_selection(current["first_read_command"])
     assert authoring in current_page.get("previously_delivered_fields", [])
+    assert precondition in current_page.get("previously_delivered_fields", [])
+    assert precondition not in facts and cli + "/next_cli_actions" not in facts
     assert "previously_delivered_fields" in current["instruction"]
     assert facts[command] == plan["ordered_steps"][index]["semantic_closeout_command_template"]
     assert "fixture-selection-current" in facts[command]
@@ -2036,7 +2045,7 @@ def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, 
     replay_page, facts = read_selection(replay["first_read_command"])
     assert authoring in replay_page.get("previously_delivered_fields", [])
     assert facts[command] == plan["ordered_steps"][index]["semantic_closeout_command_template"]
-    _, explicit = read(replay, authoring)
+    _, explicit = read(replay, authoring, precondition)
     assert explicit == original
 @pytest.mark.parametrize("version", ["quota_settlement_plan_v1", "quota_settlement_plan_v2"])
 @pytest.mark.parametrize("transition", ["same", "changed", "wrong_binding", "unknown_version", "rebound"])
