@@ -95,7 +95,7 @@ RUNTIME_REPAIR_ROUTING_RULE = (
     "lifecycle/registry: loopx-project; runtime/projection drift: loopx-self-repair."
 )
 RUNTIME_EXECUTION_ROUTING_RULE = (
-    "Normal turns: CLI interaction_contract; " + RUNTIME_REPAIR_ROUTING_RULE
+    "For normal turns follow the CLI `interaction_contract`; " + RUNTIME_REPAIR_ROUTING_RULE
 )
 HOST_LOOP_SAFETY_RULE = (
     "Obey user authority and repository rules. "
@@ -106,7 +106,7 @@ HOST_LOOP_SAFETY_RULE = (
 )
 HEARTBEAT_TURN_BOOTSTRAP_RULE = (
     "Per wake replace `<current_time_iso>` once; reuse on retries. "
-    "Assign, then guard separately in one shell; never command-prefix assignment."
+    "Assign, then run the guard in one shell, not a command-prefix assignment."
 )
 HEARTBEAT_KNOWN_CHOICE_RULE = (
     "Known new-Turn choice: add `--todo-id <id>` to first guard; else "

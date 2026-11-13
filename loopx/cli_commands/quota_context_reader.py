@@ -114,15 +114,9 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     if isinstance(selection, dict):
         selection["command_args_template"] = command
     else:
-        assert isinstance(cli, dict) and isinstance(interaction, dict)
-        cli["next_cli_actions"] = [command]
-        # Preserve the authority owner's mirrored action before signing.
-        for carrier, key in ((payload, "recommended_action"),
-                             (interaction.get("agent_channel"), "primary_action"),
-                             (payload.get("work_lane_contract"), "action")):
-            if isinstance(carrier, dict) and carrier.get(key) == template:
-                carrier[key] = command
+        from ..control_plane.work_items.interaction_contract import bind_cli_turn_selection_action
 
+        bind_cli_turn_selection_action(payload, previous=template, command=command)
 
 
 def _observed_read_presentation(fields: dict[str, Any], text_append: dict[str, Any] | None = None) -> dict[str, Any]:
