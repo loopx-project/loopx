@@ -197,68 +197,6 @@ def find_heartbeat_receipt(
     )
 
 
-HEARTBEAT_RECEIPT_STATUS_MISSING = "missing"
-HEARTBEAT_RECEIPT_STATUS_STALE = "stale"
-HEARTBEAT_RECEIPT_STATUS_FRESH = "fresh"
-
-
-def heartbeat_receipt_status(
-    runtime_root: Path,
-    *,
-    goal_id: str,
-    agent_id: str,
-    turn_instance_id: str,
-    goal_ref: Mapping[str, object] | None = None,
-) -> str:
-    """Report whether this Turn's receipt is missing, fresh, or superseded.
-
-    The native scheduler fence rejects a follow-up once a later receipt for the
-    same Goal and Agent exists, or once a later committed normal-run
-    should-run audit proves the Turn was superseded. The Python compatibility
-    route reads the same rollout log, so it must answer the same question
-    instead of accepting any receipt it can find.
-    """
-
-    events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
-    receipts = _heartbeat_receipt_events(
-        events,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        turn_instance_id=turn_instance_id,
-        goal_ref=goal_ref,
-    )
-    if not receipts:
-        return HEARTBEAT_RECEIPT_STATUS_MISSING
-    start = next(
-        (index for index, event in enumerate(events) if event is receipts[0]),
-        None,
-    )
-    if start is None:
-        return HEARTBEAT_RECEIPT_STATUS_MISSING
-    for event in events[start + 1:]:
-        if (
-            event.get("event_kind") != "quota_should_run"
-            or str(event.get("goal_id") or "") != goal_id
-            or str(event.get("agent_id") or "") != agent_id
-        ):
-            continue
-        raw_run_id = event.get("run_id")
-        run_id = raw_run_id.strip() if isinstance(raw_run_id, str) else ""
-        if run_id:
-            if run_id != turn_instance_id:
-                return HEARTBEAT_RECEIPT_STATUS_STALE
-            continue
-        details = event.get("details")
-        if (
-            event.get("status") == "normal_run"
-            and isinstance(details, Mapping)
-            and details.get("ok") is True
-            and details.get("should_run") is True
-        ):
-            return HEARTBEAT_RECEIPT_STATUS_STALE
-    return HEARTBEAT_RECEIPT_STATUS_FRESH
-
-
 def ensure_turn_heartbeat_settlement_receipt(
     runtime_root: Path,
     identity: SettlementIdentity,

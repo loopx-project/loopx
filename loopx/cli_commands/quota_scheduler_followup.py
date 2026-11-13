@@ -12,12 +12,9 @@ from ..capabilities.repository_change_window import (
     repository_delivery_interaction_hook,
 )
 from ..control_plane.quota.heartbeat_receipt import (
-    HEARTBEAT_RECEIPT_STATUS_FRESH,
-    HEARTBEAT_RECEIPT_STATUS_STALE,
     find_heartbeat_receipt,
     heartbeat_receipt_settlement_replan_obligation_id,
     heartbeat_receipt_settlement_todo_id,
-    heartbeat_receipt_status,
 )
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.quota.scheduler_ack import (
@@ -108,63 +105,6 @@ def build_scheduler_followup_payload(
         if turn_instance_id
         else None
     )
-    if turn_instance_id:
-        heartbeat_status = heartbeat_receipt_status(
-            runtime_root,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            turn_instance_id=turn_instance_id,
-            goal_ref=goal_ref,
-        )
-        if heartbeat_status != HEARTBEAT_RECEIPT_STATUS_FRESH:
-            superseded = heartbeat_status == HEARTBEAT_RECEIPT_STATUS_STALE
-            return {
-                "ok": False,
-                "schema_version": "quota_scheduler_followup_receipt_failure_v0",
-                "mode": args.quota_command,
-                "goal_id": args.goal_id,
-                "agent_id": args.agent_id,
-                "turn_instance_id": turn_instance_id,
-                "decision": "skip",
-                "should_run": False,
-                "status": (
-                    "heartbeat_receipt_stale"
-                    if superseded
-                    else "heartbeat_receipt_missing"
-                ),
-                "state": "blocked_receipt",
-                "error_code": (
-                    "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
-                    if superseded
-                    else "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_MISSING"
-                ),
-                "reason": (
-                    "scheduler follow-up Turn was superseded by a newer quota "
-                    "should-run receipt; refusing stale host writeback"
-                    if superseded
-                    else (
-                        "scheduler follow-up requires the originating heartbeat "
-                        "receipt; refusing to rebuild authority from the current "
-                        "live frontier"
-                    )
-                ),
-                "retry_guidance": (
-                    "rerun quota should-run and use the ACK/failure command emitted "
-                    "by the newest Turn"
-                    if superseded
-                    else (
-                        "retry with the exact Turn id from a committed quota "
-                        "should-run heartbeat receipt"
-                    )
-                ),
-                "write_performed": False,
-                "appended": False,
-                "registry_mutated": False,
-                "scheduler_state_mutated": False,
-                "quota_spend_performed": False,
-                "delivery_outcome": "surface_only",
-            }
-
     observed_rrule = str(
         getattr(args, "app_automation_current_rrule", None)
         or getattr(args, "codex_app_current_rrule", None)
