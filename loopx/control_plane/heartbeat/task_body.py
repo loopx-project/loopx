@@ -703,6 +703,10 @@ Observed capabilities -> --available-capability, never a user gate.
 Apply `scheduler` as projected using inline ACK argv. Read saved scheduler detail
 only for a needed missing/truncated/referenced command; failure argv only after host update failure.
 Exact monitor settlement=no refresh/spend; auxiliary poll continues work.
+Due Monitor: check once, then quota monitor-poll with the actual result digest even
+when its condition is unmet/file absent; cadence advances automatically.
+Use next_cli_actions for an obtained observation; settlement_plan only if unable to
+observe, not for a negative result.
 Validate work; execute `writeback.settlement_plan` and `writeback.next_cli_actions` with
 their exact identity. Do not guess commands from abbreviated previews.
 Writeback needs outcome and vision; unchanged reason requires an existing

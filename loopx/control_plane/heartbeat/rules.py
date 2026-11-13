@@ -44,6 +44,10 @@ HEARTBEAT_NOTIFICATION_RULE_SHORT = (
 )
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
     "Exact monitor settlement=no refresh/spend; auxiliary poll: continue work. "
+    "Due Monitor: check once, then quota monitor-poll with the actual result digest even "
+    "when its condition is unmet/file absent; cadence advances automatically. "
+    "Use next_cli_actions for an obtained observation; settlement_plan only if unable to "
+    "observe, not for a negative result. "
     "Admitted work: settlement_plan even if artifacts unchanged. "
     "Writeback=outcome+vision. "
     "After committed writeback: same-turn checkpoint-context for missing vision, add "

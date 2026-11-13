@@ -420,6 +420,19 @@ def _goal_ref_cli_arg(payload: Mapping[str, Any]) -> str:
     )
 
 
+def _primary_due_monitor(payload: Mapping[str, Any], *, mode: str) -> Mapping[str, Any] | None:
+    if mode not in {"monitor_due", "bounded_delivery", "bounded_delivery_with_user_notice", "scoped_user_gate_fallback"}:
+        return None
+    lane = payload.get("work_lane_contract")
+    selected = payload.get("selected_todo")
+    if (isinstance(lane, Mapping) and lane.get("obligation") == "attempt_due_monitor"
+            and lane.get("must_attempt_work") is True and isinstance(selected, Mapping)
+            and selected.get("task_class") == TODO_TASK_CLASS_MONITOR
+            and selected.get("todo_id") == lane.get("selected_todo_id")):
+        return selected
+    return None
+
+
 def _turn_scoped_cli_settlement_context(
     payload: dict[str, Any],
     *,
@@ -841,6 +854,24 @@ def _admitted_interaction_next_cli_actions(
                 "finish this heartbeat without another poll, writeback, or quota spend; "
                 "the next scheduler trigger must use a fresh turn identity"
             )
+        ]
+    if monitor := _primary_due_monitor(payload, mode=mode):
+        monitor_args = f" --todo-id {shlex.quote(str(monitor['todo_id']))}"
+        if not turn_instance_id:
+            return [f"{typed_quota_guard}{monitor_args} {turn_instance_arg()}"]
+        if monitor.get("target_key"):
+            monitor_args += f" --target-key {shlex.quote(str(monitor['target_key']))}"
+        monitor_args += f" --turn-instance-id {shlex.quote(turn_instance_id)}"
+        return [
+            "Check the selected Monitor once. A successful check with its condition unmet "
+            "(including an absent watched file) is an unchanged observation: record it below. "
+            "Use a digest of the actual observation; add --material-change only for a verified change. "
+            "Only inability to obtain an observation uses typed blocked writeback.",
+            f"{command_prefix} quota monitor-poll --goal-id {goal_id}{scoped_cli_args}"
+            f"{scheduler_args}{goal_ref_arg}{monitor_args} --use-current-task-lease"
+            f' --result-hash "${{{AUXILIARY_MONITOR_RESULT_HASH_ENV}:?}}" --execute',
+            "The poll advances next_due_at from cadence and settles this Monitor Turn without "
+            "refresh-state or quota spend. Yield; independent work requires a fresh guarded Turn.",
         ]
     if mode == "monitor_due":
         return [
@@ -1334,6 +1365,9 @@ def _build_interaction_cli_channel(
             registry_path=registry_path,
         ))
     spend_after_selection = selection.delivery_spend_allowed(payload, spend_after_validation)
+    primary_monitor = _primary_due_monitor(payload, mode=mode)
+    if primary_monitor is not None:
+        spend_after_selection = False
     settlement_plan, replan_settlement_contract = (
         _turn_scoped_cli_settlement_context(
             payload,
@@ -1366,6 +1400,13 @@ def _build_interaction_cli_channel(
             spend_after_validation=spend_after_selection,
         ),
     }
+    if primary_monitor is not None and settlement_plan is not None:
+        # Retain the unavailable-observation recovery route, never a poll debit.
+        channel["settlement_plan"] = settlement_plan
+        channel["spend_policy"] = (
+            "Record an obtained observation with next_cli_actions (unchanged is no-spend). "
+            "Use settlement_plan only if unable to observe, for typed blocked closeout without spend."
+        )
     if turn_binding_required:
         return {
             "turn_binding_required": True,
