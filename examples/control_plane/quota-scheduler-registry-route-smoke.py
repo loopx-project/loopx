@@ -113,7 +113,7 @@ def main() -> None:
             "external_write",
             "--codex-app-current-rrule",
             "FREQ=MINUTELY;INTERVAL=3",
-            "--turn-envelope",
+            "--complete-turn",
             cwd=project,
         )
         assert_complete_turn_decision(decision)
@@ -148,6 +148,7 @@ def main() -> None:
             "--agent-id",
             AGENT_ID,
             "--codex-app",
+            "--complete-turn",
             cwd=project,
         )
         assert_complete_turn_decision(follow_up)
