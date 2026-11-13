@@ -688,17 +688,23 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
         "--goal-id", "fixture", "--agent-id", "worker", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)])
+    from loopx.control_plane.quota.effective_action import EffectiveAction
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, compose_turn_decision
+    from tests.control_plane.test_complete_turn_decision import _valid_interaction
+
     original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"},
-        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0"},
+        "should_run": False, "effective_action": EffectiveAction.QUOTA_SKIP.value,
+        "interaction_contract": _valid_interaction(),
         "heartbeat_receipt": {"turn_instance_id": "original-turn", "status": "committed"}}
+    expected = compose_turn_decision(original)
     monkeypatch.setattr(quota, "handoff_decision", lambda *args: ({"scope": "host-request"}, "digest"))
-    monkeypatch.setattr(quota, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
 
     def competing(*args, **kwargs):
         pytest.fail("explicit native observation must not compose two projection owners")
 
     def native(payload, **kwargs):
-        assert payload == original
+        assert payload == expected
+        assert_complete_turn_decision(payload)
         if native_failure == "directory":
             pytest.fail("failed native directory preparation must not reach projection")
         if native_failure == "projection":
@@ -729,8 +735,8 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     else:
         assert len(printed) == 1 and "content" not in printed[0]
         reference = read_context_read_reference(printed[0]["reference_file"])[1]
-        assert json.loads(Path(reference["path"]).read_text()) == {"native_projection": original}
-    assert json.loads((tmp_path / "decision.json").read_text()) == original
+        assert json.loads(Path(reference["path"]).read_text()) == {"native_projection": expected}
+    assert json.loads((tmp_path / "decision.json").read_text()) == expected
 
 
 def test_explicit_off_returns_inline_guard_without_native_transport(tmp_path, monkeypatch):
