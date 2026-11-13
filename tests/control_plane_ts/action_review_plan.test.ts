@@ -46,7 +46,7 @@ test("an interrupted Task start retries only its original saved Task", () => {
   }
 });
 
-test("confirmed Task dispatch resolves only to the receipt's own execution Session", () => {
+test("confirmed Task dispatch resolves only to the receipt's own execution Turn", () => {
   const resources = {goal_id: "repair", todo_id: "todo-first", session_id: "session-first", turn_id: "turn-first"};
   const canonical = {goal_id: "repair", todo_id: "todo-first", preview_id: "reviewed", status: "applied"};
   const receipt = {projection_verified: true, outcome: "task_execution_started", resource_ids: resources, canonical_receipt: canonical};
@@ -54,7 +54,7 @@ test("confirmed Task dispatch resolves only to the receipt's own execution Sessi
     status: "applied", normalized_parameters: {goal_id: "repair", start_execution: true}, receipt};
   const result = compileActionReviewPlan(proposal);
   assert.equal(result.canApply, false);
-  assert.deepEqual(result.taskExecution, {goalId: "repair", todoId: "todo-first", sessionId: "session-first"});
+  assert.deepEqual(result.taskExecution, {goalId: "repair", todoId: "todo-first", sessionId: "session-first", turnId: "turn-first"});
   for (const change of [
     {status: "applying"},
     {normalized_parameters: {goal_id: "repair", start_execution: false}},
@@ -309,6 +309,21 @@ test("operation frame projects pending and verified result states", () => {
   assert.equal(completed.operationFrame.resultKind, "simulation_completed");
   assert.equal(completed.operationFrame.resultDeliveryVerified, true);
   assert.equal(completed.operationFrame.summary, "Simulation completed.");
+});
+
+test("an applied operation stays unverified until its current result delivery is verified", () => {
+  const proposal: Record<string, any> = operationProposal("outcome_observed");
+  proposal.status = "applied";
+  proposal.receipt = {projection_verified: true};
+  const verified = compileActionReviewPlan(proposal);
+  assert.equal(verified.interaction, "completed");
+  assert.equal(verified.reason, "readback_verified");
+  const {result_delivery, ...withoutDelivery} = proposal.operation;
+  assert.ok(result_delivery);
+  const pending = compileActionReviewPlan({...proposal, operation: withoutDelivery});
+  assert.equal(pending.interaction, "repair");
+  assert.equal(pending.reason, "readback_unverified");
+  assert.equal(pending.canApply, false);
 });
 
 test("operation frame rejects identity drift and malformed projection fields", () => {

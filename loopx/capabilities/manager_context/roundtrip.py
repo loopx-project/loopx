@@ -50,6 +50,7 @@ from ...control_plane.collaboration.inbox import (
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
 from ...chat import ChatMessagePayloadConflictError
+from ...chat_store import TERMINAL_TURN_STATES
 
 class ReturnResolutionBlocked(ValueError, RuntimeError):
     """A return cannot be resolved; ``reason`` is the provider-neutral code.
@@ -431,15 +432,22 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
                                   resume_from=None, project_history_messages=None):
     """Project return delivery state into one existing Chat snapshot."""
 
-    strict = message_limit is not None or resume_from is not None
-    snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
-                else store.session_snapshot(session_id))
+    turn = None
     if turn_id is not None:
         if message_limit is None:
             raise ValueError("a selected original Turn requires paged history")
         turn = store.load_turn(session_id, turn_id)
         if not turn or turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
             raise ValueError("original Turn is unavailable from this Session")
+    strict = message_limit is not None or resume_from is not None
+    # Read the status first: terminal completion persists its answer before
+    # publishing completed. An older message prefix must not appear final.
+    snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
+                else store.session_snapshot(session_id))
+    if turn is not None:
+        status = turn["status"]
+        snapshot["selected_turn"] = {"turn_id": turn_id, "status": status, "terminal": status in TERMINAL_TURN_STATES}
+        snapshot["active_turn"] = None
         # OriginalRequest already displays only this Turn. Select it before
         # paging/projection, retaining every message and the strict journal read.
         snapshot["messages"] = [row for row in snapshot["messages"] if row.get("turn_id") == turn_id]

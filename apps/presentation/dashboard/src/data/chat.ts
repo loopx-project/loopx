@@ -959,6 +959,7 @@ export type ChatSessionSnapshot = {
   session: ChatSessionSummary;
   messages: ChatVisibleMessage[];
   active_turn: Record<string, unknown> | null;
+  selected_turn?: {turn_id: string; status: string; terminal: boolean};
   // Derived from one complete, verified read. Never persisted or an authority grant.
   verifiedHistoryBasis?: string;
   message_page?: {
@@ -1090,6 +1091,20 @@ function sameHistorySource(actual: ChatSessionSummary, expected: ChatSessionSumm
 /** Hydrate one complete original prefix; partial pages never become a snapshot. */
 export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string): Promise<ChatSessionSnapshot> {
   return readChatSessionHistory(session, signal, turnId);
+}
+
+export async function fetchConfirmedTaskTurn(
+  {goalId, todoId, sessionId, turnId}: {goalId: string; todoId: string; sessionId: string; turnId: string},
+  signal: AbortSignal,
+) {
+  const history = await fetchChatSessionHistory(sessionId, signal, turnId);
+  const turn = history.selected_turn;
+  if (history.session.goal_id !== goalId || history.session.channel_id !== `task.${todoId}`
+    || turn?.turn_id !== turnId || typeof turn.status !== "string" || !turn.status
+    || typeof turn.terminal !== "boolean") {
+    throw new Error("The original Task Turn could not be verified.");
+  }
+  return {turn, messages: history.messages};
 }
 
 async function readChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string,

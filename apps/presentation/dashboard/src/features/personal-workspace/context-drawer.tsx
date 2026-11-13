@@ -46,6 +46,7 @@ import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue, hasGoalUsage } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
 import { TaskRequest, taskRequestIdentity, type TaskRequestRead } from "./task-request";
+import { ConfirmedTaskResult } from "./confirmed-task-result";
 import { parseTodoResumeCondition, todoResumeTransition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
@@ -123,11 +124,10 @@ const RUN_ACTION_LABEL_KEYS = {
   retry: "drawer.recoveryRetry",
 } as const;
 
-export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention, onSelectRun, callbacks, goalNotifications = [], goals = [], inspectorExpanded = false, larkConnections = [], onClose, onToggleInspectorSize, readOnly = false, proposalReadbackUnavailable = false, onRetryProposalReadback, proposalReadbackFetching = false, todoReadbackUnavailable = false, runs = [], selection }: {
+export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention, callbacks, goalNotifications = [], goals = [], inspectorExpanded = false, larkConnections = [], onClose, onToggleInspectorSize, readOnly = false, proposalReadbackUnavailable = false, onRetryProposalReadback, proposalReadbackFetching = false, todoReadbackUnavailable = false, runs = [], selection }: {
   agents: WorkspaceAgentOption[];
   attentionHistory?: WorkspaceAttention[];
   onSelectAttention?: (item: WorkspaceAttention) => void;
-  onSelectRun?: (run: WorkspaceRun) => void;
   callbacks: PersonalWorkspaceCallbacks;
   goalNotifications?: WorkspaceGoalNotification[];
   goals?: WorkspaceGoal[];
@@ -185,10 +185,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const visibleProposalFields = selection.kind === "proposal"
     ? selection.item.fields.filter(field => !completionProofFields.includes(field)) : [];
   const proposalTarget = selection.kind === "proposal" ? selection.item : null;
-  const taskExecution = proposalTarget?.status === "applied" && !proposalReadbackUnavailable
+  const taskExecution = proposalTarget?.status === "applied" && !proposalReadbackUnavailable && !readOnly
     ? proposalTarget.reviewPlan?.taskExecution : undefined;
-  const startedTaskRun = taskExecution && runs.find(run => run.goalId === taskExecution.goalId
-    && run.todoId === taskExecution.todoId && run.sessionId === taskExecution.sessionId);
   const proposalRequests = proposalTarget?.todoId
     ? attentionHistory.filter(item => item.goalId === proposalTarget.goalId && item.todoId === proposalTarget.todoId) : [];
 
@@ -1225,9 +1223,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               ? <div role="status" className="personal-proposal-state is-error" data-testid="operation-readback-unavailable"><p>{t("proposal.readbackUnavailable")}</p>
                 {onRetryProposalReadback ? <button type="button" className="personal-secondary-action" disabled={proposalReadbackFetching} onClick={onRetryProposalReadback}>{t("proposal.readbackRetry")}</button> : null}</div> : null}
             {selection.item.actionKind === "team.plan" && selection.item.status === "applied" ? <TeamPlanResult proposal={selection.item} t={t} /> : <section className="personal-proposal-card">
-              <small>{selection.item.reviewPlan?.operationFrame?.kind === "pending"
+              {!taskExecution ? <small>{selection.item.reviewPlan?.operationFrame?.kind === "pending"
                 ? t(`proposal.kind.${selection.item.actionKind}`)
-                : `${t(`proposal.kind.${selection.item.actionKind}`)} · ${t(`proposal.status.${selection.item.status}`)}`}</small>
+                : `${t(`proposal.kind.${selection.item.actionKind}`)} · ${t(`proposal.status.${selection.item.status}`)}`}</small> : null}
               {decisionFrame ? <span className={`personal-decision-chip is-${decisionFrame.decision}`}>{t(`proposal.decision.${decisionFrame.decision}`)}</span> : null}
               <h3>{selection.item.title}</h3>
               {selection.item.todoId && (selection.item.actionKind === "gate.resolve" || selection.item.actionKind === "todo.update")
@@ -1254,8 +1252,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
             </span></div> : null}
             {selection.item.status === "applied" && decisionFrame ? <p className="personal-proposal-state is-applied" role="status"><Check size={16} /><span><strong>{t(`proposal.applied.gate.${decisionFrame.decision}`)}</strong>{decisionFrame.dependentEffect ? <small>{t(`proposal.dependentEffect.${decisionFrame.dependentEffect}`)}</small> : null}</span></p>
               : selection.item.status === "applied" && selection.item.actionKind !== "team.plan" ? <p className={`personal-proposal-state ${selection.item.actionKind === "operation.execute" && selection.item.reviewPlan?.reason === "readback_unverified" ? "is-gated" : "is-applied"}`}><Check size={16} />{selection.item.actionKind === "operation.execute" ? selection.item.primaryLabel : t(taskExecution ? "feedback.taskStartRequested" : "drawer.proposalApplied")}</p> : null}
-            {startedTaskRun && onSelectRun ? <button className="personal-primary-action"
-              onClick={() => onSelectRun(startedTaskRun)} type="button">{t("tasks.viewExecution")}</button>
+            {taskExecution ? <ConfirmedTaskResult key={JSON.stringify([taskExecution.goalId, taskExecution.todoId,
+              taskExecution.sessionId, taskExecution.turnId])} receipt={taskExecution} />
               : selection.item.status === "applied" && selection.item.actionKind !== "operation.execute" && selection.item.goalId ? <button className="personal-primary-action" onClick={() => { const goalId = selection.item.goalId!; onClose(); void callbacks.onOpenGoal?.(goalId); }} type="button"><ExternalLink size={16} />{selection.item.actionKind === "goal.create" ? t("drawer.proposalEnterGoal") : t(selection.item.actionKind === "team.plan" ? "proposal.teamPlan.openGoal" : "drawer.proposalViewGoal")}</button> : null}
             {selection.item.status === "stale" ? <p className="personal-proposal-state is-stale">{t("drawer.proposalStale")}</p> : null}
             {selection.item.status === "error" && !selection.item.reviewPlan?.retryOriginal ? <div className="personal-proposal-state is-error"><span>{operationUnknown ? t("proposal.operationState.submission_unknown") : selection.item.actionKind === "team.plan" || selection.item.actionKind === "goal.create" || selection.item.reviewPlan?.reason === "readback_unverified" ? t("actionReview.readback_unverified") : t("drawer.proposalApplyFailed")}</span>{selection.item.errorMessage ? <small>{selection.item.errorMessage}</small> : null}{selection.item.actionKind !== "goal.create" ? <small>{t(operationUnknown ? "actionReview.operation_reconcile_original" : selection.item.actionKind === "team.plan" ? "proposal.teamPlan.retryUnavailable" : "drawer.proposalApplyFailedHint")}</small> : null}</div> : null}

@@ -96,8 +96,8 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   /** Recorded creation effects, not evidence of a completed Goal or model Turn. */
   creationProgress?: GoalCreationProgress;
   creationOutcome?: GoalCreationOutcome;
-  /** Accepted dispatch bound to its Task Session. It does not establish a result. */
-  taskExecution?: { goalId: string; todoId: string; sessionId: string };
+  /** Accepted dispatch bound to its original Turn. It does not establish a result. */
+  taskExecution?: { goalId: string; todoId: string; sessionId: string; turnId: string };
 };
 
 export type GoalCreationProgress = {
@@ -518,10 +518,11 @@ function taskExecutionReadback(
   const goalId = textValue(parameters.goal_id);
   const todoId = textValue(resources?.todo_id);
   const sessionId = textValue(resources?.session_id);
-  if (!goalId || !todoId || !sessionId || !textValue(resources?.turn_id)
+  const turnId = textValue(resources?.turn_id);
+  if (!goalId || !todoId || !sessionId || !turnId
       || resources?.goal_id !== goalId || canonical?.goal_id !== goalId || canonical?.todo_id !== todoId
       || canonical?.status !== "applied" || !sourceFingerprint || canonical?.preview_id !== sourceFingerprint) return undefined;
-  return {goalId, todoId, sessionId};
+  return {goalId, todoId, sessionId, turnId};
 }
 
 /**
