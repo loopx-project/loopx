@@ -566,8 +566,8 @@ def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, tur
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("delivery", ["on", "off", "delta-only", "saved-loader"])
-def test_codex_app_thin_guard_uses_complete_source_for_native_captures(tmp_path, monkeypatch, provider, delivery):
+@pytest.mark.parametrize("delivery", ["on", "off", "delta-only", "saved-loader", "saved-loader-off"])
+def test_codex_app_thin_guard_uses_complete_source_for_new_captures(tmp_path, monkeypatch, provider, delivery):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_quota_settlement_cli import _configure_read_only_todo
 
@@ -578,10 +578,12 @@ def test_codex_app_thin_guard_uses_complete_source_for_native_captures(tmp_path,
     _initialize_fixture_authority(project, runtime, provider=provider)
     captures = tmp_path / "captures"
     captures.mkdir(mode=0o700)
+    inline = delivery in {"off", "saved-loader-off"}
     options = ("--thin", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--context-delivery", "off" if delivery in {"off", "delta-only"} else "auto",
-        "--decision-output-root", str(captures))
-    if delivery != "off":
+        "--context-delivery", "off" if inline or delivery == "delta-only" else "auto")
+    if delivery != "saved-loader-off":
+        options += ("--decision-output-root", str(captures))
+    if not inline:
         options += ("--codex-context-root", str(captures))
     if delivery == "delta-only":
         options += ("--delta-delivery", "auto")
@@ -589,7 +591,7 @@ def test_codex_app_thin_guard_uses_complete_source_for_native_captures(tmp_path,
         # Without a native directory, an App loader needs its known Turn ID
         # to choose a capture destination before it can render a guard.
         options += ("--turn-instance-id", TURN_ID)
-    if delivery == "saved-loader":
+    if delivery in {"saved-loader", "saved-loader-off"}:
         # A stored bootstrap written before C1 has no complete-source flag.
         rc, bootstrap = _run_cli(registry, runtime, "heartbeat-prompt", *options, "--bootstrap", cwd=project)
         assert rc == 0, bootstrap
@@ -605,15 +607,17 @@ def test_codex_app_thin_guard_uses_complete_source_for_native_captures(tmp_path,
     rc, view = _run_cli(registry, runtime, *guard[guard.index("quota"):],
         "--todo-id", TODO_ID, cwd=project, raw_guard=False)
     assert rc == 0, view
-    (saved,) = captures.glob("decision-*/decision.json")
-    original = saved.read_bytes()
-    source = json.loads(original)
-    if delivery == "off":
-        assert "contract_binding" not in source
-        assert "context_delivery" not in view
-        assert view["heartbeat_receipt"] == source["heartbeat_receipt"]
+    if delivery == "saved-loader-off":
+        assert not list(captures.iterdir())
+        source = view
     else:
-        assert_complete_turn_decision(source)
+        (saved,) = captures.glob("decision-*/decision.json")
+        source = json.loads(read_original_capture(saved, registry=registry, runtime=runtime))
+    assert_complete_turn_decision(source)
+    if inline:
+        assert view == source
+        assert not {"context_delivery", "first_read_command", "reference_file"} & view.keys()
+    else:
         recovery = shlex.split(view["recovery"]["command"])
         recovery.extend(("--select", "/heartbeat_receipt"))
         read = subprocess.run(recovery, cwd=project, capture_output=True, text=True, timeout=30)
@@ -627,10 +631,11 @@ def test_codex_app_thin_guard_uses_complete_source_for_native_captures(tmp_path,
             # Explicitly disabling Progressive still permits an independently
             # qualified Delta route. No required-body navigation is added.
             assert "first_read_command" not in view
-    assert read_original_capture(saved, registry=registry, runtime=runtime) == original
     receipt = source["heartbeat_receipt"]
     plan = source["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert receipt["settlement_identity"] == plan["identity"]
+    if inline:
+        assert plan["schema_version"] == "quota_settlement_plan_v1"
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
 

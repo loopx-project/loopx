@@ -473,6 +473,7 @@ def _publish_quota_result(
     native_context = False
     host_todo_settlement = getattr(args, "host_todo_settlement", False)
     complete_source = False
+    app_source = False
     runtime_root = context.runtime_root if context is not None else None
     if not budgeted_spend:
         try:
@@ -485,10 +486,17 @@ def _publish_quota_result(
         native_context = activation["enabled"] and bool(
             getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
         )
-        # The App reader accepts old saved sources for recovery. Its new native
-        # captures go through the shared composition without a display flag.
-        complete_source = (host_todo_settlement
-            or (native_context and activation.get("scenario") == "codex_app_heartbeat")
+        # The scheduler profile selects the App's source. Display settings
+        # still select the transport and do not change settlement ownership.
+        if args.quota_command == "should-run" and context is not None:
+            from ..control_plane.scheduler.execution_context import (
+                SchedulerRuntimeProfile,
+                scheduler_runtime_profile_for_execution_context,
+            )
+
+            app_source = (scheduler_runtime_profile_for_execution_context(context.scheduler_context)
+                is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT)
+        complete_source = (host_todo_settlement or app_source
             or any(getattr(args, name, None) for name in (
                 "complete_turn", "turn_envelope", "decision_handoff_socket",
             )))
@@ -537,6 +545,8 @@ def _publish_quota_result(
                 payload, args, activation, compose=_export("compose_turn_decision"),
                 scheduler_context=context.scheduler_context if context is not None else None,
                 capture_directory=capture_directory, capability_context=capability_context,
+                share_inline_diagnostics=(app_source and not context_delivery_enabled
+                    and not activation["progressive_enabled"]),
             )
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
             failure = _export("quota_composition_failure_view")(args, payload, exc,

@@ -128,6 +128,7 @@ def compose_quota_cli_source(
     capture_directory: Path | None,
     compose: Callable[..., dict[str, object]],
     capability_context: list[dict[str, object]],
+    share_inline_diagnostics: bool = False,
 ) -> tuple[dict[str, object], bool, dict[str, object] | None]:
     """Prepare one decided source and an optional bounded compatibility display."""
     # Explicit complete-source JSON and Markdown readers share one source.
@@ -139,12 +140,13 @@ def compose_quota_cli_source(
     if not isinstance(payload.get("interaction_contract"), Mapping):
         return payload, raw_envelope, None
     if not raw_envelope:
-        # This is the complete inline read-only CLI response. Bound guard
-        # captures and Host consumers keep their qualified source layout.
-        inline_diagnostics = (getattr(args, "complete_turn", False) and payload.get("ok") is True
+        # Reuse the complete composer's lossless diagnostic encoding for
+        # inline readers; native and compatibility views keep their layout.
+        inline_diagnostics = payload.get("ok") is True and (share_inline_diagnostics or (
+            getattr(args, "complete_turn", False)
             and getattr(args, "context_delivery", None) == "off" and not activation["enabled"]
             and capture_directory is None
-            and not getattr(args, "turn_instance_id", None) and not getattr(args, "begin_turn", False))
+            and not getattr(args, "turn_instance_id", None) and not getattr(args, "begin_turn", False)))
         return compose(payload, scheduler_execution_context=scheduler_context,
             **({"capability_context": capability_context} if capability_context else {}),
             **({"share_inline_diagnostics": True} if inline_diagnostics else {})), False, None

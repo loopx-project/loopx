@@ -278,15 +278,14 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
         )
         assert rc == 0, envelope
         assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
-        # The explicitly complete decision retains the original replan
-        # identity and authoring, without changing the ordinary source.
+        # The App's ordinary and explicitly complete paths both retain the
+        # original replan identity and its same-Turn successor commands.
         from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, build_turn_envelope
 
-        assert "schema_version" not in selected and "contract_binding" not in selected
+        assert_complete_turn_decision(selected)
         assert_complete_turn_decision(envelope)
         bound_writer = envelope["replan_action_packet"]["writeback_contract"]
-        assert {key: value for key, value in bound_writer.items()
-                if key not in {"successor_binding_args", "successor_settlement"}} == contract
+        assert bound_writer == contract
         assert shlex.split(bound_writer["successor_binding_args"]) == ["--turn-instance-id", "effective-turn-next"]
         assert "before ending; do not run the successor" in bound_writer["successor_settlement"]
         assert envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == plan

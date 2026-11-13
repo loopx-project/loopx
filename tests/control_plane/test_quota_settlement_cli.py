@@ -4108,6 +4108,8 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     tmp_path: Path,
     host_surface: str,
 ) -> None:
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     _initialize_fixture_authority(project, runtime)
@@ -4133,6 +4135,7 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     )
 
     assert first_rc == 0, first
+    assert_complete_turn_decision(first)
     assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
     turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
     assert turn_instance_id.startswith("guided-start:")
@@ -4150,6 +4153,7 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     )
 
     assert selected_rc == 0, selected
+    assert_complete_turn_decision(selected)
     assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
     receipt_identity = selected["heartbeat_receipt"]["settlement_identity"]
@@ -4168,7 +4172,6 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
         spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
         assert spend["owner"] == "agent"
         assert f"--source {expected_source}" in spend["command_template"]
-        assert "schema_version" not in selected and "contract_binding" not in selected
 
 
 def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
@@ -4301,6 +4304,8 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     tmp_path: Path,
     host_surface: str,
 ) -> None:
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime)
     packet = build_start_goal_guided_packet(
@@ -4323,6 +4328,7 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     )
 
     assert guard_rc == 0, guard
+    assert_complete_turn_decision(guard)
     assert guard["selected_todo"]["todo_id"] == TODO_ID
     assert (
         guard["interaction_contract"]["cli_channel"].get("selection_required") is None
@@ -4342,7 +4348,6 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
         assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
         spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
         assert spend["owner"] == "agent" and f"--source {expected_source}" in spend["command_template"]
-        assert "schema_version" not in guard and "contract_binding" not in guard
 
 
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])
