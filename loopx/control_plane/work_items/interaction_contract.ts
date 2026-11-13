@@ -765,6 +765,12 @@ function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+/** Identify the explicit selection route before any work has been bound. */
+export function hasUnboundActionSelection(cli: JsonObject | null | undefined): boolean {
+  return cli?.selection_required === true && !Object.hasOwn(cli, "execution_preparation") &&
+    jsonObject(cli.selection_command)?.schema_version === "action_selection_cli_command_v1";
+}
+
 /** The adaptive primary is the work identity for both reads and settlement.
  * Historical callers may supply their already-decoded text: reapplying JS
  * trim would change Python whitespace/BOM identities in persisted journals.

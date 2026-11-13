@@ -8,7 +8,7 @@ import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, selectedWorkTodoId}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, hasUnboundActionSelection, selectedWorkTodoId}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -977,8 +977,13 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     for (const field of admissionFields) include("interaction_contract", "cli_channel", field);
   }
   const channel = object(interaction.agent_channel);
+  // The matching inbox read is already required during explicit Todo selection.
+  const selectingBeforeWork = context.ok === true && context.should_run === true &&
+    channel?.delivery_allowed === false && cli?.spend_allowed_now === false &&
+    cli.spend_after_validation === false && hasUnboundActionSelection(cli);
   const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && channel?.delivery_allowed === true && channel.must_attempt === true && Array.isArray(channel.required_reads)
+    && channel?.must_attempt === true && (channel.delivery_allowed === true || selectingBeforeWork)
+    && Array.isArray(channel.required_reads)
     ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
