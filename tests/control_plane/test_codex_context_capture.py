@@ -24,7 +24,7 @@ from loopx.control_plane.turn_driver.decision_capture import read_context_read_r
 from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _spend_run_count, _write_fixture
 from tests.control_plane.codex_checkpoint_fixture import (
     local_inference_provider, delivered_context as _delivered, last_context_page as _last_page,
-    reference_metadata_oracle,
+    reference_metadata_oracle, resolve_summary_row_references,
 )
 from tests.control_plane.test_heartbeat_envelope_transport import private_handoff  # noqa: F401 -- shared private socket fixture
 from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _input_text, _native_fixture
@@ -49,6 +49,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     # owner. Preserve a verified replay; explicit history-loss cases below
     # must still recover the original before dependent work.
     qualified_resume = host in {"benchmark", "code_mode"} or ssh_goal
+    complete_source = host == "benchmark" or ssh_goal or bool(handoff_socket) or surface == "turn_envelope"
+    source_surface = "complete_turn" if complete_source else "quota_packet"
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
@@ -711,8 +713,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     assert not (workspace / "traces").exists()
     projection = Path(wires["warm"]["recovery"]["path"])
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
+    assert wires["warm"]["target"]["surface"] == source_surface
     current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-        capture_id=wires["warm"]["target"]["capture_id"], surface="complete_turn")
+        capture_id=wires["warm"]["target"]["capture_id"], surface=source_surface)
     assert current["target"] == wires["warm"]["target"]
     baseline = wires["cold"]
     if resumed and qualified_resume and not resume_loss:
@@ -725,16 +728,19 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert current["target"]["context_epoch"] != baseline["target"]["context_epoch"]
         baseline = prepare_context_delivery(baseline["context"], scope={
             k: current["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-            capture_id=baseline["target"]["capture_id"], surface="complete_turn")
+            capture_id=baseline["target"]["capture_id"], surface=source_surface)
         assert baseline["target"] == wires["warm"]["base"]
     restored = restore_context_delivery(wires["warm"], baseline=baseline, current=current)
     assert restored["context"] == current["context"] and restored["mode"] == wires["warm"]["mode"]
-    # Both CLI spellings now emit the same complete contract. Compare every
-    # reconstructed fact with its original capture, not two compact views.
+    # Each caller's original capture is the oracle. Ordinary quota may refer
+    # to an identical Todo row elsewhere in its own presentation.
     for document, (_, raw) in zip((wires["cold"]["context"], current["context"]), snapshots, strict=True):
         original = json.loads(raw)
-        assert document == original
-        assert document["schema_version"] == "loopx_turn_envelope_v1"
+        if complete_source:
+            assert document["schema_version"] == "loopx_turn_envelope_v1"
+        else:
+            assert {"schema_version", "contract_binding"}.isdisjoint(document)
+        assert resolve_summary_row_references(document) == original
         context = document["interaction_contract"]["agent_channel"]["work_context"]
         selected = next(source["content"]["todo"] for source in context["sources"]
                         if source["source"] == "selected_todo")

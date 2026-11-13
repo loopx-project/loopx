@@ -8,7 +8,31 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def resolve_summary_row_references(presentation):
+    """Recover same-view Todo rows for comparison with an independent capture."""
+    if "context_reference_instruction" not in presentation:
+        return presentation
+    resolved = deepcopy(presentation)
+    for rows in resolved["agent_todo_summary"].values():
+        if not isinstance(rows, list):
+            continue
+        for i, row in enumerate(rows):
+            if not isinstance(row, dict) or "context_ref" not in row:
+                continue
+            pointer = row["context_ref"]
+            assert pointer.startswith("/agent_todo_summary/")
+            target = presentation
+            for token in pointer.split("/")[1:]:
+                key = token.replace("~1", "/").replace("~0", "~")
+                target = target[int(key)] if isinstance(target, list) else target[key]
+            assert "context_ref" not in target and target["todo_id"] == row["todo_id"]
+            rows[i] = deepcopy(target)
+    resolved.pop("context_reference_instruction")
+    return resolved
 
 
 def selected_context_values(content):

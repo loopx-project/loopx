@@ -10,6 +10,7 @@ import pytest
 
 from tests.control_plane.test_quota_settlement_cli import _run_cli
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle as machine_reference_oracle
+from tests.control_plane.codex_checkpoint_fixture import resolve_summary_row_references
 
 
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
@@ -1261,6 +1262,12 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             original_command = original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
             words = shlex.split(selected["command_args_template"])
             original_words = shlex.split(original_command)
+            if original.get("schema_version") == "loopx_turn_envelope_v1":
+                assert words.count("--complete-turn") == 1
+                if "--complete-turn" not in original_words:
+                    # Native selection inherits the signed preflight source even
+                    # when the original guard came through a compatibility route.
+                    words.remove("--complete-turn")
             output_root = source_path.parents[1] if "--decision-output-root" in original_words else home / "loopx-context"
             transport = {
                 "--decision-output-root": str(output_root),
@@ -1280,19 +1287,6 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     del words[index:index + 2]
             assert words == original_words
             selected["command_args_template"] = original_command
-            # Main already deduplicates identical Todo rows within this exact
-            # capture. Resolve only that registered presentation carrier.
-            for rows in presentation["agent_todo_summary"].values():
-                if not isinstance(rows, list):
-                    continue
-                for i, row in enumerate(rows):
-                    if not isinstance(row, dict) or "context_ref" not in row:
-                        continue
-                    value = presentation
-                    for part in row["context_ref"].split("/")[1:]:
-                        value = value[int(part)] if isinstance(value, list) else value[part]
-                    assert "context_ref" not in value
-                    rows[i] = value
             if "context_reference_instruction" in presentation and "context_details" not in original:
                 details = presentation.pop("context_details")
                 assert set(details) == {"command_template"}
@@ -1300,8 +1294,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 signed_source = Path(reader[reader.index("--capture-file") + 1]).read_bytes()
                 assert hashlib.sha256(signed_source).hexdigest() == reader[reader.index("--capture-sha256") + 1]
                 assert json.loads(signed_source) == original
-            presentation.pop("context_reference_instruction", None)
-            assert presentation == original  # only presentation transport differs
+            assert resolve_summary_row_references(presentation) == original
     else:
         assert cold == json.loads(sources[0][1]) and projected == json.loads(sources[1][1])
     assert all(path.read_bytes() == raw for path, raw in sources)

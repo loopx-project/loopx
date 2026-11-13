@@ -1032,7 +1032,7 @@ first reader and every observed reader output,
 including complete byte coverage of the pinned capture, with
 matching session, workspace, model and permission mode, and no intervening
 compaction, rollback, replacement or unknown replay record. This bounded IO
-profile is qualified on Codex 0.162.1 and 0.167.0-alpha.3.2 paginated rollouts. It streams only the
+profile is qualified on Codex 0.162.1, 0.167.0-alpha.3.2 and 0.167.0-alpha.4.1 paginated rollouts. It streams only the
 baseline's reader interval and subsequent records; unrelated earlier history is
 neither hashed nor decoded, and total file size does not decide reuse. The
 session metadata's creator version is not the running host version. Code-mode
@@ -1342,7 +1342,7 @@ context journal。当前工作到达正常安全边界后，沿宿主正常启�
 共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
 须保留从当前基线首次 reader 开始的摘要固定区间，以及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
 会话、工作区、模型和权限模式相同，
-中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1 和 0.167.0-alpha.3.2 的分页
+中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1、0.167.0-alpha.3.2 和 0.167.0-alpha.4.1 的分页
 rollout 上验证；流式读取当前基线对应区间及后续记录，不哈希或解码无关旧历史，
 文件总大小不决定是否差分。session metadata 的创建版本不等于当前宿主版本。
 code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部精确页字节。
