@@ -616,10 +616,27 @@ drill reaches both real CLI entries. This is an unmerged source proposal;
 installed adoption, remaining supported readers and original-quota accepted
 outcomes with complete costs still keep C1 open.
 
+After integrating [the shared Host task presentation](https://github.com/loopx-project/loopx/pull/8691),
+the built-in Codex and structured renderers use `task_context` derived by the
+same TypeScript owner after it checks the complete source. The outer executor,
+generic adapter stdin, journal and capture reader retain the original
+`work_contract` and its provenance. The model view resolves replan authoring
+and Explore guidance before leaving executor instructions with their owner.
+File and SQLite fixtures exercise the final prompt, required reads and
+settlement replay. Historical envelope-only requests keep their recorded
+renderer. Installed adoption and matched model outcomes and costs remain open.
+
+Claude, Kiro and Kunlun Goal Mode MCP admit the chosen Todo through the shared
+quota guard before delivery. The admission and `complete_task` use the same
+settlement identity. Isolated standard-package stdio tests cover alternate
+selection, invalid selection, independent validation failure and idempotent
+completion on File and SQLite. These checks cover the packaged MCP server and
+storage boundary.
+
 The [explicit inline caller checkpoint](../../../reference/contracts/interface-budget-contract.md#canonical-cli-fixture-qualification)
 qualifies ordinary quota, its retained flag/detail spellings and full transaction
 inspection against their registered v1 carriers. The complete off/Markdown
-source and native/structured Host input remain intact; historical v0 readers
+source and required task facts retain their own checks. Historical v0 readers
 retain their original-version boundary. Matched source, File/SQLite and long-route
 evidence justify revised presentation allowances, preserving the original
 failures and all line/growth/authority limits. This accepts additional inline

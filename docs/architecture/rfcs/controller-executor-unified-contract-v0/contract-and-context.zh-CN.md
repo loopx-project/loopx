@@ -453,9 +453,21 @@ capture 字节改变后拒绝读取，不产生新 admission 或 spend。
 到达两个真实 CLI 入口。这是未合入的源码提议；installed 采用、剩余受支持 reader，
 以及相对原 quota 的验收成果与完整成本仍使 C1 保持开放。
 
+集成[共享 Host 任务呈现](https://github.com/loopx-project/loopx/pull/8691)后，
+内置 Codex 和结构化 renderer 使用同一 TypeScript owner 校验完整来源后派生的
+`task_context`。外层执行器、通用适配器 stdin、journal 与 capture reader
+保留原始 `work_contract` 及其来源信息。模型视图展开 replan 编写和 Explore 指引，
+执行指令归外层 owner。File 和 SQLite 夹具覆盖最终 prompt、必读材料和结算重放。
+仅携带 envelope 的历史请求沿用其记录版本的 renderer。实际安装采用及匹配的模型成果与成本待验。
+
+Claude、Kiro 和 Kunlun Goal Mode MCP 通过共享 quota guard 为选中的 Todo 准入。
+准入和 `complete_task` 使用同一结算身份。隔离标准包的 stdio 测试在 File 和
+SQLite 覆盖选择另一项、拒绝无效选择、独立验收失败及完成重试。这些测试覆盖
+打包的 MCP server 和存储边界。
+
 [显式内联消费方检查点](../../../reference/contracts/interface-budget-contract.md#canonical-cli-fixture-qualification)
 按已注册的 v1 载体验证普通 quota、保留的 flag／详情拼法及完整事务检视。off／Markdown
-完整来源、native／structured Host 输入不缩减；历史 v0 reader 保留原版本边界。
+完整来源和必需任务事实继续各自验收。历史 v0 reader 保留原版本边界。
 同源 File／SQLite 与长路径证据支持展示预算重新定标，原失败、全部行数／增长／权限
 限制继续保留。这是接受新增内联成本，不是效率收益、installed 采用或 C1 关闭。
 
