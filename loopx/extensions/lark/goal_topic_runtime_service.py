@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import hashlib
 import logging
 from pathlib import Path
+import shutil
 from subprocess import Popen
 import threading
 import time
@@ -18,6 +19,7 @@ from typing import Any
 from ...chat_manager import MANAGER_AGENT_OBJECTIVE
 from ...file_lock import try_exclusive_file_lock
 from ..background_runtime import HostedWorker
+from .cli_resolution import LarkCliUnavailableError
 from .goal_channel_contracts import bindings_for_goal
 from .manager_context import session_turn_effect
 from .team_plan_confirmation import (
@@ -350,21 +352,24 @@ class LarkGoalTopicRuntimeService:
             if not config.get("bot_app_id") and not profiles[profile].get("bot_app_id")
         }
         inventory = getattr(self.private_conversations, "configured_profile_apps", None)
-        if not legacy or not callable(inventory):
+        if not callable(inventory):
             return profiles
-        try:
-            apps = inventory()
-        except OSError:
-            # Unknown inventory does not establish continuity across a binding
-            # change. The ordinary stop path still handles unknown identities.
-            return profiles
+        apps_by_cli: dict[str, dict[str, str]] = {}
         for profile in legacy:
-            app_id = apps.get(profile)
+            config = profiles[profile]
+            cli_bin = config["cli_bin"]
+            if cli_bin not in apps_by_cli:
+                try:
+                    apps_by_cli[cli_bin] = inventory(cli_bin=cli_bin)
+                except (OSError, LarkCliUnavailableError):
+                    # Keep the ordinary stop path if App continuity cannot
+                    # be established from this group's CLI configuration.
+                    apps_by_cli[cli_bin] = {}
+            app_id = apps_by_cli[cli_bin].get(profile)
             if app_id:
                 # Fence the original profile and the resolved App on both
                 # sides of a private binding change. Routing keeps the original
                 # snapshot and its separate group and owner grants.
-                config = profiles[profile]
                 profiles[profile] = {
                     **config,
                     "bot_app_id": app_id,
@@ -386,9 +391,13 @@ class LarkGoalTopicRuntimeService:
         app_id = str(profile_config.get("bot_app_id") or "")
         binding_id = str(profile_config.get("binding_id") or "")
         owner_binding_id = binding_id if app_id and profile_config.get("audience") == "owner" else ""
+        cli_bin = str(profile_config.get("cli_bin") or "lark-cli")
+        executable = shutil.which(cli_bin)
         return ProfileWorkerFingerprint(
             transport=ProfileTransport(
-                cli_bin=str(profile_config.get("cli_bin") or "lark-cli"),
+                # Legacy settings can name the same CLI that Chat resolved
+                # to a full path when configuring the private binding.
+                cli_bin=str(Path(executable).absolute()) if executable else cli_bin,
                 app_id=app_id,
                 consumer_lease_key=self._consumer_lease_key(profile, profile_config),
                 callback_chats=callback_chats,

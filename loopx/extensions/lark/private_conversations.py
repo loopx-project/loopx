@@ -266,9 +266,9 @@ class LarkPrivateConversations:
                 "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
         return profiles
 
-    def configured_profile_apps(self) -> dict[str, str]:
+    def configured_profile_apps(self, *, cli_bin: str | None = None) -> dict[str, str]:
         """Read local App identities for listener leases, without granting access."""
-        result = call(self.runner, [self.cli_bin, "profile", "list"])
+        result = call(self.runner, [cli_bin or self.cli_bin, "profile", "list"])
         try:
             configured = json.loads(str(result.get("stdout") or ""))
         except json.JSONDecodeError as exc:

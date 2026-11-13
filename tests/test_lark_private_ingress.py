@@ -348,12 +348,16 @@ def test_live_private_ingress_across_listener_transition(ordinary, tmp_path, mon
     (True, "replace"), (True, "add"), (True, "remove"),
     (False, "replace"), (False, "add"), (False, "remove"),
     (False, "add_after_retarget"), (False, "remove_after_retarget"),
+    (False, "add_cli_alias"), (False, "remove_cli_alias"),
+    (False, "add_different_cli"), (False, "remove_different_cli"),
 ])
 def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     ordinary,  # noqa: F811
     tmp_path, monkeypatch, stored_app, binding_change,
 ):
     import http.client
+    import os
+    import sys
     from pathlib import Path
 
     from extensions.test_lark_goal_topic_runtime import _reply_runner, _seed_legacy_topic
@@ -378,11 +382,20 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         identity["bot_app_id"] = original_app
     else:
         identity.pop("bot_app_id")
+    if binding_change.endswith(("_cli_alias", "_different_cli")):
+        transport.cli_bin = sys.executable
+        if binding_change.endswith("_cli_alias"):
+            # Legacy targets may save a PATH command while Chat resolves the
+            # same executable to a full path for its private transport.
+            executable = Path(sys.executable)
+            monkeypatch.setenv("PATH", str(executable.parent) + os.pathsep + os.environ.get("PATH", ""))
+            identity["cli_bin"] = executable.name
     bindings = {"goal-alpha": read_goal_channel_binding(binding_path)}
     before = transport.profiles()[profile]["binding_id"]
     adding = binding_change.startswith("add")
     removing = binding_change.startswith("remove")
     retargeted = binding_change.endswith("_retarget")
+    different_transport = retargeted or binding_change.endswith("_different_cli")
     if adding:
         transport.bindings.disconnect(before, expected_revision=transport.bindings.read()["revision"])
 
@@ -465,7 +478,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     server.registry_path, server.runtime_root_override = controller.registry_path, store.root.parent
     server.verbose = False
     server.lark_cli_resolution = LarkCliResolution(
-        command="lark-cli", available=True, source="explicit", version="fixture", error_code=None,
+        command=transport.cli_bin, available=True, source="explicit", version="fixture", error_code=None,
     )
     server.lark_private_conversations = transport
     server.lark_goal_topic_runtime = service
@@ -505,7 +518,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         assert len(consumer_processes) == 1
         release.set()
         assert next_stream_ready.wait(8), service.health_snapshot()
-        expected = group_events[:1] if retargeted else group_events[:2]
+        expected = group_events[:1] if different_transport else group_events[:2]
         if removing:
             expected += group_events[2:]
         assert answered == [event["message_id"] for event in expected]
@@ -516,6 +529,8 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         inbox = inspect_lark_event_inbox(project=store.root.parent, config_path=config_path)
         assert inbox["processed_count"] == len(expected)
         assert inbox["pending_count"] == 0
+        if not stored_app and (adding or removing):
+            assert [identity["cli_bin"], "profile", "list"] in provider.calls
     finally:
         release.set()
         service.close()
