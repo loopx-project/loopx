@@ -907,6 +907,25 @@ jobs:
           python -m pytest -q
           tests/control_plane/test_quota_settlement.py::test_codex_app_windows_settlement_command_substitutes_powershell_turn
 
+      - name: Set up the qualified SQLite runtime for settlement recovery
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.3"
+
+      - name: Qualify native PowerShell settlement recovery and its immutable baseline
+        run: >-
+          python -m pytest -q --basetemp "${{ runner.temp }}/lxs-${{ github.run_id }}-${{ github.run_attempt }}"
+          tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery
+          tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement
+          tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once
+
+      - name: Restore the primary Windows Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/presentation/dashboard/package-lock.json
+
       - name: Qualify TypeScript shard paths on native Windows
         run: python -m pytest -q tests/test_python_ci_workflow.py::test_typescript_shards_select_every_test_file_exactly_once
 
