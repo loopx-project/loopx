@@ -23,7 +23,9 @@ function ResearchGoalNavigation({goalId, goals, zh, onSelect, directoryUrl, acti
   const children = tree.children.get(goalId) ?? [];
   if (!parent && !children.length) return null;
   return <nav className="research-goal-navigation" aria-label={zh ? '研究 Goal 层级' : 'Research Goal hierarchy'}>
-    {parent ? <button type="button" className="research-parent-goal" onClick={() => onSelect(parent.goalId)}>← {parent.title}</button> : null}
+    {parent ? <button type="button" className="research-parent-goal" title={parent.title} onClick={() => onSelect(parent.goalId)}>
+      <span aria-hidden="true">←</span><span className="research-parent-title">{parent.title}</span>
+    </button> : null}
     {children.length ? <ResearchChildGoals goals={children} zh={zh} onSelect={onSelect}
       directoryUrl={directoryUrl} active={active} showTiming refreshRevision={refreshRevision}/> : null}
   </nav>;
