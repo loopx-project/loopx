@@ -70,7 +70,11 @@ jobs:
 
       - name: Package reviewable draft
         if: steps.generate.outputs.changed == 'true'
-        run: git diff --binary > update-note.patch
+        env:
+          NOTE_FILE: ${{ steps.generate.outputs.note_file }}
+        run: |
+          git add --intent-to-add -- "$NOTE_FILE"
+          git diff --binary > update-note.patch
 
       - name: Upload update-note draft
         if: steps.generate.outputs.changed == 'true'
