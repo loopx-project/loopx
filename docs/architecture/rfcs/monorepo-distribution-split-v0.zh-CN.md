@@ -2970,3 +2970,30 @@ Core module 诊断核验实际导入的 distribution、记录中的 module，以
 完整 R1/V1–V5/V10、真实模型恢复／采用、渐进产品控制、最小依赖闭包、
 M3/Standard/workspace/meta 拆包与完整成本验收仍开放。本轮不升级已安装 Host、
 启动模型服务或从协议夹具推断效果。原九项要求、原 Goal 回归及此前失败全部保留。
+
+### 2026-11-13 — 成功工作在同一路线上记录新检查点
+
+Generic Host result 边界此前要求新 Vision 使用 `material_replan` 与
+`replan_required`。即使已有新成果证据，保留路线的成功任务也只能复用 unchanged
+reason。现在显式 `path_delta_mode: unchanged` 可携带既有 Vision packet，
+其 `path_delta.outcome` 必须为 `continue` 或 `no_change`，且不能同时声明
+unchanged reason。既有 TypeScript Vision、任务、验证与结算 owner 仍决定持久
+效果；material replan、停止决定、非法 packet 与矛盾声明继续拒绝。省略 mode
+保持旧推断，generic 与 Codex 指导说明同一边界。
+
+一个既有隔离库存任务通过 stdio adapter 使用当前模型工具，以及 Python 3.11
+standalone core artifact 与 SQLite。更正输入得到数量 22/10/5、价值 185.25，
+此前为 172.25。独立检查核验了 13.00 差额、全部六条排除记录、可复用生成器与
+五份原文件保持不变。Normalized result 写入 journal 后，SIGKILL 中断 driver
+与 validator。原 Turn 从 validation 恢复，没有再次调用 Host，完成 Todo 并
+只结算一次；完成后的 replay 没有增加 Host、writeback 或 spend。
+首次非法 completion/replan reply 与三次 resume setup 拒绝保留为失败。
+实际有两次 Host dispatch、一次模型工作；被拒绝的 reply 未冒充已确认工作。
+
+源码 executor/driver 检查与 Codex/dsh 回归通过。安装态 File、SQLite 检查保留
+legacy completion，并核验两种新 checkpoint outcome 与 replay；首次过长的
+inline 测试命令触发既有上限，夹具随后采用普通 script path。未改命令预算、
+权限、默认行为或历史 receipt。本轮只资格化所触及的成功／检查点与恢复路径，
+不关闭完整 V1–V5/V10 或 R1。完整 context retention、最小闭包、渐进产品控制、
+可比完整成本、M3/Standard/workspace 交付与原 Goal 回归仍开放。原九项要求和
+冻结失败全部保留；没有升级已安装 Host 或模型服务。

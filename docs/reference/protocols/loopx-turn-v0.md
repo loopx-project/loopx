@@ -778,8 +778,13 @@ result unchanged: `path_delta_mode`, `agent_vision_json`, and
 `path_delta_mode: "material_replan"`, `result_kind: "replan_required"`, and a
 JSON-encoded `goal_vision_replan_contract_v0` packet whose
 `goal_path_delta_v0.outcome` is `replan`; it must not also claim an unchanged
-reason. An unchanged path uses `path_delta_mode: "unchanged"`, no vision
-packet, and a bounded `vision_unchanged_reason`. The Turn executor remains the
+reason. An unchanged path uses `path_delta_mode: "unchanged"` with either a
+bounded `vision_unchanged_reason` to reuse the current checkpoint, or a fresh
+vision packet whose `goal_path_delta_v0.outcome` is `continue` or `no_change`.
+The fresh packet carries evidence for progress or completion while retaining
+the route; it must not also declare `vision_unchanged_reason`. A fresh packet
+requires an explicit path mode: omitting it retains the legacy inference of
+`material_replan`. The Turn executor remains the
 owner of packet parsing, bounds, and semantic validation. These declarations do
 not grant write or Goal authority, and legacy hosts that omit both path-delta
 fields retain their prior compatibility behavior. For material results, an

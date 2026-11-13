@@ -3809,3 +3809,38 @@ minimal dependency closure, M3/Standard/workspace/meta packaging and complete
 cost acceptance remain open. This does not upgrade an installed host, start a
 model service or establish effectiveness from protocol fixtures. Preserve all
 nine original requirements, the original-Goal regression and earlier failures.
+
+### 2026-11-13 — Successful work records a fresh checkpoint on the same route
+
+The generic Host result boundary previously required a fresh Vision to use
+`material_replan` and `replan_required`. A successful task retaining its route
+could only reuse an unchanged reason, even when it had new outcome evidence.
+An explicit `path_delta_mode: unchanged` now accepts the existing Vision packet
+with `path_delta.outcome: continue` or `no_change`, without an unchanged reason.
+The existing TypeScript Vision, task, validation and settlement owners still
+decide durable effects. Material replans, stop decisions, malformed packets and
+conflicting declarations retain their refusal. Omitted modes retain legacy
+inference; generic and Codex guidance describe the same boundary.
+
+One existing isolated inventory task used the current model's tools through a
+stdio adapter and a Python 3.11 standalone core artifact on SQLite. Revised
+inputs yielded quantities 22/10/5 and value 185.25, versus 172.25 previously.
+Independent checks verified the 13.00 reconciliation, all six excluded rows,
+reusable generator and preservation of all five original files. After the
+normalized result was journaled, SIGKILL interrupted the driver and validator.
+The original Turn resumed at validation without invoking the Host, completed
+the Todo and spent once; completed replay added no Host, writeback or spend.
+The initial invalid completion/replan reply and three resume setup refusals
+remain failed attempts. There were two Host dispatches and one model work pass;
+the rejected reply was not treated as confirmed work.
+
+Source executor/driver checks and Codex/dsh regression pass. Installed File and
+SQLite checks retain legacy completion and qualify both fresh checkpoint
+outcomes plus replay; the initial oversized inline test command failed its
+existing bound, then the fixture used an ordinary script path. No command
+budget, authority, default or historical receipt was changed. This qualifies
+the touched success/checkpoint and recovery path, not full V1–V5/V10 or R1.
+Complete context retention, minimal closure, progressive product control,
+comparable complete costs, M3/Standard/workspace delivery and the original-Goal
+regression remain open. All nine original requirements and frozen failures
+remain intact; no installed host or model service was upgraded.

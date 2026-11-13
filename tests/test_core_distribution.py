@@ -460,8 +460,29 @@ def _assert_committed(core_python, workspace, runtime, result):
     return result["resume_turn_key"]
 
 
-def test_installed_core_executes_checks_and_replays_once(core_python, task):
+@pytest.mark.parametrize("checkpoint", [None, "continue", "no_change"])
+def test_installed_core_executes_checks_and_replays_once(core_python, task, checkpoint):
     workspace, runtime, registry, arguments = task
+    if checkpoint is not None:
+        vision = {
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "active",
+            "vision_patch": {"acceptance_summary": "Independently check squares and preserve exact replay."},
+            "path_delta": {
+                "schema_version": "goal_path_delta_v0", "outcome": checkpoint,
+                "prior_assumption": "The requested squares still needed a result check.",
+                "observed_reality": "The requested artifact is available for independent validation.",
+                "retained": ["The original squares request and acceptance."],
+                "evidence_refs": ["artifact:squares.json"],
+            },
+        }
+        host_index = arguments.index("--host-adapter-command-json") + 1
+        host_script = workspace / "checkpoint-host.py"
+        host_script.write_text(HOST_SOURCE.replace(
+            "'vision_unchanged_reason':'The requested squares remain the objective.'",
+            f"'path_delta_mode':'unchanged','agent_vision_json':{json.dumps(vision)!r}",
+        ))
+        arguments[host_index] = json.dumps([core_python, "-I", str(host_script)])
     history = json.loads(_run(core_python, ["--registry", str(registry), "--runtime-root", str(runtime),
         "--format", "json", "history", "trajectory-hygiene", "--goal-id", GOAL], workspace).stdout)
     assert history["ok"] is True
@@ -476,6 +497,11 @@ def test_installed_core_executes_checks_and_replays_once(core_python, task):
         "--format", "json", "turn", "inspect-journal", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-key", key], workspace).stdout)
     assert inspected["ok"] is True
+    if checkpoint is not None:
+        journal_path = runtime / "goals" / GOAL / "turns" / f"{key.removeprefix('sha256:')}.json"
+        journal = json.loads(journal_path.read_text())
+        assert journal["host_result"]["result_kind"] == "validated_completion"
+        assert journal["host_result"]["agent_vision"]["path_delta"]["outcome"] == checkpoint
 
 
 @pytest.mark.skipif(os.name == "nt", reason="this qualification injects a POSIX SIGKILL")
