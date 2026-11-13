@@ -1,5 +1,6 @@
 import {prepareClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
-import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
+import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON,
+  EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode} from "./handoff_mode_policy.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import {currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
 import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
@@ -63,6 +64,8 @@ export interface CoordinationTodoClaimInput {
   readonly replan_obligation_id?: string;
   readonly lease_request?: CoordinationTodoClaimLeaseRequest | null;
   readonly manage_execution?: boolean;
+  /** Admission constraint on every attempt and replay, not a new business intent. */
+  readonly required_handoff_mode?: ExecutionHandoffMode;
   readonly dry_run: boolean;
   readonly now: Date;
 }
@@ -376,6 +379,9 @@ async function executeClaimAttempt(
     if (input.manage_execution !== undefined && typeof input.manage_execution !== "boolean") {
       throw new AuthorityStoreProtocolError("manage_execution must be a boolean");
     }
+    if (input.required_handoff_mode !== undefined && !EXECUTION_HANDOFF_MODES.includes(input.required_handoff_mode)) {
+      throw new AuthorityStoreProtocolError("required_handoff_mode must be a current execution mode");
+    }
     if (input.manage_execution && (input.lease_request != null || input.actor_agent_id !== input.claimed_by)) {
       throw new AuthorityStoreProtocolError("Managed execution requires the claiming actor and no explicit lease request");
     }
@@ -426,6 +432,7 @@ async function executeClaimAttempt(
           (result.changed !== undefined && typeof result.changed !== "boolean") ||
           (result.changed !== false && typeof result.updated_at !== "string") ||
           typeof result.handoff_mode !== "string" ||
+          (input.required_handoff_mode !== undefined && result.handoff_mode !== input.required_handoff_mode) ||
           result.mutation_authority === null || typeof result.mutation_authority !== "object") {
         throw new AuthorityStoreProtocolError("original claim result is invalid");
       }
@@ -573,6 +580,10 @@ async function executeClaimAttempt(
   const retired = retiredHandoffModeRejection(handoffMode);
   if (retired !== null) return failure(retired, HANDOFF_MODE_RETIRED_REASON,
     {todo_id: input.todo_id, handoff_mode: handoffMode}, "decision_rejection");
+  if (input.required_handoff_mode !== undefined && handoffMode !== input.required_handoff_mode) {
+    return failure("claim_handoff_mode_mismatch", "Current handoff mode does not satisfy the claim's admission constraint",
+      {todo_id: input.todo_id, handoff_mode: handoffMode, required_handoff_mode: input.required_handoff_mode}, "decision_rejection");
+  }
   if (leaseRequest !== null && handoffMode !== "hard_lease") {
     return failure(
       "claim_lease_requires_hard_lease",

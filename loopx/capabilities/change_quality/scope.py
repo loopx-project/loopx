@@ -79,13 +79,29 @@ def _git(
     )
 
 
+def _git_path_text(output: bytes, *, operation: str) -> str:
+    """Decode one Git path output without normalizing its contents."""
+
+    raw = bytes(output)
+    # Git terminates path output with one LF. Strip only that separator so a
+    # repository directory ending in CR or LF keeps its literal name.
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(f"{operation} returned a path that is not valid UTF-8") from None
+
+
 def resolve_git_root(repo_path: Path) -> Path:
     candidate = repo_path.expanduser().resolve()
-    result = _git(candidate, "rev-parse", "--show-toplevel", text=True)
-    root = str(result.stdout or "").strip()
-    if result.returncode != 0 or not root:
-        detail = str(result.stderr or "").strip()
+    result = _git(candidate, "rev-parse", "--show-toplevel")
+    if result.returncode != 0 or not result.stdout:
+        detail = bytes(result.stderr or b"").decode("utf-8", errors="replace").strip()
         raise ValueError(f"repo_path is not a git worktree: {candidate}; {detail}")
+    root = _git_path_text(result.stdout, operation="git rev-parse --show-toplevel")
+    if not root:
+        raise ValueError(f"repo_path is not a git worktree: {candidate}")
     return Path(root).resolve()
 
 
@@ -107,11 +123,22 @@ def _name_only(repo_root: Path, *args: str) -> list[str]:
     literal backslash would arrive as a fragment the caller could not open.
     """
 
-    result = _git(repo_root, *args, text=True)
+    result = _git(repo_root, *args)
     if result.returncode != 0:
-        detail = str(result.stderr or "").strip()
+        detail = bytes(result.stderr or b"").decode("utf-8", errors="replace").strip()
         raise ValueError(f"git {' '.join(args)} failed: {detail}")
-    return [name for name in str(result.stdout or "").split("\0") if name]
+    records = bytes(result.stdout or b"").split(b"\0")
+    names: list[str] = []
+    for record in records:
+        if not record:
+            continue
+        try:
+            names.append(record.decode("utf-8"))
+        except UnicodeDecodeError:
+            raise ValueError(
+                "git reported a changed pathname that is not valid UTF-8"
+            ) from None
+    return names
 
 
 def _dedupe(values: list[str]) -> list[str]:

@@ -17,7 +17,11 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from ...capabilities.native_chat.external_conversations import ChatExternalConversations, QUOTA_BACKLOG_BATCH_SIZE
+from ...capabilities.native_chat.external_conversations import (
+    ChatExternalConversations,
+    QUOTA_BACKLOG_BATCH_SIZE,
+    STEWARD_BINDING_ADOPTION_PENDING,
+)
 from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
@@ -37,7 +41,8 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
                              mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
-from .private_delivery_discovery import PrivateDeliveryDiscovery
+from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits
+from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from .return_files import uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
@@ -228,7 +233,7 @@ class LarkPrivateConversations:
         self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
         self._body_discovery = PrivateDeliveryDiscovery(self.root)
         self._web_projection_scan_at = 0.0
-        self._web_projection_snapshots: dict[str, tuple[int, int]] = {}
+        self._web_projection_snapshots: dict[str, tuple[int, ...]] = {}
         from .owner_attention import LarkOwnerAttention
         self.owner_attention = LarkOwnerAttention(self)
         from .private_ingress import PrivateIngressObserver
@@ -681,14 +686,15 @@ class LarkPrivateConversations:
 
     @staticmethod
     def _record_admission(path: Path, record: dict[str, Any], admitted: dict[str, Any]) -> dict[str, Any]:
-        # Keep the existing recoverable capture until Core performs the frozen
-        # stop. A prepared command never claims execution or a delivered reply.
+        # Keep the recoverable capture while Core holds the original request.
         record.update(status="captured" if admitted["status"] == "prepared" else admitted["status"],
                       session_id=admitted["session_id"], turn_id=admitted["turn_id"],
                       response=admitted.get("response"), response_code=admitted.get("response_code"))
         if admitted.get("context_recovery"):
             record["context_recovery"] = admitted["context_recovery"]
         _atomic_write_json(path, record)
+        if admitted["status"] == "prepared" and admitted.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+            return {"status": "admission_deferred"}
         status = "durably_accepted" if admitted["status"] == "accepted" else (
             "queue_rejected" if admitted["status"] == "rejected" else "command_recorded")
         return {"status": status}
@@ -909,19 +915,9 @@ class LarkPrivateConversations:
                 canonical_type = source_message.get("msg_type", source_message.get("message_type"))
                 if canonical_type != "text":
                     return {"status": "source_conflict"}
-                content = source_message.get("content")
-                if isinstance(content, str):
-                    text = content
-                else:
-                    # Raw provider envelopes are supported by the existing
-                    # readback contract too; keep parsing isolated to body.
-                    try:
-                        raw = json.loads(source_message["body"]["content"])
-                        text = raw["text"]
-                    except (ValueError, KeyError, TypeError):
-                        return {"status": "invalid_text"}
-                    if not isinstance(text, str):
-                        return {"status": "invalid_text"}
+                text = private_source_text(source_message)
+                if text is None:
+                    return {"status": "invalid_text"}
                 if not text.strip():
                     return {"status": "empty_text"}
             elif message_type in {"image", "post"}:
@@ -1019,10 +1015,14 @@ class LarkPrivateConversations:
                         _atomic_write_json(path, record)
                         return {"status": "history_answer_held"}
                 else:
+                    preflight = (steward_source_preflight(selected["binding"], source_message,
+                        lambda fresh: self._source_message(record, selected=fresh)) if command is None else None)
                     admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                         request_ref=request, message=text, command=command, attachments=attachments,
-                        defer_background_stop=defer_background_stop)
+                        defer_background_stop=defer_background_stop, source_preflight=preflight)
                 record_event_timing(profile, event["message_id"], "core_admission_returned")
+            except PrivateSourceUnavailable:
+                return {"status": "source_verification_failed"}
             except ValueError:
                 if record.get("capture_origin") == "provider_history":
                     return {"status": "history_answer_held"}
@@ -1447,8 +1447,7 @@ class LarkPrivateConversations:
         """
         paths = [path for path, row, _ in self._body_discovery.rows()
                  if row["status"] != "delivered"]
-        return [*paths, *(path for path in sorted((self.root / "web-projections").glob("*.json"))
-                         if _read_json(path).get("status") == "pending")]
+        return [*paths, *self._pending_web_projection_paths()]
 
     @effect_runtime_request_scope()
     def pending_delivery_paths(self) -> list[Path]:
@@ -1476,6 +1475,31 @@ class LarkPrivateConversations:
         """
         return path.parent != self.root / "web-projections" and _read_json(path).get("status") == "delivered"
 
+    def _pending_web_projection_paths(self) -> list[Path]:
+        paths = []
+        for path in sorted((self.root / "web-projections").glob("*.json")):
+            try:
+                if _read_json(path).get("status") == "pending":
+                    paths.append(path)
+            except (OSError, ValueError):
+                # An unreadable journal remains unresolved, but must not stop
+                # discovery of other original conversations' replies.
+                continue
+        return paths
+
+    @staticmethod
+    def _read_web_projection_journal(path: Path) -> dict[str, Any]:
+        row = _read_json(path)
+        if (row.get("schema_version") != "lark_private_web_projection_v0"
+                or row.get("projection_id") != path.stem
+                or row.get("status") not in ("pending", "delivered", "partial")
+                or any(not isinstance(row.get(key), str) or not row[key]
+                       for key in ("request_ref", "binding_id", "profile", "session_id"))
+                or any(not isinstance(row.get(key), dict) for key in ("source", "event", "deliveries"))
+                or any(not isinstance(phase, dict) for phase in row["deliveries"].values())):
+            raise ValueError("Original App mirror journal is unavailable")
+        return row
+
     def _web_projection_paths(self) -> list[Path]:
         """Discover committed App messages, using the existing reply workers.
 
@@ -1498,9 +1522,8 @@ class LarkPrivateConversations:
             store = self.core.controller.store
             for sid, source_path in sources.items():
                 try:
-                    stat = (store.sessions_root / sid / "messages.jsonl").stat()
-                    snapshot = (stat.st_mtime_ns, stat.st_size)
-                    if self._web_projection_snapshots.get(sid) == snapshot:
+                    snapshot = file_change_fingerprint(store.sessions_root / sid / "messages.jsonl")
+                    if snapshot is not None and self._web_projection_snapshots.get(sid) == snapshot:
                         continue
                     source = _read_json(source_path)
                     if (source.get("binding_id") not in enabled or source.get("session_id") != sid
@@ -1512,7 +1535,7 @@ class LarkPrivateConversations:
                     selected = self._web_projection_transcript(sid)
                     if selected:
                         with exclusive_file_lock(path, operation="discover_web_conversation_projection"):
-                            row = _read_json(path) if path.exists() else {
+                            row = self._read_web_projection_journal(path) if path.exists() else {
                                 "schema_version": "lark_private_web_projection_v0",
                                 "projection_id": key, "request_ref": source["request_ref"],
                                 "binding_id": source["binding_id"], "profile": source["profile"],
@@ -1522,12 +1545,13 @@ class LarkPrivateConversations:
                                    for message in selected):
                                 row["status"] = "pending"
                                 _atomic_write_json(path, row)
-                    self._web_projection_snapshots[sid] = snapshot
+                    if snapshot is not None:
+                        self._web_projection_snapshots[sid] = snapshot
                 except (OSError, ValueError, KeyError):
                     # An unreadable source is unknown. Keep any prior outbox;
                     # it retains fresh source and canonical-message checks.
                     continue
-        return [path for path in sorted(root.glob("*.json")) if _read_json(path).get("status") == "pending"]
+        return self._pending_web_projection_paths()
 
     def _web_projection_transcript(self, session_id: str, *, inputs_only: bool = False,
                                    verify_turns: bool = False) -> list[dict[str, Any]]:
@@ -1587,58 +1611,6 @@ class LarkPrivateConversations:
         """The existing provider identity binds this exact canonical message."""
         return hashlib.sha256(json.dumps([row["binding_id"], row["session_id"], message["message_id"]],
             separators=(",", ":")).encode()).hexdigest()
-
-    def verify_web_return(self, *, route: dict[str, Any], session: dict[str, Any],
-                          turn: dict[str, Any], text: str,
-                          attempt: Mapping[str, str | None] | None = None,
-                          record_attempt: Callable[[Mapping[str, str | None]], None] | None = None) -> dict[str, Any]:
-        """Read an existing App mirror; its original worker alone owns sends.
-
-        Manager-context supplies its typed canonical result id and owns result
-        settlement. Neither a matching body nor a historical verified flag is
-        sufficient: revalidate the source and read the exact provider attempt.
-        """
-        from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
-
-        saved = session["steward_context"]
-        key = identity_ref(saved["binding_id"], session["session_id"])
-        path = self.root / "web-projections" / f"{key}.json"
-        if not path.is_file():
-            raise ReturnResolutionBlocked("initial_delivery_receipt_unavailable", "App mirror not yet recorded")
-        with exclusive_file_lock(path, operation="verify_web_conversation_return"):
-            row = _read_json(path)
-            canonical = self.core.controller.store.load_turn(session["session_id"], turn["turn_id"])
-            if (route.get("session_id") != session["session_id"] or row.get("session_id") != session["session_id"]
-                    or not canonical or canonical.get("origin") != "web"
-                    or canonical.get("client_turn_id") != turn.get("client_turn_id")
-                    or route.get("result_attachments")):
-                raise ValueError("original App return identity or media unavailable")
-            message = next((item for item in self._web_projection_messages(row)
-                if item["message_id"] == route.get("return_message_id")), None)
-            if (not message or message.get("origin") != "manager_followup" or message.get("role") != "agent"
-                    or message.get("turn_id") != turn["turn_id"] or _presentation_text(message["text"]) != text
-                    or message.get("attachments")):
-                raise ValueError("canonical App result changed")
-            phase = row["deliveries"].get("web." + message["message_id"], {})
-            mirrored = phase.get("attempt")
-            if phase.get("verified") is not True or not isinstance(mirrored, dict):
-                raise ReturnResolutionBlocked("initial_delivery_receipt_unavailable", "App mirror remains unverified")
-            expected = f"**LoopX（App）**\n\n{message['text']}"
-            if phase.get("text") not in (expected, _presentation_text(expected)) or (
-                    attempt is not None and dict(attempt) != mirrored):
-                raise ValueError("App mirror intent changed")
-            if attempt is None and record_attempt is not None:
-                # Persist the original locator before IO, so a crash or outage
-                # resumes verification rather than starting another delivery.
-                record_attempt(dict(mirrored))
-            result = verify_lark_inbox_reply(project=self.runtime_root, config_path=self._inbox(row),
-                message_id=row["event"]["message_id"], text=phase["text"], attempt=mirrored,
-                reply_placement="chat_root", delivery_id=self._web_projection_delivery_id(row, message),
-                runner=self._reply_runner, finalize_reactions=False, resume_parts=False,
-                source_authority_verifier=lambda profile, chat, ref: self._source_authority(row, profile, chat, ref))
-            if message not in self._web_projection_messages(row):
-                raise ValueError("canonical App result changed during readback")
-            return {**result, "idempotency_key": mirrored["provider_receipt"], "external_write_performed": False}
 
     def _web_projection_feedback(self, row: dict[str, Any], message: dict[str, Any]) -> None:
         if not self.reaction_feedback or message["role"] != "user":
@@ -1723,7 +1695,12 @@ class LarkPrivateConversations:
         # The existing worker pool serializes this outbox with a durable fence.
         # Recovery reads the same provider attempt; it never starts a Core Turn.
         with exclusive_file_lock(path, operation="deliver_web_conversation_projection"):
-            row = _read_json(path)
+            try:
+                row = self._read_web_projection_journal(path)
+            except (OSError, ValueError):
+                # Never overwrite the sole evidence of an unknown send with
+                # a blocker or a new outbox when its journal cannot be read.
+                return 0
             try:
                 messages = self._web_projection_messages(row)
                 pending = next((message for message in messages
@@ -1772,8 +1749,11 @@ class LarkPrivateConversations:
             return 0
         for path in sorted((self.root / "web-projections").glob("*.json")):
             with exclusive_file_lock(path.with_suffix(".feedback"), operation="reconcile_web_input_feedback"):
-                with exclusive_file_lock(path, operation="read_web_input_feedback"):
-                    row = _read_json(path)
+                try:
+                    with exclusive_file_lock(path, operation="read_web_input_feedback"):
+                        row = self._read_web_projection_journal(path)
+                except (OSError, ValueError):
+                    continue
                 try:
                     due = self._has_app_feedback_work(row)
                 except (OSError, ValueError, KeyError):
@@ -1796,7 +1776,10 @@ class LarkPrivateConversations:
                     if "feedback" not in phase or phase["feedback"] == prior_feedback:
                         continue
                     with exclusive_file_lock(path, operation="record_web_input_feedback"):
-                        current = _read_json(path)
+                        try:
+                            current = self._read_web_projection_journal(path)
+                        except (OSError, ValueError):
+                            continue
                         saved = current["deliveries"].get(phase_key, {})
                         if (all(current.get(key) == row.get(key) for key in
                                 ("request_ref", "binding_id", "profile", "source", "event", "session_id"))
@@ -1964,6 +1947,13 @@ class LarkPrivateConversations:
                 native_path = self.core.root / f"{row['request_ref']}.json"
                 if row["status"] == "captured" and native_path.exists():
                     native = self.core.read_request(row["request_ref"])
+                    if (row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
+                            and native.get("status") == "prepared"
+                            and native.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
+                            and all(native.get(key) == row.get(key)
+                                    for key in ("request_ref", "binding_id", "source", "session_id", "turn_id"))
+                            and prepared_steward_binding_waits(native, self.bindings.read()["bindings"], self.core.controller.store)):
+                        return 0
                     if (native.get("command") == "stop" and native.get("target_recorded") is True
                             and all(native.get(key) == row.get(key)
                                     for key in ("request_ref", "binding_id", "source"))):
@@ -1983,6 +1973,8 @@ class LarkPrivateConversations:
             if row["status"] == "captured":
                 self.admit(row["profile"], row["event"])
                 row = _read_json(path)
+                if row["status"] == "captured" and row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+                    return 0
         native_path = self.core.root / f"{row['request_ref']}.json"
         if native_path.exists():
             if (self.reaction_feedback and not row.get("context_recovery") and row["status"] == "accepted"

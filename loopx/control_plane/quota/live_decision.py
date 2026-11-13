@@ -69,10 +69,30 @@ def _receipt_bound_guard_fields(
 
 
 def _historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
-    """Dispatch the typed historical ACK without hiding pending current closeout."""
+    """Recognize the exact historical ACK closeout before durable writeback."""
     packet = payload.get("replan_action_packet")
     return (isinstance(packet, Mapping) and packet.get("settlement_only") is True
             and packet.get("decision") == "historical_ack_recorded")
+
+
+def _original_replan_settlement_required(
+    payload: Mapping[str, Any], readback: QuotaSettlementReadback | None,
+) -> bool:
+    if _historical_ack_writeback_required(payload):
+        return True
+    if readback is None or readback.replay_phase is not ReceiptBoundReplayPhase.SETTLEMENT_PENDING:
+        return False
+    packet = payload.get("replan_action_packet")
+    identity = readback.identity.value
+    return (
+        isinstance(packet, Mapping) and packet.get("settlement_only") is True
+        and packet.get("decision") == readback.replay_phase.value
+        and identity is not None and identity.replan_obligation_id is not None
+        and identity.replan_obligation_id == packet.get("obligation_id")
+        and (readback.progress or {}).get("next_step") == "quota_spend"
+        and payload.get("should_run") is True
+        and payload.get("effective_action") == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
+    )
 
 
 def _project_receipt_replan_settlement(
@@ -83,7 +103,7 @@ def _project_receipt_replan_settlement(
     goal_ref: Mapping[str, Any] | None,
 ) -> None:
     """Project closeout from the original readback, never the current selection."""
-    if not readback or not _historical_ack_writeback_required(payload):
+    if not readback or not _original_replan_settlement_required(payload, readback):
         return
     attach_settlement_progress(payload, readback, registry_path=registry_path,
         runtime_root=runtime_root, goal_ref=goal_ref)
@@ -807,6 +827,7 @@ def build_live_quota_should_run_decision(
         ),
         receipt_bound_todo_id=receipt_bound_todo_id,
         requested_action_todo_id=requested_action_todo_id,
+        retained_action_selection_todo_id=retained_action_selection_todo_id,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
@@ -873,7 +894,7 @@ def build_live_quota_should_run_decision(
     # unsettled Turn here can overwrite the settled-skip route with a recovery
     # obligation and then select a successor against the immutable receipt
     # identity.  Leave prior-Turn recovery to the next fresh Turn instead.
-    original_replan_settlement = _historical_ack_writeback_required(payload)
+    original_replan_settlement = _original_replan_settlement_required(payload, settlement_readback)
     if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
         apply_unsettled_host_turn_recovery_if_required(
             payload,

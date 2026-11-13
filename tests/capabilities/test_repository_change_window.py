@@ -1133,6 +1133,55 @@ def test_verify_detects_branch_movement(
     )
 
 
+@pytest.mark.parametrize("enforcement_level", list(EnforcementLevel))
+def test_cli_install_verify_round_trip_preserves_lf_scripts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    enforcement_level: EnforcementLevel,
+) -> None:
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "empty-global-gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "base")
+    args = [
+        "--runtime-root", str(tmp_path / "runtime"), "--format", "json", "change-window",
+    ]
+    assert main([
+        *args,
+        "install", "--repo-path", str(repo),
+        "--enforcement-level", enforcement_level.value,
+        "--execute",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "installed"
+
+    verify_args = [*args, "verify", "--repo-path", str(repo)]
+    assert main(verify_args) == 0
+    verified = json.loads(capsys.readouterr().out)
+    assert verified["status"] == "ready"
+    assert verified["verified"] is True
+    assert verified["enabled"] is True
+
+    hooks_dir = Path(_git(repo, "config", "--local", "--get", "core.hooksPath"))
+    scripts = [hooks_dir / name for name in verified["managed_hook_names"]]
+    if enforcement_level is EnforcementLevel.REFERENCE_GUARD:
+        scripts.append(hooks_dir.parent / "ssh-command")
+    for script in scripts:
+        content = script.read_bytes()
+        assert content.startswith(b"#!/bin/sh\n")
+        assert b"\r\n" not in content
+
+    scripts[0].write_bytes(scripts[0].read_bytes() + b"# modified\n")
+    assert main(verify_args) == 1
+    drifted = json.loads(capsys.readouterr().out)
+    assert drifted["status"] == "drifted"
+    assert drifted["verified"] is False
+
+
 def test_cli_preview_and_global_readback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

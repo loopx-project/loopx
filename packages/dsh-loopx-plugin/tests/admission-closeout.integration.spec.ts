@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 
 import { runFile } from '../src/cli.ts'
 import type { FileRunner } from '../src/cli.ts'
@@ -61,10 +61,22 @@ async function selectIntegrationPython(): Promise<string> {
 
 const integrationPython = selectIntegrationPython()
 
-const realLoopXRunner: FileRunner = async (_file, args, options) => {
-  return runFile(
+const readOnlySelection = `
+import sys
+from loopx.cli import main
+from loopx.cli_commands import quota_context_reader as reader
+
+def read_only(*args, **kwargs):
+    raise PermissionError("synthetic reader descriptor write denial")
+
+reader.write_context_read_reference = read_only
+raise SystemExit(main(sys.argv[1:]))
+`
+
+function loopxRunner(prefix: readonly string[]): FileRunner {
+  return async (_file, args, options) => runFile(
     await integrationPython,
-    ['-m', 'loopx.cli', ...args],
+    [...prefix, ...args],
     {
       ...options,
       env: {
@@ -75,6 +87,9 @@ const realLoopXRunner: FileRunner = async (_file, args, options) => {
     },
   )
 }
+
+const realLoopXRunner = loopxRunner(['-m', 'loopx.cli'])
+const readOnlySelectionRunner = loopxRunner(['-c', readOnlySelection])
 
 async function runCli(fixture: Fixture, args: readonly string[]): Promise<CliResult> {
   const result = await realLoopXRunner('loopx', [
@@ -92,8 +107,16 @@ async function runCli(fixture: Fixture, args: readonly string[]): Promise<CliRes
   return { exitCode: result.exitCode, payload: record(payload) }
 }
 
+async function setAllowedSlots(testFixture: Fixture, allowedSlots: number): Promise<void> {
+  const registry = record(JSON.parse(await readFile(testFixture.registry, 'utf8')))
+  const goal = record(array(registry.goals)[0])
+  goal.quota = { ...record(goal.quota), allowed_slots: allowedSlots }
+  await writeFile(testFixture.registry, JSON.stringify(registry))
+}
+
 async function fixture(): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-loopx-closeout-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
   const project = join(root, 'project')
   const runtime = join(root, 'runtime')
   const registry = join(project, '.loopx', 'registry.json')
@@ -264,31 +287,72 @@ function executablePlanArgs(
   const command = String(
     steps.find(step => step.kind === kind)?.command_template ?? '',
   )
-  const tokens = command.split(/\s+/).filter(Boolean)
+  const tokens = command.match(/'[^']*'|"[^"]*"|\S+/gu) ?? []
   expect(tokens.shift()).toBe('loopx')
-  const args = tokens.map(token => replacements[token] ?? token)
+  const args = tokens.map(token => replacements[token] ?? token.replace(/^(['"])(.*)\1$/u, '$2'))
   expect(args.some(token => token.startsWith('<'))).toBe(false)
   return args
 }
 
 describe('DSH admission-to-closeout integration', () => {
-  it('settles the queued exact receipt once through the raw generic CLI plan', async () => {
+  it.each([
+    { route: 'compatibility', version: 'loopx 1.2.4', setting: 'on', readerCalls: 0 },
+    { route: 'progressive', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4 },
+    { route: 'configured off', version: 'loopx 2.3.0', setting: 'off', readerCalls: 0 },
+    { route: 'read-only selection', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4,
+      readOnlyFromGuard: 1 },
+    { route: 'read-only paged revalidation', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4,
+      readOnlyFromGuard: 3, readOnlyPageBytes: '256' },
+  ])('settles the queued exact receipt once through $route admission', async ({
+    route, version, setting, readerCalls, readOnlyFromGuard, readOnlyPageBytes,
+  }) => {
     const testFixture = await fixture()
     const warnings: string[] = []
+    let guardCalls = 0
+    let reads = 0
+    let inlinePages = 0
+    let inlineContinuations = 0
+    const runner: FileRunner = async (file, args, options) => {
+      if (args.includes('context-read')) reads += 1
+      if (args.includes('should-run')) {
+        guardCalls += 1
+        expect(options.env?.LOOPX_CONTEXT_DELIVERY).toBe(route === 'compatibility' ? 'off' : undefined)
+      }
+      const child = { ...options, env: {
+        LOOPX_CONTEXT_DELIVERY: setting, ...options.env,
+      } }
+      if (args.includes('context-read') && readOnlyFromGuard !== undefined && guardCalls >= readOnlyFromGuard) {
+        const readerArgs = [...args]
+        if (readOnlyPageBytes) readerArgs[readerArgs.indexOf('--page-bytes') + 1] = readOnlyPageBytes
+        const response = await readOnlySelectionRunner(file, readerArgs, child)
+        const page = record(JSON.parse(response.stdout))
+        expect(page.schema_version).toBe('context_capture_page_v1')
+        expect(page.ok).toBe(true)
+        inlinePages += 1
+        if (page.offset !== 0) {
+          inlineContinuations += 1
+          expect(readerArgs).toContain('--selection-sha256')
+        }
+        return response
+      }
+      return realLoopXRunner(file, args, child)
+    }
     const driver = new LoopXContinuationDriver({
       isLiveAgent: () => true,
-      runner: realLoopXRunner,
+      runner,
       resolveCommand: async () => ({
         file: 'loopx',
         prefix: [],
         skillCommand: 'loopx',
-        version: 'loopx integration checkout',
+        version,
       }),
       makeTurnInstanceId: () => turnInstanceId,
       retryDelaysMs: [0, 0],
       warn: message => { warnings.push(message) },
     })
 
+    // Finished hooks unwind in reverse order, so the driver stops before fixture removal.
+    onTestFinished(() => driver.dispose())
     driver.observeAgent(testFixture.agent)
     const queued = await waitForQueued(testFixture, warnings)
     const source = record(queued.source)
@@ -300,7 +364,9 @@ describe('DSH admission-to-closeout integration', () => {
       turnInstanceId,
     })
     const content = array(queued.content)
-    expect(record(content[0]).text).toContain(`LOOPX_TURN=${turnInstanceId}`)
+    expect(record(content[0]).text).toContain(process.platform === 'win32'
+      ? `$LOOPX_TURN = "${turnInstanceId}"`
+      : `LOOPX_TURN=${turnInstanceId}`)
 
     testFixture.queued.splice(0, 1)
     ;(testFixture.agent as unknown as { setStatus(value: 'running'): void })
@@ -313,6 +379,15 @@ describe('DSH admission-to-closeout integration', () => {
       async () => ({ kind: 'enter', messages: [queued] }),
     )
     expect(admission.kind).toBe('enter')
+    // The Driver intentionally revalidates before and after the next pre-step hook.
+    expect(guardCalls).toBe(3)
+    if (readOnlyPageBytes) {
+      expect(reads).toBeGreaterThan(readerCalls)
+      expect(inlineContinuations).toBeGreaterThan(0)
+    } else {
+      expect(reads).toBe(readerCalls)
+    }
+    if (readOnlyFromGuard !== undefined) expect(inlinePages).toBeGreaterThan(0)
 
     const unselected = await runCli(testFixture, [
       'quota', 'should-run', '--context-delivery', 'off',
@@ -381,7 +456,7 @@ describe('DSH admission-to-closeout integration', () => {
       '--no-global-sync',
       '--suppress-external-sinks',
     ])
-    expect(writeback.exitCode).toBe(0)
+    expect(writeback.exitCode, JSON.stringify(writeback.payload)).toBe(0)
     expect(new Set(receiptEffectIds(writeback.payload))).toEqual(new Set([effectId]))
 
     const spendArgs = executablePlanArgs(steps, 'quota_spend')
@@ -440,7 +515,142 @@ describe('DSH admission-to-closeout integration', () => {
     expect(runs.filter(run => run.settlement_identity !== undefined).every(run => (
       record(run.settlement_identity).effect_id === effectId
     ))).toBe(true)
-
-    await driver.dispose()
   }, 90_000)
+
+  it('rejects queued work when quota closes during the next pre-step hook', async () => {
+    const testFixture = await fixture()
+    const warnings: string[] = []
+    let guards = 0
+    const runner: FileRunner = (file, args, options) => {
+      if (args.includes('should-run')) guards += 1
+      return realLoopXRunner(file, args, { ...options, env: {
+        ...options.env, LOOPX_CONTEXT_DELIVERY: 'on',
+      } })
+    }
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, runner, retryDelaysMs: [0, 0],
+      resolveCommand: async () => ({
+        file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.3.0',
+      }),
+      makeTurnInstanceId: () => turnInstanceId,
+      warn: message => { warnings.push(message) },
+    })
+    try {
+      driver.observeAgent(testFixture.agent)
+      const queued = await waitForQueued(testFixture, warnings)
+      testFixture.queued.splice(0, 1)
+      ;(testFixture.agent as unknown as { setStatus(value: 'running'): void })
+        .setStatus('running')
+      driver.onInboxClaimed(testFixture.agent, queued)
+
+      let reachedNext = false
+      const admission = await driver.onPreStep(
+        testFixture.agent, [queued], new AbortController().signal, async () => {
+          reachedNext = true
+          await setAllowedSlots(testFixture, 0)
+          return { kind: 'enter', messages: [queued] }
+        },
+      )
+
+      expect(reachedNext).toBe(true)
+      expect(admission).toEqual({ kind: 'reject' })
+      expect(guards).toBe(3)
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain(
+        'pre_step_rejected stage=pre-step-recheck reason=authority-after-next other_kinds=none',
+      )
+      expect(testFixture.queued).toHaveLength(0)
+    } finally {
+      await driver.dispose()
+    }
+  }, 45_000)
+
+  it.each(['held', 'digest mismatch', 'inline digest mismatch', 'paged'] as const)(
+    'keeps one guard when the progressive capture is %s',
+    async scenario => {
+      const testFixture = await fixture()
+      if (scenario === 'held') await setAllowedSlots(testFixture, 0)
+      let finishEvaluation: () => void = () => {}
+      const evaluated = new Promise<void>(resolveWait => { finishEvaluation = resolveWait })
+      const warnings: string[] = []
+      let guards = 0
+      let reads = 0
+      const runner: FileRunner = async (file, args, options) => {
+        const child = { ...options, env: { ...options.env, LOOPX_CONTEXT_DELIVERY: 'on' } }
+        if (args.includes('context-read')) {
+          reads += 1
+          const readerArgs = [...args]
+          if (scenario === 'paged') {
+            readerArgs[readerArgs.indexOf('--page-bytes') + 1] = '700'
+          }
+          if (scenario === 'inline digest mismatch') {
+            const response = await readOnlySelectionRunner(file, readerArgs, child)
+            const page = record(JSON.parse(response.stdout))
+            expect(page.ok).toBe(true)
+            expect(page.eof).toBe(true)
+            expect(page.schema_version).toBe('context_capture_page_v1')
+            return { ...response, stdout: JSON.stringify({ ...page, selection_sha256: '0'.repeat(64) }) }
+          }
+          return realLoopXRunner(file, readerArgs, child)
+        }
+        if (!args.includes('should-run')) return realLoopXRunner(file, args, child)
+        guards += 1
+        const result = await realLoopXRunner(file, args, child)
+        if (scenario !== 'digest mismatch') return result
+        const navigation = record(JSON.parse(result.stdout))
+        expect(navigation.schema_version).toBe('context_capture_navigation_v1')
+        const recovery = record(navigation.recovery)
+        const reference = String(recovery.reference_file)
+        const descriptor = record(JSON.parse(await readFile(reference, 'utf8')))
+        const wrong = join(dirname(reference), 'test-wrong-digest.reader.json')
+        await writeFile(wrong, JSON.stringify({ ...descriptor, sha256: '0'.repeat(64) }),
+          { mode: 0o600, flag: 'wx' })
+        return { ...result, stdout: JSON.stringify({
+          ...navigation, recovery: { ...recovery, reference_file: wrong },
+        }) }
+      }
+
+      const driver = new LoopXContinuationDriver({
+        isLiveAgent: () => true, runner, retryDelaysMs: [0, 0],
+        resolveCommand: async () => ({
+          file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.3.0',
+        }),
+        makeTurnInstanceId: () => turnInstanceId,
+        runDetached: async operation => {
+          try { return await operation() } finally { finishEvaluation() }
+        },
+        warn: message => { warnings.push(message) },
+      })
+      try {
+        driver.observeAgent(testFixture.agent)
+        await evaluated
+        expect(guards).toBe(1)
+        if (scenario === 'digest mismatch' || scenario === 'inline digest mismatch') {
+          expect(reads).toBe(1)
+          expect(testFixture.queued).toHaveLength(0)
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'admission_failed stage=quota kind=invalid_schema cause_kind=invalid_schema',
+          )
+          expect(warnings[0]).not.toMatch(/invalid page|selection digest did not match/u)
+        } else if (scenario === 'held') {
+          expect(reads).toBe(2)
+          expect(testFixture.queued).toHaveLength(0)
+          expect(warnings).toEqual([])
+        } else {
+          expect(reads).toBeGreaterThan(2)
+          const queued = testFixture.queued[0]
+          expect(record(queued?.source).turnInstanceId).toBe(turnInstanceId)
+          expect(warnings).toEqual([])
+        }
+        const path = join(testFixture.runtime, 'goals', goalId, 'rollout-event-log.jsonl')
+        const events = (await readFile(path, 'utf8')).trim().split('\n')
+          .map(line => record(JSON.parse(line)))
+        expect(events.filter(event => event.event_kind === 'quota_should_run'
+          && event.run_id === turnInstanceId && event.agent_id === agentId)).toHaveLength(1)
+      } finally {
+        await driver.dispose()
+      }
+    }, 45_000,
+  )
 })

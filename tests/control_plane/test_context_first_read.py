@@ -838,21 +838,32 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     _, reference = read_context_read_reference(view["recovery"]["reference_file"])
     raw = Path(reference["path"]).read_bytes()
     source = json.loads(raw)
-    words = shlex.split(view["first_read_command"])
-    for option in ("--page-bytes", "--max-page-output-bytes"):
-        words[words.index(option) + 1] = "4500"
-    content = []
-    for _ in range(20):
-        code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
-        assert code == 0 and page["ok"], page
-        assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4500
-        assert capture_page_range(page, raw=raw, digest=reference["sha256"]) is None
-        content.append(page["content"])
-        if page["eof"]:
-            break
-        words = shlex.split(page["next_command"])
-    assert page["eof"] and len(content) > 1
-    values = selected_context_values("".join(content))
+    first = shlex.split(view["first_read_command"])
+    _, first_ref = read_context_read_reference(first[first.index("--reference-file") + 1])
+    assert first_ref["path"] == reference["path"] and first_ref["sha256"] == reference["sha256"]
+    assert first_ref.get("selection_paths")
+
+    def read_initial(command):
+        words = shlex.split(command)
+        for option in ("--page-bytes", "--max-page-output-bytes"):
+            words[words.index(option) + 1] = "4500"
+        content = []
+        for _ in range(20):
+            code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+            assert code == 0 and page["ok"], page
+            assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4500
+            assert capture_page_range(page, raw=raw, digest=reference["sha256"]) is None
+            content.append(page["content"])
+            if page["eof"]:
+                break
+            words = shlex.split(page["next_command"])
+        assert page["eof"] and len(content) > 1
+        return "".join(content)
+
+    content = read_initial(view["first_read_command"])
+    # An independent dynamic read of the same source has identical ordered facts.
+    assert content == read_initial(view["recovery"]["command"] + " --initial-read")
+    values = selected_context_values(content)
     cli_path = "/interaction_contract/cli_channel"
     expected_cli = selected_context_values(json.dumps({"selections": [
         {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))
@@ -1006,7 +1017,9 @@ def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(t
 
 
 @pytest.mark.parametrize("route", [
-    "matching", "different", "missing", "incomplete", "omitted", "unknown", "bad_counts", "small", "held",
+    "matching", "bounded", "different", "missing", "incomplete", "omitted", "unknown",
+    "bad_counts", "small", "held", "missing_instruction", "selection",
+    "selection_unavailable_route", "selection_spend_allowed", "selection_different_read",
 ])
 def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp_path, decision, route):
     command = "loopx manager-inbox read --goal-id fixture --agent-id author"
@@ -1014,21 +1027,37 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
         "capability_id": "manager-context", "hook_id": "manager.context_inbox",
         "ordering": "before_work", "command": command}
     purpose = "保留原反馈与验收材料。" * (4 if route == "small" else 48)
-    agenda = {"count_unit": "request", "incoming_count": 3 if route == "bad_counts" else 2, "outgoing_count": 1,
+    bounded = route in {"bounded", "missing_instruction"}
+    agenda = {"count_unit": "request", "incoming_count": 3 if bounded or route == "bad_counts" else 2,
+        "outgoing_count": 1,
         "items": [{"request_id": f"request-{index}", "next_action": purpose} for index in range(3)],
-        "omitted_count": int(route == "omitted"), "scan_complete": route != "incomplete",
+        "omitted_count": int(bounded or route == "omitted"), "scan_complete": route != "incomplete",
         "unavailable_count": int(route == "incomplete"), "read_command": command,
         "instruction": "Read the full current request before acting."}
     if route == "unknown":
         agenda["future_gate"] = "Check the retained restriction."
+    if route == "missing_instruction":
+        del agenda["instruction"]
     decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
     channel = decision["interaction_contract"]["agent_channel"]
-    channel.update(delivery_allowed=route != "held", must_attempt=True)
+    selecting = route.startswith("selection")
+    channel.update(delivery_allowed=not selecting and route != "held", must_attempt=True)
+    if selecting:
+        decision["interaction_contract"]["cli_channel"] = {
+            "selection_required": True, "next_cli_actions": [],
+            "spend_allowed_now": route == "selection_spend_allowed", "spend_after_validation": False,
+            **({"selection_command": {"schema_version": "action_selection_cli_command_v1",
+                "route_prefix": "loopx --format json",
+                "command_args_template": "quota should-run --todo-id '{todo_id}' --turn-instance-id fixture-turn",
+                "candidate_discovery_args": "todo list --goal-id fixture --status open"}}
+                if route != "selection_unavailable_route" else {}),
+        }
     channel["work_context"]["sources"].append({**read, "content": {
         "ok": True, "read_complete": False, "unfinished_delegations": agenda,
     }})
     if route != "missing":
-        required = {**read, "command": command + " --agent-id other"} if route == "different" else read
+        required = ({**read, "command": command + " --agent-id other"}
+                    if route in {"different", "selection_different_read"} else read)
         channel["required_reads"].append(required)
 
     view = native_context_capture_view(decision, tmp_path)
@@ -1036,11 +1065,15 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
     prefix = "/interaction_contract/agent_channel/work_context/sources/3/content"
     assert values[prefix + "/read_complete"] is False
     agenda_path = prefix + "/unfinished_delegations"
-    if route == "matching":
+    if route in {"matching", "bounded", "selection"}:
         assert agenda_path not in values and agenda_path + "/items" not in values
         for field in ("incoming_count", "outgoing_count", "scan_complete"):
             assert values[f"{agenda_path}/{field}"] == agenda[field]
-        assert agenda_path + "/instruction" not in values
+        if bounded:
+            assert values[agenda_path + "/omitted_count"] == 1
+            assert values[agenda_path + "/instruction"] == agenda["instruction"]
+        else:
+            assert agenda_path + "/instruction" not in values
         assert read in values["/interaction_contract/agent_channel/required_reads"]
     else:
         assert values[agenda_path] == agenda
@@ -1049,6 +1082,42 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
         offset=0, page_bytes=64000, max_page_output_bytes=64000))
     assert detail["ok"] and detail["eof"]
     assert json.loads(detail["content"])["selections"][0]["value"] == agenda
+
+
+def test_initial_read_surfaces_bounded_peer_return_attention_before_long_sources(tmp_path, decision):
+    command = "loopx manager-inbox read --goal-id fixture --agent-id author"
+    read = {"source": "turn_start_capability_hook", "kind": "operator_inbox",
+        "capability_id": "manager-context", "hook_id": "manager.context_inbox",
+        "ordering": "before_work", "command": command}
+    attention = {"count": 1, "omitted_count": 0, "items": [{
+        "request_id": "a" * 64, "request_revision": 1, "step": "consume_peer_result",
+        "unconsumed_return_count": 1,
+        "returns": [{"result_key": "conclusion", "request_revision": 1,
+            "status": "delivered", "consumed": False}],
+    }]}
+    items = [{"request_id": f"{index:064x}", "direction": "incoming" if index < 10 else "outgoing",
+        "step": "review_request_work", "purpose": "Keep the original evidence. " * 16}
+        for index in range(20)]
+    agenda = {"count_unit": "request", "incoming_count": 10, "outgoing_count": 11,
+        "items": items, "omitted_count": 1, "return_attention": attention,
+        "scan_complete": True, "unavailable_count": 0, "read_command": command,
+        "instruction": "Read the full current request before acting."}
+    decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    channel = decision["interaction_contract"]["agent_channel"]
+    channel.update(delivery_allowed=True, must_attempt=True)
+    channel["required_reads"].append(read)
+    sources = channel["work_context"]["sources"]
+    sources.append({**read, "content": {"ok": True, "read_complete": False,
+        "unfinished_delegations": agenda}})
+
+    view = native_context_capture_view(decision, tmp_path)
+    _, values = read_selection(view["first_read_command"])
+    prefix = f"/interaction_contract/agent_channel/work_context/sources/{len(sources) - 1}/content/unfinished_delegations"
+    attention_path = prefix + "/return_attention"
+    assert values[attention_path] == attention
+    assert prefix not in values and prefix + "/items" not in values
+    goal_text = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    assert list(values).index(attention_path) < list(values).index(goal_text)
 
 
 def test_unknown_settlement_plan_is_not_compacted(tmp_path, decision):
@@ -2170,6 +2239,10 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         # The later task switch retains the same independent acceptance path.
         update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
 
+    warm_note = note.rstrip()
+    if not complete:
+        warm_note += " Appended after an incomplete observation."
+        update(TODO_ID, warm_note, "append-after-partial")
     second = capture("note-warm")
     _, original = read_context_read_reference(second["recovery"]["reference_file"])
     source_path = Path(original["path"])
@@ -2183,7 +2256,7 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
     cold_authority = cold_facts[source_pointer + "/authority_read"]
     assert current_authority["provider_revision"] != cold_authority["provider_revision"]
     warm, facts, warm_bytes = read(second["first_read_command"])
-    assert current_source[source_pointer]["todo"]["note"] == note.rstrip()
+    assert current_source[source_pointer]["todo"]["note"] == warm_note
     if revision == "selected_evidence":
         current_todo = current_source[source_pointer]["todo"]
         assert current_todo["evidence"] == "result:independent-verification"
@@ -2191,22 +2264,69 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
     codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
     recovered, restored, fallback_bytes = read(second["first_read_command"])
     assert pointer not in recovered[0].get("previously_delivered_fields", [])
-    assert restored[pointer] == note.rstrip() and source_path.read_bytes() == source
+    assert restored[pointer] == warm_note and source_path.read_bytes() == source
 
     assert _spend_run_count(runtime) == 1
     deliver(journal, event, recovered)
     settle("note-warm")
-    revised = note + "Use the revised acceptance check before writing."
+    revised = "Revised acceptance check. " + note.rstrip()
     update(TODO_ID, revised, "revise")
     update(ALTERNATIVE_TODO_ID, revised, "revise")
     corrected, current, _ = read(capture("note-corrected")["first_read_command"])
     assert current[pointer] == revised and pointer not in corrected[0].get("previously_delivered_fields", [])
     deliver(journal, event, corrected)
     settle("note-corrected")
+
+    expected_spends = 3
+    if revision == "selected_evidence":
+        def appended_turn(turn, prefix, suffix):
+            update(TODO_ID, prefix + suffix, turn)
+            guard = capture(turn)
+            pages, _, wire_bytes = read(guard["first_read_command"])
+            body = json.loads("".join(page["content"] for page in pages))
+            appended = next(row for row in body["selections"] if row["pointer"] == pointer)
+            assert appended == {"pointer": pointer, "value": suffix,
+                                "presentation": "append_to_observed_text",
+                                "prefix_bytes": len(prefix.encode("utf-8"))}
+            assert pointer not in pages[0].get("previously_delivered_fields", [])
+            _, exact, _ = read(guard["recovery"]["command"] + " --select " + pointer)
+            assert exact[pointer] == prefix + suffix
+            reference = Path(pages[0]["reference_file"])
+            _, metadata = read_context_read_reference(str(reference))
+            fallback_name = metadata["observed_read"]["fallback_reference"]["filename"]
+            fallback_command = guard["first_read_command"].replace(
+                shlex.quote(str(reference)), shlex.quote(str(reference.with_name(fallback_name))))
+            _, _, full_bytes = read(fallback_command)
+            assert full_bytes - wire_bytes > 10_000
+            print(json.dumps({"provider": provider, "prior_read": observation, "turn": turn,
+                              "full_bytes": full_bytes, "append_bytes": wire_bytes}))
+            return guard, pages
+
+        _, appended = appended_turn("note-append", revised, " 新增决策 🧪，沿用前面的验收。")
+        note_proof = codex_context._state(journal)["consumed_pointers"][pointer]
+        assert len(appended) > 1
+        deliver(journal, event, appended[-1:])
+        assert codex_context._state(journal)["consumed_pointers"][pointer] == note_proof
+        deliver(journal, event, appended[:-1])
+        assert codex_context._state(journal)["consumed_pointers"][pointer] != note_proof
+        settle("note-append")
+
+        revised += " 新增决策 🧪，沿用前面的验收。"
+        second_suffix = " Second addition with new evidence."
+        chained, _ = appended_turn("note-append-next", revised, second_suffix)
+        revised += second_suffix
+        codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+        fallback, exact, _ = read(chained["first_read_command"])
+        assert exact[pointer] == revised
+        assert pointer not in fallback[0].get("previously_delivered_fields", [])
+        settle("note-append-next")
+        update(ALTERNATIVE_TODO_ID, revised, "copy-final-note")
+        expected_spends += 2
+
     alternate, other, _ = read(capture("note-alternate", ALTERNATIVE_TODO_ID)["first_read_command"])
     assert other[pointer] == revised and other["/selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert pointer not in alternate[0].get("previously_delivered_fields", [])
-    assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == 3
+    assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == expected_spends
 
     print(json.dumps({"provider": provider, "revision": revision, "observation": observation,
                       "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
@@ -2224,4 +2344,4 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         assert fallback_bytes - warm_bytes > 10_000
     else:
         assert pointer not in warm[0].get("previously_delivered_fields", [])
-        assert facts[pointer] == restored[pointer] == note.rstrip()
+        assert facts[pointer] == restored[pointer] == warm_note

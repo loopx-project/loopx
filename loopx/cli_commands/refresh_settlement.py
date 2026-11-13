@@ -17,7 +17,8 @@ from ..control_plane.effect_program import (
     SETTLEMENT_RECEIPT_SCHEMA_VERSION, SettlementStepKind, decode_settlement_receipt_payload,
 )
 from ..control_plane.quota.settlement import (
-    SettlementIdentity, attach_settlement_progress, read_heartbeat_settlement, settlement_result_payload,
+    SettlementIdentity, attach_settlement_progress, read_heartbeat_settlement, render_owed_host_command,
+    settlement_result_payload,
 )
 
 
@@ -130,7 +131,14 @@ def settle_refreshed_turn(
     if not settled_replay:
         try:
             workspace = delivery_workspace_path.expanduser().resolve() if delivery_workspace_path else None
-            command = shlex.split(owed["command"])
+            if "command_argv" in owed:
+                command = owed["command_argv"]
+                if (not isinstance(command, list) or not command or
+                        not all(isinstance(arg, str) for arg in command) or
+                        render_owed_host_command(command) != owed["command"]):
+                    raise ValueError("owed quota command does not match its argument vector")
+            else:
+                command = shlex.split(owed["command"])
             # Validate the owner-rendered argv through the actual CLI parser too:
             # a projector bug must not debit a different valid Turn before readback.
             from ..cli import build_parser

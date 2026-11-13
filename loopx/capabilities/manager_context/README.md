@@ -241,6 +241,14 @@ awaiting explicit requester consumption. The same read model is returned by
 private agenda contains current-purpose excerpts and explicit links, not source
 transcripts, result bodies or receiver rationale.
 
+The agenda also carries a bounded `return_attention` projection for sent peer
+requests whose returned result has not been consumed. It contains only the
+request/revision identity, result keys and delivery/consumption state. Native
+context delivery places this projection in the next Turn's opening before long
+work-context sources, while the full result text remains behind the existing
+`manager-inbox read` command. This preserves asynchronous pull semantics and
+does not interrupt an active Turn or treat visibility as consumption.
+
 Outgoing requests to an original project conversation use the same typed address
 reader as explicit peer returns. The agenda retains that conversation recipient
 and its current revision without inventing a Goal/Agent receiver. A changed
@@ -348,6 +356,20 @@ request, publishes a result or grants effects. It is collected by the existing
 LoopX quota/heartbeat Turn-start path; arbitrary host Turns that do not invoke
 that path are outside this integration. Frontend/Lark conversations retain their
 existing request and return views; no new screen or setting is introduced.
+
+The progressive quota hook's required command requests the Inbox Markdown view.
+When every item on a page has the same `instruction` or `next_action`, apply
+that exact value from `shared_item_guidance` to each item on that page. Differing
+values and all request bodies, current state, read receipts, warnings, and
+cursors are delivered in full. Use the same command with the returned
+`--cursor` or `--operation-cursor` as appropriate. Plain or JSON CLI reads retain the per-item fields.
+The command on an explicit context-delivery-off guard retains the JSON view.
+
+渐进 quota 的必读命令使用 Inbox Markdown 视图。当前页每条的 `instruction` 或
+`next_action` 完全相同时，从 `shared_item_guidance` 读取原值并应用到本页每条。
+不同指引、请求全文、当前状态、读回执、警告和游标均完整交付。用相同命令和
+对应的 `--cursor` 或 `--operation-cursor` 读完后续页。普通或 JSON CLI 读保留逐条字段。显式关闭上下文交付时，
+必读命令继续使用 JSON 视图。
 
 The local Inbox read transaction now lives in
 `loopx/control_plane/collaboration/inbox_read.ts`. It reuses the typed receipt,

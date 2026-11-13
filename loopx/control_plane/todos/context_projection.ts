@@ -27,15 +27,21 @@ export function projectTodoContextPage(input: JsonObject): JsonObject {
   if (input.summary_display_views !== undefined) {
     if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display views cannot be combined with other views");
     const source = requireJsonObject(input.summary_display_views, "summary display views");
-    if (Object.keys(source).some(key => key !== "source" && key !== "handoff_gates")) {
+    if (Object.keys(source).some(key => key !== "source" && key !== "handoff_gates" && key !== "view_names")) {
       throw new EffectRuntimeRequestError("invalid summary display views fields");
     }
     requireJsonObject(source.source, "summary source");
-    return {
-      summary: projectTodoSummaryDisplay(source),
-      planning: projectTodoSummaryDisplay({source: source.source, include_terminal: false}),
-      terminal: projectTodoSummaryDisplay({source: source.source, include_terminal: true}),
+    const views: Record<string, () => JsonObject[]> = {
+      summary: () => projectTodoSummaryDisplay(source),
+      planning: () => projectTodoSummaryDisplay({source: source.source, include_terminal: false}),
+      terminal: () => projectTodoSummaryDisplay({source: source.source, include_terminal: true}),
     };
+    const names = source.view_names === undefined ? Object.keys(views) : source.view_names;
+    if (!Array.isArray(names) || names.length === 0 || new Set(names).size !== names.length ||
+        names.some(name => typeof name !== "string" || !Object.hasOwn(views, name))) {
+      throw new EffectRuntimeRequestError("summary display views must name distinct supported views");
+    }
+    return Object.fromEntries(names.map(name => [name, views[name as string]()]));
   }
   if (input.summary_display !== undefined) {
     if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display cannot be combined with other views");
@@ -73,6 +79,10 @@ export function projectTodoContextPage(input: JsonObject): JsonObject {
   const limit = requireInteger(input.limit, "limit");
   if (offset < 0 || limit < 1 || limit > 48) throw new EffectRuntimeRequestError("Todo context page is out of range");
   const exact = input.todo_id !== undefined && input.todo_id !== null;
+  const query = input.query ?? "";
+  if (typeof query !== "string" || Array.from(query).length > 200 || (exact && query)) {
+    throw new EffectRuntimeRequestError("invalid Todo context query");
+  }
   if (exact && (typeof input.todo_id !== "string" || !input.todo_id)) {
     throw new EffectRuntimeRequestError("todo_id must be a non-empty string");
   }
@@ -82,7 +92,13 @@ export function projectTodoContextPage(input: JsonObject): JsonObject {
   active.sort((a, b) => Number(a.role !== "user") - Number(b.role !== "user")
     || (String(a.priority ?? "Z") < String(b.priority ?? "Z") ? -1
       : String(a.priority ?? "Z") > String(b.priority ?? "Z") ? 1 : 0));
-  const todos = active.slice(offset, offset + limit).map(record => {
+  const needle = query.trim().toLocaleLowerCase();
+  // Search only fields this audience can read. A private continuation must not
+  // become a membership oracle for a group, even when its text is not returned.
+  const matched = needle ? active.filter(record => [record.todo_id, record.title, record.text,
+    ...(owner ? [record.note, record.continuation_hint] : [])]
+    .some(value => typeof value === "string" && value.toLocaleLowerCase().includes(needle))) : active;
+  const todos = matched.slice(offset, offset + limit).map(record => {
     const row: JsonObject = {};
     for (const key of CONTEXT_FIELDS) {
       if (record[key] !== undefined && record[key] !== null) row[key] = record[key];
@@ -101,8 +117,8 @@ export function projectTodoContextPage(input: JsonObject): JsonObject {
     row.content_truncated = truncated;
     return row;
   });
-  return {todos, coverage: {active: active.length, included: todos.length,
-    omitted: Math.max(0, active.length - todos.length)}};
+  return {todos, coverage: {active: active.length, ...(needle ? {matched: matched.length} : {}), included: todos.length,
+    omitted: Math.max(0, matched.length - todos.length)}};
 }
 
 /** Lossless CLI presentation only; the full decision read model stays intact. */

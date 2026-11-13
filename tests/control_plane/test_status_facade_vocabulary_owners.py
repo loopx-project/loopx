@@ -54,7 +54,10 @@ FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
         (status,),
     ),
     "AUTONOMOUS_REPLAN_SCHEMA_VERSION": (autonomous_replan_projection, (status,)),
-    "BACKLOG_HYGIENE_BULLET_PATTERN": (active_state_projection, (status,)),
+    "BACKLOG_HYGIENE_BULLET_PATTERN": (
+        active_state_projection,
+        (state_projection, status),
+    ),
     "BACKLOG_HYGIENE_HINT_PATTERN": (active_state_projection, (status,)),
     "BACKLOG_HYGIENE_SECTION_HEADINGS": (active_state_projection, (status,)),
     "DEAD_MONITOR_REPEAT_SCHEMA_VERSION": (autonomous_replan_projection, (status,)),

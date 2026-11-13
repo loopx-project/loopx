@@ -102,6 +102,10 @@ def _build(project: Path, *, include_detail: bool) -> dict[str, Any]:
 def _host_shadow_document(payload: dict[str, Any]) -> dict[str, Any]:
     command_pack = payload["command_pack"]
     transaction = payload["guided_transaction"]
+    recommendation = dict(payload["recommended_next_step"])
+    if "plan_prompt_ref" in recommendation:
+        assert "plan_prompt" not in recommendation
+        recommendation["plan_prompt"] = _resolve_pointer(payload, recommendation.pop("plan_prompt_ref"))
     return {
         "schema_version": payload["schema_version"],
         "project": payload["project"],
@@ -110,7 +114,7 @@ def _host_shadow_document(payload: dict[str, Any]) -> dict[str, Any]:
         "agent_id": payload["agent_id"],
         "host_surface": payload["host_surface"],
         "goal_text": payload["goal_text"],
-        "recommended_next_step": payload["recommended_next_step"],
+        "recommended_next_step": recommendation,
         "ordered_steps": transaction["ordered_steps"],
         "idempotency_policy": transaction["idempotency_policy"],
         "preserve_todos_policy": transaction["preserve_todos_policy"],
@@ -551,14 +555,24 @@ def test_invalid_idle_timeout_remediation_reuses_typed_runtime_message(
 
 
 def test_default_projection_preserves_host_actions_and_json_anchors(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project = _write_connected_project(tmp_path)
-    compact = _build(project, include_detail=False)
-    detailed = _build(project, include_detail=True)
+    code, compact = _invoke_start_goal_for_host(project, "codex-app")
+    detail_code, detailed = _invoke_start_goal_for_host(project, "codex-app", include_detail=True)
+    assert code == detail_code == 0
 
     assert set(compact) == set(detailed)
     assert _host_shadow_document(compact) == _host_shadow_document(detailed)
+    recommendation = compact["recommended_next_step"]
+    assert "plan_prompt" not in recommendation
+    assert recommendation["plan_prompt_ref"] == "#/command_pack/commands/goal_start_plan_prompt"
+    assert _resolve_pointer(compact, recommendation["plan_prompt_ref"]) == (
+        detailed["recommended_next_step"]["plan_prompt"]
+    )
+    assert "plan_prompt_ref" not in detailed["recommended_next_step"]
+    assert compact["message"] == detailed["message"]
     assert compact["command_pack_detail_included"] is False
     assert detailed["command_pack_detail_included"] is True
     assert compact["guided_transaction"]["ordered_steps"][-1]["id"] == (
@@ -1038,9 +1052,10 @@ def test_projection_materially_reduces_repetition_without_hiding_measurement(
     compact_json = json.dumps(compact, ensure_ascii=False, sort_keys=True)
     detailed_json = json.dumps(detailed, ensure_ascii=False, sort_keys=True)
 
-    # Exact-readback guidance is useful common content in both projections;
-    # retain the duplicate-content checks below rather than remove that guidance.
-    assert len(compact_json) <= int(len(detailed_json) * 0.66)
+    # Both views carry one copy of the declaration/link recipe. Its roughly
+    # 700 common characters contribute about 240 characters to the ratio
+    # difference (34% of the added content). Keep the duplicate limits below.
+    assert len(compact_json) <= int(len(detailed_json) * 0.66) + 240
     compact_duplication = compact["packet_summary"]["duplication_measurement"]
     detailed_duplication = detailed["packet_summary"]["duplication_measurement"]
     assert compact_duplication["objective_content"]["duplicate_occurrences"] <= 11
@@ -1184,14 +1199,18 @@ def test_cli_codex_app_reuses_ambient_thread_binding(
     assert payload["guided_transaction"].get("blocked_by") is None
 
 
-def test_cli_trae_app_reuses_ambient_thread_binding(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize(
+    ("host_surface", "prompt_flag"),
+    (("trae_app", "--trae_app"), ("traex-cli", "--runtime-profile generic_cli")),
+)
+def test_cli_trae_hosts_reuse_ambient_thread_binding(
+    tmp_path: Path, monkeypatch, host_surface: str, prompt_flag: str
 ) -> None:
     project = _write_connected_project(tmp_path)
     registry_path = project / ".loopx" / "registry.json"
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["thread_agent_bindings"] = [
-        {"thread_id": "trae-thread", "host_surface": "trae_app", "agent_id": AGENT_ID}
+        {"thread_id": "trae-thread", "host_surface": host_surface, "agent_id": AGENT_ID}
     ]
     registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
     monkeypatch.setenv("TRAECLI_THREAD_ID", "trae-thread")
@@ -1209,7 +1228,7 @@ def test_cli_trae_app_reuses_ambient_thread_binding(
                 "--goal-id",
                 GOAL_ID,
                 "--host-surface",
-                "trae_app",
+                host_surface,
                 "--goal-text",
                 GOAL_TEXT,
             ]
@@ -1220,9 +1239,77 @@ def test_cli_trae_app_reuses_ambient_thread_binding(
     assert payload["thread_id"] == "trae-thread"
     assert payload["agent_id"] == AGENT_ID
     assert payload["thread_agent_binding"]["status"] == "bound"
-    assert "--trae_app" in payload["command_pack"]["commands"][
+    assert payload["goal_text"] == GOAL_TEXT
+    assert prompt_flag in payload["command_pack"]["commands"][
         "heartbeat_prompt"
     ]
+
+
+@pytest.mark.parametrize(
+    ("ambient", "bound_host", "explicit", "conflict", "expected_gate"),
+    (
+        ("bound-thread", "traex-cli", None, False, None),
+        ("other-thread", "traex-cli", "bound-thread", False, None),
+        ("new-thread", "traex-cli", None, False, "fresh_agent_registration_required"),
+        (None, "traex-cli", None, False, "thread_binding_selection_required"),
+        ("bound-thread", "trae_app", None, False, "fresh_agent_registration_required"),
+        ("bound-thread", "traex-cli", None, True, "thread_binding_conflict"),
+    ),
+)
+def test_cli_traex_thread_continuity_preserves_identity_fences(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ambient: str | None,
+    bound_host: str,
+    explicit: str | None,
+    conflict: bool,
+    expected_gate: str | None,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_path = project / ".loopx" / "registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    coordination = registry["goals"][0]["coordination"]
+    bindings = [
+        {"thread_id": "bound-thread", "host_surface": bound_host, "agent_id": AGENT_ID}
+    ]
+    if conflict:
+        coordination["registered_agents"].append("conflicting-agent")
+        bindings.append(
+            {"thread_id": "bound-thread", "host_surface": bound_host,
+             "agent_id": "conflicting-agent"}
+        )
+    coordination["thread_agent_bindings"] = bindings
+    registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+    before = registry_path.read_bytes()
+    # Another host's ambient id cannot fill a missing TraeX id.
+    monkeypatch.setenv("CODEX_THREAD_ID", "bound-thread")
+    if ambient is None:
+        monkeypatch.delenv("TRAECLI_THREAD_ID", raising=False)
+    else:
+        monkeypatch.setenv("TRAECLI_THREAD_ID", ambient)
+    argv = [
+        "--format", "json", "start-goal", "--guided", "--project", str(project),
+        "--goal-id", GOAL_ID, "--host-surface", "traex-cli", "--goal-text", GOAL_TEXT,
+    ]
+    if explicit is not None:
+        argv += ["--thread-id", explicit]
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(argv)
+    assert exit_code == 0
+    payload = json.loads(output.getvalue())
+    assert payload["goal_text"] == GOAL_TEXT
+    assert payload.get("thread_id") == (explicit or ambient)
+    assert registry_path.read_bytes() == before
+    gate = payload["guided_transaction"].get("identity_selection_gate")
+    if expected_gate is None:
+        assert gate is None
+        assert payload["agent_id"] == AGENT_ID
+        assert payload["thread_agent_binding"]["status"] == "bound"
+    else:
+        assert gate["state"] == expected_gate
+        assert payload["agent_id"] is None
+        assert payload["guided_transaction"]["blocked_by"] == "agent_identity_selection"
 
 
 def test_start_goal_binds_selected_lane_before_todo_writeback(
@@ -1988,6 +2075,47 @@ def test_projection_preserves_multi_goal_selection_actions(tmp_path: Path) -> No
     ]
 
 
+def test_guided_start_uses_one_registry_version_for_goal_selection(tmp_path: Path, monkeypatch) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_path = project / ".loopx" / "registry.json"
+    single_goal = registry_path.read_bytes()
+    initial = json.loads(single_goal)
+    second_goal_id = "guided-projection-second-goal"
+    initial["goals"].append({**initial["goals"][0], "id": second_goal_id})
+    registry_path.write_text(json.dumps(initial), encoding="utf-8")
+    replacement = registry_path.with_name("registry.next")
+    replacement.write_bytes(single_goal)
+    load_registry = command_pack_module.load_registry
+
+    def replace_after_first_read(path, **kwargs):
+        document = load_registry(path, **kwargs)
+        if path == registry_path and replacement.exists():
+            replacement.replace(registry_path)
+        return document
+
+    monkeypatch.setattr(command_pack_module, "load_registry", replace_after_first_read)
+
+    def preview():
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            assert cli_main([
+                "--registry", str(registry_path), "--runtime-root", str(tmp_path / "runtime"),
+                "--format", "json", "start-goal", "--guided", "--project", str(project),
+                "--host-surface", "codex-app", "--thread-id", "snapshot-thread", "--goal-text", GOAL_TEXT,
+            ]) == 0
+        return json.loads(stdout.getvalue())
+
+    first = preview()
+    assert first["guided_transaction"]["blocked_by"] == "goal_selection"
+    assert [choice["goal_id"] for choice in first["goal_selection_gate"]["choices"]] == [GOAL_ID, second_goal_id]
+    assert first["agent_id"] is None
+    assert registry_path.read_bytes() == single_goal
+
+    next_preview = preview()
+    assert next_preview["goal_id"] == GOAL_ID
+    assert "goal_selection_gate" not in next_preview["guided_transaction"]
+
+
 def test_start_goal_keeps_the_requested_linked_worktree(
     tmp_path: Path,
     monkeypatch,
@@ -2085,33 +2213,58 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
+    base_args = [
+        "--format",
+        "json",
+        "start-goal",
+        "--guided",
+        "--project",
+        str(project),
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--goal-text",
+        GOAL_TEXT,
+        "--capability-route",
+        "issue-fix",
+    ]
+
+    compact_output = io.StringIO()
+    with contextlib.redirect_stdout(compact_output):
         exit_code = cli_main(
-            [
-                "--format",
-                "json",
-                "start-goal",
-                "--guided",
-                "--project",
-                str(project),
-                "--goal-id",
-                GOAL_ID,
-                "--agent-id",
-                AGENT_ID,
-                "--goal-text",
-                GOAL_TEXT,
-                "--capability-route",
-                "issue-fix",
-            ]
+            base_args
         )
 
     assert exit_code == 0
-    payload = json.loads(output.getvalue())
+    payload = json.loads(compact_output.getvalue())
     assert payload["guided_transaction"]["blocked_by"] == "host_surface_selection"
     assert payload["safety_contract"]["writes_registry"] is False
     choices = payload["host_surface_selection_gate"]["choices"]
     assert [choice["host_surface"] for choice in choices] == [
+        "codex-app",
+        "trae_app",
+        "codex-app-ssh",
+        "codex-cli-tui",
+        "claude-code",
+        "shell",
+        "other-agent",
+    ]
+    gate = payload["host_surface_selection_gate"]
+    assert gate["choice_projection"] == "compact"
+    assert gate["omitted_choice_count"] == 14
+    assert "--include-command-pack-detail" in gate["full_choices_detail_command"]
+    assert payload["packet_summary"]["compatibility"]["compact_projection_default"] is True
+    assert "Choose Where This Agent Runs" in payload["message"]
+    assert "Need another host (14 more)?" in payload["message"]
+
+    detailed_output = io.StringIO()
+    with contextlib.redirect_stdout(detailed_output):
+        detailed_exit = cli_main([*base_args, "--include-command-pack-detail"])
+    assert detailed_exit == 0
+    detailed = json.loads(detailed_output.getvalue())
+    full_choices = detailed["host_surface_selection_gate"]["choices"]
+    assert [choice["host_surface"] for choice in full_choices] == [
         "codex-app",
         "trae_app",
         "codex-app-ssh",
@@ -2134,7 +2287,13 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
         "shell",
         "other-agent",
     ]
-    ide = next(choice for choice in choices if choice["host_surface"] == "codex-ide-plugin")
+    assert detailed["host_surface_selection_gate"]["choice_projection"] == "complete"
+    assert detailed["host_surface_selection_gate"]["omitted_choice_count"] == 0
+    ide = next(
+        choice
+        for choice in full_choices
+        if choice["host_surface"] == "codex-ide-plugin"
+    )
     assert "--host-surface codex-ide-plugin" in ide["rerun_command"]
     assert "--capability-route issue-fix" in ide["rerun_command"]
 

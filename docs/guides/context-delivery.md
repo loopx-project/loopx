@@ -81,10 +81,13 @@ canonical read must still establish the selected Todo and its source. The
 note binds to its Goal, Agent, Todo, reader and authority source; changing only
 evidence or other Todo metadata does not make the same literal note new. Current
 task text and controls remain fresh, and metadata keeps its current source and
-existing reader. Partial delivery, changed text, incompatible identity or
-compaction returns the full note; explicit recovery reads the same capture.
-This uses observed field coverage, not file existence as retention proof, and
-does not establish model comprehension or net workflow savings.
+existing reader. If the new note starts with the exact observed note, the reader
+can present only the added text. In an `append_to_observed_text` selection,
+`value` is the suffix after `prefix_bytes` UTF-8 bytes. The next read can use the
+longer note as its prefix only after the Host observes the complete suffix view.
+A partial prior read, rewrite, incompatible identity, or compaction calls for the
+full note. Explicit recovery reads the same capture. Observed delivery does not
+establish model comprehension or net workflow savings.
 
 Replan authoring uses the same-response form: CLI display can reference the
 complete `vision_authoring` in a durable-writeback step. The existing TypeScript
@@ -166,9 +169,11 @@ response's `recovery` identifies its complete current required view;
 Do not substitute one file's hash for another's.
 
 - Use known JSON Pointers directly; repeat `--select` for related fields.
-- For an unknown pointer, list the nearest known parent with `--list`; use
-  `--list-depth 2` when it avoids another discovery round. To list the root,
-  omit `--select` rather than using `/`, which denotes an empty-name property.
+- For an unknown pointer, list the nearest known parent with
+  `--list /interaction_contract --list-depth 2`. This is equivalent to
+  `--list --select /interaction_contract --list-depth 2`; repeated `--list POINTER`
+  and `--select POINTER` combine into the same index. To list the root, use bare
+  `--list` without selectors or `--list ''`; `/` denotes an empty-name property.
 - Follow the returned byte cursor for an unfinished selected range. EOF applies
   to that selection, not to unread fields elsewhere in the capture.
 - Size both reader pages and the host tool's combined output budget. Valid JSON,

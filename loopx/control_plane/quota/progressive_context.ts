@@ -1,4 +1,5 @@
 import {EffectiveAction} from "./effective_action.generated.ts";
+import {AgentScopeFrontierAction} from "../agents/agent_scope_frontier.generated.ts";
 /** Model presentation: requirements stay inline, supporting material is
  * addressed in the immutable source. This plan changes no canonical state. */
 import {isDeepStrictEqual} from "node:util";
@@ -7,7 +8,7 @@ import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, hasUnboundActionSelection, selectedWorkTodoId}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -18,11 +19,15 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
+export type PreparationScopeDetail = {path: Path; marker_path?: Path; instruction: string};
 type ReadSelection = {pointer: string; path: Path};
-type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]};
+type ReusableReadField = {
+  path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]; appendText?: true;
+};
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
 const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
+const REPLAN_CONTEXT_PATH = ["autonomous_replan_obligation", "replan_context"];
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -45,6 +50,42 @@ function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
     && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
     && isDeepStrictEqual(identity, jsonObject(jsonObject(context.heartbeat_receipt)?.settlement_identity))
     ? identity : undefined;
+}
+
+/** Reorder the opening for an exact dated Todo reentry. The saved capture
+ * still supplies its original settlement obligations. */
+function hasBoundDatedTodoReentry(context: JsonObject, interaction: JsonObject, plan: JsonObject | undefined): boolean {
+  const action = AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED;
+  const cli = jsonObject(interaction.cli_channel), channel = jsonObject(interaction.agent_channel);
+  const frontier = jsonObject(context.agent_scope_frontier), selected = jsonObject(context.selected_todo);
+  const condition = jsonObject(selected?.resume_condition), resume = jsonObject(condition?.resume_receipt);
+  const receipt = jsonObject(context.heartbeat_receipt), identity = jsonObject(plan?.identity);
+  const scheduled = jsonObject(context.contract_binding)?.scheduler_execution_args;
+  const [first] = Array.isArray(frontier?.deferred_resume_candidates) ? frontier.deferred_resume_candidates : [];
+  const alternateRoute = ["dependency_cycle_candidates", "monitor_blocked_resume_candidates",
+    "route_continuation_replan_candidates"].some(key => {
+      const candidates = frontier?.[key];
+      return candidates !== undefined && (!Array.isArray(candidates) || candidates.length > 0);
+    });
+  return context.schema_version === "loopx_turn_envelope_v1" && context.ok === true && context.should_run === true
+    && context.effective_action === action && interaction.mode === action && frontier?.action === action && !alternateRoute
+    && context.normal_delivery_allowed === false && channel?.delivery_allowed === false && channel.must_attempt === true
+    && jsonObject(interaction.user_channel)?.action_required === false && cli?.turn_binding_required !== true
+    && cli?.spend_allowed_now === false && Array.isArray(cli.next_cli_actions) && cli.next_cli_actions.length === 3
+    && cli.next_cli_actions.every(value => typeof value === "string" && value.length > 0)
+    && typeof scheduled === "string" && scheduled.length > 0
+    && typeof selected?.todo_id === "string" && selected.todo_id === jsonObject(first)?.todo_id
+    && selected.status === "deferred" && selected.resume_ready === true
+    && condition?.schema_version === "todo_resume_condition_v0" && condition.kind === "resume_at"
+    && condition.satisfied === true && condition.resume_when === selected.resume_when
+    && resume?.schema_version === "todo_resume_receipt_v0" && resume.condition_kind === condition.kind
+    && resume.todo_id === selected.todo_id && resume.resume_when === selected.resume_when
+    && receipt?.status === "committed" && orderedSettlementSteps(plan) !== undefined
+    && identity?.schema_version === "quota_settlement_identity_v0" && identity.todo_id === selected.todo_id
+    && identity.goal_id === context.goal_id && identity.agent_id === jsonObject(context.agent_identity)?.agent_id
+    && typeof identity.effect_id === "string" && typeof receipt.turn_instance_id === "string"
+    && identity.turn_instance_id === receipt.turn_instance_id
+    && isDeepStrictEqual(identity, receipt.settlement_identity);
 }
 
 function reusableWritebackPrecondition(context: JsonObject): ReusableReadField | undefined {
@@ -111,7 +152,7 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
         known(content, ["todo", "authority_read"]) && (todo.todo_id === undefined || todo.todo_id === selectedId);
       if (!full && !compact) return [];
       return [{path: [...path, "todo", "note"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
-        sourceIdentity: [...route, authority.source_authority, selectedId]}];
+        sourceIdentity: [...route, authority.source_authority, selectedId], appendText: true}];
     }
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
@@ -189,6 +230,32 @@ function observedSectionDigest(body: string, field?: ReusableReadField): string 
   return createHash("sha256").update(value).digest("hex");
 }
 
+/** A length-bearing proof lets the current captured note verify a previous
+ * prefix without keeping another copy of that note in the native journal. */
+function observedSectionProof(body: string, value: unknown, field?: ReusableReadField): string {
+  const digest = observedSectionDigest(body, field);
+  return field?.appendText && typeof value === "string" ? `${Buffer.byteLength(value)}:${digest}` : digest;
+}
+
+function matchesObservedSection(expected: unknown, body: string, value: unknown, field?: ReusableReadField): boolean {
+  const proof = observedSectionProof(body, value, field);
+  return expected === proof || (field?.appendText === true && expected === proof.slice(proof.indexOf(":") + 1));
+}
+
+function observedTextAppend(value: unknown, proof: unknown, identity: ReturnType<typeof contextSourceIdentity>,
+    field?: ReusableReadField):
+    {prefixBytes: number; suffix: string} | undefined {
+  if (!field?.appendText || typeof value !== "string" || typeof proof !== "string") return undefined;
+  const parts = /^(\d+):([a-f0-9]{64})$/.exec(proof);
+  if (!parts) return undefined; // A legacy digest can still prove exact equality.
+  const prefixBytes = Number(parts[1]), bytes = Buffer.from(value);
+  if (!Number.isSafeInteger(prefixBytes) || prefixBytes < field.minimumBytes || prefixBytes >= bytes.length
+      || (bytes[prefixBytes]! & 0xc0) === 0x80) return undefined;
+  const prefix = bytes.subarray(0, prefixBytes).toString("utf8");
+  if (observedSectionDigest(identity(prefix, ["context", ...field.path]), field) !== parts[2]) return undefined;
+  return {prefixBytes, suffix: bytes.subarray(prefixBytes).toString("utf8")};
+}
+
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
 export function contextReadSectionDigests(request: JsonObject, paths: Path[], exactBody?: ReusableExactBody): JsonObject {
@@ -212,7 +279,8 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[], ex
       const read = capturedContextSelection({context, select: [address], recover_selection_errors: true});
       if (read.rejected_selection) continue;
       const path = (read.selections as {path: Path}[])[0].path;
-      if (observedSectionDigest(identity(at(context, path), ["context", ...path]), fields.get(address)) === expected)
+      const value = at(context, path);
+      if (matchesObservedSection(expected, identity(value, ["context", ...path]), value, fields.get(address)))
         coverage.add(address);
     }
     const complete = (path: Path): boolean => {
@@ -223,12 +291,22 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[], ex
     };
     for (const [address, field] of fields)
       if (complete(field.path)) covered.set(address, field);
+    // The native reader only presents this after authenticating the retained
+    // proof against the current epoch and checking the rendered page bytes.
+    const presented = jsonObject(request.observed_text_append);
+    const address = presented?.pointer;
+    const field = typeof address === "string" ? fields.get(address) : undefined;
+    if (typeof address === "string" && field) {
+      const append = observedTextAppend(at(context, field.path), inherited[address], identity, field);
+      if (append && append.prefixBytes === presented?.prefix_bytes) covered.set(address, field);
+    }
   }
   return Object.fromEntries([...covered].flatMap(([address, {path, minimumBytes}]) => {
-    const content = identity(at(context, path), ["context", ...path]);
+    const value = at(context, path);
+    const content = identity(value, ["context", ...path]);
     // Parent delivery must not multiply tiny bodies into a larger journal.
     return selected.has(address) || Buffer.byteLength(content) >= minimumBytes
-      ? [[address, observedSectionDigest(content, fields.get(address))]] : [];
+      ? [[address, observedSectionProof(content, value, fields.get(address))]] : [];
   }));
 }
 
@@ -267,7 +345,7 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
     const body = at(context, path);
     if (typeof seen[address] === "string" && field) {
       const content = identity(body, ["context", ...path]);
-      if (Buffer.byteLength(content) >= field.minimumBytes && observedSectionDigest(content, field) === seen[address]) {
+      if (Buffer.byteLength(content) >= field.minimumBytes && matchesObservedSection(seen[address], content, body, field)) {
         reused[address] = seen[address];
         return field.freshKeys.filter(key => body !== null && typeof body === "object" &&
           Object.hasOwn(body, key)).map(key => ({pointer: pointer([...path, key]), path: [...path, key]}));
@@ -282,16 +360,27 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
     return Object.keys(reused).length > before ? children : [row];
   };
   const current = selections.flatMap(visit);
-  if (!Object.keys(reused).length) return authoringOnly();
+  const note = current.find(row => fields.get(row.pointer)?.appendText);
+  const value = note && at(context, note.path);
+  const append = note && observedTextAppend(value, seen[note.pointer], identity, fields.get(note.pointer));
+  if (!append && !Object.keys(reused).length) return authoringOnly();
   const grouped = capturedContextSelection({context, initial_read: true}, current.map(row => row.pointer)).selections as typeof selections;
+  const textAppend = note && append && grouped.some(row => row.pointer === note.pointer)
+    ? {pointer: note.pointer, prefix_bytes: append.prefixBytes} : undefined;
+  if (textAppend) reused[textAppend.pointer] = seen[textAppend.pointer];
+  if (!Object.keys(reused).length) return authoringOnly();
   const original = capturedContextSelection({context, initial_read: true}, pointers).selections as typeof selections;
   const bytes = (rows: typeof selections) => rows.reduce((total, row) => total + Buffer.byteLength(
     JSON.stringify({pointer: row.pointer}).slice(0, -1) + ',"value":' + identity(at(context, row.path), ["context", ...row.path]) + '}'), 0);
   // Splitting a container repeats addresses. Count those and the reuse index;
   // retain a margin for the existing recovery guidance, or deliver it whole.
-  if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys({...reused, ...retainedAuthoring})))
+  // Reserve space for the appended selection's display marker and prefix length.
+  const appendSavings = textAppend && append
+    ? Buffer.byteLength(JSON.stringify(value)) - Buffer.byteLength(JSON.stringify(append.suffix)) - 128 : 0;
+  if (bytes(grouped) - appendSavings + Buffer.byteLength(JSON.stringify(Object.keys({...reused, ...retainedAuthoring})))
       + MIN_REUSABLE_BODY_BYTES >= bytes(original)) return authoringOnly();
   Object.assign(reused, retainedAuthoring);
+  const observation = {reused, ...(textAppend ? {text_append: textAppend} : {})};
   if (request.include_initial_read_plan === true) {
     // The IO adapter already has the ordinary plan. Keep unchanged runs even
     // when reused sections are far apart in the ordered selection.
@@ -310,9 +399,9 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
       splices.push({start, end: original.length, selections: grouped.slice(next)});
     const edits = splices.length === 1 ? {selection_splice: splices[0]} : {selection_splices: splices};
     if (splices.length && Buffer.byteLength(JSON.stringify(edits)) < Buffer.byteLength(JSON.stringify({selections: grouped})))
-      return {...edits, reused};
+      return {...edits, ...observation};
   }
-  return {selections: grouped, reused};
+  return {selections: grouped, ...observation};
 }
 
 function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelection[]): JsonObject {
@@ -343,7 +432,9 @@ function withLinkedObservedRemainder(observed: JsonObject | undefined,
   const remaining = initial.remaining.selections as ReadSelection[];
   const scoped = remaining.flatMap(row => addresses.has(row.pointer) || selected.some(item => pathStartsWith(row.path, item.path))
     ? [row] : selected.filter(item => pathStartsWith(item.path, row.path)));
-  return {...observed, linked_remaining: compactObservedSelection(remaining, scoped)};
+  const append = jsonObject(observed.text_append);
+  const text = append && scoped.some(row => row.pointer === append.pointer) ? {text_append: append} : {};
+  return {...observed, linked_remaining: {...compactObservedSelection(remaining, scoped), ...text}};
 }
 
 function observedSelection(ordinary: ReadSelection[], observed: JsonObject): ReadSelection[] | undefined {
@@ -382,7 +473,7 @@ function inlineReadSections(request: JsonObject, required: JsonObject, exactBody
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
 export function progressiveContextPlan(request: JsonObject,
-    scope?: {path: Path; marker_path: Path; instruction: string}): JsonObject {
+    scopes: readonly PreparationScopeDetail[] = []): JsonObject {
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -452,9 +543,9 @@ export function progressiveContextPlan(request: JsonObject,
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
-  if (scope) {
+  for (const scope of scopes) {
     deferred.push({path: scope.path, read_instruction: scope.instruction});
-    instructions.push({path: scope.marker_path, value: pointer(scope.path)});
+    if (scope.marker_path) instructions.push({path: scope.marker_path, value: pointer(scope.path)});
   }
   if (!deferred.length && !references.length) return unchanged;
   if (references.length) instructions.push({path: ["context_reference_instruction"], value:
@@ -743,8 +834,40 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   return [...opening, ...remaining];
 }
 
-/** A pending Manager Inbox read already delivers these scoped request rows. */
-function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolean {
+/** A suggested Todo in an unbound guard cannot supply the next decision's cue. */
+export function scopedReplanYardstickReversal(decision: JsonObject) {
+  const packet = jsonObject(decision.replan_action_packet);
+  const review = jsonObject(at(decision, REPLAN_CONTEXT_PATH));
+  const explore = jsonObject(review?.explore_basis);
+  const cli = jsonObject(jsonObject(decision.interaction_contract)?.cli_channel);
+  const identity = jsonObject(jsonObject(cli?.settlement_plan)?.identity);
+  const todo = selectedWorkTodoId(decision);
+  const agent = decision.agent_id ?? jsonObject(decision.agent_identity)?.agent_id;
+  if (typeof packet?.obligation_id !== "string" || packet.obligation_id !== review?.obligation_id
+      || packet.settlement_only === true || explore?.availability !== "available"
+      || todo === null || cli?.selection_required === true || identity?.todo_id !== todo
+      || typeof decision.goal_id !== "string" || identity.goal_id !== decision.goal_id
+      || typeof agent !== "string" || identity.agent_id !== agent
+      || !Array.isArray(explore.work_yardsticks)) return undefined;
+
+  const index = explore.work_yardsticks.findIndex(value => {
+    const cue = jsonObject(value);
+    return cue?.todo_id === todo && cue.proxy_order_reversed === true
+      && typeof cue.source_finding_id === "string" && typeof cue.comparison_candidate_ref === "string";
+  });
+  if (index < 0) return undefined;
+  const cue = explore.work_yardsticks[index] as JsonObject;
+  const fields = ["todo_id", "source_finding_id", "comparison_candidate_ref", "proxy_order_reversed", "proxy_comparison_scope",
+    "fidelity_status", "paired_candidates"].filter(field =>
+    ["string", "boolean", "number"].includes(typeof cue[field]));
+  if (Array.isArray(cue.comparison_finding_ids) && cue.comparison_finding_ids.length > 0
+      && cue.comparison_finding_ids.length <= 4 && cue.comparison_finding_ids.every(id => typeof id === "string")) {
+    fields.push("comparison_finding_ids");
+  }
+  return {cue, fields, path: [...REPLAN_CONTEXT_PATH, "explore_basis", "work_yardsticks", index]};
+}
+
+function requiredManagerAgenda(value: unknown, requiredReads: unknown[]): JsonObject | undefined {
   const {content, ...read} = jsonObject(value) ?? {};
   const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
   if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
@@ -752,18 +875,53 @@ function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolea
       || read.ordering !== "before_work" || typeof read.command !== "string" || !read.command
       || source?.ok !== true || source.read_complete !== false
       || !agenda || agenda.read_command !== read.command || agenda.count_unit !== "request"
-      || agenda.scan_complete !== true || agenda.omitted_count !== 0 || agenda.unavailable_count !== 0
+      || agenda.scan_complete !== true || agenda.unavailable_count !== 0
       || !Array.isArray(agenda.items)
       || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
-        "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
-      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return false;
-  const {incoming_count: incoming, outgoing_count: outgoing, items} = agenda;
+        "return_attention", "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
+      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
+  return agenda;
+}
+
+/** A pending Manager Inbox read already delivers these scoped request rows. */
+function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+  const agenda = requiredManagerAgenda(value, requiredReads);
+  if (!agenda) return undefined;
+  const {incoming_count: incoming, outgoing_count: outgoing, omitted_count: omitted, items} = agenda;
   if (typeof incoming !== "number" || !Number.isSafeInteger(incoming) || incoming < 0
       || typeof outgoing !== "number" || !Number.isSafeInteger(outgoing) || outgoing < 0
-      || incoming + outgoing !== items.length) return false;
-  // Keep small agendas inline. Three pointers retain the starting counts and
-  // scan status without repeating the required read's details or guidance.
-  return Buffer.byteLength(JSON.stringify(items), "utf8") >= 2048;
+      || typeof omitted !== "number" || !Number.isSafeInteger(omitted) || omitted < 0
+      || !Array.isArray(items)
+      || !Number.isSafeInteger(incoming + outgoing) || incoming + outgoing !== items.length + omitted
+      || Buffer.byteLength(JSON.stringify(items), "utf8") < 2048) return undefined;
+  const fields = ["incoming_count", "outgoing_count", "scan_complete"];
+  if (omitted === 0) return fields;
+  // A complete scan can have a bounded display. Preserve the omission count
+  // and reconciliation guidance while leaving the rows to the required read.
+  if (typeof agenda.instruction === "string" && agenda.instruction.trim()) {
+    return [...fields, "omitted_count", "instruction"];
+  }
+  return undefined;
+}
+
+/** Keep only returned-result identities in the first page; full Inbox text stays on its owner read. */
+function managerReturnAttention(value: unknown, requiredReads: unknown[]): JsonObject | undefined {
+  const agenda = requiredManagerAgenda(value, requiredReads);
+  const attention = jsonObject(agenda?.return_attention);
+  if (!attention || !known(attention, ["count", "items", "omitted_count"])
+      || typeof attention.count !== "number" || !Number.isSafeInteger(attention.count) || attention.count <= 0
+      || typeof attention.omitted_count !== "number" || !Number.isSafeInteger(attention.omitted_count)
+      || attention.omitted_count < 0 || !Array.isArray(attention.items) || attention.items.length > 4
+      || attention.count !== attention.items.length + attention.omitted_count) return undefined;
+  for (const value of attention.items) {
+    const item = jsonObject(value);
+    if (!item || item.step !== "consume_peer_result" || typeof item.request_id !== "string"
+        || typeof item.unconsumed_return_count !== "number" || item.unconsumed_return_count <= 0
+        || !Array.isArray(item.returns) || !item.returns.some(value => jsonObject(value)?.consumed !== true)) {
+      return undefined;
+    }
+  }
+  return attention;
 }
 
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
@@ -796,6 +954,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // A staged replan has already replaced inline acceptance with a pinned
   // review reader. Deliver its first action and ordering without writeback.
   const replan = object(context.replan_action_packet);
+  let replanReversal: ReturnType<typeof scopedReplanYardstickReversal>;
   if (context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
       replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required" &&
       replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
@@ -821,6 +980,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include("autonomous_replan_obligation", "replan_context", "context_id");
       if (Array.isArray(obligation.triggers)) obligation.triggers.forEach((_trigger, index) =>
         include("autonomous_replan_obligation", "triggers", index, "kind"));
+      replanReversal = scopedReplanYardstickReversal(context);
     }
   }
   include("agent_lane_next_action", "next_step");
@@ -828,25 +988,52 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   include("interaction_contract", "user_channel");
   for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed", "next_task_action"])
     include("interaction_contract", "agent_channel", field);
-  const turnBindingRequired = object(interaction.cli_channel)?.turn_binding_required === true;
+  const cli = object(interaction.cli_channel), planPath = SETTLEMENT_PLAN_PATH;
+  const plan = object(cli?.settlement_plan);
+  const deferredReentry = hasBoundDatedTodoReentry(context, interaction, plan);
+  const turnBindingRequired = cli?.turn_binding_required === true;
+  const admissionFields = ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"];
   if (turnBindingRequired)
-    for (const field of ["turn_binding_required", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"])
+    for (const field of ["turn_binding_required", ...admissionFields])
       include("interaction_contract", "cli_channel", field);
-  include("interaction_contract", "agent_channel", "required_reads");
-  const work = ["interaction_contract", "agent_channel", "work_context"];
-  include(...work, "instruction");
   const channel = object(interaction.agent_channel);
+  // The matching inbox read is already required during explicit Todo selection.
+  const selectingBeforeWork = context.ok === true && context.should_run === true &&
+    channel?.delivery_allowed === false && cli?.spend_allowed_now === false &&
+    cli.spend_after_validation === false && hasUnboundActionSelection(cli);
   const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && channel?.delivery_allowed === true && channel.must_attempt === true && Array.isArray(channel.required_reads)
+    && channel?.must_attempt === true && (channel.delivery_allowed === true || selectingBeforeWork)
+    && Array.isArray(channel.required_reads)
     ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  const attentionSources = sourceRows.filter(({source}) => managerReturnAttention(source, requiredInboxReads));
+  const requiredReadsPath = ["interaction_contract", "agent_channel", "required_reads"];
+  if (!attentionSources.length) include(...requiredReadsPath);
+  const work = ["interaction_contract", "agent_channel", "work_context"];
+  include(...work, "instruction");
+  if (deferredReentry) {
+    // Surface the owner's reopen and same-Turn guard before the long read.
+    for (const field of admissionFields) include("interaction_contract", "cli_channel", field);
+  }
+  // A long Manager Inbox agenda stays behind its required read. Surface only
+  // the bounded returned-result identities before work so paging or context
+  // recovery cannot hide that the requester has a result to consume.
+  const cueStart = pointers.length;
+  if (attentionSources.length) {
+    include(...requiredReadsPath);
+    for (const {index} of attentionSources) {
+      include(...work, "sources", index, "content", "unfinished_delegations", "return_attention");
+    }
+  }
   const selectedTodo = object(context.selected_todo);
   const identityAgent = object(context.agent_identity)?.agent_id;
   const agentId = context.agent_id ?? identityAgent;
   // Deliver the opted-in decision cue before work, while the candidate or
   // test can still change. The template and evidence stay on their owner read.
-  const cueStart = pointers.length;
+  if (replanReversal) {
+    for (const field of replanReversal.fields) include(...replanReversal.path, field);
+  }
   if (context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
       && typeof selectedTodo?.todo_id === "string" && typeof context.goal_id === "string" && typeof agentId === "string"
       && (identityAgent === undefined || identityAgent === agentId)) {
@@ -902,8 +1089,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include(...source, "content", field);
     include(...source, "content", "read_complete");
     const agendaPath = [...source, "content", "unfinished_delegations"];
-    if (canDeferManagerAgenda(_source, requiredInboxReads)) {
-      for (const field of ["incoming_count", "outgoing_count", "scan_complete"]) include(...agendaPath, field);
+    const agendaFields = managerAgendaOpeningFields(_source, requiredInboxReads);
+    if (agendaFields) {
+      for (const field of agendaFields) include(...agendaPath, field);
     } else include(...agendaPath);
     // The preference owner already supplies the complete current scoped view,
     // including corrections, retirement, provenance and advisory authority.
@@ -955,9 +1143,6 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
-  const cli = object(interaction.cli_channel);
-  const planPath = SETTLEMENT_PLAN_PATH;
-  const plan = object(cli?.settlement_plan);
   const steps = orderedSettlementSteps(plan);
   const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
   const [writeback, spend] = settlementSteps ?? [];
@@ -976,7 +1161,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   if (!turnBindingRequired)
     for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
       "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-      if (field !== "next_cli_actions" || !repeatsSettlement) {
+      if ((field !== "next_cli_actions" || !repeatsSettlement) && !(deferredReentry && admissionFields.includes(field))) {
         const before = pointers.length;
         include("interaction_contract", "cli_channel", field);
         // A task-facing operation and its declared continuation belong in the
@@ -992,6 +1177,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include("action_portfolio", "selection_policy");
     include("action_portfolio", "suggested_actions");
   }
+  const planStart = pointers.length;
   if (plan && steps) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
     steps.forEach((value, stepIndex) => {
@@ -1020,6 +1206,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       }
     });
   } else include(...planPath); // Unknown plan versions keep their complete obligations.
+  if (deferredReentry) opening.push(...pointers.splice(planStart));
   // Keep the pinned supporting-read route and its obligations inline.
   // The complete index is available at the same captured address.
   if (inlineSupportingDetails) {

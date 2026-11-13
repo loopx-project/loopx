@@ -20,6 +20,7 @@ from .quota_capture import (
     bind_capture_selection_transport, budgeted_settlement_result, capture_decision, handoff_decision,
     handle_native_context_command, prepare_quota_capture,
     native_context_activation, progressive_context_or_current, project_native_quota_context,
+    settlement_capture_failure_view,
 )
 from ..control_plane.turn_driver.decision_capture import (
     project_captured_context,
@@ -247,7 +248,11 @@ def _dispatch_quota_turn_start_hooks(
             agent_id=args.agent_id,
             available=args.available_capabilities,
         )
-        context_dispatch = dispatch_turn_start_hooks((turn_start_hook(root, registry_path, args.goal_id, args.agent_id),))
+        model_read = (not getattr(args, "scheduler_observation", False)
+                      and native_context_activation(args)["progressive_enabled"])
+        context_dispatch = dispatch_turn_start_hooks((
+            turn_start_hook(root, registry_path, args.goal_id, args.agent_id, model_read=model_read),
+        ))
         from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
         context_dispatch = extend_preferences(context_dispatch, runtime_root=root, registry_path=registry_path,
             goal_id=args.goal_id, agent_id=args.agent_id)
@@ -313,15 +318,7 @@ def _emit_bounded_settlement(payload, args, *, runtime_root, reader_argv, print_
         view = budgeted_settlement_result(payload, runtime_root=runtime_root,
             output_bytes=args.max_page_output_bytes, reader_argv=reader_argv)
     except QuotaDecisionTransportError as exc:
-        # Transport failure cannot replace an already evaluated refusal or
-        # committed receipt. Preserve unknown controls as well as identity;
-        # only the bulky diagnostic snapshots are omitted on this fallback.
-        view = {key: value for key, value in payload.items() if key not in ("before", "after")}
-        view["result_delivery_error"] = {"error_code": exc.error_code, "reason": str(exc),
-            "recommended_action": "Preserve the original result controls and Turn identity. "
-                "Repair capture privacy or remove --max-page-output-bytes and read back the "
-                "same operation; do not repeat admission or assume it did not commit.",
-            "omitted_diagnostics": [key for key in ("before", "after") if key in payload]}
+        view = settlement_capture_failure_view(payload, output_bytes=args.max_page_output_bytes, error=exc)
         print_payload(view, args.format, _quota_renderer(args, failure=True))
         return 1
     print_payload(view, args.format, _quota_renderer(args, failure=payload.get("ok") is not True))

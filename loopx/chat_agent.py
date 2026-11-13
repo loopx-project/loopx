@@ -1733,6 +1733,7 @@ class CodexChatAgentSession:
         project_collaboration: bool = False,
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        check_running: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         text = str(user_message or "")
         if not text.strip():
@@ -1758,21 +1759,16 @@ class CodexChatAgentSession:
         with self._request_id_lock:
             request_id = self.next_request_id
             self.next_request_id += 1
-        turn_input: list[dict[str, Any]] = [
-            {
-                "type": "text",
-                "text": text
-                if output_schema is not None
-                else _turn_prompt(
-                    text,
-                    context_summary=self.context_summary,
-                    execution_mode=self.execution_mode,
-                    runtime_profile=self.runtime_profile,
-                    project_work=self.project_context is not None and self.sandbox == "workspace-write",
-                    public_source_read_context=self._public_source_read_context,
-                ),
-            }
-        ]
+        if output_schema is None:
+            text = _turn_prompt(
+                text,
+                context_summary=self.context_summary,
+                execution_mode=self.execution_mode,
+                runtime_profile=self.runtime_profile,
+                project_work=self.project_context is not None and self.sandbox == "workspace-write",
+                public_source_read_context=self._public_source_read_context,
+            )
+        turn_input: list[dict[str, Any]] = [{"type": "text", "text": text}]
         from .chat_attachments import native_attachment_inputs
         turn_input.extend(native_attachment_inputs(attachments))
         # A running app-server is not permission for a new native Turn. Hold
@@ -1829,7 +1825,9 @@ class CodexChatAgentSession:
             if self.hard_timeout_sec is not None:
                 deadline = min(deadline, started_at + self.hard_timeout_sec)
             try:
-                message = self._next_event(deadline=deadline)
+                message = self._next_event(
+                    deadline=deadline, **({"check": check_running} if check_running is not None else {}),
+                )
             except CodexChatAgentError:
                 now = time.monotonic()
                 if self.hard_timeout_sec is not None and now - started_at >= self.hard_timeout_sec:

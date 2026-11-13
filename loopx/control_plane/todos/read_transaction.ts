@@ -223,6 +223,33 @@ async function collectCanonicalTodoSource(source: JsonObject, dependencies: Loca
 
 const originalRecords = (value: unknown): JsonObject[] => Array.isArray(value) ? value.map(row => requireJsonObject(row, "Todo source row")) : [];
 
+/** Read the selected Todo and lease facts at one checked provider revision.
+ * Reuse full collection validation; only the fields used by preparation cross
+ * the caller boundary. This read acquires no lease and grants no readiness. */
+export async function readExecutionPreparationSource(input: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+  const source = requireJsonObject(input.source, "execution preparation source");
+  const goalId = requireNonEmptyString(source.goal_id, "goal_id");
+  const todoId = id(input.todo_id);
+  if (!todoId || todoId !== input.todo_id) throw new EffectRuntimeRequestError("execution preparation requires an exact Todo id");
+  const canonical = await collectCanonicalTodoSource({
+    runtime_root: source.runtime_root, goal_id: goalId, include_leases: true,
+  }, dependencies);
+  const unavailable = {schema_version: TODO_READ_RESULT, execution_preparation_source: null};
+  if (canonical.status !== "loaded") return unavailable;
+  const todo = originalRecords(canonical.todos).find(row => row.todo_id === todoId);
+  if (!todo) return unavailable;
+  const leases = originalRecords(canonical.leases).filter(row => row.todo_id === todoId)
+    .map(({todo_id, schema_version, status, owner, expires_at, idempotency_key, version}) =>
+      ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version}));
+  return {schema_version: TODO_READ_RESULT, execution_preparation_source: {
+    goal_id: goalId, todo_id: todoId, handoff_mode: canonical.handoff_mode,
+    source_authority: canonical.source_authority, provider_revision: canonical.provider_revision,
+    decision_read_from_provider: canonical.decision_read_from_provider,
+    legacy_fallback_used: canonical.legacy_fallback_used,
+    todo: {todo_id: todoId, status: todo.status, claimed_by: todo.claimed_by}, leases,
+  }};
+}
+
 export async function readHistoricalTodoProjection(input: JsonObject): Promise<JsonObject> {
   const source = requireJsonObject(input.source, "historical Todo read source");
   const canonical = await readLocalCoordinationTodoSource({schema_version: "loopx_local_coordination_todo_source_request_v0",

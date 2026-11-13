@@ -37,6 +37,19 @@ test('unknown, partial and measured zero remain distinct', () => {
   assert.equal(selectResearchUsage(zero, 13, 13).turns_without_counters, 0);
 });
 
+test('range selection includes an interrupted Turn before later completed work', () => {
+  const capture = {...usage, turns: [turn(1), turn(3)], incomplete_turn: null,
+    interrupted_turns: [{turn_id: 'interrupted', start: turn(2).start, observed_through: turn(2).end,
+      first_line: 6, last_line: 8, counter_observations: 1, usage: turn(2, 40).usage}]};
+  const result = selectResearchUsage(capture, 1, 3);
+  assert.deepEqual(result.turns.map(row => row.turn_id), ['turn-1', 'interrupted', 'turn-3']);
+  assert.equal(result.turns[1].incomplete, true);
+  assert.equal(result.completed_turns, 2);
+  assert.equal(result.observed_input_tokens, 240);
+  assert.equal(result.observed_turn_seconds, 30);
+  assert.equal(selectResearchUsage(capture, 2, 2).observed_input_tokens, 40);
+});
+
 test('rejects empty, reversed, fractional and out-of-capture selections', () => {
   for (const [first, last] of [[0,1],[2,1],[1,14],[1.5,3],[1,NaN],[1,Infinity]]) {
     assert.throws(() => selectResearchUsage(usage, first, last), /valid captured Turn range/);

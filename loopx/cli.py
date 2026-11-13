@@ -210,6 +210,7 @@ from .cli_runtime import (
     dispatch_common_command,
     enforce_native_controller_guard,
     output_format,
+    parse_cli_args,
     print_payload,
     resolve_cli_registry,
     resolve_global_output_format,
@@ -354,7 +355,7 @@ def _main(argv: list[str] | None = None) -> int:
         print(render_concise_help(sys.argv[0] if argv is None else "loopx"), end="")
         return 0
     parser = build_parser()
-    args = parser.parse_args(raw_argv)
+    args = parse_cli_args(parser, raw_argv)
     from .usage_ping import select_operation
     select_operation(args)
     args.format = resolve_global_output_format(args)

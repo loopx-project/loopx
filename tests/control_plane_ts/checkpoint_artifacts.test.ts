@@ -7,7 +7,7 @@ import {chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, w
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {checkpointArtifacts} from "../../loopx/control_plane/runtime/checkpoint_artifacts.ts";
-import {EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
+import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 import {sqliteAuthorityRuntime} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 
 async function fixture(t: test.TestContext) {
@@ -40,7 +40,9 @@ test("capture, verify and inert materialization preserve executable code and emp
   assert.deepEqual(await readdir(join(root, "restored/components/code/empty")), []);
   assert.deepEqual(await readFile(join(root, "restored/checkpoint.json")), await readFile(join(root, "captured/checkpoint.json")));
   await assert.rejects(checkpointArtifacts({action: "materialize", root: request.destination,
-    expected_sha256: captured.sha256, destination: join(root, "restored")}), /already exists/);
+    expected_sha256: captured.sha256, destination: join(root, "restored")}), {
+    name: "EffectRuntimeConflictError", code: "state_conflict", message: "checkpoint destination already exists",
+  });
 });
 
 test("a read-only participant's copied mode survives the durability flush and materialization", async t => {
@@ -179,7 +181,9 @@ test("concurrent capture reserves one destination and cannot replace an existing
   const {root, request} = await fixture(t);
   const results = await Promise.allSettled([checkpointArtifacts(request), checkpointArtifacts(request)]);
   assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
-  assert.equal(results.filter(r => r.status === "rejected").length, 1);
+  const rejected = results.find(result => result.status === "rejected");
+  assert.ok(rejected?.reason instanceof EffectRuntimeConflictError, rejected?.reason);
+  assert.equal(rejected.reason.code, "state_conflict");
   assert.deepEqual((await readdir(root)).sort(), ["captured", "code", "conversation"]);
   const bytes = await readFile(join(root, "captured/checkpoint.json"));
   await assert.rejects(checkpointArtifacts(request), /already exists/);

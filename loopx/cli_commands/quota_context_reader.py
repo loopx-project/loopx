@@ -105,9 +105,13 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
 
 
 
-def _observed_read_presentation(fields: dict[str, Any]) -> dict[str, Any]:
-    return {"previously_delivered_fields": list(fields),
-        "field_recovery": "These unchanged fields still apply. If needed or uncertain, append --select "
+def _observed_read_presentation(fields: dict[str, Any], text_append: dict[str, Any] | None = None) -> dict[str, Any]:
+    appended = text_append["pointer"] if text_append is not None else None
+    instruction = "These unchanged fields still apply. "
+    if appended is not None:
+        instruction += "For append_to_observed_text, append value to the previously delivered text. "
+    return {"previously_delivered_fields": [pointer for pointer in fields if pointer != appended],
+        "field_recovery": instruction + "If needed or uncertain, append --select "
             "and the field pointer to recovery.command for its complete current body."}
 
 
@@ -282,6 +286,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         selectors = getattr(args, "select", None)
         initial_read = getattr(args, "initial_read", False)
         selection_digest = getattr(args, "selection_sha256", None)
+        text_append = None
         if pinned_selection is not None:
             if selectors is not None or initial_read or list_fields or list_depth is not None or selection_digest is not None:
                 raise ValueError("a pinned selection reference cannot change selectors; use the original capture reference")
@@ -311,8 +316,11 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                             reference_file = write_context_read_reference(path, digest)
                         except OSError:
                             reference_file = None
-                elif offset == 0:
-                    presentation = {**(presentation or {}), **_observed_read_presentation(observation["fields"])}
+                else:
+                    text_append = observation.get("text_append")
+                    if offset == 0:
+                        presentation = {**(presentation or {}),
+                            **_observed_read_presentation(observation["fields"], text_append)}
         if pinned_selection is not None:
             selectors, initial_read = pinned_selection["select"], pinned_selection["initial_read"]
             list_fields, list_depth = pinned_selection["list_fields"], pinned_selection["list_depth"]
@@ -339,7 +347,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     expected_sha256=selection_digest, preserve_selection_order=pinned_explicit,
                     present_goal_narrative=(pinned_selection.get("present_goal_narrative") is True
                         if pinned_selection is not None else None),
-                    selection_paths=reference.get("selection_paths") if pinned_selection is not None else None)
+                    selection_paths=reference.get("selection_paths") if pinned_selection is not None else None,
+                    text_append=text_append)
             except ContextSelectionDigestChanged as exc:
                 # A verified file digest only binds bytes. Preserve an explicit
                 # selection or listing, including a receipt-only diagnostic.
@@ -634,7 +643,8 @@ def budgeted_ready_opening(navigation: dict[str, Any], plan: dict[str, Any],
         try:
             page = _capture_page(path, content, digest, offset=0, size=page_bytes,
                 output_limit=output_bytes, instruction=False, select=[], reference_file=Path(reference),
-                presentation=_observed_read_presentation(observation["reused"]) if observation else None,
+                presentation=_observed_read_presentation(observation["reused"], observation.get("text_append"))
+                    if observation else None,
                 reader_argv=reader_argv)
         except ValueError:
             pass  # The ordinary reader has no room for its page framing.

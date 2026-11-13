@@ -65,10 +65,12 @@ flowchart TD
 原生首读也可以复用当前 Todo 完全相同的备注，前提是同一兼容 Host session 和
 context epoch 中已经观察到整段正文交付；仍须新鲜 canonical 读取确认当前选择的 Todo
 及其来源。备注绑定 Goal、Agent、Todo、reader 和 authority 来源；仅更新证据或其他
-Todo 元数据，不会让相同备注变成新正文。当前任务文本与控制保持新鲜，元数据仍由
-当前来源和既有 reader 提供。只交付一部分、正文变化、身份不兼容或发生压缩时返回
-完整备注；显式恢复读取同一 capture。这依赖已观察的字段覆盖，不以文件存在证明
-保留，也不证明模型理解或完整流程净收益。
+Todo 元数据，不会让相同备注变成新正文。当前任务文本、控制和元数据仍由当前来源及
+既有 reader 提供。当前备注以已完整观察的旧备注开头时，reader 可只送新增文字。
+在 `append_to_observed_text` 选择项里，`value` 是从 `prefix_bytes` 个 UTF-8 字节
+之后开始的新增内容。Host 完整观察到这份增量后，后续读取才可把拼接后的备注作为
+前缀。此前只读到一部分、正文被改写、身份不兼容或发生压缩时，reader 返回完整备注。
+显式恢复仍读同一 capture。观察到交付本身无法证明模型理解或完整流程净收益。
 
 重规划 authoring 使用同响应引用：CLI 展示可指向 durable-writeback 步骤中完整的
 `vision_authoring`。现有 TypeScript Turn owner 选择精确一致的正文，并为普通及捕获
@@ -129,8 +131,10 @@ Full 表示完整保存视图可用，不要求判断任何问题前先遍历所
 `context_details` 则可指向包含延后证据的原始 capture。不能交换两份文件的 hash。
 
 - 已知 JSON Pointer 直接选择，相关字段用重复 `--select` 批量读取。
-- 未知 pointer 先对最近的已知父节点 `--list`；必要时用 `--list-depth 2` 减少发现往返。
-  列出根节点时省略 `--select`，不要写表示空名称属性的 `/`。
+- 未知 pointer 先对最近的已知父节点执行 `--list /interaction_contract --list-depth 2`，
+  等价于 `--list --select /interaction_contract --list-depth 2`。重复的 `--list POINTER`
+  与 `--select POINTER` 会合并到同一个索引。列出根节点用不带 selector 的 `--list`
+  或 `--list ''`；`/` 仍表示空名称属性。
 - 未完成的选择沿返回的字节 cursor 继续。EOF 只覆盖该选择，不代表读了其他字段。
 - 同时控制 reader 页与宿主工具的合计输出预算。合法 JSON、落盘日志和 EOF 都不能
   补上被宿主截掉的字节；缩小批次，从同一 capture 补缺失范围。

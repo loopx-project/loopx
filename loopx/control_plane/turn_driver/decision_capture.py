@@ -703,10 +703,14 @@ def _first_read_goal_text(payload: dict[str, Any], path: list[Any], value: Any) 
 
 def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]],
                              *, list_fields: bool, list_depth: int | None,
-                             present_goal_narrative: bool) -> tuple[bytes, list[str]]:
+                             present_goal_narrative: bool,
+                             text_append: dict[str, Any] | None = None) -> tuple[bytes, list[str]]:
     """Render TS-verified addresses from the original, digest-checked values."""
+    if text_append is not None and (list_fields or not isinstance(text_append, dict)):
+        raise ValueError("observed text append requires a selected value")
     views: list[dict[str, Any]] = []
     presented: list[str] = []
+    append_rendered = False
     for item in selections:
         selected: Any = payload
         path, pointer = item["path"], item["pointer"]
@@ -717,7 +721,16 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
                 selected = selected[key]
             else:
                 raise ValueError("selected address does not match the original capture")
-        if list_fields:
+        if text_append is not None and pointer == text_append.get("pointer"):
+            prefix = text_append.get("prefix_bytes")
+            raw_text = selected.encode("utf-8") if isinstance(selected, str) else b""
+            if type(prefix) is not int or not 0 < prefix < len(raw_text):
+                raise ValueError("observed text append is outside the selected value")
+            views.append({"pointer": pointer, "value": raw_text[prefix:].decode("utf-8"),
+                          "presentation": "append_to_observed_text", "prefix_bytes": prefix})
+            presented.append(pointer)
+            append_rendered = True
+        elif list_fields:
             views.append({"pointer": pointer, "fields": context_index_fields(payload, item["children"])})
         else:
             text = _first_read_goal_text(payload, path, selected) if present_goal_narrative else None
@@ -726,6 +739,8 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
             else:
                 presented.append(pointer)
                 views.append({"pointer": pointer, "value": text, "presentation": _GOAL_NARRATIVE_PRESENTATION})
+    if text_append is not None and not append_rendered:
+        raise ValueError("observed text append does not match a selected value")
     view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
     raw = json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1",
         "selections": views, **view_options}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
@@ -738,17 +753,18 @@ def context_selection_binding(select: list[str], *, list_fields: bool, list_dept
         "sha256": sha256, **({"present_goal_narrative": True} if presented else {})}
 
 
-def initial_context_selection_bytes(payload: dict[str, Any],
-                                    selections: list[dict[str, Any]]) -> tuple[bytes, list[str]]:
+def initial_context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]], *,
+                                    text_append: dict[str, Any] | None = None) -> tuple[bytes, list[str]]:
     return _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
-        present_goal_narrative=True)
+        present_goal_narrative=True, text_append=text_append)
 
 
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
                                         observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
     """Pin the shared rendered selection and return its exact rendered bytes."""
-    raw, presented = initial_context_selection_bytes(payload, selections)
+    text_append = observed_read.get("text_append") if observed_read else None
+    raw, presented = initial_context_selection_bytes(payload, selections, text_append=text_append)
     reference = write_context_read_reference(path, digest,
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
             list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
@@ -781,8 +797,11 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
                            expected_sha256: str | None, preserve_selection_order: bool = False,
                            present_goal_narrative: bool | None = None,
                            selection_paths: list[list[str | int]] | None = None,
+                           text_append: dict[str, Any] | None = None,
                            ) -> tuple[dict[str, Any], bytes | None, str | None]:
     """Render the digest-pinned view from a new or previously resolved plan."""
+    if text_append is not None and (initial_read or list_fields or expected_sha256 is None):
+        raise ValueError("observed text append requires a pinned value selection")
     if selection_paths is not None:
         if initial_read or list_fields or list_depth is not None or not preserve_selection_order or expected_sha256 is None:
             raise ValueError("reader selection paths require a pinned value selection")
@@ -803,7 +822,7 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
 
     def render(plan: dict[str, Any], present: bool) -> tuple[bytes, str, list[str]]:
         raw, displayed = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields,
-            list_depth=list_depth, present_goal_narrative=present)
+            list_depth=list_depth, present_goal_narrative=present, text_append=text_append)
         return raw, hashlib.sha256(raw).hexdigest(), displayed
 
     raw, digest, displayed = render(plan, presentation)

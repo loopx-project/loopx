@@ -720,6 +720,48 @@ the existing expansion budget. This qualifies the browser driver's target
 selection; product focus recovery and the causes of earlier partial inventories
 retain their separate evidence requirements.
 
+Coverage-enabled source runs now qualify the complete M2 journey without V8
+coverage first, enforcing the ordinary below-1-second transition medians, all
+15 loaded-lens samples, and the unchanged initial-render and expansion limits.
+When coverage is requested, a second complete journey collects coverage and
+reports both timing sets while retaining classification, selection, no-effect,
+error and remote-source checks. A failed uninstrumented gate stops the run
+before coverage can supply a replacement result. Acceptance retains
+`renderQualification` and `coverageDiagnostics`; ordinary and packaged runs
+execute only the uninstrumented qualification. This changes neither the
+workload nor the numerical budgets and does not reclassify earlier failures.
+
+**Checkpoint 2026-11-12 (source-coverage execution).**
+The source lane now executes the real disposable first-Goal and runtime-readiness
+backends rather than returning packaged-only PASS receipts. Explicitly required
+backend journeys fail before PASS when their readback did not complete. Other
+scenario coverage boundaries remain valid. Existing GET/HEAD socket recovery
+includes EPIPE within the same three-attempt bound; HTTP writes stay single-attempt.
+Research-record search checks bind help dismissal to its current keyboard trigger
+and require the selected query to survive dismissal.
+
+On immutable source `eedfc5e24`, local macOS/Node26 qualification passes all
+86 scenarios across three non-overlapping 29/29/28 partitions with a common
+catalog and source tree, verified backend-readback markers and nonempty merged
+coverage. The passing partitions take 1,943.74 seconds; earlier failed runs,
+setup and repair remain separate records. This is validation cost, with no
+complete model/service/human cost comparison.
+
+The matched 200-item M2 pair retains all 15 samples and long-task windows.
+Ordinary medians are 225.77/172.99/310.77/128.45/146.52 ms, maximum 366.08 ms;
+coverage medians are 328.21/371.20/332.49/174.73/173.02 ms, maximum 421.22 ms.
+Both have zero samples above the 1-second target. Full-suite coverage M2 also
+passes: medians 325.35/270.28/326.59/164.22/166.47 ms, maximum 463.88 ms.
+The real 1,200 ms repeated Board delay is correctly rejected by ordinary
+qualification (slow median 1491.77 ms, maximum 1519.98 ms; all 15
+samples/windows retained). Existing strict-boundary and missing-sample tests
+pass without a budget change.
+
+The failed source partitions and historical frozen failures retain their original
+status. This is named local source qualification, not Linux CI, an installed-host
+upgrade, model task completion, kernel attribution or full-cost acceptance. V10
+thresholds and the remaining real-team/product milestones retain their owners.
+
 **Checkpoint 2026-10-11 (M1 proposed at `6c3c0c104` in [#6191](https://github.com/loopx-project/loopx/pull/6191), subsequently merged).**
 Verified subset: V1 reducer fixtures written from Section 5.3, mutation checks
 and the packaged page on synthetic status; V2 strip and Board sharing the work

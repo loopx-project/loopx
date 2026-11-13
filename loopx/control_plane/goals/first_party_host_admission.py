@@ -6,18 +6,28 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
+from ...agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
+from ...configuration_transaction import configuration_payload_revision
 from ...file_lock import (
     cross_runtime_lock_witness,
     exclusive_cross_runtime_file_lock,
 )
+from .. import compact_control_plane_policy
+from ..agents.runtime_model import agent_runtime_model_for_goal
+from ..agents.work_mode import agent_work_mode_for_goal
 from ..coordination.shadow_management import runtime_artifact_lock_target
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import (
+    EffectRuntimeRemoteError,
+    EffectRuntimeStartupError,
+    effect_runtime_result,
+)
 from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
     project_registry_transaction,
 )
 from ..effect_program import TurnProviderStepKind
+from ..todos.contract import normalize_todo_claimed_by
 from .activation import goal_activation_state
 from .source_session_registry_state import (
     exact_goal_ref,
@@ -229,7 +239,55 @@ def capture_first_party_host_goal_ref(
         )
 
 
-def _legacy_launch_authority(registry: Mapping[str, Any], goal_id: str) -> dict[str, Any]:
+def _legacy_running_authority(goal: dict[str, Any], agent_id: str | None) -> dict[str, Any]:
+    # Display labels and mirror freshness carry no authority to run a tool.
+    # Keep other legacy fields conservative until their runtime owners are typed.
+    authority = {key: value for key, value in goal.items() if key not in {"title", "display_name", "synced_at"}}
+    control_plane = authority.get("control_plane")
+    if isinstance(control_plane, dict):
+        core_policy = compact_control_plane_policy(control_plane)
+        if core_policy:
+            authority["control_plane"] = core_policy
+        else:
+            del authority["control_plane"]
+    if agent_id is None:
+        return authority
+
+    # Project the admitted peer's membership and grants. Keep the canonical
+    # coordination membership explicit so a legacy alias cannot mask revocation.
+    authority.pop("registered_agents", None)
+    authority.pop("agent_model", None)
+    for section, agent_fields in (
+        ("coordination", {"registered_agents", "agent_model", "agent_profiles",
+                          "agent_work_modes", "todo_lifecycle_authority"}),
+        ("spawn_policy", {"registered_agents"}),
+    ):
+        settings = authority.get(section)
+        if isinstance(settings, Mapping):
+            shared = {key: value for key, value in settings.items() if key not in agent_fields}
+            if shared:
+                authority[section] = shared
+            else:
+                authority.pop(section)
+
+    coordination = goal.get("coordination")
+    grants = coordination.get("todo_lifecycle_authority") if isinstance(coordination, Mapping) else None
+    if isinstance(grants, list):
+        grants = [grant for grant in grants if isinstance(grant, Mapping)
+                  and normalize_todo_claimed_by(grant.get("agent_id")) == agent_id]
+    return {
+        "goal": authority,
+        "agent_id": agent_id,
+        "agent_model": agent_runtime_model_for_goal(goal).value,
+        "coordination_registered": agent_id in registered_agent_ids_for_goal({"coordination": coordination}),
+        "registered": agent_id in registered_agent_ids_for_goal(goal),
+        "agent_profile": agent_profile_for_goal(goal, agent_id),
+        "work_mode": agent_work_mode_for_goal(goal, agent_id),
+        "todo_lifecycle_authority": grants or [],
+    }
+
+
+def _legacy_goal_authority(registry: Mapping[str, Any], goal_id: str, agent_id: str | None) -> dict[str, Any]:
     goals = registry.get("goals")
     if (registry.get("profile_id") == SOURCE_SESSION_PROFILE_ID or not isinstance(goals, list)
             or any(not isinstance(goal, Mapping) for goal in goals)):
@@ -240,10 +298,16 @@ def _legacy_launch_authority(registry: Mapping[str, Any], goal_id: str) -> dict[
     goal = matches[0]
     try:
         activation = goal_activation_state(goal).value
-    except ValueError:
+        running_authority = _legacy_running_authority(dict(goal), agent_id)
+    except (TypeError, ValueError):
         return {"kind": "unavailable"}
-    return {"kind": "present", "goal_id": goal_id, "activation_state": activation,
-            "registration_status": goal.get("status", "active")}
+    return {
+        "kind": "present",
+        "goal_id": goal_id,
+        "activation_state": activation,
+        "registration_status": goal.get("status", "active"),
+        "running_authority_sha256": configuration_payload_revision(running_authority).removeprefix("sha256:"),
+    }
 
 
 def _legacy_source_registry(
@@ -277,6 +341,8 @@ class FirstPartyHostGoalAdmission:
     legacy_registry_witness: Mapping[str, str] | None = None
     legacy_source_admission: FirstPartyHostGoalAdmission | None = None
     launch_decision_reader: Callable[[Path], Mapping[str, Any]] | None = None
+    legacy_running_authority_sha256: str | None = None
+    agent_id: str | None = None
 
     @classmethod
     def for_plan(
@@ -285,13 +351,16 @@ class FirstPartyHostGoalAdmission:
         registry_path: Path,
         goal_id: str,
         planned_goal_ref: object | None,
+        agent_id: str | None = None,
         capture_launch_authority: bool = True,
     ) -> FirstPartyHostGoalAdmission:
         requested_registry = registry_path.expanduser().resolve()
         require_goal_id(goal_id)
+        agent_id = normalize_todo_claimed_by(agent_id)
         source_profile = planned_goal_ref is not None
         legacy_registry_witness = None
         legacy_source_admission = None
+        legacy_running_authority_sha256 = None
         if not source_profile and requested_registry.is_file():
             source_profile = (
                 load_project_registry(requested_registry).get("profile_id")
@@ -301,24 +370,33 @@ class FirstPartyHostGoalAdmission:
                 with project_registry_transaction(
                     requested_registry, operation="first_party_host_launch_capture",
                 ) as transaction:
+                    registry = transaction.payload_copy()
                     legacy_registry_witness = transaction.source_read_witness()
+                    legacy_running_authority_sha256 = _legacy_goal_authority(
+                        registry, goal_id, agent_id,
+                    ).get("running_authority_sha256")
                     source_registry = _legacy_source_registry(
-                        transaction.payload_copy(), goal_id, requested_registry,
+                        registry, goal_id, requested_registry,
                     )
                 if source_registry is not None:
                     try:
                         with project_registry_transaction(
                             source_registry, operation="first_party_host_launch_source_capture",
                         ) as transaction:
+                            registry = transaction.payload_copy()
                             # The existing source route names its owning project,
                             # not another mirror. Reject cycles/chains before any
                             # nested lifetime lock, including a self reference.
-                            if _legacy_source_registry(transaction.payload_copy(), goal_id, source_registry) is not None:
+                            if _legacy_source_registry(registry, goal_id, source_registry) is not None:
                                 raise FirstPartyHostRuntimeRejected("goal_authority_unavailable")
                             legacy_source_admission = cls(
                                 registry_path=source_registry, goal_id=goal_id,
                                 planned_goal_ref=None, source_profile=False,
+                                agent_id=agent_id,
                                 legacy_registry_witness=transaction.source_read_witness(),
+                                legacy_running_authority_sha256=_legacy_goal_authority(
+                                    registry, goal_id, agent_id,
+                                ).get("running_authority_sha256"),
                             )
                     except (OSError, TypeError, ValueError) as exc:
                         raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
@@ -327,8 +405,10 @@ class FirstPartyHostGoalAdmission:
             goal_id=goal_id,
             planned_goal_ref=planned_goal_ref,
             source_profile=source_profile,
+            agent_id=agent_id,
             legacy_registry_witness=legacy_registry_witness,
             legacy_source_admission=legacy_source_admission,
+            legacy_running_authority_sha256=legacy_running_authority_sha256,
         )
 
     @classmethod
@@ -381,7 +461,7 @@ class FirstPartyHostGoalAdmission:
         operation: str,
         *,
         host_state: Mapping[str, Any] | None = None,
-        launch_authority: Mapping[str, Any] | None = None,
+        legacy_authority: Mapping[str, Any] | None = None,
         registry_witness: Mapping[str, str] | None = None,
         launch_decision: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -393,13 +473,16 @@ class FirstPartyHostGoalAdmission:
                 ),
                 "operation": operation,
                 "planned_goal_ref": self.planned_goal_ref,
-                "authority": dict(launch_authority) if launch_authority is not None else source_goal_authority(
+                "authority": dict(legacy_authority) if legacy_authority is not None else source_goal_authority(
                     self.registry_path,
                     self.goal_id,
                 ),
+                **({"goal_id": self.goal_id,
+                    "planned_running_authority_sha256": self.legacy_running_authority_sha256}
+                   if legacy_authority is not None else {}),
                 **({"host_state": host_state} if host_state is not None else {}),
                 **({"launch_decision": dict(launch_decision)} if launch_decision is not None else {}),
-                **({"goal_id": self.goal_id, "registry_path": str(self.registry_path),
+                **({"registry_path": str(self.registry_path),
                     "planned_registry_witness": self.legacy_registry_witness,
                     "registry_witness": dict(registry_witness)} if registry_witness is not None else {}),
             },
@@ -477,23 +560,46 @@ class FirstPartyHostGoalAdmission:
             with self.current_lifetime(operation=operation):
                 yield
             return
+        with self._legacy_lifetime(operation=operation, launch=True):
+            yield
+
+    def require_running(self, *, operation: str) -> None:
+        """Recheck the admitted Goal for an already-dispatched native Turn."""
+
+        try:
+            if self.source_profile:
+                self.require_current()
+            else:
+                with self._legacy_lifetime(operation=operation, launch=False):
+                    pass
+        except (EffectRuntimeRemoteError, EffectRuntimeStartupError, OSError) as exc:
+            raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
+
+    @contextmanager
+    def _legacy_lifetime(self, *, operation: str, launch: bool) -> Iterator[None]:
         with ExitStack() as scope:
             if self.legacy_source_admission is not None:
                 # Activation writes source then global projection under these
                 # same locks. A failed mirror sync must not hide a source stop.
-                scope.enter_context(self.legacy_source_admission.launch_lifetime(operation=operation))
+                scope.enter_context(self.legacy_source_admission._legacy_lifetime(
+                    operation=operation, launch=launch,
+                ))
             try:
                 transaction = scope.enter_context(project_registry_transaction(
                     self.registry_path, operation=operation,
                 ))
             except (OSError, TypeError, ValueError) as exc:
                 raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
-            self._decision(
-                "launch", launch_authority=_legacy_launch_authority(transaction.payload_copy(), self.goal_id),
-                registry_witness=transaction.source_read_witness(),
-                launch_decision=(self.launch_decision_reader(self.registry_path)
-                    if self.launch_decision_reader is not None else None),
-            )
+            authority = _legacy_goal_authority(transaction.payload_copy(), self.goal_id, self.agent_id)
+            if launch:
+                self._decision(
+                    "launch", legacy_authority=authority,
+                    registry_witness=transaction.source_read_witness(),
+                    launch_decision=(self.launch_decision_reader(self.registry_path)
+                        if self.launch_decision_reader is not None else None),
+                )
+            else:
+                self._decision("require_current", legacy_authority=authority)
             yield
 
     @contextmanager

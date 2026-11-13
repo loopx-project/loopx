@@ -21,7 +21,7 @@ from ..context_providers.base import (
     canonical_context_text,
     opaque_provider_ref,
 )
-from ..context_providers.openviking import classify_openviking_scope
+from ..context_providers.openviking_scope import classify_openviking_scope
 from .candidate_review import REWARD_MEMORY_REVIEW_SCHEMA_VERSION
 from .experience_quality import (
     normalize_procedural_experience,

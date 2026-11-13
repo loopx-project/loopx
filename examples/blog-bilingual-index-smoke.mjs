@@ -107,6 +107,31 @@ export async function validateBilingualBlog(blogDir) {
       assertIncludes(article, `data-audit-progressive-bytes="${sum("progressive_bytes")}"`,
         "Both published editions must use the recomputed total");
       assertIncludes(article, "32.5%", "The weighted share matches the public rows");
+      const langSuffix = locale === "zh/" ? "zh" : "en";
+      assertIncludes(article, `context-cascade-${langSuffix}.svg`,
+        "Both published editions must embed the context measurement comparisons");
+      const cascadeSvg = await readFile(
+        resolve(blogDir, `images/context-delivery/context-cascade-${langSuffix}.svg`),
+        "utf8",
+      );
+      const lesson = JSON.parse(await readFile(resolve(blogDir, "context-delivery/measurements.json"), "utf8"));
+      const manual = lesson.reader_rows.find(row => row.case === "one_batched_select");
+      const full = lesson.reader_rows.find(row => row.case === "complete_capture");
+      for (const [method, numerator, denominator] of [
+        ["progressive", lesson.native_projection.required_bytes, lesson.native_projection.original_bytes],
+        ["cycle-delta", lesson.cycle_codec.delta_bytes, lesson.cycle_codec.current_full_bytes],
+        ["manual-select", manual.body_bytes, full.body_bytes],
+      ]) {
+        assertIncludes(article, `data-comparison-${method}="${numerator}/${denominator}"`,
+          "Each comparison must retain its own measured numerator and denominator");
+        const pair = [numerator, denominator].map(value => value.toLocaleString("en-US")).join(" / ");
+        assertIncludes(cascadeSvg, pair, `Chart and article must agree on the measured pair: ${method}`);
+      }
+      const multitaskSvg = await readFile(
+        resolve(blogDir, `images/context-delivery/multitask-byte-ratios-${langSuffix}.svg`),
+        "utf8",
+      );
+      assertIncludes(multitaskSvg, "100.0%", `Eight-task byte audit chart must anchor at 100% Full: ${langSuffix}`);
       if (/7,479,469|33\.4%|69\.9 KB|57\.1ms/.test(article))
         throw new Error("Unreconciled totals or unsupported C1 attribution reappeared");
     }

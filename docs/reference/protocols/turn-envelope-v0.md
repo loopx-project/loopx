@@ -56,6 +56,20 @@ An older CLI rejects the new flag before guard execution. Omit it to roll back;
 existing complete captures remain readable through their original digest-bound
 `quota context-read`/`context-project` recovery.
 
+`quota context-project` checks a saved complete decision before presenting it
+as current context, including with Delta alone or with context delivery off.
+If the saved source cannot be verified, the returned digest-bound
+`context-read` command selects only its recorded `heartbeat_receipt` for
+diagnosis. Restore the intact, supported source and retry `context-project`
+with the original Goal, Agent, Turn and digest before using it for work.
+Native recovery publishes the current session source after the same typed
+check succeeds. Rejection retires the implicit lookup for the same native
+session, Goal and Agent. The original captures remain available by their
+explicit digest-bound references. For a rejected ready capture, the native
+hook can still read back its recorded claim and lease references. A
+diagnostic read cannot acknowledge delivery of ready work context. Optional
+presentation failures after verification can still refer to the verified capture.
+
 For eligible original Todo plans, the same typed settlement owner projects one
 `refresh-state ... --settle-turn --settlement-receipt` command. It retains the
 original effect identity, validation and terminal conditions. A non-ready
@@ -80,6 +94,15 @@ model context. Actual live adoption and efficiency still require separate proof.
 可执行的原 Todo 结算计划复用同一 typed owner，合并为一条写回并保留原 effect id，
 不把未 ready 的准备或错误回执转成授权。部分失败只沿原 `settlement_owed` 恢复。
 旧 CLI 在 guard 前拒绝新选项，回滚时移除该选项；旧完整 capture 仍用原 reader。
+
+`quota context-project` 先校验已保存的完整决定，再将它呈现为当前上下文。仅开启差分
+或关闭上下文交付时同样校验。来源校验失败或中断时，返回的摘要绑定
+`context-read` 命令只选取原记录的 `heartbeat_receipt` 用于诊断。恢复完整且受支持
+的来源后，以原 Goal、Agent、Turn 和摘要重试 `context-project`，通过后再作为工作
+上下文。原生会话通过同一校验后发布当前来源。拒绝来源时撤下同一会话、Goal 和 Agent
+的隐式读回入口。原捕获仍可通过显式摘要引用读取。准备就绪的捕获被拒绝后，原生
+Hook 仍能读回已记录的领取与租约引用。诊断读取不会确认已交付就绪的工作上下文。
+校验成功后如遇可选呈现失败，仍可读取已验证的捕获。
 这只是 Host 开发协议入口，不新增设置、模型/子 worker、预算或权限，也不证明
 已运行的 Host 采用或效率收益。
 
@@ -226,6 +249,19 @@ legacy prompt only after retaining a valid original capture and executable
 reader; a missing source is never replaced by a fresh guard. The existing generic
 followthrough is now available with stride off; its result-class counts and
 observations remain evidence, not successful-work or goal-gain verdicts.
+
+When the bound Todo's captured Yardstick shows a proxy ordering opposite to the
+authoritative measurement, the first complete Turn read and staged `review`
+show the conflict, the preferred candidate, the proxy's comparison scope, and
+the finding IDs for the measured pair alongside the Yardstick declaration.
+The selected Todo's card takes precedence within the bounded read. The pinned
+Explore read retains the full evidence. Unbound reviews keep navigation until
+the Todo is selected. The read grants only evidence access.
+
+已绑定 Todo 的标尺若与正式测量反向，完整 Turn 的首读和分段 `review` 会显示
+分歧、正式测量更优的候选、代理指标的比较范围，以及实际测量发现和原标尺声明各自的 ID。
+已选 Todo 的提示在有上限的读取中优先交付，原捕获的 Explore 读取保留完整证据。
+待选择的复盘保留证据入口，绑定 Todo 后才交付该任务的提示。读取只提供证据访问。
 
 Captured replans also reference Explore attachment syntax already present in the
 same captured writer instead of repeating it in the entry work context. This
@@ -463,6 +499,18 @@ pending effects using the existing recovery path, then start a fresh Turn when
 permitted. Downgrading code must preserve journals and captures; deleting them
 is not rollback. This transport qualification does not establish live model,
 packaged App/Lark or overall convergence acceptance.
+
+Recovery previews and journal interpretation use the same typed plan reader.
+Supported historical records keep their original versions and bytes. An
+unsupported declared plan, envelope or action-signature version or coverage
+blocks resume. Journal inspection can report the invalid work contract without
+performing recovery or a debit. Retain the historical reader until the last
+supported journal and its recovery window are reconciled.
+
+恢复预览和 journal 解释共用同一个 typed plan reader。受支持的历史记录保留原版本和
+字节。显式声明不支持的 plan、envelope 或动作签名版本及覆盖范围时，恢复会停止。
+检查入口仍可报告契约无效，不执行恢复或扣额。保留历史读取器，直到最后一份受支持的
+journal 及其恢复窗口完成核对。
 
 Repair and replan diagnostics remain in the journal's typed `host_result`,
 including its summary and follow-up action. They do not implicitly replace Todo
@@ -907,6 +955,17 @@ identity, step conditions, authority and one-spend semantics are unchanged.
 中文：新生成的结算命令自带位置正确的全局 JSON 参数，完整包、短包及写回后的
 补结算命令保持一致。填充占位项后直接执行，检查退出码和 JSON `ok`；不再需要
 手工在子命令后追加格式参数。直接 CLI 的默认格式、历史回执与结算权限均不变。
+
+On Windows, `settlement_owed.command` uses PowerShell syntax for the launcher
+and every argument, adding the call operator when the launcher needs quoting.
+Run it in PowerShell from the original workspace. The same response carries
+`settlement_owed.command_argv` for programmatic callers that need the original
+arguments without parsing shell text. Both forms retain the launcher pin and
+original settlement identity.
+
+中文：Windows 补结算命令按 PowerShell 语法呈现启动器和每个参数，启动器需要
+加引号时会加上 `&`。请在原工作目录执行。程序可从同一响应的 `command_argv`
+读取原始参数，无需解析命令文本。两种形式均保留启动器和原结算身份。
 
 When an admitted Turn's verified durable writeback is followed by a Todo
 dependency wait, its replay now projects only the original `quota_spend` step.

@@ -14,19 +14,15 @@ from typing import Any, cast
 from ..control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 
 
-def prepare_turn_host_request(
-    args: argparse.Namespace, payload: Mapping[str, Any], *,
+def prepare_turn_host_arguments(
+    args: argparse.Namespace, *,
     native_host_runner: Callable[..., dict[str, Any]] | None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None,
     native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None,
     validator_builder: Callable[..., Callable[..., Mapping[str, Any]]],
-) -> tuple[Path, list[str] | None, Callable[..., Mapping[str, Any]] | None, dict[str, Any]]:
+) -> tuple[Path, list[str] | None, Callable[..., Mapping[str, Any]] | None]:
+    """Validate transport arguments before preparation can write authority state."""
     project = Path(args.project).expanduser().resolve()
-    planned_host = (
-        cast(dict[str, Any], payload.get("host")) if isinstance(payload.get("host"), dict) else {}
-    )
-    if planned_host.get("kind") != args.host:
-        raise ValueError("--host must match the journaled LoopX Turn plan")
     if args.host == "codex-app-server" and (
         native_host_runner is None or native_session_binding_resolver is None
     ):
@@ -72,6 +68,26 @@ def prepare_turn_host_request(
                 timeout_seconds=args.validation_timeout_seconds,
                 failure_recovery_kind=args.validation_failure_kind,
             )
+    return project, raw_argv, task_validator
+
+
+def prepare_turn_host_request(
+    args: argparse.Namespace, payload: Mapping[str, Any], *,
+    native_host_runner: Callable[..., dict[str, Any]] | None,
+    native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None,
+    native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None,
+    validator_builder: Callable[..., Callable[..., Mapping[str, Any]]],
+) -> tuple[Path, list[str] | None, Callable[..., Mapping[str, Any]] | None, dict[str, Any]]:
+    planned_host = (
+        cast(dict[str, Any], payload.get("host")) if isinstance(payload.get("host"), dict) else {}
+    )
+    if planned_host.get("kind") != args.host:
+        raise ValueError("--host must match the journaled LoopX Turn plan")
+    project, raw_argv, task_validator = prepare_turn_host_arguments(
+        args, native_host_runner=native_host_runner,
+        native_session_binding_resolver=native_session_binding_resolver,
+        native_task_validator=native_task_validator, validator_builder=validator_builder,
+    )
     from ..control_plane.turn_driver.driver import read_turn_execution_context
 
     return project, raw_argv, task_validator, read_turn_execution_context(payload)
@@ -101,7 +117,7 @@ def build_codex_cli_host_runner(
         options["goal_admission"] = (
             goal_admission or FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path, goal_id=args.goal_id,
-                planned_goal_ref=goal_ref,
+                planned_goal_ref=goal_ref, agent_id=args.agent_id,
             )
         ).with_launch_decision(current_launch_decision)
         if getattr(args, "codex_operation_tools", False):

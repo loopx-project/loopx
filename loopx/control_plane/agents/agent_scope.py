@@ -639,6 +639,15 @@ def _agent_lane_frontier_hint(
         AgentScopeFrontierAction.AGENT_SCOPE_WAIT,
         AgentScopeFrontierAction.REASSIGNMENT_REQUIRED,
     }:
+        blocked_todo_id = _first_compact_todo_id(frontier.get("blocked_todo_wait_candidates"))
+        if blocked_todo_id:
+            return build_hint(
+                AgentLaneFrontierHintDecision.QUIET_NOOP_BLOCKER,
+                source="agent_scope_frontier",
+                reason_code="current_agent_blocker",
+                target_todo_id=blocked_todo_id,
+                quiet_noop_allowed=True,
+            )
         blocked_successor_todo_id = _first_compact_todo_id(
             frontier.get("blocked_successor_wait_candidates")
         )
@@ -1098,6 +1107,28 @@ def _deferred_resume_frontier(
     )
 
 
+def _blocked_todo_wait_frontier(
+    context: _AgentScopeNoCandidateContext,
+) -> dict[str, Any] | None:
+    planning = project_todo_resume_planning(context.summary, agent_id=context.agent_id)
+    blocked_items = planning.get("blocked_wait_items")
+    if blocked_items:
+        return build_agent_scope_frontier_payload(
+            agent_id=context.agent_id,
+            action=AgentScopeFrontierAction.AGENT_SCOPE_WAIT,
+            quiet_noop_allowed=True,
+            spend_policy="no quota spend while scoped work is blocked",
+            reason=f"current agent {context.agent_id} has blocked work and no runnable candidate",
+            recommended_action=(
+                "Wait for the blocker to be resolved or its resume condition to become ready; "
+                "recheck when the Todo state or available work changes."
+            ),
+            candidate_counts={**context.candidate_counts, "blocked_todo_wait_count": len(blocked_items)},
+            extra_fields={"blocked_todo_wait_candidates": blocked_items[:3]},
+        )
+    return None
+
+
 def _blocked_successor_wait_frontier(
     context: _AgentScopeNoCandidateContext,
 ) -> dict[str, Any] | None:
@@ -1358,6 +1389,7 @@ _AGENT_SCOPE_NO_CANDIDATE_RULES = (
     _blocking_handoff_frontier,
     _cleared_handoff_frontier,
     _other_agent_or_exhausted_frontier,
+    _blocked_todo_wait_frontier,
 )
 
 

@@ -88,16 +88,37 @@ def native_read(runtime):
     )
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"include_leases": False},
+        {"include_leases": True, "include_summary": True},
+        {"include_leases": True, "projection_readback": {"operation": "confirmation"}},
+    ],
+)
+def test_lease_selection_rejects_todo_summary_and_projection_readback(tmp_path, kwargs):
+    with pytest.raises(ValueError, match="lease selection requires"):
+        local_authority.read_canonical_todos_if_promoted(
+            runtime_root=tmp_path,
+            goal_id="goal-a",
+            lease_todo_ids={"todo_000"},
+            **kwargs,
+        )
+
+
 def test_cli_preserves_projection_failure_and_original_reason(wide_goal):
     runtime, _state, registry, projection = wide_goal
     projection["todo_read_model"]["contract_fields"].append("future_field")
     advance_canonical_fixture_authority(
         runtime, "goal-a", projection, operation_id="unsupported-manifest"
     )
-    with pytest.raises(LocalCoordinationAuthorityUnavailable) as failure:
-        native_read(runtime)
-    assert failure.value.code == "canonical_snapshot_projection_invalid"
-    assert "field contract mismatch" in str(failure.value)
+    for selection in (None, {"todo_000"}):
+        with pytest.raises(LocalCoordinationAuthorityUnavailable) as failure:
+            local_authority.read_canonical_todos_if_promoted(
+                runtime_root=runtime, goal_id="goal-a", include_leases=True, lease_todo_ids=selection
+            )
+        assert failure.value.code == "canonical_snapshot_projection_invalid"
+        assert "field contract mismatch" in str(failure.value)
     process = subprocess.run(
         [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
          "--format", "json", "todo", "list", "--goal-id", "goal-a"],

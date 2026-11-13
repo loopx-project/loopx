@@ -4,6 +4,7 @@ The deterministic actor proves transport/adoption attribution, not model quality
 or a causal benchmark gain. No evaluator, credentials or active Goal are used.
 """
 import hashlib
+from datetime import datetime, timezone
 from itertools import groupby
 import json
 import shlex
@@ -105,6 +106,151 @@ def starting_page(project, runtime, path, turn, saved, monkeypatch):
         page = run(project, runtime, path, *argv[argv.index("quota"):])
     assert saved.read_bytes() == data
     return page
+
+
+@pytest.mark.parametrize("native_session", [False, True])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_bound_benchmark_replan_opening_shows_scoped_reversal(tmp_path, monkeypatch, native_session, provider):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    scope = wide_write_scope()
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=scope)
+    run(project, runtime, path, "configure-goal", "--goal-id", GOAL_ID,
+        "--execution-replan-after-turns", "1",
+        "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    finding = attachment()
+    profiles = finding["work_yardstick_decision"]
+    profiles["proxy"]["comparison_scope"] = "validation:screen-slice"
+    measurements = [
+        {**profiles[role], "candidate_ref": f"candidate:{name}", "evidence_ref": f"result:{role}-{name}", "value": value}
+        for role, scores in (("authoritative", (8, 4)), ("proxy", (12, 15)))
+        for name, value in zip(("a", "b"), scores)
+    ]
+    prepared_turn = binding("prepare-reversal")
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *prepared_turn)
+    evidence = tmp_path / "finding.json"
+
+    def record(payload):
+        evidence.write_text(json.dumps(payload))
+        return run(project, runtime, path, "explore", "finding", *prepared_turn, "--result-json", str(evidence))
+
+    def record_measurement(measurement, **location):
+        return record({
+            "schema_version": finding["schema_version"], "input_revision": finding["input_revision"],
+            "status": "confirmed", "observation": f"Observed {measurement['evidence_ref']}",
+            "interpretation": "Use the matched measurement for this candidate.",
+            "evidence_refs": [measurement["evidence_ref"]], "measurements": [measurement], **location,
+        })
+
+    proxy_a = record_measurement(measurements[2], question=finding["question"], applicability=finding["applicability"])
+    node_id = proxy_a["node_id"]
+    proxy_b = record_measurement(measurements[3], node_id=node_id)
+    profiles["counterevidence_refs"] = [row["evidence_ref"] for row in measurements[2:]]
+    finding["evidence_refs"].extend(profiles["counterevidence_refs"])
+    declaration = record({**finding, "node_id": node_id})
+    assert "search_comparison" not in declaration
+    official = [record_measurement(row, node_id=node_id) for row in measurements[:2]]
+    finding_ids = [result["finding_id"] for result in [*official, proxy_a, proxy_b]]
+    assert len(set(finding_ids)) == 4 and declaration["finding_id"] not in finding_ids
+    assert official[-1]["search_comparison"]["proxy_order_reversed"]
+    first = run(project, runtime, path, "refresh-state", *prepared_turn, "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+    run(project, runtime, path, *_projected_cli_args(first["settlement_owed"]["command"],
+        turn_instance_id="prepare-reversal"))
+
+    log = explore_result_log_path(runtime, GOAL_ID)
+    for index in range(3):
+        node = f"competing-question-{index}"
+        added = run(project, runtime, path, "todo", "add", "--goal-id", GOAL_ID,
+            "--role", "agent", "--claimed-by", AGENT_ID, "--priority", "P0",
+            "--text", f"Inspect independent evidence {index}", "--task-class", "advancement_task",
+            "--action-kind", "validate", "--required-capability", "network", "--target-key", node)
+        other = added["todo_id"]
+        run(project, runtime, path, "todo", "update", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--todo-id", other, "--explore-result-node-ref", node)
+        append_explore_result_event(log, build_explore_node_event(goal_id=GOAL_ID, agent_id=AGENT_ID,
+            node_id=node, title=node, node_kind="question", status="exploring"))
+        other_work = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=other, turn_instance_id=f"other-{index}")
+        append_explore_result_event(log, build_explore_finding_event(goal_id=GOAL_ID, agent_id=AGENT_ID,
+            node_id=node, title=f"Adopt the scope for {node}", status="confirmed",
+            evidence_refs=finding["evidence_refs"], work_binding=other_work,
+            work_yardstick={"decision": {**profiles, "counterevidence_refs": []}, "binding": other_work}))
+
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    if native_session:
+        monkeypatch.setenv("CODEX_THREAD_ID", "fixture-benchmark")
+        assert codex_context_hook(str(native), {"session_id": "fixture-benchmark", "cwd": str(project),
+            "hook_event_name": "SessionStart", "source": "startup"}) == {}
+    else:
+        monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    capture = tmp_path / "captures"
+    capture.mkdir(mode=0o700)
+    opening = capture / "decision-original"
+    turn = "periodic-review"
+    prepared = run(project, runtime, path, "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn, "--runtime-profile", "generic_cli",
+        "--available-capability", "shell", "--available-capability", "filesystem_write",
+        "--decision-output-dir", str(opening), "--prepared-capture-reference", "--complete-turn",
+        "--context-delivery", "on", "--codex-context-dir", str(native), "--defer-context-presentation")
+    original = opening / "decision.json"
+    original_bytes = original.read_bytes()
+    assert prepared["capture_sha256"] == hashlib.sha256(original_bytes).hexdigest()
+    unbound = json.loads(original_bytes)
+    unbound_cli = unbound["interaction_contract"]["cli_channel"]
+    assert unbound_cli["selection_required"] is True
+    obligation = "autonomous_replan_obligation"
+    unbound_explore = unbound[obligation]["replan_context"]["explore_basis"]
+    assert len(unbound_explore["work_yardsticks"]) == 3
+    assert all(card["todo_id"] != TODO_ID for card in unbound_explore["work_yardsticks"])
+    assert unbound_explore["omitted_work_yardsticks"] == 1
+    selection = shlex.split(unbound_cli["selection_command"]["command_args_template"].replace("{todo_id}", TODO_ID))
+    bound = run(project, runtime, path, *selection)
+    [selected] = [file for file in capture.glob("decision-*/decision.json") if file != original]
+    guard = json.loads(selected.read_bytes())
+    assert guard["schema_version"] == "loopx_turn_envelope_v1"
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID and identity["turn_instance_id"] == turn
+    assert guard["effective_action"] == "autonomous_replan_required"
+    assert guard[obligation]["obligation_id"] == unbound[obligation]["obligation_id"]
+    explore = guard[obligation]["replan_context"]["explore_basis"]
+    assert explore["revision"] == unbound_explore["revision"]
+    cue, *others = explore["work_yardsticks"]
+    assert cue["todo_id"] == TODO_ID and len(others) == 2 and explore["omitted_work_yardsticks"] == 1
+    assert cue["proxy_order_reversed"] is True
+    assert original.read_bytes() == original_bytes
+    staged = run(project, runtime, path, "quota", "replan-view", "--decision-file", str(selected),
+        "--source-hash", guard["contract_binding"]["content_hash"], "--replan-stage", "review")
+    staged_cue = staged["capabilities"]["explore"]["work_yardstick_reversal"]
+
+    command = shlex.split(bound["first_read_command"])
+    page = run(project, runtime, path, *command[command.index("quota"):])
+    assert page["offset"] == 0 and not page["eof"]
+    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 12000
+    basis = f"/{obligation}/replan_context/explore_basis/work_yardsticks/0/"
+    for field, expected in (("proxy_order_reversed", True), ("comparison_candidate_ref", "candidate:a"),
+                            ("source_finding_id", declaration["finding_id"]),
+                            ("proxy_comparison_scope", profiles["proxy"]["comparison_scope"]),
+                            ("comparison_finding_ids", finding_ids)):
+        marker = json.dumps(basis + field) + ',"value":'
+        offset = page["content"].index(marker) + len(marker)
+        observed, _ = json.JSONDecoder().raw_decode(page["content"], offset)
+        assert observed == staged_cue[field] == expected
+    _, reference = read_context_read_reference(page["reference_file"])
+    assert reference["sha256"] == hashlib.sha256(selected.read_bytes()).hexdigest()
+    chunks = [page["content"]]
+    while not page["eof"]:
+        command = shlex.split(page["next_command"])
+        page = run(project, runtime, path, *command[command.index("quota"):])
+        _, follow = read_context_read_reference(page["reference_file"])
+        assert follow["path"] == reference["path"] and follow["sha256"] == reference["sha256"]
+        chunks.append(page["content"])
+    values = {row["pointer"]: row["value"] for row in json.loads("".join(chunks))["selections"]}
+    assert values["/goal_boundary"]["write_scope"] == scope
+    assert _spend_run_count(runtime) == 1
 
 
 def wide_write_scope():
@@ -980,24 +1126,88 @@ def test_disabled_new_attachment_rejects_before_primary_commit(tmp_path):
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
 
 
-def test_committed_pending_capture_recovers_after_disable_without_new_authority(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_work_yardstick_successor_remains_current_after_clock_rollback(tmp_path, provider, monkeypatch, capsys):
+    from loopx.cli import main
+
+    project, runtime, path = setup(tmp_path, provider=provider)
+    source = tmp_path / "finding.json"
+    wall_time = datetime.now(timezone.utc).replace(microsecond=100002)
+
+    class AttachmentClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return wall_time.astimezone(tz)
+
+    def record(turn, value):
+        source.write_text(json.dumps(value))
+        run(project, runtime, path, "quota", "should-run", "--codex-app", *binding(turn))
+        with monkeypatch.context() as patch:
+            patch.chdir(project)
+            patch.setattr("loopx.control_plane.runtime.time.datetime", AttachmentClock)
+            code = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json",
+                "refresh-state", *binding(turn), "--classification", "validated_change",
+                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks"])
+        packet = json.loads(capsys.readouterr().out)
+        assert code == 0 and packet["explore_result_delivery"]["ok"], packet
+        return packet
+
+    first = record("before-clock-change", attachment())
+    run(project, runtime, path, "quota", "spend-slot", *binding("before-clock-change"),
+        "--slots", "1", "--source", "heartbeat", "--execute")
+    changed = attachment()
+    changed["work_yardstick_decision"]["prior_finding_id"] = first["explore_result_delivery"]["finding_id"]
+    changed["work_yardstick_decision"]["target"]["summary"] = "Follow the validated successor"
+    wall_time = wall_time.replace(microsecond=100001)
+    second = record("after-clock-change", changed)
+    assert second["explore_result_recorded_at"] < first["explore_result_recorded_at"]
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert cue["source_finding_id"] == second["explore_result_delivery"]["finding_id"]
+    assert cue["target"]["summary"] == "Follow the validated successor"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_committed_pending_capture_recovers_after_disable_without_new_authority(
+    tmp_path, provider, monkeypatch, capsys,
+):
     from loopx.cli import main
     import loopx.capabilities.explore.result_writeback as writer
-    project, runtime, path = setup(tmp_path)
+    from loopx.control_plane.runtime.time import parse_timestamp
+
+    project, runtime, path = setup(tmp_path, provider=provider)
     source = tmp_path / "capture.json"
     source.write_text(json.dumps(attachment()))
     turn = "turn-interrupted"
     run(project, runtime, path, "quota", "should-run", "--codex-app", *binding(turn))
-    command = ["refresh-state", *binding(turn), "--classification", "validated_change",
-        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-        "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks"]
+
+    def refresh_command(turn_id, attachment_path):
+        return ["refresh-state", *binding(turn_id), "--classification", "validated_change",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--explore-result-json", str(attachment_path), "--no-global-sync", "--suppress-external-sinks"]
+
+    command = refresh_command(turn, source)
+
+    wall_time = datetime.now(timezone.utc).replace(microsecond=100001)
+
+    class AttachmentClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return wall_time.astimezone(tz)
+
+    def run_refresh(args):
+        with monkeypatch.context() as patch:
+            patch.chdir(project)
+            patch.setattr("loopx.control_plane.runtime.time.datetime", AttachmentClock)
+            rc = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json", *args])
+        return rc, json.loads(capsys.readouterr().out)
+
     def unavailable(*args, **kwargs):
         raise OSError("injected graph write interruption")
+
     with monkeypatch.context() as patch:
-        patch.chdir(project)
         patch.setattr(writer, "append_explore_result_events", unavailable)
-        rc = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json", *command])
-        failed = json.loads(capsys.readouterr().out)
+        rc, failed = run_refresh(command)
     assert rc == 1 and failed["appended"] and failed["explore_result_delivery"]["primary_committed"]
     run(project, runtime, path, "quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
     # Work continues while the old graph delivery is pending. Its later exact
@@ -1006,14 +1216,24 @@ def test_committed_pending_capture_recovers_after_disable_without_new_authority(
     newer = attachment()
     newer["work_yardstick_decision"]["target"]["summary"] = "Use the updated current target"
     newer_source.write_text(json.dumps(newer))
-    latest = refresh(project, runtime, path, "turn-newer", newer_source)
-    assert latest["explore_result_delivery"]["ok"]
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *binding("turn-newer"))
+    wall_time = wall_time.replace(microsecond=100002)
+    rc, latest = run_refresh(refresh_command("turn-newer", newer_source))
+    assert rc == 0 and latest["explore_result_delivery"]["ok"], latest
+    assert latest["generated_at"] == failed["generated_at"]
     config = json.loads(path.read_text())
     config["goals"][0]["execution_profile"]["yardstick_enabled"] = False
     path.write_text(json.dumps(config))
     recovered = run(project, runtime, path, *command)
     assert recovered["idempotent_replay"] and recovered["explore_result_delivery"]["ok"]
-    assert len(load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))) == 3
+    assert recovered["explore_result_recorded_at"] == failed["explore_result_recorded_at"]
+    assert parse_timestamp(recovered["explore_result_recorded_at"]) < parse_timestamp(latest["explore_result_recorded_at"])
+    events = load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))
+    assert len(events) == 3
+    recovered_finding = next(
+        row for row in events if row.get("result_id") == recovered["explore_result_delivery"]["finding_id"]
+    )
+    assert recovered_finding["recorded_at"] == failed["explore_result_recorded_at"]
     assert "work_yardsticks" not in context(runtime, path)["graph"]
     config["goals"][0]["execution_profile"]["yardstick_enabled"] = True
     path.write_text(json.dumps(config))
