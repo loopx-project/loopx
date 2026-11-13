@@ -169,8 +169,15 @@ def test_real_native_feedback_changes_the_checked_artifact(tmp_path, entry):
             # Keep the Worker waiting for its tool while the Goal is stopped.
             time.sleep(6)
             return message
+        if entry == "receipt-repair" and index == 9:
+            return {"type": "function_call", "id": "fc_repair_write", "call_id": "call_repair_write",
+                    "name": "exec_command", "arguments": json.dumps({"cmd": "touch docs/receipt-write-probe"})}
+        if entry == "receipt-repair" and index == 10:
+            output = str(request["input"][-1]["output"]).lower()
+            assert "denied" in output or "not permitted" in output
+            index -= 1
         if index == 4:
-            return {"type": "function_call", "id": "fc_readonly", "call_id": "call_readonly",
+            return {"type": "function_call", "id": "fc_controller_check", "call_id": "call_controller_check",
                     "name": "exec_command", "arguments": json.dumps({"cmd": "cat observation > docs/controller-check; if cat .loopx/registry.json >/dev/null; then exit 17; fi; cat docs/controller-check"})}
         if index == 5:
             output = str(request["input"][-1]["output"]).lower()
@@ -185,7 +192,7 @@ def test_real_native_feedback_changes_the_checked_artifact(tmp_path, entry):
             answer = {"instruction": "dispatch" if pinned_task else "Inspect the observation.", "result": None}
         elif index in (2, 5):
             command = ("if cat .loopx/registry.json >/dev/null; then exit 17; fi; cat observation"
-                       if index == 2 else "tr -d '\\n' > " + marker + " <<EOF\n$(cat observation)\nEOF")
+                       if index == 2 else "tr -d '\\n' > " + marker + " <<EOF\n$(cat docs/controller-check)\nEOF")
             return {"type": "function_call", "id": f"fc_{index}", "call_id": f"call_{index}",
                     "name": "exec_command", "arguments": json.dumps({"cmd": command})}
         elif index == 3:
@@ -259,7 +266,7 @@ def test_real_native_feedback_changes_the_checked_artifact(tmp_path, entry):
                    "--format", "json", "turn", "run-once", "--execute", "--no-global-sync",
                    "--goal-id", goal, "--agent-id", agent, "--project", str(project),
                    "--host", "codex-cli", "--execution-mode", "isolated-headless", "--topology", "controller-worker",
-                   "--scheduler-owner", "outer_controller", "--prepare-selected-todo",
+                   "--scheduler-owner", "outer_controller",
                    "--turn-instance-id", "direct-roles", "--timeout-seconds", "45", "--codex-bin", binary,
                    material_option, str(material), "--codex-sandbox", "workspace-write",
                    "--validation-command-json", json.dumps(fixture["_validator_command"](expected))]
@@ -302,6 +309,7 @@ def test_real_native_feedback_changes_the_checked_artifact(tmp_path, entry):
             assert (project / marker).stat().st_mtime_ns == original_worker_write
         assert completed.returncode == 0, completed.stdout[-2200:] + completed.stderr[-500:]
     assert (project / "docs/controller-check").read_text().strip() == expected
+    assert not (project / "docs/receipt-write-probe").exists()
     assert not (tmp_path / "mcp-started").exists()
     assert "For your Core receipt:" in inputs[3]
     assert not any("For your Core receipt:" in inputs[i] for i in (0, 1, 4, 6))

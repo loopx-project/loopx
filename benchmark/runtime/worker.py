@@ -330,7 +330,6 @@ def turn_command(
         "run-once",
         "--execute",
         "--no-global-sync",
-        "--prepare-selected-todo",
         *host,
         "--project",
         env["LOOPX_PROJECT"],

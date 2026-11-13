@@ -180,8 +180,6 @@ def register_turn_commands(
     material.add_argument("--controller-material", type=Path,
                           help="An additional UTF-8 task file for the Controller (up to 128 KiB, pinned at admission).")
     run_once.add_argument("--project", required=True)
-    run_once.add_argument("--prepare-selected-todo", action="store_true",
-        help="On fresh execution, perform quota’s authorized ordinary claim and reread the same Todo before dispatch.")
     run_once.add_argument(
         "--delegation-context-json",
         help="Host locator for an existing delegation operation; original work is verified and captured, never an execution grant.",

@@ -65,7 +65,7 @@ class RoleHost:
     controller_writable: bool = False
 
     @property
-    def worker_writable(self) -> bool:
+    def workspace_writable(self) -> bool:
         return self.sandbox != "read-only"
 
     @property
@@ -87,7 +87,7 @@ def read_material(path: Path) -> bytes:
 
 def role_policy(role: str, host: RoleHost) -> tuple[str, dict[str, Any]]:
     project = host.project
-    writable = host.worker_writable and (role == "worker" or host.controller_writable)
+    writable = host.workspace_writable and (role == "worker" or host.controller_writable)
     context = {
         "kind": "project_workspace", "workspace_path": str(project), "project_ref": digest(str(project))[:24],
         "audience": "local_owner", "grant": "workspace_write" if writable else "workspace_read",
@@ -117,7 +117,7 @@ def toml_value(value: Any) -> str:
 
 def role_cli_options(role: str, host: RoleHost, timeout: float) -> tuple[str, ...]:
     _, config = role_policy(role, host)
-    if host.worker_writable and (role == "worker" or host.controller_writable):
+    if host.workspace_writable and (role == "worker" or host.controller_writable):
         # Shell here-documents, compilers and tempfile users need scratch space.
         # Use the existing write grant; the shared system temp directory stays denied.
         shell = config["shell_environment_policy"]
