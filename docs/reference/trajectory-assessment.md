@@ -41,6 +41,9 @@ requires a new registration and preserves the prior version. It does not change
 the model prompt, analysis key or scoring owner. Source changes preserve the
 registered reading and cited snapshot with a historical warning. Language
 switches show the saved original with a notice, without inventing a translation.
+Each citation in a case study has a direct link to that occurrence in its saved
+version. Opening it uses the same source reader as a citation selected on the
+page. Closing returns to the citation and restores its chapter address.
 Rendering uses the existing Markdown renderer and host-owned components, with
 no executable HTML. Porthole is not a runtime dependency of this reader.
 

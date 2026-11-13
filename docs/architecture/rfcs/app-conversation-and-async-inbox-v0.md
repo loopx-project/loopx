@@ -1743,10 +1743,13 @@ A delivered failure notice is not a completed business request. The existing
 private reply scanner now discovers eligible unfinished ordinary Codex steward
 requests after the legacy manager-context migration. Context version 21 restores
 the complete visible user/assistant history in native persisted history. Large
-restores use bounded UTF-8 prefixes, with native compaction between them before
-the next prefix or user request. A scheduling acknowledgement is insufficient:
-the matching compaction item and successful terminal native Turn must finish.
-Small restores and resumed threads retain their existing path. Core's visible
+restores use bounded UTF-8 prefixes. After a successful compaction, the
+adapter uses Codex's recomputed context size to fit additional bounded imports
+within the remaining window, with room reserved for prompt overhead. If the
+estimate is unavailable, it keeps compacting between prefixes. A scheduling
+acknowledgement is insufficient: the matching compaction item and successful
+terminal native Turn must finish. Small restores and resumed threads retain
+their existing path. Core's visible
 transcript is unchanged; the native compactor owns its condensed model context.
 An unknown, failed or interrupted compaction closes the new adapter before its
 binding is published, without replaying injection or starting business work.

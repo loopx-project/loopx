@@ -187,6 +187,20 @@ try {
     assert.deepEqual(calls, [{path: `/api/chat/sessions?conversation_binding_id=${bindingId}`, method: "GET"}],
       "A fresh check of the same unchanged binding reuses the complete verified history");
 
+    // The final source check can keep the same address while reporting a
+    // different canonical Session scope. Previously read pages cannot publish.
+    sourceChecks = 0;
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (!isBoundDiscovery(input) || ++sourceChecks !== 2) return response;
+      const changedSource = await response.json();
+      changedSource.sessions[0].channel_id = "unrelated-original-channel";
+      return new Response(JSON.stringify(changedSource), {status: response.status});
+    };
+    await assert.rejects(() => fetchChatHistory(options), /original Session scope changed during history read/);
+    assert.equal(sourceChecks, 2);
+    globalThis.fetch = routedRead;
+
     // Current source revocation blocks recovery before another history page.
     child.stdin.write("deny\n"); assert.equal((await next()).source_verified, false);
     calls.length = 0;

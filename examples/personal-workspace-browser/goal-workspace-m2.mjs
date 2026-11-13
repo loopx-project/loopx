@@ -24,7 +24,27 @@ export function loadedLensBudget(samplesMs, {medianCeilingMs = 1000} = {}) {
 
 export const goalWorkspaceM2Scenario = {
   id: "goal-workspace-m2",
-  async run({browser, collectCoverage, url}) {
+  run: context => runM2Rendering(context, runM2Pass),
+};
+
+// Coverage changes V8 execution. Always qualify the complete original journey
+// without it first; an optional second pass retains coverage and diagnostics.
+// Neither a fast instrumented pass nor a coverage request can waive the gate.
+export async function runM2Rendering(context, runPass) {
+  const qualification = await runPass({...context, collectCoverage: false});
+  const diagnostic = context.collectCoverage
+    ? await runPass({...context, collectCoverage: true})
+    : null;
+  return {
+    ...(diagnostic ?? qualification),
+    measurements: {
+      renderQualification: qualification.renderBudget,
+      ...(diagnostic ? {coverageDiagnostics: diagnostic.renderBudget} : {}),
+    },
+  };
+}
+
+async function runM2Pass({browser, collectCoverage, url}) {
     const writes = [];
     let scale = false, omitSelected = false;
     const many = Array.from({length: 200}, (_, i) => ({todo_id: `scale-${String(i).padStart(3,"0")}`, text: `Synthetic work item ${i + 1}`, title: `Synthetic work item ${i + 1}`,
@@ -158,7 +178,7 @@ export const goalWorkspaceM2Scenario = {
       const renderStart = performance.now();
       await now.locator('.goal-owner-group [data-todo-id="scale-199"]').waitFor({state:"attached"});
       const initialMs = performance.now() - renderStart;
-      assert.ok(initialMs < 2000, `200-item Now render exceeded frozen 2s budget: ${initialMs}ms`);
+      if (!collectCoverage) assert.ok(initialMs < 2000, `200-item Now render exceeded frozen 2s budget: ${initialMs}ms`);
       assert.equal(await now.locator('.goal-owner-group [data-todo-id]').count(),200);
       assert.equal(await now.locator('.goal-owner-group [data-todo-id]:visible').count(),15,"Five owners show three tasks each before expansion");
       await now.locator('.goal-owner-group[data-owner-id=""] > header').getByText(/1 受阻/).waitFor();
@@ -181,7 +201,7 @@ export const goalWorkspaceM2Scenario = {
       }
       assert.equal(await visibleWork(),200,"All work remains reachable in the original owner order");
       const expandMs = performance.now() - expandStart;
-      assert.ok(expandMs < 2000, `Full 200-item expansion exceeded 2s budget: ${expandMs}ms`);
+      if (!collectCoverage) assert.ok(expandMs < 2000, `Full 200-item expansion exceeded 2s budget: ${expandMs}ms`);
       await now.getByRole('button',{name:'关系图',exact:true}).click();
       await now.locator('.work-map-node').filter({hasText:'Synthetic work item 200'}).waitFor();
       await now.getByRole('button',{name:'按负责人',exact:true}).click();
@@ -263,17 +283,17 @@ export const goalWorkspaceM2Scenario = {
       if (longTaskSupported) await page.evaluate(() => {
         window.__loopxM2LongTasks.observer.disconnect(); delete window.__loopxM2LongTasks;
       });
-      console.log(JSON.stringify({m2RenderBudget:{initialMs,expandMs,switchMs,switchSamplesMs,...lensBudget,
-        longTaskSupported,switchLongTasks,nodeCount:200}}));
+      const renderBudget = {coverageEnabled:collectCoverage,initialMs,expandMs,switchMs,switchSamplesMs,...lensBudget,
+        longTaskSupported,switchLongTasks,nodeCount:200};
+      console.log(JSON.stringify({m2RenderBudget:renderBudget}));
       assert.equal(writes.length,0,`Rendering created effects: ${writes}`);
       assert.equal(session.errors.length,0,session.errors.join('\n'));
-      assert.ok(lensBudget.withinBudget, `Loaded lens switches exceeded the repeated qualification ceiling or 2s page ceiling: ${JSON.stringify({switchSamplesMs,...lensBudget})}`);
+      if (!collectCoverage) assert.ok(lensBudget.withinBudget, `Loaded lens switches exceeded repeated 1s target or 2s ceiling: ${JSON.stringify({switchSamplesMs,...lensBudget})}`);
       await verifyRemoteSelection(browser, url);
-      return {coverageEntries:session.coverageEntries,note:'Responsibility groups, shared task selection/reload, Board/Map switching, no effect requests, desktop/mobile composition. Synthetic status/map; creation is separately qualified against real backend.'};
+      return {coverageEntries:session.coverageEntries,renderBudget,note:'Responsibility groups, shared task selection/reload, Board/Map switching, no effect requests, desktop/mobile composition. Synthetic status/map; creation is separately qualified against real backend.'};
     } catch(error) {await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-failed.png')});throw error;}
     finally {await session.close();}
-  },
-};
+}
 
 
 async function verifyRemoteSelection(browser, url) {

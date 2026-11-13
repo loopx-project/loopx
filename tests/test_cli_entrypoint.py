@@ -15,6 +15,29 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("preview", [False, True])
+def test_goal_start_does_not_load_unselected_issue_fix_execution(tmp_path, preview):
+    arguments = ["start-goal", "--help"]
+    if preview:
+        arguments = ["--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+            "start-goal", "--guided", "--project", str(tmp_path / "project"),
+            "--goal-id", "fixture", "--host-surface", "shell",
+            "--goal-text", "Produce a verified report; preserve 总计."]
+    result = run_cli_main("loopx.entrypoint", arguments,
+        forbidden_modules=("loopx.cli", "loopx.capabilities.issue_fix.workflow_plan",
+            "loopx.capabilities.issue_fix.candidate_preflight",
+            "loopx.capabilities.issue_fix.acceptance_loop",
+            "loopx.capabilities.issue_fix.metadata_preview",
+            "loopx.capabilities.issue_fix.repository_context"),
+        environment={"LOOPX_USAGE_PING": "0"})
+    assert result.returncode == 0, result.stderr
+    if preview:
+        packet = json.loads(result.stdout)
+        assert packet["goal_text"] == "Produce a verified report; preserve 总计."
+        assert packet["guided_transaction"]["writes_now"] is False
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
 @pytest.mark.parametrize("command", ["auto-research", "multi-agent"])
 def test_retired_demo_commands_reject_execution_without_writing_state(
@@ -2056,3 +2079,38 @@ def test_selected_connect_preview_keeps_full_cli_result_without_workspace(tmp_pa
     assert selected.returncode == ordinary.returncode == 0, (selected.stderr, ordinary.stderr)
     assert json.loads(selected.stdout) == json.loads(ordinary.stdout)
     assert not registry.exists()
+
+
+@pytest.mark.parametrize('arguments', [
+    ['start-goal', '--help'],
+    ['bootstrap-command-pack', '--help'],
+    ['register-agent', '--help'],
+    ['bind-agent-thread', '--help'],
+    ['start-goal', '--guided', '--goal-text', '完整 goal', '--host-surface', 'unsupported'],
+    ['register-agent', '--goal-id', 'missing'],
+    ['bind-agent-thread', '--goal-id', 'missing', '--agent-id', 'test'],
+])
+def test_guided_core_routes_match_complete_parser(arguments):
+    # Invalid argv retains the ordinary installation's canonical full-parser
+    # diagnostic fallback; valid selected help must never load that facade.
+    selected = run_cli_main('loopx.entrypoint', arguments,
+                           forbidden_modules=('loopx.cli',) if '--help' in arguments else ())
+    full = run_cli_main('loopx.cli', arguments)
+    assert (selected.returncode, selected.stdout, selected.stderr) == (full.returncode, full.stdout, full.stderr)
+
+
+def test_guided_core_preview_matches_complete_owner_without_writes(tmp_path):
+    project = tmp_path / 'project'
+    project.mkdir()
+    argv = ['--runtime-root', str(tmp_path / 'runtime'), '--format', 'json',
+            'start-goal', '--guided', '--project', str(project),
+            '--host-surface', 'shell', '--goal-text', 'Report "inventory" and 总计.']
+    environment = {'CODEX_THREAD_ID': '', 'TRAECLI_THREAD_ID': '', 'LOOPX_USAGE_PING': '0'}
+    selected = run_cli_main('loopx.entrypoint', argv, forbidden_modules=('loopx.cli',), environment=environment)
+    full = run_cli_main('loopx.cli', argv, environment=environment)
+    assert selected.returncode == full.returncode == 0
+    assert selected.stdout == full.stdout and selected.stderr == full.stderr
+    packet = json.loads(selected.stdout)
+    assert packet['goal_text'] == 'Report "inventory" and 总计.'
+    assert packet['guided_transaction']['writes_now'] is False
+    assert not list(project.iterdir()) and not (tmp_path / 'runtime').exists()

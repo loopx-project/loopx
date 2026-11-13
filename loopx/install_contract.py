@@ -34,10 +34,15 @@ ARCHIVE_FALLBACK_INSTALL_COMMAND = (
 
 
 _POWERSHELL_SAFE_COMMAND = re.compile(r"^[A-Za-z0-9_./-]+$")
+# PowerShell also treats U+2018 through U+201B as single-quote delimiters.
+_POWERSHELL_SINGLE_QUOTE_ESCAPES = str.maketrans(
+    {quote: quote * 2 for quote in "'\u2018\u2019\u201a\u201b"}
+)
 
 
-def _powershell_literal(value: str | Path) -> str:
-    return "'" + str(value).replace("'", "''") + "'"
+def powershell_literal(value: str | Path) -> str:
+    """Render a verbatim PowerShell string while preserving the original characters."""
+    return "'" + str(value).translate(_POWERSHELL_SINGLE_QUOTE_ESCAPES) + "'"
 
 
 def _powershell_command(value: str) -> str:
@@ -45,7 +50,7 @@ def _powershell_command(value: str) -> str:
 
     if _POWERSHELL_SAFE_COMMAND.fullmatch(value):
         return value
-    return f"& {_powershell_literal(value)}"
+    return f"& {powershell_literal(value)}"
 
 
 def host_command_name(value: str) -> str:
@@ -80,7 +85,7 @@ def _checkout_snapshot_installer(repo_root: Path) -> Path | None:
 def _windows_pypi_upgrade_command(*, doctor_agent_arg: str, skip_skills: bool) -> str:
     """No-clone upgrade through the interpreter that owns this installation."""
 
-    lines = [f"& {_powershell_literal(sys.executable)} -m pip install --upgrade loopx"]
+    lines = [f"& {powershell_literal(sys.executable)} -m pip install --upgrade loopx"]
     if not skip_skills:
         lines.append(DEFAULT_WORKFLOW_SKILL_INSTALL_COMMAND)
     lines.append(f"loopx doctor{doctor_agent_arg}")
@@ -91,8 +96,8 @@ def local_install_command(repo_root: Path, *, skip_skills: bool = False) -> str:
     if _is_windows_host():
         return (
             "pwsh -NoLogo -NoProfile -File "
-            f"{_powershell_literal(repo_root / 'scripts' / 'install-windows.ps1')} "
-            f"-Python {_powershell_literal(sys.executable)}"
+            f"{powershell_literal(repo_root / 'scripts' / 'install-windows.ps1')} "
+            f"-Python {powershell_literal(sys.executable)}"
             + (" -SkipSkills" if skip_skills else "")
         )
     command = shlex.quote(str(repo_root / "scripts" / "install-local.sh"))
@@ -108,7 +113,7 @@ def no_clone_upgrade_command(
     if _is_windows_host():
         repo_root = Path(__file__).resolve().parents[1]
         doctor_agent_arg = (
-            f" --agent-type {_powershell_literal(doctor_agent_type)}"
+            f" --agent-type {powershell_literal(doctor_agent_type)}"
             if doctor_agent_type
             else ""
         )
@@ -169,13 +174,13 @@ def doctor_preflight_command(
 
     if _is_windows_host():
         doctor_arg = (
-            f" --agent-type {_powershell_literal(doctor_agent_type)}"
+            f" --agent-type {powershell_literal(doctor_agent_type)}"
             if doctor_agent_type
             else ""
         )
         install_lines = [
-            f"if (-not (Get-Command {_powershell_literal(cli_bin)} -ErrorAction SilentlyContinue)) {{",
-            f"  & {_powershell_literal(sys.executable)} -m pip install --upgrade loopx",
+            f"if (-not (Get-Command {powershell_literal(cli_bin)} -ErrorAction SilentlyContinue)) {{",
+            f"  & {powershell_literal(sys.executable)} -m pip install --upgrade loopx",
         ]
         if install_skills:
             install_lines.append(

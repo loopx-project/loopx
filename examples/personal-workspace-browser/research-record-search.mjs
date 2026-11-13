@@ -305,7 +305,21 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(await phases.count(), 3);
       assert.equal(await phases.nth(2).getAttribute("aria-pressed"), "true", "Recovery applies the original period bookmark");
       await page.goto(url.replace("synthetic-record-search", "synthetic-other-research"));
-      await history.getByRole("button", {name: "Search research records", exact: true}).click();
+      const openOtherSearch = history.getByRole("button", {name: "Search research records", exact: true});
+      await openOtherSearch.evaluate(button => {
+        // Hold the frame from this one search activation until the reader moves focus.
+        button.addEventListener("click", () => {
+          const schedule = window.requestAnimationFrame;
+          const frames = [];
+          window.__loopxHeldSearchFrames = frames;
+          window.requestAnimationFrame = callback => {
+            frames.push(callback);
+            return -frames.length;
+          };
+          setTimeout(() => {window.requestAnimationFrame = schedule;}, 0);
+        }, {once: true});
+      });
+      await openOtherSearch.click();
       await results.getByRole("status", {name: "4 matches in 4 loaded records · 3 entries", exact: true}).waitFor();
       assert.equal(await search.inputValue(), "", "Another Goal starts with its own search scope");
       assert.doesNotMatch(await results.innerText(), /amber|Earlier negative/);
@@ -313,7 +327,15 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       const groupSummary = grouped.locator(":scope > summary");
       assert.match(await groupSummary.innerText(), /Refuted.*Resolved.*2 records/);
       assert.equal(await results.locator(".research-record-entry").count(), 3, "Identical titles and times leave independent attempts and absent links separate");
-      await groupSummary.press("Enter");
+      await groupSummary.focus();
+      await page.evaluate(() => {
+        const frames = window.__loopxHeldSearchFrames ?? [];
+        delete window.__loopxHeldSearchFrames;
+        frames.forEach(callback => callback(performance.now()));
+      });
+      assert(await groupSummary.evaluate(element => element === document.activeElement),
+        "Delayed search autofocus leaves the already focused record in control");
+      await page.keyboard.press("Enter");
       const groupHistory = grouped.locator(".research-record-group-history");
       await groupHistory.waitFor();
       assert.match(await grouped.innerText(), /The alternative missed the target\./);

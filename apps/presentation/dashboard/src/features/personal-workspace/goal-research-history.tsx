@@ -506,7 +506,16 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const recordUnit = read.complete && history.canonical && read.events.length > history.canonical.events.length
     ? (zh ? "条原始记录" : "source rows") : read.total === 1 ? copy.record : copy.records;
   const emptySourceHistory = hasNativeSource && emptyHistory;
-  const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
+  const hasSavedResult = Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
+  const emptyWithAnalysis = emptyHistory && hasSavedResult;
+  const historyBeforeAnalysisSummary = hasNativeSource && Boolean(value?.nodes.length) && !hasSavedResult;
+  // Reorder the existing reader in the DOM so visual and keyboard order agree.
+  // Keeping its identity also preserves a focused scope selector while loading.
+  const progressSummary = !progressiveOverview && !readingSelection
+    ? <ResearchProgressSummary key="progress" analysis={analysis}/> : null;
+  const analysisDetails = !progressiveOverview ? <Fragment key="analysis">
+    <ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/><ResearchCitationPanel analysis={analysis}/>
+  </Fragment> : null;
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
   // Keep an explicitly opened study in place during a read failure. A complete
@@ -544,10 +553,14 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       </div>
       <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
         {!emptySourceHistory ? <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {
+          const disclosure = records.current;
+          const focused = document.activeElement;
           setRecordsOpen(true);
           window.requestAnimationFrame(() => {
-            records.current?.querySelector<HTMLInputElement>("input")?.focus({preventScroll: true});
-            records.current?.scrollIntoView({block: "start"});
+            // A user can move on to a record before the input's first frame.
+            if (!disclosure?.isConnected || document.activeElement !== focused) return;
+            disclosure.querySelector<HTMLInputElement>("input")?.focus({preventScroll: true});
+            disclosure.scrollIntoView({block: "start"});
           });
         }}><Search size={15} aria-hidden/></button> : null}
         {!readingSelection && !emptySourceHistory ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
@@ -586,15 +599,16 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       <div role="status"><strong>{emptyHistoryMessage}</strong><ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></ContextHelp></div>
       <button type="button" onClick={focusResearchMode}>{zh ? "查看研究模式" : "Review research mode"}</button>
     </div> : null}
-    {!progressiveOverview ? <><ResearchAnalysisStatus analysis={analysis}/>
-      {!readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}
-      <ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/><ResearchCitationPanel analysis={analysis}/></> : null}
-    {busy && !read.events.length ? <div className="research-history-loading" role="status" aria-label={copy.loading}>
+    {!progressiveOverview ? <ResearchAnalysisStatus analysis={analysis}/> : null}
+    {[
+      historyBeforeAnalysisSummary ? null : progressSummary,
+      analysisDetails,
+      busy && !read.events.length ? <div key="loading" className="research-history-loading" role="status" aria-label={copy.loading}>
       <span className="research-history-loading-label">{copy.loading}…</span>
       <div className="research-history-loading-phases" aria-hidden>{Array.from({length: 3}, (_, index) => <span key={index}/>)}</div>
       <div className="research-history-loading-chart" aria-hidden>{Array.from({length: 18}, (_, index) => <span key={index}/>)}</div>
-    </div> : null}
-    {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
+    </div> : null,
+    value?.nodes.length ? <div key="history" className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
 
       {selected ? <div className="research-history-detail" ref={detail} role="region" aria-label={selected.latest.title} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>
         <div className="research-reader-content">
@@ -686,7 +700,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
         <summary hidden={!readingSelection}>{zh ? "研究全景" : "Research overview"}</summary>
         {readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}{historyView}
       </details>
-    </div> : null}
+    </div> : null,
+    historyBeforeAnalysisSummary ? progressSummary : null,
+    ]}
     {(selection.nodes.some(id => !value?.nodes.some(node => node.id === id)) || (selection.day !== null && !selectedGroup)) && read.complete && !busy && !error && !history.error ? <p role="status">{copy.lost}</p> : null}
     {value?.events.length && !value.nodes.length ? <ContextHelp label={zh ? "节点结构未记录" : "Node structure not recorded"} icon={CircleHelp}><p className="research-history-note">{zh ? "尚未记录节点结构；可展开下面的已读记录。" : "Node structure has not been recorded; loaded records remain available below."}</p></ContextHelp> : null}
     {value && (value.missingLinks.length || value.unknownTimeCount || value.unknownKindCount) ? <ContextHelp icon={CircleHelp} label={zh ? "研究记录覆盖缺口" : "Research record coverage gaps"}>

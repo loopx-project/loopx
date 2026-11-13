@@ -146,7 +146,12 @@ for (const storage of ["file", "sqlite"]) {
     await page.keyboard.press("Escape");
     assert.equal(await trigger.evaluate(node => node === document.activeElement), true);
     if (storage === "sqlite") {
-      await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en")); await page.reload();
+      await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+      await Promise.all([
+        page.waitForResponse(response => response.url() === ready.origin + "/api/chat/sessions"
+          && response.request().method() === "POST" && response.status() === 405),
+        page.reload(),
+      ]);
       await page.getByRole("button", {name: /Delegations,.*awaiting follow-up/}).click(); await rows(12);
       const english = page.getByRole("dialog", {name: "Delegations", exact: true});
       await fixture("hold"); await english.getByRole("button", {name: "All records", exact: true}).click(); await held();
@@ -159,6 +164,11 @@ for (const storage of ["file", "sqlite"]) {
       assert.equal(await english.getByRole("button", {name: "All records", exact: true}).getAttribute("aria-pressed"), "true");
       await page.keyboard.press("Escape");
     }
+    // A document reload reattaches the existing Session. Cancelling and
+    // retrying delegation reads within the document leaves that Session alone.
+    const reloadWrites = storage === "sqlite" ? [{url: ready.origin + "/api/chat/sessions",
+      method: "POST", body: {goal_id: "", mode: "resume_latest", context_kind: "manager"}}] : [];
+    assert.deepEqual(writes, reloadWrites);
     // A completed long return opens at its answer, rather than its evidence
     // tail. This uses the real publication, delivery and history owners.
     await fixture("report-readable");
@@ -207,19 +217,16 @@ for (const storage of ["file", "sqlite"]) {
       await returned.getByRole("link", {name: /单独阅读完整答复|Read full answer separately/}).scrollIntoViewIfNeeded();
       assert.ok(await returned.getByText("还需核验安装包中的字段映射和失败恢复。", {exact: true}).isVisible());
     }
-    // Opening/reloading the existing conversation attempts its normal Session
-    // resume (the read-only fixture rejects POST). It must never submit input,
-    // start a Turn or dispatch a model. Inventory reading above remains GET-only.
-    const resumes = storage === "sqlite" ? 5 : 4;
-    assert.deepEqual(writes, Array.from({length: resumes}, () => ({url: ready.origin + "/api/chat/sessions",
-      method: "POST", body: {goal_id: "", mode: "resume_latest", context_kind: "manager"}})));
+    // Switching steward views keeps the existing conversation connection.
+    // Reading a returned answer neither resumes the Session nor starts a Turn.
+    assert.deepEqual(writes, reloadWrites);
     const readerAfter = await fixture("inspect");
-    assert.equal(readerAfter.posts, before.posts + resumes);
+    assert.equal(readerAfter.posts, before.posts + reloadWrites.length);
     assert.equal(readerAfter.turn_count, before.turn_count);
     assert.deepEqual(errors, []);
     results.push({storage, requests: 61, originalBodyChars: [...body].length, sourceUnchanged: true,
       initial: true, filterRetry: true, staleSearch: true, more: true, multiWindow: true, sourceRecovery: true,
-      returnedAnswerStart: true, completeReaderBody: true, inventoryWrites: 0, readerSessionResumes: resumes, readerTurnsStarted: 0});
+      returnedAnswerStart: true, completeReaderBody: true, inventoryWrites: 0, reloadSessionResumes: reloadWrites.length, readerTurnsStarted: 0});
   } finally {
     // Release before shutdown: cancelled clients do not stop server work.
     child.stdin.write("release\nstop\n");

@@ -74,6 +74,12 @@ def handle_turn_command(
         )
     payload: dict[str, Any] = {}
     turn_start_hook_dispatch: dict[str, Any] = {}
+    preparation_state_written: bool | None = False
+
+    def project_preparation_effects(value: dict[str, Any]) -> None:
+        effects = value.setdefault("effects", {})
+        if preparation_state_written is not False and effects.get("state_written") is not True:
+            effects["state_written"] = preparation_state_written
     try:
         if (native_host_runner is not None or native_session_binding_resolver is not None) and (
             args.host != "codex-app-server" or native_host_runner is None or native_session_binding_resolver is None
@@ -89,6 +95,61 @@ def handle_turn_command(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
         )
+        preparation_admission: dict[str, Any] | None = None
+        execution_preparer = native_execution_preparer
+        preparation_error = "native task preparation did not make the same Todo ready"
+        if (
+            execution_preparer is None
+            and args.turn_command == "run-once"
+            and args.host == "codex-cli"
+            and bool(getattr(args, "execute", False))
+        ):
+            from ..control_plane.turn_driver.codex_execution_preparation import (
+                builtin_execution_preparation_claim,
+            )
+
+            from .turn_host_request import prepare_turn_host_arguments
+            from ..control_plane.turn_driver import build_loopx_turn_command_validator
+            from .turn_cadence import managed_cadence_start
+
+            project_cwd = Path(args.project).expanduser().resolve()
+
+            def admit_preparation(identity):
+                nonlocal preparation_admission
+                prepare_turn_host_arguments(
+                    args, native_host_runner=None, native_session_binding_resolver=None,
+                    native_task_validator=None, validator_builder=build_loopx_turn_command_validator,
+                )
+                args.turn_instance_id = identity.turn_instance_id
+                cadence = managed_cadence_start(
+                    runtime_root=runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+                    automation_id=args.automation_id, manual_reason=args.manual_interval_bypass_reason,
+                    request_id=identity.effect_id,
+                )
+                preparation_admission = cadence.admit({"attempt": 1})
+                return preparation_admission.get("admitted") is True
+
+            def record_claim(receipt: Mapping[str, Any]) -> None:
+                nonlocal preparation_state_written
+                # Echo the canonical mutation receipt. A missing/unchanged
+                # claim field cannot prove the earlier binding wrote nothing.
+                preparation_state_written = True if receipt.get("changed") is True else None
+
+            preparation_error = "execution preparation did not make the same Todo ready"
+
+            def execution_preparer(decision: Mapping[str, Any]) -> str | None:
+                return builtin_execution_preparation_claim(
+                    decision,
+                    agent_id=args.agent_id,
+                    registry_path=registry_path.expanduser().resolve(),
+                    runtime_root=runtime_root.resolve(),
+                    cwd=project_cwd,
+                    turn_instance_id=args.turn_instance_id,
+                    goal_ref=goal_ref,
+                    admit_start=admit_preparation,
+                    on_claim=record_claim,
+                )
+
         resume_instance = getattr(args, "resume_turn_instance_id", None)
         if resume_instance is not None:
             from ..control_plane.turn_driver.journal_store import find_loopx_turn_key_by_instance
@@ -271,8 +332,24 @@ def handle_turn_command(
             scheduler_context = decision_owner.scheduler_execution_context
             decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
-            if native_execution_preparer is not None and args.turn_command == "run-once" and args.execute:
-                prepared_todo = native_execution_preparer(decision)
+            if execution_preparer is not None and args.turn_command == "run-once" and args.execute:
+                prepared_todo = execution_preparer(decision)
+                if preparation_admission is not None and preparation_admission.get("admitted") is not True:
+                    from ..control_plane.turn_driver.execution_readback import execution_payload
+                    waiting_plan = build_loopx_turn_plan(
+                        decision, host=args.host, execution_mode=args.execution_mode,
+                        scheduler_owner=args.scheduler_owner, session_binding=session_binding,
+                        turn_instance_id=args.turn_instance_id, iteration_context_policy=args.iteration_context,
+                        session_scope=args.session_scope, goal_ref=goal_ref,
+                    )
+                    waiting = execution_payload(
+                        waiting_plan, {"status": "interval_wait", "host": waiting_plan["host"],
+                            "completed_phases": [], "reason": preparation_admission.get("reason"),
+                            "admission": preparation_admission},
+                        execute=True, replayed=False, effects=waiting_plan["effects"],
+                    )
+                    print_payload(waiting, output_format(args), _render_loopx_turn_execution_markdown)
+                    return 1
                 if prepared_todo is not None:
                     # Host preparation changes canonical lease state. Plan and
                     # settle against a fresh read of the same Turn and Todo.
@@ -284,7 +361,7 @@ def handle_turn_command(
                     if (preparation.get("state") != "ready" or preparation.get("todo_id") != prepared_todo
                             or (decision.get("selected_todo") or {}).get("todo_id") != prepared_todo
                             or decision.get("normal_delivery_allowed") is not True):
-                        raise ValueError("native task preparation did not make the same Todo ready")
+                        raise ValueError(preparation_error)
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}
@@ -384,6 +461,7 @@ def handle_turn_command(
                                execute=bool(args.execute), executed=False)
                 from ..capabilities.turn_start import attach_turn_start_effects
                 attach_turn_start_effects(payload, turn_start_hook_dispatch)
+                project_preparation_effects(payload)
                 print_payload(payload, output_format(args), _render_loopx_turn_plan_markdown)
                 return 0
 
@@ -417,6 +495,7 @@ def handle_turn_command(
         )
     from ..capabilities.turn_start import attach_turn_start_effects
     attach_turn_start_effects(payload, turn_start_hook_dispatch)
+    project_preparation_effects(payload)
     renderer = (
         _render_loopx_turn_execution_markdown
         if args.turn_command == "run-once"

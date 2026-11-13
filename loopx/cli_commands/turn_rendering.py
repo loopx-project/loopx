@@ -82,6 +82,9 @@ def build_turn_error_payload(
         key: True if planned_effects.get(key) is True else None if execution_started else False
         for key in ("host_invoked", "state_written", "scheduler_acknowledged", "quota_spent")
     }
+    preparation_effects = getattr(exc, "execution_effects", None)
+    if isinstance(preparation_effects, Mapping):
+        effects.update({key: preparation_effects[key] for key in effects if key in preparation_effects})
     return {
         **({"error_code": error_code, **(error_payload if isinstance(error_payload, Mapping) else {})}
            if isinstance(error_code, str) else {}),
@@ -208,11 +211,10 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
         if isinstance(managed_executor.get("output_token_budget"), dict)
         else {}
     )
-    host_failure = (
-        payload.get("host_failure")
-        if isinstance(payload.get("host_failure"), dict)
-        else {}
-    )
+    raw_host_failure = payload.get("host_failure")
+    host_failure: dict[str, Any] = raw_host_failure if isinstance(raw_host_failure, dict) else {}
+    retry = host_failure.get("retry")
+    retry = retry if isinstance(retry, dict) else {}
     journal_observation = (
         payload.get("journal_observation")
         if isinstance(payload.get("journal_observation"), dict) else {}
@@ -239,8 +241,15 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
             *(
                 [f"- host_failure_kind: {host_failure.get('kind')}",
                  f"- host_failure_retryable: {host_failure.get('retryable')}",
-                 f"- failure_reason: {payload.get('reason')}"]
-                if host_failure.get("kind") == "output_budget_exhausted" else []
+                 *([f"- host_failure_attempt: {host_failure['attempt']}"]
+                   if "attempt" in host_failure else []),
+                 *([f"- host_failure_max_attempts: {retry.get('max_attempts')}",
+                    f"- host_failure_backoff_seconds: {retry.get('backoff_seconds')}",
+                    "Retry policy is a scheduling hint. Recovery must still be admitted against the original Turn journal."]
+                   if retry else []),
+                 *([f"- failure_reason: {payload.get('reason')}"]
+                   if host_failure.get("kind") == "output_budget_exhausted" else [])]
+                if host_failure else []
             ),
             f"- validation: {validation.get('status')}",
             f"- recovery_kind: {validation.get('recovery_kind')}",

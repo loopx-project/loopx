@@ -1375,10 +1375,13 @@ export async function fetchChatHistory(options: {
   // while it was in flight. Reuse the original source owner, never a fallback.
   if (missing.length && results.some(result => result.status === "fulfilled")) {
     if (options.bound) {
+      const read = results[0];
       try {
-        await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+        const confirmed = await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+        if (read?.status === "fulfilled" && !sameHistorySource(confirmed, read.value.session)) {
+          throw new Error("The original Session scope changed during history read.");
+        }
       } catch (error) {
-        const read = results[0];
         if (options.managed || read?.status !== "fulfilled" || !historyTransportUnavailable(error)) throw error;
         return {
           messages: [],
