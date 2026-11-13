@@ -152,6 +152,15 @@ def _read_pages(output: object) -> list[dict[str, Any]]:
     return _context_pages(output)
 
 
+def _covers_bytes(ranges: list[tuple[int, int]], total: int) -> bool:
+    cursor = 0
+    for start, stop in sorted(ranges):
+        if start > cursor:
+            return False
+        cursor = max(cursor, stop)
+    return cursor == total
+
+
 def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
              event: dict[str, Any], *, selected: bool = False) -> bool:
     from .decision_capture import capture_page_range, read_context_capture_file
@@ -212,12 +221,7 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
                     ranges.append(span)
         if not _append_only(record, event):
             return False
-    cursor = 0
-    for start, stop in sorted(ranges):
-        if start > cursor:
-            return False
-        cursor = max(cursor, stop)
-    return seen_pages == expected_pages and (selected or cursor == len(body))
+    return seen_pages == expected_pages and (selected or _covers_bytes(ranges, len(body)))
 
 
 def _append_only(record: dict[str, Any], event: dict[str, Any]) -> bool:
@@ -296,7 +300,7 @@ def native_resume_sections(state: dict[str, Any], event: dict[str, Any]) -> dict
             or state.get("session_id") != event.get("session_id") or state.get("cwd") != event.get("cwd")
             or anchor.get("scope") != state.get("read_scope") or anchor.get("epoch") != state.get("context_epoch")
             or anchor.get("read_source") != state.get("source_recovery")
-            or not isinstance(anchor.get("sections"), dict)):
+            or not isinstance(anchor.get("sections"), dict) or not anchor["sections"]):
         return {}
     try:
         with _snapshot(event) as (facts, stream):
@@ -317,36 +321,54 @@ def checkpoint_native_selection(state: dict[str, Any], updated: dict[str, Any],
     consumed = updated.get("consumed_pointers", {})
     if (not (raw.get("schema_version") == "context_capture_selection_page_v1"
             or "selected_pointers" in raw and "selection_sha256" in raw)
-            or page.get("ok") is not True or page.get("offset") != 0 or page.get("eof") is not True
-            or page.get("read_sections_inherited") or not isinstance(sections, dict) or not sections
+            or page.get("ok") is not True or page.get("read_sections_inherited")
+            or not isinstance(sections, dict)
             or not isinstance(source, dict) or page.get("source_sha256") != source.get("sha256")
             or not isinstance(scope, dict) or not epoch or scope.get("context_epoch") != epoch
-            or not isinstance(call, str) or not call or not isinstance(consumed, dict)
-            or any(consumed.get(pointer) != digest for pointer, digest in sections.items())):
+            or not isinstance(call, str) or not call or not isinstance(consumed, dict)):
         return
-    receipt = {"call_id": call, "pages_sha256": _digest(raw_pages)}
     previous = state.get("selected_resume")
-    if (isinstance(previous, dict) and previous.get("scope") == scope
-            and previous.get("epoch") == epoch and previous.get("read_source") == source
-            and all(previous.get(k) == event.get(k) for k in ("model", "permission_mode"))
-            and previous.get("path") == event.get("transcript_path")
-            and isinstance(previous.get("reads"), list) and isinstance(previous.get("sections"), dict)
-            and all(isinstance(read, dict) for read in previous["reads"])
-            and len(previous["reads"]) < _MAX_SELECTED_REPLAY_READS):
-        if any(read.get("call_id") == call for read in previous["reads"]):
-            return
-        updated["selected_resume"] = {**previous, "reads": [*previous["reads"], receipt],
-            "sections": {**previous["sections"], **sections}}
-        return
+    same_source = (isinstance(previous, dict) and previous.get("scope") == scope
+        and previous.get("epoch") == epoch and previous.get("read_source") == source
+        and previous.get("path") == event.get("transcript_path")
+        and all(previous.get(k) == event.get(k) for k in ("model", "permission_mode")))
     try:
-        with _snapshot(event) as (facts, stream):
-            end = facts["observed_bytes"]
-            start = _reader_start(stream, end, raw_pages)
-            if not 0 < start < end:
-                return
-            anchor = {**facts, "reader_start": start, "reader_sha256": _region_digest(stream, start, end),
-                "read_source": source, "reads": [receipt], "sections": sections, "scope": scope, "epoch": epoch}
-        updated["selected_resume"] = anchor
+        anchor = previous if same_source else {}
+        reads, observed = anchor.get("reads", []), anchor.get("sections", {})
+        # Keep page identities only, under the existing per-checkpoint bound.
+        # The native replay verifies the interval once on resume.
+        pending = dict(anchor.get("pending_selections", {}))
+        all_reads = [*reads, *(read for group in pending.values() for read in group)]
+        if any(read["call_id"] == call for read in all_reads):
+            return
+        if len(all_reads) >= _MAX_SELECTED_REPLAY_READS:
+            anchor, reads, observed, pending = {}, [], {}, {}
+        if not anchor:
+            with _snapshot(event) as (facts, stream):
+                end = facts["observed_bytes"]
+                start = _reader_start(stream, end, raw_pages)
+                if not 0 < start < end:
+                    return
+                anchor = {**facts, "reader_start": start, "reader_sha256": _region_digest(stream, start, end),
+                    "read_source": source, "scope": scope, "epoch": epoch}
+        # Offsets belong to the exact selected view, which can coincide across
+        # different sources or presentation bindings. Only combine pages from
+        # the same physical reader and its verified view.
+        selection = _digest([raw.get("reference_file") or raw["sha256"], page["sha256"]])
+        offset = page["offset"]
+        end = offset + len(page["content"].encode("utf-8"))
+        receipt = {"call_id": call, "pages_sha256": _digest(raw_pages), "start": offset, "end": end}
+        progress = [*pending.get(selection, []), receipt]
+        if _covers_bytes([(read["start"], read["end"]) for read in progress], page["total_bytes"]):
+            # The reducer and this replay interval both observed full coverage.
+            # Never resume an inherited selection from only its displayed pages.
+            if sections and all(consumed.get(pointer) == digest for pointer, digest in sections.items()):
+                reads = [*reads, *progress]
+                observed = {**observed, **sections}
+            pending.pop(selection, None)
+        else:
+            pending[selection] = progress
+        updated["selected_resume"] = {**anchor, "reads": reads, "sections": observed, "pending_selections": pending}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return
 

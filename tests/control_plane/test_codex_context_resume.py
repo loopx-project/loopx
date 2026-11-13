@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from loopx.cli_commands.quota_capture import model_context_reference, native_context_capture_view
 from loopx.control_plane.quota.turn_envelope import restore_context_delivery
 from loopx.control_plane.turn_driver import codex_context as context
 from tests.control_plane.test_codex_context_lifecycle import project, read_pages, setup
@@ -138,7 +140,10 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
     assert_file_delta(wire, before["recovery"], current)
 
 
-@pytest.mark.parametrize("replay", ["present", "pinned", "lost_output", "partial", "compacted", "changed_source"])
+@pytest.mark.parametrize("replay", [
+    "present", "pinned", "paged", "out_of_order", "lost_page", "missing_hook",
+    "lost_output", "partial", "compacted", "changed_source",
+])
 def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monkeypatch, replay):
     """A selected read can survive a qualified replay without proving full input."""
     import hashlib
@@ -150,8 +155,15 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
     history.chmod(0o600)
     event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions")
     append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
-    address = "/requirements"
-    payload = {"ok": True, "goal_id": "fixture", "requirements": "Preserve the current stop. " * 320,
+    address = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    narrative = "Preserve the current stop. " * 320
+    payload = {"ok": True, "goal_id": "fixture", "selected_todo": {"todo_id": "todo_current"},
+        "goal_boundary": {"stop_condition": "Keep the current stop."},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
+            "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+            }}]}}, "user_channel": {}, "cli_channel": {}},
         "unread": "This is a separate source field. " * 400}
     _, wire = project(tmp_path, payload=payload)
     recovery = wire["recovery"]
@@ -165,27 +177,40 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
 
-    if replay == "pinned":
+    paged = replay in {"paged", "out_of_order", "lost_page", "missing_hook"}
+    if paged or replay == "pinned":
         from loopx.control_plane.turn_driver.decision_capture import write_context_read_reference
 
         ref = write_context_read_reference(Path(recovery["path"]), recovery["sha256"])
         source = ["--reference-file", str(ref)]
     else:
         source = ["--capture-file", recovery["path"], "--capture-sha256", recovery["sha256"]]
-    page = command(["context-read", *source, "--select", address, "--page-bytes", "1000" if replay == "partial" else "64000",
+    page = command(["context-read", *source, "--select", address,
+        "--page-bytes", "3000" if paged or replay == "partial" else "64000",
         "--max-page-output-bytes", "64000"])
-    assert page["ok"] and page["eof"] == (replay != "partial")
+    assert page["ok"] and page["eof"] == (not paged and replay != "partial")
     hook = ["context-hook", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)]
-    # A code-mode parent may append its actual output after the nested hook.
-    append(history, "response_item", {"type": "custom_tool_call", "call_id": "parent"})
-    command(hook, {**event, "hook_event_name": "PostToolUse", "tool_use_id": "reader",
-        "tool_response": json.dumps(page)})
+    pages = [page]
+    if paged:
+        while not pages[-1]["eof"]:
+            next_command = shlex.split(pages[-1]["next_command"])
+            pages.append(command(next_command[next_command.index("context-read"):]))
+        assert len(pages) > 2
+    if replay == "out_of_order":
+        pages = [pages[-1], *pages[:-1]]
+    for index, page in enumerate(pages):
+        # A code-mode parent may append its actual output after the nested hook.
+        parent = f"parent-{index}"
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent})
+        if replay != "missing_hook" or index != 1:
+            command(hook, {**event, "hook_event_name": "PostToolUse", "tool_use_id": f"reader-{index}",
+                "tool_response": json.dumps(page)})
+        if replay != "lost_output" and not (replay == "lost_page" and index == 1):
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+                "output": [{"type": "input_text", "text": json.dumps(page)}]})
     before = context._state(tmp_path)
-    assert (address in before.get("consumed_pointers", {})) == (replay != "partial")
+    assert (address in before.get("consumed_pointers", {})) == (replay not in {"partial", "missing_hook"})
     assert "candidate" not in before
-    if replay != "lost_output":
-        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": "parent",
-            "output": [{"type": "input_text", "text": json.dumps(page)}]})
     if replay == "compacted":
         append(history, "compacted", {"message": "Earlier model context was replaced."})
     if replay == "changed_source":
@@ -196,8 +221,29 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
     command(hook, {**event, "source": "resume"})
     after = context._state(tmp_path)
     assert "candidate" not in after
-    expected = {address: before["consumed_pointers"][address]} if replay in {"present", "pinned"} else {}
+    retained = replay in {"present", "pinned", "paged", "out_of_order"}
+    expected = before["consumed_pointers"] if retained else {}
     assert after.get("consumed_pointers", {}) == expected
+    if paged:
+        delivered_bytes = sum(len(page["content"].encode("utf-8")) for page in pages)
+        assert delivered_bytes == pages[0]["total_bytes"] > 8_000
+    if paged:
+        payload["goal_boundary"]["stop_condition"] = "The new stop applies before publication."
+        directory = tmp_path / "next"
+        directory.mkdir(mode=0o700)
+        prepared = context.prepare_codex_context(payload, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="next")
+        view = model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+        first_command = shlex.split(view["first_read_command"])
+        opening = command(first_command[first_command.index("context-read"):])
+        assert opening["eof"] and payload["goal_boundary"]["stop_condition"] in opening["content"]
+        assert (address in opening.get("previously_delivered_fields", [])) is retained
+        assert (narrative in opening["content"]) is not retained
+        if retained:
+            assert opening["total_bytes"] < len(narrative.encode("utf-8"))
+        else:
+            assert opening["total_bytes"] > len(narrative.encode("utf-8"))
 
 
 @pytest.mark.parametrize("single_page", [False, True])
