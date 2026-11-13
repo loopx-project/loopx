@@ -444,3 +444,46 @@ def test_installed_core_rejects_unverified_artifact_without_settlement(core_pyth
     assert result["effects"]["quota_spent"] is False
     assert _spends(runtime) == 0
     assert (workspace / "host-invocations").read_text().splitlines() == ["called"]
+
+
+def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_python, task, tmp_path, monkeypatch):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    workspace, runtime, registry, _ = task
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    todo = json.loads(_run(core_python, [*prefix, "todo", "list", "--goal-id", GOAL], workspace).stdout)
+    todo_id = todo["todos"][0]["todo_id"]
+    lease = json.loads(_run(core_python, [*prefix, "task-lease", "inspect", "--goal-id", GOAL,
+        "--todo-id", todo_id], workspace).stdout)["lease"]
+    _run(core_python, [*prefix, "task-lease", "release", "--goal-id", GOAL, "--todo-id", todo_id,
+        "--owner", AGENT, "--idempotency-key", lease["idempotency_key"],
+        "--expected-version", str(lease["version"])], workspace)
+    binary, log = _fake_codex(tmp_path)
+    binary.write_text(binary.read_text().replace('output_path = ',
+        'pathlib.Path("squares.json").write_text(json.dumps([n*n for n in range(8)]))\noutput_path = '))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    environment = {"FAKE_CODEX_LOG": str(log), "CODEX_HOME": str(home)}
+    command = [*prefix, "turn", "run-once", "--host", "codex-cli", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--todo-id", todo_id, "--project", str(workspace),
+        "--codex-bin", str(binary), "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+        "--codex-sandbox", "read-only", "--no-global-sync", "--execute"]
+    refused = json.loads(_run(core_python, [*command, "--turn-instance-id", "invalid-request",
+        "--validation-command-json", "{"], workspace, environment=environment, expected=1).stdout)
+    assert all(value is False for value in refused["effects"].values())
+    held = json.loads(_run(core_python, [*prefix, "task-lease", "inspect", "--goal-id", GOAL,
+        "--todo-id", todo_id], workspace).stdout)
+    assert held["active"] is False and not log.exists() and _spends(runtime) == 0
+    result = json.loads(_run(core_python, [*command, "--turn-instance-id", "admitted-request",
+        "--validation-command-json", json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])],
+        workspace, environment=environment).stdout)
+    assert result["status"] == "committed" and result["validation"]["status"] == "passed", result
+    assert json.loads((workspace / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
+    resume_command = [item for index, item in enumerate(command)
+                      if item != "--todo-id" and (index == 0 or command[index - 1] != "--todo-id")]
+    replay = json.loads(_run(core_python, [*resume_command, "--resume-turn-key", result["resume_turn_key"],
+        "--validation-command-json", json.dumps([core_python, "-I", "-c", VALIDATOR_SOURCE])],
+        workspace, environment=environment).stdout)
+    assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
+    assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
