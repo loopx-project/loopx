@@ -79,6 +79,20 @@ test("already shared numeric summary arrays reuse their original identity withou
   assert.deepEqual(referenceQuotaSummaryLanes(source, key), source);
 });
 
+test("claim scope only shares numeric rows with the same original value and spelling", () => {
+  const lane = () => [{todo_id: "task", text: "Original peer constraint. ".repeat(20), measurement: 1}];
+  const source = {agent_todo_summary: {schema_version: "todo_summary_v0", claimed_by_others_items: lane(),
+    claim_scope: {schema_version: "agent_claim_scope_v0", other_agent_claimed_items: lane(),
+      blocked_claimed_items: lane()}}};
+  const key = contextSourceIdentity(source, [
+    [["agent_todo_summary", "claim_scope", "other_agent_claimed_items", 0, "measurement"], "1.0"],
+  ]);
+  assert.deepEqual(referenceQuotaSummaryLanes(source, key), {agent_todo_summary: {
+    ...source.agent_todo_summary, claim_scope: {schema_version: "agent_claim_scope_v0",
+      other_agent_claimed_items: lane(), blocked_claimed_items_ref: "$.agent_todo_summary.claimed_by_others_items"},
+  }});
+});
+
 test("projected source identity tracks retained and moved values without removed tokens", () => {
   const source = {first: {values: [1, 2 ** 60]}, second: {values: [1, 2 ** 60]}};
   const tokens = [

@@ -1378,6 +1378,50 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_complete_quota_shares_repeated_peer_claims_in_the_original_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    import hashlib
+    import sys
+
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    with _stable_budget_fixture_root(tmp_path / "peer-claim-lanes") as root:
+        project, runtime, registry, state = _write_fixture(root, SCENARIOS[2])
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        capture = root / "capture"
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry,
+            state_file=state, output_format="json")["quota_should_run"]
+        code, text = _invoke_cli([*command, "--complete-turn", "--decision-output-dir", str(capture),
+            "--turn-instance-id", "peer-claim-lanes"])
+        assert code == 0, text
+        path = capture / "decision.json"
+        original = path.read_bytes()
+        payload = json.loads(text)
+        assert payload == json.loads(original)
+        assert_complete_turn_decision(payload)
+        summary = payload["agent_todo_summary"]
+        scope = summary["claim_scope"]
+        assert summary["claimed_by_others_count"] == scope["other_agent_claimed_open_count"] == 12
+        assert scope["blocked_claimed_open_count"] == 12
+        assert [(row["todo_id"], row["claimed_by"], row["text"]) for row in summary["claimed_by_others_items"]] == [
+            ("todo_fixture_001", AGENT_IDS[1], "[P1] Validate public fixture lane 01 without reading archival detail."),
+            ("todo_fixture_004", AGENT_IDS[1], "[P1] Validate public fixture lane 04 without reading archival detail."),
+        ]
+        for lane in ("other_agent_claimed_items", "blocked_claimed_items"):
+            assert lane not in scope
+            assert scope[f"{lane}_ref"] == "$.agent_todo_summary.claimed_by_others_items"
+        assert payload["selected_todo"]["todo_id"] == "todo_fixture_000"
+        assert payload["interaction_contract"]["cli_channel"]["selection_required"] is True
+        reader = shlex.join([sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota", "context-read",
+            "--capture-file", str(path), "--capture-sha256", hashlib.sha256(original).hexdigest()])
+        restored, _, _ = read_pinned_cli_body(reader)
+        assert restored.encode() == path.read_bytes() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_staged_complete_replan_shares_exact_todo_rows_in_its_required_view(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:

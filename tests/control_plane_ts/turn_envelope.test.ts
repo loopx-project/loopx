@@ -133,6 +133,8 @@ test("complete diagnostic lanes share exact arrays without losing distinct facts
   const lane = [item, {...item, todo_id: "dependency", status: "open"}];
   const source: JsonObject = {agent_todo_summary: {schema_version: "todo_summary_v0", open_count: 2,
     first_open_items: structuredClone(lane), first_executable_items: lane,
+    claim_scope: {schema_version: "agent_claim_scope_v0", other_agent_claimed_items: structuredClone(lane),
+      blocked_claimed_items: structuredClone(lane), removed_continuation_blocked_items: structuredClone(lane)},
     backlog_items: structuredClone(lane), claimed_open_items: [...lane].reverse(),
     deferred_items: [{...item, future: {may_publish: 0, value: null}}, lane[1]],
     future_items: structuredClone(lane), future_control: {requires_stop: true}},
@@ -146,6 +148,12 @@ test("complete diagnostic lanes share exact arrays without losing distinct facts
   }
   for (const key of ["first_executable_items", "claimed_open_items", "deferred_items", "future_items", "future_control", "open_count"])
     assert.deepEqual(summary[key], (source.agent_todo_summary as JsonObject)[key]);
+  const scope = summary.claim_scope as JsonObject;
+  for (const key of ["other_agent_claimed_items", "blocked_claimed_items"]) {
+    assert.equal(scope[key], undefined);
+    assert.equal(scope[`${key}_ref`], "$.agent_todo_summary.first_executable_items");
+  }
+  assert.deepEqual(scope.removed_continuation_blocked_items, lane);
   assert.deepEqual(resolveQuotaSummaryLanes(shared), source);
   assert.deepEqual(referenceQuotaSummaryLanes(shared), shared);
   assert.deepEqual(projectQuotaDiagnostics(resolveQuotaSummaryLanes(shared), {capture_ref: "$.source_capture"}),
@@ -172,6 +180,26 @@ test("diagnostic references reject ambiguity, chains, wrong roots and missing li
     assert.throws(() => resolveQuotaSummaryLanes(invalid), /summary lane reference/);
     assert.deepEqual(invalid, before);
   }
+});
+
+test("nested summary references reject missing owners, cycles and conflicting literals", () => {
+  const lane = [{todo_id: "task", text: "Keep complete requirements. ".repeat(30)}];
+  const source = (claim: JsonObject): JsonObject => ({agent_todo_summary: {
+    schema_version: "todo_summary_v0", first_executable_items: lane,
+    claim_scope: {schema_version: "agent_claim_scope_v0", ...claim},
+  }});
+  const key = "blocked_claimed_items_ref";
+  const target = "$.agent_todo_summary.claim_scope.other_agent_claimed_items";
+  for (const claim of [
+    {[key]: target},
+    {[key]: target, other_agent_claimed_items: lane, blocked_claimed_items: lane},
+    {[key]: target, other_agent_claimed_items_ref: "$.agent_todo_summary.claim_scope.blocked_claimed_items"},
+    {[key]: "$.user_todo_summary.first_open_items"},
+  ]) assert.throws(() => resolveQuotaSummaryLanes(source(claim)), /summary lane reference/);
+  assert.deepEqual(resolveQuotaSummaryLanes(source({[key]: target, other_agent_claimed_items: lane})),
+    source({other_agent_claimed_items: lane, blocked_claimed_items: lane}));
+  const unfamiliar = source({schema_version: "future_claim_scope", blocked_claimed_items_ref: "unknown"});
+  assert.deepEqual(resolveQuotaSummaryLanes(unfamiliar), unfamiliar);
 });
 
 test("complete producer and Host preserve action semantics when diagnostic lanes share a source", () => {
