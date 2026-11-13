@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from tests.control_plane.host_process_fixture import assert_host_task_context
+
 from loopx.control_plane.quota.turn_envelope import (
     _turn_envelope_result, compose_turn_decision,
 )
@@ -406,9 +408,9 @@ def test_host_transports_preserve_complete_contract_presence(tmp_path, transfer,
         model_input = json.loads(prompt.split("Turn request:\n", 1)[1])
         assert schema and extract_turn_authority(request)
         assert ("work_contract" in request) is not historical
-        assert ("work_contract" in model_input) is not historical
+        assert ("task_context" in model_input) is not historical
         if not historical:
-            assert model_input["work_contract"] == contract
+            assert_host_task_context(model_input, contract)
     assert plan == original
 
 
@@ -623,7 +625,7 @@ def test_real_turn_preview_reaches_complete_codex_input(tmp_path, monkeypatch, p
     request = build_loopx_turn_host_request(plan)
     prompt = _prompt(request)
     actual = json.loads(prompt.split("Turn request:\n", 1)[1])
-    assert actual["work_contract"] == contract
+    assert_host_task_context(actual, contract)
     assert "turn_envelope" not in actual and "turn_authority" not in actual
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
     structured = render_prompt(extract_turn_authority(request))
@@ -733,22 +735,23 @@ def test_real_turn_preview_reaches_complete_codex_input(tmp_path, monkeypatch, p
     else:
         assert code == 0 and executed["status"] == "committed", executed
     observed = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
-    assert observed["work_contract"]["schema_version"] == "loopx_turn_envelope_v1"
+    assert observed["schema_version"] == "loopx_turn_model_context_v0"
     assert "turn_envelope" not in observed
-    acceptance_sources = observed["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    acceptance_sources = observed["task_context"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     acceptance_index = next(i for i, row in enumerate(acceptance_sources) if row["source"] == "goal_acceptance")
     assert acceptance_sources[acceptance_index]["content"]["goal_acceptance_contract"] == expected_acceptance
-    assert observed["work_contract"]["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
+    assert observed["task_context"]["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
         f"$.interaction_contract.agent_channel.work_context.sources[{acceptance_index}].content.goal_acceptance_contract")
     saved = list(runtime.rglob("decisions/*.json"))
     assert len(saved) == 1
     saved_bytes = saved[0].read_bytes()
-    assert json.loads(saved_bytes) == observed["work_contract"]
+    original_source = json.loads(saved_bytes)
+    assert_host_task_context(observed, original_source)
     journal = json.loads((saved[0].parent.parent / saved[0].name).read_text())
     # Native journal persistence must preserve the captured source's number
     # types and precision, not merely Python's permissive 1 == 1.0 equality.
     assert json.dumps(journal["plan"]["work_contract"], sort_keys=True) == json.dumps(
-        observed["work_contract"], sort_keys=True)
+        original_source, sort_keys=True)
     replay_args = list(run_args)
     index = replay_args.index("--turn-instance-id")
     del replay_args[index:index + 2]
@@ -757,7 +760,7 @@ def test_real_turn_preview_reaches_complete_codex_input(tmp_path, monkeypatch, p
         received = (workspace / "received.txt").read_bytes()
         for corrupt in (True, False):
             if corrupt:
-                saved[0].write_text(json.dumps({**observed["work_contract"], "reason": "tampered source"}))
+                saved[0].write_text(json.dumps({**original_source, "reason": "tampered source"}))
             else:
                 saved[0].unlink()
             code, rejected = f._run_cli(retry_args)
@@ -768,7 +771,8 @@ def test_real_turn_preview_reaches_complete_codex_input(tmp_path, monkeypatch, p
         code, recovered = f._run_cli(retry_args)
         assert code == 0 and recovered["status"] == "committed", recovered
         restored = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
-        assert restored["work_contract"] == observed["work_contract"]
+        assert_host_task_context(restored, original_source)
+        assert restored["task_context"] == observed["task_context"]
     code, replay = f._run_cli([*replay_args, "--resume-turn-key", observed["turn_key"], "--execute"])
     assert code == 0 and replay["replayed"] is True, replay
     assert saved[0].read_bytes() == saved_bytes
@@ -810,8 +814,9 @@ output.write_text(json.dumps({"schema_version":"loopx_turn_result_v0", "turn_key
     assert code == 0, json.dumps(result, indent=2)
     prompt = (project / "received.txt").read_text()
     request = json.loads(prompt.split("Turn request:\n", 1)[1])
-    source = request["work_contract"]
-    assert source["schema_version"] == "loopx_turn_envelope_v1"
+    source = request["task_context"]
+    assert request["schema_version"] == "loopx_turn_model_context_v0"
+    assert "schema_version" not in source and "contract_binding" not in source
     assert "turn_envelope" not in request and "turn_authority" not in request
     identity = result["receipt"]["lineage"]
     if prior_todo_binding:
@@ -834,7 +839,7 @@ output.write_text(json.dumps({"schema_version":"loopx_turn_result_v0", "turn_key
     # The native outer controller owns settlement; its model input has no
     # inline settlement owner to reference. Preserve all authoring here.
     contract = source["replan_action_packet"]["writeback_contract"]
-    steps = source["interaction_contract"]["cli_channel"].get("settlement_plan", {}).get("ordered_steps", [])
+    steps = source["interaction_contract"].get("cli_channel", {}).get("settlement_plan", {}).get("ordered_steps", [])
     assert not any("vision_authoring" in step for step in steps)
     assert "vision_authoring_ref" not in contract
     if "vision_authoring" in contract:
@@ -849,8 +854,8 @@ output.write_text(json.dumps({"schema_version":"loopx_turn_result_v0", "turn_key
     import subprocess
     captured = Path(request["detail_ref"]["captured_decision"]["path"])
     original = captured.read_bytes()
-    assert json.loads(original) == source
-    captured.write_text(json.dumps({**source, "reason": "Changed original facts"}))
+    assert_host_task_context(request, json.loads(original))
+    captured.write_text(json.dumps({**json.loads(original), "reason": "Changed original facts"}))
     rejected = subprocess.run(shlex.split(request["detail_ref"]["replan_action_packet"]["review"]),
         capture_output=True, text=True)
     assert rejected.returncode != 0
@@ -889,11 +894,13 @@ def test_real_structured_host_reads_same_complete_replan_source(tmp_path, monkey
     assert rc == 0, json.dumps(result, indent=2)
     prompt = (project / "received.txt").read_text()
     request, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
-    source = request["work_contract"]
-    assert source["schema_version"] == "loopx_turn_envelope_v1"
+    source = request["task_context"]
+    assert request["schema_version"] == "loopx_turn_model_context_v0"
+    assert "schema_version" not in source and "contract_binding" not in source
     assert "turn_envelope" not in request and "turn_authority" not in request
     saved = list(runtime.rglob("decisions/*.json"))
-    assert len(saved) == 1 and json.loads(saved[0].read_text()) == source
+    assert len(saved) == 1
+    assert_host_task_context(request, json.loads(saved[0].read_text()))
     for stage in ("review", "writeback"):
         material = json.loads((project / (stage + ".json")).read_text())
         assert material["ok"] is True
