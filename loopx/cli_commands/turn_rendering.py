@@ -82,6 +82,9 @@ def build_turn_error_payload(
         key: True if planned_effects.get(key) is True else None if execution_started else False
         for key in ("host_invoked", "state_written", "scheduler_acknowledged", "quota_spent")
     }
+    preparation_effects = getattr(exc, "execution_effects", None)
+    if isinstance(preparation_effects, Mapping):
+        effects.update({key: preparation_effects[key] for key in effects if key in preparation_effects})
     return {
         **({"error_code": error_code, **(error_payload if isinstance(error_payload, Mapping) else {})}
            if isinstance(error_code, str) else {}),

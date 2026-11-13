@@ -882,6 +882,7 @@ def execute_turn_run_once(
             automation_id=args.automation_id,
             manual_reason=args.manual_interval_bypass_reason,
             on_admitted=on_managed_start_admitted,
+            request_id=settlement_identity.effect_id if args.host == "codex-cli" else None,
         )
 
         execution_started = bool(args.execute)
