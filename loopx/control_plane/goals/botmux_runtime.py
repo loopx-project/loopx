@@ -1161,7 +1161,17 @@ def _status_botmux_runtime(
     session = dict(binding.get("session") or {})
     session_id = str(session.get("session_id") or "").strip()
     dispatch_key = str(session.get("active_dispatch_key") or "").strip()
-    if not session_id or not dispatch_key:
+    # A reused session's trigger-result describes its latest *accepted* turn.
+    # An ATTEMPTING or REJECTED dispatch never became one, so the provider
+    # cannot vouch for it; resolve it from the local receipt alone.
+    local_receipts = binding.get("receipts")
+    local_receipt = (
+        local_receipts.get(dispatch_key) if isinstance(local_receipts, Mapping) else None
+    )
+    unaccepted_dispatch = bool(dispatch_key) and _dispatch_state(
+        local_receipt.get("state") if isinstance(local_receipt, Mapping) else None
+    ) in {BotmuxDispatchState.ATTEMPTING, BotmuxDispatchState.REJECTED}
+    if not session_id or not dispatch_key or unaccepted_dispatch:
         active = _active_dispatch_receipt(binding)
         if active is not None:
             active_key, receipt = active

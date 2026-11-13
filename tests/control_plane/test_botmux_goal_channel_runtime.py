@@ -1215,3 +1215,108 @@ def test_runtime_reads_return_typed_packet_when_setup_lock_times_out(
     assert result["operator_action"]["action"] == "inspect_lock_holder"
     assert json.loads(json.dumps(result)) == result
     _assert_public_packet(result)
+
+
+def _setup_reused_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[dict[str, Any], Path, Path]:
+    registry, registry_path = _registry(tmp_path)
+    binding_path = tmp_path / ".loopx" / "goal-channel-runtime.json"
+    monkeypatch.setenv("BOTMUX_TEST_TOKEN", "secret-public-fixture")
+    common = {
+        "registry": registry,
+        "registry_path": registry_path,
+        "goal_id": GOAL_ID,
+        "binding_path": binding_path,
+    }
+    setup_botmux_runtime(
+        **common,
+        endpoint="http://127.0.0.1:7891",
+        bot_id=BOT_ID,
+        chat_id=CHAT_ID,
+        token_env="BOTMUX_TEST_TOKEN",
+        execute=True,
+        requester=_requester([], tmp_path),
+    )
+    first = trigger_botmux_runtime(
+        **common, execute=True, requester=_requester([], tmp_path)
+    )
+    assert first["status"] == "queued"
+    return registry, registry_path, binding_path
+
+
+def test_status_never_vouches_for_rejected_dispatch_on_reused_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, registry_path, binding_path = _setup_reused_session(tmp_path, monkeypatch)
+    ok = _requester([], tmp_path)
+
+    def reject_trigger(**kwargs: Any) -> dict[str, Any]:
+        if kwargs["path"] == "/api/trigger":
+            raise BotmuxApiError(409, {"error": "busy"})
+        return ok(**kwargs)
+
+    rejected = trigger_botmux_runtime(
+        registry=registry,
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        binding_path=binding_path,
+        turn_key="second-segment",
+        execute=True,
+        requester=reject_trigger,
+    )
+    assert rejected["status"] == "rejected"
+
+    # The session's trigger-result still describes the first, completed turn.
+    for execute in (False, True):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID,
+            binding_path=binding_path,
+            execute=execute,
+            requester=ok,
+        )
+        assert status["ok"] is False
+        assert status["status"] == "rejected"
+        assert status["readback_verified"] is False
+        assert status["blocker"] == "botmux_api_rejected"
+
+
+def test_status_promotes_unresolved_attempt_on_reused_session_without_provider_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _registry_value, _registry_path, binding_path = _setup_reused_session(
+        tmp_path, monkeypatch
+    )
+    payload = read_botmux_runtime_binding(binding_path)
+    binding = botmux_binding_for_goal(payload, GOAL_ID)
+    assert binding is not None
+    dispatch_key = "sha256:" + ("b" * 64)
+    binding["receipts"][dispatch_key] = {
+        "state": "attempting",
+        "attempted_at": "2026-01-01T00:00:00+00:00",
+        "session_reused": True,
+    }
+    binding["session"] = {
+        "session_id": SESSION_ID,
+        "active_dispatch_key": dispatch_key,
+    }
+    payload["bindings"][GOAL_ID] = binding
+    binding_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    status = status_botmux_runtime(
+        goal_id=GOAL_ID,
+        binding_path=binding_path,
+        execute=True,
+        requester=_requester([], tmp_path),
+    )
+
+    assert status["ok"] is False
+    assert status["status"] == "unknown"
+    assert status["readback_verified"] is False
+    persisted = botmux_binding_for_goal(
+        read_botmux_runtime_binding(binding_path), GOAL_ID
+    )
+    assert persisted is not None
+    assert persisted["receipts"][dispatch_key]["state"] == "unknown"
