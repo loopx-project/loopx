@@ -95,14 +95,14 @@ RUNTIME_REPAIR_ROUTING_RULE = (
     "lifecycle/registry: loopx-project; runtime/projection drift: loopx-self-repair."
 )
 RUNTIME_EXECUTION_ROUTING_RULE = (
-    "For normal turns follow the CLI `interaction_contract`; " + RUNTIME_REPAIR_ROUTING_RULE
+    "Normal turns follow CLI `interaction_contract`. " + RUNTIME_REPAIR_ROUTING_RULE
 )
 HOST_LOOP_SAFETY_RULE = (
     "Obey user authority and repository rules. "
     "Protect credentials and private material. "
     "Share public-safe evidence. Destructive Git/production needs explicit authorization. "
     "Gate only the affected path; continue other allowed work. "
-    "Reuse existing authorization here. Ask only for missing necessary authority."
+    "Reuse existing authorization. Ask only if needed authority is missing."
 )
 HEARTBEAT_TURN_BOOTSTRAP_RULE = (
     "Per wake replace `<current_time_iso>` once; reuse on retries. "
