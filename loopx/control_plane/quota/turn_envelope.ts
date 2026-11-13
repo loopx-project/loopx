@@ -2349,7 +2349,8 @@ function capturedDecisionSelection(request: JsonObject): JsonObject {
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
   if (!initial) return capturedContextSelection(request, []);
   const context = requireJsonObject(request.context, "captured context");
-  const pointers = initialContextReadPointers(context, INITIAL_CONTEXT_DECISION_FIELDS);
+  const pointers = initialContextReadPointers(context, INITIAL_CONTEXT_DECISION_FIELDS,
+    jsonObject(context.goal_boundary)?.handoff_mode);
   const result = capturedContextSelection(request, pointers);
   const review = request.include_replan_review === true ? successorReplanReadSelection(context, pointers) : undefined;
   return review ? {...result, replan_review: review} : result;
@@ -2719,9 +2720,10 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "context_read_sections") {
     const selected = capturedContextSelection({...request, list_fields: false});
+    const context = requireJsonObject(request.context, "read section source");
     return {sections: contextReadSectionDigests(request,
       (selected.selections as {path: (string | number)[]}[]).map(row => row.path),
-      readyWriteScope(requireJsonObject(request.context, "read section source")))};
+      readyWriteScope(context), jsonObject(context.goal_boundary)?.handoff_mode)};
   }
   if (operation === "progressive_context_delivery")
     return prepareProgressiveContext(request, checkedContextPresentationPlan(request));
@@ -2730,8 +2732,10 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       if (request.surface === "complete_turn") checkedContextPresentationSource(request);
       return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
     }
+    const plan = checkedContextPresentationPlan(request);
+    const context = requireJsonObject(request.context, "current projection");
     return prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
-      checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
+      plan, readyWriteScope(context), jsonObject(context.goal_boundary)?.handoff_mode);
   }
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

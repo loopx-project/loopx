@@ -42,7 +42,7 @@ function orderedSettlementSteps(plan: JsonObject | null | undefined): unknown[] 
 }
 
 function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
-    plan: JsonObject | null | undefined): JsonObject | undefined {
+    plan: JsonObject | null | undefined, handoffMode: unknown): JsonObject | undefined {
   const cli = jsonObject(interaction.cli_channel), selected = jsonObject(context.selected_todo);
   const receipt = jsonObject(context.heartbeat_receipt), identity = jsonObject(plan?.identity);
   if (!cli || context.effective_action !== EffectiveAction.NORMAL_RUN || context.normal_delivery_allowed !== true
@@ -59,7 +59,7 @@ function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
   const identityAgent = jsonObject(context.agent_identity)?.agent_id;
   if (Object.hasOwn(cli, "execution_preparation") || Object.hasOwn(context, "execution_preparation")
       || cli.turn_binding_required === true || context.ok !== true || context.should_run !== true
-      || jsonObject(context.goal_boundary)?.handoff_mode !== "soft_claim"
+      || handoffMode !== "soft_claim"
       || jsonObject(interaction.user_channel)?.action_required !== false || cli.spend_after_validation !== true
       || receipt?.closeout_required !== true || receipt.settlement_binding_owed === true
       || (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed")
@@ -107,11 +107,11 @@ function hasBoundDatedTodoReentry(context: JsonObject, interaction: JsonObject, 
     && isDeepStrictEqual(identity, receipt.settlement_identity);
 }
 
-function reusableWritebackPrecondition(context: JsonObject): ReusableReadField | undefined {
+function reusableWritebackPrecondition(context: JsonObject, handoffMode: unknown): ReusableReadField | undefined {
   const interaction = jsonObject(context.interaction_contract);
   if (interaction?.schema_version !== "loopx_interaction_contract_v0") return undefined;
   const plan = jsonObject(at(context, SETTLEMENT_PLAN_PATH)), steps = orderedSettlementSteps(plan);
-  const identity = readySettlementIdentity(context, interaction, plan);
+  const identity = readySettlementIdentity(context, interaction, plan, handoffMode);
   const identityAgent = jsonObject(context.agent_identity)?.agent_id;
   const agent = context.agent_id ?? identityAgent;
   if (!plan || !steps || !identity || typeof agent !== "string" || agent !== identity.agent_id
@@ -132,10 +132,11 @@ function reusableWritebackPrecondition(context: JsonObject): ReusableReadField |
 
 /** One registry for bodies eligible for observed reuse, regardless of whether
  * the reader delivered the body itself or packaged it in a complete parent. */
-function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactBody): ReusableReadField[] {
+function reusableFirstReadFields(context: JsonObject, exactBody: ReusableExactBody | undefined,
+    handoffMode: unknown): ReusableReadField[] {
   const exactFields = exactBody && at(context, exactBody.path) !== undefined
     ? [{...exactBody, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}] : [];
-  const writeback = reusableWritebackPrecondition(context);
+  const writeback = reusableWritebackPrecondition(context, handoffMode);
   const fields = [...exactFields, ...(writeback ? [writeback] : [])];
   const workPath: Path = ["interaction_contract", "agent_channel", "work_context"];
   const work = jsonObject(at(context, workPath));
@@ -292,11 +293,12 @@ function observedTextAppend(value: unknown, proof: unknown, identity: ReturnType
 
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
-export function contextReadSectionDigests(request: JsonObject, paths: Path[], exactBody?: ReusableExactBody): JsonObject {
+export function contextReadSectionDigests(request: JsonObject, paths: Path[], exactBody?: ReusableExactBody,
+    handoffMode?: unknown): JsonObject {
   const context = requireJsonObject(request.context, "read section source");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const selected = new Set(paths.map(pointer));
-  const fields = new Map(reusableFirstReadFields(context, exactBody).map(field => [pointer(field.path), field]));
+  const fields = new Map(reusableFirstReadFields(context, exactBody, handoffMode).map(field => [pointer(field.path), field]));
   const authoring = reusableVisionAuthoring(context);
   if (authoring) fields.set(pointer(authoring.path), authoring);
   const covered = new Map(paths.map(path => [pointer(path), {path, minimumBytes: MIN_REUSABLE_BODY_BYTES}]));
@@ -346,11 +348,12 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[], ex
 
 /** Only registered, previously delivered bodies may use a reference. Current
  * decisions, stops, selection, settlement and unknown source shapes stay inline. */
-function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: ReusableExactBody): JsonObject | undefined {
+function observedFirstRead(request: JsonObject, pointers: string[], exactBody: ReusableExactBody | undefined,
+    handoffMode: unknown): JsonObject | undefined {
   const context = requireJsonObject(request.context, "current first read");
   const seen = requireJsonObject(request.consumed_pointers, "observed sections");
   if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return undefined;
-  const fields = new Map(reusableFirstReadFields(context, exactBody).map(field => [pointer(field.path), field]));
+  const fields = new Map(reusableFirstReadFields(context, exactBody, handoffMode).map(field => [pointer(field.path), field]));
   const parents = new Set([...fields.values()].flatMap(({path}) => path.map((_, i) => pointer(path.slice(0, i)))));
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const reused: JsonObject = {};
@@ -479,7 +482,8 @@ function observedSelection(ordinary: ReadSelection[], observed: JsonObject): Rea
   return selected;
 }
 
-function inlineReadSections(request: JsonObject, required: JsonObject, exactBody?: ReusableExactBody): JsonObject {
+function inlineReadSections(request: JsonObject, required: JsonObject, exactBody: ReusableExactBody | undefined,
+    handoffMode: unknown): JsonObject {
   const original = requireJsonObject(request.context, "inline source"), paths: Path[] = [];
   const visit = (source: unknown, shown: unknown, path: Path) => {
     if (source === shown) { paths.push(path); return; }
@@ -488,7 +492,7 @@ function inlineReadSections(request: JsonObject, required: JsonObject, exactBody
       (source as JsonObject)[key], (shown as JsonObject)[key], [...path, Array.isArray(source) ? Number(key) : key]);
   };
   visit(original, required, []);
-  return contextReadSectionDigests(request, paths, exactBody);
+  return contextReadSectionDigests(request, paths, exactBody, handoffMode);
 }
 
 function summaryReferenceInstructions(references: JsonObject[]): JsonObject[] {
@@ -761,7 +765,8 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
 export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
-    decisionFields: readonly string[], plan?: JsonObject, exactBody?: ReusableExactBody): JsonObject {
+    decisionFields: readonly string[], plan: JsonObject, exactBody: ReusableExactBody | undefined,
+    handoffMode: unknown): JsonObject {
   if (request.include_initial_read_plan !== undefined)
     requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
@@ -774,18 +779,18 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
   const groups = observe || request.include_initial_read_plan === true
-    ? initialContextReadGroups(required.context, decisionFields) : undefined;
+    ? initialContextReadGroups(required.context, decisionFields, handoffMode) : undefined;
   const openingSplit = request.include_initial_read_plan === true && groups
     ? prepareInitialOpening(required.context, groups, exactBody?.path) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const initial = request.include_initial_read_plan === true && groups
     ? nativeContextReadPlan(required.context, pointers, groups, openingSplit) : undefined;
   const observed = observe && pointers.length
-    ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial) : undefined;
+    ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody, handoffMode), initial) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
-    read_sections: inlineReadSections(request, required.context, exactBody),
+    read_sections: inlineReadSections(request, required.context, exactBody, handoffMode),
     ...(initial && plan?.source_replan_review ? {source_replan_review: plan.source_replan_review} : {}),
     ...(initial ? {initial_read_plan: initial} : {})}, sourceValues, undefined, true);
 }
@@ -931,8 +936,8 @@ export function successorReplanReadSelection(context: JsonObject, pointers: stri
   return capturedContextSelection({context, initial_read: true}, scoped);
 }
 
-export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
-  const {opening, remaining} = initialContextReadGroups(context, decisionFields);
+export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[], handoffMode?: unknown): string[] {
+  const {opening, remaining} = initialContextReadGroups(context, decisionFields, handoffMode);
   return [...opening, ...remaining];
 }
 
@@ -1026,7 +1031,7 @@ function managerReturnAttention(value: unknown, requiredReads: unknown[]): JsonO
   return attention;
 }
 
-function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
+function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[], handoffMode: unknown): {
   opening: string[]; remaining: string[];
 } {
   const object = (value: unknown): JsonObject | undefined =>
@@ -1258,7 +1263,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // A ready Turn already shows its ordered writeback and spend with their
   // conditions. Hide only the exact duplicate fallback in this first read;
   // recovery, legacy readers and the original capture keep both forms.
-  const repeatsSettlement = readySettlementIdentity(context, interaction, plan) !== undefined
+  const repeatsSettlement = readySettlementIdentity(context, interaction, plan, handoffMode) !== undefined
     && settlementSteps?.length === 2 && writeback?.kind === "durable_writeback" && spend?.kind === "quota_spend"
     && templates?.every(command => typeof command === "string" && command.length > 0) === true
     && isDeepStrictEqual(cli?.next_cli_actions, templates);

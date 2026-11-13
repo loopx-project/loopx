@@ -240,7 +240,7 @@ test("soft-claim first read shares only the original bound settlement commands",
     goal_id: "goal", agent_identity: {agent_id: "agent"}, selected_todo: {todo_id: "todo_work"},
     goal_boundary: {handoff_mode: "soft_claim"}, heartbeat_receipt: receipt, interaction_contract: interaction};
   const next = "/interaction_contract/cli_channel/next_cli_actions";
-  const kept = initialContextReadPointers(context, []);
+  const kept = initialContextReadPointers(context, [], context.goal_boundary.handoff_mode);
   assert.ok(!kept.includes(next));
   assert.ok(kept.includes("/interaction_contract/cli_channel/settlement_plan/ordered_steps/0/command_template"));
   const withCli = (changed: unknown) => ({...context, interaction_contract: {...interaction, cli_channel: changed}});
@@ -252,5 +252,5 @@ test("soft-claim first read shares only the original bound settlement commands",
     withCli({...cli, execution_preparation: {state: "claim_required"}}),
     withCli({...cli, next_cli_actions: [...actions, "recover a separate effect"]}),
     withCli({...cli, settlement_plan: {...plan, schema_version: "future"}}),
-  ]) assert.ok(initialContextReadPointers(changed, []).includes(next));
+  ]) assert.ok(initialContextReadPointers(changed, [], changed.goal_boundary.handoff_mode).includes(next));
 });
