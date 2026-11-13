@@ -1116,23 +1116,26 @@ def _traex_activation(commands: dict[str, str]) -> dict[str, Any]:
         "host_mutation": {
             "owner": "TraeX CLI TUI",
             "host_command": "/goal <task_body>",
+            "preferred_tool": "create_goal",
             "cli_can_mutate_directly": False,
             "requires_host_feature_flag": "[features] goals = true in ~/.trae/traecli.toml",
             "missing_host_tool_gate": (
-                "TraeX /goal is unavailable; if goal mode is disabled, show the exact "
+                "Native Goal tools and active Goal context are unavailable; show the exact "
                 "`/goal <task_body>` text for the user to paste after enabling "
-                "`[features] goals = true`. Do not claim another host-loop surface "
+                "`[features] goals = true` if goal mode is disabled. Do not claim another host-loop surface "
                 "without a verified LoopX adapter."
             ),
         },
         "activation_steps": [
             "Run the visible-goal prompt JSON command after project state and todos are written.",
             "Read task_body from the JSON payload.",
-            "Set the visible TraeX goal to `/goal <task_body>`; enable `[features] goals = true` first if goal mode is off.",
+            "Read the current native Goal with get_goal when available, otherwise use the current host-provided Goal context. Tool availability is an observation, not permission to change a Goal.",
+            "For continuation inside the verified same-thread LoopX Goal/Agent binding, retain the active native Goal and its original objective. Do not call create_goal or replace that objective with task_body. Preserve paused, blocked and completed states; never resume them without user direction.",
+            "For an authorized fresh start, when the host confirms no native Goal exists, call create_goal with objective=task_body if available, then verify the Goal with get_goal or current host context. If native tools and active Goal context are unavailable, use the missing_host_tool_gate manual /goal path; enable `[features] goals = true` only if goal mode is off.",
             "Keep delivery in the visible TUI turn; gate each continuation through LoopX quota should-run and do not switch to hidden headless execution.",
         ],
         "success_criteria": [
-            "The visible TraeX TUI has `/goal <task_body>` active for this goal.",
+            "The visible TraeX TUI has a verified active native Goal for this work: retain its original objective on continuation, or verify task_body after fresh activation. A preview is not activation or model adoption.",
             "Future goal turns enter through LoopX quota/status/state before delivery work.",
         ],
     }

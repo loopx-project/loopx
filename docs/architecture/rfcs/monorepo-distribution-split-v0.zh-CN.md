@@ -2915,3 +2915,25 @@ Node module/loopback/exit 事件，但不能提供 OS 级完整闭包、完整 I
 token、service cost 或人工注意力核算。Host 仍为 synthetic。完整 V1–V5/V10、
 真实模型采用／恢复、渐进产品控制、R1/M3、独立 Standard packages 与原目标回归
 仍开放，保留原九项要求和此前冻结失败。
+
+### 2026-11-13 — TraeX 续接读取运行时线程
+
+公开 `start-goal` 入口现在通过既有 host-thread adapter 读取 TraeX 的
+`TRAECLI_THREAD_ID`。已验证的 `traex-cli` 绑定自动复用原 Agent，无需再次
+传入 `--thread-id` 或 `--agent-id`；显式线程仍优先。缺失、新线程、跨 Host 与
+冲突上下文保留既有身份边界，Trae App 的绑定作用域仍独立。
+
+隔离真实 File/SQLite CLI 对照覆盖源码、从 `09886ba7a` 构建的独立 core 与
+候选 core：36 次调用在普通入口、显式对照／覆盖、未知上下文及重放中保留
+目标原文、registry/state 字节与 canonical provider revision。基线仍丢失
+ambient thread，两个修复后入口均复用已绑定 Agent。源码回归通过 215 项，
+包含跨 Host 与冲突拒绝；已安装 core／恢复／context suite 在 Python 3.11.15
+通过 23 项，源码使用 Python 3.13.5，Node 为 26.0.0。1,887 个打包 runtime
+文件均与评审源码字节一致。最初夹具设置失败继续保留为失败尝试。
+
+TraeX 激活指引先读取原生 Goal 工具或当前 Host 上下文，在续接时保留已有
+active Goal 的原始目标和用户停止状态。仅当获授权的新启动确认不存在原生
+Goal 时才可创建；工具／上下文不可用时仍保留可见 `/goal` 手工恢复路径。
+这取得入口与指令修复证据，不能证明模型采用了指引。未新增生命周期 owner、
+模型执行、preset 或已安装 Host 发布。完整 R1/V1–V5/V10、渐进控制、完整成本
+证据与原目标回归仍开放，保留全部原始失败。
