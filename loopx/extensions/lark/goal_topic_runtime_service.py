@@ -84,7 +84,7 @@ class LarkGoalTopicRuntimeService:
         self._refresh_retry: threading.Timer | None = None
         self._refresh_retry_requested = False
         self._profile_refresh_sequence = 0
-        self._applied_profile_refresh_sequence = 0
+        self._observed_profile_refresh_sequence = 0
         self._delivery_thread: threading.Thread | None = None
         self._delivery_worker = HostedWorker(target=self._reconcile_private, stop=self._closed,
             name="loopx-lark-private-delivery", retry_seconds=5)
@@ -715,6 +715,14 @@ class LarkGoalTopicRuntimeService:
             sequence = self._profile_refresh_sequence
         snapshot = self.snapshot_provider()
         profile_configs, unavailable = self._listener_configs(snapshot)
+        with self._lock:
+            if self._closed.is_set():
+                return False
+            # Record discovery before queue recovery can block, so an older
+            # inventory retry cannot stop a worker that still has queued events.
+            self._observed_profile_refresh_sequence = max(
+                self._observed_profile_refresh_sequence, sequence
+            )
         desired = {
             profile: self._profile_worker_fingerprint(
                 snapshot,
@@ -732,11 +740,9 @@ class LarkGoalTopicRuntimeService:
         with self._lock:
             if self._closed.is_set():
                 return False
-            if sequence < self._applied_profile_refresh_sequence:
-                # A newer refresh already owns the listener configuration.
-                # Recheck with the existing timer before changing any worker.
+            if sequence < self._observed_profile_refresh_sequence:
+                # Discovery can advance while this refresh is resuming queues.
                 return True
-            self._applied_profile_refresh_sequence = sequence
             for profile in unavailable:
                 replacement = desired.pop(profile)
                 worker = self._workers.get(profile)

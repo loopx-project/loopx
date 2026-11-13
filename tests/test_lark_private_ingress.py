@@ -353,6 +353,7 @@ def test_live_private_ingress_across_listener_transition(ordinary, tmp_path, mon
     (False, "add_different_cli"), (False, "remove_different_cli"),
     (False, "profile_read_fails"), (False, "profile_read_fails_then_retargets"),
     (False, "stale_inventory"), (False, "stale_inventory_after_error"),
+    (False, "stale_inventory_during_queue_recovery"),
     (False, "removed_inventory"), (False, "closed_during_inventory"),
 ])
 def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
@@ -400,7 +401,8 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     removing = binding_change.startswith("remove")
     retargeted = binding_change.endswith("_retarget")
     different_transport = retargeted or binding_change.endswith("_different_cli")
-    stale_inventory = binding_change in {"stale_inventory", "stale_inventory_after_error"}
+    stale_inventory = binding_change.startswith("stale_inventory")
+    inventory_during_queue_recovery = binding_change == "stale_inventory_during_queue_recovery"
     removed_inventory = binding_change == "removed_inventory"
     closing = binding_change == "closed_during_inventory"
     delayed_inventory = stale_inventory or removed_inventory or closing
@@ -574,9 +576,23 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         if delayed_inventory:
             retry = service._refresh_retry
             assert retry is not None and inventory_captured.wait(8)
+            if inventory_during_queue_recovery:
+                resume_session_queues = service._resume_session_queues
+
+                def resume_after_retry(snapshot):
+                    # The foreground has the current inventory but has yet
+                    # to update the listener. Finish the older read here.
+                    return_inventory.set()
+                    retry.join(8)
+                    assert not retry.is_alive()
+                    assert not original_worker[0].is_set()
+                    resume_session_queues(snapshot)
+
+                monkeypatch.setattr(service, "_resume_session_queues", resume_after_retry)
             if stale_inventory:
                 service.refresh()
-                assert service._refresh_retry is retry
+                if not inventory_during_queue_recovery:
+                    assert service._refresh_retry is retry
                 assert service._workers[profile] == original_worker
             if closing:
                 release.set()
