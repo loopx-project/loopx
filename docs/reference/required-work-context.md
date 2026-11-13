@@ -1068,9 +1068,11 @@ that exact output across an ordinary resume. Each observed page is bound to
 its native call occurrence. Several nested reads can share one Code Mode call.
 An independently verified reread can fill a missing range when its own output
 is present in replay. An emission with no matching hook observation contributes
-no coverage. The original source and scope must still match. Only selections
-with complete byte coverage can carry their literal sections into the next
-progressive view. Partial or inherited selections still use ordinary recovery.
+no coverage. If whole-capture replay fails but an independent selection still
+verifies, its digests carry into the new epoch. The next progressive view
+checks the current scope, source and body before reusing a section. Changed
+controls stay current and compaction clears the earlier selection proofs.
+Partial or inherited selections still use ordinary recovery.
 A selected read cannot establish a whole-input baseline.
 Opted-in benchmark native children create owner-only files automatically; the
 parent process and off-mode file creation policy stay unchanged. Group-writable
@@ -1374,8 +1376,10 @@ code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部
 工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。
 普通 resume 可以单独核对当前捕获中已读的选区。每页绑定到 hook 观察到的原生调用，
 同一个 Code Mode 父调用可以有多份嵌套读取输出。只有独立核验、且其自身输出出现在重放中的
-重读才能补齐缺页。没有对应 hook 观察的同字节输出不计入覆盖。原捕获和读取范围必须匹配，
-每个选区完整覆盖所有字节后，其原文才可在下一轮渐进式交付中复用。选读不能建立全量基线。
+重读才能补齐缺页。没有对应 hook 观察的同字节输出不计入覆盖。完整捕获回放失败时，
+通过独立核验的选区摘要可以带入新的上下文周期。下次渐进式交付按当前范围、来源和正文
+重新核对后才复用，变化的控制条件仍按当前捕获交付。实际压缩会清除先前的选区凭据。
+不完整或继承的选区仍走正常恢复，选读不能建立全量基线。
 开启后的 benchmark 原生子进程自动以仅所有者可访问的权限创建文件，父进程与关闭态
 保持原权限策略；既有可组写的重放来源不能建立跨进程连续性。
 新的独立决定走正常准入与上下文命令。实际压缩后，下一个新工作 Turn 建立新的完整
