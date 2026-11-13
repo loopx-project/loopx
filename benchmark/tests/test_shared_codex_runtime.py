@@ -462,6 +462,7 @@ def test_scheduler_cancel_reaps_detached_worker_host_and_keeps_receipt(tmp_path)
     )
     cli = tmp_path / "quota"
     payload = {
+        "ok": True,
         "should_run": True,
         "effective_action": "run_now",
         "scheduler_hint": {

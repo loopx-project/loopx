@@ -62,6 +62,7 @@ class RoleHost:
     material_sha256: str | None = None
     goal_state: Path | None = None
     dispatch_task_material: bool = False
+    controller_writable: bool = False
 
     @property
     def worker_writable(self) -> bool:
@@ -86,7 +87,7 @@ def read_material(path: Path) -> bytes:
 
 def role_policy(role: str, host: RoleHost) -> tuple[str, dict[str, Any]]:
     project = host.project
-    writable = role == "worker" and host.worker_writable
+    writable = host.worker_writable and (role == "worker" or host.controller_writable)
     context = {
         "kind": "project_workspace", "workspace_path": str(project), "project_ref": digest(str(project))[:24],
         "audience": "local_owner", "grant": "workspace_write" if writable else "workspace_read",
@@ -116,7 +117,7 @@ def toml_value(value: Any) -> str:
 
 def role_cli_options(role: str, host: RoleHost, timeout: float) -> tuple[str, ...]:
     _, config = role_policy(role, host)
-    if role == "worker" and host.worker_writable:
+    if host.worker_writable and (role == "worker" or host.controller_writable):
         # Shell here-documents, compilers and tempfile users need scratch space.
         # Use the existing write grant; the shared system temp directory stays denied.
         shell = config["shell_environment_policy"]
@@ -426,6 +427,9 @@ def serve(request, host):
         def save():
             atomic_write_private_json(path, evidence)
         save()
+        # Role execution is serial. Both roles share the caller's workspace
+        # grant during work. A receipt-only retry remains read-only.
+        host = replace(host, controller_writable=attempt is evidence)
         native = RoleTransport(host, deadline, admission, evidence, save)
         if attempt is evidence:
             result = run_roles(native, request, material, dispatch_task_material=host.dispatch_task_material)

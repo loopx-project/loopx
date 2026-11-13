@@ -77,11 +77,13 @@ def test_native_role_permissions_cap_the_callers_grant(tmp_path, permission):
     project.mkdir()
     host = roles.RoleHost(project, tmp_path / "state", tmp_path / "registry", tmp_path / "home",
                           "codex", None, "low", permission, 10)
+    from dataclasses import replace
+    host = replace(host, controller_writable=True)
     for role in ("controller", "worker"):
         name, config = roles.role_policy(role, host)
         rules = config["permissions"][name]
         root = rules["filesystem"][":workspace_roots"]
-        assert root["."] == ("write" if role == "worker" and permission != "read-only" else "read")
+        assert root["."] == ("write" if permission != "read-only" else "read")
         assert root[".loopx"] == root[".codex"] == "deny"
         assert rules["filesystem"][str(host.runtime)] == "deny"
         assert rules["filesystem"][str(host.codex_home)] == "deny"
@@ -169,9 +171,10 @@ def test_real_native_feedback_changes_the_checked_artifact(tmp_path, entry):
             return message
         if index == 4:
             return {"type": "function_call", "id": "fc_readonly", "call_id": "call_readonly",
-                    "name": "exec_command", "arguments": json.dumps({"cmd": "touch controller-write-probe"})}
+                    "name": "exec_command", "arguments": json.dumps({"cmd": "cat observation > docs/controller-check; if cat .loopx/registry.json >/dev/null; then exit 17; fi; cat docs/controller-check"})}
         if index == 5:
             output = str(request["input"][-1]["output"]).lower()
+            assert expected.lower() in output
             assert "denied" in output or "not permitted" in output
         if index >= 5:
             index -= 1
@@ -298,7 +301,7 @@ def test_real_native_feedback_changes_the_checked_artifact(tmp_path, entry):
             completed = subprocess.run(retry, cwd=project, env=env, timeout=85, capture_output=True, text=True)
             assert (project / marker).stat().st_mtime_ns == original_worker_write
         assert completed.returncode == 0, completed.stdout[-2200:] + completed.stderr[-500:]
-    assert not (project / "controller-write-probe").exists()
+    assert (project / "docs/controller-check").read_text().strip() == expected
     assert not (tmp_path / "mcp-started").exists()
     assert "For your Core receipt:" in inputs[3]
     assert not any("For your Core receipt:" in inputs[i] for i in (0, 1, 4, 6))
