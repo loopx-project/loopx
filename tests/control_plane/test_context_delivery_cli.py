@@ -25,6 +25,7 @@ from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID,
     _heartbeat_receipt_count, _run_cli, _spend_run_count, _write_fixture,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 
 def _native_reader_args(command):
@@ -500,7 +501,9 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     assert "target" not in disabled and not (disabled_directory / "projection.json").exists()
     ordinary, directory = invoke(None, opt_in=False)
     assert "target" not in ordinary and ordinary["mode"] == "full"
-    assert (directory / "projection.json").exists(), "ordinary defaults present the current source without native continuity"
+    recovered_source = read_cli_policy_payload(json.dumps(ordinary), returncode=0)
+    assert recovered_source == json.loads((directory / "decision.json").read_bytes())
+    assert not (directory / "projection.json").exists()
     assert state.read_bytes() == before_source and _spend_run_count(runtime) == 0
     assert all(path.read_bytes() == raw for path, raw in saved)
 
