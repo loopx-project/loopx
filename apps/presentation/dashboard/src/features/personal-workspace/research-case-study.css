@@ -2,7 +2,8 @@
 .research-goal-navigation { padding-block: 0 12px; }
 .research-goal-navigation h2 { font-size: 22px; font-weight: 600; margin-block: 16px; }
 .research-goal-navigation button { font: inherit; color: var(--pw-text); background: none; text-align: start; cursor: pointer; min-height: 44px; }
-.research-parent-goal { border: 0; padding: 8px 0; }
+.research-parent-goal { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 0; padding: 8px 0; }
+.research-parent-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .research-child-heading { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 12px; }
 .research-child-heading > span, .research-child-timing { color: var(--pw-muted); font-size: var(--text-caption); }
 .research-child-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px,100%), 1fr)); gap: 16px; }
