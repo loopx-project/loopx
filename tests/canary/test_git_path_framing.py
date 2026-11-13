@@ -259,3 +259,36 @@ def test_premerge_keeps_explicit_changed_file_normalization(tmp_path: Path) -> N
     assert response.returncode == 0, response.stderr
     payload = json.loads(response.stdout)
     assert payload["changed_files"] == ["docs/notes.py"]
+
+
+def _repo_with_carriage_return_python_path(tmp_path: Path) -> tuple[Path, str]:
+    """A repository whose tracked Python module name carries a CR.
+
+    A CR is a legal POSIX filename byte and Git frames it inside one NUL
+    record. A text-mode read applies universal-newline translation to the same
+    bytes, so ``name\r.py`` arrives as two lines and the rebuilt path names no
+    file at all.
+    """
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+    (repo / "base.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "base.py")
+    _git(repo, "commit", "-m", "base")
+    name = "carriage\rreturn.py"
+    (repo / name).write_text("y = 2\n", encoding="utf-8")
+    _git(repo, "add", name)
+    _git(repo, "commit", "-m", "add a pathname with a CR")
+    return repo, name
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX allows CR in a filename")
+def test_tracked_python_paths_keeps_a_carriage_return_name(tmp_path: Path) -> None:
+    repo, name = _repo_with_carriage_return_python_path(tmp_path)
+
+    paths = tracked_python_paths(repo)
+
+    assert repo / name in paths

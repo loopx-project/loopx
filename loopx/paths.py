@@ -377,3 +377,26 @@ def rel_or_abs(path: Path, root: Path) -> str:
         return str(path.relative_to(root))
     except ValueError:
         return str(path)
+
+
+GIT_BYTE_PATH_PREFIX = "git-bytes:"
+
+
+def display_path_text(path: Path | str) -> str:
+    """Render a pathname so a UTF-8 reader can always parse the report.
+
+    ``os.fsdecode`` keeps the bytes of a name that is not valid UTF-8 as lone
+    surrogates (PEP 383). A report that printed such a name verbatim writes
+    bytes no strict UTF-8 reader accepts, and the JSON consumer then cannot
+    read the finding that named the file. A decodable name is returned
+    unchanged; an undecodable one keeps its exact bytes in a ``git-bytes:``
+    labelled ``repr``, the marker the issue-fix artifact already uses, so two
+    distinct byte records never collapse onto one label.
+    """
+
+    text = str(path)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return f"{GIT_BYTE_PATH_PREFIX}{os.fsencode(text)!r}"
+    return text
