@@ -224,6 +224,26 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     return best
 
 
+def inline_context_read_fits(path: Path, raw: bytes, digest: str, *, page_bytes: int,
+                             output_limit: int, reader_argv: list[str] | None) -> bool:
+    """Check both the opening and the longest bounded continuation framing."""
+    path = path.parent.resolve(strict=True) / path.name
+    try:
+        page = _capture_page(path, raw, digest, offset=0, size=page_bytes,
+            output_limit=output_limit, instruction=False, reader_argv=reader_argv)
+    except ValueError:
+        return False
+    if page["eof"]:
+        return True
+    # Bound the number of cursor digits and the JSON encoding of any one
+    # character, without walking every page of a potentially large capture.
+    offset = len(raw) - 1
+    continuation = _capture_page(path, bytes(offset + 2), digest, offset=offset, size=1,
+        output_limit=None, instruction=False, next_page_bytes=page_bytes,
+        next_page_output_bytes=output_limit, reader_argv=reader_argv)
+    return len(_native_output_bytes(continuation)) <= output_limit
+
+
 def pinned_context_read_window(reference_file: Path, content: bytes, *, page_bytes: int,
                                output_limit: int, reader_argv: list[str] | None) -> tuple[int, int]:
     """Keep the caller's page budget when it can carry a verified selection."""

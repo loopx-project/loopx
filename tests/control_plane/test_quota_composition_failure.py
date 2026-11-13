@@ -61,8 +61,8 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     if bounded_route in LONG_PATH_ROUTES:
         parent = tmp_path
         if bounded_route == "deep-paths":
-            parent /= "checkout-" + "x" * 130
-            parent.mkdir()
+            parent = parent / ("checkout-" + "x" * 85) / ("package-" + "x" * 85)
+            parent.mkdir(parents=True)
         capture_length = {"deep-paths": 480, "deep-launcher": 271 - len("/decision.json")}.get(bounded_route, 250)
         capture = parent / ("capture-" + "x" * (capture_length - len(str(parent)) - len("/capture-")))
         launcher_parent = tmp_path
@@ -267,6 +267,53 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         assert "captured_decision" not in refused and "saved" not in refused["recommended_action"]
         assert not (missing_capture / "decision.json").exists()
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
+def test_refusal_that_fits_uses_a_reader_that_can_advance(tmp_path):
+    from loopx.cli_commands.quota_failure_report import captured_quota_failure_view
+    from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+
+    directory = tmp_path / ("c" * (271 - len(str(tmp_path / "decision.json")) - 1))
+    directory.mkdir()
+    capture = directory / "decision.json"
+    launcher = tmp_path / ("l" * (180 - len(str(tmp_path)) - 1))
+    launcher.write_text("#!/bin/sh\nexec " + shlex.join([sys.executable, "-m", "loopx.entrypoint"]) + ' "$@"\n')
+    launcher.chmod(0o700)
+    failure = {
+        "ok": False,
+        "should_run": False,
+        "error_code": "quota_decision_transport_failed",
+        "diagnostic_code": "runtime_unavailable",
+        "heartbeat_receipt": {"turn_instance_id": "synthetic-turn", "event_id": "synthetic-event"},
+    }
+    diagnostic = {**failure, "composition_error": {"message": "原始故障", "diagnostic_code": "runtime_unavailable"},
+        "source_diagnostic": {"unrelated_history": "λ history " * 650}}
+    digest = write_decision_capture(capture, diagnostic)
+    original = capture.read_bytes()
+    refusal = captured_quota_failure_view(failure, capture_directory=directory,
+        max_page_output_bytes=1700, capture_sha256=digest, captured_payload=diagnostic,
+        reader_argv=[str(launcher), "--cli-bin", str(launcher)], runtime_root=tmp_path)
+    assert len(json.dumps(refusal, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 1700
+    assert refusal["captured_decision"]["sha256"] == digest
+    assert refusal["diagnostic_code"] == diagnostic["diagnostic_code"]
+
+    selected = bytearray()
+    command = refusal.get("command") or refusal["captured_decision"]["command"]
+    while command:
+        result = subprocess.run(shlex.split(command), capture_output=True, check=False, timeout=30)
+        assert result.returncode == 0, result.stdout
+        assert len(result.stdout) <= 1700
+        page = json.loads(result.stdout)
+        assert page["ok"] and page["offset"] == len(selected)
+        selected.extend(page["content"].encode())
+        assert len(selected) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+        command = page.get("next_command")
+    assert page["eof"] is True
+    details = {row["pointer"]: row["value"] for row in json.loads(selected)["selections"]}
+    for key in ("heartbeat_receipt", "diagnostic_code", "composition_error"):
+        assert details["/" + key] == diagnostic[key]
+    assert "/source_diagnostic" not in details
+    assert capture.read_bytes() == original
 
 
 def test_unusable_output_limit_still_identifies_the_original_diagnostic(tmp_path):

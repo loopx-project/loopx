@@ -320,6 +320,18 @@ existing budgets.
 返回 12,000 个序列化 UTF-8 字节。显式选择 Todo 后的首读也适用。调用方可以显式
 指定首读预算，完整读取与恢复命令继续使用原有预算。
 
+After a captured refusal, the returned command reads the original decision
+and Turn receipt. If the full-file reader cannot page within the caller's
+budget, the refusal links to a digest-bound selection of the original
+diagnostic. Follow that command and its cursor. When its framing requires a
+larger reader budget, `recovery_page_output_bytes` gives the size used by the
+returned command. Reading the diagnostic performs no admission or spend.
+
+中文：捕获后的拒绝会提供读取原决定及 Turn 回执的命令。如果全文读端在调用方预算内
+无法分页，命令会改为读取由原摘要固定的诊断选区。按返回命令和游标读完。若分页头需要
+更大的读端预算，`recovery_page_output_bytes` 指出返回命令采用的大小。读取诊断
+不会重新准入或扣额。
+
 For a saved benchmark preflight, the ordinary wake prompt carries the command for
 the first page: native JSON `quota context-project --initial-read` publishes the
 saved decision and reads it in one call. Replace `--initial-read` with repeated

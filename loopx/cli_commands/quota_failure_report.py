@@ -287,12 +287,14 @@ def captured_quota_failure_view(
     from ..control_plane.turn_driver.decision_capture import (
         context_capture_read_command, native_context_page_budget, write_initial_context_read_reference,
     )
+    from .quota_context_reader import inline_context_read_fits, pinned_context_read_window
 
     page_bytes, limit = native_context_page_budget()
     if max_page_output_bytes is not None:
         limit = min(limit, max_page_output_bytes)
     saved = capture_directory / "decision.json"
-    digest = capture_sha256 or hashlib.sha256(saved.read_bytes()).hexdigest()
+    original = saved.read_bytes()
+    digest = capture_sha256 or hashlib.sha256(original).hexdigest()
     page_size = max(256, min(page_bytes, limit))
     fields = ("ok", "goal_id", "decision", "should_run", "error_code", "diagnostic_code", "error", "reason",
               "recommended_action", "heartbeat_receipt", "rollout_event", "host_poll_receipt", "action_selection_conflict")
@@ -314,7 +316,9 @@ def captured_quota_failure_view(
     def fits(value: dict[str, object]) -> bool:
         return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
 
-    if not fits(result):
+    if not fits(result) or not inline_context_read_fits(
+        saved, original, digest, page_bytes=page_size, output_limit=limit, reader_argv=reader_argv,
+    ):
         # Pin the small diagnostic selection so long launcher/capture paths and
         # repeated --select arguments do not crowd out the recovery command.
         source = payload if captured_payload is None else captured_payload
@@ -335,8 +339,6 @@ def captured_quota_failure_view(
                 select=pointers if reader is None else None,
                 page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
         if reader is not None and selected is not None:
-            from .quota_context_reader import pinned_context_read_window
-
             read_size, read_limit = pinned_context_read_window(reader, selected,
                 page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
             if (not fits(result) or read_limit > limit) and runtime_root is not None:
