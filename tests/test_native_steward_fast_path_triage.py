@@ -221,18 +221,26 @@ def test_fast_path_rejects_goal_outside_binding_scope(portfolio):
     assert exc.value.code == "goal_outside_authorized_scope"
 
 
-def test_triage_card_renders_sections_and_inspect_commands(portfolio):
+def test_triage_card_shows_results_without_exposing_commands(portfolio):
     projection = build_portfolio_triage_projection(
         registry_path=portfolio, authorized_goal_ids=["goal-a", "goal-b"])
     card = build_steward_triage_card(projection)
     body = json.dumps(card, ensure_ascii=False)
 
     assert card["header"]["template"] == "orange"
-    assert "Needs your decision" in body and "P0/P1 & blocked work" in body
-    assert "loopx todo list --goal-id goal-a --todo-id todo_aaaa00000001" in body
-    # Presentation only: no interactive callback payloads that could mutate state.
+    assert "待我处理" in body and "重点与阻塞任务" in body
+    assert "Authorize publishing the reviewed head?" in body
+    assert "loopx todo list" not in body
     assert '"tag": "action"' not in body and '"value"' not in body
     assert "/Users/" not in body
+
+
+@pytest.mark.parametrize("scope", [["goal-broken"], ["goal-broken", "goal-clear"], []])
+def test_unread_or_empty_scope_is_never_all_clear(portfolio, scope):
+    result = build_portfolio_triage_projection(registry_path=portfolio, authorized_goal_ids=scope)
+    assert result["quiet"] is False
+    assert "All clear" not in render_portfolio_triage_markdown(result)
+    assert build_steward_triage_card(result)["header"]["template"] != "green"
 
 
 def test_triage_card_rejects_foreign_payload():

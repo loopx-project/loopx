@@ -341,6 +341,11 @@ def build_portfolio_triage_projection(
                 goal_id=goal_id,
                 runtime_root_arg=runtime_root_arg,
             )
+            todos = todo_snapshot.get("todos")
+            if (todo_snapshot.get("ok") is not True or not isinstance(todos, list)
+                    or todo_snapshot.get("todo_count", len(todos)) != len(todos)
+                    or any(not isinstance(row, Mapping) or not row.get("todo_id") for row in todos)):
+                raise ValueError("Goal Todo coverage is incomplete")
         except (
             CanonicalAuthorityRequired,
             LocalCoordinationAuthorityUnavailable,
@@ -351,8 +356,6 @@ def build_portfolio_triage_projection(
             unavailable_goals.append({"goal_id": goal_id, "error_code": error_code})
             continue
 
-        todos_raw = todo_snapshot.get("todos")
-        todos = todos_raw if isinstance(todos_raw, list) else []
         for index, raw_todo in enumerate(todos):
             if not isinstance(raw_todo, Mapping):
                 continue
@@ -444,7 +447,7 @@ def build_portfolio_triage_projection(
                     all_attention_todos.append((todo_sort, todo_entry))
                 continue
 
-            if role == "agent" and done:
+            if focus == "all" and role == "agent" and done:
                 completed_stamp = str(
                     raw_todo.get("completed_at") or raw_todo.get("updated_at") or ""
                 ).strip()
@@ -465,7 +468,7 @@ def build_portfolio_triage_projection(
                 )
 
         runs_index = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
-        if runs_index.is_file():
+        if focus == "all" and runs_index.is_file():
             runs, _ = load_index(runs_index)
             for run_idx, run in enumerate(runs[-3:]):
                 if not isinstance(run, Mapping):
@@ -516,7 +519,7 @@ def build_portfolio_triage_projection(
     high_priority_count = sum(
         1 for item in sorted_todos if item.get("priority") in HIGH_PRIORITIES
     )
-    quiet = len(sorted_gates) == 0 and len(sorted_todos) == 0
+    quiet = bool(scoped_goal_ids) and not (unavailable_goals or sorted_gates or sorted_todos)
 
     return {
         "ok": True,
@@ -721,7 +724,6 @@ def execute_steward_fast_path(
         ) from exc
 
     binding = resolved.get("binding") if isinstance(resolved, Mapping) else None
-    context = resolved.get("context") if isinstance(resolved, Mapping) else None
     if (
         not isinstance(binding, Mapping)
         or binding.get("enabled") is not True
@@ -732,31 +734,11 @@ def execute_steward_fast_path(
             code="steward_binding_required",
         )
 
-    steward_scope = (
-        context.get("steward_scope") if isinstance(context, Mapping) else None
-    )
-    if isinstance(steward_scope, Mapping) and isinstance(
-        steward_scope.get("goal_ids"), list
-    ):
-        authorized_goal_ids = [
-            str(item) for item in steward_scope["goal_ids"] if str(item).strip()
-        ]
-    elif binding.get("goal_scope") == "all_registered":
-        authorized_goal_ids = resolve_all_registered_goal_ids(registry_path)
-    else:
-        raw_ids = binding.get("goal_ids")
-        authorized_goal_ids = (
-            [str(item) for item in raw_ids if str(item).strip()]
-            if isinstance(raw_ids, list)
-            else []
-        )
-
-    projection = build_portfolio_triage_projection(
+    projection = project_steward_triage(
+        intent,
+        resolved,
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
-        authorized_goal_ids=authorized_goal_ids,
-        requested_goal_ids=intent.requested_goal_ids or None,
-        focus=intent.focus,
         max_gates=max_gates,
         max_todos=max_todos,
         max_progress=max_progress,
@@ -773,6 +755,52 @@ def execute_steward_fast_path(
     }
 
 
+def project_steward_triage(
+    intent: StewardFastPathIntent,
+    resolved: Mapping[str, Any],
+    *,
+    registry_path: Path,
+    runtime_root_arg: str | None,
+    max_gates: int = 8,
+    max_todos: int = 8,
+    max_progress: int = 5,
+) -> dict[str, Any]:
+    """Read the portfolio using the result of a fresh Core binding resolution."""
+    binding = resolved["binding"]
+    context = resolved.get("context")
+    steward_scope = (
+        context.get("steward_scope") if isinstance(context, Mapping) else None
+    )
+    if isinstance(context, Mapping) and isinstance(context.get("goal_ids"), list):
+        authorized_goal_ids = list(context["goal_ids"])
+    elif isinstance(steward_scope, Mapping) and isinstance(
+        steward_scope.get("goal_ids"), list
+    ):
+        authorized_goal_ids = [
+            str(item) for item in steward_scope["goal_ids"] if str(item).strip()
+        ]
+    elif binding.get("goal_scope") == "all_registered":
+        authorized_goal_ids = resolve_all_registered_goal_ids(registry_path)
+    else:
+        raw_ids = binding.get("goal_ids")
+        authorized_goal_ids = (
+            [str(item) for item in raw_ids if str(item).strip()]
+            if isinstance(raw_ids, list)
+            else []
+        )
+
+    return build_portfolio_triage_projection(
+        registry_path=registry_path,
+        runtime_root_arg=runtime_root_arg,
+        authorized_goal_ids=authorized_goal_ids,
+        requested_goal_ids=intent.requested_goal_ids or None,
+        focus=intent.focus,
+        max_gates=max_gates,
+        max_todos=max_todos,
+        max_progress=max_progress,
+    )
+
+
 __all__ = [
     "FAST_PATH_RESPONSE_SCHEMA_VERSION",
     "PORTFOLIO_TRIAGE_SCHEMA_VERSION",
@@ -782,6 +810,7 @@ __all__ = [
     "compute_user_gate_state_fingerprint",
     "execute_steward_fast_path",
     "parse_steward_fast_path_intent",
+    "project_steward_triage",
     "render_portfolio_triage_markdown",
     "resolve_all_registered_goal_ids",
 ]

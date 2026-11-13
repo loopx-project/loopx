@@ -1,156 +1,135 @@
-"""Lark interactive card for the read-only Steward portfolio triage digest.
-
-The card is a pure presentation of ``steward_portfolio_triage_v0``. It never
-embeds callback values that mutate Goal state: each open User Gate carries the
-exact ``loopx todo list`` inspection command so the owner can review the full
-record before deciding through the existing governed path.
-"""
-
+"""Presentation of private, read-only Steward queries."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from .message_card import compact_markdown, compact_plain_text
+from .message_card import compact_plain_text
 
-TRIAGE_CARD_TITLE = "LoopX Steward Triage"
-DEFAULT_SECTION_MAX_CHARS = 1400
-
-
-def _rows(projection: Mapping[str, Any], key: str) -> list[Mapping[str, Any]]:
-    value = projection.get(key)
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, Mapping)]
+FOCUS_TITLES = {"gates": "待我处理", "todos": "任务速览", "all": "总览"}
+ButtonValue = Callable[..., dict[str, str]]
 
 
-def _section(title: str, lines: list[str]) -> dict[str, Any]:
-    body = "\n".join([f"**{title}**", *lines])
+def _text(text: str) -> dict[str, Any]:
+    # Goal and Todo text is data; do not interpret markdown, links or @ mentions.
+    return {"tag": "div", "text": {"tag": "plain_text", "content": text}}
+
+
+def _card(title: str, elements: list[dict[str, Any]], *, tone: str = "blue") -> dict[str, Any]:
     return {
-        "tag": "div",
-        "text": {
-            "tag": "lark_md",
-            "content": compact_markdown(body, max_chars=DEFAULT_SECTION_MAX_CHARS),
-        },
-    }
-
-
-def _badge(item: Mapping[str, Any]) -> str:
-    tags: list[str] = []
-    if item.get("global_gate"):
-        tags.append("global")
-    if item.get("priority"):
-        tags.append(str(item["priority"]))
-    if item.get("status") == "blocked":
-        tags.append("blocked")
-    return f"[{'/'.join(tags)}] " if tags else ""
-
-
-def _inspect_command(item: Mapping[str, Any]) -> str:
-    return (
-        f"loopx todo list --goal-id {item.get('goal_id')} "
-        f"--todo-id {item.get('todo_id')}"
-    )
-
-
-def build_steward_triage_card(projection: Mapping[str, Any]) -> dict[str, Any]:
-    """Render a bounded, mobile-scannable triage card from a triage projection."""
-
-    if projection.get("schema_version") != "steward_portfolio_triage_v0":
-        raise ValueError("triage card requires a steward_portfolio_triage_v0 projection")
-
-    counts = projection.get("counts")
-    counts = counts if isinstance(counts, Mapping) else {}
-    gates = _rows(projection, "open_user_gates")
-    todos = _rows(projection, "attention_todos")
-    progress = _rows(projection, "recent_progress")
-    unavailable = _rows(projection, "unavailable_goals")
-    quiet = projection.get("quiet") is True
-
-    summary = (
-        f"Goals `{counts.get('scoped_goals', 0)}` · "
-        f"Open gates `{counts.get('open_user_gates', 0)}` · "
-        f"P0/P1 & blocked `{counts.get('attention_todos', 0)}`"
-    )
-    elements: list[dict[str, Any]] = [
-        {"tag": "div", "text": {"tag": "lark_md", "content": summary}},
-    ]
-    if quiet:
-        elements.append(
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": "All clear: nothing needs your decision right now.",
-                },
-            }
-        )
-
-    if gates:
-        lines = []
-        for gate in gates:
-            unblocks = (
-                f" → unblocks `{gate['unblocks_todo_id']}`"
-                if gate.get("unblocks_todo_id")
-                else ""
-            )
-            lines.append(
-                f"- {_badge(gate)}{gate.get('text')}{unblocks}\n"
-                f"  `{_inspect_command(gate)}`"
-            )
-        omitted = int(counts.get("omitted_user_gates") or 0)
-        if omitted:
-            lines.append(f"- +{omitted} more")
-        elements.extend([{"tag": "hr"}, _section("Needs your decision", lines)])
-
-    if todos:
-        lines = [
-            f"- {_badge(item)}`{item.get('goal_id')}` · {item.get('text')}"
-            for item in todos
-        ]
-        omitted = int(counts.get("omitted_attention_todos") or 0)
-        if omitted:
-            lines.append(f"- +{omitted} more")
-        elements.extend([{"tag": "hr"}, _section("P0/P1 & blocked work", lines)])
-
-    if progress:
-        lines = [
-            f"- `{entry.get('goal_id')}` · {entry.get('summary')}" for entry in progress
-        ]
-        elements.extend([{"tag": "hr"}, _section("Recent progress", lines)])
-
-    footer_bits = ["Read-only digest · no lease, model call or quota spent"]
-    if unavailable:
-        footer_bits.append(f"{len(unavailable)} goal(s) unavailable")
-    elements.extend(
-        [
-            {"tag": "hr"},
-            {
-                "tag": "note",
-                "elements": [
-                    {
-                        "tag": "plain_text",
-                        "content": compact_plain_text(" · ".join(footer_bits), max_chars=120),
-                    }
-                ],
-            },
-        ]
-    )
-
-    if quiet:
-        template = "green"
-    elif gates:
-        template = "orange"
-    else:
-        template = "blue"
-    return {
-        "config": {"wide_screen_mode": True, "enable_forward": True},
-        "header": {
-            "template": template,
-            "title": {"tag": "plain_text", "content": TRIAGE_CARD_TITLE},
-        },
+        "config": {"wide_screen_mode": True, "enable_forward": False},
+        "header": {"template": tone, "title": {"tag": "plain_text", "content": title}},
         "elements": elements,
     }
 
 
-__all__ = ["TRIAGE_CARD_TITLE", "build_steward_triage_card"]
+def _buttons(*choices: tuple[str, dict[str, str]]) -> dict[str, Any]:
+    return {"tag": "action", "actions": [
+        {"tag": "button", "text": {"tag": "plain_text", "content": label},
+         "type": "default", "value": action}
+        for label, action in choices
+    ]}
+
+
+def build_steward_triage_menu(value: ButtonValue) -> dict[str, Any]:
+    return _card("LoopX 快捷操作", [_buttons(*(
+        (label, value("query", focus=focus)) for focus, label in FOCUS_TITLES.items()
+    ))])
+
+
+def build_steward_triage_projects(
+    value: ButtonValue, goals: Sequence[str], *, focus: str, offset: int, selected_goal: str = "",
+) -> dict[str, Any]:
+    page = goals[offset:offset + 6]
+    buttons = [
+        (compact_plain_text(goal, max_chars=36), value("query", focus=focus, goal=goal))
+        for goal in page
+    ]
+    elements = [_buttons(*buttons[i:i + 2]) for i in range(0, len(buttons), 2)]
+    if not goals:
+        elements.append(_text("当前没有可查看的项目。"))
+    navigation = []
+    if offset:
+        navigation.append(("上一页", value("projects", focus=focus, offset=str(offset - 6))))
+    if offset + len(page) < len(goals):
+        navigation.append(("下一页", value("projects", focus=focus, offset=str(offset + 6))))
+    if navigation:
+        elements.append(_buttons(*navigation))
+    elements.append(_buttons(
+        ("全部授权项目", value("query", focus=focus)),
+        ("返回菜单", value("menu")),
+    ))
+    label = "选择项目 · " + FOCUS_TITLES[focus]
+    if selected_goal:
+        elements.insert(0, _text("当前：" + compact_plain_text(selected_goal, max_chars=72)))
+    return _card(label, elements)
+
+
+def _rows(projection: Mapping[str, Any], key: str) -> list[Mapping[str, Any]]:
+    rows = projection.get(key)
+    return [row for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
+
+
+def build_steward_triage_card(
+    projection: Mapping[str, Any], *, value: ButtonValue | None = None,
+    navigation_goal: str | None = None,
+) -> dict[str, Any]:
+    if projection.get("schema_version") != "steward_portfolio_triage_v0":
+        raise ValueError("triage card requires a Steward portfolio projection")
+    focus = str(projection["focus"])
+    counts = projection["counts"]
+    scope = projection["scoped_goal_ids"]
+    missing = _rows(projection, "unavailable_goals")
+    gates = _rows(projection, "open_user_gates")
+    todos = _rows(projection, "attention_todos")
+    progress = _rows(projection, "recent_progress")
+    quiet = projection.get("quiet") is True and bool(scope) and not missing
+    if not scope:
+        elements = [_text("当前没有可查看的项目。")]
+    elif len(missing) == len(scope):
+        elements = [_text("暂时读不到项目状态。请稍后刷新。")]
+    else:
+        label = compact_plain_text(scope[0], max_chars=100) if len(scope) == 1 else f"{len(scope)} 个项目"
+        summary = []
+        if focus in {"all", "gates"}:
+            summary.append(f"待我处理 {counts['open_user_gates']}")
+        if focus in {"all", "todos"}:
+            summary.append(f"重点与阻塞任务 {counts['attention_todos']}")
+        elements = [_text(label + " · " + " · ".join(summary))]
+        if missing:
+            elements.insert(0, _text(f"{len(missing)} 个项目暂时读不到，以下为已读取的结果。"))
+        elif quiet:
+            elements.append(_text("全部正常，没有需要关注的事项。"))
+        elif focus == "gates" and not gates:
+            elements.append(_text("这个范围暂无待你处理的事项。"))
+        elif focus == "todos" and not todos:
+            elements.append(_text("这个范围暂无重点或阻塞任务。"))
+
+    for title, rows, omitted in (
+        ("待我处理", gates, counts["omitted_user_gates"]),
+        ("重点与阻塞任务", todos, counts["omitted_attention_todos"]),
+        ("近期进展", progress, counts["omitted_recent_progress"]),
+    ):
+        if not rows:
+            continue
+        elements.extend([{"tag": "hr"}, _text(title)])
+        for item in rows:
+            badge = "阻塞" if item.get("status") == "blocked" else item.get("priority")
+            item_label = " · ".join(str(part) for part in (item.get("goal_id"), badge) if part)
+            text = compact_plain_text(item.get("text") or item.get("summary"), max_chars=200)
+            if item_label and len(scope) != 1:
+                text = f"{item_label}｜{text}"
+            elif badge:
+                text = f"{badge}｜{text}"
+            elements.append(_text(text))
+        if omitted:
+            elements.append(_text(f"另有 {omitted} 条。"))
+
+    if value is not None:
+        controls = [("选择项目", value("projects", focus=focus, goal=navigation_goal or "")),
+                    ("返回菜单", value("menu"))]
+        if navigation_goal is not None:
+            controls.insert(0, ("刷新", value("query", focus=focus, goal=navigation_goal)))
+        elements.append(_buttons(*controls))
+    return _card(FOCUS_TITLES[focus], elements,
+                 tone="orange" if missing or gates else "green" if quiet else "blue")

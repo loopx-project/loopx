@@ -18,6 +18,7 @@ from ...file_lock import try_exclusive_file_lock
 from ..background_runtime import HostedWorker
 from .goal_channel_contracts import bindings_for_goal
 from .manager_context import session_turn_effect
+from .private_steward_triage import TRIAGE_CARD_ACTION, capture_callback, profile_supports_cards
 from .team_plan_confirmation import (
     active_profile_chat_ids,
     deliver_team_plan_review_cards_from_runtime,
@@ -28,7 +29,7 @@ from .team_plan_confirmation import (
 SnapshotProvider = Callable[[], Mapping[str, Any]]
 ProfilePoller = Callable[[str, threading.Event], None]
 ManagerRouteReconciler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
-ProfileWorkerFingerprint = tuple[str, str, str, tuple[str, ...]]
+ProfileWorkerFingerprint = tuple[str, str, str, tuple[str, ...], bool]
 ProfileWorker = tuple[threading.Event, threading.Thread, ProfileWorkerFingerprint]
 
 
@@ -251,6 +252,15 @@ class LarkGoalTopicRuntimeService:
         self._delivery_wakeup.set()
         return result
 
+    def _handle_private_steward_callback(
+        self, profile: str, event: Mapping[str, Any], action: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if self.private_conversations is None or self._closed.is_set():
+            raise ValueError("private Steward callback route is unavailable")
+        result = capture_callback(self.private_conversations, profile, event, action)
+        self._delivery_wakeup.set()
+        return result
+
     def _refresh_on_start(self) -> None:
         while not self._closed.is_set():
             try:
@@ -313,6 +323,7 @@ class LarkGoalTopicRuntimeService:
             str(profile_config.get("bot_app_id") or profile_config.get("binding_id") or ""),
             str(profile_config.get("consumer_ref") or ""),
             callback_chats,
+            self.private_conversations is not None and profile_supports_cards(profile_config),
         )
 
     def _poll_profile(self, profile: str, stop: threading.Event) -> None:
@@ -395,6 +406,9 @@ class LarkGoalTopicRuntimeService:
                     def handle_review_callback(
                         event: Mapping[str, Any],
                     ) -> Mapping[str, Any]:
+                        action = event.get("action_value")
+                        if isinstance(action, Mapping) and action.get("schema_version") == TRIAGE_CARD_ACTION:
+                            return self._handle_private_steward_callback(profile, event, action)
                         if self.action_service is None:
                             raise ValueError(
                                 "Lark manager review callbacks require Chat actions"
@@ -417,6 +431,7 @@ class LarkGoalTopicRuntimeService:
                         )
                         or {}
                     )
+                    private_steward_callbacks = self.private_conversations is not None and profile_supports_cards(profile_config)
                     # A bot App can have several local profile aliases and Chat
                     # servers can use different runtime roots or ports. The
                     # consumer lease must therefore be machine/App scoped.
@@ -462,7 +477,10 @@ class LarkGoalTopicRuntimeService:
                             proposal_deliverer=deliver_proposals,
                             review_callback_handler=(
                                 handle_review_callback
-                                if self.action_service is not None and profile in runtime._active_group_profile_configs(self.snapshot_provider())
+                                if private_steward_callbacks or (
+                                    self.action_service is not None
+                                    and profile in runtime._active_group_profile_configs(self.snapshot_provider())
+                                )
                                 else None
                             ),
                             health_sink=lambda update: self._update_health(

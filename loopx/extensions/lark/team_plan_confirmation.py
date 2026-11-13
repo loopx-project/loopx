@@ -62,6 +62,7 @@ from .presentation.team_plan import (
     build_team_plan_result_card,
     build_team_plan_review_card,
 )
+from .private_steward_triage import TRIAGE_CARD_ACTION, profile_supports_cards
 
 
 TEAM_PLAN_CALLBACK_RECEIPT_SCHEMA_VERSION = "lark_team_plan_callback_receipt_v0"
@@ -79,13 +80,17 @@ class TeamPlanReviewCallbackStream:
         process: Any,
         thread: threading.Thread,
         stop: threading.Event,
+        required: bool = True,
     ) -> None:
         self.process = process
         self.thread = thread
         self.stop = stop
+        self.required = required
 
     def disconnected(self) -> bool:
-        return self.process.poll() is not None
+        # Missing card subscriptions must not take a private message-only
+        # listener offline. Existing group review routes still reconnect.
+        return self.required and self.process.poll() is not None
 
     def terminate(self) -> None:
         self.stop.set()
@@ -158,11 +163,21 @@ def start_team_plan_review_callback_stream(
     """Start the filtered callback consumer paired with a message stream."""
 
     chat_ids = active_profile_chat_ids(snapshot, profile)
-    if not chat_ids:
+    from .goal_topic_runtime import _active_profile_configs
+    private_steward = profile_supports_cards(_active_profile_configs(snapshot).get(profile, {}))
+    if not chat_ids and not private_steward:
         return None
     chat_filter = " or ".join(
         f".chat_id == {json.dumps(chat_id)}" for chat_id in chat_ids
     )
+    # Private cards match a locally recorded message and chat. This source
+    # only forwards the Steward action shape alongside existing group chats.
+    if private_steward:
+        steward_filter = (
+            "((.action_value | if type == \"string\" then (fromjson? // {}) else . end "
+            f"| .schema_version) == {json.dumps(TRIAGE_CARD_ACTION)})"
+        )
+        chat_filter = f"{chat_filter} or {steward_filter}" if chat_filter else steward_filter
     process = process_factory(
         [
             cli_bin,
@@ -208,14 +223,16 @@ def start_team_plan_review_callback_stream(
                 )
             except json.JSONDecodeError:
                 continue
-            if (
-                not isinstance(callback_action, Mapping)
-                or callback_action.get("schema_version")
-                != TEAM_PLAN_CARD_ACTION_SCHEMA_VERSION
-            ):
+            if not isinstance(callback_action, Mapping):
+                continue
+            schema = callback_action.get("schema_version")
+            if schema == TRIAGE_CARD_ACTION:
+                if not private_steward:
+                    continue
+            elif schema != TEAM_PLAN_CARD_ACTION_SCHEMA_VERSION or callback_event.get("chat_id") not in chat_ids:
                 continue
             try:
-                handler(callback_event)
+                handler({**callback_event, "action_value": callback_action} if schema == TRIAGE_CARD_ACTION else callback_event)
             except (OSError, RuntimeError, TypeError, ValueError):
                 logging.getLogger(__name__).warning(
                     "Lark manager review callback was rejected"
@@ -231,6 +248,7 @@ def start_team_plan_review_callback_stream(
         process=process,
         thread=thread,
         stop=local_stop,
+        required=bool(chat_ids),
     )
 
 
