@@ -1,5 +1,6 @@
 """Capture is a transport readback, never a second guard or fresh admission."""
 import argparse
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -337,9 +338,14 @@ def test_explicit_off_turn_envelope_preserves_bounded_view_and_complete_capture(
     turn_envelope.assert_complete_turn_decision(source)
     shown = json.loads(output)
     if projection_fails:
+        from hashlib import sha256
+
         assert shown["error_code"] == "quota_decision_transport_failed"
         assert shown["heartbeat_receipt"] == source["heartbeat_receipt"]
-        assert shown["captured_decision"] == {"path": str(directory / "decision.json")}
+        reference = shown["captured_decision"]
+        assert reference["path"] == str(directory / "decision.json")
+        assert reference["sha256"] == sha256(raw).hexdigest()
+        _assert_captured_receipts(reference["command"], source, cwd=project, env=os.environ, output_limit=64_000)
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
         assert _spend_run_count(runtime) == 0
         return
@@ -648,6 +654,67 @@ def _assert_captured_receipts(command, source, *, cwd, env, output_limit):
     assert recovered['rollout_event'] == source['rollout_event']
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Exercises the POSIX release launcher and Host socket")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_released_guard_failure_reads_through_its_own_launcher(tmp_path, monkeypatch, provider):
+    import socket
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    from tests.control_plane.test_quota_settlement_cli import _initialize_fixture_authority, _spend_run_count
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    release = Path(__file__).resolve().parents[2] / "scripts" / "loopx"
+    wrong_bin = tmp_path / "old runtime"
+    wrong_bin.mkdir()
+    wrong_cli = wrong_bin / "loopx"
+    wrong_cli.write_text("#!/bin/sh\nexit 97\n")
+    wrong_cli.chmod(0o755)
+    monkeypatch.setenv("PATH", str(wrong_bin) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+
+    capture = tmp_path / "original"
+    with tempfile.TemporaryDirectory(prefix="lx-host-", dir="/tmp") as directory:
+        endpoint = Path(directory).resolve() / "host.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            listener.listen(1)
+            listener.settimeout(20)
+            args = [str(release), "--format", "json", "--registry", str(registry),
+                    "--runtime-root", str(runtime), "quota", "should-run", "--goal-id", GOAL_ID,
+                    "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID,
+                    "--context-delivery", "off", "--decision-output-dir", str(capture),
+                    "--decision-handoff-socket", str(endpoint)]
+            with subprocess.Popen(args, cwd=project, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True) as process:
+                try:
+                    channel, _ = listener.accept()
+                    with channel, channel.makefile("rb") as stream:
+                        request = json.loads(stream.readline())
+                        assert request["sha256"] == sha256((capture / "decision.json").read_bytes()).hexdigest()
+                        channel.sendall(b'{"released":false}\n')
+                    stdout, stderr = process.communicate(timeout=20)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+    assert process.returncode == 1, (stdout, stderr)
+    failure = json.loads(stdout)
+    original = (capture / "decision.json").read_bytes()
+    reader = shlex.split(failure["captured_decision"]["command"])
+    page = subprocess.run([*reader, "--select", "/heartbeat_receipt"], cwd=project,
+                          capture_output=True, text=True, timeout=30)
+    assert page.returncode == 0, (reader, page.stdout, page.stderr)
+    assert reader[0] == str(release)
+    assert json.loads(json.loads(page.stdout)["content"])["selections"][0]["value"] == json.loads(original)["heartbeat_receipt"]
+    assert (capture / "decision.json").read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
 def test_handoff_requires_explicit_capture_before_guard(tmp_path):
     with pytest.raises(QuotaCommandValidationError, match='invalid decision handoff'):
         prepare_decision_capture(request(None, decision_handoff_socket=str(tmp_path / 'missing')))
@@ -861,6 +928,8 @@ def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_pat
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
 def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_path):
+    from hashlib import sha256
+
     code, selected, observed, saved, runtime = _replan_selection_hop(tmp_path, lambda _: False)
     assert code == 1 and selected['ok'] is False
     # Never a generic collection failure that replaces the original capture.
@@ -868,7 +937,9 @@ def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_
     assert selected['status'] == 'decision_transport_failed'
     assert 'Do not blindly rerun the guard' in selected['reason']
     assert selected['heartbeat_receipt']['turn_instance_id'] == TURN_ID
-    assert len(saved) == 1 and selected['captured_decision'] == {'path': str(saved[0])}
+    assert len(saved) == 1
+    assert selected['captured_decision']['path'] == str(saved[0])
+    assert selected['captured_decision']['sha256'] == sha256(saved[0].read_bytes()).hexdigest()
     assert json.loads(saved[0].read_text()) == observed['decision']
     assert observed['decision']['ok'] is True
     assert _heartbeat_receipt_count(runtime, TURN_ID) >= 1
@@ -938,7 +1009,8 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
         assert failure['status'] == 'decision_transport_failed'
         assert failure['heartbeat_receipt'] == original['heartbeat_receipt']
         assert failure['rollout_event'] == original['rollout_event']
-        assert failure['captured_decision'] == {'path': str(saved[0])}
+        assert failure['captured_decision']['path'] == str(saved[0])
+        assert failure['captured_decision']['sha256'] == hashlib.sha256(attempts[0]).hexdigest()
     else:
         assert len(output.encode()) <= output_limit
         reference = failure['captured_decision']

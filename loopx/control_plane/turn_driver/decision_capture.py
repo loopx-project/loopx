@@ -369,10 +369,11 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  list_depth: int | None = None,
                                  initial_read: bool = False,
                                  reference_file: Path | None = None,
-                                 reader_argv: list[str] | None = None) -> str:
+                                 reader_argv: list[str] | None = None,
+                                 compact: bool = False) -> str:
     from ...command_invocation import loopx_cli_argv
 
-    if page_bytes is None:
+    if page_bytes is None and not compact:
         page_bytes = NATIVE_CONTEXT_PAGE_BYTES
         if max_page_output_bytes is None:
             max_page_output_bytes = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
@@ -380,7 +381,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
         "--format", "json", "quota", "context-read",
         *(["--reference-file", str(reference_file)] if reference_file is not None
           else ["--capture-file", str(path), "--capture-sha256", digest]),
-        "--offset", str(offset), "--page-bytes", str(page_bytes),
+        *(["--offset", str(offset)] if offset or not compact else []),
+        *(["--page-bytes", str(page_bytes)] if page_bytes is not None else []),
         *(["--initial-read"] if initial_read else []),
         *(["--list"] if list_fields else []),
         *(["--list-depth", str(list_depth)] if list_depth is not None else []),
@@ -392,7 +394,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
 def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
                                  navigation: dict[str, Any] | None = None, observed_read: dict[str, Any] | None = None,
                                  selection_paths: list[list[str | int]] | None = None,
-                                 reference_directory: Path | None = None) -> Path:
+                                 reference_directory: Path | None = None,
+                                 reference_file: Path | None = None) -> Path:
     """Immutable reader IO metadata, not a new identity or authority store.
 
     A short filename locates the document; only its complete stored digests are
@@ -415,7 +418,7 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
     suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
               if selection is not None or navigation is not None else "")
     directory = path.parent if reference_directory is None else reference_directory
-    reference = directory / (path.stem + suffix + ".reader.json")
+    reference = reference_file or directory / (path.stem + suffix + ".reader.json")
     try:
         write_decision_capture(reference, payload)
     except FileExistsError:

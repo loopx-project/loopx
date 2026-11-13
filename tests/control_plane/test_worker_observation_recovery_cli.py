@@ -204,10 +204,10 @@ def test_failed_capture_discloses_the_already_recorded_poll(
     runtime, registry, count, _ = _worker_fixture(tmp_path, monkeypatch, provider)
     original_capture = quota_capture.capture_decision
 
-    def failed_publication(directory, payload, *, args, native_context):
+    def failed_publication(directory, payload, **kwargs):
         # Only the capture publisher fails; admission and receipt IO are real.
         with patch.object(quota_capture.os, "replace", side_effect=OSError("synthetic capture outage")):
-            original_capture(directory, payload, args=args, native_context=native_context)
+            original_capture(directory, payload, **kwargs)
 
     monkeypatch.setattr(quota, "capture_decision", failed_publication)
     monkeypatch.chdir(tmp_path / "project")
