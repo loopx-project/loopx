@@ -5,6 +5,7 @@ import {AgentScopeFrontierAction} from "../agents/agent_scope_frontier.generated
 import {isDeepStrictEqual} from "node:util";
 import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
+import {reusableTurnContext} from "../capability_hooks.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
@@ -126,6 +127,7 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
   if (!Array.isArray(sources)) return fields;
   const selectedId = jsonObject(context.selected_todo)?.todo_id;
   const selectedSources = sources.filter(value => jsonObject(value)?.source === "selected_todo").length;
+  const preferenceSources = sources.filter(value => jsonObject(value)?.kind === "agent_preferences").length;
   return [...fields, ...sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (!content) return [];
@@ -155,8 +157,22 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
       return [{path: [...path, "todo", "note"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
         sourceIdentity: [...route, authority.source_authority, selectedId], appendText: true}];
     }
-    if (source?.kind === "agent_preferences")
-      return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
+    if (source?.kind === "agent_preferences") {
+      const identityAgent = jsonObject(context.agent_identity)?.agent_id;
+      const agent = context.agent_id ?? identityAgent;
+      if (preferenceSources !== 1 || (identityAgent !== undefined && agent !== identityAgent) ||
+          content.read_complete === false || ![context.registry, context.runtime_root, context.goal_id, agent]
+            .every(part => typeof part === "string" && part.length > 0)) return [];
+      const reuse = reusableTurnContext(source, {goal_id: context.goal_id, agent_id: agent});
+      if (!reuse) return [];
+      // Share the capability owner's prose whitelist with the exact codec.
+      // Keep the current revision, lifecycle, membership and unknown fields literal.
+      return reuse.paths.map(body => {
+        const item = body[1] === "items" ? jsonObject(at(content, body.slice(0, -1))) : null;
+        return {path: [...path, ...body], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
+          sourceIdentity: JSON.stringify([context.registry, context.runtime_root, ...reuse.identity, item?.key ?? null])};
+      });
+    }
     if (source?.source !== "goal_acceptance") return [];
     const outcomesPath = [...path, "goal_acceptance_contract", "outcome_requirements", "outcomes"];
     const outcomes = at(context, outcomesPath);

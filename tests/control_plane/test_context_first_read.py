@@ -1204,6 +1204,70 @@ def test_initial_read_preserves_empty_and_unknown_current_preference_values(tmp_
     assert capture_page_range(page, raw=raw, digest=page["sha256"]) is None
 
 
+@pytest.mark.parametrize("transition", ["same", "corrected", "retired", "empty", "different_hook", "different_registry"])
+def test_native_first_read_reuses_only_registered_preference_prose(tmp_path, monkeypatch, decision, transition):
+    from test_codex_context_lifecycle import deliver, setup
+
+    event = setup(tmp_path, monkeypatch)
+    decision.update(agent_id="agent", registry=str(tmp_path / "registry.json"), runtime_root=str(tmp_path / "runtime"))
+    prose = "Use the current verified source for this preference. " * 110
+    item = {"key": "review.preference", "state": "active", "statement": prose, "source_ref": "owner-1",
+            "source_quote": "Preserve the current source.", "operation_id": "remember-1", "expires_at": None}
+    current = {"schema_version": "agent_preferences_v1", "authority": "advisory_only",
+               "instructions": "Read the current view before any preference-dependent external action.",
+               "revision": "initial", "items": [item], "future_control": "Observe this value on each read."}
+    content = {"ok": True, "status": "read", "current": current}
+    sources = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    source = {"source": "turn_start_capability_hook", "kind": "agent_preferences",
+              "hook_id": "semantic_preference.agent_context", "capability_id": "semantic-preference", "content": content}
+    sources.append(source)
+    prefix = f"/interaction_contract/agent_channel/work_context/sources/{len(sources) - 1}/content"
+    address = prefix + "/current/items/0/statement"
+
+    def capture(name):
+        directory = tmp_path / name
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=name)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+
+    first = capture("first")
+    observed, facts = read_selection(first["recovery"]["command"] + " --select " + prefix + "/current")
+    assert facts[prefix + "/current"] == current
+    deliver(tmp_path, event, [observed])
+    current["revision"] = "next"
+    if transition == "corrected":
+        item.update(statement="Use the revised source.", operation_id="remember-2")
+    elif transition == "retired":
+        item.update(statement=None, state="retired", operation_id="retire-1")
+    elif transition == "empty":
+        current["items"] = []
+    elif transition == "different_hook":
+        source["hook_id"] = "another.preference.reader"
+    elif transition == "different_registry":
+        decision["registry"] = str(tmp_path / "another-registry.json")
+
+    second = capture("next")
+    page, facts = read_selection(second["first_read_command"])
+    if transition == "same":
+        assert page["previously_delivered_fields"] == [address]
+        assert facts[prefix + "/status"] == "read"
+        assert facts[prefix + "/current/revision"] == "next"
+        assert facts[prefix + "/current/future_control"] == current["future_control"]
+        assert facts[prefix + "/current/items/0/state"] == "active"
+        assert facts[prefix + "/current/items/0/operation_id"] == "remember-1"
+        assert prose not in page["content"]
+        _, recovered = read_selection(second["recovery"]["command"] + " --select " + address)
+        assert recovered[address] == prose
+        codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+        restored, facts = read_selection(second["first_read_command"])
+        assert restored["total_bytes"] - page["total_bytes"] > 4000
+        page = restored
+    assert address not in page.get("previously_delivered_fields", [])
+    assert facts[prefix + "/current"] == current
+
+
 def test_initial_read_exposes_existing_outcome_addresses_without_loading_all_criteria(tmp_path, decision):
     pointer = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes/0"
     outcome = {"id": "current-work", "supporting_material_pointer": pointer,
