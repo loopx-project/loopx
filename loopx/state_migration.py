@@ -135,6 +135,37 @@ def copy_rewritten_text_file(source: Path, target: Path, *, goal_id_map: dict[st
     atomic_write_state_text(target, rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map))
 
 
+def _planned_state_bytes(source: Path, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> bytes:
+    """The exact bytes ``copy_rewritten_text_file`` publishes for ``source``."""
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return source.read_bytes()
+    return rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map).encode("utf-8")
+
+
+def _require_no_active_state_clobber(
+    source_path: Path,
+    target_path: Path,
+    *,
+    goal_id_map: dict[str, str],
+    path_map: dict[str, str],
+) -> None:
+    """Refuse to replace a different live target state with the legacy copy.
+
+    A repeated migration (for example ``--all-goals`` after more legacy Goals
+    appear) must not roll back Todos completed or added at the target since the
+    first copy. Identical content and in-place rewrites remain idempotent.
+    """
+    if not target_path.exists() or source_path.resolve() == target_path.resolve():
+        return
+    if target_path.read_bytes() != _planned_state_bytes(source_path, goal_id_map=goal_id_map, path_map=path_map):
+        raise ValueError(
+            f"migrated active state already exists with different content: {target_path}; "
+            "refusing to overwrite it with the legacy copy"
+        )
+
+
 def copy_active_state_files(
     pairs: list[tuple[dict[str, Any], dict[str, Any]]],
     *,
@@ -142,10 +173,23 @@ def copy_active_state_files(
     path_map: dict[str, str],
     execute: bool,
 ) -> list[dict[str, Any]]:
+    resolved_pairs = [
+        (
+            source_goal,
+            target_goal,
+            resolve_goal_state(source_goal.get("repo"), source_goal.get("state_file")),
+            resolve_goal_state(target_goal.get("repo"), target_goal.get("state_file")),
+        )
+        for source_goal, target_goal in pairs
+    ]
+    # Check every target before the first copy so a conflict leaves no partial write.
+    for _source_goal, _target_goal, source_path, target_path in resolved_pairs:
+        if source_path and target_path and source_path.exists():
+            _require_no_active_state_clobber(
+                source_path, target_path, goal_id_map=goal_id_map, path_map=path_map
+            )
     results: list[dict[str, Any]] = []
-    for source_goal, target_goal in pairs:
-        source_path = resolve_goal_state(source_goal.get("repo"), source_goal.get("state_file"))
-        target_path = resolve_goal_state(target_goal.get("repo"), target_goal.get("state_file"))
+    for _source_goal, target_goal, source_path, target_path in resolved_pairs:
         row: dict[str, Any] = {
             "goal_id": target_goal.get("id"),
             "source": str(source_path) if source_path else None,
