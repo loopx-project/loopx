@@ -221,7 +221,7 @@ def _dispatch_quota_turn_start_hooks(
     runtime_root_arg: str | None,
 ) -> tuple[dict[str, object] | None, bool]:
     _export("validate_quota_command_context_request")(args)
-    if args.quota_command != "should-run":
+    if args.quota_command != "should-run" or getattr(args, "dry_run", False):
         return None, False
     from .lark_inbox import dispatch_goal_lark_turn_start_hooks
 
@@ -351,6 +351,25 @@ def _prepare_quota_result_context(
     return payload, activation
 
 
+def _observe_live_quota_result(
+    args: argparse.Namespace,
+    payload: Mapping[str, object],
+    *,
+    context: QuotaCommandContext | None,
+    registry_path: Path,
+    heartbeat_turn_id: str | None,
+    started_at: int,
+) -> None:
+    preview = args.quota_command == "should-run" and getattr(args, "dry_run", False)
+    if context is None or preview:
+        return
+    observe_quota_result(
+        args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
+        turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
+        started_at=started_at,
+    )
+
+
 def _emit_scheduler_observation_result(
     payload: dict[str, object],
     args: argparse.Namespace,
@@ -362,12 +381,10 @@ def _emit_scheduler_observation_result(
     print_payload: PrintPayload,
 ) -> int:
     """Emit the bounded observer without entering native capture or settlement."""
-    if context is not None:
-        observe_quota_result(
-            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
-            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
-            started_at=usage_quota_started,
-        )
+    _observe_live_quota_result(
+        args, payload, context=context, registry_path=registry_path,
+        heartbeat_turn_id=heartbeat_turn_id, started_at=usage_quota_started,
+    )
     succeeded = payload.get("ok") is True
     print_payload(project_scheduler_observation(payload), args.format,
                   _quota_renderer(args, failure=not succeeded))
@@ -414,12 +431,10 @@ def _emit_quota_result(
             cli["settlement_plan"], registry_path=registry_path,
             runtime_root=context.runtime_root if context is not None else None,
         )
-    if context is not None:
-        observe_quota_result(
-            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
-            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
-            started_at=usage_quota_started,
-        )
+    _observe_live_quota_result(
+        args, payload, context=context, registry_path=registry_path,
+        heartbeat_turn_id=heartbeat_turn_id, started_at=usage_quota_started,
+    )
     if budgeted_spend:
         assert context is not None
         return _emit_bounded_settlement(payload, args, runtime_root=context.runtime_root,
@@ -432,7 +447,7 @@ def _emit_quota_result(
     if capture_directory is not None and payload.get("replan_action_packet"):
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": reader_argv}
-    if args.quota_command == "should-run" and context is not None:
+    if args.quota_command == "should-run" and not getattr(args, "dry_run", False) and context is not None:
         # Capture the one liveness observation with the decision that produced
         # it. Presentation and evidence recovery must not record it again.
         _export("attach_host_poll_receipt")(
@@ -875,7 +890,8 @@ def handle_quota_command(
             runtime_root_arg=runtime_root_arg,
             error=exc,
         )
-    if _export("should_log_quota")(args.quota_command, payload):
+    preview = args.quota_command == "should-run" and getattr(args, "dry_run", False)
+    if not preview and _export("should_log_quota")(args.quota_command, payload):
         spend_turn_instance_id = _effective_spend_turn_instance_id(
             payload,
             heartbeat_turn_id=heartbeat_turn_id,
