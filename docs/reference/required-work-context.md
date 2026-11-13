@@ -623,6 +623,12 @@ identity, JSON types and unknown item fields. Resolve references before display
 caps; ambiguous, missing, chained or foreign targets are rejected. Counts,
 candidate collections, selection, authority and settlement retain their owners.
 
+For an unbound JSON `quota should-run --complete-turn --context-delivery off`,
+a lane reference may also name a nonempty proper prefix of its summary's
+literal preferred lane. For example, `first_executable_items[0:2]` means the
+first two complete Agent Todo rows in that lane. The corresponding User lane
+is `first_open_items`.
+
 For enabled native quota with selected work, the same acceptance snapshot may
 include `outcome_context` navigation. `suggested_outcome_ids` prioritizes work
 connected through registered Todo relations, shared acceptance/source/evidence
@@ -1092,6 +1098,11 @@ all-Goal adoption, actual solver costs or outcome benefit.
 Vision audit 和 replan authoring 副本复用该本地序列化身份。原始 JSON 编码不同的
 布尔／数值、整数／整值浮点表示及带符号零分别保留；仅键顺序不同仍可共享。不增加
 模型补读或 runtime 往返；不同来源事实保留完整指引。
+未绑定 Turn 的 JSON `quota should-run --complete-turn --context-delivery off` 可在
+同一摘要中复用字面前缀。`first_executable_items[0:2]` 指 Agent 首批可执行 Todo
+的前两条完整记录。User 摘要对应 `first_open_items`。同一响应的来源清单可复用
+`source_defaults`，逐条以行内字段覆盖共同值，显式 `null` 也覆盖。来源顺序、
+时效和告警以原始观测为准。
 Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
 显式标记时，`work_context.sources` 原样携带完整非生成正文，保留目标、frontmatter、
 任意章节、注释、历史和末尾停止条件。当前 writer 和旧版无 Goal 参数的 writer 生成的

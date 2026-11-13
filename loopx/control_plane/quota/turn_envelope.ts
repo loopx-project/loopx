@@ -14,6 +14,7 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
+import {expandProjectionSourceFields, shareProjectionSourceFields} from "../projection_envelope.ts";
 import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRetainFields,
   contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -1732,6 +1733,8 @@ function requireCompleteDecisionSource(source: JsonObject): void {
   requireVisionAuditReferences(source);
   requireCurrentTaskTitleReference(source);
   resolveQuotaSummaryLanes(source);
+  const projection = jsonObject(source.projection_envelope);
+  if (projection) expandProjectionSourceFields(projection);
   resolveExploreGuidance(source, object(object(object(source.interaction_contract).agent_channel).work_context));
   // This root field selects execution, unlike optional evidence carried intact
   // in the source. Reuse both registered owners; do not inherit the historical
@@ -1993,6 +1996,8 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   }
   const embed = request.embed_in_complete_source !== undefined &&
     requireBoolean(request.embed_in_complete_source, "embed_in_complete_source");
+  const shareInlineDiagnostics = request.share_inline_diagnostics === undefined ? false
+    : requireBoolean(request.share_inline_diagnostics, "share_inline_diagnostics");
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
     if (embed) throw new EffectRuntimeRequestError("recorded Turn context cannot be rebound");
     const prior = requireCompleteTurnDecision(payload, request.source_number_tokens);
@@ -2056,7 +2061,12 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   source = referenceExploreGuidance(source);
   source = referenceCurrentTaskTitle(source);
   source = referenceVisionContinuation(source, sourceIdentity);
-  source = referenceQuotaSummaryLanes(source, sourceIdentity);
+  source = referenceQuotaSummaryLanes(source, sourceIdentity, shareInlineDiagnostics);
+  const projection = jsonObject(source.projection_envelope);
+  if (shareInlineDiagnostics && projection) {
+    const shared = shareProjectionSourceFields(projection, sourceIdentity, ["projection_envelope"]);
+    if (shared !== projection) source = {...source, projection_envelope: shared};
+  }
   requireCompleteDecisionSource(source);
   const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,
     contract_binding: {scheduler_execution_args: request.scheduler_execution_args,

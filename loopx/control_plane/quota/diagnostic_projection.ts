@@ -206,14 +206,28 @@ function resolveSummaryLaneReferences(container: JsonObject, fields: Iterable<st
   return expanded;
 }
 
+function literalTodoPrefix(rows: unknown, length: number): unknown[] | undefined {
+  if (!Array.isArray(rows) || length >= rows.length) return undefined;
+  const prefix = rows.slice(0, length);
+  // Object rows retain original numeric lineage when the array is sliced.
+  return prefix.every(row => jsonObject(row)?.schema_version === "todo_item_v0") ? prefix : undefined;
+}
+
 /** Complete contracts share literal arrays inside each signed summary.
- * Claim-scope aliases may point to their enclosing summary or own scope. */
+ * Claim-scope aliases may point to their enclosing summary or own scope.
+ * A slice may only name a proper prefix of the literal preferred lane. */
 export function resolveQuotaSummaryLanes(payload: JsonObject): JsonObject {
-  return mapQuotaSummaryLanes(payload, (summary, scope, root) => {
+  return mapQuotaSummaryLanes(payload, (summary, scope, root, preferred) => {
     const prefix = `$.${root}.`;
     const scopePrefix = `${prefix}claim_scope.`;
     const owner = (address: unknown, allowScope: boolean): unknown => {
-      if (typeof address !== "string" || !address.startsWith(prefix)) return undefined;
+      if (typeof address !== "string") return undefined;
+      if (address.startsWith(preferred + "[")) {
+        const length = /^\[0:([1-9]\d*)\]$/.exec(address.slice(preferred.length));
+        return length && !Object.hasOwn(summary, `${preferred}_ref`)
+          ? literalTodoPrefix(summary[preferred], Number(length[1])) : undefined;
+      }
+      if (!address.startsWith(prefix)) return undefined;
       const nested = allowScope && scope && address.startsWith(scopePrefix);
       const field = address.slice(nested ? scopePrefix.length : prefix.length);
       const container = nested ? scope : summary;
@@ -229,20 +243,26 @@ export function resolveQuotaSummaryLanes(payload: JsonObject): JsonObject {
 }
 
 export function referenceQuotaSummaryLanes(payload: JsonObject,
-    identity = contextSourceIdentity(payload)): JsonObject {
+    identity = contextSourceIdentity(payload), sharePreferredPrefixes = false): JsonObject {
   return mapQuotaSummaryLanes(resolveQuotaSummaryLanes(payload), (summary, scope, root, preferred) => {
     const owners = new Map<string, string>();
+    // A prefix uses the coordinates of the actual input literal.
+    const leading = sharePreferredPrefixes ? jsonObject(payload[root])?.[preferred] : undefined;
     const share = (container: JsonObject, fields: Iterable<string>, parent: string[]) => {
       let projected = container;
       for (const field of fields) {
         const value = container[field];
         if (!Array.isArray(value) || !value.length) continue;
         const path = [...parent, field], encoded = identity(value, path);
-        const owner = owners.get(encoded);
-        if (!owner) { owners.set(encoded, `$.${path.join(".")}`); continue; }
         const key = `${field}_ref`;
-        if (Buffer.byteLength(JSON.stringify({[field]: value})) <= Buffer.byteLength(JSON.stringify({[key]: owner})))
+        const prefix = literalTodoPrefix(leading, value.length);
+        const owner = owners.get(encoded) ?? (prefix && identity(prefix, [root, preferred]) === encoded
+          ? `${preferred}[0:${value.length}]` : undefined);
+        if (!owner || Buffer.byteLength(JSON.stringify({[field]: value})) <= Buffer.byteLength(JSON.stringify({[key]: owner}))) {
+          if (!owners.has(encoded)) owners.set(encoded, `$.${path.join(".")}`);
           continue;
+        }
+        owners.set(encoded, owner);
         if (projected === container) projected = {...container};
         projected[key] = owner;
         delete projected[field];

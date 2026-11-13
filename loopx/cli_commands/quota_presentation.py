@@ -139,8 +139,15 @@ def compose_quota_cli_source(
     if not isinstance(payload.get("interaction_contract"), Mapping):
         return payload, raw_envelope, None
     if not raw_envelope:
+        # This is the complete inline read-only CLI response. Bound guard
+        # captures and Host consumers keep their qualified source layout.
+        inline_diagnostics = (getattr(args, "complete_turn", False) and payload.get("ok") is True
+            and getattr(args, "context_delivery", None) == "off" and not activation["enabled"]
+            and capture_directory is None
+            and not getattr(args, "turn_instance_id", None) and not getattr(args, "begin_turn", False))
         return compose(payload, scheduler_execution_context=scheduler_context,
-            **({"capability_context": capability_context} if capability_context else {})), False, None
+            **({"capability_context": capability_context} if capability_context else {}),
+            **({"share_inline_diagnostics": True} if inline_diagnostics else {})), False, None
 
     from ..control_plane.quota.turn_envelope import compose_turn_decision_with_raw_envelope
 

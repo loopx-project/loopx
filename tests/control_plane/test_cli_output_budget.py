@@ -1378,6 +1378,72 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unbound_complete_quota_fits_the_inline_multi_agent_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from loopx.cli_commands import quota
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    baseline = {}
+    compose = quota.compose_turn_decision
+
+    def compare_same_source(payload, *, share_inline_diagnostics=False, **kwargs):
+        # Compare two encodings of the exact guard observation, without a
+        # second guard or a change of time, launcher or settlement identity.
+        baseline.update(compose(payload, **kwargs))
+        return compose(payload, **kwargs, **(
+            {"share_inline_diagnostics": True} if share_inline_diagnostics else {}))
+
+    monkeypatch.setattr(quota, "compose_turn_decision", compare_same_source)
+    with _stable_budget_fixture_root(tmp_path) as root:
+        project, runtime, registry, state = _write_fixture(root, SCENARIOS[2])
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry,
+            state_file=state, output_format="json")["quota_should_run"]
+        code, text = _invoke_cli([*command, "--complete-turn"])
+        assert code == 0, text
+
+    limit = CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"].max_chars["multi_agent"]["json"]
+    assert len(text) <= limit
+    decision = json.loads(text)
+    assert_complete_turn_decision(decision)
+    assert "heartbeat_receipt" not in decision
+    assert "context_delivery" not in decision
+    assert decision["selected_todo"]["todo_id"] == "todo_fixture_000"
+    assert decision["interaction_contract"]["cli_channel"]["selection_required"] is True
+    assert decision["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+
+    # Independently reconstruct both encodings. Check the full source,
+    # including the original task, gates, claim order and source freshness.
+    agent = decision["agent_todo_summary"]
+    assert agent["backlog_items_ref"] == "first_executable_items[0:2]"
+    prefix = agent["first_executable_items"][:2]
+    assert [row["todo_id"] for row in prefix] == ["todo_fixture_000", "todo_fixture_003"]
+    for summary in (agent, baseline["agent_todo_summary"]):
+        literals = dict(summary)
+        for field, reference in literals.items():
+            if not field.endswith("items_ref"):
+                continue
+            target = (prefix if reference == "first_executable_items[0:2]"
+                      else literals[reference.removeprefix("$.agent_todo_summary.")])
+            summary[field.removesuffix("_ref")] = target
+            del summary[field]
+
+    projection = decision["projection_envelope"]
+    assert projection["schema_version"] == "loopx_projection_envelope_v1"
+    defaults = projection.pop("source_defaults")
+    projection["sources"] = [{**defaults, **row} for row in projection["sources"]]
+    projection["schema_version"] = "loopx_projection_envelope_v0"
+    compact_binding = decision.pop("contract_binding")
+    baseline_binding = baseline.pop("contract_binding")
+    assert compact_binding["scheduler_execution_args"] == baseline_binding["scheduler_execution_args"]
+    assert compact_binding["hash_codec"] == baseline_binding["hash_codec"]
+    assert decision == baseline
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_complete_quota_shares_repeated_peer_claims_in_the_original_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
@@ -1402,6 +1468,7 @@ def test_complete_quota_shares_repeated_peer_claims_in_the_original_capture(
         payload = json.loads(text)
         assert payload == json.loads(original)
         assert_complete_turn_decision(payload)
+        assert payload["projection_envelope"]["schema_version"] == "loopx_projection_envelope_v0"
         summary = payload["agent_todo_summary"]
         scope = summary["claim_scope"]
         assert summary["claimed_by_others_count"] == scope["other_agent_claimed_open_count"] == 12

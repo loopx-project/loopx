@@ -100,13 +100,17 @@ def test_complete_composition_keeps_original_numeric_facts_and_returns_only_edit
 
 
 @pytest.mark.parametrize("left,right", [(1, 1.0), (-0.0, 0), (2**60, 2**60 + 1)])
-def test_complete_summary_lanes_share_only_exact_original_numbers(left, right):
+@pytest.mark.parametrize("prefix", [False, True])
+def test_complete_summary_lanes_share_only_exact_original_numbers(left, right, prefix):
     source = packet()
-    row = {"todo_id": "task-one", "text": "Keep the complete original task and evidence. " * 20}
+    row = {"schema_version": "todo_item_v0", "todo_id": "task-one",
+           "text": "Keep the complete original task and evidence. " * 20}
     first, second = [{**row, "future": [left]}], [{**row, "future": [right]}]
+    if prefix:
+        first.append({**row, "todo_id": "task-two"})
     source["agent_todo_summary"] = {"schema_version": "todo_summary_v0",
         "first_executable_items": first, "backlog_items": second, "claimed_open_items": deepcopy(second)}
-    shared = compose_turn_decision(source)
+    shared = compose_turn_decision(source, share_inline_diagnostics=prefix)
     summary = shared["agent_todo_summary"]
     assert json.dumps(summary["first_executable_items"]) == json.dumps(first)
     assert json.dumps(summary["backlog_items"]) == json.dumps(second)
