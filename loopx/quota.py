@@ -399,7 +399,12 @@ def goal_quota_with_spend_ledger(
     current_time = now or datetime.now(timezone.utc).astimezone()
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
-    window_start = current_time - timedelta(hours=int(payload["window_hours"]))
+    try:
+        window_start = current_time - timedelta(hours=int(payload["window_hours"]))
+    except OverflowError:
+        # A window longer than datetime can represent still covers every
+        # representable event. It must not crash the Goal-wide history read.
+        window_start = datetime.min.replace(tzinfo=current_time.tzinfo)
     contributions: list[tuple[str, str, int]] = []
     spend_event_count = 0
     void_event_count = 0

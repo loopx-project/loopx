@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+import pytest
+
 from loopx.quota import goal_quota_with_spend_ledger
 
 
@@ -123,3 +125,20 @@ def test_rolling_counter_isolated_by_exact_goal_instance() -> None:
     assert current["spend_event_count"] == 1
     assert legacy_owner["spent_slots"] == 1
     assert legacy_owner["spend_event_count"] == 1
+
+
+@pytest.mark.parametrize("window_hours", [10**8, 10**12, 1e12])
+def test_unrepresentable_window_covers_all_history_without_crashing(
+    window_hours: float,
+) -> None:
+    goal = _goal()
+    goal["quota"]["window_hours"] = window_hours
+    spent = _spend("2026-01-01T00:00:00+00:00", "turn-1")
+
+    ledger = goal_quota_with_spend_ledger(
+        goal,
+        [spent],
+        now=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+    assert ledger["spent_slots"] == 1
