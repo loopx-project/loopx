@@ -611,7 +611,7 @@ def test_complete_quota_successor_settles_original_turn_without_staged_reader(tm
 
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
     capture = tmp_path / "capture"
-    guard = call("quota", "should-run", *host_args, "--goal-id", GOAL,
+    guard = call("quota", "should-run", "--complete-turn", *host_args, "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-instance-id", TURN, "--decision-output-dir", str(capture))
     original = (capture / "decision.json").read_bytes()
     assert json.loads(original) == guard
@@ -655,7 +655,7 @@ def test_complete_quota_successor_settles_original_turn_without_staged_reader(tm
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("format_name,envelope_flag", [
-    ("json", True), ("json", False), ("markdown", True), ("markdown", False),
+    ("json", True), ("json", False), ("markdown", True),
 ])
 def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeypatch, provider, format_name, envelope_flag):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -675,6 +675,8 @@ def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeyp
         "--decision-output-dir", str(capture)]
     if envelope_flag:
         command.append("--turn-envelope")
+    else:
+        command.append("--complete-turn")
     process = subprocess.run(command, cwd=Path(__file__).resolve().parents[2],
         capture_output=True, text=True, check=False)
     assert process.returncode == 0, process.stdout + process.stderr
@@ -700,8 +702,7 @@ def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeyp
         assert shlex.split(output["detail_ref"]["full_decision"]) == ["cat", "--", str(capture / "decision.json")]
         assert output["writeback"]["settlement_plan"]["identity"] == contract["heartbeat_receipt"]["settlement_identity"]
     else:
-        text = process.stdout if format_name == "json" else process.stdout.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
-        output = json.loads(text)
+        output = json.loads(process.stdout)
         assert output == contract  # Every original fact and instruction survives rendering.
         assert "action" not in output and "contract_capsule" not in output
     scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="fixture", context_epoch="one")
@@ -716,6 +717,55 @@ def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeyp
         baseline=old, retained={"complete": True, "target": old["target"]})
     assert changed_surface["mode"] == "full"
     assert (capture / "decision.json").read_bytes() == original
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("complete", [False, True], ids=["ordinary", "complete"])
+def test_visible_goal_binding_command_preserves_explicit_source(tmp_path, monkeypatch, provider, complete):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.test_quota_settlement_cli import (
+        _heartbeat_receipt_count, _initialize_fixture_authority, _run_generated_cli,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    flags = ["--complete-turn", "--delta-delivery", "off"] if complete else []
+    code, unbound = _run_cli(registry, runtime, "quota", "should-run",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--runtime-profile", "codex_cli",
+        "--available-capability", "shell", "--available-capability", "filesystem_read", *flags, cwd=project)
+    assert code == 0, unbound
+    interaction = unbound["interaction_contract"]
+    cli = interaction["cli_channel"]
+    assert cli["turn_binding_required"] and not unbound["normal_delivery_allowed"]
+    assert "heartbeat_receipt" not in unbound
+    command, = cli["next_cli_actions"]
+    assert command == interaction["agent_channel"]["primary_action"] == unbound["recommended_action"]
+    assert command == unbound["work_lane_contract"]["action"]
+    if complete:
+        argv = shlex.split(command)
+        assert argv[argv.index("--context-delivery") + 1] == "off"
+        assert argv[argv.index("--delta-delivery") + 1] == "off"
+    else:
+        # Decode the ordinary presentation without introducing a new default.
+        monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "off")
+    turn = "visible-goal-explicit-source"
+    code, bound = _run_generated_cli(command.replace("<unique-work-iteration-id-reuse-on-retry>", turn),
+        registry_path=registry, cwd=project)
+    assert code == 0, bound
+    if complete:
+        assert_complete_turn_decision(unbound)
+        assert_complete_turn_decision(bound)
+    else:
+        assert all("schema_version" not in packet and "contract_binding" not in packet for packet in (unbound, bound))
+    assert bound["normal_delivery_allowed"] and bound["selected_todo"]["todo_id"] == TODO_ID
+    identity = bound["heartbeat_receipt"]["settlement_identity"]
+    assert identity == bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+    assert identity["turn_instance_id"] == turn
+    assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0
 
 
@@ -749,7 +799,8 @@ def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, mo
     launcher.parent.mkdir()
     source_file = tmp_path / "original.json"
     calls = tmp_path / "guard-calls.txt"
-    extras = ["--available-capability", "shell", "--available-capability", "filesystem_read"]
+    # Opt in at the source; the ordinary MCP caller retains its inline contract.
+    extras = ["--complete-turn", "--available-capability", "shell", "--available-capability", "filesystem_read"]
     if bound_turn:
         extras += ["--turn-instance-id", "mcp-original-turn"]
     launcher.write_text(f"#!{sys.executable}\n" +
@@ -1180,7 +1231,7 @@ def test_external_worker_validates_complete_source_before_wake(tmp_path, monkeyp
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state)),
         state_path=state, provider=provider)
-    rc, contract = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+    rc, contract = _run_cli(registry, runtime, "quota", "should-run", "--complete-turn", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "external-source",
         "--runtime-profile", "generic_cli", "--include-detail", "scheduler",
         "--available-capability", "shell", "--available-capability", "filesystem_read", cwd=project)

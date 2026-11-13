@@ -48,7 +48,7 @@ def _capture_selection_transport_template(payload: dict[str, Any], args: argpars
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
                                      capture_root: Path | None = None,
                                      capture_directory: Path | None = None) -> None:
-    """Retain caller display/capture options in the existing selection command.
+    """Retain caller display/capture options when binding or selecting a Turn.
 
     Only transport argv is composed here; the typed quota owner still selects the
     action and owns admission. Each selection invocation allocates a new capture.
@@ -68,9 +68,13 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
     selection = cli.get("selection_command") if isinstance(cli, dict) else None
-    if not isinstance(selection, dict):
+    if isinstance(selection, dict):
+        template = selection.get("command_args_template")
+    elif complete_turn and isinstance(cli, dict) and cli.get("turn_binding_required") is True:
+        actions = cli.get("next_cli_actions")
+        template = actions[0] if isinstance(actions, list) and len(actions) == 1 else None
+    else:
         return
-    template = selection.get("command_args_template")
     if not isinstance(template, str):
         return
     words = shlex.split(template)
@@ -106,7 +110,18 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         words.append("--turn-envelope")
     if complete_turn and "--complete-turn" not in words:
         words.append("--complete-turn")
-    selection["command_args_template"] = shlex.join(words)
+    command = shlex.join(words)
+    if isinstance(selection, dict):
+        selection["command_args_template"] = command
+    else:
+        assert isinstance(cli, dict) and isinstance(interaction, dict)
+        cli["next_cli_actions"] = [command]
+        # Preserve the authority owner's mirrored action before signing.
+        for carrier, key in ((payload, "recommended_action"),
+                             (interaction.get("agent_channel"), "primary_action"),
+                             (payload.get("work_lane_contract"), "action")):
+            if isinstance(carrier, dict) and carrier.get(key) == template:
+                carrier[key] = command
 
 
 

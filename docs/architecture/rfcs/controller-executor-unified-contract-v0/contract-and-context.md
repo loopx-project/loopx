@@ -991,7 +991,10 @@ migration does not make native Markdown an executable transport.
 The staged proposal keeps ordinary quota and thin heartbeat on the existing
 decision and presentation path until the parent acceptance qualifies a default
 change. Explicit `--complete-turn` and managed handoff keep the checked source
-through selection and native lease preparation. Progressive and Delta remain
+through selection and native lease preparation. An unbound visible Goal also
+keeps `--complete-turn` in its emitted Turn-binding command. The File and SQLite
+checks execute that command and verify one original receipt, no debit on binding,
+and the unchanged ordinary source in the control. Progressive and Delta remain
 independent of source selection.
 
 For a replan that qualifies for successor creation, plan the optional review
