@@ -132,16 +132,19 @@ print(json.dumps({'package':str(Path(loopx.__file__).resolve())}))
     assert not list(tmp_path.iterdir())
 
 
-def test_installed_core_guided_start_identity_and_readback(core_python, tmp_path, monkeypatch):
+@pytest.mark.parametrize("host_surface", ("shell", "traex-cli"))
+def test_installed_core_guided_start_identity_and_readback(core_python, tmp_path, monkeypatch, host_surface):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    if host_surface == "traex-cli":
+        monkeypatch.setenv("TRAECLI_THREAD_ID", "core-session")
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     project.mkdir()
     prefix = ["--runtime-root", str(runtime), "--format", "json"]
     objective = 'Produce an inventory report; preserve "quoted" source names and 总计.'
     start = [*prefix, "start-goal", "--guided", "--project", str(project),
-             "--goal-id", GOAL, "--host-surface", "shell", "--goal-text", objective]
+             "--goal-id", GOAL, "--host-surface", host_surface, "--goal-text", objective]
 
     def command(*arguments, expected=0):
         return json.loads(_run(core_python, list(arguments), project, expected=expected).stdout)
@@ -166,15 +169,17 @@ def test_installed_core_guided_start_identity_and_readback(core_python, tmp_path
                         "--agent-id", AGENT, "--require-new", "--execute", expected=1)
     assert collision["ok"] is False and collision["written"] is False
     binding = command(*prefix, "bind-agent-thread", "--goal-id", GOAL,
-                      "--agent-id", AGENT, "--thread-id", "core-session", "--host-surface", "shell", "--execute")
+                      "--agent-id", AGENT, "--thread-id", "core-session", "--host-surface", host_surface, "--execute")
     assert binding["global_sync"]["ok"] is True
     assert binding["registration_readback"]["verified"] is True
-    resumed = command(*start, "--thread-id", "core-session")
+    resumed = command(*start) if host_surface == "traex-cli" else command(*start, "--thread-id", "core-session")
     assert resumed["agent_id"] == AGENT
     assert resumed["project_connection"]["goal_found"] is True
     assert "identity_selection_gate" not in resumed["guided_transaction"]
+    assert resumed["goal_text"] == objective
+    assert resumed["thread_id"] == "core-session"
     pack = command(*prefix, "bootstrap-command-pack", "--project", str(project),
-                   "--goal-id", GOAL, "--agent-id", AGENT, "--host-surface", "shell", "--goal-text", objective)
+                   "--goal-id", GOAL, "--agent-id", AGENT, "--host-surface", host_surface, "--goal-text", objective)
     assert pack["goal_start_contract"]["goal_text"] == objective
     assert pack["goal_start_contract"]["explicit_invocation_confirms_project_local_state_writes"] is True
 
