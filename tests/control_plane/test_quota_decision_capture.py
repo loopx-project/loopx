@@ -17,7 +17,7 @@ from tests.control_plane.canonical_authority_fixture import (
 )
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _write_fixture,
-    _configure_read_only_todo, _run_cli, _heartbeat_receipt_count,
+    _configure_read_only_todo, _run_cli, _heartbeat_receipt_count, _spend_run_count,
 )
 
 
@@ -496,9 +496,19 @@ def test_capture_root_allocates_private_distinct_children(tmp_path):
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
-@pytest.mark.parametrize('release', ['exact', 'wrong_digest', 'disconnect', 'changed_capture'])
-@pytest.mark.parametrize('native_context', [False, True])
-def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_context):
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize(('release', 'native_context', 'output_limit', 'long_capture', 'metadata_error'), [
+    pytest.param(release, native, 1700 if native and release != 'exact' else None, False, False,
+                 id=f"{'native' if native else 'ordinary'}-{release}")
+    for native in (False, True)
+    for release in ('exact', 'wrong_digest', 'disconnect', 'changed_capture')
+] + [
+    pytest.param('changed_capture', True, 720, True, False, id='bounded-long-capture'),
+    pytest.param('changed_capture', True, 600, True, True, id='insufficient-metadata-budget'),
+])
+def test_real_cli_handoff_preserves_original_receipt(
+    tmp_path, provider, release, native_context, output_limit, long_capture, metadata_error,
+):
     import hashlib
     import socket
     import sys
@@ -508,8 +518,16 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
 
     project, runtime, registry = _write_fixture(tmp_path)
     state = _configure_read_only_todo(project)
-    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state)
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
     capture = tmp_path / 'handoff-capture'
+    if long_capture:
+        # Keep each path component below filesystem limits. Non-ASCII text
+        # also catches counting characters instead of serialized UTF-8 bytes.
+        remainder = 426 - len(os.fsencode(tmp_path / 'decision.json')) - 2
+        parent = tmp_path / ('测' * (remainder // 6))
+        parent.mkdir()
+        capture = parent / ('c' * (remainder - len(os.fsencode(parent.name))))
+        assert len(os.fsencode(capture / 'decision.json')) == 426
     context = tmp_path / 'native-context'
     if native_context:
         context.mkdir(mode=0o700)
@@ -528,11 +546,13 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
                        '--decision-output-dir', str(capture), '--decision-handoff-socket', str(endpoint)]
             if native_context:
                 command += ['--context-delivery', 'on', '--codex-context-dir', str(context)]
-            bounded_refusal = native_context and release != 'exact'
-            if bounded_refusal:
-                command += ['--max-page-output-bytes', '1700']
+            if output_limit is not None:
+                command += ['--max-page-output-bytes', str(output_limit)]
+            env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2])}
+            if native_context:
+                env.update(LOOPX_CONTEXT_DELIVERY='on', LOOPX_EXECUTION_MODE='heartbeat')
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2]), **({'LOOPX_CONTEXT_DELIVERY': 'on', 'LOOPX_EXECUTION_MODE': 'heartbeat'} if native_context else {})}) as process:
+                                  text=True, env=env) as process:
                 try:
                     channel, _ = listener.accept()
                     with channel:
@@ -543,7 +563,7 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
                         digest = hashlib.sha256(original).hexdigest()
                         assert message == {'path': str(capture / 'decision.json'), 'sha256': digest}
                         receipts = _heartbeat_receipt_count(runtime, TURN_ID)
-                        assert receipts >= 1 and process.poll() is None
+                        assert receipts == 1 and process.poll() is None
                         # The actual CLI has persisted admission but cannot expose
                         # successful output while the Host is taking its snapshot.
                         import select
@@ -556,36 +576,74 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
                             channel.sendall(json.dumps({'released': True, 'sha256': (
                                 '0' * 64 if release == 'wrong_digest' else digest)}).encode() + b'\n')
                     stdout, stderr = process.communicate(timeout=15)
-                    if release == 'exact':
-                        assert process.returncode == 0 and json.loads(stdout)['ok'] is True
-                        assert not stderr
-                    else:
-                        assert process.returncode != 0
-                        if bounded_refusal:
-                            assert len(stdout.encode()) <= 1700
-                            failure = json.loads(stdout)
-                            assert failure['error_code'] == 'quota_decision_transport_failed'
-                            reference = failure['captured_decision']
-                            assert reference['sha256'] == digest
-                            if release == 'changed_capture':
-                                assert 'cannot be verified' in failure['reason']
-                                assert 'command' not in failure and 'command' not in reference
-                                assert hashlib.sha256((capture / 'decision.json').read_bytes()).hexdigest() != digest
-                            else:
-                                assert failure.get('command') or reference['command']
-                                assert (capture / 'decision.json').read_bytes() == original
-                        else:
-                            assert 'Do not blindly rerun' in stderr + stdout
-                        if native_context:
-                            assert list(context.iterdir()) == []
-                    assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
-                    original_source = json.loads(original)
-                    assert original_source['heartbeat_receipt']['turn_instance_id'] == TURN_ID
-                    assert_complete_turn_decision(original_source)
                 finally:
                     if process.poll() is None:
                         process.kill()
                         process.wait()
+
+    original_source = json.loads(original)
+    assert original_source['heartbeat_receipt']['turn_instance_id'] == TURN_ID
+    assert_complete_turn_decision(original_source)
+    if release == 'exact':
+        assert process.returncode == 0 and json.loads(stdout)['ok'] is True
+        assert not stderr
+    else:
+        assert process.returncode != 0
+        if native_context:
+            assert not list(context.iterdir())
+        if output_limit is None:
+            assert 'Do not blindly rerun' in stderr + stdout
+        else:
+            if not metadata_error:
+                assert len(stdout.encode()) <= output_limit
+            failure = json.loads(stdout)
+            assert failure['error_code'] == 'quota_decision_transport_failed'
+            reference = failure['captured_decision']
+            assert reference['sha256'] == digest
+            if release == 'changed_capture':
+                assert reference['path'] == str(capture / 'decision.json')
+                assert 'Do not rerun admission.' in failure['instruction']
+                if metadata_error:
+                    assert 'too small for recovery metadata' in failure['reason']
+                elif long_capture:
+                    assert 'Unverified capture' in failure['instruction']
+                else:
+                    assert 'cannot be verified' in failure['reason']
+                assert 'command' not in failure and 'command' not in reference
+                assert (capture / 'decision.json').read_bytes() == original + b'\n'
+            else:
+                recovery = failure.get('command') or reference['command']
+                assert (capture / 'decision.json').read_bytes() == original
+                if release == 'wrong_digest':
+                    _assert_captured_receipts(
+                        recovery, original_source, cwd=project, env=env,
+                        output_limit=failure.get('recovery_page_output_bytes', output_limit),
+                    )
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
+    assert _spend_run_count(runtime) == 0
+
+
+def _assert_captured_receipts(command, source, *, cwd, env, output_limit):
+    pages = bytearray()
+    while command:
+        run = subprocess.run(shlex.split(command), cwd=cwd, env=env, capture_output=True,
+                             check=True, timeout=30)
+        assert len(run.stdout) <= output_limit
+        page = json.loads(run.stdout)
+        assert page['ok'] and page['offset'] == len(pages)
+        pages.extend(page['content'].encode())
+        if page['eof']:
+            assert len(pages) == page['total_bytes']
+            break
+        assert page['content'] and page['next_offset'] == len(pages)
+        command = page['next_command']
+    else:
+        pytest.fail('recovery reader did not reach EOF')
+    recovered = json.loads(pages)
+    if 'selections' in recovered:
+        recovered = {row['pointer'].lstrip('/'): row['value'] for row in recovered['selections']}
+    assert recovered['heartbeat_receipt'] == source['heartbeat_receipt']
+    assert recovered['rollout_event'] == source['rollout_event']
 
 
 def test_handoff_requires_explicit_capture_before_guard(tmp_path):
@@ -883,26 +941,11 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
         assert len(output.encode()) <= output_limit
         reference = failure['captured_decision']
         assert reference['sha256'] == hashlib.sha256(attempts[0]).hexdigest()
-        command = shlex.split(failure.get('command') or reference['command'])
-        assert command[:3] == [str(launcher), '--cli-bin', str(launcher)]
-        pages = bytearray()
-        while True:
-            page = subprocess.run(command, cwd=project, capture_output=True, check=True, timeout=30,
-                env={**os.environ, 'LOOPX_USAGE_PING': '0', 'PYTHONPATH': str(Path(__file__).resolve().parents[2])})
-            assert len(page.stdout) <= failure.get('recovery_page_output_bytes', output_limit)
-            view = json.loads(page.stdout)
-            assert view['ok'] and view['offset'] == len(pages)
-            pages.extend(view['content'].encode())
-            if view['eof']:
-                assert len(pages) == view['total_bytes']
-                break
-            assert view['content'] and view['next_offset'] == len(pages)
-            command = shlex.split(view['next_command'])
-        recovery = json.loads(pages)
-        if 'selections' in recovery:
-            recovery = {row['pointer'].lstrip('/'): row['value'] for row in recovery['selections']}
-        assert recovery['heartbeat_receipt'] == original['heartbeat_receipt']
-        assert recovery['rollout_event'] == original['rollout_event']
+        command = failure.get('command') or reference['command']
+        assert shlex.split(command)[:3] == [str(launcher), '--cli-bin', str(launcher)]
+        _assert_captured_receipts(command, original, cwd=project,
+            env={**os.environ, 'LOOPX_USAGE_PING': '0', 'PYTHONPATH': str(Path(__file__).resolve().parents[2])},
+            output_limit=failure.get('recovery_page_output_bytes', output_limit))
         assert saved[0].read_bytes() == attempts[0]
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0

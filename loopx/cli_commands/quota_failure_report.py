@@ -270,6 +270,11 @@ def quota_failure_payload(
     return payload
 
 
+def _fits_failure_output(payload: dict[str, object], limit: int) -> bool:
+    # Count the compact CLI JSON and its trailing newline.
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1 <= limit
+
+
 def captured_quota_failure_view(
     payload: Mapping[str, object], *, capture_directory: Path,
     max_page_output_bytes: int | None = None,
@@ -322,10 +327,7 @@ def captured_quota_failure_view(
             "This response does not establish a context baseline or grant execution authority."
         )
 
-    def fits(value: dict[str, object]) -> bool:
-        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
-
-    if not fits(result) or not inline_context_read_fits(
+    if not _fits_failure_output(result, limit) or not inline_context_read_fits(
         saved, original, digest, page_bytes=page_size, output_limit=limit, reader_argv=reader_argv,
     ):
         # Pin the small diagnostic selection so long launcher/capture paths and
@@ -355,7 +357,7 @@ def captured_quota_failure_view(
         if reader is not None and selected is not None:
             read_size, read_limit = pinned_context_read_window(reader, selected,
                 page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
-        if runtime_root is not None and (reader is None or not fits(result) or read_limit > limit):
+        if runtime_root is not None and (reader is None or not _fits_failure_output(result, limit) or read_limit > limit):
             from .context_machine import _private_transport_root
 
             try:
@@ -379,12 +381,12 @@ def captured_quota_failure_view(
         if read_limit > limit:
             result["recovery_page_output_bytes"] = read_limit
             result["instruction"] = "Do not rerun admission."
-        if not fits(result):
+        if not _fits_failure_output(result, limit):
             # The command or pinned descriptor already carries the capture path.
             result["captured_decision"] = {"sha256": digest}
-        if original_decision and "reason" in payload and fits({**result, "reason": payload["reason"]}):
+        if original_decision and "reason" in payload and _fits_failure_output({**result, "reason": payload["reason"]}, limit):
             result["reason"] = payload["reason"]
-        if not fits(result):
+        if not _fits_failure_output(result, limit):
             # Even an impossibly small envelope must keep the original failure
             # and locator. Report why the requested output size cannot be met.
             result["instruction"] = "Output limit is too small for recovery metadata. Read this Turn. Do not rerun admission."
@@ -505,10 +507,17 @@ def quota_captured_transport_failure_view(
         "path": str(saved), "sha256": capture_sha256,
     }, "reason": "The saved decision cannot be verified against its original SHA-256.",
         "instruction": "Restore the original capture and inspect its Turn receipt. Do not rerun admission."}
+    if not _fits_failure_output(result, output_limit):
+        result.pop("reason")
+        result["instruction"] = "Unverified capture. Restore it and read its receipt. Do not rerun admission."
+        if not _fits_failure_output(result, output_limit):
+            # The locator and recovery rule must survive even below the metadata floor.
+            result["reason"] = "Output limit is too small for recovery metadata."
+            return result
     for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
         if key in failure:
             candidate = {**result, key: failure[key]}
-            if len(json.dumps(candidate, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= output_limit:
+            if _fits_failure_output(candidate, output_limit):
                 result = candidate
     return result
 
