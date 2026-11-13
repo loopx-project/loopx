@@ -2414,15 +2414,16 @@ and fresh terminal checks; `vision_closed` + `stop` is not Goal closure.
 
 ### MCP vision authoring and recovery / MCP vision 写入与恢复
 
-The MCP guard projects `interaction_contract.mcp_channel`. For admitted normal
-Todo delivery, it replaces the raw CLI writeback/spend instructions with
-`complete_task` ownership; those are alternate transports, not two obligations.
-Replan-only and blocked lanes preserve their live CLI actions and binding.
+The MCP guard returns the original complete decision and a separate
+`mcp_channel`. For admitted Todo delivery the channel names `complete_task`
+as the executor for writeback and quota spending. Replan-only and blocked
+lanes preserve their live CLI actions and binding.
 Vision field and total limits come from the same TS validator, not copied prompt
 constants. Quota admission, permission and workspace facts are unchanged.
 
-MCP 的普通 Todo 交付不再同时要求模型执行 CLI 记账和 MCP 结算两套流程；独立 replan
-仍使用动态 CLI 契约。vision 字段与预算直接来自 TS 校验器，不要求模型猜格式或翻测试。
+MCP 原样交付完整决定，单独的 `mcp_channel` 指定普通 Todo 由
+`complete_task` 写回和扣额。独立重规划沿用当前 CLI 契约，vision 字段与预算直接
+来自 TypeScript 校验器。
 
 `complete_task` accepts either `agent_vision` (the existing bounded
 `goal_vision_replan_contract_v0` JSON packet) or `vision_unchanged_reason`.

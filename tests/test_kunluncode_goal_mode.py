@@ -148,7 +148,9 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
 
     def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         commands.append(command)
-        if "--turn-instance-id" not in command:
+        if "--complete-turn" in command:
+            payload = '{"ok": false, "reason": "fixture guard diagnostic"}'
+        elif "--turn-instance-id" not in command:
             payload = '{"ok": true}'
         else:
             args = command[command.index("json") + 1 :]
@@ -197,8 +199,9 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
     assert json.loads(control.claim_task("todo-1", "cc"))["ok"] is False
     assert commands == []
 
-    assert json.loads(control.should_run())["ok"] is True
-    assert commands[-1][-2:] == ["--runtime-profile", "kunluncode"]
+    assert json.loads(control.should_run())["reason"] == "fixture guard diagnostic"
+    assert "--complete-turn" in commands[-1]
+    assert commands[-1][commands[-1].index("--runtime-profile") + 1] == "kunluncode"
     assert commands[-1][3:5] == ["--format", "json"]
 
     assert json.loads(control.claim_task("todo-1", "kunlun"))["ok"] is True

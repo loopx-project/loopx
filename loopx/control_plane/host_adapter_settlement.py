@@ -165,10 +165,10 @@ def project_host_interaction(output: str) -> str | McpGuardContent:
     """Keep admission facts; let the typed host lens choose the transport instructions."""
     try:
         packet = json.loads(output)
-    except ValueError:
-        return output
+    except ValueError as exc:
+        raise ValueError("MCP quota guard did not return valid JSON") from exc
     if not isinstance(packet, dict):
-        return output
+        raise ValueError("MCP quota guard did not return a JSON object")
     projection = _runtime_reduction({
         "schema_version": "loopx_host_todo_completion_transaction_v1",
         "phase": "project_guard", "packet": packet,
@@ -179,7 +179,7 @@ def project_host_interaction(output: str) -> str | McpGuardContent:
     projected = projection["packet"]
     if projected.get("schema_version") == "host_mcp_interaction_v0":
         return McpGuardContent(source=output, channel=projected)
-    return json.dumps(projected, ensure_ascii=False)
+    return output
 
 
 def _runtime_reduction(params: Mapping[str, Any], *, phase: str) -> dict[str, Any]:

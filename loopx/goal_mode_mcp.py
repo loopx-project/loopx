@@ -120,8 +120,8 @@ class GoalModeMCPControlPlane:
         if registry:
             command += ["--registry", registry]
         command += ["--format", "json"]
-        # MCP parses/projects raw decisions itself. Pin only this subprocess;
-        # the existing environment opt-out also works with older CLI parsers.
+        # MCP projects the original decision itself. Pin off only for this
+        # subprocess so machine-level context delivery cannot wrap the input.
         environment = {**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"}
         result = subprocess.run(
             [*command, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
@@ -158,33 +158,23 @@ class GoalModeMCPControlPlane:
             }
         )
 
-    def should_run_args(self, goal_id: str, agent_id: str | None) -> tuple[list[str], list[str]]:
-        common = ["quota", "should-run", "--goal-id", goal_id]
+    def should_run_args(self, goal_id: str, agent_id: str | None) -> list[str]:
+        args = ["quota", "should-run", "--goal-id", goal_id, "--complete-turn",
+                "--runtime-profile", self.config.runtime_profile]
         if agent_id:
-            common += ["--agent-id", agent_id]
-        return (
-            [*common, "--runtime-profile", self.config.runtime_profile],
-            [
-                *common,
-                "--host-surface",
-                self.config.legacy_host_surface,
-                "--scheduler-owner",
-                self.config.scheduler_owner,
-                "--execution-mode",
-                self.config.execution_mode,
-            ],
-        )
+            args += ["--agent-id", agent_id]
+        return args
 
-    def _read_guard(self) -> str:
-        """Read the CLI source once, before its host transport projection."""
+    def _read_guard(self) -> str | McpGuardContent:
+        """Read the CLI source once and derive the separate MCP channel."""
         goal_id, _ = self.context()
         if not goal_id:
             return self.no_goal_message()
-        args, legacy_args = self.should_run_args(goal_id, self.bound_agent_id())
-        return self.run_cli(args, legacy_args=legacy_args)
+        source = self.run_cli(self.should_run_args(goal_id, self.bound_agent_id()))
+        return project_host_interaction(source)
 
     def should_run(self) -> str:
-        result = project_host_interaction(self._read_guard())
+        result = self._read_guard()
         return result.source if isinstance(result, McpGuardContent) else result
 
     def list_todos(self) -> str:
@@ -348,8 +338,7 @@ def create_fastmcp_server(
 
     server = GoalModeServer(config.server_name)
 
-    def guard_content(source: str) -> CallToolResult:
-        projected = project_host_interaction(source)
+    def guard_content(projected: str | McpGuardContent) -> CallToolResult:
         if isinstance(projected, McpGuardContent):
             channel = dict(projected.channel)
             return CallToolResult(
@@ -371,15 +360,15 @@ def create_fastmcp_server(
             return control.host_prompt()
 
     def should_run() -> Any:
-        """Read the bound decision; MCP guidance is separate in complete-v1, inline in legacy results."""
+        """Read the complete bound decision and its separate MCP guidance."""
         return guard_content(control._read_guard())
 
     def list_todos() -> Any:
-        """Read visible Todo decisions; MCP guidance is separate in complete-v1, inline in legacy results."""
+        """Read the complete Todo decision and its separate MCP guidance."""
         return guard_content(control._read_guard())
 
-    # Supply the evaluated SDK annotation before registration. The signed source
-    # remains a required string and older results omit the separate channel.
+    # Supply the evaluated SDK annotation before registration. Collection
+    # diagnostics have a string result and no separate MCP channel.
     for read_guard in (should_run, list_todos):
         read_guard.__annotations__["return"] = Annotated[CallToolResult, GuardToolOutput]
         server.tool()(read_guard)

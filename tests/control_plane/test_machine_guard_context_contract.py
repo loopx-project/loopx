@@ -95,14 +95,17 @@ def test_mcp_and_typed_completion_guards_use_raw_transport(machine, completion):
         step = plan["provider_effect"]["steps"][0]
         args, legacy = step["args"], step["legacy_args"]
     else:
-        args, legacy = control.should_run_args(GOAL_ID, AGENT_ID)
+        args, legacy = control.should_run_args(GOAL_ID, AGENT_ID), None
     payload = json.loads(control.run_cli(args, legacy_args=legacy))
     assert_decision(payload, runtime)
     if completion:
         assert payload["heartbeat_receipt"]["settlement_identity"] == plan["identity"]
-    # Both current and legacy host declarations use the same machine contract.
-    legacy_payload = json.loads(control.run_cli(legacy))
-    assert_decision(legacy_payload, runtime)
+        # Completion still accepts the older CLI's scheduler declaration.
+        assert_decision(json.loads(control.run_cli(legacy)), runtime)
+    else:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(payload)
 
 
 def test_rejected_guard_never_completes_or_spends_with_machine_on(machine):
@@ -127,7 +130,7 @@ def test_rejected_guard_never_completes_or_spends_with_machine_on(machine):
     assert not (runtime / "context-delivery").exists()
 
 
-def test_mcp_legacy_retry_keeps_raw_transport_without_new_parser_flags(monkeypatch):
+def test_mcp_completion_legacy_retry_keeps_raw_transport_without_new_parser_flags(monkeypatch):
     import loopx.goal_mode_mcp as mcp
 
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
@@ -146,7 +149,13 @@ def test_mcp_legacy_retry_keeps_raw_transport_without_new_parser_flags(monkeypat
         GoalModeMCPConfig(server_name="fixture", runtime_profile="claude_code", legacy_host_surface="claude_code"),
         lambda: {"goal_id": GOAL_ID, "agent_id": AGENT_ID},
     )
-    args, legacy = control.should_run_args(GOAL_ID, AGENT_ID)
-    result = json.loads(control.run_cli(args, legacy_args=legacy))
+    request = HostTodoSettlementRequest(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        runtime_profile="claude_code", legacy_host_surface="claude_code",
+        scheduler_owner="agent_cli_loop", execution_mode="interactive",
+        completion_args=(),
+    )
+    step = _prepare(request)["provider_effect"]["steps"][0]
+    result = json.loads(control.run_cli(step["args"], legacy_args=step["legacy_args"]))
     assert result == {"ok": True, "should_run": False}
     assert len(calls) == 2 and os.environ["LOOPX_CONTEXT_DELIVERY"] == "on"

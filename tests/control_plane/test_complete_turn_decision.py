@@ -771,8 +771,8 @@ def test_visible_goal_binding_command_preserves_explicit_source(tmp_path, monkey
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("bound_turn", [False, True])
-@pytest.mark.parametrize("source_fault", [None, "binding", "version"])
-def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, monkeypatch, provider, bound_turn, source_fault):
+@pytest.mark.parametrize("source_fault", [None, "binding", "version", "unversioned"])
+def test_real_mcp_defaults_to_complete_source_at_stdio_boundary(tmp_path, monkeypatch, provider, bound_turn, source_fault):
     """Provider content must retain the original decision, beyond the CLI alone."""
     import asyncio
     import os
@@ -799,8 +799,7 @@ def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, mo
     launcher.parent.mkdir()
     source_file = tmp_path / "original.json"
     calls = tmp_path / "guard-calls.txt"
-    # Opt in at the source; the ordinary MCP caller retains its inline contract.
-    extras = ["--complete-turn", "--available-capability", "shell", "--available-capability", "filesystem_read"]
+    extras = ["--available-capability", "shell", "--available-capability", "filesystem_read"]
     if bound_turn:
         extras += ["--turn-instance-id", "mcp-original-turn"]
     launcher.write_text(f"#!{sys.executable}\n" +
@@ -813,7 +812,10 @@ def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, mo
         "if fault:\n"
         "    packet = json.loads(result.stdout)\n"
         "    if fault == 'binding': packet['interaction_contract']['cli_channel']['next_cli_actions'].append('changed procedure')\n"
-        "    else: packet['schema_version'] = 'loopx_turn_envelope_v99'\n"
+        "    elif fault == 'version': packet['schema_version'] = 'loopx_turn_envelope_v99'\n"
+        "    else:\n"
+        "        del packet['schema_version']\n"
+        "        del packet['contract_binding']\n"
         "    sys.stdout.write(json.dumps(packet))\n"
         "else: sys.stdout.buffer.write(result.stdout)\n"
         "sys.stderr.buffer.write(result.stderr)\nsys.exit(result.returncode)\n")
@@ -840,8 +842,12 @@ def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, mo
                         assert response.isError
                         assert "mcp_channel" not in (response.structuredContent or {})
                         error = response.content[0].text
-                        assert ("integrity mismatch" if source_fault == "binding"
-                                else "unsupported complete Turn decision version") in error
+                        message = {
+                            "binding": "integrity mismatch",
+                            "version": "unsupported complete Turn decision version",
+                            "unversioned": "unsupported complete Turn decision version",
+                        }[source_fault]
+                        assert message in error
                         continue
                     assert not response.isError
                     received = json.loads(response.content[0].text)
@@ -861,6 +867,8 @@ def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, mo
                     assert channel["schema_version"] == "host_mcp_interaction_v0"
                     assert channel["delivery_executor"] == "complete_task"
                     assert channel["delivery_todo_id"] == (TODO_ID if bound_turn else None)
+                    assert channel["checkpoint_recovery_tool"] == "review_task_vision"
+                    assert "original committed Turn writeback" in channel["vision_authoring"]["authoring_hint"]
                     if bound_turn:
                         identity = received["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
                         assert identity == received["heartbeat_receipt"]["settlement_identity"]

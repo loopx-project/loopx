@@ -12,6 +12,13 @@ with LoopX's deterministic gate).
   goal/agent. It only SETS UP a goal; the work runs under native `/loop`.
 - **Optional hardening** — an opt-in `PreToolUse` `should_run` gate (`--harden`).
 
+`should_run` and `list_todos` deliver the complete Turn decision from the
+installed LoopX CLI and separate MCP tool guidance. Read the original JSON
+and use `complete_task` for Todo settlement. Independent replanning still
+follows the original decision's CLI instructions. If the MCP host resolves
+an older CLI that cannot produce a complete decision, update the CLI it
+uses and restart that MCP host.
+
 ## Install (opt-in)
 
 The adapter is **never** installed by the normal LoopX installer. You enable it

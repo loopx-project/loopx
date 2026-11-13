@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {settlementPlanPayload} from "../../loopx/control_plane/effect_program.ts";
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
-import {projectMcpInteraction} from "../../loopx/control_plane/turn_driver/host_interaction.ts";
 import {nativeCliSettlementProjection, turnScopedCliSettlementPlan}
   from "../../loopx/control_plane/quota/settlement_plan.ts";
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../../loopx/control_plane/work_items/execution_preparation.ts";
@@ -275,19 +274,12 @@ test("incomplete command facts or ambiguous identity fail closed", () => {
 });
 
 
-test("material CLI and MCP retain authoring while in-flight CLI omits material closeout guidance", () => {
+test("material CLI retains authoring while in-flight CLI omits material closeout guidance", () => {
   for (const delivery_boundary of [undefined, "in_flight_continuation"]) {
     const wire = settlementPlanPayload(turnScopedCliSettlementPlan({...input, delivery_boundary}));
     const steps = wire.ordered_steps as Record<string, unknown>[];
     const material = delivery_boundary === undefined;
     assert.equal(steps.filter(step => step.vision_authoring).length, material ? 1 : 0);
     assert.deepEqual(steps[1].vision_authoring, material ? visionAuthoringContract() : undefined);
-    const mcp = projectMcpInteraction({ok: true, normal_delivery_allowed: true,
-      selected_todo: {todo_id: "todo"}, interaction_contract: {cli_channel: {settlement_plan: wire}}});
-    const contract = mcp.interaction_contract as Record<string, Record<string, unknown>>;
-    assert.equal(contract.cli_channel.settlement_plan, undefined);
-    // MCP complete_task is material completion even when the CLI can continue in-flight.
-    assert.deepEqual(contract.mcp_channel.vision_authoring, visionAuthoringContract());
-    assert.match(visionAuthoringContract().authoring_hint as string, /original committed Turn writeback/);
   }
 });
