@@ -3677,3 +3677,63 @@ closure, paired complete costs, progressive product control, R1/M3 and original
 Goal regression remain unqualified. Keep the nine original requirements,
 previous failed attempts and frozen budget failures; no minimal preset,
 provider default, package publication or paid operation is promoted here.
+
+### 2026-11-13 — Full Turn defers unselected provider implementations
+
+The installed core Turn previously loaded BM25 and OpenViking while resolving
+Reward Memory configuration, and loaded the anti-entropy inspector even when
+retirement governance was disabled. Context-provider exports and the existing
+builtin builder registry now resolve implementations on explicit use. A pure
+OpenViking scope owner is shared by binding normalization and the provider;
+the original URI grammar, public aliases and Python serialization identity are
+retained. Anti-entropy still uses the existing typed activation and applicable
+basis; its feedback builder resolves only after those checks. No capability,
+provider default, authority, claim, stop or settlement rule is added or relaxed.
+
+The 12 fresh-process checks cover registry rejections/custom builders, real
+local BM25 retrieval, binding classification, disabled/enabled retirement and
+attribute/from/star exports. The original 11-check corpus fails five loading
+oracles on immutable base `441c6077e7c5c8e896ea79562761fd483baf157e`, while its
+six export checks pass. Sixteen URI success/rejection cases and protocol-4
+pickle bytes match between installed base and candidate; cross-version reads
+pass both ways. Definitions move to the pure scope source file: declaration
+source introspection is not preserved by the original-module alias.
+
+The final independent Python 3.11 core wheel contains 1886 runtime files that
+match source bytes (SHA256
+`bc36c92dd437b9418e21031e185fefd04984c91a30169cbd866a3c712d92b4fa`).
+Source capability regression passes 628 cases. Real isolated File and SQLite
+execution commits a checked artifact and one settlement; original-key replay
+has no Host, state or quota effects. Instrumented full-Turn module counts,
+including the package root, change from 525 to 516 on execution and 438 to 432
+on replay; capability counts change from 111 to 102 and 56 to 50. Execution
+RPC counts remain 221/220 and replay remains 11. The unselected OpenViking,
+BM25 and anti-entropy inspection implementations disappear from those paths.
+These counts describe the observed Python path, not the complete minimal closure.
+
+Matched installed observations use macOS 27 arm64, Python 3.11.15, Node 26.0.0
+and five
+alternating base/candidate pairs per backend and phase. Each invocation starts
+a new Python process. Before first execution, the isolated managed RPC server
+is normally stopped and must restart; completed-Turn replay reuses that server.
+Setup and independent readback are outside timing; OS, bytecode and compilation
+caches are not reset. Nearest-rank p95 is the maximum of five samples.
+
+| Backend / phase | Wall median / p95 ms, base → candidate | Median invocation RSS MiB, base → candidate |
+| --- | --- | --- |
+| SQLite / fresh execution | 2922.5 / 3561.9 → 3006.8 / 4139.9 | 81.81 → 81.25 |
+| SQLite / completed-Turn replay | 809.6 / 948.6 → 889.0 / 1415.0 | 44.73 → 44.42 |
+| File / fresh execution | 2858.7 / 3005.5 → 2862.5 / 2985.0 | 81.09 → 81.36 |
+| File / completed-Turn replay | 645.4 / 679.7 → 692.5 / 773.9 | 44.73 → 44.28 |
+
+All 40 invocations preserve the same independent result/effect fingerprint;
+stdout sizes remain 4002 bytes for execution and 4548 for replay. The candidate
+has slower SQLite medians and a higher tail: no latency or complete-cost
+improvement is qualified. Invocation RSS excludes the persistent Node server;
+zero block-I/O counters do not prove zero file access. Separate controlled
+observers verify Python import/open/process/loopback events and Node module/
+loopback/exit events, but do not provide OS-wide closure, complete IPC/I/O or
+model-token, service-cost and human-attention accounting. The Host remains
+synthetic. Full V1–V5/V10, real model adoption/recovery, progressive product
+control, R1/M3, independent Standard packages and original-goal regression remain
+open. Preserve all nine original requirements and earlier frozen failures.
