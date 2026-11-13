@@ -7,6 +7,7 @@ on:
       - "packages/loopx-core/**"
       - "loopx/**"
       - "tests/test_core_distribution.py"
+      - "tests/control_plane/test_installed_core_context.py"
       - "packages/loopx-repo-health/**"
       - "packages/loopx-obelisk/**"
       - "packages/loopx-codex-provider-routing/**"
@@ -20,6 +21,7 @@ on:
       - "packages/loopx-core/**"
       - "loopx/**"
       - "tests/test_core_distribution.py"
+      - "tests/control_plane/test_installed_core_context.py"
       - "packages/loopx-repo-health/**"
       - "packages/loopx-obelisk/**"
       - "packages/loopx-codex-provider-routing/**"
@@ -56,10 +58,13 @@ jobs:
           uv venv "$RUNNER_TEMP/core-env" --python .venv/bin/python
           uv pip install --python "$RUNNER_TEMP/core-env/bin/python" "$RUNNER_TEMP"/core-dist/loopx_core-*.whl
           echo "LOOPX_CORE_TEST_PYTHON=$RUNNER_TEMP/core-env/bin/python" >> "$GITHUB_ENV"
-      - name: Qualify installed execution, recovery, replay and refusal
+      - name: Qualify installed execution, context, recovery, replay and refusal
         env:
           LOOPX_USAGE_PING: "0"
-        run: uv run --extra test python -m pytest -q tests/test_core_distribution.py
+        run: >-
+          uv run --extra test python -m pytest -q
+          tests/test_core_distribution.py
+          tests/control_plane/test_installed_core_context.py
 
   codex-provider-routing:
     name: loopx-codex-provider-routing

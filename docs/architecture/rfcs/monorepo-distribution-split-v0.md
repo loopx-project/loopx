@@ -3608,3 +3608,32 @@ at an immutable revision; the procedure, consent and check-scope clauses remain
 unchanged. It is an on-demand supporting reference, not a runtime fetch or new
 authority. Preserve the earlier failed installation gate and disk-limited base
 replays separately from the repaired-head validation.
+
+### 2026-11-13 — Installed context regression enters the package lane
+
+The standalone core lane now invokes `tests/test_core_distribution.py` and
+`tests/control_plane/test_installed_core_context.py` together, and both pull
+request and main-push filters observe the context suite. The previous lane
+omitted that suite despite its local qualification. An independent workflow
+check rejects the unchanged base for all three omissions and accepts the
+repaired command and filters. The clean Python 3.11.15 wheel's 1,885 tracked
+runtime files match the source bytes; the installed artifact remains separate
+from the source test environment.
+
+Additional macOS arm64/Python 3.13.5/Node 26 observations use the same installed
+core 2.3.0 and isolated SQLite/File complete-Turn fixtures, with synthetic Hosts
+and usage telemetry disabled. The two selected Turn processes still load 525
+LoopX Python modules, including 111 capability modules, and issue 220/221 Effect
+RPCs. All 1,024 observed Python connect/address-resolution events target
+loopback; the two Node listeners and their DNS lookups also use loopback. Four
+Node processes, including the Host supervisors, load 247 distinct files. The
+observer's own local-connection and named-import subprocess controls pass;
+the earlier incomplete observer remains separate from this checked observation.
+
+These observations identify local RPC traffic in this fixture; they do not
+establish OS-wide network completeness, ordinary telemetry behavior, model
+context adoption, paired performance or full costs. This delivery closes the
+installed protocol's CI coverage gap without selecting D2/D5 or a minimal
+preset. Real Host initial/revised/compacted/lost-ACK adoption, complete V1–V5/V10,
+R1/M3, Standard/workspace publication and original-goal regression remain open.
+Preserve the earlier failures, frozen budgets and unchanged governance owners.
