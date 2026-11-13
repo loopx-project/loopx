@@ -19,6 +19,7 @@ from loopx.control_plane.turn_driver.decision_capture import (
 from loopx.control_plane.turn_driver.journal_store import load_loopx_turn_plan_from_journal, turn_journal_path
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.host_process_fixture import assert_host_task_context
 
 
 def _fixture_module():
@@ -100,13 +101,16 @@ def test_codex_workspace_write_consumes_original_decision_inline(tmp_path, monke
     source = script.read_text(encoding="utf-8").replace("prompt = sys.stdin.read()", '''prompt = sys.stdin.read()
 assert args[args.index("--sandbox") + 1] == "workspace-write"
 request = json.loads(prompt.split("Turn request:\\n", 1)[1])
-contract = request["work_contract"]
+contract = request["task_context"]
+assert request["schema_version"] == "loopx_turn_model_context_v0"
+assert "cli_channel" not in contract["interaction_contract"]
 capture = request["detail_ref"]["captured_decision"]
 assert capture["turn_key"] == request["turn_key"]
 assert capture["goal_id"] == contract["goal_id"]
 assert capture["agent_id"] == contract["agent_identity"]["agent_id"]
 assert capture["source_hash_ref"] == "$.source_decision_hash"
-assert request["source_decision_hash"] == contract["contract_binding"]["content_hash"]
+assert "contract_binding" not in contract
+assert request["source_decision_hash"].startswith("sha256:")
 # Model the tool filesystem boundary independently of the stdin transport.
 original_open = pathlib.Path.open
 def sandbox_open(path, *args, **kwargs):
@@ -120,7 +124,7 @@ except PermissionError:
     pass
 else:
     raise AssertionError("capture read unexpectedly allowed")
-assert "Read the original captured decision inline in work_contract" in prompt
+assert "Read the supplied task_context before dependent work" in prompt
 assert "not a prerequisite filesystem read" in prompt
 assert contract["interaction_contract"]["agent_channel"]["work_context"]
 pathlib.Path("received.json").write_text(json.dumps(request), encoding="utf-8")
@@ -135,7 +139,7 @@ pathlib.Path("received.json").write_text(json.dumps(request), encoding="utf-8")
     assert (workspace / fixture.MARKER_NAME).read_text() == fixture._marker_value(1)
     received = json.loads((workspace / "received.json").read_text(encoding="utf-8"))
     capture = Path(received["detail_ref"]["captured_decision"]["path"])
-    assert received["work_contract"] == json.loads(capture.read_text(encoding="utf-8"))
+    assert_host_task_context(received, json.loads(capture.read_text(encoding="utf-8")))
     assert fixture._quota_spend_count(runtime) == 1
 
 
@@ -351,14 +355,14 @@ def test_real_host_reads_original_capture_after_source_change(
     else:
         assert original.endswith(b"\n") and b"\n" not in original[:-1]
     source_a = json.loads(original)
-    assert request["work_contract"] == source_a
+    assert_host_task_context(request, source_a)
     assert source_a["goal_id"] == f.GOAL_ID
     assert source_a["agent_identity"]["agent_id"] == f.AGENT_ID
     # Direct `turn` bypasses quota CLI emission. Check its actual subprocess
     # prompt against the same original contracts, including recovery below.
-    for field in ("work_lane_contract", "execution_obligation", "automation_liveness"):
+    for field in ("work_lane_contract", "execution_obligation"):
         assert source_a[field]
-        assert request["work_contract"][field] == source_a[field]
+        assert request["task_context"][field] == source_a[field]
     # Change the real provider through its native CAS CLI, not the projection.
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
@@ -439,7 +443,7 @@ def test_real_host_reads_original_capture_after_source_change(
                                       "--retry-failed-turn", "--execute"])
         assert code == 0 and recovered["status"] == "committed", json.dumps(recovered)
         retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
-        assert retried["work_contract"] == request["work_contract"]
+        assert retried["task_context"] == request["task_context"]
         assert retried["detail_ref"] == detail
         assert path.read_bytes() == original
     code, repeated = f._run_cli([*replay, "--resume-turn-key", request["turn_key"], "--execute"])
@@ -627,7 +631,7 @@ def test_complete_dsh_binds_session_and_tools_to_shared_work(
         sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert call["session_id"] == expected_session
     model_input, _ = json.JSONDecoder().raw_decode(call["prompt"].split("Turn request:\n", 1)[1])
-    assert model_input["work_contract"] == contract and "turn_envelope" not in model_input
+    assert_host_task_context(model_input, contract)
     assert pinned["LOOPX_TURN_TODO_ID"] == "stale-ambient-todo"
     for invalid in (None, {**contract, "reason": "changed source"},
                     {**contract, "schema_version": "unsupported_fixture_version"}):
@@ -653,9 +657,9 @@ def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path
         "import json\nfrom pathlib import Path\n"
         "def run_dsh_turn(**kwargs):\n"
         "    source, _ = json.JSONDecoder().raw_decode(kwargs['prompt'].split('Turn request:\\n', 1)[1])\n"
-        "    contract = source['work_contract']\n"
-        "    assert source['schema_version'] == 'loopx_turn_host_request_v1'\n"
-        "    assert contract['schema_version'] == 'loopx_turn_envelope_v1'\n"
+        "    contract = source['task_context']\n"
+        "    assert source['schema_version'] == 'loopx_turn_model_context_v0'\n"
+        "    assert 'schema_version' not in contract and 'contract_binding' not in contract\n"
         "    assert 'turn_envelope' not in source\n"
         f"    assert contract['goal_id'] == {fixture.GOAL_ID!r}\n"
         f"    assert contract['selected_todo']['todo_id'] == {fixture.TODO_ID!r}\n"
@@ -719,16 +723,16 @@ def test_real_traex_cli_checks_the_adapter_before_dispatch_and_replays_once(
         "prompt = args[-1]\n"
         "assert 'Never re-enter admission for detail reads.' in prompt\n"
         "source, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])\n"
-        "assert source['schema_version'] == 'loopx_turn_host_request_v1'\n"
+        "assert source['schema_version'] == 'loopx_turn_model_context_v0'\n"
         "assert 'turn_envelope' not in source\n"
-        "contract = source['work_contract']\n"
+        "contract = source['task_context']\n"
         f"assert contract['selected_todo']['todo_id'] == {fixture.TODO_ID!r}\n"
         "ref = source['detail_ref']['captured_decision']\n"
         "assert ref['turn_key'] == source['turn_key']\n"
         "original = Path(ref['path']).read_bytes()\n"
         "assert ref['source_hash_ref'] == '$.source_decision_hash'\n"
-        "assert source['source_decision_hash'] == contract['contract_binding']['content_hash']\n"
-        "assert json.loads(original) == contract\n"
+        "assert source['source_decision_hash'] == json.loads(original)['contract_binding']['content_hash']\n"
+        "assert json.loads(original)['interaction_contract']['agent_channel'] == contract['interaction_contract']['agent_channel']\n"
         f"Path({fixture.MARKER_NAME!r}).write_text({fixture._marker_value(1)!r})\n"
         "candidate = {'result_kind':'validated_progress','classification':'traex_complete_work',\n"
         "    'delivery_batch_scale':'implementation','delivery_outcome':'outcome_progress',\n"
@@ -1106,8 +1110,11 @@ def test_codex_prompt_preserves_complete_source_and_historical_version_gate(comp
     request, contract = complete_host_request
     prompt = _prompt(request)
     payload = json.loads(prompt.split("Turn request:\n", 1)[1])
-    assert payload == complete_host_input(request)
-    assert payload["work_contract"] == contract and "turn_envelope" not in payload
+    assert_host_task_context(payload, contract)
+    # The adapter wire stays complete even though model presentation differs.
+    assert complete_host_input(request)["work_contract"] == contract
+    with pytest.raises(ValueError, match="unsupported"):
+        complete_host_input(payload)
     historical = {key: value for key, value in request.items() if key != "work_contract"}
     assert "TurnEnvelope as the source of truth" in _prompt(historical)
     for source in (request, historical):
@@ -1139,6 +1146,66 @@ def test_complete_structured_authority_keeps_detached_source(complete_host_reque
     authority["contract_binding"]["source_decision_hash"] = "changed local authority"
     authority["selected_todo"]["text"] = "changed local work"
     assert contract == before and request["work_contract"] == before
+
+
+def test_task_presentation_retains_unknown_values_and_source_gate(complete_host_request):
+    from copy import deepcopy
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+
+    request, original = complete_host_request
+    source = deepcopy({k: v for k, v in original.items() if k not in {"schema_version", "contract_binding"}})
+    source["future_task_data"] = {"numbers": [2**60 + 1, 1.0, -0.0],
+                                "text": "保留原要求。\n" * 200 + "Stop before publication.  \n"}
+    contract = compose_turn_decision(source)
+    request = {**request, "work_contract": contract, "turn_envelope": build_turn_envelope(contract)}
+    before = json.dumps(request, sort_keys=True, ensure_ascii=False)
+    model = json.loads(_prompt(request).split("Turn request:\n", 1)[1])
+    assert_host_task_context(model, contract)
+    assert len(json.dumps(model)) < len(json.dumps(complete_host_input(request)))
+    assert json.dumps(request, sort_keys=True, ensure_ascii=False) == before
+    # Projected input has no valid source commitment. It must not be accepted
+    # as an adapter request, even if a caller changes the presentation tag.
+    for changed in (model, {**model, "schema_version": "loopx_turn_host_request_v1"},
+                    {**request, "work_contract": model["task_context"]}):
+        with pytest.raises((ValueError, RuntimeError)):
+            _prompt(changed)
+
+
+def test_task_view_resolves_authoring_and_explore_before_hiding_effects(complete_host_request):
+    from copy import deepcopy
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+
+    request, original = complete_host_request
+    source = deepcopy({k: v for k, v in original.items() if k not in {"schema_version", "contract_binding"}})
+    authoring = {"instruction": "Preserve the complete stops and writeback order. " * 40,
+                 "future": {"numbers": [2**60 + 1, 1.0, -0.0], "allowed": False}}
+    guidance = "Record result evidence; do not apply the outer writeback or spend. " * 40
+    source["interaction_contract"]["cli_channel"]["settlement_plan"] = {"ordered_steps": [
+        {"kind": "durable_writeback", "vision_authoring": authoring,
+         "optional_attachments": [{"capability_id": "explore", "guidance": guidance}]}]}
+    source["interaction_contract"]["agent_channel"]["work_context"]["sources"].append({
+        "kind": "explore_turn_context", "content": {"graph": {"result_writeback_guidance": guidance}}})
+    source["replan_action_packet"] = {"obligation_id": "source-obligation",
+                                     "writeback_contract": {"vision_authoring": deepcopy(authoring)}}
+    source["autonomous_replan_obligation"] = {"replan_context": {
+        "obligation_id": "source-obligation", "context_id": "source-context"}}
+    source["replan_read_path"] = str(Path(request["workspace"]) / "original.json") if "workspace" in request else "original.json"
+    contract = compose_turn_decision(source)
+    assert "vision_authoring_ref" in contract["replan_action_packet"]["writeback_contract"]
+    before = json.dumps(contract, sort_keys=True, ensure_ascii=False)
+    model = json.loads(_prompt({**request, "work_contract": contract,
+                               "turn_envelope": build_turn_envelope(contract)}).split("Turn request:\n", 1)[1])
+    context = model["task_context"]
+    writer = context["replan_action_packet"]["writeback_contract"]
+    assert "vision_authoring_ref" not in writer
+    assert json.dumps(writer["vision_authoring"], sort_keys=True) == json.dumps(authoring, sort_keys=True)
+    graph = context["interaction_contract"]["agent_channel"]["work_context"]["sources"][-1]["content"]["graph"]
+    assert "result_writeback_guidance_ref" not in graph and graph["result_writeback_guidance"] == guidance
+    assert "cli_channel" not in context["interaction_contract"]
+    assert json.dumps(contract, sort_keys=True, ensure_ascii=False) == before
 
 
 @pytest.mark.parametrize("operation_tools", [False, True])
@@ -1262,7 +1329,7 @@ def test_complete_host_prompt_uses_source_without_decoding_effect_layout(complet
         assert authority["primary_action"] == request["turn_envelope"]["action"]["primary_action"]
         prompt = render_prompt(authority)
     model_input, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
-    assert model_input["work_contract"] == contract
+    assert_host_task_context(model_input, contract)
     assert "turn_envelope" not in model_input and "turn_authority" not in model_input
     assert json.dumps(request, ensure_ascii=False, sort_keys=True) == original
 
