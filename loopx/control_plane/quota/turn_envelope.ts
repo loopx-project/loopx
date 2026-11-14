@@ -743,8 +743,10 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
     args.push("--context-delivery", "on");
   }
   if (typeof captureSha256 === "string") args.push("--capture-sha256", captureSha256);
-  // Match the host CLI renderer for the PowerShell launcher captured by the first read.
-  const powershell = /\.ps1$/iu.test(program);
+  // Match the host CLI renderer for digest-bound reads, including Windows
+  // Python installations. Legacy commands can be part of stored signatures.
+  const powershell = /\.ps1$/iu.test(program) ||
+    (typeof captureSha256 === "string" && process.platform === "win32");
   const quote = powershell ? powershellLiteral : shellQuote;
   const executable = powershell && !/^[A-Za-z0-9_./-]+$/u.test(program)
     ? `& ${quote(program)}`

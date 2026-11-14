@@ -187,22 +187,20 @@ def test_progress_cli_reads_policy_with_context_delivery(
 
 
 @pytest.mark.skipif(shutil.which("pwsh") is None, reason="Requires PowerShell 7")
-@pytest.mark.parametrize(("provider", "complete"), [("file", False), ("sqlite", True)])
+@pytest.mark.parametrize(("provider", "complete", "python_route"), [
+    pytest.param("file", False, False, id="launcher-file"),
+    pytest.param("sqlite", True, False, id="launcher-sqlite"),
+    pytest.param("sqlite", True, True, id="windows-python-sqlite",
+                 marks=pytest.mark.skipif(os.name != "nt", reason="Native Windows Python route")),
+])
 def test_replan_stage_commands_run_verbatim_in_powershell(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, complete: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, complete: bool, python_route: bool,
 ) -> None:
     tmp_path = tmp_path.resolve()
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     workspace = tmp_path / "reader's O’Neil workspace"
     workspace.mkdir()
     fixture = make_progress_cli_fixture(workspace, provider, "advanced")
-    launcher = workspace / "loopx.ps1"
-    checkout = Path(__file__).resolve().parents[2]
-    shutil.copyfile(checkout / "scripts/loopx.ps1", launcher)
-    launcher.with_name("loopx-current-release.json").write_text(json.dumps({
-        "release_root": str(checkout), "python": sys.executable,
-    }), encoding="utf-8")
-    monkeypatch.delenv("LOOPX_CURRENT_RELEASE_FILE", raising=False)
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     powershell = shutil.which("pwsh")
     assert powershell is not None
@@ -214,11 +212,25 @@ def test_replan_stage_commands_run_verbatim_in_powershell(
         return json.loads(result.stdout)
 
     try:
-        opening = run("-File", str(launcher), "--cli-bin", str(launcher), "--format", "json",
+        opening_args = ["--format", "json",
             "--registry", str(fixture["registry"]), "--runtime-root", str(fixture["runtime"]),
             "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
             "--context-delivery", "on", "--delta-delivery", "off",
-            *(["--complete-turn"] if complete else []))
+            *(["--complete-turn"] if complete else [])]
+        if python_route:
+            result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", *opening_args],
+                cwd=fixture["project"], capture_output=True, encoding="utf-8", timeout=60)
+            assert result.returncode == 0, (result.stdout, result.stderr)
+            opening = json.loads(result.stdout)
+        else:
+            launcher = workspace / "loopx.ps1"
+            checkout = Path(__file__).resolve().parents[2]
+            shutil.copyfile(checkout / "scripts/loopx.ps1", launcher)
+            launcher.with_name("loopx-current-release.json").write_text(json.dumps({
+                "release_root": str(checkout), "python": sys.executable,
+            }), encoding="utf-8")
+            monkeypatch.delenv("LOOPX_CURRENT_RELEASE_FILE", raising=False)
+            opening = run("-File", str(launcher), "--cli-bin", str(launcher), *opening_args)
         if os.name == "nt":
             from tests.control_plane.windows_private_acl import assert_private_acl
 

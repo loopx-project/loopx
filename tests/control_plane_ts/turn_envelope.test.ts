@@ -452,6 +452,34 @@ function completeAcceptanceRead(source: JsonObject, outcomeRef = ""): JsonObject
   return outcomeRef ? read : {outcomes: (read.acceptance_index as JsonObject | undefined)?.outcomes};
 }
 
+test("digest-bound replan readers render Windows commands for an installed Python route", () => {
+  const source = payload();
+  source.replan_action_packet = {obligation_id: "original-obligation"};
+  source.autonomous_replan_obligation = {replan_context: {
+    obligation_id: "original-obligation", context_id: "original-context"}};
+  const payloadCaptured = evaluateTurnEnvelope({operation: "compose_complete", payload: source,
+    scheduler_execution_args: ""});
+  const request = {operation: "replan_view", payload: payloadCaptured,
+    captured_decision_path: "C:\\Reader's O’Neil workspace\\decision.json",
+    reader_argv: ["C:\\Program Files\\LoopX\\python.exe", "-m", "loopx.entrypoint"],
+    source_hash: (payloadCaptured.contract_binding as JsonObject).content_hash, stage: "review"};
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  try {
+    Object.defineProperty(process, "platform", {...platform, value: "darwin"});
+    const legacy = evaluateTurnEnvelope(request);
+    Object.defineProperty(process, "platform", {...platform, value: "win32"});
+    const digest = "a".repeat(64);
+    const review = evaluateTurnEnvelope({...request, capture_sha256: digest});
+    const command = String((review.next as JsonObject).writeback);
+    assert.ok(command.startsWith("& 'C:\\Program Files\\LoopX\\python.exe' '-m' 'loopx.entrypoint' "));
+    assert.ok(command.includes("'--decision-file' 'C:\\Reader''s O’’Neil workspace\\decision.json'"));
+    assert.ok(command.endsWith(`'--capture-sha256' '${digest}' '--replan-stage' 'writeback'`));
+    assert.deepEqual(evaluateTurnEnvelope(request), legacy);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+});
+
 test("both replan readers surface an opted-in reversal for the bound task only", () => {
   const conflict = {todo_id: "todo-1", source_finding_id: "finding-1",
     comparison_candidate_ref: "candidate:outcome-best", proxy_order_reversed: true,
