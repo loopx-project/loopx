@@ -1325,19 +1325,25 @@ function sameHistoryRevision(current: ChatSessionSummary, read: ChatSessionSumma
 }
 
 function hasPendingReturnDelivery(snapshot: ChatSessionSnapshot) {
-  const pending = (status: string) => status !== "delivered" && status !== "superseded";
+  // The owner also projects explicit_unverified when its receipt cannot be
+  // read. That projection can recover; a recorded terminal failure does not.
+  const pending = ({status, error}: {status: string; error?: string | null}) =>
+    status !== "delivered" && status !== "superseded"
+      && (status !== "explicit_unverified" || error === "delivery_state_unreadable");
   return snapshot.messages.some(message =>
-    (message.return_delivery && pending(message.return_delivery.status))
+    (message.return_delivery && pending(message.return_delivery))
     || (message.collaborations ?? (message.collaboration ? [message.collaboration] : []))
-      .some(request => request.returns.some(reply => pending(reply.status)))
+      .some(request => request.returns.some(pending))
   );
 }
 
 function historyTransportUnavailable(error: unknown) {
-  if (!(error instanceof ChatApiError) || error.payload.error_code !== "chat_api_unavailable") return false;
-  const status = error.payload.http_status;
+  if (!(error instanceof ChatApiError) || error.payload.session_invalidated === true) return false;
+  const {error_code: code, http_status: status} = error.payload;
+  // The history endpoint sends a plain 503 when its store is temporarily unavailable.
+  if (status === 503 && code === undefined) return true;
   // A response body can be interrupted after successful history headers.
-  return status === undefined || status === 200 || Number(status) >= 500;
+  return code === "chat_api_unavailable" && (status === undefined || status === 200 || Number(status) >= 500);
 }
 
 export type ChatHistory = {
@@ -1365,7 +1371,8 @@ export async function fetchChatHistory(options: {
   const exact = Boolean(options.bound || options.managed);
   const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS))]}
     : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS) });
-  const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  const priorSnapshots = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  const known = new Map(priorSnapshots);
   const pending = previous?.pendingBoundSnapshot;
   const current = listed.sessions[0];
   const retained = !options.managed && pending && options.bound?.bindingId === pending.bindingId && current
@@ -1385,7 +1392,8 @@ export async function fetchChatHistory(options: {
     // Return receipts can be written after the answer text. The bound suffix
     // proof checks the displayed prefix, including delivery state.
     return !saved || (exact && !sameHistoryRevision(session, saved.session))
-      || (Boolean(options.bound) && hasPendingReturnDelivery(saved));
+      || (Boolean(options.bound) && (hasPendingReturnDelivery(saved)
+        || (priorSnapshots.has(session.session_id) && previous?.unavailableSessionIds.includes(session.session_id))));
   });
   if (exact) for (const session of missing) known.delete(session.session_id);
   const results = await Promise.allSettled(missing.map(async (session) => {
@@ -1395,7 +1403,7 @@ export async function fetchChatHistory(options: {
     // A retained read with pending returns is still private. Use it only as
     // the basis for a fresh proof of the visible prefix through the same source.
     const saved = options.bound && !progress && (pendingReturnBasis?.session.session_id === session.session_id
-      ? pendingReturnBasis : previous?.snapshots.find(row => row.session.session_id === session.session_id));
+      ? pendingReturnBasis : priorSnapshots.get(session.session_id));
     let snapshot: ChatSessionSnapshot;
     try {
       const linkImages = Boolean(options.bound);
@@ -1444,12 +1452,28 @@ export async function fetchChatHistory(options: {
   for (const result of results) {
     if (result.status === "fulfilled") known.set(result.value.session.session_id, result.value);
   }
-  const snapshots = listed.sessions.flatMap((session) => known.has(session.session_id) ? [known.get(session.session_id)!] : []);
+  let sessions = listed.sessions;
+  let usingStaleBoundHistory = false;
+  const failed = results[0];
+  const saved = current && priorSnapshots.get(current.session_id);
+  if (options.bound && !options.managed && failed?.status === "rejected" && historyTransportUnavailable(failed.reason)
+    && current && saved && sameHistorySource(current, saved.session)) {
+    // Keep only an already proven transcript. If the binding changed while the
+    // failed read was in flight, rechecking it here keeps this path fail-closed.
+    const confirmed = await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+    if (!sameHistorySource(confirmed, saved.session)) {
+      throw new Error("The original Session scope changed during history read.");
+    }
+    sessions = [confirmed];
+    known.set(confirmed.session_id, saved);
+    usingStaleBoundHistory = true;
+  }
+  const snapshots = sessions.flatMap((session) => known.has(session.session_id) ? [known.get(session.session_id)!] : []);
   return {
     messages: mergeChatSessionMessages(snapshots),
-    sessions: listed.sessions,
+    sessions,
     snapshots,
-    unavailableSessionIds: listed.sessions.filter((session) => !known.has(session.session_id)).map((session) => session.session_id),
+    unavailableSessionIds: sessions.filter(session => usingStaleBoundHistory || !known.has(session.session_id)).map(session => session.session_id),
     pendingReads,
   };
 }
