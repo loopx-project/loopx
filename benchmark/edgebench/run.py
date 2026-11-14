@@ -609,10 +609,14 @@ def main(argv=None):
         if provider_failure := getattr(backend, "provider_failure_receipt", None):
             receipt["provider_failure"] = provider_failure
         receipt_path.write_text(json.dumps(receipt, indent=2))
+        if checkpoint is not None and args.preserve_failed_worker:
+            checkpoint.finish_grading_from_receipt(trial, run_id=args.run_id, task_id=task.task_id)
         raise
     finally:
         if feedback is not None:
             feedback.close()
+    if checkpoint is not None and args.preserve_failed_worker:
+        checkpoint.finish_grading(getattr(result, "grading_status", None))
     # Native cancellation and swallowed Docker failures return runtime=0.
     # Observe the signal independently; never infer cancellation from output prose.
     execution = backend.execution_receipt or {}
