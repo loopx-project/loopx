@@ -1110,7 +1110,7 @@ function owedPriorTurnFromSnapshot(
   snapshot: QuotaSettlementReadbackSnapshot,
   agentId: string,
   turnInstanceId: string | null,
-  options?: { includeAdmittedReplans: boolean },
+  options?: { includeUnwrittenReplans: boolean },
 ): OwedPriorTurn | null {
   const receipts = heartbeatReceiptsFromEvents(snapshot.events, request.goal_id, agentId)
     .filter((event) => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
@@ -1121,7 +1121,7 @@ function owedPriorTurnFromSnapshot(
     turnInstanceId,
     options,
   );
-  for (const selected of candidates) {
+  for (const {candidate: selected, requireWritebackForRecovery} of candidates) {
     // A committed monitor poll is its own exact no-spend closeout. This is the
     // same acceptance rule the next-Turn preflight applies; using only the
     // advancement writeback/spend chain here incorrectly made every later
@@ -1149,9 +1149,9 @@ function owedPriorTurnFromSnapshot(
         },
         snapshot,
         false,
-      ))
+      ), requireWritebackForRecovery)
       : null;
-    if (missingReceipts !== null) {
+    if (missingReceipts != null) {
       return { ...selected, missing_receipts: missingReceipts };
     }
   }
@@ -1169,7 +1169,7 @@ function readPendingCloseoutFromRequest(
   }
   const notFound = {schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA, found: false};
   const turn = request.turn_instance_id ?? owedPriorTurnFromSnapshot(
-    request, snapshot, explicitAgentId, null, { includeAdmittedReplans: true },
+    request, snapshot, explicitAgentId, null, { includeUnwrittenReplans: true },
   )?.prior_turn_instance_id;
   if (!turn) return notFound;
   // Selection, original binding validation and receipt progress share this
