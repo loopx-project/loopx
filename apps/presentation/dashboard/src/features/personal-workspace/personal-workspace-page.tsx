@@ -39,6 +39,7 @@ import {
   setupGoalChannel,
   stewardPrompts,
   transitionTypedAction,
+  listTypedActions,
   typedActionProposalSchema,
   type GoalRepositoryContext,
   type LarkGoalConnection,
@@ -1030,6 +1031,7 @@ export function PersonalWorkspacePage({
   const actionReadback = useTypedActionReadback(readOnly, selectedGoalId);
   const selectedAgentId = controlledAgentId ?? localAgentId;
   const goalAgentId = goalCreationAgentId(selectedAgentId, agents);
+  const goalDraftPreparations = useRef(new Map<string, Promise<WorkspaceActionPreview>>());
   // Only execution runtimes count: the read-only status projection answers
   // questions but runs nothing, and the loading placeholder is not a fact.
   const runtimeReadiness = useMemo(() => deriveRuntimeReadiness(agents
@@ -1088,17 +1090,46 @@ export function PersonalWorkspacePage({
   async function reviewGoalDraft(draft: GoalDraft, edit = false, draftId = "") {
     // Source message + reviewed contents survive retry without merging distinct requests.
     if (!edit && goalDraftReady(draft)) {
-      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
-        JSON.stringify([draftId, draft, goalAgentId, locale])));
-      const operationId = Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, "0")).join("");
-      await createPreview(goalCreateRequest({ objective: draft.objective,
-        completion: draft.completion_criteria, boundary: draft.execution_boundary,
-        permission: "read_only", agentId: goalAgentId, contextGoalId: null, operationId }, t));
-      return;
+      // Keep existing locale-scoped operation ids compatible, but discover
+      // both languages so changing presentation cannot duplicate a Goal.
+      const operationIds = await Promise.all((["zh-CN", "en"] as const).map(async language => {
+        const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
+          JSON.stringify([draftId, draft, goalAgentId, language])));
+        return Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, "0")).join("");
+      }));
+      const operationId = operationIds[locale === "zh-CN" ? 0 : 1];
+      const preparationKey = JSON.stringify([selectionScope, draftId, draft, goalAgentId]);
+      const pendingPreparation = goalDraftPreparations.current.get(preparationKey);
+      if (pendingPreparation) return await pendingPreparation;
+      const preparation = (async () => {
+        // A reload or language change reads the original operation before
+        // preparing anything. Cached data cannot certify a failed read.
+        const readback = await listTypedActions({contextKind: "manager"});
+        const recorded = readback.find(proposal => proposal.action_kind === "goal.create"
+          && operationIds.some(id => proposal.idempotency_key === `workspace-goal.create-${id}`
+            && proposal.normalized_parameters.goal_id === `goal-${id}`));
+        if (recorded) return workspaceProposal(recorded, t);
+        return await createPreview(goalCreateRequest({ objective: draft.objective,
+          completion: draft.completion_criteria, boundary: draft.execution_boundary,
+          permission: "read_only", agentId: goalAgentId, contextGoalId: null, operationId }, t), { select: false });
+      })();
+      goalDraftPreparations.current.set(preparationKey, preparation);
+      try { return await preparation; }
+      finally { goalDraftPreparations.current.delete(preparationKey); }
     }
     setActionDraft({ kind: "goal", goalId: null, goalTitle: "", agentId: goalAgentId,
       text: draft.objective, completionCriteria: draft.completion_criteria,
       executionBoundary: draft.execution_boundary, permission: "read_only" });
+  }
+  async function confirmGoalDraft(proposal: WorkspaceActionPreview) {
+    if (readOnly) throw new Error(t("source.readOnlyWriteError"));
+    if (proposal.actionKind !== "goal.create") throw new Error(t("actionReview.targetChanged"));
+    const current = proposals[proposal.previewId] ?? proposal;
+    if (!current.reviewPlan?.canApply) {
+      setSelection({ item: current, kind: "proposal" });
+      return current;
+    }
+    return await applyProposal(current, { presentation: "inline" });
   }
   function suggestReply(text: string) {
     setComposer(composer ? `${composer}\n${text}` : text);
@@ -1401,10 +1432,12 @@ export function PersonalWorkspacePage({
   const timelineActionTarget = agentWorkActive ? conversationKey : selectedGoal?.goalId ?? conversationKey;
   const canCancelTimelineTurn = !readOnly && Boolean(callbacks.onCancelConversationPreparation);
   const canInterruptTimelineTurn = !readOnly && Boolean(callbacks.onInterruptConversationTurn);
+  const goalDraftTargetChanged = t("actionReview.targetChanged");
   const nextTimelineActions = {
     key: timelineKey,
     select: setSelection,
     review: readOnly ? undefined : reviewGoalDraft,
+    apply: readOnly ? undefined : confirmGoalDraft,
     suggest: readOnly ? undefined : suggestReply,
     adjust: focusTurnComposer,
     cancel: canCancelTimelineTurn ? () => callbacks.onCancelConversationPreparation?.(timelineActionTarget) : undefined,
@@ -1416,14 +1449,19 @@ export function PersonalWorkspacePage({
     const current = () => currentTimelineActions.current?.key === timelineKey ? currentTimelineActions.current : null;
     return {
       onSelect: (value: WorkspaceDrawerSelection) => current()?.select(value),
-      onReviewGoalDraft: async (...args: Parameters<typeof reviewGoalDraft>) => { await current()?.review?.(...args); },
+      onReviewGoalDraft: async (...args: Parameters<typeof reviewGoalDraft>) => current()?.review?.(...args),
+      onApplyGoalDraft: async (proposal: WorkspaceActionPreview) => {
+        const apply = current()?.apply;
+        if (!apply) throw new Error(goalDraftTargetChanged);
+        return apply(proposal);
+      },
       onSuggestReply: (text: string) => current()?.suggest?.(text),
       onAdjustTurn: (turnId: string) => current()?.adjust(turnId),
       onCancelPreparation: () => current()?.cancel?.(),
       onInterruptTurn: async (turnId: string) => { await current()?.interrupt?.(turnId); },
       onOpenGoalEvidence: (goalId: string) => current()?.openEvidence(goalId),
     };
-  }, [timelineKey]);
+  }, [timelineKey, goalDraftTargetChanged]);
   const conversationOpen = (!agentWorkActive || managedWorkActive) && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
   const boundHistory = Boolean(originalConversation);
   const onReadTimelineMessage = useCallback(() => { followConversationRef.current = false; }, []);
@@ -3075,7 +3113,10 @@ export function PersonalWorkspacePage({
                       />
                     ) : null}
                     <ChannelTimeline key={timelineKey} {...timelineReading} readOnly={readOnly}
-                      onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft} onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
+                      goalDraftPreparationContext={`${goalAgentId}:${locale}`}
+                      onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft}
+                      onApplyGoalDraft={readOnly ? undefined : timelineActions.onApplyGoalDraft}
+                      onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
                       items={visibleTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={selectedGoal}
                       onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
                       onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
@@ -3092,7 +3133,10 @@ export function PersonalWorkspacePage({
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})} />
             ) : (
               <ChannelTimeline key={timelineKey} {...timelineReading} readOnly={readOnly} emptyState={managerTimelineEmpty}
-                onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft} onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
+                goalDraftPreparationContext={`${goalAgentId}:${locale}`}
+                onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft}
+                onApplyGoalDraft={readOnly ? undefined : timelineActions.onApplyGoalDraft}
+                onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
                 items={managerTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={null} showManagerTeamResults={!boundManagerChat}
                 onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
                 onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}

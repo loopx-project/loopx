@@ -300,6 +300,16 @@ Paired diffs do not certify translation accuracy.
 
 ## Planning, Research, And Adaptive Intelligence
 
+- [Mechanism Convergence and the Experience Reuse Loop v0](mechanism-convergence-and-learning-loop-v0.md)
+  ([中文版](mechanism-convergence-and-learning-loop-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; budgeted method feedback and structural convergence, with no runtime change.
+  - **Current boundary:** Reuses Controller C1/C4/C9 and Target/Stride/Explore to
+    connect prior expectations, execution, feedback and the next real choice.
+    Defines caller migration and duplicate-producer retirement, then staged
+    forecast calibration and policy learning. Memory/Skills carry qualified
+    knowledge; application receipts are optional adoption evidence, not the
+    first-loop prerequisite. No default, training or experiment is activated.
+
 - [LoopX × LayerFS — Engineering Exploration and Evaluation v0](layerfs-engineering-exploration-evaluation-v0.md)
   ([中文版](layerfs-engineering-exploration-evaluation-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; no provider integration or measured benefit.

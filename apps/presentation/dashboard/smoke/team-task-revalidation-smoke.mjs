@@ -44,7 +44,9 @@ try {
     const started = Date.now();
     const response = await page.request.post(`${origin}/api/chat/sessions/recovery/loopx`, {data: {
       operation: body.operation, operation_id: ["accepted-analysis", "synthesis-1"].includes(body.operation_id) ? selected : body.operation_id}});
-    console.log(`HTTP ${body.operation} returned in ${Date.now() - started}ms`);
+    const {status, worker_active, recovery_required} = await response.json();
+    console.log(`HTTP ${body.operation} returned ${response.status()} in ${Date.now() - started}ms`,
+      {status, worker_active, recovery_required});
     return route.fulfill({response});
   });
   await page.getByText("LoopX · 正在推进", {exact: true}).waitFor();
@@ -99,12 +101,15 @@ try {
   await page.screenshot({path: resolve(outputDir, "team-original-recovery-desktop.png")});
   await page.setViewportSize({width: 390, height: 844});
   await recover.click();
+  let actual;
   for (let attempt = 0; attempt < 30; attempt++) {
-    const actual = await command("task-inspect");
+    actual = await command("task-inspect");
     assert.equal(actual.host_calls, "1");
     if (actual.operation.status === "accepted") break;
     await new Promise(done => setTimeout(done, 500));
   }
+  const {status, worker_active, recovery_required} = actual.operation;
+  assert.equal(status, "accepted", JSON.stringify({status, worker_active, recovery_required}));
   await recheck.click();
   await evidence.getByLabel("证据内容: output.json").waitFor();
   assert.equal(await failure.count(), 0);

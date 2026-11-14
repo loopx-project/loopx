@@ -2,6 +2,7 @@ import {DocumentAttachment, isDocumentAttachment} from "./document-attachment";
 import { MessageActivity } from "./message-activity";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
+import {goalDraftReady} from "./goal-create-request";
 import {Fragment, memo, useEffect, useEffectEvent, useLayoutEffect, useRef, useState} from "react";
 import { CollaborationCards } from "./collaboration-card";
 import {ConversationReplyContext} from "./conversation-requests";
@@ -20,7 +21,7 @@ import {ManagerTeamResult} from "./manager-team-result";
 import { compareProposalRecency } from "./proposal-recency";
 import { conversationOrder } from "./conversation-order";
 import { ConversationFind, conversationMessageKey } from "./conversation-find";
-import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
+import type { WorkspaceActionPreview, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 function answerLink(sessionId: string, messageId: string) {
   const url = new URL(window.location.href);
@@ -62,6 +63,8 @@ export const ChannelTimeline = memo(function ChannelTimeline({
   selectedGoal,
   showManagerTeamResults = false,
   onReviewGoalDraft,
+  onApplyGoalDraft,
+  goalDraftPreparationContext,
   onSuggestReply,
   onOpenGoalEvidence,
   onInterruptTurn,
@@ -87,13 +90,25 @@ export const ChannelTimeline = memo(function ChannelTimeline({
   onSelect: (selection: WorkspaceDrawerSelection) => void;
   selectedGoal: WorkspaceGoal | null;
   showManagerTeamResults?: boolean;
-  onReviewGoalDraft?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<void>;
+  onReviewGoalDraft?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<WorkspaceActionPreview | void>;
+  onApplyGoalDraft?: (proposal: WorkspaceActionPreview) => Promise<WorkspaceActionPreview>;
+  goalDraftPreparationContext?: string;
   onSuggestReply?: (text: string) => void;
   onOpenGoalEvidence?: (goalId: string) => void;
   onInterruptTurn?: (turnId: string) => Promise<void>;
   onAdjustTurn?: (turnId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
+  const [draftProposalIds, setDraftProposalIds] = useState<Record<string, string>>({});
+  const draftKey = (id: string, draft: GoalDraft) => JSON.stringify([id, draft, goalDraftPreparationContext]);
+  const inlineProposalIds = new Set(items.flatMap(item => item.kind === "message"
+    && item.message.goalDraft && goalDraftReady(item.message.goalDraft)
+    ? [draftProposalIds[draftKey(`${item.message.sourceSessionId ?? ""}:${item.message.id}`, item.message.goalDraft)]] : []));
+  async function reviewDraft(draft: GoalDraft, edit = false, id = "") {
+    const result = await onReviewGoalDraft?.(draft, edit, id);
+    if (!edit && result) setDraftProposalIds(current => ({...current, [draftKey(id, draft)]: result.previewId}));
+    return result;
+  }
   const [findNavigation, setFindNavigation] = useState(0);
   const [findMessageId, setFindMessageId] = useState<string | null>(null);
   const timeline = useRef<HTMLDivElement>(null);
@@ -108,7 +123,14 @@ export const ChannelTimeline = memo(function ChannelTimeline({
     });
     return () => cancelAnimationFrame(frame);
   }, [findMessageId, findNavigation]);
-  const orderedItems = conversationOrder(items.filter(item => {
+  const presentedItems = items.filter(item => {
+    // The visible draft already owns this confirmation and recovery entry.
+    // Its canonical proposal remains available when the draft is not loaded.
+    if (item.kind === "proposal" && !readOnly && onApplyGoalDraft && onReviewGoalDraft
+      && inlineProposalIds.has(item.proposal.previewId)) return false;
+    return true;
+  });
+  const orderedItems = conversationOrder(presentedItems.filter(item => {
     if (item.kind !== "message") return true;
     if (item.message.queued) return false;
     const queued = item.message.role === "user" && queuedTurnKeys?.has(
@@ -176,7 +198,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
         ? t("timeline.runCompleted", { run: latestAnnounceable.run.title })
         : "";
 
-  const gatedItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
+  const gatedItems = presentedItems.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
     item.kind === "proposal" && item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute");
   // Only routine execution is folded. Waiting, interruption, and failures stay
   // visible; no prose-based inference that a waiting run is safe to ignore.
@@ -197,7 +219,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
   ] as Array<string | number | null>).concat(locale === "zh-CN"
     ? [workingCount && `${workingCount} 个执行中`, queuedCount && `${queuedCount} 个排队中`, completedCount && `${completedCount} 次执行已结束`, progressCount && `${progressCount} 项进展更新`]
     : [workingCount && `${workingCount} running`, queuedCount && `${queuedCount} queued`, completedCount && `${completedCount} runs finished`, progressCount && `${progressCount} progress updates`]).filter(Boolean).join(" · ");
-  const activeProposalItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
+  const activeProposalItems = presentedItems.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
     item.kind === "proposal" && (item.proposal.status !== "gated" || item.proposal.actionKind === "operation.execute"));
   // Only drafts awaiting the owner fold behind the newest one; applying, applied and failed results stay visible.
   // "Newest" is read from the stored proposal, not from the position in this
@@ -273,7 +295,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
             : null}
           {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn}/> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
-            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
+            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} preparationContext={goalDraftPreparationContext} draft={item.message.goalDraft} onReview={onReviewGoalDraft ? reviewDraft : undefined} onApply={onApplyGoalDraft} onSuggest={onSuggestReply}/> : null}
           <CollaborationCards request={item.message.collaboration} requests={item.message.collaborations} />
         </div>
       </article>
