@@ -2,16 +2,16 @@
 
 - **RFC status:** Accepted (effective upon merge; a discussion proposal before merge)
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal; this document delivers a source audit and target architecture, with no runtime change.
+- **Delivery maturity:** Partial upon merge: ordinary-execution linkage in the existing source reader; method benefit and the remaining target architecture are unqualified.
 - **Authors / owners:** LoopX maintainers; source facts have code references, while the target architecture and trade-offs are AI-assisted proposals pending maintainer review and confirmation.
-- **Created / last normative revision:** 2026-11-14
+- **Created / last normative revision:** 2026-11-14 / 2026-11-15
 - **Implementation baseline:** `8d7d234c6f55fa45fa5db0ad5a156dcaaf726d32`; references to `main` in section 4 mean this revision.
 - **Semantic mirror:** [中文版](mechanism-convergence-and-learning-loop-v0.zh-CN.md)
 - **Related:** [roadmap](loopx-overall-roadmap-v0.md), [small kernel](monorepo-distribution-split-v0.md), [Controller/unified contract](controller-executor-unified-contract-v0.md), [Target/Yardstick/Stride](target-yardstick-stride-decisions-v0.md), [research exploration](research-exploration-control-plane-v0.md), [memory utility](post-outcome-memory-utility-attribution-v0.md), [Goal contract evolution](goal-contract-evolution-v0.md).
 
 ## Document map and maintenance contract
 
-Section 4 describes the pinned implementation; 4.3 separates unmerged work. Sections 5–11 propose the converged structure, calls, migration and composition acceptance, not shipped behavior. This RFC owns cross-mechanism composition; individual schemas, authority, defaults and promotion gates remain in their owning specifications. Amend those specifications together when changing them rather than overriding them here. Implementation evidence stays in existing RFCs/tasks and ledgers, without a parallel roadmap or execution queue. Maintainers must verify and confirm consequential design choices; this document assumes neither a human contribution ratio nor ownership of unconfirmed ideas.
+Section 4 describes the pinned implementation; 4.3 separates unmerged work. Sections 5–11 propose the converged structure, calls, migration and composition acceptance; only the explicit implementation checkpoint qualifies source behavior. This RFC owns cross-mechanism composition; individual schemas, authority, defaults and promotion gates remain in their owning specifications. Amend those specifications together when changing them rather than overriding them here. Implementation evidence stays in existing RFCs/tasks and ledgers, without a parallel roadmap or execution queue. Maintainers must verify and confirm consequential design choices; this document assumes neither a human contribution ratio nor ownership of unconfirmed ideas.
 
 ## 1. Decision summary
 
@@ -248,6 +248,21 @@ Effect evaluation reuses the [existing pilot and decision-episode acceptance](lo
 | Matched outcomes and forecast calibration | Original research experiments first compare complete-budget outcomes under the existing pilot; qualifying prior forecasts separately test duration/results and other subpredictions. | Frozen conditions, missingness handling and holdout boundaries. Without benefit evidence, improve the design rather than labeling more accurate forecasts better allocation. |
 | Evidence-supported cross-task improvement | Reward Memory carries conditional experience; the original policy owner decides whether to use calibrated/learned values; Skills qualify separately. | Real choices, execution and outcomes in new tasks, including mismatch/counterexamples/revocation and complete cost. Extend application only for callers missing the needed relation. |
 | Execution convergence | C1/C4/C9 and #8266/#8484 migrate entries, results and recovery. | Original single-session semantic/outcome/cost/recovery controls; remove duplicate normal paths and qualify dual roles separately. |
+
+**Source checkpoint: ordinary execution linkage (2026-11-15).** The existing
+[`work Yardstick reader`](../../../loopx/control_plane/work_items/yardstick_decision.ts)
+consumes confirmed ordinary execution findings without requiring a repeated
+decision. It reuses canonical history ordering and the existing measurement
+work-window rule, retains the original choice and links prior execution after
+the next choice. The existing Explore adapter supplies missing source ordinals
+only to the opted-in work reader; public history and disabled behavior retain
+their wire. [File/SQLite CLI regression](../../../tests/control_plane/test_work_yardstick_cli.py)
+covers the original omission failure, independent candidate readback, a later
+choice, replay and disable; typed checks reject foreign, tentative, stale and
+late-visible attribution. This qualifies source transport and record linkage,
+not current-model adoption, prediction calibration, cross-task benefit or
+matched-budget gains. Those requirements and C1/C4/C9 integration remain open;
+there is no new decision owner, execution entry, schema or default activation.
 
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 

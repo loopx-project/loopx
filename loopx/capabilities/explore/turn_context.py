@@ -20,6 +20,8 @@ from ...control_plane.effect_runtime import effect_runtime_request_scope, effect
 from ...explore_graph import compact_explore_graph_policy
 from ...control_plane.todos.list_readback import list_goal_todos
 from .result_log import (
+    EVENT_KIND_FINDING,
+    _fold_by_result_id,
     build_explore_result_projection,
     explore_result_log_path,
     load_explore_result_events_strict,
@@ -134,6 +136,17 @@ def explore_turn_context(
             events, goal_id=goal_id, finding_limit=len(events),
             mermaid_node_limit=3,
         )
+        if yardstick and any("execution_observation" in row and "recorded_order" not in row
+                             for row in projection["findings"]):
+            # Supply canonical ordinals only to the opted-in work reader.
+            # Folding remains with the existing result-history owner.
+            orders = {row["result_id"]: row["_recorded_order"]
+                      for row in _fold_by_result_id(events, event_kind=EVENT_KIND_FINDING)}
+            projection["findings"] = [
+                {**row, "recorded_order": orders[row["finding_id"]]}
+                if "execution_observation" in row and "recorded_order" not in row else row
+                for row in projection["findings"]
+            ]
     if gate["enabled"] or graph and (todo_id is not None or page_tasks or yardstick):
         todos = list_goal_todos(
             registry_path=registry_path,
