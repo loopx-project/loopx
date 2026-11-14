@@ -7,6 +7,7 @@ from typing import Any
 
 from ..control_plane.runtime.time import parse_timestamp
 from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
+from .todo_source import resolve_chat_todo_source
 
 
 class ChatMonitorActionMixin:
@@ -20,11 +21,12 @@ class ChatMonitorActionMixin:
 
         goal_id = str(parameters["goal_id"])
         operation = str(parameters["operation"])
-        runtime_root_arg = self._todo_runtime_root_arg()
+        source = resolve_chat_todo_source(self, goal_id)
+        if basis is not None:
+            source.require_review(basis)
         if operation == "stop":
             result = complete_goal_todo(
-                registry_path=self.registry_path,
-                runtime_root_arg=runtime_root_arg,
+                **source.writer_scope(),
                 goal_id=goal_id,
                 todo_id=str(parameters["todo_id"]),
                 evidence="Owner stopped the continuous monitor from typed Chat action.",
@@ -37,8 +39,7 @@ class ChatMonitorActionMixin:
             )
         else:
             kwargs: dict[str, Any] = {
-                "registry_path": self.registry_path,
-                "runtime_root_arg": runtime_root_arg,
+                **source.writer_scope(),
                 "goal_id": goal_id,
                 "todo_id": str(parameters["todo_id"]),
                 "agent_id": str(parameters["agent_id"]),

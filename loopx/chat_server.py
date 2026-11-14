@@ -40,7 +40,7 @@ from .chat.result_files_api import ChatResultFilesRequestMixin
 from .capabilities.native_chat.model_settings_api import ChatModelSettingsRequestMixin
 from .capabilities.native_chat.queue_api import ChatQueueRequestMixin
 from .chat.status_api import ChatStatusRequestMixin
-from .chat.todo_actions import review_todo_create
+from .chat.todo_source import review_todo_create
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
     ChatRuntimeController,
@@ -63,6 +63,7 @@ from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
     parse_chat_history_selection,
+    prepare_chat_history_session,
     read_chat_history_selection,
 )
 from .control_plane.goals.active_state_metadata import active_state_section_text
@@ -925,11 +926,9 @@ class ChatRequestHandler(
     def _session_snapshot(self, session_id: str) -> None:
         try:
             selection = parse_chat_history_selection(parse_qs(urlparse(self.path).query, keep_blank_values=True))
-            # A historical Turn read must not recover an unrelated execution.
-            if selection["turn_id"] is None:
-                self.server.runtime_controller.recover_exited_turn(session_id)
             store = self.server.chat_store
-            session = store.load_session(session_id) or {}
+            session = prepare_chat_history_session(store, session_id, selection,
+                recover_turn=self.server.runtime_controller.recover_exited_turn)
             media = self.server.private_media_history
             contexts = getattr(self.server.runtime_controller, "project_contexts", None)
             bindings = getattr(contexts, "conversation_bindings", None)
@@ -938,8 +937,8 @@ class ChatRequestHandler(
                 self.server.runtime_controller.coordination_runtime_root, store, session_id,
                 registry=self.server.registry_path, selection=selection,
                 project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None,
-                project_provider=lambda rows: project_private_reply_history(
-                    store, session, rows))
+                project_provider=lambda rows: self._link_history_images(
+                    session_id, session, selection, project_private_reply_history(store, session, rows)))
             if markers and "session" in payload:
                 payload["session"] = media.summary(payload["session"], markers)
             self._send_json(payload)
@@ -1549,18 +1548,23 @@ class ChatRequestHandler(
             return
         except Exception:
             try:
-                self.server.action_store.mark_failed(
+                proposal = self.server.action_store.mark_failed(
                     proposal_id,
                     error_code="canonical_action_failed",
                     message="Canonical LoopX service did not complete the transition.",
                 )
-            except (ActionConflictError, KeyError, ValueError):
-                pass
-            self._send_error(
-                "Typed action could not be applied through its canonical LoopX service.",
-                status=424,
-                error_code="canonical_action_failed",
-            )
+            except (ActionConflictError, KeyError, ValueError, OSError):
+                proposal = None
+            payload = {
+                "ok": False,
+                "error": "Typed action could not be applied through its canonical LoopX service.",
+                "error_code": "canonical_action_failed",
+            }
+            if proposal and proposal.get("action_kind") in {"todo.create", "monitor.create"}:
+                # Present the original confirmation's durable facts, including
+                # when the first write succeeded and this acknowledgement failed.
+                payload["proposal"] = proposal
+            self._send_json(payload, status=424)
             return
         proposal = result["proposal"]
         if proposal.get("status") == "stale":

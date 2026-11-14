@@ -26,6 +26,21 @@ from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
 from .checkpoint_controller import _controller, _physical, _remaining, _phase_budget, capture
 
 
+_COMPONENT_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
+
+
+def capture_failure_fields(error: Exception) -> dict[str, str]:
+    """Keep a bounded diagnostic for a declared component's failed Docker read."""
+    fields = {"error_kind": type(error).__name__}
+    component_id = getattr(error, "checkpoint_component_id", None)
+    if isinstance(component_id, str) and _COMPONENT_ID.fullmatch(component_id):
+        from docker.errors import NotFound
+
+        if isinstance(error, NotFound):
+            fields["missing_component_id"] = component_id
+    return fields
+
+
 def qualify_export_storage(destination: Path) -> None:
     """Check filename fidelity before registration, without reserving a run.
 
@@ -72,7 +87,7 @@ def _validate_request(value: dict) -> dict:
     for entry in value["components"]:
         if (not isinstance(entry, dict) or set(entry) != {"id", "source_path"} or
                 not isinstance(entry["id"], str) or
-                not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", entry["id"]) or entry["id"] in ids):
+                not _COMPONENT_ID.fullmatch(entry["id"]) or entry["id"] in ids):
             raise ValueError("Worker components require unique IDs")
         ids.add(entry["id"])
         paths.append(_guest_path(entry["source_path"]))
@@ -334,7 +349,13 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                         deadline = min(deadline, time.monotonic() + prepared["deadline_epoch"] - time.time())
                     for entry in request["components"]:
                         client.api.timeout = _remaining(deadline)
-                        copied = _archive_component(container, entry["source_path"], stage / "workers" / entry["id"], deadline=deadline)
+                        try:
+                            copied = _archive_component(
+                                container, entry["source_path"], stage / "workers" / entry["id"], deadline=deadline)
+                        except docker.errors.NotFound as error:
+                            # Keep the provider exception for direct capture callers.
+                            error.checkpoint_component_id = entry["id"]
+                            raise
                         components.append({"id": entry["id"], "source_path": str(copied)})
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {

@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (50)
+## 已接受 (52)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -35,6 +35,7 @@
 | [RFC：前沿科学研究计划 v0](frontier-science-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal Artifact 生命周期投影（milestone / guard / next-transition）v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Goal Channel 协作模型 v0](goal-channel-collaboration-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：Goal 契约演化与有界工作上下文（v0）](goal-contract-evolution-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal Direction Baseline（目标方向基线）v0](goal-direction-baseline-v0.zh-CN.md) | 已接受 | 无 | — |
 | [后续设计：重启与实例替换中的 Goal 连续性](goal-immutability-coherence-defense-v0.zh-CN.md) | 已接受 | none | — |
 | [Goal 实例身份与孤儿状态恢复（v0）](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -54,6 +55,7 @@
 | [RFC：长程 Agent 可靠性诊断与治理交付 v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | [4 条](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0 / 管家运行模式 v0](manager-runtime-profile-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：机制收敛与经验复用闭环（v0）](mechanism-convergence-and-learning-loop-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Monorepo 发行拆分与小内核运行时装配（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Agent 判断与可选独立评估——以 Jev 为候选方案（v0）](optional-semantic-assistance-jev-v0.zh-CN.md) | 已接受 | 无 | — |

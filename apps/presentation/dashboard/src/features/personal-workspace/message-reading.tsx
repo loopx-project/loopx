@@ -1,4 +1,4 @@
-import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
+import {useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {MarkdownText} from "./markdown";
 import {markdownExcerpt} from "./markdown-blocks";
 import "./message-reading.css";
@@ -15,10 +15,11 @@ export function returnedAnswerStart(scroller: HTMLElement): {key: string; top: n
 }
 
 /** Folding is an explicit reading choice after the initial historical snapshot. */
-export function HistoricalMessageText({text, initiallyCollapsed, focused, zh, onRead}: {
+export function HistoricalMessageText({text, initiallyCollapsed, focused, focusRequest, zh, onRead}: {
   text: string;
   initiallyCollapsed: boolean;
   focused: boolean;
+  focusRequest?: number;
   zh: boolean;
   onRead?: () => void;
 }) {
@@ -27,7 +28,7 @@ export function HistoricalMessageText({text, initiallyCollapsed, focused, zh, on
   const [expanded, setExpanded] = useState(!initiallyCollapsed || focused);
   const toggle = useRef<HTMLButtonElement>(null);
   const anchor = useRef<number | null>(null);
-  useEffect(() => {if (focused) setExpanded(true);}, [focused]);
+  useLayoutEffect(() => {if (focused) setExpanded(true);}, [focused, focusRequest]);
   useLayoutEffect(() => {
     if (anchor.current === null || !toggle.current) return;
     const scroller = toggle.current.closest<HTMLElement>(".personal-channel-scroll");

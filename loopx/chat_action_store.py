@@ -90,6 +90,22 @@ class ActionConflictError(RuntimeError):
     """Raised when a typed action transition conflicts with durable state."""
 
 
+def action_checkpoint_steps(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    checkpoint = proposal.get("checkpoint")
+    steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else None
+    return steps if isinstance(steps, dict) else {}
+
+
+def is_todo_create_recovery(proposal: Mapping[str, Any]) -> bool:
+    return (
+        proposal.get("action_kind") in ("todo.create", "monitor.create")
+        and (bool(action_checkpoint_steps(proposal).keys() & {"todo_create_prepared", "todo_created"})
+             or (proposal.get("status") == "failed"
+                 and (proposal.get("failure") or {}).get("error_code") == "canonical_action_failed")
+             or proposal.get("status") == "applying")
+    )
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -1320,6 +1336,8 @@ class ChatActionStore:
                 raise ActionConflictError(
                     f"proposal in {proposal.get('status')} state cannot be cancelled"
                 )
+            if is_todo_create_recovery(proposal):
+                raise ActionConflictError("Creation is already confirmed; recover the original operation.")
             now = _utc_now()
             proposal["status"] = "cancelled"
             proposal["cancelled_at"] = now
@@ -1504,6 +1522,8 @@ class ChatActionStore:
                 raise ActionConflictError(
                     f"proposal in {status} state cannot become {to_state}"
                 )
+            if to_state in {"deferred", "rejected"} and is_todo_create_recovery(proposal):
+                raise ActionConflictError("Creation is already confirmed; recover the original operation.")
             proposal["status"] = to_state
             proposal.update(_safe_json_value(dict(updates), path="transition"))
             proposal["updated_at"] = _utc_now()
@@ -1516,7 +1536,6 @@ class ChatActionStore:
         *,
         current_state_fingerprint: str,
         receipt: Mapping[str, Any],
-        stale_unless_checkpoint: str | None = None,
     ) -> dict[str, Any]:
         token = _opaque_id(proposal_id, field="proposal_id")
         current_fingerprint = _bounded_text(
@@ -1543,11 +1562,6 @@ class ChatActionStore:
             expected_fingerprint = str(proposal.get("expected_state_fingerprint") or "")
             now = _utc_now()
             if current_fingerprint != expected_fingerprint:
-                # A concurrent confirmer may already have bound the original
-                # write. Its durable plan must resolve commit vs stale.
-                checkpoint = proposal.get("checkpoint") or {}
-                if stale_unless_checkpoint and stale_unless_checkpoint in (checkpoint.get("steps") or {}):
-                    return proposal
                 proposal["status"] = "stale"
                 proposal["stale"] = {
                     "expected_state_fingerprint": expected_fingerprint,

@@ -16,7 +16,7 @@ export type ActionReviewReason =
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
   | "operation_confirmation_expired" | "operation_expiry_unknown" | "team_plan_retry"
-  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry";
+  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry" | "task_start_retry" | "todo_creation_retry";
 
 export type OperationReviewContent = {
   title: string;
@@ -93,9 +93,13 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   decisionFrame?: DecisionReviewFrame;
   /** Recover this exact canonical command; generating a new preview loses its receipt identity. */
   retryOriginal?: true;
+  /** A saved create attempt is never replaced by implicit regeneration. */
+  prohibitRegeneration?: true;
   /** Recorded creation effects, not evidence of a completed Goal or model Turn. */
   creationProgress?: GoalCreationProgress;
   creationOutcome?: GoalCreationOutcome;
+  /** Accepted dispatch bound to its original Turn. It does not establish a result. */
+  taskExecution?: { goalId: string; todoId: string; sessionId: string; turnId: string };
 };
 
 export type GoalCreationProgress = {
@@ -505,6 +509,24 @@ function compileDecisionReviewFrame(proposal: Record<string, unknown>): Decision
     ? DEPENDENT_EFFECTS[state as keyof typeof DEPENDENT_EFFECTS] : "unknown" };
 }
 
+function taskExecutionReadback(
+  proposal: Record<string, unknown>, receipt: Record<string, unknown>, sourceFingerprint: string,
+): ActionReviewPlan["taskExecution"] {
+  const parameters = objectValue(proposal.normalized_parameters);
+  if (proposal.action_kind !== "todo.create" || parameters?.start_execution !== true
+      || receipt.outcome !== "task_execution_started") return undefined;
+  const resources = objectValue(receipt.resource_ids);
+  const canonical = objectValue(receipt.canonical_receipt);
+  const goalId = textValue(parameters.goal_id);
+  const todoId = textValue(resources?.todo_id);
+  const sessionId = textValue(resources?.session_id);
+  const turnId = textValue(resources?.turn_id);
+  if (!goalId || !todoId || !sessionId || !turnId
+      || resources?.goal_id !== goalId || canonical?.goal_id !== goalId || canonical?.todo_id !== todoId
+      || canonical?.status !== "applied" || !sourceFingerprint || canonical?.preview_id !== sourceFingerprint) return undefined;
+  return {goalId, todoId, sessionId, turnId};
+}
+
 /**
  * Compile provider-neutral presentation semantics from a typed action proposal.
  * This reducer owns no action authority and performs no external effects.
@@ -521,6 +543,10 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const operationFrame = compileOperationReviewFrame(proposal, nowMs);
   const reviewCardFrame = compileReviewCardFrame(proposal);
   const decisionFrame = compileDecisionReviewFrame(proposal);
+  const steps = objectValue(objectValue(proposal.checkpoint)?.steps);
+  const createPlan = objectValue(steps?.todo_create_prepared);
+  const todoCreation = proposal.action_kind === "todo.create" || proposal.action_kind === "monitor.create";
+  const prohibitRegeneration = todoCreation && Boolean(createPlan || objectValue(steps?.todo_created));
   const creationProgress = goalCreationProgress(proposal);
   // Older already-dispatched creations retain their original semantics. A
   // failed write retries its original CAS even after a response was lost.
@@ -534,6 +560,7 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     ...(reviewCardFrame ? { reviewCardFrame } : {}),
     ...(decisionFrame ? { decisionFrame } : {}),
     ...(creationProgress ? { creationProgress } : {}),
+    ...(prohibitRegeneration ? {prohibitRegeneration: true as const} : {}),
     ...(creationOutcome ? { creationOutcome } : {}),
   });
   const held = (
@@ -559,10 +586,14 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       return held("repair", "readback_unverified");
     }
     const receipt = objectValue(proposal.receipt);
-    return receipt?.projection_verified === true
-      && (proposal.action_kind !== "operation.execute" || (operationFrame?.kind === "result" && operationFrame.resultDeliveryVerified))
-      ? held("completed", "readback_verified")
-      : held("repair", "readback_unverified");
+    if (receipt?.projection_verified !== true
+        || (proposal.action_kind === "operation.execute"
+          && (operationFrame?.kind !== "result" || !operationFrame.resultDeliveryVerified))) {
+      return held("repair", "readback_unverified");
+    }
+    const taskExecution = taskExecutionReadback(proposal, receipt, identity.sourceFingerprint);
+    const completed = held("completed", "readback_verified");
+    return taskExecution ? {...completed, taskExecution} : completed;
   }
   const basis = objectValue(proposal.canonical_update_basis);
   const parameters = objectValue(proposal.normalized_parameters);
@@ -573,6 +604,29 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
       && creationProgress) {
     return {...finish({interaction: "review", canApply: true, reason: "goal_creation_retry"}), retryOriginal: true};
+  }
+  if (proposal.action_kind === "todo.create" && parameters?.start_execution === true
+      && proposal.permission_classification === "durable_write" && identity.proposalId && identity.sourceFingerprint
+      && (proposal.status === "applying" || (proposal.status === "failed" && objectValue(proposal.failure)?.retry_safe === true))) {
+    const created = objectValue(steps?.todo_created);
+    const receipt = objectValue(created?.canonical_receipt);
+    if (textValue(created?.todo_id) && created?.todo_id === receipt?.todo_id
+        && textValue(parameters.goal_id) && receipt?.goal_id === parameters.goal_id
+        && receipt?.preview_id === identity.sourceFingerprint && receipt.status === "applied") {
+      return {...finish({interaction: "review", canApply: true, reason: "task_start_retry"}), retryOriginal: true};
+    }
+  }
+  // A confirmation with a saved create plan may already have written. Only a
+  // complete plan for this exact proposal can offer native recovery on reload.
+  if (todoCreation && ["failed", "applying"].includes(String(proposal.status))
+      && proposal.permission_classification === "durable_write"
+      && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
+      && createPlan?.operation_id === ("chat-create:" + identity.proposalId)
+      && createPlan.preview_id === identity.sourceFingerprint
+      && textValue(createPlan.source_identity) && textValue(createPlan.source_authority)
+      && textValue(createPlan.expected_provider_revision) && textValue(createPlan.expected_registry_sha256)
+      && textValue(createPlan.expected_store_identity)) {
+    return {...finish({interaction: "review", canApply: true, reason: "todo_creation_retry"}), retryOriginal: true};
   }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null

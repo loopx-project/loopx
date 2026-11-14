@@ -168,7 +168,7 @@ jobs:
           python-version: "3.11"
       - name: Install checkout for Python-backed browser scenarios
         run: |
-          python -m pip install --disable-pip-version-check -e .
+          python -m pip install --disable-pip-version-check -e '.[test]'
           echo "LOOPX_TEST_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v6
         with:
@@ -192,6 +192,8 @@ jobs:
           npm run smoke:chat-upgrade
           npm run smoke:delegation-search
           npm run smoke:task-inspector-route
+          npm run smoke:conversation-find
+          node smoke/todo-confirmation-browser-smoke.mjs
       - name: Qualify packaged team evidence and feedback recovery
         if: matrix.shard == 2
         working-directory: apps/presentation/dashboard
@@ -466,9 +468,11 @@ jobs:
         run: node scripts/check-css-custom-properties.mjs dashboard
 
       # The coverage merger consumes the unit report from shard 1 only.
-      - name: Measure Dashboard unit coverage once
+      - name: Check Dashboard startup ownership and measure unit coverage once
         if: matrix.shard == 1
-        run: npm run test:dashboard:coverage
+        run: |
+          node --test examples/personal-workspace-browser/server-startup.test.mjs
+          npm run test:dashboard:coverage
 
       - name: Measure Dashboard browser interactions
         env:

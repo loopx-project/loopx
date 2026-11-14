@@ -3,13 +3,13 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
-from threading import Barrier, Event
+from threading import Event
 
 import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
-from loopx import chat, chat_actions
-from loopx.chat_action_store import ChatActionStore
+from loopx import chat_actions
+from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.chat_actions import ChatActionService
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos.mutation_api import add_goal_todo
@@ -62,11 +62,11 @@ def _interrupt_after_create(service, monkeypatch, kind):
     else:
         apply = service.store.apply
 
-        def save(proposal_id, *, current_state_fingerprint, receipt):
+        def save(proposal_id, *, current_state_fingerprint, receipt, **kwargs):
             if receipt.get("outcome") == "monitor_created" and not lost:
                 lost.append(receipt)
                 raise OSError("interrupted after provider commit")
-            return apply(proposal_id, current_state_fingerprint=current_state_fingerprint, receipt=receipt)
+            return apply(proposal_id, current_state_fingerprint=current_state_fingerprint, receipt=receipt, **kwargs)
 
         monkeypatch.setattr(service.store, "apply", save)
     return lost
@@ -119,45 +119,41 @@ def test_separate_confirmation_cannot_claim_the_original_create(confirmation, mo
     assert _snapshot(runtime) == after_assignment
 
 
-def test_late_preparation_resumes_a_concurrent_commit(confirmation, monkeypatch):
+def test_duplicate_confirmation_keeps_the_running_owner(confirmation, monkeypatch):
     service, _, runtime, _ = confirmation
     proposal_id = _preview(service, "todo.create", "concurrent")
     entered, resume = Event(), Event()
     original_plan = chat_actions.plan_reviewed_todo_create
 
     def plan(**arguments):
-        if not entered.is_set():
-            entered.set()
-            assert resume.wait(15), "the second confirmer did not finish"
+        entered.set()
+        assert resume.wait(15), "the duplicate confirmer did not return"
         return original_plan(**arguments)
 
     monkeypatch.setattr(chat_actions, "plan_reviewed_todo_create", plan)
     lost = _interrupt_after_create(service, monkeypatch, "todo.create")
     with ThreadPoolExecutor(max_workers=1) as pool:
-        late = pool.submit(service.apply, proposal_id)
+        pending = pool.submit(service.apply, proposal_id)
         try:
             assert entered.wait(10)
-            with pytest.raises(OSError, match="after provider commit"):
+            with pytest.raises(ActionConflictError, match="original confirmation is in progress"):
                 service.apply(proposal_id)
+            with pytest.raises(ActionConflictError, match="original confirmation is in progress"):
+                service.regenerate(proposal_id)
         finally:
             resume.set()
-        recovered = late.result(timeout=30)["proposal"]
-    assert recovered["status"] == "applied"
+        with pytest.raises(OSError, match="after provider commit"):
+            pending.result(timeout=30)
+    committed = _snapshot(runtime)
+    recovered = service.apply(proposal_id)["proposal"]
     assert recovered["receipt"]["canonical_receipt"] == lost[0]
-    assert len(_snapshot(runtime)["todos"]) == 1
+    assert len(committed["todos"]) == 1
+    assert _snapshot(runtime) == committed
 
 
-def test_saved_legacy_create_can_finish_assignment_once(confirmation, monkeypatch):
-    service, registry, runtime, _ = confirmation
-    proposal_id = _preview(service, "todo.create", "old-confirmation", agent="agent-a")
-    proposal = service.store.start_apply(proposal_id)
-    created = chat.apply_todo_review_preview(
-        registry_path=registry, goal_id="goal-a", text="Review service availability",
-        priority="P2", preview_id=proposal["expected_state_fingerprint"],
-    )["receipt"]
-    service.store.save_checkpoint(proposal_id, step="todo_created", receipt={
-        "todo_id": created["todo_id"], "canonical_receipt": created,
-    })
+def test_interrupted_assignment_recovers_at_original_revision(confirmation, monkeypatch):
+    service, _, runtime, _ = confirmation
+    proposal_id = _preview(service, "todo.create", "assignment", agent="agent-a")
     original_save = service.store.save_checkpoint
 
     def save(proposal_id, *, step, receipt, **kwargs):
@@ -173,7 +169,8 @@ def test_saved_legacy_create_can_finish_assignment_once(confirmation, monkeypatc
     assert assigned["todos"][0]["claimed_by"] == "agent-a"
     recovered = service.apply(proposal_id)["proposal"]
     assert recovered["status"] == "applied"
-    assert recovered["receipt"]["canonical_receipt"] == created
+    saved = service.load(proposal_id)["checkpoint"]["steps"]["todo_created"]
+    assert recovered["receipt"]["canonical_receipt"] == saved["canonical_receipt"]
     assert _snapshot(runtime) == assigned
 
 
@@ -206,21 +203,26 @@ def test_uncommitted_confirmation_rejects_changed_basis(confirmation, monkeypatc
 def test_concurrent_monitor_confirmation_uses_one_schedule(confirmation, monkeypatch):
     service, _, runtime, _ = confirmation
     proposal_id = _preview(service, "monitor.create", "concurrent")
-    now = datetime.now(timezone.utc)
-    clock = iter([now, now + timedelta(minutes=5)])
-    monkeypatch.setattr("loopx.chat_actions.now_utc", lambda: next(clock))
+    entered, resume = Event(), Event()
     prepare = service.store.save_checkpoint
-    barrier = Barrier(2)
 
     def save(proposal_id, *, step, receipt, **kwargs):
         if step == "todo_create_prepared":
-            barrier.wait(timeout=15)
+            entered.set()
+            assert resume.wait(15), "the duplicate confirmer did not return"
         return prepare(proposal_id, step=step, receipt=receipt, **kwargs)
 
     monkeypatch.setattr(service.store, "save_checkpoint", save)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(service.apply, (proposal_id, proposal_id)))
-    assert results[0]["proposal"]["receipt"] == results[1]["proposal"]["receipt"]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(service.apply, proposal_id)
+        try:
+            assert entered.wait(10)
+            with pytest.raises(ActionConflictError, match="in progress"):
+                service.apply(proposal_id)
+        finally:
+            resume.set()
+        initial = pending.result(timeout=30)["proposal"]
+    assert initial["receipt"] == service.apply(proposal_id)["proposal"]["receipt"]
     todos = _snapshot(runtime)["todos"]
     assert len(todos) == 1 and todos[0]["next_due_at"]
 

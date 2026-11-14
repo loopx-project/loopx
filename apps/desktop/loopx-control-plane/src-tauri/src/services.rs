@@ -4,7 +4,7 @@ use std::{
     env,
     ffi::OsStr,
     fmt, fs,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -20,10 +20,40 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_PROBE_RESPONSE_BYTES: u64 = 1024 * 1024;
 
+// Core owns activation admission. Keep its bounded reason codes intact across
+// the native supervisor and recovery view; a deferred provider prerequisite is
+// not a failed service transaction or proof that rollback happened.
+pub(crate) fn activation_error_code(code: &str) -> Option<&'static str> {
+    match code {
+        "chat_work_pending" => Some("chat_work_pending"),
+        "chat_state_unverified" => Some("chat_state_unverified"),
+        "chat_service_unverified" => Some("chat_service_unverified"),
+        "native_account_work_pending" => Some("native_account_work_pending"),
+        "native_observer_provider_binding_required" => {
+            Some("native_observer_provider_binding_required")
+        }
+        "native_observer_provider_upgrade_required" => {
+            Some("native_observer_provider_upgrade_required")
+        }
+        "native_observer_requires_target_runtime" => {
+            Some("native_observer_requires_target_runtime")
+        }
+        "service_runtime_alignment_unavailable" => Some("service_runtime_alignment_unavailable"),
+        "service_runtime_alignment_failed" => Some("service_runtime_alignment_failed"),
+        "service_runtime_route_unverified" => Some("service_runtime_route_unverified"),
+        "service_runtime_rollback_failed" => Some("service_runtime_rollback_failed"),
+        _ => None,
+    }
+}
+
 pub(crate) fn runtime_alignment_error(code: &str) -> bool {
     matches!(
         code,
-        "service_runtime_alignment_unavailable"
+        "native_account_work_pending"
+            | "native_observer_provider_binding_required"
+            | "native_observer_provider_upgrade_required"
+            | "native_observer_requires_target_runtime"
+            | "service_runtime_alignment_unavailable"
             | "service_runtime_route_unverified"
             | "service_runtime_alignment_failed"
             | "service_runtime_rollback_failed"
@@ -167,7 +197,21 @@ pub(crate) struct SelectedRuntime {
     pub identity: Option<serde_json::Value>,
 }
 
+/// A qualified installation is reusable only when both existing listeners
+/// answer with its exact identity. Observation starts/stops no service.
+pub(crate) fn runtime_ready(runtime: &SelectedRuntime, endpoints: &ServiceEndpoints) -> bool {
+    runtime.identity.is_some()
+        && SERVICE_KINDS.iter().all(|kind| {
+            probe_on_port(*kind, endpoints.port(*kind), runtime.identity.as_ref())
+                == Probe::Matching
+        })
+}
+
 impl ServiceSet {
+    pub(crate) fn runtime(&self) -> &SelectedRuntime {
+        &self.runtime
+    }
+
     pub(crate) fn runtime_identity(&self) -> Option<&serde_json::Value> {
         self.runtime.identity.as_ref()
     }
@@ -331,13 +375,10 @@ fn managed_runtime_alignment_result(
     {
         return Ok(());
     }
-    let code = match payload["reason"].as_str() {
-        Some("chat_work_pending") => "chat_work_pending",
-        Some("chat_state_unverified") => "chat_state_unverified",
-        Some("service_runtime_route_unverified") => "service_runtime_route_unverified",
-        Some("service_runtime_rollback_failed") => "service_runtime_rollback_failed",
-        _ => "service_runtime_alignment_failed",
-    };
+    let code = payload["reason"]
+        .as_str()
+        .and_then(activation_error_code)
+        .unwrap_or("service_runtime_alignment_failed");
     Err(ServiceError(code.into()))
 }
 
@@ -1344,7 +1385,9 @@ fn probe_on_port(
     port: u16,
     expected_runtime_identity: Option<&serde_json::Value>,
 ) -> Probe {
-    let mut response = match read_probe_response(port, kind.probe_path()) {
+    // This budget covers the whole observation, including any legacy request.
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let mut response = match read_probe_response(port, kind.probe_path(), deadline) {
         Ok(response) => response,
         Err(probe) => return probe,
     };
@@ -1357,7 +1400,7 @@ fn probe_on_port(
     {
         // A legacy Core has no lightweight endpoint. Keep its original
         // fingerprint/identity checks; new services never enumerate metadata.
-        response = match read_probe_response(port, "/api/chat/capabilities") {
+        response = match read_probe_response(port, "/api/chat/capabilities", deadline) {
             Ok(response) => response,
             Err(probe) => return probe,
         };
@@ -1365,33 +1408,54 @@ fn probe_on_port(
     classify_response(kind, &response, expected_runtime_identity)
 }
 
-fn read_probe_response(port: u16, path: &str) -> Result<String, Probe> {
+fn probe_time_left(deadline: Instant) -> Result<Duration, Probe> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(Probe::Unresponsive);
+    }
+    Ok(remaining)
+}
+
+fn read_probe_response(port: u16, path: &str, deadline: Instant) -> Result<String, Probe> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut stream = match TcpStream::connect_timeout(&address, PROBE_TIMEOUT) {
-        Ok(stream) => stream,
-        Err(_) => return Err(Probe::Unavailable),
-    };
-    let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
+    let mut stream = TcpStream::connect_timeout(&address, probe_time_left(deadline)?)
+        .map_err(|_| Probe::Unavailable)?;
     let request = format!(
         "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
         path, port
     );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return Err(Probe::Unresponsive);
+    let mut unsent = request.as_bytes();
+    while !unsent.is_empty() {
+        stream
+            .set_write_timeout(Some(probe_time_left(deadline)?))
+            .map_err(|_| Probe::Unresponsive)?;
+        match stream.write(unsent) {
+            Ok(0) => return Err(Probe::Unresponsive),
+            Ok(written) => unsent = &unsent[written..],
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return Err(Probe::Unresponsive),
+        }
     }
-    let mut response = String::new();
-    if stream
-        .take(MAX_PROBE_RESPONSE_BYTES + 1)
-        .read_to_string(&mut response)
-        .is_err()
-    {
-        return Err(Probe::Unresponsive);
+    let mut reader = stream.take(MAX_PROBE_RESPONSE_BYTES + 1);
+    let mut response = Vec::new();
+    let mut buffer = [0; 8192];
+    loop {
+        reader
+            .get_ref()
+            .set_read_timeout(Some(probe_time_left(deadline)?))
+            .map_err(|_| Probe::Unresponsive)?;
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => response.extend_from_slice(&buffer[..read]),
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return Err(Probe::Unresponsive),
+        }
+        if response.len() as u64 > MAX_PROBE_RESPONSE_BYTES {
+            return Err(Probe::Foreign);
+        }
     }
-    if response.len() as u64 > MAX_PROBE_RESPONSE_BYTES {
-        return Err(Probe::Foreign);
-    }
-    Ok(response)
+    probe_time_left(deadline)?;
+    String::from_utf8(response).map_err(|_| Probe::Unresponsive)
 }
 
 fn classify_response(

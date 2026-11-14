@@ -91,15 +91,18 @@ same operation ID is a conflict. No provider promotion or receipt rewrite occurs
 ## Write Contract
 
 Confirming a typed Chat Todo or Monitor prepares the provider revision and
-source registry digest before writing. The proposal's operation ID and the
+source registry digest and store identity before writing. The proposal's operation ID and the
 Monitor's first due time are reused on retry. After checking the current Goal
 source and caller authority, retry returns the original receipt for a committed
-create. An uncommitted create still requires the reviewed source and provider
-revision. Older control planes reject the source-bound v3 request before writing.
+create. Chat keeps the original card available after refresh and offers a retry
+through that card. A prepared create cannot be regenerated. A stale preview
+that never started can still be regenerated. An uncommitted create requires
+the reviewed source and provider revision. Older control planes reject the
+source-bound v3 request before writing.
 
-确认 Chat 的 Todo 或 Monitor 提案时，先记录源注册表摘要和权威存储修订号，再执行写入。
+确认 Chat 的 Todo 或 Monitor 提案时，先记录源注册表摘要、权威存储身份和修订号，再执行写入。
 重试沿用原操作 ID 和 Monitor 的首次到期时间。已提交的操作返回原回执，未提交的操作仍校验
-确认时的来源和修订号。来源绑定请求采用 v3 协议，旧版控制面会在写入前拒绝。
+确认时的来源和修订号。刷新后仍可用原确认卡重试。已准备的确认不能重新生成；尚未执行的过期预览仍可重新生成。来源绑定请求采用 v3 协议，旧版控制面会在写入前拒绝。
 
 For a caller-owned runtime that already registered its Goal/Agent, generate the
 model planning checkpoint before writing executable task Todos:
@@ -233,6 +236,13 @@ For scheduled monitors, keep the contract minimal: `--next-due-at` is the first
 eligible time, `--cadence` is the retry interval, `--monitor-target-key` is the
 stable idempotency key, and optional `--expires-at` is the hard stop after
 which the monitor must not catch up.
+
+When a monitor supplies `--cadence` and omits `--next-due-at`, the create
+transaction derives the first due time once. Retry the original `todo add`
+with the same `--operation-id` to recover its result. Changing an explicit
+due time under that operation ID is a conflict.
+If an older cadence-only create reports a conflict after a lost response,
+read its saved result with `todo receipt --goal-id GOAL --operation-id ID`.
 
 Public Todo updates validate the effective waiting state, not just newly supplied
 `resume_when`. Changing a Monitor-waiting Todo's status/task class or successor
@@ -1331,6 +1341,20 @@ immutable operation identity or public receipts. A matching historical
 create/update/poll/terminal receipt is recovered before checking current source
 contents. Claim replay retains its current acceptance check and rejects a stale
 source while preserving `original_receipt`; this adds no new claim grant.
+
+Chat Task detail and reviewed actions resolve the Goal's source registry and
+runtime before reading or writing. The review basis carries the source identity,
+source registry digest and provider revision. A created Task checkpoint also
+retains the authority store identity and original operation. Assignment and
+managed claim use the retained revision. If an interrupted confirmation has no
+source witness, or the current source is different, restore and verify the
+original Todo before retrying the assignment. A matching Todo ID alone does not
+establish that it is the same task.
+
+The local v3 Todo create and managed claim wires require both
+`expected_provider_revision` and `expected_registry_sha256`. The source check
+uses the existing registry witness. Earlier wire versions retain their original
+behavior.
 
 On `authority_source_changed`, inspect current registration and the Todo again
 before issuing new work. The rejected attempt writes no canonical head or receipt;

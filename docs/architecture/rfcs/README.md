@@ -254,6 +254,14 @@ Paired diffs do not certify translation accuracy.
     governed commit policy/verifier, lease-impact handling and Stage 3+
     qualification remain unshipped. Manager handoff consumes these boundaries;
     it does not provide another amendment writer.
+- [Goal contract evolution and bounded working context v0](goal-contract-evolution-v0.md)
+  ([中文版](goal-contract-evolution-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; existing objective revision and additive
+    outcome maintenance remain the implemented boundary.
+  - **Current boundary:** One authorized change set for objective and requirements,
+    retained version history, scoped peer adoption and bounded indexed context.
+    R4/R5 own migration; real model recognition, packaged recovery, shared-store
+    concurrency and outcome/cost qualification remain open.
 - [Persistent Goal outcome refinement v0](goal-outcome-refinement-v0.md)
   ([中文版](goal-outcome-refinement-v0.zh-CN.md))
   - **Current boundary:** Supporting outcomes preserve cumulative requirements
@@ -291,6 +299,16 @@ Paired diffs do not certify translation accuracy.
     owner inventory grants no activation, and R6 and D1–D3 retain their own gates.
 
 ## Planning, Research, And Adaptive Intelligence
+
+- [Mechanism Convergence and the Experience Reuse Loop v0](mechanism-convergence-and-learning-loop-v0.md)
+  ([中文版](mechanism-convergence-and-learning-loop-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; budgeted method feedback and structural convergence, with no runtime change.
+  - **Current boundary:** Reuses Controller C1/C4/C9 and Target/Stride/Explore to
+    connect prior expectations, execution, feedback and the next real choice.
+    Defines caller migration and duplicate-producer retirement, then staged
+    forecast calibration and policy learning. Memory/Skills carry qualified
+    knowledge; application receipts are optional adoption evidence, not the
+    first-loop prerequisite. No default, training or experiment is activated.
 
 - [LoopX × LayerFS — Engineering Exploration and Evaluation v0](layerfs-engineering-exploration-evaluation-v0.md)
   ([中文版](layerfs-engineering-exploration-evaluation-v0.zh-CN.md))
