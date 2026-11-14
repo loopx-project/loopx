@@ -28,8 +28,11 @@ try {
   browser = await launchBrowser(loadPlaywright().chromium);
   for (const locale of ["en", "zh-CN"]) {
     const zh = locale === "zh-CN";
+    let corruptHistory = null, invalidReplies = 0;
+    const pageErrors = [];
     await command("fault");
     workspace = await openWorkspacePage(browser, url, {beforeGoto(_api, page) {
+      page.on("pageerror", error => pageErrors.push(error.message));
       return Promise.all([page.addInitScript(value => localStorage.setItem("loopx-pw-locale", value), locale),
         page.route("**/api/chat/sessions**", async route => {
           const request = route.request(), target = new URL(request.url());
@@ -42,6 +45,18 @@ try {
           }
           assert.equal(request.method(), "GET", "Finding original messages cannot mutate the store");
           const response = await route.fetch({url: `${origin}${target.pathname}${target.search}`});
+          if (corruptHistory && target.pathname === "/api/chat/sessions/old" && response.ok()) {
+            const snapshot = await response.json();
+            assert.ok(snapshot.messages.length > 0);
+            if (corruptHistory === "text") snapshot.messages[0].text = null;
+            else if (corruptHistory === "attachments") snapshot.messages[0].attachments = "invalid attachments";
+            else if (corruptHistory === "reply_context") snapshot.messages[0].reply_context = {source_text: "", parent: null};
+            else if (corruptHistory === "collaborations") snapshot.messages[0].collaborations = "invalid collaborations";
+            else snapshot.messages[0].return_delivery = {schema_version: "manager_return_delivery_status_v0",
+              phase: "conclusion", status: "delivered", request_revision: {invalid: true}};
+            invalidReplies += 1;
+            return route.fulfill({status: response.status(), json: snapshot});
+          }
           return route.fulfill({response});
         })]);
     }});
@@ -56,7 +71,28 @@ try {
     await bar.getByText(zh ? "对话记录尚未完整读取，结果仅包含已加载消息。" : "History is incomplete; results include loaded messages only.").waitFor();
     const retained = await active.getAttribute("data-timeline-id");
     await command("recover");
-    await page.getByRole("button", {name: zh ? "重试读取" : "Retry history", exact: true}).click();
+    const retry = page.getByRole("button", {name: zh ? "重试读取" : "Retry history", exact: true});
+    for (const field of ["text", "attachments", "reply_context", "collaborations", "return_delivery"]) {
+      corruptHistory = field;
+      const before = invalidReplies;
+      const invalidRead = page.waitForResponse(response => new URL(response.url()).pathname === "/api/chat/sessions/old");
+      await retry.click();
+      await (await invalidRead).finished();
+      try {
+        await page.waitForFunction(label => [...document.querySelectorAll("button")].some(button =>
+          button.textContent.trim() === label && !button.disabled), zh ? "重试读取" : "Retry history");
+      } catch (error) {
+        throw new Error(`${field} history did not recover; page errors: ${pageErrors.join(" | ")}; console errors: ${workspace.errors.join(" | ")}`, {cause: error});
+      }
+      assert.ok(invalidReplies > before, `The malformed ${field} response was exercised`);
+      await bar.getByText(zh ? "对话记录尚未完整读取，结果仅包含已加载消息。" : "History is incomplete; results include loaded messages only.").waitFor();
+      assert.equal(await active.getAttribute("data-timeline-id"), retained, "Invalid history must not hide the current message");
+      assert.deepEqual(pageErrors, [], "Invalid history must not crash the page");
+      assert.deepEqual(workspace.errors.filter(error => !error.startsWith("Failed to load resource: the server responded with a status of 503")), [],
+        "Invalid history must not cause a render error");
+    }
+    corruptHistory = null;
+    await retry.click();
     await bar.getByRole("status").filter({hasText: "2 / 3"}).waitFor();
     assert.equal(await active.getAttribute("data-timeline-id"), retained, "Backfill preserves the selected original message");
     // Reopen the timeline after the complete read to exercise folded history.
@@ -137,7 +173,7 @@ try {
     assert.deepEqual(await command("inspect"), {store_unchanged: true, turn_count: 0});
     await workspace.close(); workspace = null;
   }
-  console.log("conversation-find: packaged HTTP/store, en/zh, full-text expansion, navigation/wrap, literal no-match, scope reset, narrow layout and zero writes passed");
+  console.log("conversation-find: packaged HTTP/store, en/zh, malformed history recovery, full-text expansion, navigation/wrap, literal no-match, scope reset, narrow layout and zero writes passed");
 } finally {
   await workspace?.close(); await browser?.close(); server?.kill("SIGTERM");
   child.stdin.end(); if (child.exitCode === null) await exited; lines.close();

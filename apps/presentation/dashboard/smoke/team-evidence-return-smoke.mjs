@@ -42,6 +42,29 @@ try {
   const evidence = dialog.getByRole("region", {name: "执行证据"});
   const original = () => evidence.getByLabel("证据内容: report.json");
   await original().waitFor();
+  const mismatchedReadback = route => route.request().postDataJSON()?.operation === "read"
+    ? route.fulfill({json: {...legacyReadback, operation_id: "another-operation"}}) : route.fallback();
+  await page.route("**/api/chat/sessions/*/loopx", mismatchedReadback);
+  await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
+  await evidence.getByRole("alert").waitFor({timeout: 3000});
+  assert.equal(await original().count(), 0);
+  await page.unroute("**/api/chat/sessions/*/loopx", mismatchedReadback);
+  await evidence.getByRole("button", {name: "重新检查交付", exact: true}).click();
+  await original().waitFor();
+  await dialog.getByRole("button", {name: "返回执行列表", exact: true}).click();
+  await dialog.locator('.goal-team-record[data-state="accepted"]').first().waitFor();
+  const malformedInventory = route => route.request().postDataJSON()?.operation === "operations"
+    ? route.fulfill({json: {items: [], has_more: false, next_cursor: null, page_readback_complete: "false"}})
+    : route.fallback();
+  await page.route("**/api/chat/sessions/*/loopx", malformedInventory);
+  await dialog.getByRole("button", {name: "重新核验", exact: true}).click();
+  await dialog.getByRole("alert").waitFor({timeout: 3000});
+  assert.equal(await dialog.locator('.goal-team-record[data-state="accepted"]').count(), 0);
+  await page.unroute("**/api/chat/sessions/*/loopx", malformedInventory);
+  await dialog.getByRole("button", {name: "重新核验", exact: true}).click();
+  await dialog.locator('.goal-team-record[data-state="accepted"]').first().waitFor();
+  await openEvidence.first().click();
+  await original().waitFor();
   // Rechecking the same version must preserve the reader's exact comparison.
   await evidence.getByRole("button", {name: /^修订依据/}).click();
   await evidence.getByLabel("对照产物", {exact: false}).selectOption({label: "report.md"});

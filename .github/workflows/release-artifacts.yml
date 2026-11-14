@@ -16,6 +16,7 @@ on:
       - "apps/presentation/dashboard/**"
       - "scripts/chat_bundle.py"
       - "scripts/verify_installed_chat.py"
+      - "scripts/verify_installed_runtime.py"
       - "README.md"
       - "scripts/release_artifacts.py"
       - "scripts/runtime_artifact.py"
@@ -137,7 +138,7 @@ jobs:
             dist/packages/*.whl
           test "$("${RUNNER_TEMP}/loopx-wheel/bin/loopx" --version)" = \
             "loopx ${RELEASE_TAG#v}"
-          "${RUNNER_TEMP}/loopx-wheel/bin/python" - <<'PY'
+          "${RUNNER_TEMP}/loopx-wheel/bin/python" -I - <<'PY'
           from loopx.control_plane.effect_program import SettlementIdentity
           from loopx.control_plane.effect_runtime import (
               collect_effect_runtime_readiness,
@@ -226,9 +227,11 @@ jobs:
       - name: Verify installed frontend and sdist rebuild
         run: |
           python scripts/verify_installed_chat.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
+          python scripts/verify_installed_runtime.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
           python -m pip wheel --no-deps dist/packages/*.tar.gz --wheel-dir "${RUNNER_TEMP}/sdist-wheel"
           "${RUNNER_TEMP}/loopx-wheel/bin/python" -m pip install --force-reinstall --no-deps "${RUNNER_TEMP}"/sdist-wheel/*.whl
           python scripts/verify_installed_chat.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
+          python scripts/verify_installed_runtime.py --python "${RUNNER_TEMP}/loopx-wheel/bin/python"
 
       - name: Resolve browser fixture correction without rebuilding product bytes
         env:

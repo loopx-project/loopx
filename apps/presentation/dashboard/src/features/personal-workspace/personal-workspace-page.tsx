@@ -1055,7 +1055,7 @@ export function PersonalWorkspacePage({
   }
   const conversationKey = workspaceConversations?.managed ? conversationContextKey({kind: "managed", ...workspaceConversations.managed.target}) : originalConversation ? conversationContextKey({ kind: "bound", ...originalConversation.target }) : selectedWorkspaceRef
     ? conversationContextKey({ kind: "project", projectRef: selectedWorkspaceRef })
-    : selectedGoalId ?? "manager";
+    : conversationContextKey(selectedGoalId != null ? {kind: "goal", goalId: selectedGoalId} : {kind: "manager"});
   const composerDraftKey = conversationInputKey(conversationKey, selectedAgentId, managedWorkActive || Boolean(originalConversation));
   const [modelSettingsSaving, setModelSettingsSaving] = useState<Record<string, boolean>>({});
   async function saveModelSettings(change: () => void | Promise<void>) {
@@ -3059,9 +3059,9 @@ export function PersonalWorkspacePage({
                     <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly} goalDraftPreparationContext={`${goalAgentId}:${locale}`} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onApplyGoalDraft={readOnly ? undefined : confirmGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal}
                       onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                       onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
-                        ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
+                        ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
                       onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
-                        ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId)
+                        ? (turnId) => callbacks.onInterruptConversationTurn!(conversationKey, turnId)
                         : undefined} />
                   </>),
                 }} />

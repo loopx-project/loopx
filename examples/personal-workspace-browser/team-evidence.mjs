@@ -163,7 +163,9 @@ export const teamEvidenceScenario = {
       await page.setViewportSize({width: 1512, height: 982});
       const changedReport = async route => {
         const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
-        if (body.operation === "read") return route.fulfill({json: {operation_id: body.operation_id, status: "accepted", artifacts: [
+        if (body.operation === "read") return route.fulfill({json: {operation_id: body.operation_id,
+          request_id: "request-analysis", agent_id: "local-analyst", todo_id: "todo_analysis",
+          status: "accepted", worker_active: false, recovery_required: false, artifacts: [
           {ref: "report.md", sha256: "f".repeat(64), text: "newer unverified report"},
         ]}});
         return route.fallback();
@@ -231,7 +233,8 @@ export const teamEvidenceScenario = {
       const changedSource = async route => {
         const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
         if (body.operation === "read" && body.operation_id === "accepted-analysis") {
-          return route.fulfill({json: {operation_id: body.operation_id, status: "accepted", recovery_required: false,
+          return route.fulfill({json: {operation_id: body.operation_id, request_id: "request-analysis",
+            agent_id: "local-analyst", todo_id: "todo_analysis", status: "accepted", worker_active: false, recovery_required: false,
             artifacts: [{ref: "report.json", sha256: "f".repeat(64), text: "newer content must not appear"}]}});
         }
         return route.fallback();
@@ -274,8 +277,8 @@ export const teamEvidenceScenario = {
       const rejectedSource = async route => {
         const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
         if (body.operation === "read" && body.operation_id === "review-objection") {
-          return route.fulfill({json: {operation_id: body.operation_id, agent_id: "independent-reviewer",
-            status: "rejected", recovery_required: false}});
+          return route.fulfill({json: {operation_id: body.operation_id, request_id: "request-review",
+            agent_id: "independent-reviewer", todo_id: "todo_review", status: "rejected", worker_active: false, recovery_required: false}});
         }
         return route.fallback();
       };
@@ -295,8 +298,8 @@ export const teamEvidenceScenario = {
         const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
         if (body.operation === "read" && body.operation_id === "accepted-analysis") {
           revisionRechecks++;
-          return route.fulfill({json: {operation_id: body.operation_id, agent_id: "local-analyst",
-            status: "accepted", recovery_required: false,
+          return route.fulfill({json: {operation_id: body.operation_id, request_id: "request-analysis",
+            agent_id: "local-analyst", todo_id: "todo_analysis", status: "accepted", worker_active: false, recovery_required: false,
             artifacts: [{ref: "report.json", sha256: "f".repeat(64), text: "newer revision"}]}});
         }
         return route.fallback();

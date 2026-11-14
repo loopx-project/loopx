@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
-import { fetchChatHistory, fetchChatSessionHistory } from "../src/data/chat";
+import { fetchChatHistory, fetchChatSession, fetchChatSessionHistory } from "../src/data/chat";
 import { readConversationReturns } from "../src/data/conversation-return-observation";
 import { conversationReturnSessions, reconcileConversationReturns } from "../src/data/conversation-returns";
 
@@ -116,6 +116,10 @@ try {
     (value: any) => {value.message_page.snapshot_sha256 = "0".repeat(64);},
     (value: any) => {value.message_page.offset = 0;},
     (value: any) => {value.messages[0].message_id = complete.messages[0].message_id;},
+    (value: any) => {value.messages[0].text = null;},
+    (value: any) => {value.messages[0].role = null;},
+    (value: any) => {value.messages[0].created_at = 7;},
+    (value: any) => {value.messages[0].turn_id = 7;},
     (value: any) => {delete value.message_page;},
   ]) {
     globalThis.fetch = async (input, init) => {
@@ -126,6 +130,15 @@ try {
     };
     await assert.rejects(() => fetchChatSessionHistory("old"), "Never accept mixed or partial pages");
   }
+  globalThis.fetch = async (input, init) => {
+    const response = await routedFetch(input, init);
+    if (new URL(String(input), origin).searchParams.has("message_cursor")) return response;
+    const value = await response.json();
+    assert.ok(value.messages.length > 0);
+    value.messages[0].text = null;
+    return new Response(JSON.stringify(value), {status: response.status});
+  };
+  await assert.rejects(() => fetchChatSessionHistory("old"), "A malformed first page must not be published");
   globalThis.fetch = routedFetch;
   const abort = new AbortController(); abort.abort(); requests.length = 0;
   await assert.rejects(() => fetchChatSessionHistory("old", abort.signal));
@@ -145,6 +158,61 @@ try {
   // The existing full-snapshot service remains compatible on the first read.
   globalThis.fetch = async () => new Response(JSON.stringify(complete));
   assert.deepEqual((await fetchChatSessionHistory(complete.session)).messages, complete.messages);
+  const collaboration = {schema_version: "collaboration_request_readback_v0", request_id: "request", agent_id: "agent",
+    read_status: "pending", decision: "pending", returns: [],
+    brief: {purpose: "purpose", context: "context", constraints: [], inputs: [], acceptance: [], return_requirement: "reply"}};
+  const legacy = {...complete, messages: [{schema_version: "loopx_chat_message_v1", message_id: "legacy-id",
+    turn_id: null, role: "agent", text: "", created_at: "2025-01-01T00:00:00Z", extension: {preserved: true},
+    attachments: [{id: "file", name: "note.txt", size: 0, mime_type: "text/plain", data_url: "data:text/plain;base64,"}],
+    reply_context: {source_text: "question", parent: {message_id: "parent", content: "quoted", complete: true},
+      thread: {root_message_id: "root", thread_id: "thread", before_message_id: "legacy-id", complete: false,
+        messages: [{message_id: "earlier", content: "before", content_truncated: false, position: 0}], omitted_message_count: 0}},
+    collaboration, collaborations: [collaboration],
+    return_delivery: {schema_version: "manager_return_delivery_status_v0", phase: "conclusion", status: "delivered", request_revision: 1}}]};
+  globalThis.fetch = async () => new Response(JSON.stringify(legacy));
+  assert.deepEqual((await fetchChatSessionHistory("old")).messages, legacy.messages);
+  assert.deepEqual((await fetchChatSession("old")).messages, legacy.messages);
+  for (const invalid of [
+    {...legacy, session: {...legacy.session, session_id: "different-session"}},
+    {...legacy, schema_version: "unsupported"},
+  ]) {
+    globalThis.fetch = async () => new Response(JSON.stringify(invalid));
+    await assert.rejects(() => fetchChatSession("old"), "Direct reads must match the requested Session and schema");
+  }
+  const unversioned = structuredClone(legacy);
+  delete (unversioned.messages[0] as Partial<typeof unversioned.messages[0]>).schema_version;
+  globalThis.fetch = async () => new Response(JSON.stringify(unversioned));
+  assert.deepEqual((await fetchChatSessionHistory("old")).messages, unversioned.messages);
+  const nullAttachments = {...legacy, messages: [{...legacy.messages[0], attachments: null}]};
+  globalThis.fetch = async () => new Response(JSON.stringify(nullAttachments));
+  assert.deepEqual((await fetchChatSessionHistory("old")).messages, nullAttachments.messages);
+  const duplicates = {...legacy, messages: [legacy.messages[0], {...legacy.messages[0]}]};
+  globalThis.fetch = async () => new Response(JSON.stringify(duplicates));
+  await assert.rejects(() => fetchChatSessionHistory("old"), "Legacy history must reject duplicate message IDs");
+  await assert.rejects(() => fetchChatSession("old"), "Direct reads must reject duplicate message IDs");
+  const selectedTurn = {...legacy.messages[0], turn_id: "selected-turn"};
+  const unrelated = {...legacy.messages[0], message_id: "other", turn_id: "other-turn", text: null};
+  globalThis.fetch = async () => new Response(JSON.stringify({...legacy, messages: [selectedTurn, unrelated]}));
+  assert.deepEqual((await fetchChatSessionHistory("old", undefined, "selected-turn")).messages, [selectedTurn],
+    "An unrelated damaged legacy message must not hide the selected Turn");
+  for (const invalid of [
+    {...legacy.messages[0], schema_version: "unsupported"},
+    {...legacy.messages[0], message_id: ""}, {...legacy.messages[0], role: null},
+    {...legacy.messages[0], text: null}, {...legacy.messages[0], created_at: null},
+    {...legacy.messages[0], turn_id: 7}, {...legacy.messages[0], attachments: "invalid"},
+    {...legacy.messages[0], attachments: [{id: "file"}]},
+    {...legacy.messages[0], reply_context: {source_text: "", parent: null}},
+    {...legacy.messages[0], reply_context: {...legacy.messages[0].reply_context, thread: {messages: "invalid"}}},
+    {...legacy.messages[0], collaborations: "invalid"},
+    {...legacy.messages[0], collaboration: {...collaboration, brief: null}},
+    {...legacy.messages[0], collaboration: {...collaboration, schema_version: "unsupported"}},
+    {...legacy.messages[0], collaborations: [{...collaboration, returns: "invalid"}]},
+    {...legacy.messages[0], return_delivery: {...legacy.messages[0].return_delivery, request_revision: {invalid: true}}}, null,
+  ]) {
+    globalThis.fetch = async () => new Response(JSON.stringify({...legacy, messages: [invalid]}));
+    await assert.rejects(() => fetchChatSessionHistory("old"), "Malformed legacy messages must not be published");
+    await assert.rejects(() => fetchChatSession("old"), "Malformed direct messages must not be published");
+  }
   globalThis.fetch = routedFetch;
   child.stdin.end("inspect\n");
   assert.deepEqual(await next(), { store_unchanged: true, turn_count: 0 });

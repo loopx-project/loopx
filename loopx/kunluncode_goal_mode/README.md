@@ -75,9 +75,25 @@ identity selection still come from the current working directory and the
 ignored `.loopx/kunluncode.json` binding.
 
 The installer never overwrites a foreign same-name entry unless `--replace` is
-explicit. If adding the replacement fails, it restores a command-based previous
-entry; registrations that cannot be safely reconstructed are rejected before
+explicit. If adding a replacement exits unsuccessfully and readback shows no
+same-name entry, it attempts to restore the previous command-based entry and
+checks the result. It rejects entries that cannot be reconstructed before
 removal.
+
+Before replacement, the installer saves the previous entry in a private JSON
+recovery file with its name, command and arguments. If a command times out, it
+reads the current configuration and stops
+without automatically writing another entry. If there was a previous entry,
+the error gives the recovery-file path. Inspect that file and
+`kunluncode config get mcp_servers` locally before deciding how to restore it;
+the file can contain secrets. Remove it after verifying the chosen configuration.
+Coordinate other writers while replacing or restoring an entry: the installer
+does not use an atomic compare-and-swap with them.
+
+If `uv pip install` times out, the installer accepts the environment only after
+an isolated probe checks the pinned MCP version, LoopX version and source
+checkout when applicable. A matching registration does not prove the server
+starts; run the MCP test below.
 
 Read the connection back:
 

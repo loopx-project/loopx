@@ -630,6 +630,12 @@ function agentModelSelectionKey(contextId: string, agentId: string) {
   return `${contextId}:${agentId}`;
 }
 
+function runConversationKey(run: {goalId: string; runId?: string}) {
+  return run.runId === "manager:resume-failed"
+    ? conversationContextKey({kind: "manager"})
+    : conversationContextKey({kind: "goal", goalId: run.goalId});
+}
+
 type PersonalManagerAnswer = {
   lines: string[];
   text: string;
@@ -1460,6 +1466,7 @@ function PersonalGoalHome({
   const sessionDiscoveryKey = model.goals.some((goal) => goal.activationState === "active" && goal.loadState === "loading")
     ? "loading" : model.goals.map((goal) => `${goal.goalId}:${goal.agentId}`).join("|");
   const contextId = conversationContextKey(conversationContext);
+  const selectedGoalContextId = selectedGoal ? conversationContextKey({kind: "goal", goalId: selectedGoal.goalId}) : "";
   const activeConversationContext = useRef(contextId);
   activeConversationContext.current = contextId;
   const discoveredAgents: PersonalAgentOption[] = runtimeAgents.length > 0
@@ -2175,7 +2182,7 @@ function PersonalGoalHome({
           try {
             const completed = await readCompletedChatTurn(session.session_id, turnId, controller.signal);
             if (controller.signal.aborted) return;
-            const persisted = !completed || await projectRecoveredTurnProposals(manager ? "manager" : goalId!, session.goal_id ?? undefined, turnId, completed.proposals, null);
+            const persisted = !completed || await projectRecoveredTurnProposals(manager ? "manager" : conversationContextKey({kind: "goal", goalId: goalId!}), session.goal_id ?? undefined, turnId, completed.proposals, null);
             if (persisted) projected.add(key);
             else retry = true;
           } catch {
@@ -2213,7 +2220,7 @@ function PersonalGoalHome({
         const next = { ...current };
         for (const row of rows) {
           if (!row.session) continue;
-          next[row.goalId] = {
+          next[conversationContextKey({kind: "goal", goalId: row.goalId})] = {
             agentId: row.session.agent_id,
             resumable: row.session.resumable,
             sessionId: row.session.session_id,
@@ -2355,14 +2362,15 @@ function PersonalGoalHome({
   }
 
   async function prepareGoalConversation(goalId: string, agentId: string, signal?: AbortSignal) {
-    const key = `${goalId}:${agentId}`;
+    const targetContextId = conversationContextKey({kind: "goal", goalId});
+    const key = `${targetContextId}:${agentId}`;
     const existing = sessionIds.current.get(key);
     if (existing) return existing;
     const session = await createChatSession({ kind: "goal", goalId }, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", signal, requestedAgentModels.current[key], requestedAgentEfforts.current[key]);
-    recordSessionAdmission(goalId, session.session);
+    recordSessionAdmission(targetContextId, session.session);
     sessionIds.current.set(key, session.session_id);
     newSessionRequired.current.delete(key);
-    recordRuntimeBinding(goalId, {agentId, resumable: true, sessionId: session.session_id, status: session.session.status});
+    recordRuntimeBinding(targetContextId, {agentId, resumable: true, sessionId: session.session_id, status: session.session.status});
     return session.session_id;
   }
 
@@ -2419,8 +2427,8 @@ function PersonalGoalHome({
       });
       void recordProjectionExchange({
         answer: [answer.text, ...answer.lines.slice(0, 3)].filter(Boolean).join("\n"),
-        contextKind: targetContextId === "manager" ? "manager" : "goal",
-        goalId: targetContextId === "manager" ? undefined : targetContextId,
+        contextKind: targetContext.kind === "manager" ? "manager" : "goal",
+        goalId: targetContext.kind === "goal" ? targetContext.goalId : undefined,
         question,
       }).then((receipt) => {
         updateConversationMessage(targetContextId, userMessageId, {
@@ -2774,8 +2782,8 @@ function PersonalGoalHome({
     }
   }
 
-  async function interruptManagerTurn(run?: { agentId: string; goalId: string; sessionId?: string; turnId?: string }) {
-    const targetContextId = run?.goalId ?? contextId;
+  async function interruptManagerTurn(run?: { agentId: string; goalId: string; runId?: string; sessionId?: string; turnId?: string }, exactContextId?: string) {
+    const targetContextId = exactContextId ?? (run ? runConversationKey(run) : contextId);
     const binding = runtimeBindings[targetContextId];
     const agentId = run?.agentId ?? binding?.agentId ?? selectedAgent.agentId;
     const sessionKey = `${targetContextId}:${agentId}`;
@@ -2812,8 +2820,8 @@ function PersonalGoalHome({
     }
   }
 
-  async function retryManagerSession(run: { agentId: string; goalId: string; sessionId?: string }) {
-    const targetContextId = run.goalId;
+  async function retryManagerSession(run: { agentId: string; goalId: string; runId?: string; sessionId?: string }) {
+    const targetContextId = runConversationKey(run);
     const sessionKey = `${targetContextId}:${run.agentId}`;
     const sessionId = run.sessionId ?? runtimeBindings[targetContextId]?.sessionId ?? sessionIds.current.get(sessionKey);
     if (!sessionId) return;
@@ -2838,11 +2846,12 @@ function PersonalGoalHome({
     }
   }
 
-  function startNewManagerSession(run: { agentId: string; goalId: string }) {
-    const sessionKey = `${run.goalId}:${run.agentId}`;
+  function startNewManagerSession(run: { agentId: string; goalId: string; runId?: string }) {
+    const targetContextId = runConversationKey(run);
+    const sessionKey = `${targetContextId}:${run.agentId}`;
     sessionIds.current.delete(sessionKey);
     newSessionRequired.current.add(sessionKey);
-    recordRuntimeBinding(run.goalId, {
+    recordRuntimeBinding(targetContextId, {
       agentId: run.agentId,
       resumable: true,
       sessionId: "new-session-pending",
@@ -2850,13 +2859,14 @@ function PersonalGoalHome({
     });
   }
 
-  async function closeManagerSession(run: { agentId: string; goalId: string; sessionId?: string }) {
-    const sessionKey = `${run.goalId}:${run.agentId}`;
-    const sessionId = run.sessionId ?? runtimeBindings[run.goalId]?.sessionId ?? sessionIds.current.get(sessionKey);
+  async function closeManagerSession(run: { agentId: string; goalId: string; runId?: string; sessionId?: string }) {
+    const targetContextId = runConversationKey(run);
+    const sessionKey = `${targetContextId}:${run.agentId}`;
+    const sessionId = run.sessionId ?? runtimeBindings[targetContextId]?.sessionId ?? sessionIds.current.get(sessionKey);
     if (sessionId && sessionId !== "new-session-pending") await closeChatSession(sessionId);
     sessionIds.current.delete(sessionKey);
     newSessionRequired.current.add(sessionKey);
-    recordRuntimeBinding(run.goalId, null);
+    recordRuntimeBinding(targetContextId, null);
   }
 
   function chooseAgent(agentId: string) {
@@ -2979,30 +2989,30 @@ function PersonalGoalHome({
     // A persistent chat session is not itself waiting work. Only surface a
     // Goal-level execution row when there is execution, a status observation,
     // or a wait/fault. Observations are not deliverable Files.
-    ...(selectedGoal && (runtimeBindings[selectedGoal.goalId]?.turnId
+    ...(selectedGoal && (runtimeBindings[selectedGoalContextId]?.turnId
       || selectedGoal.hasRunObservation || goalHasExecutionSummary(selectedGoal)) ? [{
       id: `run:${selectedGoal.goalId}`,
       kind: "run" as const,
       run: {
-        agentId: runtimeBindings[selectedGoal.goalId]?.agentId ?? selectedGoal.agentId,
-        agentLabel: personalAgentLabel(runtimeBindings[selectedGoal.goalId]?.agentId ?? selectedGoal.agentId),
-        canInterrupt: Boolean(runtimeBindings[selectedGoal.goalId]?.turnId),
+        agentId: runtimeBindings[selectedGoalContextId]?.agentId ?? selectedGoal.agentId,
+        agentLabel: personalAgentLabel(runtimeBindings[selectedGoalContextId]?.agentId ?? selectedGoal.agentId),
+        canInterrupt: Boolean(runtimeBindings[selectedGoalContextId]?.turnId),
         completedSteps: selectedGoal.agentTodos.filter((todo) => todo.done).length,
         goalId: selectedGoal.goalId,
         goalTitle: selectedGoal.title,
         latestActivity: selectedGoal.agentSentence,
-        resumable: runtimeBindings[selectedGoal.goalId]?.resumable ?? true,
+        resumable: runtimeBindings[selectedGoalContextId]?.resumable ?? true,
         runId: `goal:${selectedGoal.goalId}`,
-        sessionId: runtimeBindings[selectedGoal.goalId]?.sessionId,
-        sessionStatus: runtimeBindings[selectedGoal.goalId]?.status,
-        status: runtimeBindings[selectedGoal.goalId]?.turnId
+        sessionId: runtimeBindings[selectedGoalContextId]?.sessionId,
+        sessionStatus: runtimeBindings[selectedGoalContextId]?.status,
+        status: runtimeBindings[selectedGoalContextId]?.turnId
           ? "running" as const
           : selectedGoal.state === "需修复"
             ? "failed" as const
             : "waiting" as const,
         title: selectedGoal.nextSentence,
         totalSteps: selectedGoal.agentTodos.length || 1,
-        turnId: runtimeBindings[selectedGoal.goalId]?.turnId,
+        turnId: runtimeBindings[selectedGoalContextId]?.turnId,
       },
     }] : []),
     ...contextMessages.map((message): WorkspaceTimelineItem => ({
@@ -3133,6 +3143,7 @@ function PersonalGoalHome({
           onApplyAttention: (attention) => openGoalChat(attention.goalId),
           onCorrectRun: async (run, message) => {
             if (!run.sessionId) throw new Error("这个 Run 还没有可纠偏的执行 Session。");
+            const targetContextId = runConversationKey(run);
             const proposal = await previewTypedAction({
               actionKind: "run.correct",
               context: { kind: "run", goal_id: run.goalId, todo_id: run.todoId },
@@ -3142,7 +3153,7 @@ function PersonalGoalHome({
             });
             const applied = await applyTypedAction(proposal.proposal_id);
             const turnId = typeof applied.turn?.turn_id === "string" ? applied.turn.turn_id : undefined;
-            recordRuntimeBinding(run.goalId, {
+            recordRuntimeBinding(targetContextId, {
               agentId: run.agentId,
               resumable: true,
               sessionId: run.sessionId,
@@ -3150,15 +3161,15 @@ function PersonalGoalHome({
               turnId,
             });
             if (turnId) {
-              activeTurnIds.current.set(run.goalId, turnId);
+              activeTurnIds.current.set(targetContextId, turnId);
               const controller = new AbortController();
               const observationKey = `${run.sessionId}:${turnId}`;
               // History recovery must adopt this correction's observer when
               // the owner returns to Chat, just as it adopts composer Turns.
               turnObservers.current.set(observationKey, controller);
-              streamControllers.current.set(run.goalId, controller);
+              streamControllers.current.set(targetContextId, controller);
               let streamedText = "";
-              const messageId = appendManagerAssistantMessage(run.goalId, {
+              const messageId = appendManagerAssistantMessage(targetContextId, {
                 activity: ["正在把纠偏送入原执行 Session"],
                 sourceTurnId: turnId,
                 sourceSessionId: run.sessionId,
@@ -3173,10 +3184,10 @@ function PersonalGoalHome({
                   signal: controller.signal,
                   onDelta: (delta) => {
                     streamedText += delta;
-                    updateConversationMessage(run.goalId, messageId, { text: streamedText });
+                    updateConversationMessage(targetContextId, messageId, { text: streamedText });
                   },
                 });
-                updateConversationMessage(run.goalId, messageId, {
+                updateConversationMessage(targetContextId, messageId, {
                   activity: [],
                   pending: false,
                   text: visibleAgentMessage(streamed.response.message || streamedText.trim()) || `${run.agentLabel} 已完成纠偏。`,
@@ -3184,18 +3195,18 @@ function PersonalGoalHome({
               } catch (error) {
                 const interrupted = interruptedTurnIds.current.delete(turnId)
                   || (error instanceof ChatApiError && error.payload.error_code === "turn_interrupted");
-                updateConversationMessage(run.goalId, messageId, {
+                updateConversationMessage(targetContextId, messageId, {
                   activity: [],
                   pending: false,
                   text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "纠偏回合失败。",
                 });
               } finally {
                 if (turnObservers.current.get(observationKey) === controller) turnObservers.current.delete(observationKey);
-                const ownsStream = streamControllers.current.get(run.goalId) === controller;
-                if (ownsStream) streamControllers.current.delete(run.goalId);
-                if (ownsStream && activeTurnIds.current.get(run.goalId) === turnId) {
-                  activeTurnIds.current.delete(run.goalId);
-                  recordRuntimeBinding(run.goalId, {
+                const ownsStream = streamControllers.current.get(targetContextId) === controller;
+                if (ownsStream) streamControllers.current.delete(targetContextId);
+                if (ownsStream && activeTurnIds.current.get(targetContextId) === turnId) {
+                  activeTurnIds.current.delete(targetContextId);
+                  recordRuntimeBinding(targetContextId, {
                     agentId: run.agentId,
                     resumable: true,
                     sessionId: run.sessionId,
@@ -3224,7 +3235,7 @@ function PersonalGoalHome({
               goalId: targetContextId,
               sessionId: binding.sessionId,
               turnId,
-            });
+            }, targetContextId);
           },
           onSteerConversationTurn: async (targetContextId, turnId, message, ingressId) => {
             const binding = runtimeBindings[targetContextId];
@@ -3239,6 +3250,7 @@ function PersonalGoalHome({
           },
           onOpenRunSession: async (run) => {
             if (!run.sessionId) return;
+            const targetContextId = runConversationKey(run);
             const sessionId = run.sessionId;
             const snapshot = await fetchChatSession(sessionId);
             setExecutionSessionSnapshots((current) => ({
@@ -3247,7 +3259,7 @@ function PersonalGoalHome({
             }));
             setMessagesByContext((current) => ({
               ...current,
-              [run.goalId]: snapshot.messages.map((message) => ({
+              [targetContextId]: snapshot.messages.map((message) => ({
                 sourceMessageId: message.message_id,
               goalDraft: normalizeGoalDraft(message.goal_draft),
                 sourceSessionId: sessionId,
@@ -3262,7 +3274,7 @@ function PersonalGoalHome({
                 text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
               })),
             }));
-            recordRuntimeBinding(run.goalId, {
+            recordRuntimeBinding(targetContextId, {
               agentId: run.agentId,
               resumable: snapshot.session.resumable,
               sessionId,
@@ -3385,7 +3397,7 @@ function PersonalGoalHome({
             }
           },
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
-          onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, contextId: goalId, loopxMode: {operation, settings}}); },
+          onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, contextId: conversationContextKey({kind: "goal", goalId}), loopxMode: {operation, settings}}); },
           onStartNewRunSession: startNewManagerSession,
         }}
         goalArchiveLoadState={goalArchiveLoadState}

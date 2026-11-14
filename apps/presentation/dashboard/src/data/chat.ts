@@ -1,6 +1,6 @@
 import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
 import {sourceReadApiUrl} from "./local-status-query";
-import type {OracleEvidence} from "./goal-acceptance-observation";
+import {oracleEvidenceSchema, type OracleEvidence} from "./goal-acceptance-observation";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
@@ -716,16 +716,19 @@ export function conversationSupportsStatusProjection(context: ConversationContex
 
 // Goal ids are single path segments, so a key containing "/" never names a Goal.
 const PROJECT_CONVERSATION_KEY_PREFIX = "project/";
+const MANAGER_GOAL_CONVERSATION_KEY = "goal/manager";
 
 export function conversationContextKey(context: ConversationContext): string {
   if (context.kind === "manager") return "manager";
   if (context.kind === "managed") return `managed/${encodeURIComponent(context.goalId)}/${encodeURIComponent(context.agentId)}/${encodeURIComponent(context.sessionId)}`;
   if (context.kind === "bound") return `bound/${encodeURIComponent(context.bindingId)}/${encodeURIComponent(context.sessionId)}`;
-  return context.kind === "goal" ? context.goalId : `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
+  if (context.kind === "goal") return context.goalId === "manager" ? MANAGER_GOAL_CONVERSATION_KEY : context.goalId;
+  return `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
 }
 
 export function conversationContextOfKey(key: string): ConversationContext {
   if (key === "manager") return { kind: "manager" };
+  if (key === MANAGER_GOAL_CONVERSATION_KEY) return { kind: "goal", goalId: "manager" };
   if (key.startsWith("managed/")) {
     const [, goalId = "", agentId = "", sessionId = ""] = key.split("/");
     return {kind: "managed", goalId: decodeURIComponent(goalId), agentId: decodeURIComponent(agentId), sessionId: decodeURIComponent(sessionId)};
@@ -968,8 +971,57 @@ export type ChatSessionSnapshot = {
   };
 };
 
+const chatReplyContextSchema = z.object({
+  source_text: z.string(),
+  parent: z.object({message_id: z.string(), content: z.string(), complete: z.boolean()}).passthrough(),
+  thread: z.object({
+    omitted_message_count: z.number().nullish(),
+    messages: z.array(z.object({message_id: z.string(), content: z.string(), content_truncated: z.boolean(),
+      sender: z.object({kind: z.string()}).passthrough().nullish(), created_at: z.string().nullish()}).passthrough()),
+  }).passthrough().nullish(),
+}).passthrough();
+
+const chatCollaborationSchema = z.object({
+  schema_version: z.literal("collaboration_request_readback_v0").optional(),
+  request_id: z.string(), agent_id: z.string(), goal_id: z.string().nullish(),
+  request_revision: z.number().nullish(), decision_reason: z.string().nullish(),
+  brief: z.object({
+    purpose: z.string(), context: z.string(), constraints: z.array(z.string()),
+    inputs: z.array(z.object({ref: z.string(), description: z.string(), sha256: z.string().nullish()}).passthrough()),
+    acceptance: z.array(z.string()), return_requirement: z.string(),
+  }).passthrough(),
+  returns: z.array(z.object({phase: z.string(), status: z.string()}).passthrough()),
+}).passthrough();
+
+const chatVisibleMessagesSchema = z.array(z.object({
+  schema_version: z.literal("loopx_chat_message_v1").optional(),
+  message_id: z.string().min(1), turn_id: z.string().nullable(), role: z.string(),
+  text: z.string(), created_at: z.string(),
+  attachments: z.array(z.object({id: z.string(), name: z.string(), size: z.number(),
+    mime_type: z.string(), data_url: z.string()}).passthrough()).nullish(),
+  reply_context: chatReplyContextSchema.nullish(),
+  collaboration: chatCollaborationSchema.nullish(),
+  collaborations: z.array(chatCollaborationSchema).nullish(),
+  return_delivery: z.object({schema_version: z.literal("manager_return_delivery_status_v0"),
+    phase: z.enum(["decision", "conclusion"]), status: z.string(), request_revision: z.number().int().nonnegative().nullish(),
+    error: z.string().nullish(), verification: z.string().nullish(),
+    created_at: z.string().nullish(), delivered_at: z.string().nullish()}).passthrough().nullish(),
+}).passthrough());
+
+function requireValidChatMessages(messages: unknown): void {
+  const parsed = chatVisibleMessagesSchema.safeParse(messages);
+  if (!parsed.success || new Set(parsed.data.map(message => message.message_id)).size !== parsed.data.length) {
+    throw new Error("The original Session messages could not be verified.");
+  }
+}
+
 export async function fetchChatSession(sessionId: string, signal?: AbortSignal) {
-  return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
+  const snapshot = await requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
+  if (snapshot?.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || snapshot.session?.session_id !== sessionId) {
+    throw new Error("The original Session scope changed during history read.");
+  }
+  requireValidChatMessages(snapshot.messages);
+  return snapshot;
 }
 
 export const chatQueueInputRequestSchema = z.discriminatedUnion("action", [
@@ -1147,9 +1199,12 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
     // page cannot silently lose the cursor contract and masquerade as complete.
     if (!Object.hasOwn(snapshot, "message_page")) {
       if (cursor !== null) throw new Error("The history page contract changed during read.");
+      const legacyMessages = turnId === undefined ? snapshot.messages : snapshot.messages.filter(row => row.turn_id === turnId);
+      requireValidChatMessages(legacyMessages);
       return {...snapshot, verifiedHistoryBasis: undefined,
-        messages: turnId === undefined ? snapshot.messages : snapshot.messages.filter(row => row.turn_id === turnId)};
+        messages: legacyMessages};
     }
+    requireValidChatMessages(snapshot.messages);
     const parsed = chatMessagePageSchema.safeParse(snapshot.message_page);
     if (!parsed.success) throw new Error("The original history page could not be verified.");
     const page = parsed.data, end = messages.length + snapshot.messages.length;
@@ -1218,6 +1273,7 @@ async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: C
     || !historyBasisMatches(proof.data.next, saved.messages.length + snapshot.messages.length)) {
     throw new Error("The original history suffix could not be verified.");
   }
+  requireValidChatMessages(snapshot.messages);
   const ids = new Set(saved.messages.map(message => message.message_id));
   for (const message of snapshot.messages) {
     if (!message || typeof message.message_id !== "string" || !message.message_id || ids.has(message.message_id)) {
@@ -1742,43 +1798,87 @@ export type DelegationReadback = {
     blocking_operation_id?: string; blocking_input_ref?: string; path?: string[]};
   dependencies?: DelegationDependency[]; adoptions?: DelegationAdoption[];
 };
+const delegationArtifactVersionSchema = z.object({ref: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/)});
+const delegationReadbackSchema = z.object({
+  ok: z.literal(true).optional(),
+  operation_id: z.string().min(1), request_id: z.string().min(1), agent_id: z.string().min(1),
+  todo_id: z.string().nullable(), status: z.string().min(1), worker_active: z.boolean(), recovery_required: z.boolean(),
+  artifacts: z.array(delegationArtifactVersionSchema.extend({text: z.string()})).optional(), error: z.string().optional(),
+  validation: z.object({source: z.enum(["goal_acceptance", "todo_validation", "request_validation"]),
+    basis_sha256: z.string(), check_count: z.number().int().nonnegative(), pinned_file_count: z.number().int().nonnegative(),
+    checked_at: z.string().optional(), output_versions: z.array(delegationArtifactVersionSchema).optional(),
+    oracle_checks: z.array(oracleEvidenceSchema.extend({criterion_id: z.string()})).optional()}).optional(),
+  task_failure: z.object({recovery_kind: z.enum(["repair_required", "replan_required"]),
+    summary: z.string(), turn_key: z.string()}).optional(),
+  current_use: z.object({state: z.enum(["current", "unavailable"]),
+    reason: z.string().optional(), blocking_operation_id: z.string().optional(),
+    blocking_input_ref: z.string().optional(), path: z.array(z.string()).optional()}).optional(),
+  dependencies: z.array(delegationArtifactVersionSchema.extend({operation_id: z.string(), input_ref: z.string(),
+    relation: z.enum(["responds_to", "revises", "uses"]), state: z.enum(["current", "unavailable"])})).optional(),
+  adoptions: z.array(z.object({requester_agent_id: z.string(), consumer_operation_id: z.string(),
+    consumer_request_id: z.string(), consumer_agent_id: z.string(), consumer_todo_id: z.string().nullable(),
+    state: z.enum(["current", "unavailable"]), source_artifacts: z.array(delegationArtifactVersionSchema),
+    consumer_artifacts: z.array(delegationArtifactVersionSchema)})).optional(),
+});
+function requireDelegationReadback(readback: unknown, operationId: string): DelegationReadback {
+  const parsed = delegationReadbackSchema.safeParse(readback);
+  if (!parsed.success || parsed.data.operation_id !== operationId) {
+    throw new Error("执行详情无法核验，请重新读取 / Execution details cannot be verified; retry");
+  }
+  return readback as DelegationReadback;
+}
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
-  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+  return requestJson<unknown>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
-  });
+  }).then(readback => requireDelegationReadback(readback, operationId));
 }
 export function adoptLoopXTeamWork(sessionId: string, operationId: string, consumerOperationId: string) {
-  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+  return requestJson<unknown>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "adopt", operation_id: operationId,
       consumer_operation_id: consumerOperationId}),
-  });
+  }).then(readback => requireDelegationReadback(readback, operationId));
 }
 export function revalidateLoopXTeamWork(sessionId: string, operationId: string) {
-  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+  return requestJson<unknown>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "revalidate", operation_id: operationId}),
-  });
+  }).then(readback => requireDelegationReadback(readback, operationId));
 }
-export type ManagedGoalResultRow = {
-  todo_id: string; title: string; producer_agent_id: string; sha256: string;
-  content_type: string; size_bytes: number; completed_at?: string | null;
-};
-export type ManagedGoalResultPage = {
-  ok: true; items: ManagedGoalResultRow[]; total: number; next_cursor: string | null;
-  unavailable_count: number; unavailable_todo_ids: string[];
-};
-export type ManagedGoalResultRead = {
-  ok: true; goal_id: string; todo_id: string; text: string;
-  result: {sha256: string; content_type: string; producer_agent_id: string};
-};
-export function fetchManagedGoalResults(goalId: string, cursor?: string) {
+const managedResultIdentitySchema = z.object({
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  content_type: z.string().min(1), producer_agent_id: z.string().min(1),
+}).passthrough();
+const managedGoalResultRowSchema = managedResultIdentitySchema.extend({
+  todo_id: z.string().min(1), title: z.string().min(1), size_bytes: z.number().int().nonnegative(),
+  completed_at: z.string().nullable().optional(),
+});
+const managedGoalResultPageSchema = z.object({
+  ok: z.literal(true), items: z.array(managedGoalResultRowSchema), total: z.number().int().nonnegative(),
+  next_cursor: z.string().min(1).nullable(), unavailable_count: z.number().int().nonnegative(),
+  unavailable_todo_ids: z.array(z.string().min(1)),
+}).passthrough().refine(page => page.unavailable_count === page.unavailable_todo_ids.length
+  && page.items.length + page.unavailable_count <= page.total);
+const managedGoalResultReadSchema = z.object({
+  ok: z.literal(true), goal_id: z.string().min(1), todo_id: z.string().min(1), text: z.string(),
+  result: managedResultIdentitySchema,
+}).passthrough();
+export type ManagedGoalResultRow = z.infer<typeof managedGoalResultRowSchema>;
+export type ManagedGoalResultPage = z.infer<typeof managedGoalResultPageSchema>;
+export type ManagedGoalResultRead = z.infer<typeof managedGoalResultReadSchema>;
+export async function fetchManagedGoalResults(goalId: string, cursor?: string) {
   const params = new URLSearchParams({goal_id: goalId});
   if (cursor) params.set("cursor", cursor);
-  return requestJson<ManagedGoalResultPage>(`/api/chat/goal-results?${params}`);
+  const page = managedGoalResultPageSchema.safeParse(await requestJson<unknown>(`/api/chat/goal-results?${params}`));
+  if (!page.success) throw new Error("报告列表响应不完整 / Report inventory response is incomplete");
+  return page.data;
 }
-export function readManagedGoalResult(goalId: string, todoId: string) {
-  return requestJson<ManagedGoalResultRead>(
+export async function readManagedGoalResult(goalId: string, todoId: string) {
+  const response = managedGoalResultReadSchema.safeParse(await requestJson<unknown>(
     `/api/chat/goal-results/${encodeURIComponent(todoId)}?goal_id=${encodeURIComponent(goalId)}`,
-  );
+  ));
+  if (!response.success || response.data.goal_id !== goalId || response.data.todo_id !== todoId) {
+    throw new Error("报告详情响应不完整或不匹配 / Report detail response is incomplete or mismatched");
+  }
+  return response.data;
 }
 export type DelegationState = "unavailable" | "accepted" | "rejected" | "recovery_required"
   | "stopped" | "executing" | "validating" | "dispatched" | "unknown";
@@ -1814,10 +1914,24 @@ export function delegationStateLabel(row: DelegationStateFacts, zh: boolean) {
   const label = DELEGATION_STATE_LABELS[delegationState(row)];
   return zh ? label.zh : label.en;
 }
-export function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
-  return requestJson<DelegationInventory>(`/api/chat/sessions/${sessionId}/loopx`, {
+const delegationInventorySchema = z.object({
+  ok: z.literal(true).optional(), schema_version: z.literal("loopx_delegation_inventory_v0").optional(),
+  items: z.array(z.object({record_id: z.string().min(1), operation_id: z.string().min(1).nullable(),
+    agent_id: z.string().optional(), todo_id: z.string().nullable().optional(), status: z.string().min(1),
+    worker_active: z.boolean().optional(), recovery_required: z.boolean().nullable(),
+    artifacts: z.array(delegationArtifactVersionSchema).optional(),
+    current_use: z.object({state: z.enum(["current", "unavailable"])}).optional()})),
+  has_more: z.boolean(), next_cursor: z.string().min(1).nullable(), page_readback_complete: z.boolean(),
+}).refine(page => page.has_more === (page.next_cursor !== null)
+  && (!page.page_readback_complete || page.items.every(row => row.status !== "unavailable")));
+export async function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
+  const inventory = await requestJson<unknown>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "operations", limit: 10, ...(cursor ? {cursor} : {})}),
   });
+  if (!delegationInventorySchema.safeParse(inventory).success) {
+    throw new Error("执行列表无法核验，请重新读取 / Execution inventory cannot be verified; retry");
+  }
+  return inventory as DelegationInventory;
 }
 export function inspectLoopXMember(sessionId: string, bindingId: string) {
   return requestJson<DelegationPreflight>(`/api/chat/sessions/${sessionId}/loopx`, {

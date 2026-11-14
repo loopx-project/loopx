@@ -108,10 +108,10 @@ export async function buildStats(db, day) {
     const rows = await db
       .prepare(
         `SELECT ${column} AS key, COUNT(*) AS installs FROM (` +
-          `SELECT install_id, ${column}, MAX(day) FROM pings WHERE substr(day, 1, 7) = ?1 GROUP BY install_id` +
+          `SELECT install_id, ${column}, MAX(day) FROM pings WHERE day >= ?1 AND day < date(?1, '+1 month') GROUP BY install_id` +
           `) GROUP BY key ORDER BY installs DESC`,
       )
-      .bind(day.slice(0, 7))
+      .bind(`${day.slice(0, 7)}-01`)
       .all();
     breakdown[column] = suppressSmall(rows.results);
   }
@@ -209,10 +209,9 @@ export async function handle(request, db, now = new Date()) {
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    const raw = new TextDecoder().decode(bytes);
     let parsed;
     try {
-      parsed = JSON.parse(raw);
+      parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch {
       return json({ error: "invalid JSON" }, 400);
     }
