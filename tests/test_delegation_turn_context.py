@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -242,6 +243,54 @@ def test_large_inbox_does_not_fall_back_to_unbounded_output(flow):
     assert "items" not in failure and "command" not in failure and "Long original request." not in output
     assert list(destination.iterdir()) == []
     assert entry.read_bytes() == before
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell 7 is not installed")
+@pytest.mark.parametrize("directory", ["release", "owner's release"])
+def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory):
+    root, registry, _, create = flow
+    _, _, receipt = create()
+    entry, = (_root(root) / "entries").glob(f"*/{receipt['request_id']}.json")
+    stored = json.loads(entry.read_bytes())
+    message = "Preserve the original constraint 核对原约束.\n" * 1100
+    _write(entry, {**stored, "message": message})
+    checkout = Path(__file__).resolve().parents[1]
+    launcher = root / directory / "loopx.ps1"
+    launcher.parent.mkdir()
+    shutil.copyfile(checkout / "scripts/loopx.ps1", launcher)
+    pointer = launcher.with_name("loopx-current-release.json")
+    pointer.write_text(json.dumps({"release_root": str(checkout), "python": sys.executable}), encoding="utf-8")
+    environment = dict(os.environ)
+    environment.pop("LOOPX_CURRENT_RELEASE_FILE", None)
+    environment["LOOPX_USAGE_PING"] = "0"
+    powershell = [shutil.which("pwsh"), "-NoProfile", "-NonInteractive"]
+    invocation = [str(launcher), "--cli-bin", str(launcher), "--registry", str(registry),
+        "--runtime-root", str(root), "manager-inbox", "read", "--format", "markdown",
+        "--goal-id", "research", "--agent-id", "worker"]
+    opening = subprocess.run([*powershell, "-File", *invocation], cwd=root, env=environment,
+        capture_output=True, timeout=60)
+    assert opening.returncode == 0, opening.stderr
+    assert 0 < len(opening.stdout) <= 12_000
+    markdown = opening.stdout.decode().replace("\r\n", "\n")
+    view = json.loads(markdown.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
+    before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
+    original = bytearray()
+    command = view["command"]
+    pages = 0
+    while command:
+        output = subprocess.run([*powershell, "-Command", command], cwd=root, env=environment,
+            capture_output=True, timeout=60)
+        assert output.returncode == 0, output.stderr
+        assert 0 < len(output.stdout) <= 12_000
+        page = json.loads(output.stdout)
+        assert page["ok"] and page["offset"] == len(original) and page["sha256"] == view["sha256"]
+        original.extend(page["content"].encode())
+        assert len(original) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+        command = None if page["eof"] else page["next_command"]
+        pages += 1
+    recovered, = json.loads(original)["items"]
+    assert pages > 1 and recovered["request_id"] == receipt["request_id"] and recovered["message"] == message
+    assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
