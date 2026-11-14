@@ -5,6 +5,7 @@ credentials or model account is read or contacted. Stdin controls source events.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -159,12 +160,42 @@ class SyntheticPrivateSource:
         if "--returned-files" in sys.argv:
             returned_files, reply_evidence = self.seed_returned_files(server, original)
             bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        history_images = {}
+        if "--history-images" in sys.argv:
+            def image(name, encoded):
+                return server.chat_store.append_message(sid, role="user", text=f"Original {name}", origin="lark",
+                    attachments=[{"id": name, "name": name + ".png", "mime_type": "image/png",
+                                  "size": len(base64.b64decode(encoded)), "data_url": "data:image/png;base64," + encoded}])
+
+            old = image("archived-image", "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGNQnLIKjhhwcgA6oBB17nqaVAAAAABJRU5ErkJggg==")
+            for index in range(75):
+                server.chat_store.append_message(sid, role="user", text=f"Original archived message {index:02d}.")
+            current = image("latest-image", "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4v0gdghjgLABwBAqxX1jWkgAAAABJRU5ErkJggg==")
+            server.chat_store.append_message(sid, role="agent", text="Latest original result after archived images.")
+            history_images = {"historyImages": {"old": old["message_id"], "current": current["message_id"]}}
+            original_image_handler = server.RequestHandlerClass._serve_chat_history_image
+            failed = False
+            failure_lock = threading.Lock()
+
+            def fail_first_image_read(handler, parts):
+                nonlocal failed
+                with failure_lock:
+                    fail = parts[3] == sid and parts[5] == old["message_id"] and not failed
+                    failed |= fail
+                if fail:
+                    handler._send_error("Fixture image temporarily unavailable", status=503)
+                    return True
+                return original_image_handler(handler, parts)
+
+            server.RequestHandlerClass._serve_chat_history_image = fail_first_image_read
+            journal = server.chat_store.sessions_root / sid / "messages.jsonl"
+            reply_evidence[journal] = journal.read_bytes()
         other, _ = runtime.open_session(goal_id=None, agent_id="codex", objective="", mode="new",
             work_dir=self.root / "project", project_ref=binding["project_ref"])
         server.chat_store.append_message(other["session_id"], role="agent", text="Unrelated desktop conversation — must remain separate.")
         print(json.dumps({"origin": f"http://127.0.0.1:{server.server_port}",
             "bindingId": binding["binding_id"], "sessionId": sid, "ordinarySessionId": other["session_id"],
-            **returned_files}), flush=True)
+            **returned_files, **history_images}), flush=True)
         settings_handler = server.RequestHandlerClass._private_conversations
         history_handler = server.RequestHandlerClass._session_snapshot
         sessions_handler = server.RequestHandlerClass._list_sessions
@@ -280,6 +311,16 @@ class SyntheticPrivateSource:
                     target["text"] = "Changed earlier original row 10"
                     journal.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
                     result = {"history_rows": len(rows)}
+                elif command == "history-image-refresh" and history_images:
+                    journal = server.chat_store.sessions_root / sid / "messages.jsonl"
+                    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+                    archived = next(row for row in rows if row["message_id"] == history_images["historyImages"]["old"])
+                    latest = next(row for row in rows if row["message_id"] == history_images["historyImages"]["current"])
+                    for key in ("data_url", "size"):
+                        archived["attachments"][0][key] = latest["attachments"][0][key]
+                    journal.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+                    reply_evidence[journal] = journal.read_bytes()
+                    result = {"history_image_refreshed": archived["message_id"]}
                 elif command == "inspect":
                     saved = server.chat_store.load_session(sid)
                     result = {"sessions": len(server.chat_store.list_sessions()), "original_thread": saved["upstream_thread_id"],
