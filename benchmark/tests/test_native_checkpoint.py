@@ -367,9 +367,6 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     turn_id = "checkpoint-continuation-fixture"
     binding = ["--goal-id", destination_goal, "--agent-id", destination_agent,
                "--todo-id", destination_todo, "--turn-instance-id", turn_id]
-    assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
-    guard = json.loads(capsys.readouterr().out)
-    assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     from loopx.hosts.research_checkpoint import canonical_context, research_context, adopt_todo_context, _encoded
     source_prefix = ["--format", "json", "--registry", str(source_registry), "--runtime-root", str(source_runtime)]
     def invoke(arguments):
@@ -377,6 +374,16 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         output = capsys.readouterr().out
         assert code == 0, output
         return json.loads(output)
+
+    # The fixture reads a full inline decision and declares the shell it uses.
+    # The destination must acquire its one real lease through context adoption
+    # before it can begin the retained work.
+    guard_options = ["--runtime-profile", "generic_cli", "--context-delivery", "off",
+                     "--available-capability", "shell"]
+    destination_guard = [*prefix, "quota", "should-run", *guard_options, *binding]
+    preflight = invoke(destination_guard)
+    assert preflight["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert preflight["interaction_contract"]["cli_channel"]["execution_preparation"]["state"] == "claim_required"
     source_binding = ["--goal-id", source_goal, "--todo-id", source_todo]
     invoke([*source_prefix, "task-lease", "acquire", *source_binding,
             "--owner", source_agent, "--idempotency-key", "source-context"])
@@ -446,8 +453,9 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         source_vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
             "state": "vision_patch_proposed", "vision_patch": {"acceptance_summary":
                 "Complete a fresh-sample experiment before changing the retained route."}}))
-        invoke([*source_prefix, "quota", "should-run", *source_binding, "--agent-id", source_agent,
-            "--turn-instance-id", "source-research-evidence", "--runtime-profile", "generic_cli"])
+        source_guard = invoke([*source_prefix, "quota", "should-run", *guard_options,
+            *source_binding, "--agent-id", source_agent, "--turn-instance-id", "source-research-evidence"])
+        assert source_guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
         invoke([*source_prefix, "refresh-state", *source_binding, "--agent-id", source_agent,
             "--turn-instance-id", "source-research-evidence", "--classification", "synthetic_research_evidence",
             "--delivery-batch-scale", "multi_surface", "--delivery-outcome", "outcome_progress",
@@ -730,7 +738,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         adopted_todo = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
         assert adopted_todo["todo"]["claimed_by"] == destination_agent
         assert json.loads(adopted_todo["todo"]["note"])["source_session"] == source_session
-        guard = invoke([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding])
+        guard = invoke(destination_guard)
         assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
         if joint:
             control = tmp_path / "host-control"
