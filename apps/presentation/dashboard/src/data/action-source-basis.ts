@@ -5,6 +5,7 @@ const todoBasis = {
   provider_revision: z.string().min(1),
   source_authority: z.enum(["file_v0", "sqlite_v0"]),
   registry_sha256: digest,
+  source_identity: digest.optional(),
 };
 
 // Decode existing backend contracts; effect authority and stale-source checks

@@ -20,12 +20,7 @@ if TYPE_CHECKING:
     from .capabilities.native_chat.transports import ChatConversationTransports
 from .attached_session_api import AttachedSessionRequestMixin
 from .zcode_goal_mode.api import ZCodeGoalRequestMixin
-from .chat import (
-    TodoReviewPreviewConflict,
-    apply_todo_review_preview,
-    build_todo_review_preview,
-    redact_local_paths,
-)
+from .chat import TodoReviewPreviewConflict, redact_local_paths
 from .chat_agent import CodexChatAgentError
 from .capabilities.native_chat.project_context import ChatProjectContexts
 from .chat_attachments import (
@@ -45,6 +40,7 @@ from .chat.result_files_api import ChatResultFilesRequestMixin
 from .capabilities.native_chat.model_settings_api import ChatModelSettingsRequestMixin
 from .capabilities.native_chat.queue_api import ChatQueueRequestMixin
 from .chat.status_api import ChatStatusRequestMixin
+from .chat.todo_source import review_todo_create
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
     ChatRuntimeController,
@@ -1199,19 +1195,10 @@ class ChatRequestHandler(
             if not goal_id:
                 raise ValueError("goal_id is required")
             self._registry_and_goal(goal_id)
-            if apply:
-                payload = apply_todo_review_preview(
-                    registry_path=self.server.registry_path,
-                    goal_id=goal_id,
-                    text=text,
-                    preview_id=str(body.get("preview_id") or ""),
-                )
-            else:
-                payload = build_todo_review_preview(
-                    registry_path=self.server.registry_path,
-                    goal_id=goal_id,
-                    text=text,
-                )
+            payload = review_todo_create(
+                self.server, goal_id=goal_id, text=text,
+                preview_id=str(body.get("preview_id") or "") if apply else None,
+            )
         except TodoReviewPreviewConflict as exc:
             self._send_error(str(exc), status=409, todo_receipt=exc.receipt)
             return

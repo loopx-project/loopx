@@ -47,11 +47,14 @@ def create_canonical_todo_if_promoted(
     project: Path | None = None, state_file: Path | None = None,
     operation_id: str | None = None,
     expected_provider_revision: str | None = None,
+    expected_registry_sha256: str | None = None,
 ) -> dict[str, Any]:
     # The native writer guard selects the route under the same maintenance
     # lock as provider open and commit. A separate source read grants nothing.
     if operation_id is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]+", operation_id):
         raise ValueError("operation_id must be a non-empty public-safe token")
+    if expected_registry_sha256 is not None and expected_provider_revision is None:
+        raise ValueError("A reviewed Todo create requires a canonical provider revision and registry digest")
     operation_id = operation_id if operation_id is not None else f"todo-create:{uuid4().hex}"
     # Identity is independent of current Todo count: exact retries still address
     # the original operation after other creates, edits, completion or archive.
@@ -99,10 +102,15 @@ def create_canonical_todo_if_promoted(
         result = effect_runtime_result(
             "coordination.local_authority.todo_create",
             {
-                "schema_version": ("loopx_local_coordination_todo_create_request_v2"
-                    if expected_provider_revision is not None else "loopx_local_coordination_todo_create_request_v1"),
+                "schema_version": (
+                    "loopx_local_coordination_todo_create_request_v3" if expected_registry_sha256 is not None
+                    else "loopx_local_coordination_todo_create_request_v2" if expected_provider_revision is not None
+                    else "loopx_local_coordination_todo_create_request_v1"
+                ),
                 **({"expected_provider_revision": expected_provider_revision}
                     if expected_provider_revision is not None else {}),
+                **({"expected_registry_sha256": expected_registry_sha256}
+                   if expected_registry_sha256 is not None else {}),
                 "runtime_root": str(runtime_root.resolve()),
                 "goal_id": goal_id,
                 "todo": todo,
