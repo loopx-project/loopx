@@ -2,16 +2,16 @@
 
 - **RFC 状态：** Accepted（合并后生效；合并前是讨论提案）
 - **替代 / 关闭：** 无
-- **交付成熟度：** Proposal；本文交付源码盘点与目标架构，不改变运行行为。
+- **交付成熟度：** 合并后 Partial：既有源码读取链路支持普通执行关联；方法收益及剩余目标架构尚未取得资格。
 - **作者 / 归属：** LoopX maintainers；源码事实由路径支持，目标架构和取舍为 AI 辅助提案，待维护者审阅确认。
-- **创建日期 / 最近规范修订：** 2026-11-14
+- **创建日期 / 最近规范修订：** 2026-11-14 / 2026-11-15
 - **实现基线：** `8d7d234c6f55fa45fa5db0ad5a156dcaaf726d32`（第 4 节的 `main` 均指此版本）。
 - **语义镜像：** [English](mechanism-convergence-and-learning-loop-v0.md)
 - **关联：** [总体路线](loopx-overall-roadmap-v0.zh-CN.md)、[小内核](monorepo-distribution-split-v0.zh-CN.md)、[Controller/统一契约](controller-executor-unified-contract-v0.zh-CN.md)、[Target/Yardstick/Stride](target-yardstick-stride-decisions-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[记忆效用](post-outcome-memory-utility-attribution-v0.zh-CN.md)、[Goal 契约演化](goal-contract-evolution-v0.zh-CN.md)。
 
 ## 文档地图与维护契约
 
-第 4 节记录固定版本的实现，4.3 单列未合入工作。第 5–11 节定义拟议的收敛后结构、调用关系、迁移和组合验收；它们不是当前已交付行为。本文持有跨机制的组合设计，单个能力的 schema、权限、默认值和晋升门仍归原规范；涉及改变时须同步修订所属规范，不能用本文覆盖。实施证据沿原 RFC/任务及 ledger 记录，不另建路线图或执行队列。维护者须核实并确认关键设计选择；本文不推定人工贡献比例或未确认观点的归属。
+第 4 节记录固定版本的实现，4.3 单列未合入工作。第 5–11 节定义拟议的收敛后结构、调用关系、迁移和组合验收；只有显式实施 checkpoint 说明已取得资格的源码行为。本文持有跨机制的组合设计，单个能力的 schema、权限、默认值和晋升门仍归原规范；涉及改变时须同步修订所属规范，不能用本文覆盖。实施证据沿原 RFC/任务及 ledger 记录，不另建路线图或执行队列。维护者须核实并确认关键设计选择；本文不推定人工贡献比例或未确认观点的归属。
 
 ## 1. 决策摘要
 
@@ -248,6 +248,17 @@ flowchart TD
 | 匹配成果与预测校准 | 原研究实验 owner 先按既有 pilot 比较完整预算成果；有合格事前预测时分别检验耗时/结果等子预测。 | 冻结条件、缺失处理与留出边界；没有收益证据时改进方案，不把更准的预测称作更好的分配。 |
 | 有证据支持的跨任务改进 | Reward Memory 传递条件性经验，原策略 owner 决定是否采用校准/学习值；Skill 另行资格化。 | 新任务中的真实选择、执行与结果，包含失配/反例/撤销及完整成本；application 扩展仅为缺失关联的 caller 实施。 |
 | 执行融合 | C1/C4/C9、#8266/#8484 迁移入口、结果及恢复。 | 对照原单会话的语义、成果/成本和恢复；删除重复正常路径，双角色独立验收。 |
+
+**源码 checkpoint：普通执行关联（2026-11-15）。** 既有
+[`work Yardstick 读取模块`](../../../loopx/control_plane/work_items/yardstick_decision.ts)
+直接消费 confirmed 的普通执行 finding，无需重复声明决策。复用 canonical 历史
+排序和既有测量工作窗口规则，保留原选择，并在下一选择后关联此前执行。
+既有 Explore 适配器只向显式启用的工作读取模块补充缺失来源序号；公开历史及
+关闭状态保留原 wire。[File/SQLite CLI 回归](../../../tests/control_plane/test_work_yardstick_cli.py)
+覆盖原省略失败、独立候选回读、后续选择、重放及关闭；typed 检查拒绝其他归属、
+tentative、过时和迟到证据的错误关联。这只取得源码传输和记录关联资格，尚不证明
+当前模型采用、预测校准、跨任务收益或可比预算下的效果提升。对应要求与
+C1/C4/C9 集成继续开放；没有新增决策 owner、执行入口、schema 或默认启用。
 
 首个任务须确有反馈或方法选择需求。已有链完整时直接复用；有缺口时由真实消费者证明并修复，不为配合示例制造失败。运行实验、训练模型和发布过程各沿原权限，本文不占用其他 lane 配额或预设 PR 数。
 
