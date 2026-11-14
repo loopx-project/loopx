@@ -11,6 +11,8 @@ interface RunFacts {
   state: string;
   reason: string;
   quota_focus_wait: boolean;
+  quota_allowed_slots: bigint | null;
+  quota_spent_slots: bigint | null;
   capability_gate: JsonObject | null;
   capability_monitor_fallback: boolean;
   workspace_guard: JsonObject | null;
@@ -63,6 +65,8 @@ function decodeRunFacts(params: JsonObject): RunFacts {
     repair_effective_action: text(params.repair_effective_action, "repair_effective_action"),
     state: text(params.state, "state"), reason: text(params.reason, "reason"),
     quota_focus_wait: requireBoolean(params.quota_focus_wait, "quota_focus_wait"),
+    quota_allowed_slots: quotaCount(params.quota_allowed_slots, "quota_allowed_slots"),
+    quota_spent_slots: quotaCount(params.quota_spent_slots, "quota_spent_slots"),
     capability_gate: optionalRecord(params.capability_gate, "capability_gate"),
     capability_monitor_fallback: requireBoolean(params.capability_monitor_fallback, "capability_monitor_fallback"),
     workspace_guard: optionalRecord(params.workspace_guard, "workspace_guard"),
@@ -86,6 +90,14 @@ function nonNegativeCount(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || Number(value) < 0)
     throw new EffectRuntimeRequestError(`${label} must be a non-negative safe integer`);
   return Number(value);
+}
+
+function quotaCount(value: unknown, label: string): bigint | null {
+  if (value === null || value === undefined) return null;
+  // Decimal transport preserves Python's integer precision without rounding quota boundaries.
+  if (typeof value !== "string" || !/^\d+$/.test(value))
+    throw new EffectRuntimeRequestError(`${label} must be a non-negative integer string`);
+  return BigInt(value);
 }
 
 function guardReason(guard: JsonObject | null, fallback: string): string {
@@ -139,8 +151,18 @@ function quotaEffectiveAction(facts: RunFacts, decision: RunDecision): string {
 
 function applyGoalOverrides(facts: RunFacts, decision: RunDecision): void {
   const inboxPriority = facts.inbox_reply_due || facts.inbox_material_review_due;
-  decision.replan_decision_allowed = !inboxPriority && facts.replan_required && facts.replan_applies
+  const replanSelected = !inboxPriority && facts.replan_required && facts.replan_applies
     && facts.goal_health_ok && !facts.workspace_guard && !facts.automation_prompt_upgrade_required;
+  const quotaExhausted = facts.state === "throttled" || (facts.quota_allowed_slots !== null
+    && facts.quota_spent_slots !== null && facts.quota_spent_slots >= facts.quota_allowed_slots);
+  decision.replan_decision_allowed = replanSelected && !quotaExhausted;
+  if (replanSelected && quotaExhausted) {
+    clearExecutionLanes(decision);
+    decision.should_run = false;
+    decision.effective_action = EffectiveAction.THROTTLED_SKIP;
+    decision.reason = "compute window exhausted; fresh replan has zero extra allowance; "
+      + "wait until the window resets or the owner raises the compute budget";
+  }
   if (decision.replan_decision_allowed) {
     if (facts.replan_settlement_pending) {
       // A covered frontier can stop new work before its original receipt has

@@ -289,6 +289,8 @@ def resolve_quota_run_decision(
         "self_repair_allowed": self_repair_allowed,
         "repair_effective_action": str(repair_action or ""),
         "state": state, "reason": reason,
+        "quota_allowed_slots": str(quota["allowed_slots"]) if quota.get("allowed_slots") is not None else None,
+        "quota_spent_slots": str(quota["spent_slots"]) if quota.get("spent_slots") is not None else None,
         "quota_focus_wait": bool(quota.get("focus_wait")),
         "capability_gate": _guard_strings(capability_gate, ("action", "reason")),
         "capability_monitor_fallback": bool(capability_monitor_fallback),
