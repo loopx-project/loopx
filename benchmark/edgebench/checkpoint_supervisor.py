@@ -15,7 +15,9 @@ from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
 from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE, _PHASE_DEADLINE
 
 from .checkpoint_controller import _controller
-from .checkpoint_worker import _archive, _guest_path, _validate_request, capture_worker, qualify_export_storage
+from .checkpoint_worker import (
+    _archive, _guest_path, _validate_request, capture_failure_fields, capture_worker, qualify_export_storage,
+)
 
 
 class CheckpointSupervisor:
@@ -202,7 +204,7 @@ class CheckpointSupervisor:
                     except Exception as error:
                         # Optional capture failure resumes the original source;
                         # credentials and raw provider errors never enter it.
-                        response["error_kind"] = type(error).__name__
+                        response.update(capture_failure_fields(error))
                         if isinstance(error, EffectRuntimeRemoteError):
                             response["runtime_failure"] = {
                                 "error_kind": error.error_kind,
