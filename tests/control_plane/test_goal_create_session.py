@@ -337,8 +337,9 @@ def test_created_session_adopts_original_task_only_with_independent_owner_check(
         "work_evidence": ["report.txt"], "validation_evidence": ["The independent checker reads both original sections"]}
     binary = Path(controller.codex_bin)
     source = binary.read_text().replace('"message": "Runtime response."', '"message": ' + repr(json.dumps(candidate)))
+    artifact_content = expected if checks != "failed" else "Introduction\n"
     source = source.replace('        turn_count += 1',
-        f'        open({str(artifact)!r}, "w").write({(expected if checks != "failed" else "Introduction\n")!r})\n        turn_count += 1')
+        f'        open({str(artifact)!r}, "w").write({artifact_content!r})\n        turn_count += 1')
     binary.write_text(source)
     controller.adapters.pop(sid).close_session()
     before = capture.read_bytes()
