@@ -730,8 +730,15 @@ Codex App 心跳的新决定统一采用经校验的完整来源，贯穿普通 
 命令无需添加 flag。两种交付都关闭时，App 直接收到完整来源，不读写原生上下文；
 原本由 Agent 执行的写回和扣额方案保持不变。若从旧的认领前捕获
 恢复，新生成的就绪捕获使用完整契约，认领和 Turn 仍沿原回执绑定。预期完整的就绪捕获
-丢失版本或绑定时，不得按历史载体用于工作。其他普通 quota 和 thin heartbeat 调用方
-在验收前沿用现有行为。显式 `--complete-turn` 和托管 handoff 在选题与原生 lease 准备中
+丢失版本或绑定时，不得按历史载体用于工作。
+
+Trae App 和 Antigravity App 已绑定 Turn 的心跳也采用经校验的完整来源。已保存的启动
+指令及同一 Turn 的恢复指令保留调用方的交付设置。自动交付采用无状态读取器，显式 off
+以内联方式交付完整来源。两种方式都由 Agent 执行原有写回，并且只扣额一次。无 Turn
+的调度探测仍走观察入口。Trae App 在 File 和 SQLite 上用实际生成的启动指令验证了
+这条读取链路。真实 Trae App 会话采用和匹配模型成本对照仍待验证。
+
+显式 `--complete-turn` 和托管 handoff 在选题与原生 lease 准备中
 保留经校验的来源。尚未绑定 Turn 的可见 Goal，给出的绑定命令也保留
 `--complete-turn`。File 和 SQLite 的用例执行该命令，核对仅有一张原回执、绑定
 不扣额度，以及对照组仍沿用普通来源。渐进与差分仍独立于来源格式。
@@ -743,6 +750,7 @@ Benchmark checkpoint 预检按自身调用选择普通或完整来源校验，�
 | Reader 边界 | 当前行为与退役条件 |
 | --- | --- |
 | Codex App thin heartbeat 和引导启动 | 新决定不论是否使用原生交付，都调用已有 TypeScript 组合。原生 hook 在同一 Turn 恢复时固定预期的就绪版本。 |
+| 已绑定 Turn 的 Trae App 和 Antigravity App 心跳 | 共用 TypeScript 组合和无状态读取器。选题和恢复沿用原 Turn 与交付模式。调度和扣额仍由原有执行方负责。 |
 | 其他普通 quota 和 thin heartbeat | 保留现有紧凑决定与结算，直到实际调用方通过验收。已保存的未签名捕获沿原来源和固定引用恢复。 |
 | 显式 `--complete-turn` 和托管 handoff | 在选题和 lease 准备中保留经校验的完整来源。ready capture 丢失完整来源版本和绑定时，只允许回执诊断。 |
 | 显式 `--turn-envelope` | 渐进或差分开启时使用完整来源。两者都关闭且没有托管 handoff 时，仍展示同一次组合产生的有界 v0 兼容视图。 |

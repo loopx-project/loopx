@@ -1014,8 +1014,16 @@ the ordinary agent-owned writeback and spend plan is unchanged.
 When an old pre-claim capture is resumed, the ready capture is newly produced
 under the complete contract; the original claim and Turn remain bound to their
 original receipts. A ready capture expected to be complete cannot be used as a
-historical carrier after it loses its version or binding. Other ordinary quota
-and thin heartbeat callers retain their existing behavior pending qualification.
+historical carrier after it loses its version or binding.
+
+Turn-scoped Trae App and Antigravity App heartbeats also use the checked source.
+Their saved launchers and same-Turn recovery guards keep the caller's delivery
+setting. Automatic delivery uses the stateless reader and explicit off delivers
+the full source inline. Both retain the agent's original writeback and single
+spend. Turnless scheduler probes keep their observation route. For Trae App,
+the generated activation bootstrap and its reads are exercised over File and
+SQLite. Adoption in a live Trae App session and matched model costs remain open.
+
 Explicit `--complete-turn` and managed handoff keep the checked source
 through selection and native lease preparation. An unbound visible Goal also
 keeps `--complete-turn` in its emitted Turn-binding command. The File and SQLite
@@ -1034,6 +1042,7 @@ the capture's format fields.
 | Reader boundary | Current behavior and retirement condition |
 | --- | --- |
 | Codex App thin heartbeat and guided start | New decisions use the existing TypeScript composer with or without native delivery. The native hook pins the expected ready version for same-Turn recovery. |
+| Trae App and Antigravity App heartbeats with a bound Turn | Use the same TypeScript composer and stateless reader. Selection and recovery carry the original Turn and delivery mode. The scheduler and spend retain their existing owners. |
 | Other ordinary quota and thin heartbeat | Keep the existing compact decision and settlement until their actual callers qualify. Saved unsigned captures retain their original source and pinned recovery. |
 | Explicit `--complete-turn` and managed handoff | Keep the checked complete source through selection and lease preparation. If a ready capture loses its complete version and binding, it offers receipt diagnosis only. |
 | Explicit `--turn-envelope` | Progressive or Delta uses the complete source. With both off and without a managed handoff, retain the bounded v0 compatibility display from the same composition. |

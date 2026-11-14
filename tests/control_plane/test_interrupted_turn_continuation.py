@@ -16,8 +16,16 @@ from test_quota_settlement_cli import (
 )
 
 
-@pytest.mark.parametrize("profile", ["codex", "antigravity-explicit-capture", "antigravity-inline"])
-def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Path, profile: str) -> None:
+@pytest.mark.parametrize(("host", "delivery", "envelope"), [
+    pytest.param("--codex-app", None, False, id="codex"),
+    pytest.param("--antigravity_app", "auto", True, id="antigravity-explicit-capture"),
+    pytest.param("--antigravity_app", "off", False, id="antigravity-inline"),
+    pytest.param("--trae_app", "off", False, id="trae-inline"),
+    pytest.param("--trae_app", "auto", False, id="trae-progressive"),
+])
+def test_original_turn_can_resume_and_settle_without_mutating_todo(
+    tmp_path: Path, host: str, delivery: str | None, envelope: bool,
+) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
@@ -25,13 +33,13 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
     recovery_turn = "interrupted-recovery"
     capture_root = tmp_path / "private captures"
     capture_root.mkdir(mode=0o700)
-    if profile == "antigravity-explicit-capture":
-        transport = ("--antigravity_app", "--turn-envelope", "--context-delivery", "auto",
-                     "--decision-output-root", str(capture_root))
-    elif profile == "antigravity-inline":
-        transport = ("--antigravity_app", "--context-delivery", "off")
-    else:
-        transport = ("--codex-app",)
+    transport = (host,)
+    if delivery is not None:
+        transport += ("--context-delivery", delivery)
+    if delivery == "auto":
+        transport += ("--decision-output-root", str(capture_root))
+    if envelope:
+        transport += ("--turn-envelope",)
 
     def guard(turn: str):
         before = set(capture_root.glob("*/decision.json"))
@@ -41,10 +49,10 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
             "--turn-instance-id", turn, "--todo-id", TODO_ID,
         )
         assert rc == 0, result
-        if profile == "antigravity-explicit-capture":
+        if delivery == "auto":
             decision, = set(capture_root.glob("*/decision.json")) - before
             result = json.loads(decision.read_text())
-        if profile != "codex":
+        if delivery is not None:
             assert_complete_turn_decision(result)
         return result
 
@@ -56,24 +64,26 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
     actions = interrupted["interaction_contract"]["cli_channel"]["next_cli_actions"]
     assert not any("--resume-when" in action for action in actions)
     for action in (actions[1], actions[-1]):
-        if profile == "antigravity-explicit-capture":
-            argv = shlex.split(action)
-            assert "--turn-envelope" in argv and "--complete-turn" not in argv
+        if delivery is None:
+            continue
+        argv = shlex.split(action)
+        assert host in argv and "--complete-turn" not in argv
+        assert ("--turn-envelope" in argv) is envelope
+        assert argv[argv.index("--context-delivery") + 1] == delivery
+        if delivery == "auto":
             assert argv[argv.index("--decision-output-root") + 1] == str(capture_root)
-            assert argv[argv.index("--context-delivery") + 1] == "auto"
-        if profile == "antigravity-inline":
-            argv = shlex.split(action)
-            assert argv[argv.index("--context-delivery") + 1] == "off"
-            assert not {"--turn-envelope", "--complete-turn", "--decision-output-root"} & set(argv)
+        else:
+            assert "--decision-output-root" not in argv
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_before = state_path.read_bytes()
     rc, resumed = _run_generated_cli(actions[1], registry_path=registry)
     assert rc == 0, resumed
-    if profile != "codex":
+    if delivery is not None:
         assert_complete_turn_decision(resumed)
     assert state_path.read_bytes() == state_before
     assert resumed["effective_action"] != "unsettled_host_turn_recovery", resumed
     assert resumed["selected_todo"]["todo_id"] == TODO_ID
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == admitted["heartbeat_receipt"]["settlement_identity"]
     assert _spend_run_count(runtime) == 0
 
     rc, writeback = _run_cli(
@@ -98,7 +108,7 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
     assert _spend_run_count(runtime) == 1
     rc, next_guard = _run_generated_cli(actions[-1], registry_path=registry)
     assert rc == 0, next_guard
-    if profile != "codex":
+    if delivery is not None:
         assert_complete_turn_decision(next_guard)
     assert next_guard["effective_action"] != "unsettled_host_turn_recovery", next_guard
     assert next_guard["selected_todo"]["todo_id"] == TODO_ID

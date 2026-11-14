@@ -725,10 +725,7 @@ def test_codex_app_thin_guard_uses_complete_source_for_new_captures(tmp_path, mo
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("loader", ["saved-alias-off", "sidecar-auto"])
-def test_antigravity_wake_defaults_to_complete_source_and_recovers_agent_spend(
-    tmp_path, monkeypatch, provider, loader,
-):
+def test_antigravity_sidecar_gate_does_not_admit_work(tmp_path, monkeypatch, provider):
     from loopx.agy_goal_mode import build_antigravity_sidecar_template
     from loopx.control_plane.scheduler.scheduler_hint import SCHEDULER_HOST_FACTS_CHUNK_FLAG
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -778,42 +775,89 @@ def test_antigravity_wake_defaults_to_complete_source_and_recovers_agent_spend(
         else:
             assert actual == expected, field
 
-    if loader == "saved-alias-off":
-        rc, prompt = _run_cli(
-            registry, runtime, "heartbeat-prompt", "--thin", "--antigravity_app", "--context-delivery", "off",
-            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project,
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("host", ["antigravity_app", "trae_app"])
+@pytest.mark.parametrize("delivery", ["auto", "off"])
+def test_stateless_app_wake_defaults_to_complete_source_and_recovers_agent_spend(
+    tmp_path, monkeypatch, provider, host, delivery,
+):
+    from loopx.agy_goal_mode import build_antigravity_sidecar_template
+    from loopx.host_loop_activation import build_host_loop_activation_packet
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _configure_read_only_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    acceptance = "Verify the aggregate before submitting evidence. 保留验收记录。\n" * 168
+    state.write_text(
+        state.read_text(encoding="utf-8").replace("## Next Action", acceptance + "\n## Next Action", 1),
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    if host == "trae_app":
+        activation = build_host_loop_activation_packet(
+            agent_type="trae_app", goal_id=GOAL_ID, agent_id=AGENT_ID,
+            registered_agents=[AGENT_ID], runtime_root=str(runtime), registry=str(registry),
         )
+        command = activation["activation_input_command"]
+        if delivery == "off":
+            command += " --context-delivery off"
+        rc, loader = _run_generated_cli(command, registry_path=registry, cwd=project)
+        assert rc == 0 and loader["ok"], loader
+        bootstrap = loader["task_body"]
+    elif delivery == "auto":
+        bootstrap = build_antigravity_sidecar_template(
+            goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_root=str(runtime),
+        )["sidecar"]["loopx-heartbeat"]["bootstrap_prompt"]
     else:
-        command = template["bootstrap_prompt"].split("```sh\n", 1)[1].split("\n```", 1)[0]
-        rc, prompt = _run_generated_cli(command, registry_path=registry, cwd=project)
+        rc, loader = _run_cli(
+            registry, runtime, "heartbeat-prompt", "--thin", "--antigravity_app", "--context-delivery", "off",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--bootstrap", cwd=project,
+        )
+        assert rc == 0 and loader["ok"], loader
+        bootstrap = loader["task_body"]
+    command = bootstrap.split("```sh\n", 1)[1].split("\n```", 1)[0]
+    rc, prompt = _run_generated_cli(command, registry_path=registry, cwd=project)
     assert rc == 0 and prompt["ok"], prompt
     command = next(line for line in prompt["task_body"].splitlines() if " quota should-run " in line)
     guard = shlex.split(command)
     assert not {"--complete-turn", "--turn-envelope", "--codex-context-root"} & set(guard)
-    assert guard[guard.index("--context-delivery") + 1] == ("off" if loader == "saved-alias-off" else "auto")
+    assert guard[guard.index("--context-delivery") + 1] == delivery
     guard[guard.index("--turn-instance-id") + 1] = TURN_ID
     guard = guard[guard.index("quota"):]
 
+    def read_pages(command, *, max_output_bytes, selection=False):
+        reference, body = None, b""
+        schema = "context_capture_selection_page_v1" if selection else "context_capture_page_v1"
+        pin = "reference_file" if selection else "sha256"
+        while True:
+            result = subprocess.run(
+                shlex.split(command), cwd=project, capture_output=True, timeout=30,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert len(result.stdout) <= max_output_bytes
+            page = json.loads(result.stdout)
+            assert page["ok"] and page["schema_version"] == schema and page["offset"] == len(body), page
+            reference = reference or page[pin]
+            assert page[pin] == reference, page
+            body += page["content"].encode()
+            if page["eof"]:
+                assert len(body) == page["total_bytes"]
+                if not selection:
+                    assert hashlib.sha256(body).hexdigest() == reference
+                return body
+            command = page["next_command"]
+
     def read_current(view):
-        if loader == "saved-alias-off":
+        if delivery == "off":
             assert not {"context_delivery", "first_read_command", "reference_file"} & view.keys()
             return view
         assert view["schema_version"] == "context_capture_navigation_v1" and view["mode"] == "full"
-        command = view["recovery"]["command"]
-        digest, body = None, b""
-        while True:
-            result = subprocess.run(
-                shlex.split(command), cwd=project, capture_output=True, text=True, timeout=30,
-            )
-            assert result.returncode == 0, result.stdout + result.stderr
-            page = json.loads(result.stdout)
-            digest = digest or page["sha256"]
-            assert page["ok"] and page["sha256"] == digest and page["offset"] == len(body), page
-            body += page["content"].encode()
-            if page["eof"]:
-                assert len(body) == page["total_bytes"] and hashlib.sha256(body).hexdigest() == digest
-                return json.loads(body)
-            command = page["next_command"]
+        return json.loads(read_pages(view["recovery"]["command"], max_output_bytes=64000))
 
     rc, refused = _run_cli(
         registry, runtime, *guard, "--context-delivery", "on", "--delta-delivery", "auto",
@@ -836,9 +880,22 @@ def test_antigravity_wake_defaults_to_complete_source_and_recovers_agent_spend(
     spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
     assert spend["owner"] == "agent" and "--settle-turn" not in writeback["command_template"]
 
+    if delivery == "auto":
+        body = read_pages(view["first_read_command"], max_output_bytes=12000, selection=True)
+        rows = {row["pointer"]: row["value"] for row in json.loads(body)["selections"]}
+        agent_path = "/interaction_contract/agent_channel"
+        assert rows["/heartbeat_receipt"]["settlement_identity"] == identity
+        assert rows["/selected_todo"]["todo_id"] == TODO_ID
+        assert any(acceptance in value for pointer, value in rows.items()
+                   if pointer.startswith(agent_path + "/work_context/sources/") and pointer.endswith("/content/text"))
+        assert rows[agent_path + "/required_reads"] == source["interaction_contract"]["agent_channel"]["required_reads"]
+        assert rows["/interaction_contract/cli_channel/settlement_plan/identity"] == identity
+    else:
+        assert not (runtime / "context-delivery").exists()
+
     command = writeback["command_template"]
     for token, value in {
-        "<validated_progress>": "antigravity_fixture_progress", "<scale>": "implementation",
+        "<validated_progress>": "stateless_app_fixture_progress", "<scale>": "implementation",
         "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation",
     }.items():
         command = command.replace(token, value)

@@ -507,7 +507,7 @@ def _publish_quota_result(
     host_todo_settlement = getattr(args, "host_todo_settlement", False)
     complete_source = False
     app_source = False
-    antigravity_work_turn = False
+    stateless_app_work_turn = False
     runtime_root = context.runtime_root if context is not None else None
     if not budgeted_spend:
         try:
@@ -529,11 +529,12 @@ def _publish_quota_result(
             )
 
             profile = scheduler_runtime_profile_for_execution_context(context.scheduler_context)
-            # Antigravity also uses this command for turnless sidecar and Stop probes.
-            antigravity_work_turn = (
-                profile is SchedulerRuntimeProfile.ANTIGRAVITY_APP and heartbeat_turn_id is not None
+            # Turnless App probes retain their observation route.
+            stateless_app_work_turn = (
+                heartbeat_turn_id is not None
+                and profile in {SchedulerRuntimeProfile.TRAE_APP, SchedulerRuntimeProfile.ANTIGRAVITY_APP}
             )
-            app_source = profile is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT or antigravity_work_turn
+            app_source = profile is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT or stateless_app_work_turn
         complete_source = (host_todo_settlement or app_source
             or any(getattr(args, name, None) for name in (
                 "complete_turn", "turn_envelope", "decision_handoff_socket",
@@ -542,7 +543,7 @@ def _publish_quota_result(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
             complete_source=complete_source,
-            preserve_app_delivery=antigravity_work_turn and not getattr(args, "complete_turn", False),
+            preserve_app_delivery=stateless_app_work_turn and not getattr(args, "complete_turn", False),
             activation=activation, remember_result=remember_result,
         )
     _observe_live_quota_result(

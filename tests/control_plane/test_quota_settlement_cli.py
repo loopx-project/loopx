@@ -714,6 +714,7 @@ def _bind_selected_replan_guard(
     goal_id: str = GOAL_ID,
     agent_id: str = AGENT_ID,
     todo_id: str = SELECTED_REPLAN_TODO_ID,
+    profile: str = "--codex-app",
 ) -> dict[str, Any]:
     """Choose the fixture Todo explicitly, then consume the generated recovery.
 
@@ -721,7 +722,7 @@ def _bind_selected_replan_guard(
     Keep the existing semantic-delta regressions testing an admitted identity.
     """
     rc, deferred = _run_cli(
-        registry, runtime, "quota", "should-run", "--codex-app",
+        registry, runtime, "quota", "should-run", profile,
         "--goal-id", goal_id, "--agent-id", agent_id,
         "--turn-instance-id", turn_instance_id,
         "--todo-id", todo_id,
@@ -4104,7 +4105,7 @@ def _assert_ssh_complete_turn_settles_once(guard, *, registry_path, runtime, pro
     assert _spend_run_count(runtime) == 1
 
 
-@pytest.mark.parametrize("host_surface", ["codex-app", "codex-app-ssh"])
+@pytest.mark.parametrize("host_surface", ["codex-app", "codex-app-ssh", "trae_app"])
 def test_guided_start_begins_one_turn_and_executes_returned_selection(
     tmp_path: Path,
     host_surface: str,
@@ -4163,12 +4164,15 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     settlement_plan = cli_channel["settlement_plan"]
     assert settlement_plan["identity"] == receipt_identity
     assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
-    expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
+    expected_source = "visible-goal" if host_surface == "codex-app-ssh" else "heartbeat"
     assert cli_channel["quota_spend_source"] == expected_source
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
     if host_surface == "codex-app-ssh":
         _assert_ssh_complete_turn_settles_once(selected, registry_path=registry_path, runtime=runtime, project=project)
     else:
+        if host_surface == "trae_app":
+            assert "--trae_app" in shlex.split(selection_command)
+            assert "--complete-turn" not in shlex.split(guard_command)
         assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
         spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
         assert spend["owner"] == "agent"
@@ -7406,9 +7410,12 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
     assert obligation_id not in json.dumps(next_guard, sort_keys=True)
 
 
+@pytest.mark.parametrize("profile", ["--codex-app", "--trae_app"])
 def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
-    tmp_path: Path,
+    tmp_path: Path, profile: str,
 ) -> None:
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry_path)
     _initialize_git_checkout(project)
@@ -7420,7 +7427,7 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
         runtime,
         "quota",
         "should-run",
-        "--codex-app",
+        profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -7429,10 +7436,12 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
         turn_instance_id,
     )
     assert guard_rc == 0, guard
+    assert_complete_turn_decision(guard)
     assert guard["decision"] == "autonomous_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
 
-    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id, profile=profile)
+    assert_complete_turn_decision(guard)
 
     refresh_rc, refresh = _run_cli(
         registry_path,
