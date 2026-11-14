@@ -4142,3 +4142,30 @@ File/SQLite negative cases guard this boundary without changing valid activation
   complete D2/D5 closure, comparable full costs, V1–V5/V10, R1/M3 or C1 default
   cutover. The model reused its report generator between the two checks;
   these are not independent inference trials or an outcome/cost comparison.
+
+### 2026-11-15 — One confirmation for a complete conversational Goal draft
+
+- **Gap:** a complete draft skipped the form but still required a preview click
+  followed by drawer confirmation. The user could not see the resolved executor
+  and workspace until taking the first of those actions.
+- **Delta:** the Dashboard prepares a visible complete draft's existing typed action,
+  displays its server-resolved Agent and workspace, and offers one explicit
+  `Create and start` confirmation. Incomplete drafts and read-only views cannot
+  prepare creation; Edit and typed availability/stale/recovery gates remain.
+  Existing locale-scoped operation identities are read before preparation;
+  reload, language changes and repeated clicks retain the original operation.
+  The visible draft owns one confirmation/recovery entry; the canonical proposal
+  stays available when its draft is not loaded. Collapsed unseen history does
+  not initiate preparation.
+- **Evidence:** `goal-draft` covers preparation failure, no Goal writes before
+  confirmation, Edit/cancel, repeated clicks, reload, locale and narrow views.
+  `goal-draft-live` uses the real discovery and action store on isolated state
+  for resolved scope, lost-response readback, original-operation retry and
+  unavailable-Agent refusal. Its conversation is synthetic and its stub Agent
+  fails the first Turn; that failure is preserved rather than called success.
+- **Boundary:** this is a V4/R1 entry increment using the existing Goal draft,
+  typed review/apply and creation/recovery owners. It adds no shared schema,
+  authority grant, alternate execution pipeline or C1 composition owner.
+  Full task-artifact success through this entry, installed native App/model
+  adoption, compaction retention, complete D2/D5 closure, comparable total cost,
+  V1–V5/V10, R1/M3 and C1 default cutover remain unqualified.
