@@ -1015,7 +1015,10 @@ function requireValidChatMessages(messages: unknown): void {
 
 export async function fetchChatSession(sessionId: string, signal?: AbortSignal) {
   const snapshot = await requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
-  requireValidChatMessages(snapshot?.messages);
+  if (snapshot?.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || snapshot.session?.session_id !== sessionId) {
+    throw new Error("The original Session scope changed during history read.");
+  }
+  requireValidChatMessages(snapshot.messages);
   return snapshot;
 }
 

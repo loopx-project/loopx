@@ -172,6 +172,13 @@ try {
   globalThis.fetch = async () => new Response(JSON.stringify(legacy));
   assert.deepEqual((await fetchChatSessionHistory("old")).messages, legacy.messages);
   assert.deepEqual((await fetchChatSession("old")).messages, legacy.messages);
+  for (const invalid of [
+    {...legacy, session: {...legacy.session, session_id: "different-session"}},
+    {...legacy, schema_version: "unsupported"},
+  ]) {
+    globalThis.fetch = async () => new Response(JSON.stringify(invalid));
+    await assert.rejects(() => fetchChatSession("old"), "Direct reads must match the requested Session and schema");
+  }
   const unversioned = structuredClone(legacy);
   delete (unversioned.messages[0] as Partial<typeof unversioned.messages[0]>).schema_version;
   globalThis.fetch = async () => new Response(JSON.stringify(unversioned));
