@@ -200,6 +200,7 @@ class SyntheticPrivateSource:
         history_handler = server.RequestHandlerClass._session_snapshot
         sessions_handler = server.RequestHandlerClass._list_sessions
         slow_page, slow_source = threading.Event(), threading.Event()
+        history_unavailable = threading.Event()
         hold_steward_discovery, resume_steward_discovery = threading.Event(), threading.Event()
 
         if self.steward:
@@ -218,6 +219,8 @@ class SyntheticPrivateSource:
             bindings._core = controlled_core
 
         def delayed_history(handler, selected_session):
+            if selected_session == sid and history_unavailable.is_set():
+                return handler._send_error("Chat history is temporarily unavailable", status=503)
             if selected_session == sid and slow_page.is_set():
                 slow_page.clear()
                 time.sleep(5.2)
@@ -263,6 +266,12 @@ class SyntheticPrivateSource:
                 elif command == "slow-history-source":
                     slow_source.set()
                     result = {"slow_history_source": True}
+                elif command in {"history-unavailable", "history-available"}:
+                    if command == "history-unavailable":
+                        history_unavailable.set()
+                    else:
+                        history_unavailable.clear()
+                    result = {"history_available": not history_unavailable.is_set()}
                 elif command == "replace-peer" and self.peer_provider is not None:
                     old = next(row for row in bindings.read()["bindings"] if row["transport_ref"] == self.peer_provider.transport_ref)
                     bindings.disconnect(old["binding_id"], expected_revision=bindings.read()["revision"])
@@ -304,6 +313,32 @@ class SyntheticPrivateSource:
                 elif command == "history-extra":
                     server.chat_store.append_message(sid, role="agent", text="A full new original result. " * 150)
                     result = {"history_rows": len(server.chat_store.messages(sid))}
+                elif command in {"history-return", "history-return-delivered", "history-return-unverified",
+                                 "history-return-unreadable"}:
+                    from loopx.capabilities.manager_context import _hash, _root, _write
+
+                    store = server.chat_store
+                    root = runtime.coordination_runtime_root
+                    request_id = "b" * 64
+                    reply_dir = _root(root) / "replies" / request_id
+                    message_id = f"handoff.{_hash([request_id, 'conclusion'])}"
+                    if command == "history-return":
+                        _write(_root(root) / "roundtrips" / f"{request_id}.json", {
+                            "request_id": request_id, "session_id": sid,
+                            "source_chat_runtime_root": str(store.root.parent),
+                        })
+                        _write(reply_dir / "conclusion.json", {"text": "Original delegated result."})
+                        store.append_message(sid, role="agent", text="Original delegated result.",
+                            origin="manager_followup", message_id=message_id)
+                    elif command == "history-return-delivered":
+                        _write(reply_dir / "conclusion.delivery.json", {"status": "delivered"})
+                    elif command == "history-return-unverified":
+                        _write(reply_dir / "conclusion.delivery.json", {
+                            "status": "explicit_unverified", "error": "provider_delivery_unverified",
+                        })
+                    else:
+                        (reply_dir / "conclusion.delivery.json").write_text("{", encoding="utf-8")
+                    result = {"messageId": message_id}
                 elif command == "history-rewrite":
                     journal = server.chat_store.sessions_root / sid / "messages.jsonl"
                     rows = [json.loads(line) for line in journal.read_text().splitlines()]
