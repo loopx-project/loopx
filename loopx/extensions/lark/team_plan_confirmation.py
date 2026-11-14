@@ -12,7 +12,12 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ...chat_action_store import ActionConflictError, ChatActionStore
+from ...chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from ...control_plane.runtime.runtime_projection_route import (
     resolve_goal_source_runtime_route,
 )
@@ -842,6 +847,8 @@ def handle_team_plan_review_callback(
             "confirmed_at": callback_timestamp(
                 event.get("timestamp"), subject="team plan"
             ),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
         },
     )
     decided_review_card = decided.get("review_card")

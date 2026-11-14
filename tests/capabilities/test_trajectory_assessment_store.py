@@ -10,6 +10,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from loopx.chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ChatActionStore,
+)
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import (
@@ -1553,3 +1558,252 @@ def test_human_attention_registration_discovery_and_evidence_need_no_analysis(pa
     assert historical["human_attention"]["projection"] == projection
     assert read_citation(**op, **citation)["applicability"] == "historical"
     assert not list(scope["runtime_root"].glob("benchmark/trajectory-assessments/*/jobs/*"))
+
+
+def test_authenticated_loopx_card_decisions_capture_through_registration_cli(
+    pack, tmp_path
+):
+    scope, _, original, input_path, sources, _ = pack
+    store = ChatActionStore(scope["runtime_root"] / "chat" / "actions")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    start = now - timedelta(minutes=10)
+    operation_delivered = now - timedelta(minutes=8)
+    operation_confirmed = now - timedelta(minutes=3)
+    review_delivered = now - timedelta(minutes=6)
+    review_confirmed = now - timedelta(minutes=2)
+    end = now + timedelta(minutes=1)
+
+    operation = store.create_preview(
+        action_kind="operation.execute",
+        summary="Confirm one bounded synthetic operation",
+        normalized_parameters={
+            "goal_id": "solver",
+            "payload_digest": "a" * 64,
+            "projection_digest": "b" * 64,
+            "destination_account_ref": "account:synthetic",
+            "expires_at": (now + timedelta(hours=1)).isoformat(),
+            "authorized_principals": ["lark:ou_attention_fixture"],
+            "executor": {"revision": "fixture-v1"},
+        },
+        context={"kind": "goal", "goal_id": "solver"},
+        expected_state_fingerprint="operation-state",
+        permission_classification="protected",
+        validation_evidence=[],
+        available_transitions=["cancel"],
+        idempotency_key="attention-operation-fixture",
+    )
+    operation = store.arm_operation(operation["proposal_id"])
+    operation = store.record_operation_delivery(
+        operation["proposal_id"],
+        delivery={
+            "provider": "lark",
+            "message_id": "om_attention_operation",
+            "chat_id": "oc_attention_fixture",
+            "app_id": "cli_attention_fixture",
+            "binding_digest": "c" * 64,
+            "card_digest": "d" * 64,
+            "delivered_at": operation_delivered.isoformat(),
+        },
+    )
+    with pytest.raises(ValueError, match="human actor"):
+        store.decide_operation(
+            operation["proposal_id"],
+            decision="confirm",
+            confirmation={
+                "provider": "lark",
+                "event_id": "evt_attention_operation",
+                "principal": "lark:ou_attention_fixture",
+                "message_id": "om_attention_operation",
+                "chat_id": "oc_attention_fixture",
+                "app_id": "cli_attention_fixture",
+                "surface_kind": "group_message_card",
+                "interaction_kind": "button_callback",
+                "confirmation_digest": operation["operation"]["confirmation_digest"],
+                "card_digest": "d" * 64,
+                "confirmed_at": operation_confirmed.isoformat(),
+                "actor_class": "system",
+                "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
+            },
+        )
+    store.decide_operation(
+        operation["proposal_id"],
+        decision="confirm",
+        confirmation={
+            "provider": "lark",
+            "event_id": "evt_attention_operation",
+            "principal": "lark:ou_attention_fixture",
+            "message_id": "om_attention_operation",
+            "chat_id": "oc_attention_fixture",
+            "app_id": "cli_attention_fixture",
+            "surface_kind": "group_message_card",
+            "interaction_kind": "button_callback",
+            "confirmation_digest": operation["operation"]["confirmation_digest"],
+            "card_digest": "d" * 64,
+            "confirmed_at": operation_confirmed.isoformat(),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
+        },
+    )
+
+    review = store.create_preview(
+        action_kind="team.plan",
+        summary="Review one bounded synthetic team plan",
+        normalized_parameters={"goal_id": "solver"},
+        context={"kind": "goal", "goal_id": "solver"},
+        expected_state_fingerprint="review-state",
+        permission_classification="durable_write",
+        validation_evidence=[],
+        available_transitions=["apply", "cancel"],
+        idempotency_key="attention-review-fixture",
+    )
+    store.prepare_review_card_delivery(
+        review["proposal_id"],
+        audience_ids=["goal:solver"],
+        authorized_principal="lark:ou_attention_fixture",
+    )
+    submitted_card = {"schema": "2.0", "body": {"elements": []}}
+    card_digest = hashlib.sha256(
+        json.dumps(
+            submitted_card,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    store.record_review_card_delivery(
+        review["proposal_id"],
+        audience_id="goal:solver",
+        delivery={
+            "provider": "lark",
+            "message_id": "om_attention_review",
+            "chat_id": "oc_attention_fixture",
+            "app_id": "cli_attention_fixture",
+            "cli_bin": "lark-cli",
+            "sender_profile": "attention-fixture",
+            "binding_digest": "e" * 64,
+            "card_digest": card_digest,
+            "submitted_card": submitted_card,
+            "delivered_at": review_delivered.isoformat(),
+            "authorized_principal": "lark:ou_attention_fixture",
+        },
+    )
+    store.decide_review_card(
+        review["proposal_id"],
+        decision="reject",
+        confirmation={
+            "provider": "lark",
+            "event_id": "evt_attention_review",
+            "principal": "lark:ou_attention_fixture",
+            "message_id": "om_attention_review",
+            "chat_id": "oc_attention_fixture",
+            "app_id": "cli_attention_fixture",
+            "audience_id": "goal:solver",
+            "state_fingerprint": "review-state",
+            "card_digest": card_digest,
+            "confirmed_at": review_confirmed.isoformat(),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
+        },
+    )
+    # Model a receipt written before explicit human markers were introduced.
+    # Only the complete historical authenticated-card shape is eligible for
+    # conservative backfill; the source projection labels it as legacy.
+    stored_actions = json.loads(store.path.read_text(encoding="utf-8"))
+    legacy_confirmation = stored_actions["proposals"][review["proposal_id"]][
+        "review_card"
+    ]["confirmation"]
+    legacy_confirmation.pop("actor_class")
+    legacy_confirmation.pop("verification_kind")
+
+    spoofed_operation = json.loads(
+        json.dumps(stored_actions["proposals"][operation["proposal_id"]])
+    )
+    spoofed_operation["proposal_id"] = "proposal-spoofed-surface"
+    spoofed_operation["operation"]["confirmation"].update(
+        event_id="evt_spoofed_surface", surface_kind="dashboard"
+    )
+    stored_actions["proposals"][spoofed_operation["proposal_id"]] = spoofed_operation
+
+    incomplete_legacy = json.loads(
+        json.dumps(stored_actions["proposals"][review["proposal_id"]])
+    )
+    incomplete_legacy["proposal_id"] = "proposal-incomplete-legacy"
+    incomplete_legacy["review_card"]["confirmation"].pop("event_id")
+    stored_actions["proposals"][incomplete_legacy["proposal_id"]] = incomplete_legacy
+    store.path.write_text(
+        json.dumps(stored_actions, ensure_ascii=False), encoding="utf-8"
+    )
+
+    unchanged_input = input_path.read_bytes()
+    registry = tmp_path / "attention-registry.json"
+    registry.write_text(json.dumps({"goals": []}), encoding="utf-8")
+    command = [
+        sys.executable,
+        "-m",
+        "loopx.cli",
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(scope["runtime_root"]),
+        "--format",
+        "json",
+        "benchmark",
+        "trajectory-pack-register",
+        "--goal-id",
+        scope["owner_goal_id"],
+        "--input-json",
+        str(input_path),
+        "--source-root",
+        str(sources),
+        "--title",
+        "Authenticated LoopX attention",
+        "--loopx-human-attention-start",
+        start.isoformat().replace("+00:00", "Z"),
+        "--loopx-human-attention-end",
+        end.isoformat().replace("+00:00", "Z"),
+        "--preserve-default",
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, check=True)
+    registered = json.loads(completed.stdout)
+    projection = registered["human_attention"]["projection"]
+    assert projection["complete"] is False
+    assert projection["total"] == 2
+    assert projection["counts"]["approval"] == 1
+    assert projection["counts"]["review"] == 1
+    assert projection["required"] == 2
+    assert projection["active_ms"] is None
+    assert projection["wait_ms"] == 6 * 60 * 1000
+    assert projection["optimization_points"] == []
+    assert input_path.read_bytes() == unchanged_input
+    assert inspect_pack(**scope, pack_id=original["pack_id"]).get("human_attention") is None
+
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert view["job"] is None and view["result"] is None
+    assert view["human_attention"]["projection"] == projection
+    first_event = projection["events"][0]
+    observed = read_citation(
+        **scope,
+        pack_id=registered["pack_id"],
+        analysis_key=registered["analysis_key"],
+        **first_event["citation"],
+    )
+    assert '"actor_class":"human"' in observed["text"]
+    assert '"verification_kind":"lark_authenticated_card_callback_v1"' in observed["text"]
+    assert "ou_attention_fixture" not in observed["text"]
+    assert "payload" not in observed["text"]
+    legacy_event = projection["events"][1]
+    legacy_observed = read_citation(
+        **scope,
+        pack_id=registered["pack_id"],
+        analysis_key=registered["analysis_key"],
+        **legacy_event["citation"],
+    )
+    assert '"actor_class":"human"' in legacy_observed["text"]
+    assert (
+        '"verification_kind":"legacy_lark_authenticated_card_callback_v0"'
+        in legacy_observed["text"]
+    )
+    assert "ou_attention_fixture" not in legacy_observed["text"]
+    assert len(list(sources.glob("loopx-human-attention-*.json*"))) == 2
+    replay = subprocess.run(command, capture_output=True, text=True, check=True)
+    assert json.loads(replay.stdout)["pack_id"] == registered["pack_id"]

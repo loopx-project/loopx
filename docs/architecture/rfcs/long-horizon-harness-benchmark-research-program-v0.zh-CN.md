@@ -545,8 +545,11 @@ replan 前 checkpoint、恢复、接收者读回及下一次可观察动作的�
 [研究页人工注意力 observer](../../reference/trajectory-assessment.md#human-attention-in-research-optional)
 现在通过既有 pack 与引用 owner 读取有来源的人工介入、分别取并集的主动／等待时间
 及标记可避免的介入候选。记录方分类、部分时间覆盖和历史来源保持明确。
-合成打包阅读检查只验收此读取路径；真实采集覆盖、必要性校准及同等验收质量下的
-注意力降低仍未验收。
+合成打包阅读检查验收此读取路径。真实 producer 当前仅验收经过认证、由目标 Goal
+pack 与 UTC 时间窗显式绑定的 LoopX Lark `operation.execute` 与 `team.plan` 卡片决定。
+该边界保留部分覆盖，把投递到确认记为等待，主动投入保持未知，并将 marker 引入前的
+保守回填标为 legacy。未认证、pending/expired、runtime-native approval 的采集，必要性
+校准及同等验收质量下的注意力降低仍未验收。
 
 ### 6.5 Benchmark integrity 与反作弊
 

@@ -62,6 +62,14 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
         "--native-outcomes-json",
         help="Optional provider-recorded native outcomes, relative to source-root; same pack scope, never analyzer scores.",
     )
+    register.add_argument(
+        "--loopx-human-attention-start",
+        help="UTC start of an explicit partial capture of authenticated LoopX card decisions; requires --loopx-human-attention-end.",
+    )
+    register.add_argument(
+        "--loopx-human-attention-end",
+        help="UTC end of an explicit partial capture of authenticated LoopX card decisions; requires --loopx-human-attention-start.",
+    )
     add_format(register)
     listing = subparsers.add_parser(
         "trajectory-packs",
@@ -113,6 +121,8 @@ def _handle_benchmark_trajectory_command(
                 include_tool_context=args.include_tool_context,
                 loopx_input_json=args.loopx_input_json,
                 native_outcomes_json=args.native_outcomes_json,
+                loopx_human_attention_start=args.loopx_human_attention_start,
+                loopx_human_attention_end=args.loopx_human_attention_end,
                 base_pack_id=args.base_pack_id,
                 select_default=not args.preserve_default,
             )

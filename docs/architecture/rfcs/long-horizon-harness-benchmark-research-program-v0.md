@@ -678,8 +678,13 @@ The [Research human-attention observer](../../reference/trajectory-assessment.md
 now reads source-bound human inputs, separate active/wait interval unions and
 recorded avoidable-input candidates through the existing pack and citation owner.
 Recorder classifications, partial timing and historical sources remain explicit.
-Synthetic packaged-reader checks qualify this reading path; live capture coverage,
-calibrated necessity and lower attention for equal accepted quality remain unqualified.
+Synthetic packaged-reader checks qualify this reading path. The live producer
+boundary is now qualified only for authenticated LoopX Lark `operation.execute`
+and `team.plan` card decisions, explicitly bound to a Goal pack and UTC window.
+It preserves partial coverage, treats delivery-to-confirmation as waiting, leaves
+active attention unknown, and labels conservative pre-marker backfill as legacy.
+Unauthenticated, pending/expired and runtime-native approval capture, calibrated
+necessity and lower attention for equal accepted quality remain unqualified.
 
 ### 6.5 Benchmark integrity and anti-cheating
 
