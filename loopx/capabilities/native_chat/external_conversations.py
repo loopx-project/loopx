@@ -27,7 +27,7 @@ from ...control_plane.quota.automation_cadence_readback import (
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import FileChatDiscovery
+from .file_discovery import FileChatDiscovery, later_equivalent_source_input, source_control_fields
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -189,6 +189,8 @@ class ChatExternalConversations:
         _, open_literal, _ = _review_openings(str((turn.get("response") or {}).get("message") or ""), 0)
         preparation = None
         later_equivalent = None
+        read_source_controls = (discovery_reads.source_controls if discovery_reads is not None
+                                else cache(self.source_controls))
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
         runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
         if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
@@ -209,6 +211,10 @@ class ChatExternalConversations:
                 and datetime.fromisoformat(item["created_at"]) > created
                 for item in (discovery_reads.user_messages(session["session_id"])
                              if discovery_reads is not None else store.messages(session["session_id"])))
+        elif turn.get("status") == "failed" and session.get("agent_id") == "codex":
+            # Native history cannot see a newer request that is still in the FIFO.
+            # Read the Core receipt when the source journal has not settled yet.
+            later_equivalent = later_equivalent_source_input(row, read_source_controls, store.turn_for_client)
         from ...chat_manager import steward_machine_defaults
         recovery_row = {key: value for key, value in row.items() if key != "attachments"}
         review_preparation = None
@@ -241,15 +247,14 @@ class ChatExternalConversations:
                 "attachments_present": bool(row.get("attachments")),
                 "steering_observed": any(event.get("kind") == "turn.steered" for event in events),
                 "stop_observed": self._source_stop_observed(row, turn, events,
-                    source_controls=discovery_reads.source_controls if discovery_reads is not None else None),
+                    source_controls=read_source_controls),
                 "preparation_observation": preparation,
                 "later_equivalent_input_present": later_equivalent,
                 "preparation_scope_available": preparation_scope_available,
                 "later_source_input_present": any(item.get("binding_id") == row["binding_id"]
                     and item.get("source") == row["source"] and item.get("command") is None
                     and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
-                    for item in (discovery_reads.source_controls() if discovery_reads is not None
-                                 else self.source_controls())) if turn.get("error_code") == "antigravity_step_error" else None,
+                    for item in read_source_controls()) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 **({"retained_result_review": retained_review} if retained_review is not None else {}),
                 **({"live_work_owner": live_work_owner} if unfinished or related_review is not None else {}),
@@ -1673,7 +1678,7 @@ class ChatExternalConversations:
                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
 
     def source_controls(self) -> list[dict[str, Any]]:
-        """Observe exact source-control fields without reparsing unchanged bodies.
+        """Observe source controls and private text digests without reparsing unchanged bodies.
 
         Recovery/stop rules remain with their original typed owner and callers.
         A new, replaced or modified journal is read again; pending() and exact
@@ -1682,14 +1687,8 @@ class ChatExternalConversations:
         paths = (path for path in sorted(self.root.glob("*.json"))
                  if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
 
-        def project(_path, row):
-            fields = ("binding_id", "source", "command", "created_at")
-            # The tolerant reader can return {} after transient IO failure.
-            # An incomplete read must not seed an unchanged-file observation.
-            return {key: row[key] for key in fields} if all(key in row for key in fields) else None
-
         return [row for _path, row in self._source_control_discovery.rows(self.root, paths,
-            read=_read_json, project=project)]
+            read=_read_json, project=source_control_fields)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")
