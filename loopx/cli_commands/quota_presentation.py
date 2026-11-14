@@ -41,6 +41,15 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
     view["interaction_contract"] = {"agent_channel": select(contract.get("agent_channel"), "must_attempt")}
     hint = select(payload.get("scheduler_hint"), "action", "cadence_class", "reason")
     if isinstance(source := payload.get("scheduler_hint"), Mapping):
+        app = source.get("app_automation")
+        if isinstance(app, Mapping) and app.get("host_surface") == "antigravity_app":
+            # The sidecar reads these existing scheduler fields directly.
+            hint["app_automation"] = select(
+                app, "recommended_interval_minutes", "recommended_rrule", "stateful_backoff",
+            )
+            for key in ("ack_hint", "failure_hint"):
+                if key in app:
+                    hint["app_automation"][key] = select(app[key], "cli_args")
         for key, field in (("reset_policy", "reset_token"), ("cold_path_detail", "local_scheduler")):
             if key in source:
                 hint[key] = select(source[key], field)

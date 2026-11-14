@@ -1,4 +1,5 @@
 """Qualify the real worker -> renderer -> guard/selection/settlement boundary."""
+import base64
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import zlib
 from pathlib import Path
 
 import pytest
@@ -719,6 +721,149 @@ def test_codex_app_thin_guard_uses_complete_source_for_new_captures(tmp_path, mo
         assert plan["schema_version"] == "quota_settlement_plan_v1"
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("loader", ["saved-alias-off", "sidecar-auto"])
+def test_antigravity_wake_defaults_to_complete_source_and_recovers_agent_spend(
+    tmp_path, monkeypatch, provider, loader,
+):
+    from loopx.agy_goal_mode import build_antigravity_sidecar_template
+    from loopx.control_plane.scheduler.scheduler_hint import SCHEDULER_HOST_FACTS_CHUNK_FLAG
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _configure_read_only_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    template = build_antigravity_sidecar_template(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_root=str(runtime),
+    )["sidecar"]["loopx-heartbeat"]
+    gate = shlex.split(template["gate_command"])
+    rc, observation = _run_cli(registry, runtime, *gate[gate.index("quota"):], cwd=project, raw_guard=False)
+    assert rc == 0 and observation[template["wake_when_json_field_true"]] is True, observation
+    assert not {"contract_binding", "heartbeat_receipt", "first_read_command"} & observation.keys()
+    assert not (runtime / "context-delivery").exists()
+    rc, inline = _run_cli(
+        registry, runtime, *gate[gate.index("quota"):-1], "--context-delivery", "off",
+        cwd=project, raw_guard=False,
+    )
+    assert rc == 0 and inline["should_run"] == observation["should_run"], inline
+
+    def followup(argv):
+        args, chunks = [], []
+        values = iter(argv)
+        for token in values:
+            if token == SCHEDULER_HOST_FACTS_CHUNK_FLAG:
+                chunks.append(next(values))
+            else:
+                args.append(token)
+        assert chunks
+        encoded = "".join(chunks)
+        packet = json.loads(zlib.decompress(base64.b64decode(encoded + "=" * (-len(encoded) % 4))))
+        assert packet["host_facts"].pop("generated_at")
+        return args, packet
+
+    for field in template["stateful_backoff"].values():
+        actual, expected = observation, inline
+        for segment in field.split("."):
+            actual, expected = actual[segment], expected[segment]
+        if field.endswith(".cli_args"):
+            # A new observation timestamps its own transport, even with identical scheduler facts.
+            assert followup(actual) == followup(expected), field
+        else:
+            assert actual == expected, field
+
+    if loader == "saved-alias-off":
+        rc, prompt = _run_cli(
+            registry, runtime, "heartbeat-prompt", "--thin", "--antigravity_app", "--context-delivery", "off",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project,
+        )
+    else:
+        command = template["bootstrap_prompt"].split("```sh\n", 1)[1].split("\n```", 1)[0]
+        rc, prompt = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and prompt["ok"], prompt
+    command = next(line for line in prompt["task_body"].splitlines() if " quota should-run " in line)
+    guard = shlex.split(command)
+    assert not {"--complete-turn", "--turn-envelope", "--codex-context-root"} & set(guard)
+    assert guard[guard.index("--context-delivery") + 1] == ("off" if loader == "saved-alias-off" else "auto")
+    guard[guard.index("--turn-instance-id") + 1] = TURN_ID
+    guard = guard[guard.index("quota"):]
+
+    def read_current(view):
+        if loader == "saved-alias-off":
+            assert not {"context_delivery", "first_read_command", "reference_file"} & view.keys()
+            return view
+        assert view["schema_version"] == "context_capture_navigation_v1" and view["mode"] == "full"
+        command = view["recovery"]["command"]
+        digest, body = None, b""
+        while True:
+            result = subprocess.run(
+                shlex.split(command), cwd=project, capture_output=True, text=True, timeout=30,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+            page = json.loads(result.stdout)
+            digest = digest or page["sha256"]
+            assert page["ok"] and page["sha256"] == digest and page["offset"] == len(body), page
+            body += page["content"].encode()
+            if page["eof"]:
+                assert len(body) == page["total_bytes"] and hashlib.sha256(body).hexdigest() == digest
+                return json.loads(body)
+            command = page["next_command"]
+
+    rc, refused = _run_cli(
+        registry, runtime, *guard, "--context-delivery", "on", "--delta-delivery", "auto",
+        cwd=project, raw_guard=False,
+    )
+    assert rc != 0 and refused["ok"] is False, refused
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == _spend_run_count(runtime) == 0
+
+    rc, view = _run_cli(registry, runtime, *guard, cwd=project, raw_guard=False)
+    assert rc == 0, view
+    source = read_current(view)
+    assert source["should_run"] is True, source
+    assert_complete_turn_decision(source)
+    assert source["selected_todo"]["todo_id"] == TODO_ID
+    identity = source["heartbeat_receipt"]["settlement_identity"]
+    plan = source["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
+    assert plan["identity"] == identity and identity["turn_instance_id"] == TURN_ID
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert spend["owner"] == "agent" and "--settle-turn" not in writeback["command_template"]
+
+    command = writeback["command_template"]
+    for token, value in {
+        "<validated_progress>": "antigravity_fixture_progress", "<scale>": "implementation",
+        "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation",
+    }.items():
+        command = command.replace(token, value)
+    command += " --delivery-boundary in_flight_continuation --no-global-sync --suppress-external-sinks"
+    rc, write_result = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and write_result["settlement_identity"] == identity, write_result
+    assert _spend_run_count(runtime) == 0
+
+    # A lost writeback response leaves only the original spend due.
+    rc, view = _run_cli(registry, runtime, *guard, "--todo-id", TODO_ID, cwd=project, raw_guard=False)
+    assert rc == 0, view
+    recovery = read_current(view)
+    assert recovery["normal_delivery_allowed"] is False, recovery
+    assert_complete_turn_decision(recovery)
+    assert recovery["settlement_progress"]["state"] == "spend_required"
+    [spend_command] = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert "spend-slot" in spend_command
+    rc, settled = _run_generated_cli(spend_command, registry_path=registry, cwd=project)
+    assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled
+    assert settled["settlement_identity"] == identity
+    rc, replay = _run_generated_cli(spend_command, registry_path=registry, cwd=project)
+    assert rc == 0 and replay["ok"] and replay["appended"] is False, replay
+    rc, view = _run_cli(registry, runtime, *guard, "--todo-id", TODO_ID, cwd=project, raw_guard=False)
+    assert rc == 0, view
+    assert read_current(view)["should_run"] is False
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == _spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -129,7 +129,10 @@ def build_antigravity_sidecar_template(
         ]
     )
     if agent_id:
-        quota_args.extend(["--agent-id", agent_id])
+        quota_args.extend(["--agent-id", agent_id, "--scheduler-observation"])
+    else:
+        # Unbound templates have no Agent for the scheduler observation.
+        quota_args.extend(["--context-delivery", "off"])
     heartbeat_args = [cli_bin, "--format", "json"]
     if runtime_root:
         heartbeat_args.extend(["--runtime-root", runtime_root])
