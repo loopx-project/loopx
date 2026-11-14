@@ -8,28 +8,36 @@ module restating a constant whose owner it already imports from. It now borrows
 the owner object and the restated name is retired.
 
 The neighbouring ``_NON_REPORTABLE_KINDS`` (five different kinds) is a separate
-vocabulary and is deliberately left alone. The census keys on the **folded
-value**, so that neighbour is never swept: its members differ. The by-name
-semantic inventory cannot see this pair either, because the two sides use
-different names and both are module-private.
+vocabulary and is deliberately left alone. The targeted literal checks key on
+the **folded value**, so that neighbour is never swept: its members differ. The
+by-name semantic inventory cannot see this pair either, because the two sides
+use different names and both are module-private.
 
-Two layers: a whole-tree folded-value census (only the owner states the set),
-and behavioural parity through the consumer's own ``_normalize_policy`` entry,
-so a migration that changed the accepted kinds fails here. The owner's gate is
-pinned by identity -- it reads the very object the consumer now borrows.
+Hard checks are pinned to the sites that share one semantic slot, scope and
+contract: the owner (``core``) and the validation entry
+(``triggers._normalize_policy``), with behavioural parity through that entry.
+A profile's ``enabled_kinds`` is a different slot -- a per-profile choice of
+which kinds *that profile* enables -- so two profiles may legitimately select
+the same eight kinds with different intervals; those selections are verified
+through the real decision entry, not by counting literals. Whole-package
+same-value matching stays in the existing advisory lane (the semantic
+inventory's merge candidates): the convergence RFC makes merge candidates
+advisory because an equal value set is not proof of one concept, and
+``reuse_existing`` requires the same slot, compatible scope and an equivalent
+contract.
 """
 
 from __future__ import annotations
 
 import ast
 import pathlib
+from typing import Any
 
 import pytest
 
 from loopx.capabilities.periodic_report import core, triggers
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-PACKAGE_ROOT = REPO_ROOT / "loopx"
 OWNER_PATH = "loopx/capabilities/periodic_report/core.py"
 CONSUMER_PATH = "loopx/capabilities/periodic_report/triggers.py"
 
@@ -54,16 +62,6 @@ NON_REPORTABLE = frozenset(
         "vision_checkpoint",
     }
 )
-
-# A preset's ``enabled_kinds`` is a configuration choice -- which kinds *this
-# preset* enables -- not the vocabulary of which kinds are reportable. The weekly
-# preset enables all eight today, but the portfolio preset selects only
-# ``["cadence_due"]``, proving the list is a per-preset policy. Borrowing the
-# owner here would auto-enable any future reportable kind in the weekly preset,
-# a domain decision rather than a deduplication. The list is sorted downstream by
-# ``_normalize_policy``, so its literal order carries no meaning. Declared, and
-# pinned to exactly one site below so the declaration cannot rot silently.
-DECLARED_CONFIG_SITES = {"loopx/capabilities/periodic_report/presets.py": 1}
 
 
 def _members(node: ast.expr) -> frozenset[str] | None:
@@ -104,24 +102,6 @@ def _kind_literal_sites(source: str) -> list[int]:
     ]
 
 
-@pytest.fixture(scope="module")
-def tree_findings() -> dict[str, str]:
-    findings: dict[str, str] = {}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        relative = path.relative_to(REPO_ROOT).as_posix()
-        if relative == OWNER_PATH:
-            continue
-        sites = _kind_literal_sites(path.read_text(encoding="utf-8"))
-        declared = DECLARED_CONFIG_SITES.get(relative, 0)
-        if len(sites) != declared:
-            findings[relative] = f"states the kind set at {sites}, declared {declared}"
-    return findings
-
-
-def test_only_the_owner_and_the_declared_preset_state_the_kind_set(tree_findings) -> None:
-    assert tree_findings == {}, f"an undeclared restatement of the reportable kinds remains: {tree_findings}"
-
-
 def test_the_owner_states_the_recorded_members_once() -> None:
     assert frozenset(core._REPORTABLE_TRIGGER_KINDS) == KINDS
     source = (REPO_ROOT / OWNER_PATH).read_text(encoding="utf-8")
@@ -151,17 +131,74 @@ def test_the_non_reportable_neighbour_is_a_different_set() -> None:
 def test_the_preset_enabled_kinds_is_a_configuration_not_the_vocabulary() -> None:
     from loopx.capabilities.periodic_report import presets
 
-    # Two presets, two different selections: this is a per-preset policy, which
-    # is why the weekly list is declared rather than folded into the owner.
+    # A preset's ``enabled_kinds`` is a configuration choice -- which kinds
+    # *this preset* enables -- not the vocabulary of which kinds are
+    # reportable. Borrowing the owner here would auto-enable any future
+    # reportable kind in the weekly preset, a domain decision rather than a
+    # deduplication. Two presets, two different selections, so the list is a
+    # per-preset policy; it is verified behaviourally below, not pinned by a
+    # literal-site count that a second legitimate profile would break.
     weekly = presets._WEEKLY_PROGRESS_PROFILE["trigger_policy"]["enabled_kinds"]
     assert frozenset(weekly) == KINDS
     portfolio = presets.resolve_periodic_report_profile_preset("portfolio-progress")
     assert portfolio["trigger_policy"]["enabled_kinds"] == ["cadence_due"]
-    # The declaration is pinned to exactly one site, so it cannot rot silently.
-    source = (REPO_ROOT / "loopx/capabilities/periodic_report/presets.py").read_text(
-        encoding="utf-8"
+
+
+# --- profile selections are configuration, verified through the real decision entry ---
+
+
+def _decide(
+    profile_id: str, policy: dict[str, Any], kind: str, facts: dict[str, Any]
+) -> dict[str, Any]:
+    return triggers.build_periodic_report_trigger_decision(
+        {
+            "schema_version": triggers.TRIGGER_REQUEST_SCHEMA,
+            "evaluated_at": "2026-11-12T00:00:00Z",
+            "profile": {"profile_id": profile_id, "profile_version": "v1"},
+            "trigger_policy": policy,
+            "candidates": [
+                {
+                    "trigger_kind": kind,
+                    "observed_at": "2026-11-12T00:00:00Z",
+                    "source_ref": f"{profile_id}-{kind}",
+                    "evidence_digest": f"{profile_id}-{kind}-evidence",
+                    "facts": facts,
+                }
+            ],
+        }
     )
-    assert len(_kind_literal_sites(source)) == 1
+
+
+def test_each_profile_selection_drives_the_real_decision() -> None:
+    from loopx.capabilities.periodic_report import presets
+
+    weekly = presets.resolve_periodic_report_profile_preset("weekly-progress")
+    portfolio = presets.resolve_periodic_report_profile_preset("portfolio-progress")
+    # The same authorized manual candidate: weekly enables it, portfolio does not.
+    selected = _decide(
+        "weekly_progress", weekly["trigger_policy"], "manual", {"authorized": True}
+    )
+    assert selected["selected_trigger_kind"] == "manual"
+    suppressed = _decide(
+        "portfolio_progress",
+        portfolio["trigger_policy"],
+        "manual",
+        {"authorized": True},
+    )
+    assert suppressed["selected_trigger_kind"] is None
+    assert suppressed["suppressed_triggers"][0]["reason"] == "disabled_by_profile"
+
+
+def test_a_second_profile_may_select_the_same_kinds_with_its_own_interval() -> None:
+    # Two profiles may legitimately select the same eight kinds with different
+    # intervals: the selection belongs to each profile, so the real decision
+    # entry must accept this one rather than treat it as a duplicate vocabulary.
+    policy = {"enabled_kinds": sorted(KINDS), "minimum_interval_seconds": 21_600}
+    decision = _decide("six_hour_digest", policy, "cadence_due", {"due": True})
+    assert decision["ok"] is True
+    assert decision["selected_trigger_kind"] == "cadence_due"
+    assert decision["trigger_policy"]["enabled_kinds"] == sorted(KINDS)
+    assert decision["trigger_policy"]["minimum_interval_seconds"] == 21_600
 
 
 # --- behavioural parity through the consumer's own policy normalizer ----------------------
@@ -186,7 +223,7 @@ def test_the_default_enabled_kinds_is_the_owner_set() -> None:
     assert normalized["enabled_kinds"] == sorted(KINDS)
 
 
-# --- the census bites every restatement form and leaves the others ----------------------
+# --- the folded-value scan bites every restatement form and leaves the others -----------
 
 _MEMBER_TEXT = ", ".join(repr(kind) for kind in sorted(KINDS))
 _NON_MEMBER_TEXT = ", ".join(repr(kind) for kind in sorted(NON_REPORTABLE))
