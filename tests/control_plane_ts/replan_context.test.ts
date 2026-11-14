@@ -262,6 +262,41 @@ test("ordinary declared-work evidence reaches followthrough without becoming typ
   assert.deepEqual(projectReplanContext({...request, rows: [decision, actual]}).decision_followthrough.ordinary_work.evidence, follow.ordinary_work.evidence);
 });
 
+test("same-second ordinary work keeps each admitted result readable", () => {
+  const decision = reviewed(1);
+  (decision._source_facts as JsonObject).planned_todo_ids = ["todo-a"];
+  const first: JsonObject = {...subsequent(2), progress_observation: null, delivery_outcome: "outcome_progress"};
+  const second = {...first, _source_facts: subsequent(3)._source_facts};
+  const rows = [decision, first, first, second];
+  const context = projectReplanContext({...strideRequest, rows});
+  const follow = context.decision_followthrough as OrdinaryFollowthrough;
+  assert.equal(follow.ordinary_work.recorded_count, 2);
+  const resultRefs = follow.ordinary_work.evidence.map(item => item.evidence_ref);
+  assert.equal(new Set(resultRefs).size, 2);
+  assert.equal((follow as unknown as JsonObject).work_result_use &&
+    ((follow as unknown as JsonObject).work_result_use as JsonObject).unresolved_count, 2);
+  assert.equal(validateReplanContext(context), context);
+
+  const legacy = {...first};
+  delete legacy._source_facts;
+  const oldRef = (projectReplanContext({...request, rows: [legacy]}).evidence as JsonObject[])[0].evidence_ref;
+  for (const ref of [...resultRefs, oldRef]) {
+    const read = projectReplanContext({...request, operation: "resolve", rows: [first, second], evidence_ref: ref});
+    assert.equal((read.evidence as JsonObject).recommended_action, first.recommended_action);
+  }
+  const retirement = reviewed(4);
+  const vision = (retirement._source_facts as JsonObject).agent_vision as JsonObject;
+  (vision.path_delta as JsonObject).evidence_refs = [oldRef];
+  (retirement._source_facts as JsonObject).planned_todo_ids = ["todo-a"];
+  const later = {...subsequent(5), progress_observation: null, delivery_outcome: "outcome_progress"};
+  const next = projectReplanContext({...strideRequest, rows: [...rows, retirement, later]});
+  const relation = (next.decision_followthrough as JsonObject).work_result_use as JsonObject;
+  assert.equal(relation.recorded_followthrough_count, 1);
+  assert.equal(relation.unresolved_count, 2);
+  assert.deepEqual(projectReplanContext({...strideRequest, rows: [decision, first, second, first]})
+    .decision_followthrough, follow);
+});
+
 test("ordinary followthrough retains corrections and bounded coverage under source scope", () => {
   const decision = reviewed(1);
   const current = {goal_id: "goal-a", goal_instance_id: "instance-current"};
