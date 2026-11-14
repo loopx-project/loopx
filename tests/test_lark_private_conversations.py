@@ -1071,7 +1071,7 @@ def source_https(monkeypatch):
     "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
     "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect", "stopped", "stopped_after_fetch",
     "closed_on_upload_preview", "stopped_on_upload_source_read", "closed_on_upload_source_read",
-    "closed_on_source_controls_read"])
+    "closed_on_source_controls_read", "stopped_before_upload_intent", "closed_before_upload_intent"])
 def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, source_https, monkeypatch, fault):  # noqa: F811
     from test_chat_image_attachments import PNG_BYTES
     from test_lark_app_image_projection import ImageIO
@@ -1086,8 +1086,9 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     fake.write_text(script.replace(default,
         f'"message": {authored!r} if turn_count == 1 else "Next original reply.",', 1))
     article_url = "https://source.example/article"
-    stopped = fault in ("stopped", "stopped_after_fetch", "stopped_on_upload_source_read")
-    closed = fault in ("closed_on_upload_preview", "closed_on_upload_source_read", "closed_on_source_controls_read")
+    stopped = fault in ("stopped", "stopped_after_fetch", "stopped_on_upload_source_read", "stopped_before_upload_intent")
+    closed = fault in ("closed_on_upload_preview", "closed_on_upload_source_read", "closed_on_source_controls_read",
+                       "closed_before_upload_intent")
     redirect_targets = {
         "listed_redirect": "/canonical.png",
         "same_host_redirect": "/unlisted.png",
@@ -1119,6 +1120,23 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     io.corrupt_download = fault in ("corrupt_readback", "legacy_cached_readback")
     upload_previewed = False
     control_committed = False
+    if fault in ("stopped_before_upload_intent", "closed_before_upload_intent"):
+        from loopx.extensions.lark import return_files
+        write_receipt = return_files._write
+
+        def control_before_upload_intent(path, value):
+            nonlocal control_committed
+            if value.get("upload_started") and not control_committed:
+                control_committed = True
+                if stopped:
+                    transport.admit("notes-app", provider.event("notes-app", "stop-before-resource-intent", "/stop"))
+                    assert any(row.get("command") == "stop" for row in transport.core.source_controls())
+                else:
+                    assert runtime.close_session(sid)
+                    assert store.load_session(sid)["status"] == "closed"
+            return write_receipt(path, value)
+
+        monkeypatch.setattr(return_files, "_write", control_before_upload_intent)
 
     if fault == "closed_on_source_controls_read":
         read_controls = transport.core.source_controls
@@ -1182,8 +1200,12 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         assert all(row["chat_id"] == source["chat_id"] for _, row, _ in out)
         assert any("[Source chart](" in nodes[0][0]["text"] for _, _, nodes in out)
         assert all(not any("![Source chart]" in node.get("text", "") for line in nodes for node in line) for _, _, nodes in out)
-        if fault in ("stopped_on_upload_source_read", "closed_on_upload_source_read", "closed_on_source_controls_read"):
+        if fault in ("stopped_on_upload_source_read", "closed_on_upload_source_read", "closed_on_source_controls_read",
+                     "stopped_before_upload_intent", "closed_before_upload_intent"):
             assert control_committed
+        if fault in ("stopped_before_upload_intent", "closed_before_upload_intent"):
+            from loopx.extensions.lark.return_files import _root
+            assert list((_root(transport.runtime_root) / "lark-chat-images").glob("*.json")) == []
         if stopped or closed:
             assert io.uploads == 0 and transport.core.read_request(ref).get("delivery_verified", False) is False
             assert not any(name.startswith(("answer_images.", "answer_image_notice.")) for name in saved["deliveries"])

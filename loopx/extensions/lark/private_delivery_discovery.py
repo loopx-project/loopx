@@ -3,28 +3,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from ...chat_store import RESUMABLE_SESSION_STATES, ChatSessionStore, _read_json
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from .private_progress import legacy_recovery_repairs
-
-if TYPE_CHECKING:
-    from ...capabilities.native_chat.external_conversations import ChatExternalConversations
-
-
-def resumable_answer_image_session(
-    core: ChatExternalConversations, request: dict[str, Any], turn: dict[str, Any] | None
-) -> dict[str, Any] | None:
-    """Apply source controls and then read the current session for delayed media."""
-    store = core.controller.store
-    session_id, turn_id = request["session_id"], request["turn_id"]
-    if (turn is None or turn.get("status") != "completed"
-            or core._source_stop_observed(request, turn, store.events_after(session_id, turn_id, None))):
-        return None
-    session = store.load_session(session_id)
-    return session if session is not None and session.get("status") in RESUMABLE_SESSION_STATES else None
-
 
 def prepared_steward_binding_waits(
     request: dict[str, Any], bindings: list[dict[str, Any]], store: ChatSessionStore

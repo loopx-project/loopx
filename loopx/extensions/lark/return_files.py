@@ -7,9 +7,12 @@ import base64
 import json
 import re
 import subprocess
+from contextlib import ExitStack, contextmanager
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from .cli_resolution import run_lark_command_with_dispatch_guard
 from .inbox_reply import _default_runner, _json_object, _message
 from .outbound import normalize_lark_outbound_text
 from .presentation.markdown_post import lark_markdown_readback_attachment_keys, lark_markdown_readback_matches
@@ -42,10 +45,13 @@ def _image_upload_scope_rejected(result):
     )
 
 
-def _call(args, cwd, *, runner, private_transport):
+def _call(args, cwd, *, runner, private_transport, dispatch_guard=None):
     try:
         if private_transport is not None:
-            return private_transport.runner([private_transport.cli_bin, *args[1:]], cwd, 30)
+            command = [private_transport.cli_bin, *args[1:]]
+            if dispatch_guard is not None:
+                return run_lark_command_with_dispatch_guard(private_transport.runner, command, cwd, 30, dispatch_guard)
+            return private_transport.runner(command, cwd, 30)
         return runner(args) if runner is not None else _default_runner(args, cwd=cwd)
     except (OSError, subprocess.SubprocessError):
         return {"returncode": 1}
@@ -75,7 +81,7 @@ def _chat_images(attachments):
 
 
 def uploaded_chat_images(*, root, profile, provider_ref, attachments, private_transport,
-                         before_upload, verify_only=False):
+                         before_upload, verify_only=False, dispatch_guard=None):
     """Reuse resource IO; never regenerate an unknown upload or sent intent."""
     return _uploaded_resources(root=root, profile=profile, provider_ref=provider_ref,
         attachments=_chat_images(attachments), cache_dir="lark-chat-images", resource="images",
@@ -83,12 +89,28 @@ def uploaded_chat_images(*, root, profile, provider_ref, attachments, private_tr
         read_bytes=lambda image: image["raw"],
         upload_data=lambda _image: {"image_type": "message"}, runner=None,
         private_transport=private_transport, before_upload=before_upload, verify_only=verify_only,
-        fence_upload=True)
+        fence_upload=True, dispatch_guard=dispatch_guard)
+
+
+@contextmanager
+def _authorize_upload_dispatch(guard, cache, saved):
+    with ExitStack() as authority:
+        try:
+            authority.enter_context(guard())
+        except (KeyError, OSError, ValueError) as exc:
+            # The CLI has yet to start. Only preserve receipts for an earlier
+            # attempt, including a known scope denial.
+            if saved is None:
+                cache.unlink()
+            else:
+                _write(cache, saved)
+            raise ValueError("original upload authority unavailable") from exc
+        yield
 
 
 def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, resource,
                         key_field, key_pattern, read_bytes, upload_data, runner, private_transport,
-                        before_upload, verify_only, fence_upload=False):
+                        before_upload, verify_only, fence_upload=False, dispatch_guard=None):
     keys = []
     for attachment in attachments:
         identity = {"profile": profile, "provider_ref": provider_ref,
@@ -123,7 +145,9 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
                     raise ValueError("result file return authority revoked")
                 if fence_upload:
                     _write(cache, {"identity": identity, "upload_started": True})
-                uploaded = _call(args, cwd, runner=runner, private_transport=private_transport)
+                guard = partial(_authorize_upload_dispatch, dispatch_guard, cache, saved) if dispatch_guard else None
+                uploaded = _call(args, cwd, runner=runner, private_transport=private_transport,
+                                 dispatch_guard=guard)
                 if fence_upload and _image_upload_scope_rejected(uploaded):
                     _write(cache, {"identity": identity, "upload_rejected_scope": LARK_APP_SCOPE_NOT_APPLIED})
                     raise ValueError("result file upload unavailable")

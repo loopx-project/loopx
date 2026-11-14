@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -261,6 +262,8 @@ def build_lark_command_runner(
         args: list[str],
         cwd: Path | None = None,
         timeout: float | None = None,
+        *,
+        dispatch_guard=None,
     ) -> dict[str, Any]:
         if not resolution.available:
             raise LarkCliUnavailableError(resolution.error_code or "lark_cli_not_installed")
@@ -272,14 +275,25 @@ def build_lark_command_runner(
             env["PATH"] = os.pathsep.join(
                 [parent, *(part for part in current if part != parent)]
             )
-        completed = subprocess_run(
-            args,
-            cwd=str(cwd) if cwd else None,
-            timeout=timeout,
-            capture_output=True,
-            env=env,
-            text=True,
-        )
+        if dispatch_guard is not None:
+            with dispatch_guard():
+                process = subprocess.Popen(
+                    args, cwd=str(cwd) if cwd else None, env=env, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+            with process:
+                try:
+                    stdout, stderr = process.communicate(timeout=timeout)
+                except BaseException:
+                    process.kill()
+                    process.communicate()
+                    raise
+                completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+        else:
+            completed = subprocess_run(
+                args, cwd=str(cwd) if cwd else None, timeout=timeout,
+                capture_output=True, env=env, text=True,
+            )
         return {
             "returncode": completed.returncode,
             "stdout": completed.stdout,
@@ -287,4 +301,14 @@ def build_lark_command_runner(
             "timed_out": False,
         }
 
+    run.dispatch_guard = True
     return run
+
+
+def run_lark_command_with_dispatch_guard(runner, args, cwd, timeout, guard):
+    """Keep the native authority fence through CLI spawn, never response IO."""
+    if getattr(runner, "dispatch_guard", False) is True:
+        return runner(args, cwd, timeout, dispatch_guard=guard)
+    # Injected in-process runners execute synchronously and own no subprocess.
+    with (guard() if guard is not None else nullcontext()):
+        return runner(args, cwd, timeout)
