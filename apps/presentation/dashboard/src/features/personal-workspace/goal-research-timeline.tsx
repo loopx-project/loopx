@@ -105,7 +105,13 @@ export function GoalResearchTimeline({timeline, complete, zh, selectedIds, selec
       style={{left: pct(group.at)}} onClick={event => onSelectMany(ids, event.currentTarget)}><span>{ids.length}</span></button>;
   });
   const trail = groupExploreTimelineDecisions(timeline, phase);
-  const decisionOutcomes = [...new Set(timeline.decisions.map(item => item.sections!.decision!.outcome))];
+  const timedDecisions = timeline.decisions.filter(item => item.at !== null);
+  const decisionCounts = new Map<string, number>();
+  for (const item of timedDecisions) {
+    const outcome = item.sections!.decision!.outcome;
+    decisionCounts.set(outcome, (decisionCounts.get(outcome) ?? 0) + 1);
+  }
+  const undatedDecisions = timeline.decisions.length - timedDecisions.length;
   const groupedIds = new Set(dayGroups.flatMap(group => group.nodes.map(node => node.id)));
   const swarm = timeline.singles.filter(id => !groupedIds.has(id)).map(id => timeline.nodes.get(id)!).filter(item => item.first !== null);
   const unknownTime = [...timeline.nodes.values()].filter(item => item.first === null).length;
@@ -140,7 +146,7 @@ export function GoalResearchTimeline({timeline, complete, zh, selectedIds, selec
         <ContextHelp label={zh ? "时间线读法" : "Reading the timeline"}>
       {complete ? <p>{phaseNote}</p> : null}
       <p className="research-density-help"><i className="research-bar-key" aria-hidden/>{complete ? copy.densityHint : copy.partialDensityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
-      <p>{zh ? "悬停刻度可查看对应的本地时间。" : "Hover over a tick for its local time."}</p>
+      <p>{zh ? "悬停标记可查看记录时间。决策数量覆盖已读取的记录，时段选择只高亮对应的标记。" : "Hover over a mark for its record time. Counts cover the loaded records. Selecting a period highlights its marks."}</p>
       <p>{findingCopy.meaning}</p>
       {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
       <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>
@@ -151,15 +157,19 @@ export function GoalResearchTimeline({timeline, complete, zh, selectedIds, selec
       </div>
     </div>
     <div className="research-timeline-grid">
-      <div className="research-row-label"><strong>{copy.density}</strong><small>{axisLabel}</small><small>
-        {hasRecordingGaps ? <span><i className="research-gap-key" aria-hidden="true"/> {complete ? copy.gap : copy.partialGap}</span> : null}
-        {decisionOutcomes.map(outcome => <span key={outcome}><i className={`research-tick-key is-${outcome}`}/> {label(outcome)}</span>)}
-      </small></div>
+      <div className="research-row-label">
+        <strong>{copy.density}</strong><small>{axisLabel}</small>
+        {hasRecordingGaps ? <small><i className="research-gap-key" aria-hidden="true"/>{complete ? copy.gap : copy.partialGap}</small> : null}
+        {timeline.decisions.length ? <small className="research-decision-key" role="group" aria-label={copy.decisions}>
+          {[...decisionCounts].map(([outcome, count]) => <span key={outcome}><i className={`research-tick-key is-${outcome}`} aria-hidden="true"/> {label(outcome)} {count}</span>)}
+          {undatedDecisions ? <span>{copy.unknownTime} {undatedDecisions}</span> : null}
+        </small> : null}
+      </div>
       <div className="research-row-plot">
         <div className="research-density" ref={plot}>{timeline.bins.map((bin, index) => <span key={index} className={bin.events ? "" : "is-gap"} title={`${timeLabel(bin.start)} — ${timeLabel(bin.end)} · ${bin.events}`}
           style={{height: bin.events ? `${Math.max(8, (bin.events / maxEvents) * 100)}%` : "100%"}}/>)}</div>
-        {timeline.decisions.length ? <div className="research-decision-ticks">{timeline.decisions.filter(item => item.at !== null).map(item => <span key={item.event.event_id}
-          title={`${label(item.sections!.decision!.outcome)} · ${item.at === null ? "—" : timeLabel(item.at)}`}
+        {timedDecisions.length ? <div className="research-decision-ticks" aria-hidden="true">{timedDecisions.map(item => <span key={item.event.event_id}
+          title={`${label(item.sections!.decision!.outcome)} · ${timeLabel(item.at!, true)}`}
           className={`is-${item.sections!.decision!.outcome}${inPhase(item.at) ? "" : " is-dimmed"}`} style={{left: pct(item.at!)}}/>)}</div> : null}
         {complete ? timeline.phases.slice(1).map(item => <span key={item.index} className="research-phase-divider" style={{left: pct(item.start)}}/>) : null}
         <div className="research-axis" role="group" aria-label={axisLabel}>{ticks.map(offset => <time

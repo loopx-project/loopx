@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -12,10 +14,14 @@ from loopx.capabilities.explore.research_evidence import append_research_observa
 from loopx.capabilities.explore.result_log import (
     append_explore_result_event, build_explore_edge_event, build_explore_node_event, explore_result_log_path,
 )
+from loopx.history import load_index_snapshot
+from loopx.quota import goal_quota_with_spend_ledger
 from loopx.control_plane.work_items.semantic_replan_writeback import qualify_replan_writeback
 from loopx.control_plane.testing.model_tool_behavior import QuotaToolContext
+from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.capabilities.explore.research_frontier import prepare_research_replan_evidence
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
+from tests.control_plane.test_quota_settlement_cli import _run_generated_cli
 
 GOAL = "research-gate-fixture"
 AGENT = "fixture-agent"
@@ -33,8 +39,10 @@ def observation(node: str, target: str | None = None) -> dict:
                                          "interaction_kind": "state_interference", "evidence_ids": [f"ev-{node}", f"ev-{target}"]}] if target else []}
 
 
-@pytest.fixture
-def fixture(tmp_path: Path):
+@pytest.fixture(params=["file", "sqlite"])
+def fixture(tmp_path: Path, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     state = tmp_path / "ACTIVE_GOAL_STATE.md"
     state.write_text('---\nstatus: active\nowner_mode: goal\nobjective: "Test the explicit research boundary."\n'
                      'updated_at: 2026-09-28T00:00:00Z\n---\n\n# Research fixture\n\n'
@@ -58,7 +66,7 @@ def fixture(tmp_path: Path):
     append_research_observation(log, goal_id=GOAL, observation=observation("a", "b"))
     for name in ["a", "b"]:
         append_explore_result_event(log, build_explore_edge_event(goal_id=GOAL, from_node="joint", to_node=name, edge_type="depends_on"))
-    initialize_canonical_source_fixture(runtime, GOAL, state_path=state)
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=request.param)
 
     def cli(*args: str, success: bool = True) -> dict:
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
@@ -69,7 +77,10 @@ def fixture(tmp_path: Path):
             return QuotaToolContext.from_output(result.stdout).packet
         return json.loads(result.stdout)
 
-    return cli, log, runtime, registry, state
+    try:
+        yield cli, log, runtime, registry, state
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
 
 
 def activate(cli) -> None:
@@ -100,7 +111,58 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     assert guard["effective_action"] == "autonomous_replan_required"
     packet = guard["replan_action_packet"]
     obligation = packet["obligation_id"]
-    assert packet["capability_guard"]["gap_id"] == guard["bounded_research_frontier"]["selected_gap"]["gap_id"]
+    receipt = guard["heartbeat_receipt"]
+    capability_guard = receipt["semantic_replan_capability_guard"]
+    gap = guard["bounded_research_frontier"]["selected_gap"]
+    assert capability_guard == {
+        "schema_version": "semantic_replan_capability_guard_v0", "capability_id": "explore",
+        "gap_id": gap["gap_id"], "frontier_revision": gap["frontier_revision"],
+    }
+    assert receipt["semantic_replan_obligation_id"] == obligation == gap["obligation_id"]
+    # The default staged entry retains the admitted duty in its original
+    # receipt. Follow its real readers before authoring, without a new guard.
+    before_reads = {path: path.read_bytes() for path in (
+        registry, state, runtime / "goals" / GOAL / "rollout-event-log.jsonl")}
+
+    run_index = runtime / "goals" / GOAL / "runs" / "index.jsonl"
+
+    def quota_ledger():
+        index_bytes = run_index.read_bytes() if run_index.exists() else None
+        source = json.loads(registry.read_text())["goals"][0]
+        runs = load_index_snapshot(run_index, include_artifact_status=False).records
+        return index_bytes, goal_quota_with_spend_ledger(source, runs)
+
+    before_ledger = quota_ledger()
+    assert before_ledger[1]["spent_slots"] == 0
+
+    def read_stage(command):
+        argv = shlex.split(command)
+        assert argv[0] == sys.executable
+        module = argv.index("-m")
+        assert argv[module + 1] == "loopx.entrypoint"
+        assert all(option == "-I" for option in argv[1:module])
+        result = subprocess.run(argv, cwd=registry.parent, capture_output=True, text=True,
+            env={**os.environ, "LOOPX_USAGE_PING": "0"}, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    review = read_stage(packet["review"])
+    assert quota_ledger() == before_ledger
+    writer = read_stage(review["next"]["writeback"])
+    assert quota_ledger() == before_ledger
+    assert review["stage"] == "review" and writer["stage"] == "writeback"
+    assert review["obligation_id"] == writer["obligation_id"] == obligation
+    assert review["context_id"] == writer["context_id"]
+    assert review["source_hash"] == writer["source_hash"]
+    successor_command = writer["writeback_contract"]["successor_command"]
+    successor = shlex.split(successor_command)
+    assert successor[successor.index("--goal-id") + 1] == GOAL
+    assert successor[successor.index("--claimed-by") + 1] == AGENT
+    assert successor[successor.index("--replan-obligation-id") + 1] == obligation
+    assert successor[successor.index("--target-key") + 1] == gap["successor_binding"]["target_key"]
+    assert writer["writeback"]["next_cli_actions"] == [successor_command]
+    assert writer["writeback"]["spend_allowed_now"] is False
+    assert {path: path.read_bytes() for path in before_reads} == before_reads
     status = cli("status", "--goal-id", GOAL, "--agent-id", AGENT)
     item = next(item for item in status["attention_queue"]["items"] if item["goal_id"] == GOAL)
     assert item["project_asset"]["bounded_research_frontier"] == guard["bounded_research_frontier"]
@@ -109,8 +171,8 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     assert summary["research_execution_frontier"] == guard["bounded_research_frontier"]
     from loopx.cli_commands.explore import render_explore_markdown
     from loopx.presentation.renderers.status_markdown import render_status_markdown
-    assert packet["capability_guard"]["gap_id"] in render_explore_markdown(summary)
-    assert packet["capability_guard"]["gap_id"] in render_status_markdown(status)
+    assert capability_guard["gap_id"] in render_explore_markdown(summary)
+    assert capability_guard["gap_id"] in render_status_markdown(status)
     assert "lineage_gaps" not in guard["bounded_research_frontier"]
     assert "settlement_transitions" not in guard["bounded_research_frontier"]
     rejected = cli("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
@@ -126,7 +188,9 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     deferred = cli(*base, "--text", "Deferred joint experiment.", "--explore-result-node-ref", "joint",
                    "--status", "deferred", "--resume-when", "capacity_available:fixture", success=False)
     assert "no deferral" in json.dumps(deferred)
-    created = cli(*base, "--text", "Run the bounded joint experiment.", "--explore-result-node-ref", "joint", "--target-key", "joint")
+    code, created = _run_generated_cli(
+        shlex.join([*successor, "--format", "json"]), registry_path=registry, cwd=registry.parent)
+    assert code == 0, created
     assert created["replan_transition"]["recorded"]
     before_closeout = state.read_bytes()
     missing = cli("todo", "complete", "--goal-id", GOAL, "--todo-id", created["todo_id"],
@@ -139,7 +203,7 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     assert "current typed experiment observation" in json.dumps(retired)
     assert state.read_bytes() == before_closeout
     replay = cli("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "fixture-on")
-    assert replay["heartbeat_receipt"]["semantic_replan_capability_guard"] == packet["capability_guard"]
+    assert replay["heartbeat_receipt"]["semantic_replan_capability_guard"] == capability_guard
     assert replay["replan_action_packet"]["obligation_id"] == obligation
     refresh = cli("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
                   "--replan-obligation-id", obligation, "--turn-instance-id", "fixture-on",
@@ -151,13 +215,20 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     spent = cli("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT, "--slots", "1", "--source", "heartbeat",
                 "--execute", "--replan-obligation-id", obligation, "--turn-instance-id", "fixture-on")
     assert spent["settlement_progress"]["state"] == "settled"
+    after_spend = quota_ledger()
+    assert after_spend[1]["spent_slots"] == 1
+    assert after_spend[1]["spend_event_count"] == 1
+    cli("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--slots", "1", "--source", "heartbeat", "--execute",
+        "--replan-obligation-id", obligation, "--turn-instance-id", "fixture-on")
+    assert quota_ledger() == after_spend
     append_explore_result_event(log, build_explore_node_event(goal_id=GOAL, node_id="joint", title="Research joint",
                                                            node_kind="experiment", status="resolved"))
     result = observation("joint")
     result["progress"]["work_item_id"] = created["todo_id"]
     result["input_observations"] = guard["bounded_research_frontier"]["selected_gap"]["input_observations"]
     result["execution_lineage"] = {"schema_version": "research_execution_lineage_v0", "goal_id": GOAL,
-        "gap_id": packet["capability_guard"]["gap_id"], "replan_obligation_id": obligation,
+        "gap_id": capability_guard["gap_id"], "replan_obligation_id": obligation,
         "successor_todo_id": created["todo_id"], "agent_id": AGENT}
     append_research_observation(log, goal_id=GOAL, observation=result, agent_id=AGENT,
                                registry_path=registry, runtime_root=runtime)
@@ -180,7 +251,7 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     from loopx.extensions.lark.presentation.explore_results import _node_record_values
     joint = next(node for node in summary["nodes"] if node["node_id"] == "joint")
     lark = _node_record_values(joint, goal_id=GOAL, source_id="synthetic-source")
-    assert "observed" in lark["Summary"] and packet["capability_guard"]["gap_id"] in lark["Summary"]
+    assert "observed" in lark["Summary"] and capability_guard["gap_id"] in lark["Summary"]
 
 
 def test_selected_guard_cannot_be_erased_by_input_invalidation(fixture) -> None:
@@ -218,6 +289,7 @@ def test_real_replan_guard_accepts_exact_blocker_wait_and_resumes_without_closur
     activate(cli)
     guard = cli("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "fixture-blocked")
     packet = guard["replan_action_packet"]
+    capability_guard = guard["heartbeat_receipt"]["semantic_replan_capability_guard"]
     task = cli("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
         "--task-class", "advancement_task", "--action-kind", "joint_probe", "--target-key", "joint",
         "--explore-result-node-ref", "joint", "--replan-obligation-id", packet["obligation_id"],
@@ -233,7 +305,7 @@ def test_real_replan_guard_accepts_exact_blocker_wait_and_resumes_without_closur
     result["closure_basis"] = None
     result["input_observations"] = guard["bounded_research_frontier"]["selected_gap"]["input_observations"]
     result["execution_lineage"] = {"schema_version": "research_execution_lineage_v0", "goal_id": GOAL,
-        "gap_id": packet["capability_guard"]["gap_id"], "replan_obligation_id": packet["obligation_id"],
+        "gap_id": capability_guard["gap_id"], "replan_obligation_id": packet["obligation_id"],
         "successor_todo_id": task["todo_id"], "agent_id": AGENT}
     result["composition_resolution"] = {"schema_version": "research_composition_resolution_v0",
         "disposition": "deferred", "evidence_ids": ["ev-joint"]}
@@ -262,8 +334,8 @@ def test_real_replan_guard_accepts_exact_blocker_wait_and_resumes_without_closur
         "progress_observation": recorded["observation"]["progress"]}], state_text=state.read_text(), agent_id=AGENT,
         goal_id=GOAL, registry_goal=source, guard_scoped=True,
         capability_evidence=prepare_research_replan_evidence(runtime_root=runtime, goal_id=GOAL,
-            agent_id=AGENT, registry_goal=source, state_text=state.read_text(), capability_guard=packet["capability_guard"]),
-        guard_semantic_replan_obligation_id=packet["obligation_id"], guard_capability=packet["capability_guard"],
+            agent_id=AGENT, registry_goal=source, state_text=state.read_text(), capability_guard=capability_guard),
+        guard_semantic_replan_obligation_id=packet["obligation_id"], guard_capability=capability_guard,
         progress_observation=recorded["observation"]["progress"])
     assert repeated["accepted"] is False
     cli("todo", "complete", "--goal-id", GOAL, "--todo-id", blocker["todo_id"], "--agent-id", AGENT,
@@ -284,6 +356,7 @@ def test_real_replan_guard_accepts_exact_result_source_and_candidate_dismissal(f
     activate(cli)
     guard = cli("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "fixture-terminal")
     packet = guard["replan_action_packet"]
+    capability_guard = guard["heartbeat_receipt"]["semantic_replan_capability_guard"]
     task = cli("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
         "--task-class", "advancement_task", "--action-kind", "joint_probe", "--target-key", "joint",
         "--explore-result-node-ref", "joint", "--replan-obligation-id", packet["obligation_id"],
@@ -294,7 +367,7 @@ def test_real_replan_guard_accepts_exact_result_source_and_candidate_dismissal(f
     result["progress"]["work_item_id"] = task["todo_id"]
     result["input_observations"] = guard["bounded_research_frontier"]["selected_gap"]["input_observations"]
     result["execution_lineage"] = {"schema_version": "research_execution_lineage_v0", "goal_id": GOAL,
-        "gap_id": packet["capability_guard"]["gap_id"], "replan_obligation_id": packet["obligation_id"],
+        "gap_id": capability_guard["gap_id"], "replan_obligation_id": packet["obligation_id"],
         "successor_todo_id": task["todo_id"], "agent_id": AGENT}
     if disposition == "dismissed":
         result["progress"]["result_class"] = "no_followup"
