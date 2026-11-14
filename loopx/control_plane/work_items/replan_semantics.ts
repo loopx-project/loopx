@@ -282,11 +282,11 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   let recoveredLifecycle: JsonObject | null = null;
   let delta: JsonObject | null = null;
   let historicalAckRecorded = false;
-  for (const value of request.transition_candidates) {
+  const candidates = writebackCommitted ? [] : request.transition_candidates;
+  for (const value of candidates) {
     const candidate = object(value);
     const obligation = object(candidate.obligation);
-    if (!writebackCommitted && request.guard_scoped &&
-        object(candidate.source_obligation).resolution_mode === "todo_lifecycle_settlement") {
+    if (request.guard_scoped && object(candidate.source_obligation).resolution_mode === "todo_lifecycle_settlement") {
       const recovered = lifecycleObligation({...candidate, obligation: candidate.source_obligation,
         selected_obligation_id: selected, agent_id: request.agent_id});
       if (recovered) recoveredLifecycle = recovered;

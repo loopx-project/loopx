@@ -754,6 +754,7 @@ def build_live_quota_should_run_decision(
     )
     if (
         receipt_bound_guard_fields["receipt_bound_replan_guard_scoped"]
+        and receipt_bound_replay_phase is ReceiptBoundReplayPhase.OPEN
         and receipt_bound_replan_obligation_id
         and agent_id
     ):

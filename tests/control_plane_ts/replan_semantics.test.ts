@@ -661,6 +661,13 @@ test("a later durable exact ACK settles only its original receipt-bound Turn", (
   assert.deepEqual(packet.semantic_delta, delta);
   assert.equal((packet.writeback_contract as JsonObject).preferred_input, "exact_historical_ack");
 
+  const pending = projectReplanSemantics({operation: "receipt_bound_obligation", ...request,
+    current_obligation: null, replay_phase: "settlement_pending"}).obligation as JsonObject;
+  const remaining = pending.settlement_action_packet as JsonObject;
+  assert.equal(remaining.required_outcome, "quota_spend_receipt");
+  assert.equal(remaining.semantic_delta, null);
+  assert.equal(remaining.successor_todo_id, null);
+
   for (const missingGuard of [{guard_scoped: false}, {goal_id: null}, {agent_id: null},
     {guard_recorded_at: null}, {guard_turn_instance_id: null}]) {
     const unbound = {...request, ...missingGuard};
