@@ -423,6 +423,18 @@ def project_saved_context_capture(
     full_reference = dict(reference)
     version = payload.get("schema_version")
     complete = version == COMPLETE_TURN_DECISION_VERSION
+    saved_source = None
+    if complete and activation["progressive_enabled"]:
+        from ..control_plane.runtime.private_permissions import require_private_path
+
+        try:
+            require_private_path(path)
+        except OSError:
+            # A manually restored capture may still use the existing checked
+            # presentation path without becoming a private reader source.
+            pass
+        else:
+            saved_source = full_reference
     try:
         if not complete and (require_complete_source or not is_legacy_saved_quota_decision(payload)):
             if activation["enabled"]:
@@ -451,7 +463,9 @@ def project_saved_context_capture(
             navigation = progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
                 directory=None, reader_argv=reader_argv, captured_decision_path=str(path),
-                replan_review_source=full_reference if complete else None, page_attached=saved_page)
+                captured_recovery=saved_source,
+                replan_review_source=full_reference if complete and saved_source is None else None,
+                page_attached=saved_page)
             if saved_page:
                 return _saved_context_read_page(args, navigation, initial_reference=None,
                     initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
@@ -491,6 +505,10 @@ def project_saved_context_capture(
         if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
             raise ValueError("saved projection needs a private physical capture root owned by this user")
         cache = Path(tempfile.mkdtemp(prefix="context-", dir=root))
+        # Staged recovery can check the original digest without reserializing
+        # the private source or requiring an attached first page.
+        staged_path = str(path) if saved_source is not None or (
+            args.initial_read and activation["progressive_enabled"]) else None
         # The Host may have captured this guard before native SessionStart.
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle
@@ -513,8 +531,9 @@ def project_saved_context_capture(
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
-            replan_review_source=full_reference if complete else None,
-            captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
+            captured_recovery=saved_source,
+            replan_review_source=full_reference if complete and saved_source is None else None,
+            captured_decision_path=staged_path,
             hook_session=hook_session, saved_capture=True)
         projected = prepared.delivery
         initial_read_plan = prepared.initial_read_plan
