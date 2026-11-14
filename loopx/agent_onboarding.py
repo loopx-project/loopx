@@ -28,6 +28,7 @@ from .kiro_cli_goal_mode import (
 from .project_prompt import (
     host_command,
     render_available_capability_args,
+    render_cli_command_prefix,
     render_codex_cli_install_preflight,
     render_optional_cli_arg,
     render_quota_guard_command,
@@ -282,10 +283,9 @@ def _bootstrap_pack_command(
     goal_id: str,
     agent_id: str | None,
     agent_type: str,
-    cli_bin: str,
+    command_prefix: str,
     task_text: str | None,
     available_capabilities: list[str] | None,
-    runtime_root: str | None,
 ) -> str:
     surface_by_type = {
         "codex-app": "codex-app",
@@ -310,7 +310,7 @@ def _bootstrap_pack_command(
         "other-agent": "other-agent",
     }
     parts = [
-        host_command(cli_bin) + render_optional_cli_arg("--runtime-root", runtime_root),
+        command_prefix,
         "bootstrap-command-pack",
         "--project",
         shell_arg_for_host(project),
@@ -505,15 +505,20 @@ def build_agent_onboarding_packet(
         host_loop_activation.get("available_capabilities") or []
     )
     install_command = _surface_install_command(canonical_agent_type, cli_bin, resolved_project)
+    if canonical_agent_type == "antigravity-app":
+        followup_prefix = render_cli_command_prefix(
+            cli_bin=cli_bin, runtime_root=runtime_root_override,
+        )
+    else:
+        followup_prefix = host_command(cli_bin) + render_optional_cli_arg("--runtime-root", runtime_root_override)
     bootstrap_pack_command = _bootstrap_pack_command(
         project=resolved_project,
         goal_id=resolved_goal_id,
         agent_id=str(selected_agent_id) if selected_agent_id else None,
         agent_type=canonical_agent_type,
-        cli_bin=cli_bin,
+        command_prefix=followup_prefix,
         task_text=task_text,
         available_capabilities=normalized_available_capabilities,
-        runtime_root=runtime_root_override,
     )
     commands: dict[str, Any] = {
         "doctor_or_install": render_codex_cli_install_preflight(
@@ -535,7 +540,7 @@ def build_agent_onboarding_packet(
             else None
         ),
         "agent_onboard_recheck": (
-            f"{host_command(cli_bin)}{render_optional_cli_arg('--runtime-root', runtime_root_override)}"
+            f"{followup_prefix}"
             " agent-onboard "
             f"--agent-type {shell_arg_for_host(canonical_agent_type)} "
             f"--project {shell_arg_for_host(resolved_project)} "

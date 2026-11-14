@@ -356,6 +356,12 @@ def antigravity_app_activation_extras(
     cli_bin: str = "loopx",
 ) -> dict[str, Any]:
     """Keyword overrides for ``antigravity_app_activation``'s facade call."""
+    # An explicit global override can be inherited when the host builder uses
+    # the default name. The native Stop adapter accepts only a single program,
+    # so leave its default unchanged when the invocation route is a module.
+    route = loopx_cli_argv(None if cli_bin == "loopx" else cli_bin)
+    if route[1:] == ["--cli-bin", route[0]]:
+        cli_bin = route[0]
     sidecar_template = build_antigravity_sidecar_template(
         goal_id=goal_id,
         agent_id=agent_id,
