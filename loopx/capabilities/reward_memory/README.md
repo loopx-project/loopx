@@ -287,8 +287,17 @@ engineering source kind, and opaque evidence refs; an ordinary Turn summary is
 not evidence. It also carries `procedural_experience_contract_v0` with
 applicability, observed outcome, attribution, complete future behavior,
 limitations, and the same evidence refs. Legacy v0 reflections remain
-audit-only and cannot become durable memory. Ambiguous provider commits and
-unverified readbacks remain in a
+audit-only and cannot become durable memory. When the same Turn delivers recall
+guidance and enables ingest, reflection compares new independent evidence with
+comparable procedural experience guidance. Without a comparable experience, the
+ordinary eligibility rule remains in force. Mere confirmation leaves the
+reflection empty; a candidate is
+produced only for distinct reusable applicability or a material change to its
+trigger, action, validation, stop condition, or limitations. Distinct
+applicability remains separate rather than being blended. Reflection never
+merges, updates, retires, or supersedes a provider record; configured lifecycle
+owners retain those decisions. Ambiguous
+provider commits and unverified readbacks remain in a
 mode-0600 Goal+Agent+event sidecar. The next executing Turn retries the same
 deterministic event before recall, so the provider can deduplicate it and LoopX
 can require exact readback. Explicit disable suppresses reconciliation and all

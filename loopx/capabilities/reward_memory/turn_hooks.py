@@ -30,6 +30,10 @@ def _reward_memory_prompt_instructions(*, has_guidance: bool, ingest_enabled: bo
         instructions.append(
             "Set reward_memory_reflection_json to an empty string unless independent task evidence established a reusable experience. For eligible evidence, return one compact JSON object using schema_version=turn_reward_memory_reflection_v1, status=eligible, a configured surface_id, outcome_kind in research|simulation|real|engineering, content_summary, reasoning_summary, confidence in low|medium|high, and 1-5 opaque evidence_refs. Also include experience using schema_version=procedural_experience_contract_v0 with non-empty applicability and limitations lists, observed_outcome, attribution, the same evidence_refs, and future_behavior containing trigger, action, validation, and stop_condition. A fact recap without a future behavior change and non-generalization boundary is not eligible memory. Legacy v0 reflections are audit-only and cannot become durable memory. Never use your own summary as evidence. Settlement may ingest it only when the caller-declared Todo validator attests the exact reflection digest and evidence; ordinary validator success remains awaiting and makes no provider write."
         )
+    if has_guidance and ingest_enabled:
+        instructions.append(
+            "Before proposing a reflection, compare current independent task evidence with any comparable procedural_experience in the delivered reward_memory_recall guidance. If no comparable procedural experience was delivered, apply the ordinary eligibility rule above. Leave reward_memory_reflection_json empty when the evidence only confirms the same future behavior and limitations; emit a candidate only when it establishes distinct reusable applicability or materially changes the trigger, action, validation, stop condition, or limitations. Keep distinct applicability conditions separate rather than blending them. Do not claim to merge, update, retire, or supersede provider records; those lifecycle decisions remain with their configured owners."
+        )
     return instructions
 
 

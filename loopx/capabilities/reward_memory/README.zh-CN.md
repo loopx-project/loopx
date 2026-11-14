@@ -187,7 +187,13 @@ quota settlement 均完成后，才接受 outcome ingest。Reflection 必须使�
 research/simulation/real/engineering 来源类型和 opaque evidence refs；还必须携带
 `procedural_experience_contract_v0`，分别写出适用情境、已观察结果、归因、未来行为（触发、动作、
 验证、停止条件）、失效边界，并绑定相同 evidence refs。只有事实复述、没有未来行为改变的普通
-Turn summary 不算经验。旧的 v0 reflection 只保留审计兼容，不会写成可持久召回的记忆。
+Turn summary 不算经验。旧的 v0 reflection 只保留审计兼容，不会写成可持久召回的记忆。同一
+Turn 同时交付 recall guidance 并启用 ingest 时，reflection 会把新的独立证据与其中可比较的
+procedural experience 对照；没有可比较经验时，仍使用普通资格规则。若只是确认相同的未来行为
+与失效边界，就保持为空。只有触发、动作、验证、停止条件或
+失效边界发生实质变化，或者形成可复用的独立适用情境时才生成候选；适用情境不同的经验保持
+分开，不混成更宽泛的规则。
+Reflection 不合并、更新、退役或取代 Provider 记录，这些决定仍属于已配置的生命周期 owner。
 Provider commit 含糊或精确读回失败时，会保留一份权限为 0600、按 Goal+Agent+事件隔离的
 sidecar。下一个执行 Turn 会在 recall 前以同一 deterministic event 重试，使 Provider 可以去重，
 LoopX 再要求精确读回。显式关闭会停止 reconciliation，并保持零 Provider 调用。
