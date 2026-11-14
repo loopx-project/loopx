@@ -252,6 +252,7 @@ def _store_result(
     agent_id: str,
     surface: str,
     state_key: str,
+    migrate_legacy: bool | None = None,
 ) -> Mapping[str, Any]:
     params: dict[str, Any] = {
         "schema_version": SCHEDULER_STATE_STORE_REQUEST_SCHEMA,
@@ -265,6 +266,8 @@ def _store_result(
     }
     if state is not None:
         params["state"] = state
+    if migrate_legacy is not None:
+        params["migrate_legacy"] = migrate_legacy
     try:
         result = effect_runtime_result(f"scheduler.state.{operation}", params)
     except EffectRuntimeRejected as exc:
@@ -290,6 +293,11 @@ def load_scheduler_state(
 ) -> dict[str, Any] | None:
     if not agent_id:
         return None
+    # Python reads are projections (quota should-run hints and the scheduler
+    # follow-up hint rebuild). Legacy state stays read-only until the native
+    # commit holds every applicable authority fence and migrates it under the
+    # scheduler lock; a read here must not move or delete the legacy file
+    # before a receipt/authority fence can reject the caller.
     result = _store_result(
         "load",
         runtime_root,
@@ -298,6 +306,7 @@ def load_scheduler_state(
         agent_id=agent_id,
         surface=surface,
         state_key=state_key,
+        migrate_legacy=False,
     )
     state = result.get("state")
     if state is not None and not isinstance(state, dict):
