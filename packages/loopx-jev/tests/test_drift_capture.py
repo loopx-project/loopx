@@ -594,6 +594,40 @@ def test_windows_rejects_workspace_swap_between_lstat_and_open(
             saved.rename(repo)
 
 
+@pytest.mark.parametrize("alias", ["record.txt", "RECORD.txt"])
+def test_index_only_change_is_seen_through_case_alias(repo, alias):
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+        ).stdout
+
+    if (
+        git(
+            "config", "--type=bool", "--default=false", "--get", "core.ignorecase"
+        ).strip()
+        != "true"
+    ):
+        pytest.skip("requires a case-insensitive workspace")
+    if os.name != "nt" and not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("unsupported capture platform")
+    (repo / "record.txt").write_bytes(b"original\n")
+    git("add", "record.txt")
+    before = drift_capture.stable_capture(repo, [alias])
+    assert before["files"][alias]["text"] == "original\n"
+    # Stage different content, then restore the working file: only the index changed.
+    (repo / "record.txt").write_bytes(b"staged\n")
+    git("add", "record.txt")
+    (repo / "record.txt").write_bytes(b"original\n")
+    after = drift_capture.stable_capture(repo, [alias])
+    assert after["content_digest"] == before["content_digest"]
+    assert after["index_digest"] != before["index_digest"]
+    # An untracked or absent neighbour keeps its ordinary empty index evidence.
+    assert (
+        drift_capture.stable_capture(repo, ["missing.txt"])["files"]["missing.txt"]
+        is None
+    )
+
+
 def test_posix_keeps_nofollow_open(repo, monkeypatch):
     (repo / "file.txt").write_bytes(b"original\n")
     platform = SimpleNamespace(**vars(os))

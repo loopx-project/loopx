@@ -208,6 +208,28 @@ def _windows_capture(repo: Path, target: Path) -> tuple[bytes, int] | None:
             return raw, opened.st_mode & 0o111
 
 
+def _index(repo: Path, paths: list[str]) -> str:
+    # A case-insensitive workspace opens RECORD.txt as the tracked record.txt;
+    # read that entry the same way so its staged changes are not missed.
+    try:
+        icase = (
+            git(repo, "config", "--type=bool", "--get", "core.ignorecase").strip()
+            == "true"
+        )
+    except ValueError:  # unset: Git matches paths exactly
+        icase = False
+    if icase:
+        return git(
+            repo,
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+            *(f":(icase,literal){name}" for name in paths),
+        )
+    return git(repo, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", *paths)
+
+
 def capture(repo: Path, paths: list[str]) -> dict[str, Any]:
     windows = os.name == "nt" and not hasattr(os, "O_NOFOLLOW")
     if not windows and not hasattr(os, "O_NOFOLLOW"):
@@ -217,7 +239,7 @@ def capture(repo: Path, paths: list[str]) -> dict[str, Any]:
     if Path(git(repo, "rev-parse", "--show-toplevel").strip()).resolve() != repo:
         raise ValueError("workspace_must_be_git_root")
     before = git(repo, "rev-parse", "HEAD").strip()
-    index = git(repo, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", *paths)
+    index = _index(repo, paths)
     files: dict[str, Any] = {}
     size = 0
     for name in paths:
@@ -246,9 +268,7 @@ def capture(repo: Path, paths: list[str]) -> dict[str, Any]:
         if size > MAX_BYTES or b"\0" in raw:
             raise ValueError("oversized_or_binary_scope")
         files[name] = {"text": raw.decode("utf-8"), "executable": bool(mode)}
-    if before != git(repo, "rev-parse", "HEAD").strip() or index != git(
-        repo, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", *paths
-    ):
+    if before != git(repo, "rev-parse", "HEAD").strip() or index != _index(repo, paths):
         raise ValueError("workspace_changed_during_capture")
     return {
         "head": before,
