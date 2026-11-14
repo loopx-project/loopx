@@ -228,6 +228,7 @@ def build_scheduler_followup_payload(
             failed_rrule=args.failed_rrule,
             observed_host_rrule=observed_rrule,
             failure_kind=args.failure_kind,
+            turn_instance_id=turn_instance_id,
         )
     return record_quota_scheduler_ack(
         status_payload,
@@ -248,4 +249,5 @@ def build_scheduler_followup_payload(
         scheduler_execution_context=scheduler_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         before_decision=before_decision,
+        turn_instance_id=turn_instance_id,
     )

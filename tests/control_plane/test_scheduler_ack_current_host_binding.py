@@ -24,6 +24,11 @@ from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.rollout_event_log import (
+    _append_rollout_event_line,
+    build_rollout_event,
+    rollout_event_log_path,
+)
 from loopx.status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
 
 
@@ -440,6 +445,201 @@ def test_scheduler_fail_current_rejects_missing_turn_receipt_without_state_write
     assert payload["scheduler_state_mutated"] is False
     assert payload["quota_spend_performed"] is False
     assert not state_path.exists()
+
+
+def _append_later_heartbeat_receipt(
+    runtime_root: Path,
+    *,
+    turn_instance_id: str,
+) -> None:
+    """Append a later committed receipt that supersedes earlier Turns."""
+
+    _append_rollout_event_line(
+        rollout_event_log_path(runtime_root, GOAL_ID),
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=SCOPED_AGENT_ID,
+            run_id=turn_instance_id,
+            status="normal_run",
+            summary=(
+                "later heartbeat cycle supersedes earlier turns "
+                f"({turn_instance_id})"
+            ),
+            details={"ok": True, "should_run": True},
+        ),
+    )
+
+
+def _scheduler_state_files(runtime_root: Path) -> list[Path]:
+    return [
+        path
+        for goal_dir in sorted((runtime_root / "goals").glob(f"{GOAL_ID}*"))
+        for path in sorted((goal_dir / "scheduler-state").rglob("*.json"))
+    ]
+
+
+def test_scheduler_ack_current_rejects_superseded_turn_receipt_without_state_write(
+    tmp_path: Path,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+
+    seeded_rc, seeded = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-superseded-ack",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert seeded_rc == 0
+    assert seeded["ok"] is True
+    _append_later_heartbeat_receipt(
+        runtime_root,
+        turn_instance_id="heartbeat-newer-ack",
+    )
+
+    returncode, payload = run_json_cli_result(
+        "quota",
+        "scheduler-ack-current",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-superseded-ack",
+        "--execute",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+
+    assert returncode == 1
+    assert payload["ok"] is False
+    assert payload["status"] == "heartbeat_receipt_stale"
+    assert payload["state"] == "blocked_receipt"
+    assert payload["error_code"] == ("SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE")
+    assert payload["write_performed"] is False
+    assert payload["scheduler_state_mutated"] is False
+    assert payload["quota_spend_performed"] is False
+    assert _scheduler_state_files(runtime_root) == []
+
+
+def test_scheduler_fail_current_rejects_superseded_turn_receipt_without_state_write(
+    tmp_path: Path,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+
+    seeded_rc, seeded = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-superseded-fail",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert seeded_rc == 0
+    assert seeded["ok"] is True
+    _append_later_heartbeat_receipt(
+        runtime_root,
+        turn_instance_id="heartbeat-newer-fail",
+    )
+
+    returncode, payload = run_json_cli_result(
+        "quota",
+        "scheduler-fail-current",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-superseded-fail",
+        "--failed-rrule",
+        "FREQ=MINUTELY;INTERVAL=30",
+        "--state-key",
+        APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+        "--execute",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+
+    assert returncode == 1
+    assert payload["ok"] is False
+    assert payload["status"] == "heartbeat_receipt_stale"
+    assert payload["state"] == "blocked_receipt"
+    assert payload["error_code"] == ("SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE")
+    assert payload["write_performed"] is False
+    assert payload["scheduler_state_mutated"] is False
+    assert payload["quota_spend_performed"] is False
+    assert _scheduler_state_files(runtime_root) == []
+
+
+def test_scheduler_ack_current_routes_the_newest_turn_receipt(
+    tmp_path: Path,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+
+    seeded_rc, seeded = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-newest",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert seeded_rc == 0
+    assert seeded["ok"] is True
+
+    returncode, payload = run_json_cli_result(
+        "quota",
+        "scheduler-ack-current",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-newest",
+        "--execute",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+
+    assert returncode == 0
+    assert payload["ok"] is True
+    assert payload["scheduler_state_mutated"] is True
+    assert Path(payload["scheduler_state_path"]).exists()
 
 
 def test_trae_app_scheduler_failure_does_not_read_codex_automation_store(
