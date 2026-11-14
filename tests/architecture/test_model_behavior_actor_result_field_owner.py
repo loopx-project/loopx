@@ -15,15 +15,18 @@ value set shared with ``_ACTOR_RESULT_FIELDS`` is invisible to a name-keyed scan
 This guard keys on the **folded value** instead, so a renamed restatement is
 caught and a same-name-different-value neighbour is never swept.
 
-Enforcement is scoped to the two actual validation entry points: the owner
-states the set exactly once and the consumer borrows it. A whole-package
-folded-value census is kept only as **advisory** (RFC
-``semantic-vocabulary-convergence-v0`` ``same_value_candidates_advisory``):
-independent same-value data -- e.g. an ordered ``preview_columns()`` presentation
-tuple -- is reported for review, never an enforcing failure, because reuse
-requires the same semantic slot, scope and contract, not merely the same
-members. Behavioural parity through each module's own normalizer still pins the
-accepted keys, so a migration that silently changed them fails here.
+Enforcement is keyed on the **field binding**, not on every same-value literal
+in the two validation entry-point files: the owner binds ``_ACTOR_RESULT_FIELDS``
+exactly once at module level, and the consumer borrows that object (identity) and
+binds no field set of its own. The two normalizers' accepted keys are pinned by
+behavioural parity, so a migration that silently changed them fails here.
+
+Every other same-value literal -- including independent data in the *same* file,
+e.g. an ordered ``preview_columns()`` presentation tuple -- is **advisory** only
+(RFC ``semantic-vocabulary-convergence-v0`` ``same_value_candidates_advisory``):
+a whole-package folded-value census reports it for review, never an enforcing
+failure, because reuse requires the same semantic slot, scope and contract, not
+merely the same members. Such data need not be moved or rewritten.
 """
 
 from __future__ import annotations
@@ -45,6 +48,8 @@ OWNER_PATH = "loopx/control_plane/testing/model_behavior_qualification.py"
 CONSUMER_PATH = "loopx/control_plane/testing/onboarding_model_behavior_qualification.py"
 
 FIELDS = frozenset({"schema_version", "actor_ref", "decision", "tool_calls"})
+OWNER_BINDING = "_ACTOR_RESULT_FIELDS"
+CONSUMER_BINDINGS = ("_ACTOR_RESULT_FIELDS", "_RESULT_FIELDS")
 
 
 def _members(node: ast.expr) -> frozenset[str] | None:
@@ -89,20 +94,45 @@ def _field_literal_sites(source: str) -> list[int]:
     ]
 
 
-def _entry_point_offenders() -> dict[str, list[int]]:
-    """Enforce ownership only at the two actual validation entry points.
+def _binding_sites(source: str, names: tuple[str, ...]) -> list[int]:
+    """Module-level assignments to one of ``names`` whose value folds to FIELDS.
 
-    The owner may state the set exactly once; the consumer must borrow it and
-    state it nowhere. Same-value data in any other module is advisory, never an
-    enforcing offender -- an ordered presentation tuple is not a field set.
+    Only a module-level binding can restate the field set; a literal inside a
+    function body (e.g. an ordered ``preview_columns()`` presentation tuple) is
+    independent data, not a binding, and is left to the advisory census.
+    """
+
+    sites: list[int] = []
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if _members(value) != FIELDS:
+            continue
+        if any(isinstance(t, ast.Name) and t.id in names for t in targets):
+            sites.append(node.lineno)
+    return sites
+
+
+def _entry_point_offenders() -> dict[str, list[int]]:
+    """Enforce only the field binding at the two validation entry points.
+
+    The owner binds ``_ACTOR_RESULT_FIELDS`` exactly once; the consumer borrows
+    it and binds no field set of its own. Any other same-value literal -- in
+    these files or anywhere else -- is advisory, never an enforcing offender.
     """
 
     offenders: dict[str, list[int]] = {}
-    owner_sites = _field_literal_sites((REPO_ROOT / OWNER_PATH).read_text(encoding="utf-8"))
+    owner_sites = _binding_sites(
+        (REPO_ROOT / OWNER_PATH).read_text(encoding="utf-8"), (OWNER_BINDING,)
+    )
     if len(owner_sites) != 1:
         offenders[OWNER_PATH] = owner_sites
-    consumer_sites = _field_literal_sites(
-        (REPO_ROOT / CONSUMER_PATH).read_text(encoding="utf-8")
+    consumer_sites = _binding_sites(
+        (REPO_ROOT / CONSUMER_PATH).read_text(encoding="utf-8"), CONSUMER_BINDINGS
     )
     if consumer_sites:
         offenders[CONSUMER_PATH] = consumer_sites
@@ -129,21 +159,20 @@ def test_only_the_two_entry_points_are_enforced() -> None:
     )
 
 
-def test_same_value_candidates_outside_the_entry_points_are_advisory() -> None:
-    # RFC same_value_candidates_advisory: independent same-value data (e.g. an
-    # ordered preview_columns() presentation tuple) is reported for review, not
-    # an enforcing failure. Only the consumer entry point is enforced here; the
-    # rest of the package is deliberately NOT asserted empty.
+def test_the_advisory_census_is_review_only() -> None:
+    # RFC same_value_candidates_advisory: the whole-package census reports
+    # same-value sites for review and never feeds enforcement. The owner is the
+    # legitimate source, so it is excluded; independent same-value data anywhere
+    # else -- including the consumer file -- may be reported without failing.
     candidates = _package_same_value_candidates()
-    assert CONSUMER_PATH not in candidates, (
-        f"the consumer entry point must borrow, not restate: {candidates.get(CONSUMER_PATH)}"
-    )
+    assert OWNER_PATH not in candidates
+    assert _entry_point_offenders() == {}
 
 
 def test_the_owner_states_the_recorded_members_once() -> None:
     assert frozenset(owner._ACTOR_RESULT_FIELDS) == FIELDS
     source = (REPO_ROOT / OWNER_PATH).read_text(encoding="utf-8")
-    assert len(_field_literal_sites(source)) == 1
+    assert len(_binding_sites(source, (OWNER_BINDING,))) == 1
 
 
 def test_the_consumer_borrows_the_owner_object() -> None:
@@ -153,7 +182,7 @@ def test_the_consumer_borrows_the_owner_object() -> None:
 def test_the_consumer_retired_its_restated_name() -> None:
     assert not hasattr(consumer, "_RESULT_FIELDS")
     source = (REPO_ROOT / CONSUMER_PATH).read_text(encoding="utf-8")
-    assert _field_literal_sites(source) == []
+    assert _binding_sites(source, CONSUMER_BINDINGS) == []
     assert "_ACTOR_RESULT_FIELDS" in source
 
 
@@ -211,59 +240,97 @@ def test_the_census_names_every_form_and_leaves_the_others(
     assert len(_field_literal_sites(source)) == expected, label
 
 
-# --- enforcement distinguishes a real consumer restatement from independent data --------
+# --- enforcement distinguishes a field-binding restatement from independent data --------
+
+OWNER_BINDING_SRC = (
+    '_ACTOR_RESULT_FIELDS = {"schema_version", "actor_ref", "decision", "tool_calls"}\n'
+)
+CONSUMER_BORROW_SRC = "from .model_behavior_qualification import _ACTOR_RESULT_FIELDS\n"
+# The reviewer's counterexample: an ordered presentation tuple of the same four
+# strings (in the reviewer's order), used only for table column ordering.
+PRESENTATION_SRC = (
+    "def preview_columns():\n"
+    '    return ("actor_ref", "decision", "tool_calls", "schema_version")\n'
+)
 
 
-def test_enforcement_bites_a_consumer_restatement_not_independent_presentation(
-    tmp_path, monkeypatch
-) -> None:
-    """The reviewer's preview_columns() case: an ordered presentation tuple of the
-    same four strings is legitimate independent data, not a field-set definition.
-    Enforcement must catch a consumer restatement yet never fail on that tuple;
-    the advisory census reports it for review without enforcing.
-    """
-
+def _setup_fixture(tmp_path, monkeypatch):
     module = sys.modules[__name__]
-    owner_rel = "loopx/control_plane/testing/model_behavior_qualification.py"
-    consumer_rel = "loopx/control_plane/testing/onboarding_model_behavior_qualification.py"
     presentation_rel = "loopx/control_plane/testing/preview.py"
-    owner_file = tmp_path / owner_rel
-    consumer_file = tmp_path / consumer_rel
+    owner_file = tmp_path / OWNER_PATH
+    consumer_file = tmp_path / CONSUMER_PATH
     presentation_file = tmp_path / presentation_rel
     for file in (owner_file, consumer_file, presentation_file):
         file.parent.mkdir(parents=True, exist_ok=True)
-    owner_file.write_text(
-        '_ACTOR_RESULT_FIELDS = {"schema_version", "actor_ref", "decision", "tool_calls"}\n',
-        encoding="utf-8",
-    )
-    presentation_file.write_text(
-        "def preview_columns():\n"
-        '    return ("schema_version", "actor_ref", "decision", "tool_calls")\n',
-        encoding="utf-8",
-    )
+    owner_file.write_text(OWNER_BINDING_SRC, encoding="utf-8")
+    consumer_file.write_text(CONSUMER_BORROW_SRC, encoding="utf-8")
+    presentation_file.write_text(PRESENTATION_SRC, encoding="utf-8")
     monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(module, "PACKAGE_ROOT", tmp_path / "loopx")
-    monkeypatch.setattr(module, "OWNER_PATH", owner_rel)
-    monkeypatch.setattr(module, "CONSUMER_PATH", consumer_rel)
+    return owner_file, consumer_file, presentation_file, presentation_rel
 
-    # A real consumer restatement is enforced; the independent presentation tuple
-    # is present in the same package but is never an enforcing offender.
+
+def test_same_file_presentation_data_is_advisory_not_enforcing(tmp_path, monkeypatch) -> None:
+    """The reviewer's preview_columns() case: the same ordered presentation tuple
+    is legitimate independent data whether it lives in a third module or inside
+    the owner / consumer file itself. It must never become an enforcing offender;
+    the advisory census reports it for review without failing.
+    """
+
+    owner_file, consumer_file, _presentation_file, presentation_rel = _setup_fixture(
+        tmp_path, monkeypatch
+    )
+    assert _entry_point_offenders() == {}
+    assert _package_same_value_candidates().get(presentation_rel) == [2]
+
+    # The identical function moved INTO the owner file: still exactly one field
+    # binding, so enforcement stays clean.
+    owner_file.write_text(OWNER_BINDING_SRC + PRESENTATION_SRC, encoding="utf-8")
+    assert _entry_point_offenders() == {}
+    assert len(_binding_sites(owner_file.read_text(encoding="utf-8"), (OWNER_BINDING,))) == 1
+
+    # ...and into the consumer file: advisory only, reported by the census.
+    consumer_file.write_text(CONSUMER_BORROW_SRC + PRESENTATION_SRC, encoding="utf-8")
+    assert _entry_point_offenders() == {}
+    assert _package_same_value_candidates().get(CONSUMER_PATH) == [3]
+
+
+def test_enforcement_bites_a_consumer_field_binding_restatement(tmp_path, monkeypatch) -> None:
+    _owner_file, consumer_file, _presentation_file, _presentation_rel = _setup_fixture(
+        tmp_path, monkeypatch
+    )
     consumer_file.write_text(
         '_RESULT_FIELDS = {"schema_version", "actor_ref", "decision", "tool_calls"}\n',
         encoding="utf-8",
     )
-    assert _entry_point_offenders() == {consumer_rel: [1]}
-    assert presentation_rel not in _entry_point_offenders()
-    candidates = _package_same_value_candidates()
-    assert candidates.get(consumer_rel) == [1]
-    assert candidates.get(presentation_rel) == [2]  # advisory only, non-failing
+    assert _entry_point_offenders() == {CONSUMER_PATH: [1]}
+    assert _package_same_value_candidates().get(CONSUMER_PATH) == [1]
 
-    # Once the consumer borrows the owner object, enforcement is clean while the
-    # independent presentation tuple stays an advisory candidate, not a failure.
+    # A same-name restatement bites too (it also breaks object identity).
+    consumer_file.write_text(OWNER_BINDING_SRC, encoding="utf-8")
+    assert _entry_point_offenders() == {CONSUMER_PATH: [1]}
+
+    # Borrowing the owner object clears enforcement.
+    consumer_file.write_text(CONSUMER_BORROW_SRC, encoding="utf-8")
+    assert _entry_point_offenders() == {}
+
+
+def test_renamed_same_value_binding_is_advisory_but_owner_double_binding_bites(
+    tmp_path, monkeypatch
+) -> None:
+    owner_file, consumer_file, _presentation_file, _presentation_rel = _setup_fixture(
+        tmp_path, monkeypatch
+    )
+    # A renamed module-level same-value binding is independent data, not the field
+    # binding: advisory only (RFC same_value_candidates_advisory).
     consumer_file.write_text(
-        "from .model_behavior_qualification import _ACTOR_RESULT_FIELDS\n",
+        CONSUMER_BORROW_SRC
+        + '_PREVIEW_COLUMNS = ("actor_ref", "decision", "tool_calls", "schema_version")\n',
         encoding="utf-8",
     )
     assert _entry_point_offenders() == {}
-    assert presentation_rel not in _entry_point_offenders()
-    assert _package_same_value_candidates().get(presentation_rel) == [2]
+    assert _package_same_value_candidates().get(CONSUMER_PATH) == [2]
+
+    # The owner must bind the field set exactly once; a second binding bites.
+    owner_file.write_text(OWNER_BINDING_SRC + OWNER_BINDING_SRC, encoding="utf-8")
+    assert _entry_point_offenders() == {OWNER_PATH: [1, 2]}
