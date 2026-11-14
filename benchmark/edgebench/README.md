@@ -290,15 +290,14 @@ An Official worker without a checkpoint must retain its existing session and
 use its authorized runtime owner's idle credential handoff; this preparation
 helper does not provide a live credential-replacement transaction.
 
-An unchanged stopped heartbeat worker with an empty-output legacy Host failure
-can use the explicit [idle-host handoff](../runtime/RUNTIME.md) after independent
+An unchanged stopped heartbeat worker with a completed Host or an empty-output
+legacy failure can use the explicit [idle-host handoff](../runtime/RUNTIME.md) after independent
 native-history, source, current Goal and account qualification. Seal with
 `python -m benchmark.edgebench.stopped_recovery --idle-host-handoff` using the
 original source declaration; then select the original scheduler digest with
 `benchmark.runtime.scheduler --idle-host-state-sha256`. Both options are off by
-default. The original failure remains recorded. This route preserves the
-existing completed session and source rather than manufacturing an interrupted
-Turn. Native judge restoration, opportunity/cooldown conservation, the audited
+default. The original return, session, and source remain recorded.
+Native judge restoration, opportunity/cooldown conservation, the audited
 remaining allowance and a finite owner cutoff remain separate requirements.
 It does not apply to Official or native-Goal workers.
 
