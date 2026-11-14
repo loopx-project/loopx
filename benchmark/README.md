@@ -330,6 +330,8 @@ private physical directory owned by the same user (Unix only). After writing the
 complete original decision, the CLI sends one newline-delimited JSON object
 `{"path": ".../decision.json", "sha256": "..."}` and withholds successful output
 until it receives exactly `{"released": true, "sha256": "..."}` for those bytes.
+The digest is fixed when the CLI publishes the capture. A file replaced before
+handoff is rejected before the Host can act on it.
 The existing selection command preserves both transport options. Ordinary CLI
 output and admission remain unchanged when the option is absent; this option
 does not enable TurnEnvelope.
@@ -823,6 +825,10 @@ and `runtime_failure.diagnostic_code`, without copying the error message or raw
 provider response into the worker reply. An expired artifact capture window is
 `request_rejected` / `checkpoint_capture_window_closed`. These diagnostics do not
 retry the capture, extend its deadline or grant execution authority.
+When Docker cannot find a declared component during export, the supervisor and
+terminal receipts include its declared `missing_component_id`. The worker reports
+that ID when it matches the original request. The capture still fails and the
+existing source-retention rules apply.
 
 This explicit command produces an **inert joint file snapshot**, still
 `research_point_qualified=false`. It does not snapshot process memory, freeze
@@ -1151,6 +1157,9 @@ worker 保留原 guard，controller 暂停全部容器写入者，核对仍有�
 文件 witness，再封存原生评测机会、incumbent 及剩余预算。源变化、过期或失去
 交接会拒绝；可恢复的捕获失败不取消原研究，也不得改用稍后的状态。解除暂停后，
 源会话继续使用原 packet 和 deadline。
+Docker 导出找不到某个已声明组件时，supervisor 和终态回执会记录其
+`missing_component_id`。worker 在确认 ID 与原请求匹配后报告该 ID。
+捕获仍失败，来源仍按原规则保留。
 原生交接先接收并读取一条有界请求，再校验捕获根目录的物理路径。目录缺失或为
 符号链接时关闭该连接，原来源可纠正路径后经同一监听器继续；拒绝不捕获、不释放
 旧 packet，不延长原 wake 截止时间，也不创建或跟随外来根目录。

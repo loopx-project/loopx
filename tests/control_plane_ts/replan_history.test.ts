@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { projectReplanHistory } from "../../loopx/control_plane/work_items/replan_history.ts";
+import { MONITOR_TARGET_SCHEMA } from "../../loopx/control_plane/scheduler/monitor_successor.ts";
 
 const neutral = ["quota_slot_spent", "quota_slot_voided", "delivery_completion_spend_accounted_v0"];
 function run(id: number, patch: JsonObject = {}): JsonObject {
@@ -239,6 +240,72 @@ function monitorTodo(patch: JsonObject = {}): JsonObject {
   return { id: "todo_watch", claim: "worker-a", public_claim: "worker-a", target: "watch",
     no_change_count: 5, due_at: null, expires_at: null, ...patch };
 }
+test("intentional watches do not become dead monitors after unchanged observations", () => {
+  for (const watch_only of [true, false, undefined]) {
+    const todos = {monitors: [monitorTodo({watch_only})], advancements: [], resume: null};
+    const before = structuredClone(todos);
+    assert.equal(trigger(many(6, poll), {todos})?.kind ?? null,
+      watch_only === true ? null : "dead_monitor_repeat");
+    assert.deepEqual(todos, before);
+  }
+});
+
+test("watch exemptions require the observed Todo, target and lane", () => {
+  for (const patch of [{id: "other"}, {target: "other"}, {claim: "peer"}, {expires_at: 6}]) {
+    const todos = {monitors: [monitorTodo({watch_only: true, ...patch})], advancements: [], resume: null};
+    assert.equal(trigger(many(6, poll), {todos})?.kind, "dead_monitor_repeat");
+  }
+  const todos = {monitors: [monitorTodo({watch_only: true})], advancements: [], resume: null};
+  assert.equal(trigger(many(6, n => poll(n, {target_id: "target-digest", target_key: "watch"})), {todos}), null,
+    "the recorded target digest is distinct from the canonical target key");
+  assert.equal(trigger(many(6, n => poll(n, {todo_id: null, target_key: "watch"})), {todos}), null);
+  assert.equal(trigger(many(6, n => poll(n, {todo_id: "other", target_key: "watch"})), {todos})?.kind,
+    "dead_monitor_repeat", "a matching key cannot override a different Todo");
+});
+
+test("opaque recorded Monitor targets only exempt an unkeyed watch with matching Todo and Agent", () => {
+  const current = monitorTodo({target: "todo_watch", target_key: null, watch_only: true});
+  const runs = many(6, n => poll(n, {target_schema: MONITOR_TARGET_SCHEMA, target_id: "opaque-target"}));
+  const todos = (monitor: JsonObject) => ({monitors: [monitor], advancements: [], resume: null});
+  assert.equal(trigger(runs, {todos: todos(current)}), null);
+  for (const changed of [{id: "todo_other"}, {claim: "other"}, {target_key: "new-target"},
+    {watch_only: false}, {expires_at: 6}]) {
+    assert.equal(trigger(runs, {todos: todos({...current, ...changed})})?.kind, "dead_monitor_repeat");
+  }
+  const withoutOwner = runs.map(row => ({...row, agent_id: null, monitor_agent_id: null}));
+  assert.equal(trigger(withoutOwner, {todos: todos(current)})?.kind, "dead_monitor_repeat");
+  const legacy = many(6, n => poll(n, {target_id: "todo_watch"}));
+  assert.equal(trigger(legacy, {todos: todos(current)}), null);
+});
+
+test("intentional watch state does not discharge independent work reviews", () => {
+  const todos = {monitors: [monitorTodo({watch_only: true})], advancements: [], resume: null};
+  assert.equal(trigger(many(2, n => run(n, {progress: observation})), {todos})?.kind,
+    "typed_progress_repeat");
+  assert.equal(trigger(many(20), {todos})?.kind, "periodic_review_due");
+  assert.equal(trigger(many(2, n => poll(n, {
+    mode: "blocked_successor_wait_without_material_transition", frontier: "frontier-a",
+  })), {todos})?.kind, "blocked_successor_no_progress_repeat");
+});
+
+test("both current streak projections skip intentional watches and retain finite monitors", () => {
+  for (const operation of ["monitor_streak", "frontier_monitor_streak"]) {
+    const todos = {monitors: [monitorTodo({watch_only: true, no_change_count: 99})],
+      advancements: [], resume: null};
+    assert.equal(trigger([], {operation, observed_at: 100, todos}), null);
+    assert.equal(trigger([], {operation, observed_at: 100, todos: {...todos,
+      monitors: [...todos.monitors, monitorTodo({id: "finite", target: "finite", watch_only: false})],
+    }})?.monitor_target_id, "finite");
+  }
+});
+
+test("malformed watch state is rejected at the typed history boundary", () => {
+  for (const watch_only of ["true", 1, null]) {
+    const todos = {monitors: [monitorTodo({watch_only})], advancements: [], resume: null};
+    assert.throws(() => trigger(many(6, poll), {todos}), /watch_only/);
+  }
+});
+
 test("persisted monitor streak retains stable tie order and advancement ownership", () => {
   const todos = { monitors: [monitorTodo(), monitorTodo({ target: "second" })], advancements: [], resume: null };
   assert.equal(trigger([], { operation: "monitor_streak", todos })?.monitor_target_id, "watch");

@@ -82,6 +82,7 @@ from .quota_reward_memory import (
 )
 from ..control_plane.quota.cli_projection import compact_refresh_state_cli_payload
 from .refresh_settlement import settle_requested_refresh
+from .refresh_recovery import attach_refresh_settlement_recovery
 
 
 def register_refresh_state_command(
@@ -668,6 +669,7 @@ def handle_refresh_state_command(
             "error": str(exc),
             **({"error_code": exc.code, **getattr(exc, "payload", {})} if isinstance(getattr(exc, "code", None), str) else {}),
         }
+        attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)
         if isinstance(exc, ReplanWritebackRejected):
             transition = project_replan_writeback_rejection(
                 exc,
@@ -686,6 +688,10 @@ def handle_refresh_state_command(
                     "current_context_id": recovery["replan_context"]["context_id"],
                     "instruction": recovery["instruction"], **reference,
                 }
+            settlement_recovery = payload.get("settlement_recovery")
+            if isinstance(settlement_recovery, dict) and transition["host_action"] == "write_typed_semantic_delta":
+                transition["host_action"] = "read_current_replan_context"
+                transition["next_cli_actions"] = settlement_recovery["next_cli_actions"]
             payload["replan_transition"] = transition
             if transition["next_cli_actions"]:
                 payload["error"] += " Required transition: " + "; ".join(
@@ -884,6 +890,7 @@ def handle_refresh_state_command(
             )
         if not material_refresh_ready:
             settle_requested_refresh(payload, args, registry_path, goal_ref)
+            attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)
             print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
         if payload.get("explore_result") is not None:
@@ -974,5 +981,6 @@ def handle_refresh_state_command(
             ),
         )
     settle_requested_refresh(payload, args, registry_path, goal_ref)
+    attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)
     print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
     return 0 if payload.get("ok") else 1

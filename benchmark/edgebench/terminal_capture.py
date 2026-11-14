@@ -53,7 +53,7 @@ def _scheduler_components_at_barrier(container, components, stage, *, deadline):
     import re
     import docker
     from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE
-    from benchmark.runtime.scheduler import phase_state_name
+    from benchmark.runtime.scheduler import phase_state_name, read_phase_deadline
     from .checkpoint_worker import _archive
 
     root = PurePosixPath(_CONTROL, "scheduler-state.json")
@@ -63,7 +63,7 @@ def _scheduler_components_at_barrier(container, components, stage, *, deadline):
         clock = _archive(container, _ACTIVE_PHASE_DEADLINE, stage / "active-clock", deadline=deadline)
     except docker.errors.NotFound:
         return components  # A fresh worker has no admitted continuation.
-    current = root.with_name(phase_state_name(root, float(clock.read_bytes())))
+    current = root.with_name(phase_state_name(root, read_phase_deadline(clock.read_bytes())))
     chain = []
     while current != root:
         if (current in chain or current.parent != root.parent
@@ -150,7 +150,9 @@ class FailurePreservation:
             self.receipt.update(capture_succeeded=True, capture=point)
         except Exception as error:
             # No remote message, output, account information or token is retained.
-            self.receipt["error_kind"] = type(error).__name__
+            from .checkpoint_worker import capture_failure_fields
+
+            self.receipt.update(capture_failure_fields(error))
         finally:
             # Native final-archive extraction and grading drain occur before its
             # cleanup callback. Stop here so orphaned work cannot run through
@@ -165,6 +167,39 @@ class FailurePreservation:
         """Release compute, never remove the only source after an uncertain save."""
         try:
             _stop_retained_worker(container, self.receipt)
+        finally:
+            self._persist_receipt()
+
+    def finish_grading(self, grading_status):
+        """Seal the drained native registration if the joint export failed."""
+        receipt = self.receipt
+        if (grading_status != "complete" or receipt is None
+                or not receipt["capture_attempted"] or receipt["capture_succeeded"]
+                or receipt.get("source_stopped") is not True
+                or "native_scoring_checkpoint" in receipt):
+            return
+
+        # This point is captured after grading, with no worker phase clock.
+        # It is deliberately not the earlier joint attempt or a resume grant.
+        capture_id = uuid.uuid4().hex
+        retained = {"capture_id": capture_id, "capture_succeeded": False}
+        receipt["native_scoring_checkpoint"] = retained
+        self._persist_receipt()
+        try:
+            from .checkpoint_controller import capture
+
+            supervisor = self.supervisor
+            retained["capture"] = capture(
+                supervisor.controller_file,
+                token=supervisor.token,
+                capture_id=capture_id,
+                destination=supervisor.destination / f"terminal-native-{capture_id}",
+            )
+            retained["capture_succeeded"] = True
+        except Exception as error:
+            # A failed or uncertain export remains evidence, never a retry
+            # under a different capture identity or a changed solver outcome.
+            retained["error_kind"] = type(error).__name__
         finally:
             self._persist_receipt()
 

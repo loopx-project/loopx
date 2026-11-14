@@ -98,6 +98,8 @@ def write_monitor_poll_todo_state(
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     gate_scope_guard: bool = False,
+    available_capabilities: list[str] | None = None,
+    admitted_resume_when: str | None = None,
     legacy_batch_version: int | None = None,
 ) -> dict[str, Any] | None:
     """Route one typed Monitor transaction to its owning storage adapter."""
@@ -178,6 +180,7 @@ def write_monitor_poll_todo_state(
             execute=execute, monitor_effect_id=monitor_effect_id, agent_id=agent_id,
             lease_proof=lease_proof, gate_scope_guard=gate_scope_guard,
             receipt_only=source_error is not None,
+            available_capabilities=available_capabilities, admitted_resume_when=admitted_resume_when,
             observation=observation, intent=intent,
         )
     except LocalCoordinationAuthorityRejection as error:

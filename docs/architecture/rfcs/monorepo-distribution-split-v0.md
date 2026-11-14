@@ -3995,3 +3995,70 @@ owners. A valid terminal request still loads the adapter, including when its
 ordinary-Todo guard returns early. Complete workflow isolation, paired complete
 costs, real-host adoption, R1/M3 and C1 writer/consumer cutover remain open.
 These tests do not authorize C1 default promotion or establish model benefit.
+
+
+### 2026-11-14 — Ordinary completion defers research implementations
+
+`ResearchTerminalEvidenceHost.qualify` loads its research execution and
+configuration implementations after its existing Todo applicability check.
+A Todo without research or replan applicability signals can therefore persist
+its completion evidence and replay its original receipt while either research
+implementation is unavailable.
+Research-qualified Todos still select the same policy and evidence owners;
+module failures retain their error and commit no completion state or receipt.
+The existing source checks, writer fence, qualification, CAS and cleanup apply.
+
+Fresh-process fault cases cover both unavailable implementations on real File
+and SQLite authority. Both retained baseline probes fail at the ordinary
+completion; the candidate completes and independently reads back the result,
+replays without a new effect and refuses repeated selected-research failures.
+The available-module comparison passes the same 107 existing native cases;
+the candidate additionally passes the failure-isolation case, for 108 total.
+The real research CLI suite passes 11 cases. The same production delta and
+fault cases pass with the exact C1 candidates #8266 (`b0b930bfb92a`) and #8484
+(`b7e4e01cc423`), with 190 and 189 authority, context and recovery cases. An independently built Core wheel, installed alone, also passes the same File/SQLite fault paths with production module bytes equal to the source; this does not qualify an installed model Host or adoption.
+
+This closes the evidenced ordinary-completion dependency failure using the
+existing research guard, without duplicating the C1 work contract or its
+producer/consumer pipeline. Research- or replan-associated Todos still enter the existing policy check and
+load its implementations; a disabled policy does not remove that remaining
+loading dependency. Complete D2/D5 closure, real-model Host/context continuity, progressive controls,
+comparable complete cost, R1/M3 and C1 default cutover remain unqualified.
+
+### 2026-11-14 — Disabled research composition resolves before execution loading
+
+The existing Explore configuration module now owns the composition policy for
+the documented scalar modes and unchanged public-safe identifier validation. Research execution and evidence
+reuse that owner; their established exports remain available. Native terminal
+qualification checks the current source and resolves the same policy before
+loading research execution. The original applicability, source, qualification,
+writer, lease, CAS, receipt and cleanup rules remain in their existing owners.
+
+Fresh-process File/SQLite cases complete and independently read back ordinary
+and generic-replan results without research execution or graph implementations
+when composition is disabled, including an explicit Goal-off override. Enabled
+and inheritance-only configurations retain selected dependency failures with no
+completion or receipt. Invalid modes and scope identifiers remain rejected;
+an unavailable execution implementation cannot hide those configuration errors.
+After an enabled dependency failure, an explicitly disabled current source can
+complete the same failed operation once and replay its receipt; stale source
+requests remain refused. Both retained baseline backend probes fail on the
+original loading dependency, while the same candidate fixtures pass.
+
+The same 21 policy and 13 identifier observations retain full return values and
+error details. An independently built Core wheel, installed alone, passes the
+same File/SQLite fault and recovery paths with production bytes equal to source.
+The delta also passes selected authority/context/recovery combinations with
+C1 #8266 (`b4f958186532`) and #8484 (`b7e4e01cc423`), retaining their original
+tests and producer/consumer owners. This is dependency-failure isolation, not a
+measurement of latency, complete cost or model benefit. Configuration errors
+now precede unavailable execution IO intentionally. Full selected D2/D5 closure,
+real-model Host/context adoption, progressive controls, R1/M3, C1 cutover and
+original-goal regression remain unqualified.
+
+The final counterexample review also rejects non-string composition modes.
+Previously a single-element array such as `["explicit_only"]` passed string
+coercion but produced an inactive policy, silently skipping research evidence.
+The existing configuration owner now refuses this malformed shape before IO;
+documented scalar modes, defaults and errors retain their semantics. Real
+File/SQLite negative cases guard this boundary without changing valid activation.
