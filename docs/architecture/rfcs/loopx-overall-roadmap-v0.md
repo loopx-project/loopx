@@ -1469,6 +1469,7 @@ full lifecycle.
 
 ### R6: Local/Cloud Convergence
 
+- **Cross-person product path:** [Multi-LoopX cloud collaboration](multi-loopx-agent-cloud-collaboration-v0.md) connects people's local Agents through scoped gateway/MCP access, one selected shared authority and portable versioned evidence. Its M2 joins complete collaboration to Live Team L1/L2 human research reading; M1 is a read-only precursor, and M3 retains the full G3/R6 qualification below. Existing provider/identity/amendment holds remain.
 - **Owner:** shared-authority provider/service, session host adapters and collaboration. Extend existing PostgreSQL admission/identity-rotation foundations; do not rebuild the store.
 - **Delivery:** authenticated transport, tenant/Goal/actor authorization, host identity and capability admission. Cross-host request/receipt/wake flows use their owners. Handle disconnection, lease expiry, stale workers, service restart/restore incarnation and ambiguous commit.
 - **Exit:** at least two real hosts, including one cloud worker, collaborate in an isolated tenant; wrong-tenant/actor, revocation and split-brain negatives pass. Shared budgets/admission have explicit ownership; local quota is not a distributed resource reservation.

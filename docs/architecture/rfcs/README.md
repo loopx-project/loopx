@@ -388,6 +388,16 @@ Paired diffs do not certify translation accuracy.
 
 ## Runtime, Capability, And Collaboration Integration
 
+- [Multi-LoopX Agent Cloud Collaboration v0](multi-loopx-agent-cloud-collaboration-v0.md)
+  ([中文版](multi-loopx-agent-cloud-collaboration-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal; the existing HTTPS remote task service is
+    a source candidate, not a complete team service.
+  - **Current boundary:** Scoped cloud gateway/MCP access for people's local
+    Agents, one shared Goal authority, portable versioned evidence and original
+    result/adoption return. M2 requires two people on two physical computers and
+    a packaged human research reading journey with Live Team L1/L2; full R6/G3
+    adds cloud-worker, budget and operational qualification. No deployment,
+    provider promotion, local shell exposure or automatic private-Goal merge.
 - [Capable Agent Manager and Semantic Work Handoff v0](capable-manager-semantic-handoff-v0.md)
   ([中文版](capable-manager-semantic-handoff-v0.zh-CN.md))
   - **Delivery on `main`:** Partial; private runtime profile, executor settings,
