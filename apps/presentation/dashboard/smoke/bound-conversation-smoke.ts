@@ -167,6 +167,24 @@ try {
     assert.equal(recovered.pendingReads?.size, 0);
     assert.ok(calls.every(row => row.method === "GET"), "Recovery never starts work");
     globalThis.fetch = routedRead;
+    const plain503Offsets: number[] = [];
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (new URL(String(input), origin).pathname !== `/api/chat/sessions/${sessionId}`) return response;
+      const {message_page: {offset}} = await response.clone().json();
+      plain503Offsets.push(offset);
+      if (offset === 200 && plain503Offsets.length === 2) {
+        return Response.json({error: "Original history store unavailable"}, {status: 503});
+      }
+      return response;
+    };
+    const boundUnavailable = await fetchChatHistory(options);
+    assert.deepEqual(boundUnavailable.messages, []);
+    assert.equal(boundUnavailable.pendingReads?.get(sessionId)?.messages.length, 200);
+    assert.deepEqual((await fetchChatHistory(options, boundUnavailable)).messages, recovered.messages);
+    assert.deepEqual(plain503Offsets, [0, 200, 200, 400]);
+    globalThis.fetch = routedRead;
+
     // If the fresh post-history source read loses its connection, keep the
     // verified pages private until a later source check succeeds.
     const isBoundDiscovery = (input: RequestInfo | URL) =>
@@ -282,6 +300,96 @@ try {
     assert.ok(rewritten.messages.some(row => row.text === "Changed earlier original row 10"));
     assert.ok(!rewritten.messages.some(row => row.text === "Paged bound row 10"));
 
+    child.stdin.write("history-return\n");
+    const {messageId} = await next();
+    const queued = await fetchChatHistory(options, rewritten);
+    const returnStatus = (snapshot: typeof queued) => snapshot.messages
+      .find(row => row.message_id === messageId)?.return_delivery?.status;
+    assert.equal(returnStatus(queued), "queued");
+    calls.length = 0;
+    assert.equal(returnStatus(await fetchChatHistory(options, queued)), "queued");
+    assert.equal(readRequests().length, 1, "An unchanged pending return only needs the history proof");
+
+    sourceChecks = 0;
+    globalThis.fetch = (input, init) => {
+      if (isBoundDiscovery(input) && ++sourceChecks === 2) throw new Error("Lost pending return source check");
+      return routedRead(input, init);
+    };
+    const awaitingReturnSource = await fetchChatHistory(options);
+    assert.deepEqual(awaitingReturnSource.messages, []);
+    assert.deepEqual(awaitingReturnSource.snapshots, []);
+    assert.equal(awaitingReturnSource.pendingBoundSnapshot?.snapshot.messages
+      .find(row => row.message_id === messageId)?.return_delivery?.status, "queued");
+    globalThis.fetch = routedRead;
+
+    calls.length = 0;
+    assert.equal(returnStatus(await fetchChatHistory(options, awaitingReturnSource)), "queued");
+    assert.deepEqual(readRequests().map(url => url.searchParams.has("known_history")), [true],
+      "Recovery of a private transcript with a pending return only needs the history proof if it still matches");
+    assert.equal(calls.filter(row => new URL(row.path, origin).pathname === "/api/chat/sessions").length, 2,
+      "Recovery checks the original binding again after verifying the retained history");
+
+    child.stdin.write("history-return-delivered\n");
+    assert.equal((await next()).messageId, messageId);
+    calls.length = 0;
+    const delivered = await fetchChatHistory(options, queued);
+    assert.equal(delivered.sessions[0].transcript_revision, queued.sessions[0].transcript_revision);
+    assert.equal(returnStatus(delivered), "delivered", "A return can complete without rewriting the Chat transcript");
+    assert.equal(delivered.messages.length, queued.messages.length);
+    assert.equal(readRequests()[0].searchParams.has("known_history"), true);
+    assert.ok(calls.every(row => row.method === "GET"));
+    calls.length = 0;
+    const deliveredWhileWaiting = await fetchChatHistory(options, awaitingReturnSource);
+    assert.deepEqual(deliveredWhileWaiting.messages, delivered.messages);
+    assert.equal(readRequests()[0].searchParams.has("known_history"), true);
+    assert.equal(readRequests()[1].searchParams.has("message_cursor"), false,
+      "A pending return that changed while the source was unavailable restarts at page zero");
+    calls.length = 0;
+    assert.equal(returnStatus(await fetchChatHistory(options, delivered)), "delivered");
+    assert.equal(readRequests().length, 0, "A settled immutable transcript uses the compact discovery read again");
+
+    child.stdin.write("history-return-unreadable\n");
+    assert.equal((await next()).messageId, messageId);
+    const unreadable = await fetchChatHistory(options, queued);
+    assert.equal(returnStatus(unreadable), "explicit_unverified");
+    assert.equal(unreadable.messages.find(row => row.message_id === messageId)?.return_delivery?.error,
+      "delivery_state_unreadable");
+
+    child.stdin.write("history-return-unverified\n");
+    assert.equal((await next()).messageId, messageId);
+    const unverified = await fetchChatHistory(options, unreadable);
+    assert.equal(returnStatus(unverified), "explicit_unverified");
+    assert.equal(unverified.messages.find(row => row.message_id === messageId)?.return_delivery?.error,
+      "provider_delivery_unverified", "The owner recorded a failed verification, not a successful delivery");
+    calls.length = 0;
+    assert.equal(returnStatus(await fetchChatHistory(options, unverified)), "explicit_unverified");
+    assert.equal(readRequests().length, 0, "An owner-recorded terminal failure does not repeatedly fetch history");
+
+    child.stdin.write("history-extra\n");
+    await next();
+    child.stdin.write("history-unavailable\n");
+    assert.equal((await next()).history_available, false);
+    const coldUnavailable = await fetchChatHistory(options);
+    assert.deepEqual(coldUnavailable.snapshots, [], "No verified transcript exists on a first read");
+    assert.deepEqual(coldUnavailable.unavailableSessionIds, [sessionId]);
+    calls.length = 0;
+    const degraded = await fetchChatHistory(options, unverified);
+    assert.deepEqual(degraded.messages, unverified.messages, "An HTTP 503 alone must not hide verified history");
+    assert.equal(degraded.snapshots[0]?.session.session_id, sessionId, "The same original composer retains a usable snapshot");
+    assert.deepEqual(degraded.unavailableSessionIds, [sessionId], "Report the incomplete refresh without emptying history");
+    assert.equal(calls.filter(row => isBoundDiscovery(row.path)).length, 2,
+      "A cached transcript is usable only after the bound source is checked again");
+    child.stdin.write("deny\n");
+    assert.equal((await next()).source_verified, false);
+    await assert.rejects(() => fetchChatHistory(options, degraded),
+      "Missing authority is not a degraded history read");
+    child.stdin.write("recover\n");
+    assert.equal((await next()).source_verified, true);
+    child.stdin.write("history-available\n");
+    assert.equal((await next()).history_available, true);
+    const resumedAfterUnavailable = await fetchChatHistory(options, degraded);
+    assert.equal(resumedAfterUnavailable.messages.length, unverified.messages.length + 1);
+    assert.deepEqual(resumedAfterUnavailable.unavailableSessionIds, []);
     child.stdin.write("history-extra\n");
     await next();
     globalThis.fetch = async (input, init) => {
@@ -292,7 +400,7 @@ try {
       }
       return response;
     };
-    await assert.rejects(() => fetchChatHistory(options, rewritten), "A revoked original binding cannot publish a suffix");
+    await assert.rejects(() => fetchChatHistory(options, resumedAfterUnavailable), "A revoked original binding cannot publish a suffix");
     globalThis.fetch = routedRead;
     child.stdin.write("recover\n");
     assert.equal((await next()).source_verified, true);
