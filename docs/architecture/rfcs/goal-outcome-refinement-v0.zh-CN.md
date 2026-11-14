@@ -440,3 +440,19 @@ Goal 生命周期变化会重置编辑器，不能把旧请求转移给新 owner
 
 这些验证证明产品语义和恢复，不证明真实模型识别、安装宿主采用、质量增益或
 人工注意力下降；测试数量与 PR 合并均不能替代后者。
+
+### 记录格式的容量恢复
+
+refinement 显式携带 `storage_format: "records"` 时，以原 Goal 生命周期、
+有序声明、来源、工作、自查和 CAS／回执 owner 选择
+`loopx_goal_outcome_records_v1`。旧 v0 限制保持。记录页和新操作分别受
+128 KiB 预算约束，长期保留的集合长度不再占单次写入预算；有序清单摘要拒绝
+缺失或被修改的页。`review_patch` 保留逐项依据新鲜度，完整 `review` 仍要求
+全量覆盖。App 补充要求和原生／CLI 操作复用同一 owner。见
+[操作合同](../../reference/goal-acceptance-observations.md#long-horizon-record-storage)。
+
+这是容量恢复和追加演化路径，不表示索引式存储、局部并发、目标／条件替换、
+跨 Agent 采用、模型收益或已安装资格完成。物理分页仍位于完整 provider 快照
+内部，整份读回和传输成本仍增长；已有 objective proposal/apply/adopt owner
+保持不变。只在显式 refinement 提交时迁移，不重写旧回执。新格式回执恢复当前
+投影而不复制完整声明；切换后必须使用兼容运行时。
