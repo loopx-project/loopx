@@ -434,6 +434,8 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
         assert writer["allowed_terminal"] == source["replan_action_packet"]["allowed_terminal"]
 
+        recovery_root = path.parent / "context-delivery"
+        prior_recoveries = set(recovery_root.glob("recovery-*"))
         for limit in (80, 96):
             denied = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
             assert denied["ok"] is False and "command" not in denied
@@ -447,6 +449,19 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
             assert denied.returncode == 1 and len(denied.stdout) <= limit
             assert b"output budget" in denied.stderr
             assert denied.stdout == (b'{"ok":false}\n' if limit == 13 else b"")
+        assert set(recovery_root.glob("recovery-*")) == prior_recoveries
+
+        moved = path.with_name("unavailable-source.json")
+        path.rename(moved)
+        try:
+            missing = subprocess.run(shlex.split(f"{writer_command} --max-page-output-bytes 80"),
+                cwd=fixture["project"], capture_output=True, text=True, timeout=30)
+            assert missing.returncode == 1 and len(missing.stdout.encode()) <= 80
+            refusal = json.loads(missing.stdout)
+            assert refusal["ok"] is False and "stderr" in refusal["reason"]
+            assert str(path) in missing.stderr
+        finally:
+            moved.rename(path)
 
         output_limit = 1450
         bounded = read(f"{writer_command} --max-page-output-bytes {output_limit}", output_limit=output_limit)
@@ -499,7 +514,7 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
                 rejected = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
                 assert rejected["ok"] is False and "command" not in rejected
                 reason = rejected["reason"].lower()
-                assert "digest" in reason and "restore" in reason
+                assert all(word in reason for word in ("digest", "restore", "do not rerun admission"))
         finally:
             path.write_bytes(raw)
         assert read(writer_command) == writer
