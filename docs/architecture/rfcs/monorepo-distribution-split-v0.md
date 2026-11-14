@@ -4114,3 +4114,31 @@ File/SQLite negative cases guard this boundary without changing valid activation
   actual model/Host context adoption, progressive controls, comparable complete
   costs, full V1–V5/V10, R1/M3 and C1 default cutover remain unqualified. The
   process Host and native context events are synthetic fixtures.
+
+### 2026-11-14 — Current-model task result survives Core recovery
+
+- **Sources:** `main@83809355f84a` and C1 #8266 at `6a31d83497a6`,
+  each in a separate installed Core environment. The executed entrypoint,
+  Turn driver/executor, complete-source owner and recall entrypoints match
+  their declared source bytes.
+- **Observed outcome:** the current interactive model adopted each actual
+  generic Host request and used tools to produce JSON and readable Markdown
+  inventory reports from isolated synthetic input. An independent input-derived
+  Decimal oracle checks duplicate merging, zero stock, over-reservation, a
+  non-ASCII SKU, ordering, each group and the totals.
+- **Recovery:** after the model result reached the durable `typed_result`
+  phase, the owning CLI process was killed with SIGKILL. Both original Turns
+  resumed without another Host invocation, completed independent validation
+  and Todo readback, and retained exactly one debit after replay. On C1,
+  a damaged report was rejected with the Todo still open and zero debit;
+  restoring the checked report allowed the same Turn to finish.
+- **Owner boundary:** a private rendezvous adapter only transports the current
+  model's request/result. C1 and the existing Turn driver retain composition,
+  identity, admission, validation, capture, recovery and settlement. No new
+  execution pipeline, schema, product default or capability activation is added.
+- **Remaining:** this strengthens task-result recovery evidence. It does not
+  qualify an installed native model/App adapter, natural-language onboarding,
+  model retention through native compaction, progressive product controls,
+  complete D2/D5 closure, comparable full costs, V1–V5/V10, R1/M3 or C1 default
+  cutover. The model reused its report generator between the two checks;
+  these are not independent inference trials or an outcome/cost comparison.
