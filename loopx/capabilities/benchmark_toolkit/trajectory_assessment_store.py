@@ -391,6 +391,8 @@ def register_pack(
     include_tool_context: bool = False,
     loopx_input_json: str | None = None,
     native_outcomes_json: str | None = None,
+    loopx_human_attention_start: str | None = None,
+    loopx_human_attention_end: str | None = None,
     base_pack_id: str | None = None,
     case_study_json: Path | None = None,
     select_default: bool = True,
@@ -398,10 +400,27 @@ def register_pack(
     """Trusted operator only; no HTTP/renderer path-registration endpoint."""
     if not title.strip():
         raise ValueError("A case/window title is required")
+    input_value = json.loads(input_path.read_text(encoding="utf-8"))
+    if (loopx_human_attention_start is None) != (loopx_human_attention_end is None):
+        raise ValueError(
+            "LoopX human attention start and end must be supplied together"
+        )
+    if loopx_human_attention_start is not None:
+        from .trajectory_human_attention_capture import (
+            capture_verified_loopx_human_attention,
+        )
+
+        input_value = capture_verified_loopx_human_attention(
+            runtime_root=runtime_root,
+            input_value=input_value,
+            source_root=source_root,
+            start=loopx_human_attention_start,
+            end=loopx_human_attention_end,
+        )
     prepared = effect_runtime_result(
         "benchmark.trajectory.prepare",
         {
-            "input": json.loads(input_path.read_text(encoding="utf-8")),
+            "input": input_value,
             "config": config or DEFAULT_CONFIG,
             "generation_defaults": not config,
             **({"case_study": json.loads(case_study_json.read_text(encoding="utf-8"))}

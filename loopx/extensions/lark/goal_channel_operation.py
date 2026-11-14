@@ -9,7 +9,12 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ...chat_action_store import ActionConflictError, ChatActionStore
+from ...chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...file_lock import exclusive_file_lock
 from ...extensions.runtime import (
@@ -1058,6 +1063,8 @@ def handle_goal_channel_operation_callback(
             "confirmation_digest": action["confirmation_digest"],
             "card_digest": str(delivery["card_digest"]),
             "confirmed_at": _callback_timestamp(event.get("timestamp")),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
         },
     )
     dispatch_lock = store.root / f"{action['operation_id']}.dispatch.lock"
