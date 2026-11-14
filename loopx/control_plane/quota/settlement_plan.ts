@@ -192,6 +192,9 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         "For an admitted open continuous Monitor whose observation is unavailable, " +
         "use this original identity for typed blocked outcome_gap; it settles without " +
         "poll or spend and preserves observation clocks/hash/generation. " +
+        "A successful check whose condition is unmet (including an absent watched file) is " +
+        "an unchanged observation, not unavailable: record quota monitor-poll with its actual " +
+        "result digest; it advances next_due_at from cadence without refresh or spend. " +
         "An already committed Monitor poll needs neither refresh nor spend." + inputHint,
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
