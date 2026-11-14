@@ -5,6 +5,7 @@ from typing import Any, cast
 from ..goals.acceptance_readback import configured_checks
 from ..quota.blocked_transition_notice import blocked_priority_fallback_owner_reason
 from ..quota.effective_action import EffectiveAction
+from ..quota.effect_program import required_environment_arg
 from ..quota.execution_preparation import attach_interaction_execution_preparation
 from ..effect_runtime import effect_runtime_result
 import json
@@ -73,6 +74,11 @@ AUXILIARY_MONITOR_OBSERVATION_INPUT_SCHEMA_VERSION = (
     "auxiliary_monitor_observation_input_v0"
 )
 AUXILIARY_MONITOR_RESULT_HASH_ENV = "LOOPX_MONITOR_RESULT_HASH"
+MONITOR_RESULT_HASH_INSTRUCTION = (
+    "Set the hash from the actual observation before polling. "
+    "PowerShell: `$env:LOOPX_MONITOR_RESULT_HASH = '<actual-observation-digest>'`; "
+    "POSIX: `export LOOPX_MONITOR_RESULT_HASH='<actual-observation-digest>'`."
+)
 
 
 class _InteractionContractRequired(typing.TypedDict):
@@ -418,6 +424,43 @@ def _goal_ref_cli_arg(payload: Mapping[str, Any]) -> str:
         " --goal-instance-id "
         + shlex.quote(goal_ref["goal_instance_id"])
     )
+
+
+def _primary_due_monitor(payload: Mapping[str, object], *, mode: str) -> Mapping[str, object] | None:
+    if mode not in {"monitor_due", "bounded_delivery", "bounded_delivery_with_user_notice", "scoped_user_gate_fallback"}:
+        return None
+    lane = payload.get("work_lane_contract")
+    selected = payload.get("selected_todo")
+    if (isinstance(lane, Mapping) and lane.get("obligation") == "attempt_due_monitor"
+            and lane.get("must_attempt_work") is True and isinstance(selected, Mapping)
+            and selected.get("task_class") == TODO_TASK_CLASS_MONITOR
+            and selected.get("todo_id") == lane.get("selected_todo_id")):
+        return selected
+    return None
+
+
+def _due_monitor_cli_actions(
+    monitor: Mapping[str, object], *, goal_id: str, scoped_cli_args: str, scheduler_args: str,
+    goal_ref_arg: str, turn_instance_id: str | None, runtime_root: str | None, registry_path: str | None,
+) -> list[str]:
+    prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path, host_shell=True)
+    bound_args = f"--goal-id {goal_id}{scoped_cli_args}{scheduler_args}{goal_ref_arg}"
+    todo_arg = f"--todo-id {shlex.quote(str(monitor['todo_id']))}"
+    if turn_instance_id is None:
+        return [f"{prefix} --format json quota should-run {bound_args} {todo_arg} {turn_instance_arg()}"]
+    target_key = monitor.get("target_key")
+    target_arg = f" --target-key {shlex.quote(str(target_key))}" if target_key else ""
+    return [
+        "Check the selected Monitor once. A successful check with its condition unmet "
+        "(including an absent watched file) is an unchanged observation: record it below. "
+        f"{MONITOR_RESULT_HASH_INSTRUCTION} Add --material-change only for a verified change. "
+        "Only inability to obtain an observation uses typed blocked writeback.",
+        f"{prefix} quota monitor-poll {bound_args} {todo_arg}{target_arg} "
+        f"{turn_instance_arg(turn_instance_id)} --use-current-task-lease "
+        f"--result-hash {required_environment_arg(AUXILIARY_MONITOR_RESULT_HASH_ENV)} --execute",
+        "The poll advances next_due_at from cadence and settles this Monitor Turn without "
+        "refresh-state or quota spend. Yield; independent work requires a fresh guarded Turn.",
+    ]
 
 
 def _turn_scoped_cli_settlement_context(
@@ -842,6 +885,12 @@ def _admitted_interaction_next_cli_actions(
                 "the next scheduler trigger must use a fresh turn identity"
             )
         ]
+    if monitor := _primary_due_monitor(payload, mode=mode):
+        return _due_monitor_cli_actions(
+            monitor, goal_id=goal_id, scoped_cli_args=scoped_cli_args, scheduler_args=scheduler_args,
+            goal_ref_arg=goal_ref_arg, turn_instance_id=turn_instance_id,
+            runtime_root=runtime_root, registry_path=registry_path,
+        )
     if mode == "monitor_due":
         return [
             typed_monitor_poll,
@@ -1334,6 +1383,9 @@ def _build_interaction_cli_channel(
             registry_path=registry_path,
         ))
     spend_after_selection = selection.delivery_spend_allowed(payload, spend_after_validation)
+    primary_monitor = _primary_due_monitor(payload, mode=mode)
+    if primary_monitor is not None:
+        spend_after_selection = False
     settlement_plan, replan_settlement_contract = (
         _turn_scoped_cli_settlement_context(
             payload,
@@ -1366,6 +1418,13 @@ def _build_interaction_cli_channel(
             spend_after_validation=spend_after_selection,
         ),
     }
+    if primary_monitor is not None and settlement_plan is not None:
+        # Retain the unavailable-observation recovery route, never a poll debit.
+        channel["settlement_plan"] = settlement_plan
+        channel["spend_policy"] = (
+            "Record an obtained observation with next_cli_actions (unchanged is no-spend). "
+            "Use settlement_plan only if unable to observe, for typed blocked closeout without spend."
+        )
     if turn_binding_required:
         return {
             "turn_binding_required": True,
@@ -1393,6 +1452,7 @@ def _build_interaction_cli_channel(
         if selected_monitor_id:
             command_prefix = selection.render_cli_command_prefix(
                 runtime_root=runtime_root, registry_path=registry_path,
+                host_shell=True,
             )
             agent_identity = payload.get("agent_identity")
             if not isinstance(agent_identity, dict):
@@ -1472,15 +1532,15 @@ def _build_interaction_cli_channel(
                     f"{command_prefix} quota monitor-poll --goal-id "
                     f"{shlex.quote(str(payload.get('goal_id') or '<GOAL_ID>'))}"
                     f"{_scoped_cli_args(agent_identity, available_capabilities=available_capabilities)}"
-                    f"{auxiliary_scheduler_args} --turn-instance-id "
-                    f"{shlex.quote(safe_turn_instance_id)} --todo-id "
+                    f"{auxiliary_scheduler_args} {turn_instance_arg(safe_turn_instance_id)} --todo-id "
                     f"{shlex.quote(selected_monitor_id)}{target_args} --use-current-task-lease --result-hash "
-                    f'"${{{AUXILIARY_MONITOR_RESULT_HASH_ENV}:?}}"'
+                    f"{required_environment_arg(AUXILIARY_MONITOR_RESULT_HASH_ENV)}"
                     f"{_goal_ref_cli_arg(payload)}"
                 )
                 auxiliary_projection.update(
                     {
                         "availability": "ready",
+                        "next_step": MONITOR_RESULT_HASH_INSTRUCTION,
                         "turn_instance_id": safe_turn_instance_id,
                         "command": f"{command} --execute",
                         "material_change_command": (

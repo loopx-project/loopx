@@ -467,6 +467,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.zh-CN.md) | S2 | 已接受；registry/inventory/drift 与后续 typed 切片存在 | P1：按语义角色收敛 vocabulary；盘点真实 producer/consumer；不凭枚举同名合并，schema 改动单独审阅 |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.zh-CN.md) | S2/S3/S7 | 已接受；store、局部事务和 service admission 基础已存在 | P1→P2：R5 本地 D1–D3；R6 认证跨 host；真实 backend/soak/恢复资格后才晋升 |
 | [Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | S3 | 已接受；Stage 1/2 与有界本地 root/template commit，通用采纳未闭合 | P1：R4 一个 work-graph amendment class；CAS/lease impact、冲突及丢响应回执 |
+| [Goal 契约演化与有界工作上下文 v0](goal-contract-evolution-v0.zh-CN.md) | S3/S5/S6/S7 | 提案；main 的目标修订与只增成果仍分离 | R4/R5 M1：已满 Goal 接收纠正、精确保留、有界完整读取及打包恢复；M2 统一变更／peer 采用；S11、R6/R7 验行为、共享权威及完整成本 |
 | [Goal Direction Baseline (v0)](goal-direction-baseline-v0.zh-CN.md) | S3/S6 | 已接受；只读设计 | P1：合成 fixture 验同 Agent/current revision 的材料阅读；不写 Vision、不自动建 Todo |
 | [Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | S3/S5 | 已接受；只读设计 | P1：从现有 typed facts 显示 milestone/guard/next transition；不加流程引擎 |
 | [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.zh-CN.md) | S1/S3 | 已接受；共享请求评估/Core 链接上下文与沙盒关联工作已验证，M1–M4 未完整验收 | P0→P1：R1/R2 真实团队及 R3 验证接收方采用、实际工作与原路回传；接续矩阵及 A1–A20 |
@@ -845,6 +846,7 @@ Lark 传输 owner，本切片不再重复修改它。
 - **当前工作与完整义务：** 遵循 [alignment RFC §3.7](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#37-当前工作与-goal-要求)。跨重规划、压缩、重启和 Agent 交接保留 criterion 身份与覆盖关系；只有授权且留痕的 amendment 可改变承诺。经 R5 复用既有 Goal acceptance 与 Todo owner。全局收口前验证证据内容、范围和时效，局部 `no_followup` 不足以结清目标。共享 Goal/当前任务读取前置之外的部分仍未完成；模型实际采用的资格归 S11。
 - **成果连续性切片：** [默认细化与自查](goal-outcome-refinement-v0.zh-CN.md) 保留原始意图和累计要求，复用内联工作上下文，把有变化的证据合并进正常写回。未覆盖要求进入现有 replan，局部自查不改变根目标停止／预算权威。Rebase 后的基础组合验收／ACK 兼容、已配置检查、累计成果与未覆盖成果重规划；外部 worker 尝试去重及 Explore 方法选择仍由各自 owner 负责。只增式 File／SQLite 与打包 UI 验证，同 S11 模型采用及匹配 EdgeBench 收益分开记录；这里不发起实验。
 - **执行目标过期：** [owner 修订与逐 Agent 采用](goal-outcome-refinement-v0.zh-CN.md#current-operating-objective) 复用 Goal update 和验收传输，由 Agent 准备、owner 应用。Canonical 上下文优先于旧文件展示；各 Agent 在新执行前独立对齐，在途恢复保留。原始承诺及受保护修改权限不变。脚本 CLI／原生工具和真实存储验证不代表模型识别能力、已安装宿主或线上协作已验收。
+- **统一契约演化：** [Goal 契约演化](goal-contract-evolution-v0.zh-CN.md)在既有 R4 权威下统一当前目标与要求变更，保留精确历史、受治理替换／撤回、受影响 peer 采用，并衔接 R5 索引存储。M1 须让已满 Goal 通过 CLI／原生工具和打包 App 恢复路径保留新纠正；M2 验证关联变更及 peer 返回；S11 测自然触发识别和后续成果。它是提案，不提高上限、不增权威，也不因工具存在就声称模型会用。
 - **Owner：** alignment RFC Stage 3–5；TS Goal/work-graph owner。
 - **先收口：** `intent_basis` 仅是现有 source-facts digest；保留兼容 reader，真正引入 intent revision 时单独版本化并盘点 producer/reader。不得改名后假装历史回执拥有新语义。
 - **交付次序：** 明确 root intent/permissions/acceptance/stop 的 authority；先做保持 intent 的一个 work-graph commit class。普通 Todo 编辑仍走现有 owner，不能给每次 add 强加 amendment 流程。跨共享承诺修改才消费有范围 policy、必要的 verifier、精确 CAS 与 lease-impact disposition。

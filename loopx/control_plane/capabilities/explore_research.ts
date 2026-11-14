@@ -3,6 +3,7 @@ import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
+import {researchIdentifier as id} from "./explore_configuration.ts";
 
 const OBSERVATION = "typed_research_observation_v0";
 const CLOSURE = "research_closure_basis_v0";
@@ -13,12 +14,6 @@ export const MAX_RESEARCH_GAPS = 3;
 const TERMINAL = new Set(["exploration_exhausted", "no_followup"]);
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 
-function id(value: unknown, field: string): string {
-  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
-    throw new EffectRuntimeRequestError(`${field} must be an opaque public-safe identifier`);
-  }
-  return value;
-}
 function object(value: unknown, field: string, allowed: string[]): JsonObject {
   const row = requireJsonObject(value, field);
   if (Object.keys(row).some(key => !allowed.includes(key))) {

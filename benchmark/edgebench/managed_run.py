@@ -200,7 +200,7 @@ def _terminal_history_entry(entry, *, task_id: str) -> bool:
     )
 
 
-def _grading_drained(trial: Path, *, history_file: str, run_id: str, task_id: str) -> bool:
+def native_grading_drained(trial: Path, *, history_file: str, run_id: str, task_id: str) -> bool:
     try:
         grading, _ = _read_record(trial / "grading_status.json")
     except FileNotFoundError:
@@ -272,7 +272,7 @@ def publish_managed_terminal(trial: Path, *, execute: bool = False) -> bool:
     if not solver_matches or not _solver_ended(execution, admitted_at=admitted.timestamp(),
                                                observed_at=datetime.now(UTC).timestamp()):
         raise ValueError("Retained solver termination evidence differs")
-    if not _grading_drained(trial, history_file=history_file, run_id=run_id, task_id=task_id):
+    if not native_grading_drained(trial, history_file=history_file, run_id=run_id, task_id=task_id):
         return False
     continuity = build_benchmark_runtime_continuity(
         launch_runtime_digest=retained.get("launch_runtime_sha256"),

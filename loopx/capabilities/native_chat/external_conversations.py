@@ -6,8 +6,9 @@ runner. Write it before admission so a crash can replay the same client identity
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
+from functools import cache
 from pathlib import Path
 import hashlib
 import json
@@ -26,7 +27,7 @@ from ...control_plane.quota.automation_cadence_readback import (
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import FileChatDiscovery
+from .file_discovery import FileChatDiscovery, later_equivalent_source_input, source_control_fields
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -105,6 +106,7 @@ class ChatExternalConversations:
         self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
         self._source_control_discovery = FileChatDiscovery()
+        self._backlog_request_discovery = FileChatDiscovery()
         self.actions: Any | None = None
 
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -187,6 +189,8 @@ class ChatExternalConversations:
         _, open_literal, _ = _review_openings(str((turn.get("response") or {}).get("message") or ""), 0)
         preparation = None
         later_equivalent = None
+        read_source_controls = (discovery_reads.source_controls if discovery_reads is not None
+                                else cache(self.source_controls))
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
         runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
         if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
@@ -207,6 +211,10 @@ class ChatExternalConversations:
                 and datetime.fromisoformat(item["created_at"]) > created
                 for item in (discovery_reads.user_messages(session["session_id"])
                              if discovery_reads is not None else store.messages(session["session_id"])))
+        elif turn.get("status") == "failed" and session.get("agent_id") == "codex":
+            # Native history cannot see a newer request that is still in the FIFO.
+            # Read the Core receipt when the source journal has not settled yet.
+            later_equivalent = later_equivalent_source_input(row, read_source_controls, store.turn_for_client)
         from ...chat_manager import steward_machine_defaults
         recovery_row = {key: value for key, value in row.items() if key != "attachments"}
         review_preparation = None
@@ -239,15 +247,14 @@ class ChatExternalConversations:
                 "attachments_present": bool(row.get("attachments")),
                 "steering_observed": any(event.get("kind") == "turn.steered" for event in events),
                 "stop_observed": self._source_stop_observed(row, turn, events,
-                    source_controls=discovery_reads.source_controls if discovery_reads is not None else None),
+                    source_controls=read_source_controls),
                 "preparation_observation": preparation,
                 "later_equivalent_input_present": later_equivalent,
                 "preparation_scope_available": preparation_scope_available,
                 "later_source_input_present": any(item.get("binding_id") == row["binding_id"]
                     and item.get("source") == row["source"] and item.get("command") is None
                     and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
-                    for item in (discovery_reads.source_controls() if discovery_reads is not None
-                                 else self.source_controls())) if turn.get("error_code") == "antigravity_step_error" else None,
+                    for item in read_source_controls()) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 **({"retained_result_review": retained_review} if retained_review is not None else {}),
                 **({"live_work_owner": live_work_owner} if unfinished or related_review is not None else {}),
@@ -283,20 +290,25 @@ class ChatExternalConversations:
                 and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
                 for item in (source_controls or self.source_controls)())))
 
-    def quota_backlog_observer(self) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
-        """Batch the existing typed projection; share controls only within this read."""
-        controls: list[dict[str, Any]] | None = None
-
-        def read_controls() -> list[dict[str, Any]]:
-            nonlocal controls
-            if controls is None:
-                controls = self.source_controls()
-            return controls
+    def quota_backlog_observer(
+        self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None,
+    ) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
+        """Read Session state after each batch's Turns and share source controls across batches."""
+        read_controls = cache(source_controls or self.source_controls)
 
         def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
             if len(rows) > QUOTA_BACKLOG_BATCH_SIZE:
                 raise ValueError("select at most 64 pending requests per observation")
             params = [self._quota_pending_inputs(row) for row in rows]
+            load_session = self.controller.store.load_session
+            sessions = {}
+            for session_id in dict.fromkeys(row["session_id"] for row in rows):
+                # A transient read failure must not mask a closed Session.
+                session = load_session(session_id) or load_session(session_id)
+                sessions[session_id] = ({key: session[key] for key in ("session_id", "status") if key in session}
+                                        if session is not None else None)
+            for row, values in zip(rows, params, strict=True):
+                values["current_session"] = sessions[row["session_id"]]
             flags = self._quota_pending_flags(params)
             stopped = []
             for index, (row, values, pending) in enumerate(zip(rows, params, flags, strict=True)):
@@ -351,15 +363,9 @@ class ChatExternalConversations:
         return flags
 
     def _quota_pending_inputs(self, row: dict[str, Any]) -> dict[str, Any]:
-        store = self.controller.store
-        turn = store.load_turn(row["session_id"], row["turn_id"])
-        session = store.load_session(row["session_id"])
-        # Keep the full request/response evidence. The related Session and
-        # Turn need only identity, lifecycle and result for this read.
+        turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
         return {
             "request": {key: value for key, value in row.items() if key != "attachments"},
-            "current_session": ({key: session[key] for key in ("session_id", "status") if key in session}
-                                if session is not None else None),
             "pending_observation": {
                 "turn": ({key: turn[key] for key in ("session_id", "turn_id", "client_turn_id", "status",
                     "error_code", "response") if key in turn} if turn is not None else None),
@@ -370,22 +376,7 @@ class ChatExternalConversations:
     def quota_backlog_pending(self, row: dict[str, Any], *,
                               source_controls: Callable[[], list[dict[str, Any]]] | None = None) -> bool:
         """Retain quota and declared unfinished work without admitting recovery."""
-        from ...control_plane.effect_runtime import effect_runtime_result
-
-        params = self._quota_pending_inputs(row)
-        observation = params["pending_observation"]
-        turn = observation["turn"]
-        # The typed owner first excludes work that has no retained obligation even
-        # without a stop. Stop evidence can only remove a pending request;
-        # never expose a positive result before reading those native facts.
-        if effect_runtime_result("collaboration.conversation.request", params).get("pending") is not True:
-            return False
-        assert turn is not None  # Required by the typed pending projection.
-        events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
-        if self._source_stop_observed(row, turn, events, source_controls=source_controls):
-            observation["stop_observed"] = True
-            return effect_runtime_result("collaboration.conversation.request", params).get("pending") is True
-        return True
+        return self.quota_backlog_observer(source_controls=source_controls)([row])[0]
 
     def context_recovery_observer(self) -> Callable[[str], bool]:
         """Reuse scan-local hints; reread each request, Turn and binding."""
@@ -1687,7 +1678,7 @@ class ChatExternalConversations:
                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
 
     def source_controls(self) -> list[dict[str, Any]]:
-        """Observe exact source-control fields without reparsing unchanged bodies.
+        """Observe source controls and private text digests without reparsing unchanged bodies.
 
         Recovery/stop rules remain with their original typed owner and callers.
         A new, replaced or modified journal is read again; pending() and exact
@@ -1696,17 +1687,26 @@ class ChatExternalConversations:
         paths = (path for path in sorted(self.root.glob("*.json"))
                  if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
 
-        def project(_path, row):
-            fields = ("binding_id", "source", "command", "created_at")
-            # The tolerant reader can return {} after transient IO failure.
-            # An incomplete read must not seed an unchanged-file observation.
-            return {key: row[key] for key in fields} if all(key in row for key in fields) else None
-
         return [row for _path, row in self._source_control_discovery.rows(self.root, paths,
-            read=_read_json, project=project)]
+            read=_read_json, project=source_control_fields)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")
+
+    def read_backlog_requests(self, request_refs: Iterable[str]) -> Iterator[dict[str, Any]]:
+        """Observe settings correlation, without retaining ordinary request bodies."""
+        fields = ("request_ref", "binding_id", "source", "session_id", "turn_id",
+                  "status", "command", "created_at")
+
+        def project(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+            # Recovery evidence is consumed by the typed pending rule.
+            if any(row.get(k) is not None for k in ("context_recovery", "native_result_recovery")):
+                return None
+            return {key: row[key] for key in fields} if all(key in row for key in fields) else None
+
+        paths = (self.root / f"{ref}.json" for ref in request_refs)
+        for _, row in self._backlog_request_discovery.rows(self.root, paths, read=_read_json, project=project):
+            yield row
 
     def commission_evidence(self, session: dict[str, Any]) -> list[dict[str, Any]]:
         """Read original Core execution facts for this exact bound audience.

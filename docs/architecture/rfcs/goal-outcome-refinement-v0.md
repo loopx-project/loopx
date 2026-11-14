@@ -50,6 +50,17 @@ An outcome is useful when it has a separately recognizable result and criteria,
 especially across multiple turns, tasks or repeated user corrections. Do not
 promote every message, housekeeping action or intermediate step.
 
+## Evolution beyond additive refinement
+
+[Goal contract evolution](goal-contract-evolution-v0.md) defines the next R4/R5
+proposal: unify operating-objective and requirement changes, retain exact prior
+versions, separate applicability from satisfaction, and provide bounded working
+context over scalable canonical records. It also qualifies whether a model
+recognizes a natural correction and adopts it in subsequent work. This extends
+the existing acceptance/amendment owners; it does not replace today's additive
+operation, capacity limits or full-context obligations before migration qualifies.
+Vision remains a route checkpoint, never fallback acceptance after a failed save.
+
 ## Ordinary user messages
 
 <a id="current-operating-objective"></a>
@@ -603,3 +614,23 @@ SQLite/HTTP/CLI authority and injects transport failures, not fabricated commits
 These checks establish product semantics and recovery. Live-model recognition,
 installed host adoption and comparative quality/attention gains remain unproven
 until separately measured; test counts and a merged PR are not those outcomes.
+
+### Record-format capacity recovery
+
+The opt-in `storage_format: "records"` refinement now selects
+`loopx_goal_outcome_records_v1` with the same Goal lifetime, ordered declarations,
+origins, work, reviews and CAS/receipt owner. Legacy v0 limits remain unchanged.
+Record pages and new operations have independent 128 KiB budgets; retained
+collection length no longer consumes the per-operation budget. Inventory digests
+reject missing/altered pages. `review_patch` retains per-item basis freshness;
+complete `review` remains complete. App additions and native/CLI operations use
+the same owner. See the [operational contract](../../reference/goal-acceptance-observations.md#long-horizon-record-storage).
+
+This is capacity recovery and an additive evolution path, not completion of
+record-indexed persistence, scoped concurrency, objective/condition replacement,
+peer adoption, model benefit or installed qualification. Physical pages remain
+inside the full provider snapshot; complete readback/transport costs still grow.
+The existing objective proposal/apply/adopt owner is unchanged. Migration occurs
+only with the explicit committed refinement; old receipts are never rewritten.
+New record-format receipts recover the current projection without embedding a
+full duplicate declaration. A compatible runtime is required after cutover.
