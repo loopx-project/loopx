@@ -180,6 +180,38 @@ signature. Qualify replay rejection and key rotation/revocation before enabling
 that profile. Authentication alone never grants Goal/evidence access, acceptance
 or a task lease; both profiles use the same authorization and receipt owners.
 
+### Resource ACL after authentication
+
+Successful authentication supplies a principal, not unrestricted access.
+The existing typed service admission and resource owners enforce one
+provider-neutral authorization contract with default deny:
+
+`allowed = principal grants ∩ credential scope ∩ resource ACL ∩ applicable delegation/source permissions`
+
+| Resource | Permissions must distinguish |
+| --- | --- |
+| Exact Goal lifetime | Discover/read versus propose/amend intent or administer membership |
+| Todo/request | Read versus claim, update or complete the authorized work |
+| Evidence/artifact/version | Metadata versus content/download, submit, independently accept or share to another audience |
+
+Use exact Goal/resource identities, not an alias or path substring. Inheritance
+is explicit and child/source restrictions can narrow it; Goal membership does
+not make every source visible. A coordinator role or an accepted result cannot
+grant membership, expand an evidence audience or impersonate the verifier.
+
+Authorize discovery/list/search, metadata, download, result return and sharing
+through their owning boundaries, filtering unauthorized identities and metadata
+from projections. Caches and URLs do not confer ongoing permission. Apply current
+policy to new service accesses; qualify the lifetime/revocation boundary of any
+download capability. Revocation cannot reclaim already downloaded bytes, and
+already admitted operations retain the §7 snapshot/stop boundary.
+
+ACL permission is necessary but execution still requires current work ownership,
+lease, budget and acceptance preconditions. PostgreSQL/NAS access controls may
+provide storage defense but do not replace the LoopX ACL. The current candidate
+has Goal/actor/operation grants; general resource ACL and evidence-sharing
+qualification are future work in these existing owners, not a second policy ledger.
+
 ### Work and feedback lifecycle
 
 1. An operator grants scope; the person connects and reads the selected Goal,
@@ -272,7 +304,7 @@ requires reviewed export/cutover rather than a silent failover.
 
 | ID / claim | Decisive evidence | Required result / limit |
 | --- | --- | --- |
-| C1 Scoped access | Two people on two physical computers; wrong/missing key or principal/tenant/Goal, same alias/different lifetime, per-client rotation/revocation and mixed-version cases; provider-neutral admission conformance | Only granted scopes discoverable; stale/unauthorized writes have no effect; revoking one client's key preserves another granted client and historical receipts; one-host processes or an unqualified NAS provider are insufficient |
+| C1 Scoped access | Two people on two physical computers; wrong/missing key or principal/tenant/Goal, valid key with denied Goal/work/evidence ACL, forbidden discovery/download/share, same alias/different lifetime, per-client rotation/revocation and mixed-version cases; provider-neutral admission conformance | Only granted scopes and metadata discoverable; stale/unauthorized writes have no effect; revoking one client's key preserves another granted client and historical receipts; ACL cannot bypass lease/budget checks; one-host processes or an unqualified NAS provider are insufficient |
 | C2 Complete collaboration | Real request → local investigation → portable artifact → independent exact-version check → receiver's next action → original-route return | Recoverable commitments and observed adoption; submission/message count does not pass |
 | C3 Portable evidence | Second computer opens exact bytes; denied/offline/deleted source, conflicting version/digest and common-origin copies | Permitted bytes reproducible, failures visible, no permission transfer or false corroboration |
 | C4 Failure and cost | Lost response after commit, reconnect, service restart/restore, lease expiry/takeover, stop/drain and budget contention | Reconcile the same intent once; no duplicate effect/debit, stale completion or hidden local-write fallback |
