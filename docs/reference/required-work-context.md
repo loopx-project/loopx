@@ -1499,6 +1499,13 @@ returned `settlement_owed` command for the original Turn. Read the result's
 supporting snapshot only when needed. Raw delivery, manual plans and other
 profiles retain their original settlement commands.
 
+A captured direct replan can also offer a combined `settlement_command` in its
+writeback view. It uses the captured semantic writer: fill the evidence
+placeholders after review, run it on the original obligation, and check its
+receipts. The original plan and manual steps remain available for recovery.
+Do not debit again after a settled receipt. Successor creation and Todo-bound
+replans retain their original authoring and settlement routes.
+
 Generated Turn-bound JSON `quota spend-slot` commands include
 `--max-page-output-bytes 64000`. This output option does not enable Context
 Delivery or create a native continuity baseline. Small results remain complete;
@@ -1529,6 +1536,11 @@ Codex App heartbeat 有原生会话，且当前 Todo 已准入并就绪时，可
 执行计划给出的写回命令。该命令会执行尚欠的扣额，并返回原回执。部分失败时，
 沿返回的 `settlement_owed` 命令恢复原 Turn。结果中的支持快照按需读取。
 原始投递、手动计划和其他运行模式继续使用原结算命令。
+
+已捕获的直接重规划也可在写回视图提供合并的 `settlement_command`。该命令复用
+捕获中的语义写回参数；复盘后填写证据占位符，沿原义务执行并检查回执。原计划和
+手动步骤仍可用于恢复。确认已结算后不再扣额。创建后继 Todo 或已绑定 Todo 的
+重规划保留原有的写回和结算路径。
 
 生成的 Turn 绑定 JSON `quota spend-slot` 命令携带
 `--max-page-output-bytes 64000`。此输出选项不启用 Context Delivery，也不建立原生
