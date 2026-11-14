@@ -81,17 +81,15 @@ agents:
       replan_after_turns: 6
 ```
 
-For an explicitly selected **heartbeat-only** context experiment, add
-`turn_envelope: true` to `kwargs` (default `false`). Each wake creates a private
-capture root and asks the product renderer for a short TurnEnvelope dispatcher.
-Full decisions remain available through `detail_ref.full_decision` from the same
-guard invocation. Selection/reentry still evaluate current authority; generated
-selection commands retain the capture root. When enabled, the setting appears in install,
-execution and wake receipts as `turn_envelope: true`. When disabled, the field
-and worker environment override are absent, preserving the pre-opt-in shape. Invalid native-Goal/plain/Turn-driver combinations
-fail before execution. Set it back to `false` for the next run to roll back;
-do not change a running trial's treatment. Captures contain private Goal context.
-Transport tests do not establish lower token cost or better model decisions.
+For a **heartbeat-only** study of the v0 presentation, set
+`turn_envelope: true` and `context_delivery: "off"` in `kwargs`.
+A successful guard returns the short view, with the signed C1 decision
+available through `detail_ref.full_decision` from the same invocation.
+Selection/reentry still evaluate current authority and retain the private
+capture root. Install, execution and wake receipts record the requested
+`turn_envelope: true`; check native tool results and recovery for what the
+model received. Invalid native-Goal/plain/Turn-driver combinations fail before
+execution. Omit the option in a separate run to select the default complete view.
 
 New native heartbeat trials default to context delivery `on`. Add
 `context_delivery: "off"` to the same heartbeat agent `kwargs` to disable it.
@@ -166,10 +164,11 @@ app-server test do not by themselves prove installed desktop adoption.
 A simultaneous `fresh_replan` checkpoint listener retains ownership of the same
 original capture. It validates and holds the original full decision before any
 context projection, then releases its exact digest. Only afterward may the
-native projector present full/delta for an uninterrupted tool. A refused/lost
-release remains the original typed transport failure, without publishing an
-optimized result or rerunning the guard. An interrupted guard continues with
-the original full packet; no delta is required for checkpoint recovery. Native
+native projector present full/delta for an uninterrupted tool. With context
+delivery off, an explicit short-view request still returns the v0 display
+after release. A refused/lost release reports the original typed transport
+failure. An interrupted guard continues with the original full packet; no
+delta or replay is required for checkpoint recovery. Native
 cursor verification binds the context-directory/root option and the worker's
 original `--complete-turn` and `--turn-envelope` choices. A checkpoint without
 a complete-mode binding cannot verify a pending command that uses
@@ -202,7 +201,7 @@ rerunning admission. An optional cache write after recovery is established can
 still fall back to the same full input. A bad source hash/scope is refused before
 publication. This does not renew decision freshness or establish autonomous solver benefit.
 With context delivery off, the worker supplies a bounded, digest-checked reader
-for the complete saved CLI view. Each preflight stores its view in its own
+for the saved CLI view. Each preflight stores its view in its own
 capture directory, so a retry of the same Turn preserves previously issued
 page cursors. Follow those cursors before using the original Turn's instructions.
 An explicit short envelope keeps its v0 display and same-Turn selection flags.
@@ -214,16 +213,14 @@ Include the projection command, descriptor, recovery and page reads in subsequen
 total-cost comparisons.
 Across distinct worker wakes, settle the prior Turn before selecting new work;
 reading an old prompt from resumed history cannot supply the next wake's guard.
-Do not modify an active/frozen trial. Set `context_delivery: "off"` for a new trial
-to roll back; default runs install no hooks, trust or trace settings. No scorer,
-budget, task semantics or launch authority changes with this option.
+Do not modify an active/frozen trial. Set `context_delivery: "off"` for a new
+trial to roll back the transport; off trials install no hooks, trust or trace
+settings. No scorer, budget, task semantics or launch authority changes with
+this option.
 
-Checkpoint capture is independent of this display experiment. A `fresh_replan`
-declaration may establish a private capture/handoff socket while
-`turn_envelope` remains false: the worker keeps the ordinary dispatcher and quota
-input, and only an explicit true setting selects the short view. This replaces
-the earlier implicit activation by checkpoint handoff. Do not relabel older
-receipts or trajectories as feature-off; qualify their actual input separately.
+Checkpoint capture is independent of the display choice. A `fresh_replan`
+declaration alone does not enable the short view. Keep older receipts under
+their original revision and qualify actual model input separately.
 
 | Mode | Execution/continuation | LoopX skills and state |
 | --- | --- | --- |

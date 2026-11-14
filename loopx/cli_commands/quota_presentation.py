@@ -140,12 +140,11 @@ def compose_quota_cli_source(
     share_inline_diagnostics: bool = False,
 ) -> tuple[dict[str, object], bool, dict[str, object] | None]:
     """Prepare one decided source and an optional bounded compatibility display."""
-    # Explicit complete-source JSON and Markdown readers share one source.
-    # The legacy flag with delivery off selects the bounded compatibility view.
+    # The Host always holds the complete source. An explicit raw reader gets
+    # its bounded view only after that source has been released.
     raw_envelope = (getattr(args, "turn_envelope", False)
         and not activation["enabled"]
-        and activation.get("requested") == "off"
-        and not getattr(args, "decision_handoff_socket", None))
+        and activation.get("requested") == "off")
     if not isinstance(payload.get("interaction_contract"), Mapping):
         return payload, raw_envelope, None
     if not raw_envelope:

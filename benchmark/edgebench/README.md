@@ -1011,17 +1011,20 @@ settlement. `--complete-turn` records an explicit selection in the worker
 and runtime receipts. `--context-delivery off` disables native context
 delivery while keeping the same decision contract.
 
-Use `--turn-envelope` only to reproduce the v0 presentation of a signed
-decision. Give that comparison a new run ID and keep task/scorer version,
-model and budgets matched. To compare against the original quota source, pin
-the reference runner and LoopX revision recorded by the experiment. Inspect
-wake receipts and saved decisions to verify adoption. See the
+Use `--turn-envelope --context-delivery off` to reproduce the v0 presentation
+of a signed C1 decision. A successful checkpoint handoff preserves that
+presentation; interrupted-tool recovery reads the complete source. Match
+task/scorer version, model and budget under a new run ID. To compare against the
+original quota source, pin the pre-C1 runner and LoopX revision. Wake receipts
+show the requested settings; verify actual delivery in native tool output and
+any recovery reads. See the
 [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
 for source readback and recovery.
 
 中文：新 heartbeat 运行默认用 C1 决策，关闭上下文交付后仍用同一份决策契约。
-运行回执记录默认或显式选择。旧短包选项仅用于复现展示，原 quota 对照需要固定
-对照组的 runner 与 LoopX 版本。
+同时传 `--turn-envelope --context-delivery off` 可复现旧短包展示，工具中断后
+从完整来源恢复。回执记录配置；实际交付看原生工具结果和恢复读取。原 quota
+对照需要固定 C1 之前的 runner 与 LoopX 版本。
 
 ## Close a managed native attempt
 

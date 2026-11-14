@@ -401,7 +401,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert_complete_turn_decision(full)
         if enabled:
             assert_original_contract_view(first, full)
-            if not context_delivery and private_handoff is None:
+            if not context_delivery:
                 assert first['schema_version'] == 'loopx_turn_envelope_v0'
                 assert_original_read_and_recovery_duties(body)
             else:
@@ -433,6 +433,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert_complete_turn_decision(selected_full)
         if enabled:
             assert_original_contract_view(selected, selected_full)
+            assert selected['schema_version'] == first['schema_version']
             cli = (selected['writeback'] if selected['schema_version'] == 'loopx_turn_envelope_v0'
                 else selected['interaction_contract']['cli_channel'])
             assert cli['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']

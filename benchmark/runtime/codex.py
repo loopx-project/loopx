@@ -94,7 +94,7 @@ class Execution:
 
 
 def turn_envelope_receipt(execution: Execution) -> dict:
-    """Record the actual heartbeat source choice independently of capture."""
+    """Record the configured heartbeat view, independently of delivered input."""
     if execution.turn_envelope:
         return {"turn_envelope": True, "turn_envelope_source": "explicit"}
     if execution.uses_complete_heartbeat_guard:

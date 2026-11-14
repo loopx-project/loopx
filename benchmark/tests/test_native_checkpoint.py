@@ -1026,9 +1026,9 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(
 @pytest.mark.skipif(os.name != "posix", reason="Exercises the private Host Unix rendezvous")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("mode_matches", [True, False], ids=["retained", "switched"])
-@pytest.mark.parametrize("explicit", [False, True], ids=["default", "explicit"])
-def test_held_complete_guard_checkpoint_binds_original_settlement_mode(
-    tmp_path, monkeypatch, provider, mode_matches, explicit,
+@pytest.mark.parametrize("display", ["default", "complete", "short"])
+def test_held_guard_checkpoint_binds_original_source_and_display(
+    tmp_path, monkeypatch, provider, mode_matches, display,
 ):
     """Exercise the worker, real quota guard and checkpoint store with fixed native history."""
     from copy import deepcopy
@@ -1073,15 +1073,19 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(
            "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_CLI": str(cli),
            "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
            "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CHECKPOINT_REQUEST": str(declaration),
-           "LOOPX_CONTEXT_DELIVERY": "off", "LOOPX_TURN_ENVELOPE": "0",
-           "LOOPX_COMPLETE_TURN": "1" if explicit else "0"}
+           "LOOPX_CONTEXT_DELIVERY": "off", "LOOPX_TURN_ENVELOPE": "1" if display == "short" else "0",
+           "LOOPX_COMPLETE_TURN": "1" if display == "complete" else "0"}
     session = CodexAgentSession(env, context="resume", sandbox="read-only", receipt={})
     _store_codex_cli_session(runtime, lineage=session.lineage, session_scope="agent",
         session_id="fixture-session", goal_ref=session.goal_ref, session_profile_digest=session.digest)
     receipt = {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID,
         "session": {"session_id": "fixture-session"},
         **turn_envelope_receipt(explicit_turn_display(env))}
-    assert receipt["complete_turn_source"] == ("explicit" if explicit else "default")
+    short = display == "short"
+    if short:
+        assert receipt["turn_envelope_source"] == "explicit" and "complete_turn" not in receipt
+    else:
+        assert receipt["complete_turn_source"] == ("explicit" if display == "complete" else "default")
     (tmp_path / "wakes" / TURN_ID).mkdir(parents=True)
 
     with CheckpointWake(env, receipt) as host:
@@ -1089,8 +1093,10 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(
         block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
         command = shlex.join(["/bin/bash", "-lc", block])
         original = _guard_cli_arguments(command, {"cli": str(cli), "turn_instance_id": TURN_ID})
-        assert "--complete-turn" in original and "--turn-envelope" not in original
-        observed = original if mode_matches else [word for word in original if word != "--complete-turn"]
+        display_flag = "--turn-envelope" if short else "--complete-turn"
+        assert ("--turn-envelope" in original) is short
+        assert ("--complete-turn" in original) is not short
+        observed = original if mode_matches else [word for word in original if word != display_flag]
         item = {"type": "commandExecution", "id": "pending-guard", "cwd": str(project),
                 "command": shlex.join(["/bin/bash", "-lc", shlex.join([str(cli), *observed])]),
                 "status": "failed", "exitCode": 137, "aggregatedOutput": None}
@@ -1104,8 +1110,9 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(
                     agent_id=AGENT_ID, turn_instance_id=TURN_ID,
                     deadline=time.monotonic() + 30) as held:
                 assert held["quota"]["ok"] is True and held["intent"]["capture"] is True
-                quota = held["quota"]["heartbeat_receipt"]
-                assert quota["turn_instance_id"] == TURN_ID
+                source_decision = held["quota"]
+                assert source_decision["schema_version"] == "loopx_turn_envelope_v1"
+                assert source_decision["heartbeat_receipt"]["turn_instance_id"] == TURN_ID
                 digest = hashlib.sha256(held["path"].read_bytes()).hexdigest()
                 assert digest == held["sha256"]
                 point = host.root / held["intent"]["obligation_id"]
@@ -1117,7 +1124,7 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(
                     assert result["sha256"] == captured["sha256"]
                     manifest = json.loads((point / "checkpoint.json").read_bytes())["point_metadata"]
                     stored = manifest["native_session"]["interrupted_guard"]
-                    assert stored["complete_turn"] is True and stored["turn_envelope"] is False
+                    assert stored["complete_turn"] is not short and stored["turn_envelope"] is short
                     assert stored["turn_instance_id"] == TURN_ID and stored["native_call_id"] == item["id"]
                     assert stored["decision_sha256"] == digest
                     assert (point / "components" / manifest["held_decision_component_id"]).read_bytes() == held["path"].read_bytes()
@@ -1127,6 +1134,15 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(
                     assert not point.exists()
             stdout, stderr = command_process.communicate(timeout=30)
             assert command_process.returncode == 0, (stdout, stderr)
+            shown = json.loads(stdout)
+            if short:
+                assert shown["schema_version"] == "loopx_turn_envelope_v0"
+                assert shown["detail_ref"]["captured_decision"]["path"] == str(held["path"])
+                signature = shown["action_signature"]
+                assert signature["matches"] is True
+                assert signature["source_decision_hash"] == source_decision["contract_binding"]["content_hash"]
+            else:
+                assert shown == source_decision
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
     assert "thread/fork" not in calls
