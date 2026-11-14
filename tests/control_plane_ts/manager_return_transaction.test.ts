@@ -136,6 +136,27 @@ test("concurrent exact admission is single flight and stale settlement cannot ov
   } finally { await f.close(); }
 });
 
+test("a legacy transaction cannot rewrite a saved exact attempt", async () => {
+  const f = await fixture(true, true);
+  try {
+    const plan = await f.run("prepare");
+    const saved = await f.run("attempt", { ...plan, attempt });
+    const before = await readFile(f.statePath);
+    const legacy = { exact: false, now: "2026-01-02T03:06:05.123456+00:00",
+      facts: { error: "return_source_unavailable" } };
+    const scanned = await f.run("scan", { ...legacy, candidates: [{ request_id: id, result_key: "conclusion" }] });
+    assert.deepEqual(scanned.candidates, []);
+    const skipped = await f.run("prepare", legacy);
+    assert.equal(skipped.action, "skip");
+    assert.equal(skipped.processed, 0);
+    await assert.rejects(f.run("attempt", { ...saved, ...legacy, attempt }), /exact delivery profile/);
+    assert.deepEqual(await readFile(f.statePath), before);
+    const recovery = await f.run("prepare", { now: legacy.now });
+    assert.equal(recovery.action, "verify");
+    assert.deepEqual(recovery.attempt, attempt);
+  } finally { await f.close(); }
+});
+
 test("an ambiguous expired external admission never dispatches another send", async () => {
   const f = await fixture(true, true);
   try {

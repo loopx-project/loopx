@@ -358,7 +358,15 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
         "MODEL_NAME": "fixture", "REASONING_EFFORT": "high", "OPENAI_BASE_URL": "http://localhost:8123/v1",
         "OPENAI_API_KEY": "fixture-key", "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_REGISTRY": str(registry), "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID}
-    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", lambda *a, **kw: "original work contract")
+    from benchmark.runtime import worker
+    real_heartbeat_body = worker.heartbeat_body
+
+    def checked_heartbeat_body(*args, **kwargs):
+        # Keep the real admission owner; only the synthetic model text is fixed.
+        real_heartbeat_body(*args, **kwargs)
+        return "original work contract"
+
+    monkeypatch.setattr(worker, "heartbeat_body", checked_heartbeat_body)
     off = run_once(env)
     assert off["ok"] and "checkpoint" not in off
     (project / "host-input.txt").unlink()
