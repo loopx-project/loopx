@@ -959,6 +959,7 @@ export type ChatSessionSnapshot = {
   session: ChatSessionSummary;
   messages: ChatVisibleMessage[];
   active_turn: Record<string, unknown> | null;
+  selected_turn?: {turn_id: string; status: string; terminal: boolean; error?: string};
   // Derived from one complete, verified read. Never persisted or an authority grant.
   verifiedHistoryBasis?: string;
   message_page?: {
@@ -1092,8 +1093,23 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
   return readChatSessionHistory(session, signal, turnId);
 }
 
+export async function fetchConfirmedTaskTurn(
+  {goalId, todoId, sessionId, turnId}: {goalId: string; todoId: string; sessionId: string; turnId: string},
+  signal: AbortSignal,
+) {
+  const history = await readChatSessionHistory(sessionId, signal, turnId, undefined, undefined, {goalId, todoId});
+  const turn = history.selected_turn;
+  if (history.session.goal_id !== goalId || history.session.channel_id !== `task.${todoId}`
+    || turn?.turn_id !== turnId || typeof turn.status !== "string" || !turn.status
+    || typeof turn.terminal !== "boolean" || (turn.error !== undefined && typeof turn.error !== "string")) {
+    throw new Error("The original Task Turn could not be verified.");
+  }
+  return {turn, messages: history.messages};
+}
+
 async function readChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string,
-  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void): Promise<ChatSessionSnapshot> {
+  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void,
+  taskScope?: {goalId: string; todoId: string}): Promise<ChatSessionSnapshot> {
   const sessionId = typeof session === "string" ? session : session.session_id;
   // A delegation has the original Session ID; pin its first verified page's
   // scope. History discovery callers keep validating against their own source.
@@ -1110,6 +1126,10 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
     signal?.throwIfAborted();
     const query = new URLSearchParams({message_limit: "200"});
     if (turnId !== undefined) query.set("turn_id", turnId);
+    if (taskScope) {
+      query.set("task_goal_id", taskScope.goalId);
+      query.set("task_todo_id", taskScope.todoId);
+    }
     if (cursor !== null) query.set("message_cursor", cursor);
     const snapshot = await requestJson<ChatSessionSnapshot>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
