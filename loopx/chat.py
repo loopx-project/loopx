@@ -1160,14 +1160,15 @@ def apply_prepared_todo_review(
     *, registry_path: Path, goal_id: str, runtime_root_arg: str, text: str,
     priority: str | None, preview_id: str, operation_id: str,
     expected_provider_revision: str, expected_registry_sha256: str,
-) -> dict[str, Any]:
-    """Send the original reviewed request so the provider can recover it."""
+) -> tuple[dict[str, Any], str]:
+    """Recover the original business receipt and the current display delivery."""
     applied = _add_review_todo(registry_path=registry_path, goal_id=goal_id,
         runtime_root_arg=runtime_root_arg, text=text, priority=priority, dry_run=False,
         operation_id=operation_id, expected_provider_revision=expected_provider_revision,
         expected_registry_sha256=expected_registry_sha256)
-    return _todo_write_receipt(preview_id=preview_id, preview_revision=expected_provider_revision,
+    receipt = _todo_write_receipt(preview_id=preview_id, preview_revision=expected_provider_revision,
         applied_payload=applied)
+    return receipt, applied["projection_delivery"]
 
 
 def _bound_todo_review_preview(
@@ -1292,6 +1293,8 @@ def apply_todo_review_preview(
             receipt=receipt,
         ) from exc
     compact = _compact_todo_payload(applied, applied=True)
+    if "projection_delivery" in applied:
+        compact["projection_delivery"] = applied["projection_delivery"]
     compact["receipt"] = _todo_write_receipt(
         preview_id=preview_id,
         preview_revision=_todo_revision(current_preview),

@@ -20,7 +20,7 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
   onPreview: (request: WorkspaceActionPreviewRequest) => Promise<WorkspaceActionPreview>;
   onSelect: (selection: WorkspaceDrawerSelection) => void;
 }) {
-  const {locale} = useWorkspaceI18n();
+  const {locale, t} = useWorkspaceI18n();
   const zh = locale === "zh-CN";
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -29,20 +29,22 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
   const submitting = useRef(false);
   const [reviewed, setReviewed] = useState<{text: string; id: string} | null>(null);
   const proposal = reviewed ? proposals[reviewed.id] : undefined;
+  const pendingDisplay = proposal?.reviewPlan?.reason === "canonical_create_projection_pending" ? proposal : null;
   useEffect(() => {
     if (!reviewed || proposal) return;
     const successor = Object.values(proposals).find(item => item.regeneratedFrom === reviewed.id);
     if (successor) setReviewed({...reviewed, id: successor.previewId});
   }, [reviewed, proposal, proposals]);
   useEffect(() => {
-    if (proposal?.status !== "applied") return;
+    if (proposal?.status !== "applied" && !pendingDisplay) return;
     setText(current => current === reviewed?.text ? "" : current);
-    setReviewed(null);
-  }, [proposal?.status, reviewed]);
+    if (proposal?.status === "applied") setReviewed(null);
+  }, [pendingDisplay, proposal?.status, reviewed]);
   const textLength = boundedLength(text);
   const tooLong = textLength > todoTextLimit;
   return <div className="goal-inline-create">
     <button aria-expanded={open} type="button" onClick={() => setOpen(value => !value)}><Plus size={15} aria-hidden/>{zh ? "添加任务" : "Add task"}</button>
+    {pendingDisplay ? <button type="button" onClick={() => onSelect({kind: "proposal", item: pendingDisplay})}>{t("drawer.recoverEditResult")}</button> : null}
     {open ? <form onSubmit={async event => {
       event.preventDefault();
       if (submitting.current || textLength === 0 || tooLong) return;
@@ -58,7 +60,7 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
       <label>{zh ? "任务内容" : "Task"}<textarea autoFocus aria-label={zh ? "任务内容" : "Task"} value={text} onChange={event => setText(event.target.value)} disabled={busy}/></label>
       {tooLong ? <p role="status">{zh ? `请将任务精简至 ${todoTextLimit} 字以内。` : `Shorten the task to ${todoTextLimit} characters.`}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
-      {proposal?.status === "error" || proposal?.status === "stale" ? <p role="status">{zh ? "任务尚未确认创建，草稿已保留。" : "Creation is not confirmed; your draft is retained."}</p> : null}
+      {!pendingDisplay && (proposal?.status === "error" || proposal?.status === "stale") ? <p role="status">{zh ? "任务尚未确认创建，草稿已保留。" : "Creation is not confirmed; your draft is retained."}</p> : null}
       <button disabled={busy || textLength === 0 || tooLong} type="submit">{busy ? (zh ? "正在检查…" : "Reviewing…") : (zh ? "检查任务" : "Review task")}</button>
     </form> : null}
   </div>;

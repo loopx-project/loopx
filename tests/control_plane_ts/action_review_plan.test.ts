@@ -537,3 +537,27 @@ test("a plan card frame is refused for anything that was never an admitted previ
   assert.equal(operation.operationFrame?.kind, "confirmation");
   assert.equal(operation.reviewCardFrame, undefined);
 });
+
+
+test("task and monitor creation recover the original pending display without accepting an unrelated proposal", () => {
+  const prepared = {operation_id: "chat-create:reviewed", expected_provider_revision: "revision", source_binding: "a".repeat(64)};
+  const proposal = {schema_version: "loopx_chat_action_proposal_v1", proposal_id: "reviewed",
+    expected_state_fingerprint: "original-preview", permission_classification: "durable_write",
+    normalized_parameters: {goal_id: "goal-a"}, status: "failed",
+    checkpoint: {steps: {todo_create_prepared: prepared}},
+    failure: {error_code: "canonical_create_projection_pending", retry_safe: true,
+      details: {canonical_committed: true, todo_id: "todo_created"}}};
+  for (const action_kind of ["todo.create", "monitor.create"]) {
+    const action = {...proposal, action_kind};
+    const plan = compileActionReviewPlan(action);
+    assert.equal(plan.reason, "canonical_create_projection_pending");
+    assert.equal(plan.retryOriginal, true);
+    assert.equal(plan.canApply, true);
+    assert.equal(compileActionReviewPlan({...action, failure: null, status: "applying"}).reason, "canonical_create_retry");
+    assert.equal(compileActionReviewPlan({...action, status: "applied", receipt: {projection_verified: true}}).interaction, "completed");
+    for (const change of [{status: "stale"}, {checkpoint: null}, {permission_classification: "protected"},
+      {proposal_id: "different"}, {action_kind: "todo.update"}, {failure: {retry_safe: false}}]) {
+      assert.equal(compileActionReviewPlan({...action, ...change}).retryOriginal, undefined);
+    }
+  }
+});

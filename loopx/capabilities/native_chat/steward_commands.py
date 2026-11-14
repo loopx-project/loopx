@@ -1,4 +1,4 @@
-"""In-process transport to the existing native command owners.
+"""Native command transport and confirmation readback for the steward.
 
 No stdout redirection or subprocess: original Chat workers can run concurrently.
 Arguments are constructed by the host, never accepted from a model or HTTP body.
@@ -41,3 +41,19 @@ def native_command(controller: Any, argv: list[str]) -> dict[str, Any]:
     if code or result.get("ok") is not True:
         raise NativeStewardCommandError(result)
     return result
+
+
+
+def todo_confirmation_readback(proposal: dict[str, Any], proposal_id: str) -> dict[str, Any]:
+    failure = proposal.get("failure") or {}
+    if (proposal.get("status") == "failed" and failure.get("error_code") == "canonical_create_projection_pending"
+        and (failure.get("details") or {}).get("canonical_committed") is True):
+        return {"response": ("待办已创建，展示尚未更新。请在原确认有效期内"
+                            f"重试 /confirm {proposal_id} 以完成更新。")}
+    if proposal.get("status") != "applied":
+        raise ValueError("the creation preview became stale; prepare a new preview")
+    receipt = proposal["receipt"]
+    resources = receipt["resource_ids"]
+    return {"todo_receipt": receipt, "response": (
+        f"已记录待办：{proposal['normalized_parameters']['text']}\n"
+        f"目标：{resources['goal_id']}；规范写入回执已读回。本次没有启动执行。")}

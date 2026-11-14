@@ -2146,14 +2146,16 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      if (!stored && ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) && !readbackMismatch) {
+      const workCreation = proposal.actionKind === "todo.create" || proposal.actionKind === "monitor.create";
+      const reconcileExactGoal = workCreation || ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind);
+      if (!stored && reconcileExactGoal && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
         if (readback.isSuccess) stored = readback.data?.find(item => item.proposal_id === proposal.previewId);
       }
       if (stored?.proposal_id === proposal.previewId && stored.action_kind === proposal.actionKind
         && matchesTodoTarget(stored)
-        && (!["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
+        && (!reconcileExactGoal || stored.normalized_parameters.goal_id === proposal.goalId)) {
         await actionReadback.acceptProposal(stored);
         const observed = workspaceProposal(stored, t);
         const reconciled = { ...observed, errorMessage: observed.status === "error"
@@ -2163,8 +2165,17 @@ export function PersonalWorkspacePage({
         if (observed.reviewPlan?.creationProgress?.goalId) void callbacks.onRefresh?.();
         setActionFeedback(stored.status === "stale" ? t("feedback.stale")
           : observed.reviewPlan?.interaction === "completed" ? completedActionFeedback(observed, t)
+          : workCreation && observed.reviewPlan?.retryOriginal ? t(`actionReview.${observed.reviewPlan.reason}`)
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
         return reconciled;
+      }
+      if (workCreation && proposal.reviewPlan?.retryOriginal && !stale && !readbackMismatch && !stored) {
+        // An unavailable response cannot invalidate the last known operation.
+        const recovering = {...proposal, errorMessage: error instanceof Error ? error.message : String(error)};
+        setProposals(current => ({...current, [proposal.previewId]: recovering}));
+        if (options.presentation !== "inline") selectReceipt(recovering);
+        setActionFeedback(t("actionReview.canonical_create_retry"));
+        return recovering;
       }
       const failed = {
         ...proposal,
