@@ -35,6 +35,7 @@ from loopx.paths import shell_selected_global_registry
 from loopx.rollout_event_log import build_rollout_event
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture,
+    isolate_sqlite_runtime,
     read_fixture_todos,
 )
 from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
@@ -4108,6 +4109,8 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     tmp_path: Path,
     host_surface: str,
 ) -> None:
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     _initialize_fixture_authority(project, runtime)
@@ -4133,6 +4136,7 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     )
 
     assert first_rc == 0, first
+    assert_complete_turn_decision(first)
     assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
     turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
     assert turn_instance_id.startswith("guided-start:")
@@ -4150,6 +4154,7 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     )
 
     assert selected_rc == 0, selected
+    assert_complete_turn_decision(selected)
     assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
     receipt_identity = selected["heartbeat_receipt"]["settlement_identity"]
@@ -4168,7 +4173,66 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
         spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
         assert spend["owner"] == "agent"
         assert f"--source {expected_source}" in spend["command_template"]
-        assert "schema_version" not in selected and "contract_binding" not in selected
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_guided_app_selection_keeps_both_delivery_layers_off_without_capture_root(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    monkeypatch.setenv("CODEX_THREAD_ID", "guided-app-inline-test")
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    packet = build_start_goal_guided_packet(
+        project=project, goal_id=GOAL_ID, agent_id=AGENT_ID, cli_bin="loopx",
+        host_surface="codex-app", goal_text="Validate one delivery.",
+    )
+    guard = next(step["command"] for step in packet["guided_transaction"]["ordered_steps"]
+                 if step["id"] == "quota_guard")
+    guard += " --context-delivery off --delta-delivery off"
+    rc, first = _run_generated_cli(guard, registry_path=registry, cwd=project)
+    assert rc == 0, first
+    assert_complete_turn_decision(first)
+    assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
+    turn = first["heartbeat_receipt"]["turn_instance_id"]
+    selection = first["interaction_contract"]["cli_channel"]["selection_command"]
+    command = selection["route_prefix"] + " " + selection["command_args_template"].replace("{todo_id}", ALTERNATIVE_TODO_ID)
+    words = shlex.split(command)
+    assert all(word not in words for word in ("--decision-output-root", "--codex-context-root"))
+
+    result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", *words[1:]], cwd=project,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)}, capture_output=True, text=True, timeout=45)
+    selected = json.loads(result.stdout)
+    assert result.returncode == 0 and selected.get("schema_version") == "loopx_turn_envelope_v1", (
+        result.stderr, selected.get("schema_version"), words)
+    for option in ("--context-delivery", "--delta-delivery"):
+        assert words[words.index(option) + 1] == "off"
+    assert_complete_turn_decision(selected)
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert not (runtime / "context-delivery").exists()
+    assert _heartbeat_receipt_count(runtime, turn) == 2
+    cli = selected["interaction_contract"]["cli_channel"]
+    plan = cli["settlement_plan"]
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert plan["identity"] == identity and identity["turn_instance_id"] == turn
+    assert cli["quota_spend_source"] == "heartbeat"
+    writeback, = (step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    spend, = (step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert spend["owner"] == "agent" and _spend_run_count(runtime) == 0
+    refresh = writeback["command_template"].replace("<validated_progress>", "verified_inline_app_selection").replace(
+        "<scale>", "implementation").replace("<outcome>", "outcome_progress")
+    rc, written = _run_generated_cli(refresh + " --delivery-boundary in_flight_continuation"
+        " --no-global-sync --suppress-external-sinks", registry_path=registry, cwd=project)
+    assert rc == 0, written
+    for replay in (False, True):
+        rc, settled = _run_generated_cli(spend["command_template"], registry_path=registry, cwd=project)
+        assert rc == 0 and settled["settlement_identity"] == identity, settled
+        assert bool(settled.get("idempotent_replay")) is replay and _spend_run_count(runtime) == 1
+    assert not (runtime / "context-delivery").exists()
+    assert _heartbeat_receipt_count(runtime, turn) == 2
 
 
 def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
@@ -4301,6 +4365,8 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     tmp_path: Path,
     host_surface: str,
 ) -> None:
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime)
     packet = build_start_goal_guided_packet(
@@ -4323,6 +4389,7 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     )
 
     assert guard_rc == 0, guard
+    assert_complete_turn_decision(guard)
     assert guard["selected_todo"]["todo_id"] == TODO_ID
     assert (
         guard["interaction_contract"]["cli_channel"].get("selection_required") is None
@@ -4342,7 +4409,6 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
         assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
         spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
         assert spend["owner"] == "agent" and f"--source {expected_source}" in spend["command_template"]
-        assert "schema_version" not in guard and "contract_binding" not in guard
 
 
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])

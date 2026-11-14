@@ -113,7 +113,6 @@ def main() -> None:
             "external_write",
             "--codex-app-current-rrule",
             "FREQ=MINUTELY;INTERVAL=3",
-            "--turn-envelope",
             cwd=project,
         )
         assert_complete_turn_decision(decision)

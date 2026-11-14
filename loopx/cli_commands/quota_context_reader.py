@@ -53,7 +53,8 @@ def _capture_selection_transport_template(payload: dict[str, Any], args: argpars
 
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
                                      capture_root: Path | None = None,
-                                     capture_directory: Path | None = None) -> None:
+                                     capture_directory: Path | None = None,
+                                     retain_delivery_options: bool = False) -> None:
     """Retain caller display/capture options when binding or selecting a Turn.
 
     Only transport argv is composed here; the typed quota owner still selects the
@@ -69,7 +70,7 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         capture_root = capture_directory.parent
     complete_turn = getattr(args, "complete_turn", False)
     turn_envelope = getattr(args, "turn_envelope", False)
-    if root is None and capture_root is None and not (complete_turn or turn_envelope):
+    if root is None and capture_root is None and not (complete_turn or turn_envelope or retain_delivery_options):
         return
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None

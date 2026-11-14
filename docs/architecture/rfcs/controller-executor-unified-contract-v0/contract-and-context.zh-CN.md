@@ -725,8 +725,10 @@ composition owner，只捕获一次结果。Markdown renderer 在一个 JSON 块
 不成立的进展被拒绝，先持久写回再扣额，重放仍只有一次扣额。原生 Codex profile
 继续要求 JSON 和捕获目的地；这次普通 reader 迁移不把原生 Markdown 变成可执行传输。
 
-Codex App 原生心跳的新捕获统一采用经校验的完整来源，贯穿普通 guard、同一 Turn
-选题和宿主认领后的 guard。已保存的 thin 启动命令无需添加 flag。若从旧的认领前捕获
+Codex App 心跳的新决定统一采用经校验的完整来源，贯穿普通 guard、同一 Turn 选题
+和宿主认领后的 guard。由解析后的调度 profile 在捕获前选择来源。已保存的 thin 启动
+命令无需添加 flag。两种交付都关闭时，App 直接收到完整来源，不读写原生上下文；
+原本由 Agent 执行的写回和扣额方案保持不变。若从旧的认领前捕获
 恢复，新生成的就绪捕获使用完整契约，认领和 Turn 仍沿原回执绑定。预期完整的就绪捕获
 丢失版本或绑定时，不得按历史载体用于工作。其他普通 quota 和 thin heartbeat 调用方
 在验收前沿用现有行为。显式 `--complete-turn` 和托管 handoff 在选题与原生 lease 准备中
@@ -740,8 +742,8 @@ Benchmark checkpoint 预检按自身调用选择普通或完整来源校验，�
 
 | Reader 边界 | 当前行为与退役条件 |
 | --- | --- |
-| Codex App 原生 thin heartbeat | 新原生捕获退役未签名 writer。quota CLI 调用已有 TypeScript 完整组合，原生 hook 在同一 Turn 恢复时固定预期的就绪版本。 |
-| 其他普通 quota 和 thin heartbeat | 保留现有紧凑决定与结算，直到实际调用方通过验收。两种交付层均关闭的 App guard 也走此路径。已保存的未签名捕获沿原来源和固定引用恢复。 |
+| Codex App thin heartbeat 和引导启动 | 新决定不论是否使用原生交付，都调用已有 TypeScript 组合。原生 hook 在同一 Turn 恢复时固定预期的就绪版本。 |
+| 其他普通 quota 和 thin heartbeat | 保留现有紧凑决定与结算，直到实际调用方通过验收。已保存的未签名捕获沿原来源和固定引用恢复。 |
 | 显式 `--complete-turn` 和托管 handoff | 在选题和 lease 准备中保留经校验的完整来源。ready capture 丢失完整来源版本和绑定时，只允许回执诊断。 |
 | 显式 `--turn-envelope` | 渐进或差分开启时使用完整来源。两者都关闭且没有托管 handoff 时，仍展示同一次组合产生的有界 v0 兼容视图。 |
 | 已记录的 v0 capture、plan 与 request | 保留原版本完整性／恢复 reader，直到未结准入工作及受支持恢复窗口核清。无效新来源不能选择该回退。 |

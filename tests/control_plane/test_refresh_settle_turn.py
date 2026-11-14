@@ -25,6 +25,8 @@ from test_quota_settlement_cli import (
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_context_delivery_preserves_the_canonical_settlement_contract(tmp_path, monkeypatch, provider):
     """Presentation may change; the current Turn's executable owners must not."""
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider)
@@ -39,12 +41,12 @@ def test_context_delivery_preserves_the_canonical_settlement_contract(tmp_path, 
         assert rc == 0, result
         path = capture / "decision.json"
         source = json.loads(path.read_bytes())
-        if alias:
-            from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-
-            assert_complete_turn_decision(source)
-        else:
-            assert "schema_version" not in source and "contract_binding" not in source
+        assert_complete_turn_decision(source)
+        if mode == "off":
+            if alias:
+                assert result["schema_version"] == "loopx_turn_envelope_v0"
+            else:
+                assert result == source and "context_delivery" not in result
         plan = source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert plan["schema_version"] == "quota_settlement_plan_v1"
         assert plan["identity"] == source["heartbeat_receipt"]["settlement_identity"]
