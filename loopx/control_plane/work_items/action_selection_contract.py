@@ -5,14 +5,22 @@ from collections.abc import Mapping
 from typing import Any
 
 from ...command_invocation import loopx_cli_argv
+from ...install_contract import render_host_cli_command
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
 from ..todos.contract import normalize_todo_id
 from ..quota.effective_action import EffectiveAction
 
 
-def render_cli_command_prefix(*, runtime_root: str | None = None, registry_path: str | None = None) -> str:
-    return (shlex.join(loopx_cli_argv()) + (f" --registry {shlex.quote(str(registry_path))}" if registry_path else "")
-        + (f" --runtime-root {shlex.quote(str(runtime_root))}" if runtime_root else ""))
+def render_cli_command_prefix(
+    *, runtime_root: str | None = None, registry_path: str | None = None, host_shell: bool = False,
+) -> str:
+    argv = loopx_cli_argv()
+    if registry_path:
+        argv.extend(("--registry", str(registry_path)))
+    if runtime_root:
+        argv.extend(("--runtime-root", str(runtime_root)))
+    # Parsed command templates retain their shell-neutral shlex grammar.
+    return render_host_cli_command(argv) if host_shell else shlex.join(argv)
 
 
 def action_portfolio_requires_explicit_selection(

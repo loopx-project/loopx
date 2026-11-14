@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
@@ -244,9 +246,10 @@ def test_due_watch_only_monitor_is_an_auxiliary_no_spend_route() -> None:
     assert f"--turn-instance-id {turn_instance_id}" in auxiliary_cli["command"]
     assert "--todo-id todo_watch_due" in auxiliary_cli["command"]
     assert "--use-current-task-lease" in auxiliary_cli["command"]
-    assert '--result-hash "${LOOPX_MONITOR_RESULT_HASH:?}"' in auxiliary_cli[
-        "command"
-    ]
+    if os.name == "nt":
+        assert '--result-hash "$(if (-not $env:LOOPX_MONITOR_RESULT_HASH)' in auxiliary_cli["command"]
+    else:
+        assert '--result-hash "${LOOPX_MONITOR_RESULT_HASH:?}"' in auxiliary_cli["command"]
     assert auxiliary_cli["command"].endswith("--execute")
     assert "--material-change --execute" in auxiliary_cli[
         "material_change_command"
