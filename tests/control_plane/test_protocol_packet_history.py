@@ -59,7 +59,6 @@ def test_retired_release_objects_are_rejected_without_resigning(case):
                 decision,
                 Namespace(turn_envelope=use_envelope, quota_command="should-run"),
                 frozenset(),
-                None,
             )
     with pytest.raises(EffectRuntimeRejected, match=ERROR):
         turn_envelope_action_signature_document(envelope)
@@ -144,7 +143,6 @@ def test_presence_is_rejected_in_decision_or_witness_even_when_empty(value, loca
                 decision,
                 Namespace(turn_envelope=use_envelope, quota_command="should-run"),
                 frozenset(),
-                None,
             )
     with pytest.raises(EffectRuntimeRejected, match=ERROR):
         bind_turn_decision_capture(

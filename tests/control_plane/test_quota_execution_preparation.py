@@ -172,7 +172,7 @@ def _run(
     return packet
 
 
-def _present_saved_guard(tmp_path, native, capture, scenario, turn):
+def _present_saved_guard(tmp_path, native, capture, scenario, turn, *, refused_receipt=None):
     source = capture / "decision.json"
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     code, view = run_json_cli_result(
@@ -182,7 +182,14 @@ def _present_saved_guard(tmp_path, native, capture, scenario, turn):
         "--capture-file", str(source), "--capture-sha256", digest,
         registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
     )
-    assert code == 0 and view["ok"] is True, view
+    if refused_receipt is not None:
+        assert code == 1 and view["ok"] is False, view
+        assert view["error_code"] == "quota_decision_transport_failed"
+        assert view["reason"] == "complete Turn decision content integrity mismatch"
+        assert view["heartbeat_receipt"] == refused_receipt
+        assert not {"execution_preparation", "interaction_contract", "first_read_command"} & view.keys()
+    else:
+        assert code == 0 and view["ok"] is True, view
     return digest
 
 
@@ -364,8 +371,9 @@ def test_model_claim_keeps_receipt_without_unrelated_projection_details(
     ("sqlite", "codex_app_heartbeat", "root", None),
     ("sqlite", "codex_app_heartbeat", "root", "other-session"),
 ])
+@pytest.mark.parametrize("complete", [False, True])
 def test_native_hook_returns_readable_ready_source_and_original_claim(
-    tmp_path, monkeypatch, provider, scenario, location, ambient,
+    tmp_path, monkeypatch, provider, scenario, location, ambient, complete,
 ):
     from loopx.control_plane.turn_driver import codex_context
 
@@ -387,9 +395,16 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     before = _run(tmp_path, monkeypatch, provider, [], "--runtime-profile", scenario,
         "--turn-instance-id", "preparation-turn", "--todo-id", TODO,
         "--defer-context-presentation", "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
+        *(("--complete-turn",) if complete else ()),
         todos=[original], context_delivery="on",
         goal_suffix="\n\n## Constraints\n\n" + "Preserve the complete Goal and its stop. 保留停止条件。\n" * 100)
     assert before["execution_preparation"]["state"] == "claim_required"
+    current_source = complete or scenario == "codex_app_heartbeat"
+    assert before.get("schema_version") == ("loopx_turn_envelope_v1" if current_source else None)
+    if current_source:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(before)
     goal_text = (tmp_path / "state.md").read_text()
     digest = _present_saved_guard(tmp_path, native, capture, scenario, "preparation-turn")
     hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(tmp_path / "registry.json"),
@@ -420,6 +435,12 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert claim_reference == f"todo-claim:codex-capture:{digest}"
     ready = receipt["context"]
     assert ready["ok"], ready.get("reason")
+    [published] = native.glob("prepared-*/ready/decision.json")
+    published_source = json.loads(published.read_bytes())
+    assert published_source.get("schema_version") == before.get("schema_version")
+    assert ("contract_binding" in published_source) is current_source
+    if current_source:
+        assert_complete_turn_decision(published_source)
     if location == "root":
         assert list(root.iterdir()) == [native]
     read = shlex.split(ready["recovery"]["command"])
@@ -437,9 +458,9 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
     assert plan["schema_version"] == (
-        "quota_settlement_plan_v2" if scenario == "codex_app_heartbeat" else "quota_settlement_plan_v1"
+        "quota_settlement_plan_v2" if complete or scenario == "codex_app_heartbeat" else "quota_settlement_plan_v1"
     )
-    if scenario == "codex_app_heartbeat":
+    if complete or scenario == "codex_app_heartbeat":
         writeback, spend = [step for step in plan["ordered_steps"]
                             if step["kind"] in {"durable_writeback", "quota_spend"}]
         assert "--settle-turn --settlement-receipt" in writeback["command_template"]
@@ -496,8 +517,21 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert observed.returncode == 0, observed.stderr
     ready_page = json.loads(observed.stdout)
     assert ready_page["ok"] and ready_page["sha256"] == readback["capture_sha256"]
+    observations = []
+    if readback_command[readback_command.index("quota") + 1] == "context-project":
+        # The complete source must pass validation before its first page is
+        # readable. The projection itself does not prove delivery of any bytes.
+        observations.append((ready_page, True))
+        reader = shlex.split(ready_page["recovery"]["command"])
+        assert reader[reader.index("quota") + 1] == "context-read"
+        observed = subprocess.run(reader, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+        assert observed.returncode == 0, observed.stderr
+        ready_page = json.loads(observed.stdout)
+        assert ready_page["ok"] and ready_page["sha256"] == readback["capture_sha256"]
+    assert ready_page["offset"] == 0 and ready_page["content"]
     forged = {**ready_page, "content": "x" + ready_page["content"][1:]}
-    for observation, should_repeat in ((forged, True), (ready_page, False)):
+    observations.extend(((forged, True), (ready_page, False)))
+    for observation, should_repeat in observations:
         shown = subprocess.run(hook, input=json.dumps({**hook_event, "tool_response": observation}),
             env=hook_env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
         assert shown.returncode == 0, shown.stderr
@@ -512,7 +546,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("replace_stage", ["guard", "record", "version"])
+@pytest.mark.parametrize("replace_stage", ["guard", "record", "version", "downgrade"])
 def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     tmp_path, monkeypatch, capsys, provider, replace_stage,
 ):
@@ -544,18 +578,21 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 
     def observe_guard(command, **kwargs):
         prepared = "--prepared-capture-reference" in command
-        if prepared and replace_stage == "version":
-            command = [*command, "--complete-turn"]
+        if prepared:
+            assert "--complete-turn" in command
         result = run(command, **kwargs)
         if prepared:
             verified["writer"] = json.loads(result.stdout)
             if replace_stage == "guard":
                 replace_capture()
-            elif replace_stage == "version":
+            elif replace_stage in {"version", "downgrade"}:
                 source, = native.glob("prepared-*/ready/decision.json")
                 payload = json.loads(source.read_bytes())
                 assert payload["schema_version"] == "loopx_turn_envelope_v1"
-                payload["schema_version"] = "loopx_turn_envelope_v999"
+                if replace_stage == "downgrade":
+                    del payload["schema_version"], payload["contract_binding"]
+                else:
+                    payload["schema_version"] = "loopx_turn_envelope_v999"
                 source.write_text(json.dumps(payload))
                 verified["writer"]["capture_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
                 result.stdout = json.dumps(verified["writer"])
@@ -586,7 +623,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     context = receipt["context"]
     assert context["ok"] is False
     recovery = shlex.split(context["recovery_command"])
-    if replace_stage == "version":
+    if replace_stage in {"version", "downgrade"}:
         assert "Unsupported" in context["reason"]
         assert context["recovery_command"] == context["recovery"]["command"]
         assert [recovery[index + 1] for index, word in enumerate(recovery) if word == "--select"] == ["/heartbeat_receipt"]
@@ -613,11 +650,20 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
             cwd=tmp_path, text=True, capture_output=True)
         assert implicit.returncode == 1 and json.loads(implicit.stdout)["ok"] is False
         retry = shlex.split(readback["context"]["recovery_command"])
-        assert "context-project" in retry and "--turn-instance-id" in retry
-        refusal = subprocess.run(retry, cwd=tmp_path, text=True, capture_output=True)
-        error = json.loads(refusal.stdout)
-        assert refusal.returncode == 1 and error["heartbeat_receipt"] == context["heartbeat_receipt"]
-        assert "content" not in error and log.read_bytes() == after_claim
+        if replace_stage == "downgrade":
+            assert "context-read" in retry
+            assert [retry[index + 1] for index, word in enumerate(retry) if word == "--select"] == ["/heartbeat_receipt"]
+            read = subprocess.run(retry, cwd=tmp_path, check=True, text=True, capture_output=True)
+            assert json.loads(json.loads(read.stdout)["content"])["selections"] == [
+                {"pointer": "/heartbeat_receipt", "value": context["heartbeat_receipt"]},
+            ]
+        else:
+            assert "context-project" in retry and "--turn-instance-id" in retry
+            refusal = subprocess.run(retry, cwd=tmp_path, text=True, capture_output=True)
+            error = json.loads(refusal.stdout)
+            assert refusal.returncode == 1 and error["heartbeat_receipt"] == context["heartbeat_receipt"]
+            assert "content" not in error
+        assert log.read_bytes() == after_claim
         return
     assert "digest mismatch" in context["reason"]
     digest = hashlib.sha256(verified["bytes"]).hexdigest()
@@ -651,7 +697,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     "after-ready-released-execution", "legacy-same-execution", "legacy-released-execution",
     "reencoded-released-execution", "legacy-marked-released-execution",
 ])
-def test_native_hook_replays_the_original_claim_after_guard_timeout(
+def test_native_hook_recovers_the_original_claim_after_guard_timeout(
     tmp_path, monkeypatch, capsys, provider, case,
 ):
     import io
@@ -672,12 +718,15 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
     after_ready = case.startswith("after-ready-")
     released = not case.endswith("same-execution")
     native_args = () if legacy else ("--defer-context-presentation", "--codex-context-dir", str(native))
-    before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
+    profile_args = ("--runtime-profile", "generic_cli") if legacy else ("--codex-app",)
+    before = _run(tmp_path, monkeypatch, provider, [], *profile_args,
         "--turn-instance-id", turn, "--todo-id", TODO, "--decision-output-dir", str(capture),
         *native_args, context_delivery="off" if legacy else "on")
     assert before["execution_preparation"]["state"] == "claim_required"
     source = capture / "decision.json"
     original_bytes = source.read_bytes()
+    if legacy:
+        assert not {"schema_version", "contract_binding"} & json.loads(original_bytes).keys()
     digest = _present_saved_guard(tmp_path, native, capture, "codex_app_heartbeat", turn)
 
     run = codex_execution_preparation._default_runner
@@ -720,25 +769,36 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         assert code == 0 and payload["ok"], payload
         return payload
 
+    def projected_read(command):
+        result = subprocess.run(shlex.split(command), cwd=tmp_path, capture_output=True,
+                                check=True, text=True)
+        return json.loads(result.stdout)
+
     if legacy:
-        # Before the upgrade the Host issued the ordinary claim without a
-        # persisted operation ID, then could lose the ready result.
+        # Older Hosts may have committed a claim without a captured operation ID.
         legacy_claim = read(*before["execution_preparation"]["claim"]["cli_args"])
         original_id = legacy_claim["claim_operation_id"]
+        original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
     else:
-        first_context = hook()["hookSpecificOutput"]["additionalContext"]
-        first_request = json.loads(first_context.rsplit("Receipt: ", 1)[1])
-        assert first_request["event"] == "host_execution_preparation_readback_required"
+        hint = hook()["hookSpecificOutput"]["additionalContext"]
+        request = json.loads(hint.rsplit("Receipt: ", 1)[1])
+        assert request["event"] == "host_execution_preparation_readback_required"
+        assert (request["goal_id"], request["agent_id"], request["todo_id"], request["turn_instance_id"]) == (
+            GOAL, AGENT, TODO, turn,
+        )
         original_id = claims[0]["claim_operation_id"]
-        assert original_id == f"todo-claim:codex-capture:{digest}"
-        assert first_request["claim_operation_id"] == original_id
-    original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+        assert request["claim_operation_id"] == original_id == f"todo-claim:codex-capture:{digest}"
+        original = projected_read(request["receipt_command"])
     lease = original["receipts"][0]["result"]["lease"]
     if released:
         read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
             "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])
 
     unverified_copy = case in ("reencoded-released-execution", "legacy-marked-released-execution")
+    signed_tamper = (
+        case == "legacy-marked-released-execution"
+        and json.loads(original_bytes).get("schema_version") == "loopx_turn_envelope_v1"
+    )
     if legacy or unverified_copy:
         presented_capture = capture
         if unverified_copy:
@@ -750,16 +810,23 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
             else:
                 copy.write_bytes(original_bytes + b" ")
             copy.chmod(0o600)
-        presented_digest = _present_saved_guard(tmp_path, native, presented_capture, "codex_app_heartbeat", turn)
+        presented_digest = _present_saved_guard(
+            tmp_path, native, presented_capture, "codex_app_heartbeat", turn,
+            refused_receipt=before["heartbeat_receipt"] if signed_tamper else None,
+        )
         assert (presented_digest != digest) == unverified_copy
     result = hook()
     resume = hook("SessionStart")
     current = read("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
     assert source.read_bytes() == original_bytes
     if legacy or unverified_copy:
-        guidance = result["hookSpecificOutput"]["additionalContext"]
-        assert "no verified live guard binding" in guidance and "fresh capture" in guidance
-        assert "host_execution_prepared" not in guidance
+        if signed_tamper:
+            # A rejected complete capture must retire the moving recovery lookup.
+            assert result == resume == {}
+        else:
+            guidance = result["hookSpecificOutput"]["additionalContext"]
+            assert "no verified live guard binding" in guidance and "fresh capture" in guidance
+            assert "host_execution_prepared" not in guidance
         assert len(claims) == len(guards) == (0 if legacy else 1)
         assert current["active"] is (not released)
         assert current["lease"]["lease_epoch"] == lease["lease_epoch"]
@@ -777,11 +844,8 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
             )
             if after_ready:
                 assert receipt["context"]["recovery_command"]
-        for command_key in ("receipt_command", "lease_command"):
-            proc = subprocess.run(
-                shlex.split(receipt[command_key]), cwd=tmp_path, capture_output=True, text=True, check=True,
-            )
-            assert json.loads(proc.stdout)["ok"]
+        assert projected_read(receipt["receipt_command"])["receipts"] == original["receipts"]
+        assert projected_read(receipt["lease_command"]) == current
         if released:
             assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
         else:

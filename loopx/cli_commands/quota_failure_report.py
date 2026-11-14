@@ -13,12 +13,14 @@ import hashlib
 import json
 import os
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..command_invocation import (
     current_loopx_cli_argv,
     loopx_cli_argv,
+    loopx_cli_route,
     resolve_command_path,
     same_context_reader_route,
 )
@@ -30,6 +32,7 @@ from ..control_plane.coordination.local_authority import (
 )
 from ..control_plane.effect_runtime import (
     EffectRuntimeHostPermissionError,
+    EffectRuntimeRejected,
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
 )
@@ -277,57 +280,153 @@ def quota_failure_payload(
     return payload
 
 
+def _fits_failure_output(payload: dict[str, object], limit: int) -> bool:
+    # Count the compact CLI JSON and its trailing newline.
+    return _failure_output_size(payload) <= limit
+
+
 def captured_quota_failure_view(
     payload: Mapping[str, object], *, capture_directory: Path,
     max_page_output_bytes: int | None = None,
+    capture_sha256: str | None = None,
+    reader_argv: list[str] | None = None,
+    runtime_root: Path | None = None,
+    captured_payload: Mapping[str, object] | None = None,
+    capture_bytes: bytes | None = None,
 ) -> dict[str, object]:
-    """Bound an opted-in refusal without entering native delivery continuity.
+    """Bound a failure using the saved decision and its original receipt.
 
-    The rejected decision remains immutable diagnostic detail. Its current
-    error, receipt and recovery are useful input; unrelated Goal history is not
-    a prerequisite for following that recovery. No field is silently truncated.
+    A composition rejection saves its diagnostic. A later presentation failure
+    retains the admitted decision and points to its receipt for recovery.
     """
     from ..control_plane.turn_driver.decision_capture import (
-        context_capture_read_command, native_context_page_budget,
+        context_capture_read_command, native_context_page_budget, write_initial_context_read_reference,
+    )
+    from .quota_context_reader import (
+        inline_context_read_fits, inline_context_recovery_budget, pinned_context_read_window,
     )
 
     page_bytes, limit = native_context_page_budget()
     if max_page_output_bytes is not None:
         limit = min(limit, max_page_output_bytes)
     saved = capture_directory / "decision.json"
-    digest = hashlib.sha256(saved.read_bytes()).hexdigest()
-    fields = ("ok", "goal_id", "decision", "should_run", "error_code", "reason",
-              "recommended_action", "heartbeat_receipt", "action_selection_conflict")
+    original = saved.read_bytes() if capture_bytes is None else capture_bytes
+    source = payload if captured_payload is None else captured_payload
+    digest = capture_sha256 or hashlib.sha256(original).hexdigest()
+    original_decision = source.get("ok") is True
+    page_size = max(256, min(page_bytes, limit))
+    fields = ("ok", "goal_id", "decision", "should_run", "error_code", "diagnostic_code", "error", "reason",
+              "recommended_action", "heartbeat_receipt", "rollout_event", "host_poll_receipt", "action_selection_conflict")
     result = {key: payload[key] for key in fields if key in payload}
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, Mapping) else None
     if isinstance(cli, Mapping) and "next_cli_actions" in cli:
         result["next_cli_actions"] = cli["next_cli_actions"]
-    result["captured_decision"] = {"path": str(saved), "sha256": digest,
+    reference = {"path": str(saved), "sha256": digest}
+    result["captured_decision"] = {**reference,
         "command": context_capture_read_command(saved, digest,
-            page_bytes=min(page_bytes, limit), max_page_output_bytes=limit)}
-    result["instruction"] = (
-        "The guard refused this request. Follow its recovery using the original Turn identity. "
-        "The saved decision is optional diagnostic detail; read only facts needed for recovery. "
-        "This response does not establish a context baseline or grant execution authority."
-    )
-    def fits(value: dict[str, object]) -> bool:
-        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+            page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
+    compact_instruction = "Read the original failure and Turn receipt before recovery. Do not rerun admission."
+    if original_decision:
+        compact_instruction = "Read the saved decision for the original Turn. Do not rerun admission."
+        result["instruction"] = compact_instruction
+    else:
+        result["instruction"] = (
+            "The guard refused this request. Follow its recovery using the original Turn identity. "
+            "The saved decision is optional diagnostic detail; read only facts needed for recovery. "
+            "This response does not establish a context baseline or grant execution authority."
+        )
 
-    if not fits(result):
-        # Exceptional large diagnostics still use the shared digest-checked
-        # selected reader, never an eager replay of the full failed packet.
-        pointers = ["/" + key for key in fields if key in payload]
-        if isinstance(cli, Mapping) and "next_cli_actions" in cli:
-            pointers.append("/interaction_contract/cli_channel/next_cli_actions")
-        result = {"ok": False, "captured_decision": result["captured_decision"],
-            "instruction": "Read the selected failure and recovery fields before acting; "
-                "the original decision and Turn identity remain unchanged. No execution authority or context baseline was granted.",
-            "command": context_capture_read_command(saved, digest, select=pointers,
-                page_bytes=min(page_bytes, limit), max_page_output_bytes=limit)}
-        if not fits(result):
-            raise QuotaDecisionTransportError("Failure recovery metadata exceeds the output limit; read the saved original decision.")
+    if not _fits_failure_output(result, limit) or not inline_context_read_fits(
+        saved, original, digest, page_bytes=page_size, output_limit=limit, reader_argv=reader_argv,
+    ):
+        # Pin the small diagnostic selection so long launcher/capture paths and
+        # repeated --select arguments do not crowd out the recovery command.
+        recovery_fields = (
+            ("heartbeat_receipt", "rollout_event", "host_poll_receipt")
+            if original_decision else (*fields, "composition_error")
+        )
+        paths = [[key] for key in recovery_fields if key in source]
+        if not original_decision and isinstance(cli, Mapping) and "next_cli_actions" in cli:
+            paths.append(["interaction_contract", "cli_channel", "next_cli_actions"])
+        if not paths:
+            paths = [["ok"]]
+        pointers = ["/" + "/".join(path) for path in paths]
+        selections = [{"path": path, "pointer": pointer} for path, pointer in zip(paths, pointers, strict=True)]
+        try:
+            reader, selected = write_initial_context_read_reference(saved, digest, dict(source), selections)
+        except (OSError, ValueError):
+            # Existing captures can remain readable when publishing reader metadata fails.
+            reader, selected = None, None
+        result = {"ok": False, "captured_decision": reference,
+            **{key: payload[key] for key in ("error_code", "diagnostic_code") if key in payload},
+            "instruction": compact_instruction,
+            "command": context_capture_read_command(saved, digest, reference_file=reader,
+                page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
+        read_size, read_limit = page_size, limit
+        if reader is not None and selected is not None:
+            read_size, read_limit = pinned_context_read_window(reader, selected,
+                page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
+        if runtime_root is not None and (reader is None or not _fits_failure_output(result, limit) or read_limit > limit):
+            from .context_machine import _private_transport_root
+
+            try:
+                transport = Path(_private_transport_root(runtime_root))
+                if reader is None or len(str(transport)) < len(str(reader.parent)):
+                    shorter, body = write_initial_context_read_reference(saved, digest, dict(source), selections,
+                        reference_directory=transport)
+                    read_size, read_limit = pinned_context_read_window(shorter, body,
+                        page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
+                    reader = shorter
+            except (OSError, ValueError):
+                pass  # Keep the original capture and any usable reference.
+        if reader is None:
+            # Explicit selectors require the same runtime that may have just
+            # failed. The original file's digest is sufficient for this reader.
+            read_limit = inline_context_recovery_budget(saved, original, digest,
+                page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
+        result["command"] = context_capture_read_command(saved, digest,
+            reference_file=reader, page_bytes=read_size, max_page_output_bytes=read_limit,
+            reader_argv=reader_argv)
+        if read_limit > limit:
+            result["recovery_page_output_bytes"] = read_limit
+            result["instruction"] = "Do not rerun admission."
+        if not _fits_failure_output(result, limit):
+            # The command or pinned descriptor already carries the capture path.
+            result["captured_decision"] = {"sha256": digest}
+        if original_decision and "reason" in payload and _fits_failure_output({**result, "reason": payload["reason"]}, limit):
+            result["reason"] = payload["reason"]
+        if not _fits_failure_output(result, limit):
+            # Even an impossibly small envelope must keep the original failure
+            # and locator. Report why the requested output size cannot be met.
+            result["instruction"] = "Output limit is too small for recovery metadata. Read this Turn. Do not rerun admission."
     return result
+
+
+def quota_composition_failure_view(
+    args: argparse.Namespace, committed: Mapping[str, object],
+    error: EffectRuntimeRemoteError | EffectRuntimeStartupError, *,
+    capture_directory: Path | None, present_capture_failure: bool,
+    reader_argv: list[str], runtime_root: Path | None,
+    record_capture: Callable[[dict[str, object], str], None],
+) -> dict[str, object]:
+    """Publish diagnostics after admission, independently of execution source."""
+    failure = quota_decision_transport_failure_payload(args, committed, error, capture_directory=None)
+    if capture_directory is None:
+        return failure
+    from .quota_capture import capture_decision
+
+    diagnostic = {**failure, "source_diagnostic": committed,
+        "composition_error": {"type": type(error).__name__, "message": str(error),
+            "diagnostic_code": error.diagnostic_code}}
+    digest = capture_decision(capture_directory, diagnostic, record_capture=record_capture)
+    failure = quota_decision_transport_failure_payload(args, committed, error,
+        capture_directory=capture_directory, capture_sha256=digest, reader_argv=reader_argv)
+    if not present_capture_failure:
+        return failure
+    return captured_quota_failure_view(failure, capture_directory=capture_directory,
+        capture_sha256=digest, max_page_output_bytes=getattr(args, "max_page_output_bytes", None),
+        reader_argv=reader_argv, captured_payload=diagnostic, runtime_root=runtime_root)
 
 
 def _compact_quota_failure(
@@ -364,12 +463,11 @@ def _quota_failure_reader_route(cli_bin: str | None) -> list[str]:
     executable = resolve_command_path(cli_bin)
     if executable is None:
         raise QuotaCommandValidationError("Recovery CLI could not be resolved; no guard was run.")
-    # Keep the executable's invocation path. A wrapper or symlink can use
-    # its own filename to select behavior.
+    # A wrapper or symlink can select behavior using its invocation path.
     return loopx_cli_argv(str(executable.absolute()))
 
 
-def _prepare_quota_failure_reader(limit: int, *, cli_bin: str | None = None) -> _QuotaFailureReader:
+def _prepare_quota_failure_reader(limit: int, *, cli_bin: str | None) -> _QuotaFailureReader:
     from tempfile import mkdtemp
 
     from .quota_context_reader import validate_compact_recovery_budget
@@ -419,8 +517,9 @@ def run_with_quota_failure_reader(
     print_payload: Callable[..., None], run: Callable[[], int],
 ) -> int:
     """Keep one recovery locator for the guard and any inline selection reentry."""
+    cli_bin = getattr(args, "control_cli_bin", None)
     try:
-        reader = _prepare_quota_failure_reader(limit, cli_bin=getattr(args, "control_cli_bin", None))
+        reader = _prepare_quota_failure_reader(limit, cli_bin=cli_bin)
     except (OSError, ValueError) as error:
         reason = (str(error) if isinstance(error, QuotaCommandValidationError)
             else "Cannot prepare a private recovery reference; no guard was run.")
@@ -429,8 +528,13 @@ def run_with_quota_failure_reader(
             print_payload(_quota_budget_failure_payload(reason, limit), "json", str)
         return 1
     args._quota_failure_reader = reader
+    executable = reader.reader_argv[0]
+    # Bind the captured Inbox, review and settlement commands before admission.
+    # Recovering the receipt may happen after the caller's PATH changes.
+    route = loopx_cli_route(executable) if cli_bin is not None and cli_bin != executable else nullcontext()
     try:
-        return run()
+        with route:
+            return run()
     finally:
         try:
             reader.reference.parent.rmdir()
@@ -446,6 +550,7 @@ def _bounded_quota_transport_failure(
 
     if digest is None and _failure_output_size(failure) <= limit:
         return failure
+    original_locator = {"path": str(path), "sha256": digest} if path is not None and digest is not None else None
     receipt = failure.get("heartbeat_receipt")
     command = None
     if reader is not None:
@@ -485,6 +590,13 @@ def _bounded_quota_transport_failure(
     if command is not None or isinstance(receipt, Mapping):
         compact = _compact_quota_failure(command, receipt=receipt if command is None else None)
         guided = {**compact, "instruction": "Read the original Turn receipt before recovering. Do not rerun admission."}
+        if command is not None and original_locator is not None:
+            # Keep the independently checkable identity when the receipt and
+            # full failure do not fit. A fallback diagnostic is not the original.
+            for reference in (original_locator, {"sha256": original_locator["sha256"]}):
+                located = {**guided, "captured_decision": reference}
+                if _failure_output_size(located) <= limit:
+                    return located
         if _failure_output_size(guided) <= limit:
             return guided
         if _failure_output_size(compact) <= limit:
@@ -506,18 +618,22 @@ def quota_decision_transport_failure_payload(
     *,
     capture_directory: Path | None,
     capture_sha256: str | None = None,
+    reader_argv: list[str] | None = None,
 ) -> dict[str, object]:
-    """Report a post-guard failure with the original receipt and capture.
-
-    The saved digest, when available, comes from publication rather than
-    reopening the path to establish a new identity.
-    """
-    typed_transport = isinstance(error, QuotaDecisionTransportError)
-    reason = (
-        " ".join(str(error).split())[:500] if typed_transport
-        else "The guard committed, but its result could not be presented."
+    """Report a post-guard failure using the receipt and any actual capture."""
+    saved = capture_directory / "decision.json" if capture_directory is not None else None
+    composition_error = (
+        error if isinstance(error, (EffectRuntimeRemoteError, EffectRuntimeStartupError)) else None
     )
-    failure: dict[str, object] = {
+    typed = composition_error is not None or isinstance(error, QuotaDecisionTransportError)
+    if composition_error is not None and not isinstance(composition_error, EffectRuntimeRejected):
+        message = "The local runtime could not compose the complete Turn context."
+    elif typed:
+        message = str(error)
+    else:
+        message = "The guard committed, but its result could not be presented."
+    reason = " ".join(message.split())[:500]
+    payload: dict[str, object] = {
         "ok": False,
         "mode": args.quota_command,
         "goal_id": args.goal_id,
@@ -530,33 +646,93 @@ def quota_decision_transport_failure_payload(
         "status": "decision_transport_failed",
         "source": "quota",
         "recommended_action": (
-            "Inspect this Turn's receipt before recovering the result. Do not rerun admission."
+            "The guard already ran. Inspect this Turn's receipt and resolve the reported "
+            "failure before recovery. Do not rerun admission."
         ),
     }
-    for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
-        if key in committed:
-            failure[key] = committed[key]
-    if not typed_transport:
-        failure["error_class"] = type(error).__name__
-        failure.update(verbose_debug_fields(error, verbose=bool(getattr(args, "verbose", False))))
+    if composition_error is not None:
+        payload.update(error=reason, diagnostic_code=composition_error.diagnostic_code)
+    if not typed:
+        payload["error_class"] = type(error).__name__
+        payload.update(verbose_debug_fields(error, verbose=bool(getattr(args, "verbose", False))))
     limit = getattr(args, "max_page_output_bytes", None) if args.format == "json" else None
-    reader = getattr(args, "_quota_failure_reader", None)
-    if limit is not None:
-        return _bounded_quota_transport_failure(
-            failure, limit, reader,
-            capture_directory / "decision.json" if capture_directory is not None else None,
-            capture_sha256,
-        )
-    if capture_directory is not None and capture_sha256 is not None:
+    if saved is not None and capture_sha256 is not None:
         from ..control_plane.turn_driver.decision_capture import context_capture_read_command
 
-        saved = capture_directory / "decision.json"
-        failure["captured_decision"] = {
-            "path": str(saved),
-            "sha256": capture_sha256,
-            "command": context_capture_read_command(saved, capture_sha256, reader_argv=current_loopx_cli_argv()),
-        }
-    return failure
+        payload["captured_decision"] = {"path": str(saved), "sha256": capture_sha256,
+            "command": context_capture_read_command(saved, capture_sha256, reader_argv=reader_argv,
+                compact=limit is not None, max_page_output_bytes=limit)}
+        payload["recommended_action"] = (
+            "The guard already ran. Use quota context-read with the saved composition "
+            "diagnostic path and SHA-256. Inspect this Turn's receipt before resolving "
+            "the failure. Do not rerun admission."
+            if composition_error is not None
+            else "The guard already ran. Read the saved decision and this Turn's receipt "
+            "instead of rerunning the guard. If the handoff endpoint belongs to an "
+            "ended Host wake, use the transport named by the current wake, or none."
+        )
+    for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
+        if key in committed:
+            payload[key] = committed[key]
+    return payload
+
+
+def quota_captured_transport_failure_view(
+    args: argparse.Namespace, committed: dict[str, object], error: Exception, *,
+    capture_directory: Path | None, capture_sha256: str | None,
+    reader_argv: list[str], runtime_root: Path | None,
+) -> dict[str, object]:
+    """Report a delivery failure without replacing the previously committed capture."""
+    reader = getattr(args, "_quota_failure_reader", None)
+    if reader is not None:
+        reader_argv = reader.reader_argv
+    failure = quota_decision_transport_failure_payload(
+        args, committed, error, capture_directory=capture_directory,
+        capture_sha256=capture_sha256, reader_argv=reader_argv,
+    )
+    output_limit = getattr(args, "max_page_output_bytes", None)
+    if output_limit is None or args.format != "json":
+        return failure
+    if capture_directory is None or capture_sha256 is None:
+        return _bounded_quota_transport_failure(failure, output_limit, reader, None, None)
+
+    from ..control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    saved = capture_directory / "decision.json"
+    try:
+        _, original, source = read_context_capture_file(str(saved), capture_sha256, private=True)
+    except (OSError, ValueError):
+        pass
+    else:
+        projected = captured_quota_failure_view(
+            failure, capture_directory=capture_directory, max_page_output_bytes=output_limit,
+            capture_sha256=capture_sha256, reader_argv=reader_argv,
+            runtime_root=runtime_root, captured_payload=source, capture_bytes=original,
+        )
+        if _fits_failure_output(projected, output_limit) and "recovery_page_output_bytes" not in projected:
+            return projected
+        return _bounded_quota_transport_failure(failure, output_limit, reader, saved, capture_sha256)
+    # The Host can change the file after guard publication. The expected digest
+    # remains that of the original and there is no reader for the changed bytes.
+    result = {"ok": False, "error_code": QuotaDecisionTransportError.error_code, "captured_decision": {
+        "path": str(saved), "sha256": capture_sha256,
+    }, "reason": "The saved decision cannot be verified against its original SHA-256.",
+        "instruction": "Restore the original capture and inspect its Turn receipt. Do not rerun admission."}
+    if not _fits_failure_output(result, output_limit):
+        result.pop("reason")
+        result["instruction"] = "Restore file. Read receipt. Do not rerun admission."
+        if not _fits_failure_output(result, output_limit):
+            # The reserved reader can carry the original locator and receipt in
+            # private diagnostics. It must never read the unverified capture.
+            diagnostic = {**result, **{key: failure[key] for key in
+                ("heartbeat_receipt", "rollout_event", "host_poll_receipt") if key in failure}}
+            return _bounded_quota_transport_failure(diagnostic, output_limit, reader, None, None)
+    for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
+        if key in failure:
+            candidate = {**result, key: failure[key]}
+            if _fits_failure_output(candidate, output_limit):
+                result = candidate
+    return result
 
 
 def quota_validation_failure_payload(

@@ -7,6 +7,9 @@ from typing import Any, Literal
 from loopx.control_plane.heartbeat.agent_input import (
     HEARTBEAT_AGENT_INPUT_SCHEMA_VERSION,
 )
+from loopx.control_plane.quota.turn_envelope import (
+    COMPLETE_TURN_PLAN_SCHEMA_VERSION,
+)
 from loopx.control_plane.testing.cli_output_semantics import (
     action_signature_semantic_sha256,
     json_shape_paths as collect_json_shape_paths,
@@ -529,12 +532,11 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "boundary",
         ),
         markdown_anchor=None,
-        # Complete v1 retains the original source, session and transaction;
-        # the matched small fixture is 26,886 chars. Historical v0 keeps its
-        # 15,000 ceiling in its own checkout; default plan stays at 26,000.
+        # The same complete-contract callers reach 28,955 chars, including
+        # session and transaction metadata. The v0 15,000 failure is retained.
         max_chars={"json": 30_000},
         max_lines={"json": 380},
-        output_contract_version="loopx_turn_plan_v1",
+        output_contract_version=COMPLETE_TURN_PLAN_SCHEMA_VERSION,
     ),
     CliOutputModeVariantSpec(
         variant_id="loopx_turn_run_once_preview",
@@ -914,19 +916,10 @@ def assert_cli_output_baseline(
             f"{spec.surface_id}/{scenario}/{output_format} emitted "
             f"{measurement['lines']} lines; baseline ceiling is {max_lines}"
         )
-    if output_format == "markdown" and spec.markdown_anchor not in text:
-        raise AssertionError(
-            f"{spec.surface_id} markdown lost semantic anchor {spec.markdown_anchor!r}"
-        )
-    if output_format == "json":
-        payload = measurement.get("resolved_payload", measurement.get("payload"))
-        if not isinstance(payload, dict):
-            raise AssertionError(f"{spec.surface_id} did not emit a JSON object")
-        missing = [key for key in spec.semantic_json_keys if key not in payload]
-        if missing:
-            raise AssertionError(
-                f"{spec.surface_id} JSON lost semantic key(s): {', '.join(missing)}"
-            )
+    assert_cli_output_semantics(spec.surface_id, output_format=output_format,
+        text=text, measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
+        markdown_anchor=spec.markdown_anchor,
+        output_contract_version=spec.output_contract_version if output_format == "json" else None)
 
 
 def assert_cli_output_mode_variant(
@@ -952,23 +945,39 @@ def assert_cli_output_mode_variant(
             f"{spec.variant_id}/{output_format} emitted {measurement['lines']} lines; "
             f"variant ceiling is {spec.max_lines[output_format]}"
         )
+    assert_cli_output_semantics(spec.variant_id, output_format=output_format,
+        text=text, measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
+        markdown_anchor=spec.markdown_anchor, output_contract_version=spec.output_contract_version)
+
+
+def assert_cli_output_semantics(
+    output_id: str, *, output_format: OutputFormat, text: str,
+    measurement: dict[str, Any], semantic_json_keys: tuple[str, ...],
+    markdown_anchor: str | None, output_contract_version: str | None = None,
+) -> None:
+    """Qualify the versioned carrier independently of its size allowance."""
     if output_format == "markdown":
-        if spec.markdown_anchor not in text:
-            raise AssertionError(
-                f"{spec.variant_id} markdown lost semantic anchor "
-                f"{spec.markdown_anchor!r}"
-            )
-        return
-    payload = measurement.get("resolved_payload", measurement.get("payload"))
+        if markdown_anchor and markdown_anchor not in text:
+            raise AssertionError(f"{output_id} markdown lost semantic anchor {markdown_anchor!r}")
+        if output_contract_version is None:
+            return
+        # Markdown carries the same complete source or pinned progressive
+        # reference as JSON. A heading alone cannot qualify the contract.
+        try:
+            payload = json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+        except (IndexError, json.JSONDecodeError) as exc:
+            raise AssertionError(f"{output_id} lost its complete JSON carrier") from exc
+        if isinstance(payload, dict) and payload.get("schema_version") == "context_capture_navigation_v1":
+            payload = measurement.get("resolved_payload", payload)
+    else:
+        payload = measurement.get("resolved_payload", measurement.get("payload"))
     if not isinstance(payload, dict):
-        raise AssertionError(f"{spec.variant_id} did not emit a JSON object")
-    if spec.output_contract_version is not None and payload.get("schema_version") != spec.output_contract_version:
-        raise AssertionError(f"{spec.variant_id} output contract version mismatch")
-    missing = [key for key in spec.semantic_json_keys if key not in payload]
+        raise AssertionError(f"{output_id} did not emit a JSON object")
+    if output_contract_version is not None and payload.get("schema_version") != output_contract_version:
+        raise AssertionError(f"{output_id} output contract version mismatch")
+    missing = [key for key in semantic_json_keys if key not in payload]
     if missing:
-        raise AssertionError(
-            f"{spec.variant_id} JSON lost semantic key(s): {', '.join(missing)}"
-        )
+        raise AssertionError(f"{output_id} JSON lost semantic key(s): {', '.join(missing)}")
 
 
 def _assert_context_body_budget(measurement: dict[str, Any], *, max_chars: int, max_lines: int) -> None:
@@ -1011,6 +1020,8 @@ def public_manifest() -> dict[str, Any]:
                 "command": spec.command,
                 "qualification_policy": "explicit_opt_in_cold_path",
                 "formats": list(spec.output_formats),
+                **({"output_contract_version": spec.output_contract_version}
+                   if spec.output_contract_version is not None else {}),
             }
             for spec in CLI_OUTPUT_MODE_VARIANT_SPECS
         ],

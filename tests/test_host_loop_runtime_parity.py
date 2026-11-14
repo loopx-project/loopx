@@ -84,8 +84,10 @@ def canonical_wait_payload() -> dict[str, object]:
         == "rerun_quota_should_run_once"
     )
     return {
+        "ok": True,
         "should_run": False,
         "effective_action": "monitor_quiet_skip",
+        "interaction_contract": {"agent_channel": {"must_attempt": False}},
         "scheduler_hint": hint,
     }
 

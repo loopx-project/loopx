@@ -17,6 +17,7 @@ import sys
 import time
 from typing import Any
 
+from ..command_invocation import loopx_cli_argv
 from ..entrypoint import pin_utf8_stdio
 from ..file_lock import exclusive_file_lock
 
@@ -41,7 +42,7 @@ def retryable_native_error(error: Any) -> bool:
 
 
 def _core_args(args: argparse.Namespace, command: list[str]) -> list[str]:
-    result = [args.cli_bin, "--format", "json"]
+    result = [*loopx_cli_argv(args.cli_bin), "--format", "json"]
     for flag, value in (
         ("--registry", args.registry),
         ("--runtime-root", args.runtime_root),

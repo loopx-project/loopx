@@ -607,6 +607,21 @@ def _terminal_cli_actions(
     return ["no quota spend without validated transition/blocker writeback"]
 
 
+def bind_cli_turn_selection_action(
+    payload: dict[str, Any], *, previous: str, command: str,
+) -> None:
+    """Replace one CLI selection command and its matching decision mirrors."""
+    interaction = payload["interaction_contract"]
+    interaction["cli_channel"]["next_cli_actions"] = [command]
+    for carrier, field in (
+        (payload, "recommended_action"),
+        (interaction.get("agent_channel"), "primary_action"),
+        (payload.get("work_lane_contract"), "action"),
+    ):
+        if isinstance(carrier, dict) and carrier.get(field) == previous:
+            carrier[field] = command
+
+
 def _selection_recovery_command(
     payload: dict[str, Any], *, available_capabilities: Any,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,

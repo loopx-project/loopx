@@ -20,6 +20,7 @@ from ..quota.spend_sources import (
 from ..scheduler.execution_context import (
     SchedulerRuntimeProfile,
     render_scheduler_execution_args,
+    uses_codex_ssh_goal_profile,
 )
 from ..todos.contract import (
     normalize_required_capabilities,
@@ -193,6 +194,7 @@ def _heartbeat_prompt_commands(
         runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context,
         heartbeat_turn_receipt=not native_goal_host,
+        complete_turn=complete_turn,
     )
     quota_spend_command = render_quota_spend_command(
         goal_id,
@@ -302,8 +304,7 @@ def _heartbeat_prompt_commands(
             commands[key] = str(commands[key]) + display_arg + capture_arg
         commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + display_arg + capture_arg
     if complete_turn:
-        for key in ("quota_guard_command", "task_body_quota_guard_command", "thin_prompt_command"):
-            commands[key] = str(commands[key]) + " --complete-turn"
+        commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + " --complete-turn"
     return commands
 
 
@@ -383,6 +384,7 @@ def build_heartbeat_prompt(
         runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context,
     ) or traex_visible_goal
+    codex_ssh_goal = uses_codex_ssh_goal_profile(runtime_profile, scheduler_execution_context)
     ark_managed_agent_goal = uses_ark_managed_agent_goal_host(
         runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context,
@@ -434,7 +436,11 @@ def build_heartbeat_prompt(
         context_delivery=effective_context_delivery,
         turn_envelope=turn_envelope,
         complete_turn=complete_turn,
+        codex_ssh_goal=codex_ssh_goal,
     )
+    # A saved SSH loader may still name the old display. New SSH guards use
+    # the complete source selected by the shared guard renderer.
+    turn_envelope = turn_envelope and not codex_ssh_goal
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:
         normalized_agent_scopes = explicit_agent_scopes
@@ -563,14 +569,12 @@ def build_heartbeat_prompt(
         compact_prompt_command=str(commands["compact_prompt_command"]),
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
-        **({"captured_envelope": True} if turn_envelope else {}),
         **({"captured_context": True} if native_goal_host and effective_context_delivery == "on" else {}),
         **reward_memory_rule_kwargs,
     )
     task_body = bind_exact_turn_settlement_task_body(
         task_body,
         turn_instance_id=normalized_turn_instance_id,
-        captured_envelope=turn_envelope,
     )
     if fine_grained:
         task_body = f"{task_body}\n\n{FINE_GRAINED_TURN_RULE}"

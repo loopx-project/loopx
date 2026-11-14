@@ -6,7 +6,7 @@ from contextlib import nullcontext
 from pathlib import Path
 import re
 
-from ...command_invocation import loopx_cli_argv
+from ...command_invocation import current_loopx_cli_argv, loopx_cli_argv
 from ...file_lock import exclusive_file_lock
 from ...install_contract import render_host_cli_command
 from ...control_plane.collaboration import conversation_scope
@@ -283,9 +283,11 @@ def turn_start_hook(
             "error_code": error,
         }
 
+    # Only the producing CLI is known to support the progressive Inbox view.
+    cli_argv = current_loopx_cli_argv() if model_read else loopx_cli_argv()
     command = render_host_cli_command(
         [
-            *loopx_cli_argv(),
+            *cli_argv,
             "--registry",
             str(registry_path),
             "--runtime-root",

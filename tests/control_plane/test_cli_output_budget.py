@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from copy import deepcopy
 import io
 import json
 import os
@@ -840,6 +841,9 @@ def test_host_ready_turn_plan_preserves_current_controls(tmp_path: Path, scenari
         assert payload["route"]["kind"] == "ready_for_host"
         assert payload["boundary"]["inspection_only"] is True
         assert not any(payload["effects"].values()) and state_file.read_bytes() == before
+        if os.name != "posix":
+            assert payload["work_contract"]["contract_binding"]
+            return
         assert_cli_output_baseline(CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"], scenario=scenario.name,
             output_format="json", text=text, measurement=measure_cli_output(text, output_format="json"))
         detail = payload["detail_ref"]
@@ -922,7 +926,10 @@ def test_turn_envelope_references_selected_todo_without_duplicate_context(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
+    assert payload["schema_version"] == "loopx_turn_envelope_v0"
+    assert payload["action"]["selected_todo"]["todo_id"] == "todo_fixture_000"
     assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
+    assert payload["action"]["recommended_action"]
     work_context = payload["work_context"]
     assert work_context["selected_todo_ref"] == "selected_todo"
     source = next(row for row in work_context["sources"] if row["source"] == "selected_todo")
@@ -1295,34 +1302,37 @@ def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
         assert payload["boundary"]["inspection_only"] is True
         assert not any(payload["effects"].values()) and state_file.read_bytes() == before
         [source] = originals
-        detail = payload["detail_ref"]
-        assert json.loads(Path(detail["path"]).read_bytes()) == source
-        assert payload["work_contract"]["replan_action_packet"] == source["replan_action_packet"]
-        assert payload["work_contract"]["goal_boundary"] == source["goal_boundary"]
-        # The later read must remain bound to this preview when live facts change.
-        state_file.write_text("# Different Goal after the inspection\n", encoding="utf-8")
-        selector = "/interaction_contract/agent_channel/work_context"
-        reader = shlex.split(detail["command"])
-        rc, page_text = _invoke_cli(["--format", "json", *reader[reader.index("quota"):], "--select", selector])
-        page = json.loads(page_text)
-        assert rc == 0 and page["eof"], page
-        [selected] = json.loads(page["content"])["selections"]
-        assert selected == {"pointer": selector,
-            "value": source["interaction_contract"]["agent_channel"]["work_context"]}
-        assert "sources" not in payload["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
-        assert "contract_binding" not in payload["work_contract"]
-        if os.name == "posix" and not include_agent_vision:
-            state_file.write_bytes(before)
-            # An insecure existing transport must not receive private data.
-            transport = runtime / "context-delivery"
-            transport.chmod(0o755)
-            captures = list(transport.iterdir())
-            fallback_code, fallback_text = _invoke_cli(command)
-            assert fallback_code == 0, fallback_text
-            fallback = _json_payload(fallback_text)
-            assert "detail_ref" not in fallback and fallback["work_contract"] == originals[-1]
-            assert fallback["boundary"]["inspection_only"] is True
-            assert list(transport.iterdir()) == captures and state_file.read_bytes() == before
+        if os.name == "posix":
+            detail = payload["detail_ref"]
+            assert json.loads(Path(detail["path"]).read_bytes()) == source
+            assert payload["work_contract"]["replan_action_packet"] == source["replan_action_packet"]
+            assert payload["work_contract"]["goal_boundary"] == source["goal_boundary"]
+            # The later read must remain bound to this preview when live facts change.
+            state_file.write_text("# Different Goal after the inspection\n", encoding="utf-8")
+            selector = "/interaction_contract/agent_channel/work_context"
+            reader = shlex.split(detail["command"])
+            rc, page_text = _invoke_cli(["--format", "json", *reader[reader.index("quota"):], "--select", selector])
+            page = json.loads(page_text)
+            assert rc == 0 and page["eof"], page
+            [selected] = json.loads(page["content"])["selections"]
+            assert selected == {"pointer": selector,
+                "value": source["interaction_contract"]["agent_channel"]["work_context"]}
+            assert "sources" not in payload["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+            assert "contract_binding" not in payload["work_contract"]
+            if not include_agent_vision:
+                state_file.write_bytes(before)
+                # An insecure existing transport must not receive private data.
+                transport = runtime / "context-delivery"
+                transport.chmod(0o755)
+                captures = list(transport.iterdir())
+                fallback_code, fallback_text = _invoke_cli(command)
+                assert fallback_code == 0, fallback_text
+                fallback = _json_payload(fallback_text)
+                assert "detail_ref" not in fallback and fallback["work_contract"] == originals[-1]
+                assert fallback["boundary"]["inspection_only"] is True
+                assert list(transport.iterdir()) == captures and state_file.read_bytes() == before
+        else:
+            assert payload["work_contract"] == source
 
     writeback = payload["work_contract"]["replan_action_packet"][
         "writeback_contract"
@@ -1366,6 +1376,222 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
     assert "do not invent work or consume budget merely to stay active" in guidance
     assert "provisional agent-created candidate rules" in guidance
     assert "do not rewrite criteria after failure" in guidance
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unbound_complete_quota_fits_the_inline_multi_agent_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from loopx.cli_commands import quota
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    baseline = {}
+    compose = quota.compose_turn_decision
+
+    def compare_same_source(payload, *, share_inline_diagnostics=False, **kwargs):
+        # Compare two encodings of the exact guard observation, without a
+        # second guard or a change of time, launcher or settlement identity.
+        baseline.update(compose(deepcopy(payload), **kwargs))
+        return compose(deepcopy(payload), **kwargs, **(
+            {"share_inline_diagnostics": True} if share_inline_diagnostics else {}))
+
+    monkeypatch.setattr(quota, "compose_turn_decision", compare_same_source)
+    with _stable_budget_fixture_root(tmp_path) as root:
+        project, runtime, registry, state = _write_fixture(root, SCENARIOS[2])
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry,
+            state_file=state, output_format="json")["quota_should_run"]
+        code, text = _invoke_cli([*command, "--complete-turn"])
+        assert code == 0, text
+
+    limit = CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"].max_chars["multi_agent"]["json"]
+    assert len(text) <= limit
+    decision = json.loads(text)
+    assert_complete_turn_decision(decision)
+    assert "heartbeat_receipt" not in decision
+    assert "context_delivery" not in decision
+    assert decision["selected_todo"]["todo_id"] == "todo_fixture_000"
+    assert decision["interaction_contract"]["cli_channel"]["selection_required"] is True
+    assert decision["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+
+    # Compare the full source, including the original task, gates, claim
+    # order and freshness. Restore the facts through their existing owner.
+    agent = decision["agent_todo_summary"]
+    assert agent["backlog_items_ref"] == "first_executable_items[0:2]"
+    prefix = agent["first_executable_items"][:2]
+    assert [row["todo_id"] for row in prefix] == ["todo_fixture_000", "todo_fixture_003"]
+    for summary in (agent, baseline["agent_todo_summary"]):
+        literals = dict(summary)
+        for field, reference in literals.items():
+            if not field.endswith("items_ref"):
+                continue
+            target = (prefix if reference == "first_executable_items[0:2]"
+                      else literals[reference.removeprefix("$.agent_todo_summary.")])
+            summary[field.removesuffix("_ref")] = target
+            del summary[field]
+
+    projection = decision["projection_envelope"]
+    assert projection["schema_version"] == "loopx_projection_envelope_v2"
+    from loopx.control_plane.projection_envelope_facts import serve_projection_envelope
+
+    original_projection = baseline["projection_envelope"]
+    restored = serve_projection_envelope(projection, served_at=original_projection["served_at"])
+    assert {key: value for key, value in projection.items() if key not in {"schema_version", "sources", "source_defaults"}} == {
+        key: value for key, value in original_projection.items() if key not in {"schema_version", "sources"}
+    }
+    decision["projection_envelope"] = {**restored, "served_from_cache": original_projection["served_from_cache"]}
+    compact_binding = decision.pop("contract_binding")
+    baseline_binding = baseline.pop("contract_binding")
+    assert compact_binding["scheduler_execution_args"] == baseline_binding["scheduler_execution_args"]
+    assert compact_binding["hash_codec"] == baseline_binding["hash_codec"]
+    assert decision == baseline
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_complete_quota_shares_repeated_peer_claims_in_the_original_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    import hashlib
+    import sys
+
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    with _stable_budget_fixture_root(tmp_path / "peer-claim-lanes") as root:
+        project, runtime, registry, state = _write_fixture(root, SCENARIOS[2])
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        capture = root / "capture"
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry,
+            state_file=state, output_format="json")["quota_should_run"]
+        code, text = _invoke_cli([*command, "--complete-turn", "--decision-output-dir", str(capture),
+            "--turn-instance-id", "peer-claim-lanes"])
+        assert code == 0, text
+        path = capture / "decision.json"
+        original = path.read_bytes()
+        payload = json.loads(text)
+        assert payload == json.loads(original)
+        assert_complete_turn_decision(payload)
+        assert payload["projection_envelope"]["schema_version"] == "loopx_projection_envelope_v0"
+        summary = payload["agent_todo_summary"]
+        scope = summary["claim_scope"]
+        assert summary["claimed_by_others_count"] == scope["other_agent_claimed_open_count"] == 12
+        assert scope["blocked_claimed_open_count"] == 12
+        assert [(row["todo_id"], row["claimed_by"], row["text"]) for row in summary["claimed_by_others_items"]] == [
+            ("todo_fixture_001", AGENT_IDS[1], "[P1] Validate public fixture lane 01 without reading archival detail."),
+            ("todo_fixture_004", AGENT_IDS[1], "[P1] Validate public fixture lane 04 without reading archival detail."),
+        ]
+        for lane in ("other_agent_claimed_items", "blocked_claimed_items"):
+            assert lane not in scope
+            assert scope[f"{lane}_ref"] == "$.agent_todo_summary.claimed_by_others_items"
+        assert payload["selected_todo"]["todo_id"] == "todo_fixture_000"
+        assert payload["interaction_contract"]["cli_channel"]["selection_required"] is True
+        reader = shlex.join([sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota", "context-read",
+            "--capture-file", str(path), "--capture-sha256", hashlib.sha256(original).hexdigest()])
+        restored, _, _ = read_pinned_cli_body(reader)
+        assert restored.encode() == path.read_bytes() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_bound_complete_quota_reuses_backlog_rows_when_source_navigation_is_already_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    import hashlib
+
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from loopx.control_plane.turn_driver.decision_capture import private_capture_supported
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    if not private_capture_supported():
+        pytest.skip("private progressive capture requires the POSIX owner checks")
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    with _stable_budget_fixture_root(tmp_path) as root:
+        project, runtime, registry, state = _write_fixture(root, SCENARIOS[2])
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        capture = root / "capture"
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry,
+            state_file=state, output_format="json", context_delivery="auto")["quota_should_run"]
+        turn = "bound-backlog-budget"
+        code, text = _invoke_cli([*command, "--complete-turn", "--turn-instance-id", turn,
+            "--decision-output-dir", str(capture)])
+        assert code == 0, text
+        event_log = rollout_event_log_path(runtime, GOAL_ID)
+        receipt_log = event_log.read_bytes()
+        assert sum(row["event_kind"] == "quota_should_run" and row.get("run_id") == turn
+            for row in map(json.loads, receipt_log.splitlines())) == 1
+        navigation = json.loads(text)
+        body, _, _ = read_pinned_cli_body(navigation["recovery"]["command"])
+        view = json.loads(body)
+        path = capture / "decision.json"
+        raw = path.read_bytes()
+        source = json.loads(raw)
+        assert_complete_turn_decision(source)
+
+        source_summary = source["agent_todo_summary"]
+        assert [row["todo_id"] for row in source_summary["backlog_items"]] == ["todo_fixture_000", "todo_fixture_003"]
+        summary = view["agent_todo_summary"]
+        assert summary["first_executable_items"] == source_summary["first_executable_items"]
+        assert summary["backlog_items"] == [
+            {"todo_id": row["todo_id"], "context_ref": f"/agent_todo_summary/first_executable_items/{index}"}
+            for index, row in enumerate(source_summary["backlog_items"])
+        ]
+        assert "context_ref" in view.pop("context_reference_instruction")
+        source_read = shlex.split(view.pop("context_details")["command_template"])
+        assert source_read[source_read.index("--capture-file") + 1] == str(path)
+        assert source_read[source_read.index("--capture-sha256") + 1] == hashlib.sha256(raw).hexdigest()
+
+        selection = view["interaction_contract"]["cli_channel"]["selection_command"]
+        selection_args = shlex.split(selection["command_args_template"])
+        assert selection_args[selection_args.index("--turn-instance-id") + 1] == turn
+        assert "--complete-turn" in selection_args
+        selection["command_args_template"] = source["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+        summary["backlog_items"] = summary["first_executable_items"][:2]
+        assert view == source
+        assert source["heartbeat_receipt"]["turn_instance_id"] == turn
+        assert path.read_bytes() == raw
+        assert event_log.read_bytes() == receipt_log
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_staged_complete_replan_shares_exact_todo_rows_in_its_required_view(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    with _stable_budget_fixture_root(tmp_path / "replan-todo-rows") as root:
+        project, runtime, registry, state = _write_fixture(root, SCENARIOS[1])
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        capture = root / "capture"
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry,
+            state_file=state, output_format="json", context_delivery="auto")["quota_should_run"]
+        code, text = _invoke_cli([*command, "--complete-turn", "--decision-output-dir", str(capture),
+            "--turn-instance-id", "replan-todo-rows"])
+        assert code == 0, text
+        view = _json_payload(text)
+        original_bytes = (capture / "decision.json").read_bytes()
+        original = json.loads(original_bytes)
+        assert_complete_turn_decision(original)
+        assert view["effective_action"] == original["effective_action"] == "autonomous_replan_required"
+        assert view["contract_binding"] == original["contract_binding"]
+        assert "context_ref" in view["context_reference_instruction"]
+        visible = view["agent_todo_summary"]
+        saved = original["agent_todo_summary"]
+        assert visible["first_executable_items"] == saved["first_executable_items"]
+        assert visible["backlog_items"] == [
+            {"todo_id": row["todo_id"], "context_ref": f"/agent_todo_summary/first_executable_items/{index}"}
+            for index, row in enumerate(saved["backlog_items"])
+        ]
+        assert [visible["first_executable_items"][int(row["context_ref"].split("/")[-1])]
+                for row in visible["backlog_items"]] == saved["backlog_items"]
+        review = shlex.split(view["replan_action_packet"]["review"])
+        code, detail = _invoke_cli(["--format", "json", *review[review.index("quota"):]])
+        assert code == 0, detail
+        assert json.loads(detail)["obligation_id"] == original["replan_action_packet"]["obligation_id"]
+        assert (capture / "decision.json").read_bytes() == original_bytes
 
 
 @pytest.mark.parametrize("surface", ["quota_should_run", "loopx_turn_plan"])
@@ -1577,11 +1803,11 @@ def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
             read_context=True,
         )
 
-    assert canonical_exit_code == 0, canonical_text
-    assert legacy_exit_code == 0, legacy_text
-    assert _quota_payload_without_rollout_receipt(
-        canonical_text
-    ) == _quota_payload_without_rollout_receipt(legacy_text)
+        assert canonical_exit_code == 0, canonical_text
+        assert legacy_exit_code == 0, legacy_text
+        assert _quota_payload_without_rollout_receipt(
+            canonical_text
+        ) == _quota_payload_without_rollout_receipt(legacy_text)
 
 
 def test_quota_cli_all_detail_matches_repeated_canonical_selectors(
@@ -1617,15 +1843,15 @@ def test_quota_cli_all_detail_matches_repeated_canonical_selectors(
             read_context=True,
         )
 
-    assert repeated_exit_code == 0, repeated_text
-    assert all_exit_code == 0, all_text
-    all_payload = _json_payload(all_text)
-    assert _quota_payload_without_rollout_receipt(
-        all_text
-    ) == _quota_payload_without_rollout_receipt(repeated_text)
-    assert all_payload["agent_todo_summary"]["backlog_items"]
-    assert all_payload["user_todo_summary"]["other_agent_bound_user_action_items"]
-    assert all_payload["goal_boundary"]["checkpointed_boundary_authority"]["entries"]
+        assert repeated_exit_code == 0, repeated_text
+        assert all_exit_code == 0, all_text
+        all_payload = _json_payload(all_text)
+        assert _quota_payload_without_rollout_receipt(
+            all_text
+        ) == _quota_payload_without_rollout_receipt(repeated_text)
+        assert all_payload["agent_todo_summary"]["backlog_items"]
+        assert all_payload["user_todo_summary"]["other_agent_bound_user_action_items"]
+        assert all_payload["goal_boundary"]["checkpointed_boundary_authority"]["entries"]
 
 
 def test_agent_scoped_status_keeps_whole_goal_todo_index_on_cold_path(
@@ -1830,6 +2056,114 @@ def _assert_mode_variant_budgets(root: Path, *, only: str | None = None) -> None
             )
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_modes_keep_original_contracts_on_long_routes(
+    tmp_path: Path, provider: str,
+) -> None:
+    # Combine the supported route length and enabled subagent policy rather
+    # than calibrating either cost in isolation. This starts no model or child.
+    parent = Path(tempfile.gettempdir() if os.name == "nt" else "/tmp").resolve()
+    prefix = "loopx-explicit-"
+    while len(str(parent / prefix)) + 8 > 128:
+        assert parent != parent.parent
+        parent = parent.parent
+    prefix += "p" * (128 - len(str(parent / prefix)) - 8)
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=parent) as directory:
+        root = Path(directory).resolve()
+        assert len(str(root)) == 128
+        project, runtime, registry_path, state_file = _write_fixture(root, SCENARIOS[0])
+        registry = json.loads(registry_path.read_text())
+        registry["goals"][0]["spawn_policy"] = {
+            "mode": "multi_subagent", "spawn_allowed": True, "max_children": 4,
+            "model_config": {"model": "example-small", "reasoning_effort": "max"},
+        }
+        registry_path.write_text(json.dumps(registry))
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+        from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+        for output_format in ("json", "markdown"):
+            commands = _mode_variant_commands(project=project, runtime=runtime,
+                registry_path=registry_path, state_file=state_file, output_format=output_format)
+            for variant_id in ("quota_should_run_turn_envelope", "loopx_turn_plan_transaction_detail"):
+                spec = CLI_OUTPUT_MODE_VARIANT_BY_ID[variant_id]
+                if output_format not in spec.output_formats:
+                    continue
+                capture = runtime / f"{variant_id}-{output_format}"
+                command = commands[variant_id]
+                if variant_id == "quota_should_run_turn_envelope":
+                    command = [*command, "--decision-output-dir", str(capture),
+                               "--turn-instance-id", "complete-explicit"]
+                code, text = _invoke_cli(command)
+                assert code == 0, text
+                if variant_id == "loopx_turn_plan_transaction_detail":
+                    payload = json.loads(text)
+                    source = payload["work_contract"]
+                    assert build_loopx_turn_host_request(payload)["work_contract"] == source
+                else:
+                    source = json.loads((capture / "decision.json").read_text())
+                    if output_format == "json":
+                        view = json.loads(text)
+                        assert view["schema_version"] == "loopx_turn_envelope_v0"
+                        assert view["action_signature"]["matches"] is True
+                        assert view["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
+                    else:
+                        assert text.startswith("# LoopX Turn Envelope")
+                        assert "- envelope_bytes: `" in text
+                assert_complete_turn_decision(source)
+                assert_cli_output_mode_variant(spec, output_format=output_format, text=text,
+                    measurement=measure_cli_output(text, output_format=output_format))
+                oversized = text + " " * max(0, spec.max_chars[output_format] + 1 - len(text))
+                with pytest.raises(AssertionError, match="variant ceiling"):
+                    assert_cli_output_mode_variant(spec, output_format=output_format, text=oversized,
+                        measurement=measure_cli_output(oversized, output_format=output_format))
+
+
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+@pytest.mark.parametrize("measurement_only", [False, True])
+def test_explicit_complete_source_qualification_rejects_old_or_incomplete_carriers(
+    output_format: str, measurement_only: bool,
+) -> None:
+    from dataclasses import replace
+    from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
+
+    # The versioned check is for an explicit complete source. Ordinary quota
+    # and its diagnostic selectors keep their own previously qualified carrier.
+    spec = replace(CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_vision_detail"],
+        markdown_anchor="# LoopX Turn Envelope",
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract"))
+    valid = {key: {} for key in spec.semantic_json_keys}
+    valid["schema_version"] = spec.output_contract_version
+    def check(payload):
+        text = json.dumps(payload)
+        if output_format == "markdown":
+            text = spec.markdown_anchor + "\n\n```json\n" + text + "\n```"
+        measurement = measure_cli_output(text, output_format=output_format)
+        if measurement_only:
+            import runpy
+            runner = runpy.run_path(str(Path(__file__).resolve().parents[2] /
+                "examples/control_plane/cli-output-probe-runner.py"))
+            runner["_assert_output_contract"](output_format=output_format, text=text,
+                measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
+                markdown_anchor=spec.markdown_anchor, output_contract_version=spec.output_contract_version)
+        else:
+            assert_cli_output_mode_variant(spec, output_format=output_format, text=text,
+                measurement=measurement)
+    check(valid)
+    if output_format == "markdown":
+        with pytest.raises(AssertionError, match="lost its complete JSON carrier"):
+            measurement = measure_cli_output(spec.markdown_anchor, output_format="markdown")
+            assert_cli_output_mode_variant(spec, output_format="markdown", text=spec.markdown_anchor,
+                measurement=measurement)
+    with pytest.raises(AssertionError, match="version mismatch"):
+        check({**valid, "schema_version": "loopx_turn_envelope_v0"})
+    with pytest.raises(AssertionError, match="lost semantic key"):
+        check({key: value for key, value in valid.items() if key != "contract_binding"})
+    with pytest.raises(AssertionError, match="lost semantic key"):
+        check({key: value for key, value in valid.items() if key != "interaction_contract"})
+
+
+
 def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
     # Keep the original public CLI fixture and expand only its authored scope
     # to the supported boundary. JSON/body budgets must fit complete guidance.
@@ -1857,9 +2191,10 @@ def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
         assert "Local outcomes never replace root continuation, budget or stop criteria." in payload["task_body"]
 
 
-@pytest.mark.parametrize("route_padding, within_budget", [("", True), ("x" * 48, False)])
+@pytest.mark.parametrize("route_padding, within_budget", [("", True), ("x" * 96, False)])
+@pytest.mark.parametrize("bound_turn", [None, "2026-11-01T17:44:12.398Z"])
 def test_thin_budget_covers_complete_capability_and_cli_routes(
-    tmp_path: Path, route_padding: str, within_budget: bool,
+    tmp_path: Path, route_padding: str, within_budget: bool, bound_turn: str | None,
 ) -> None:
     # Exercise the actual CLI composition, not a shortened instruction or an
     # estimated sum. An oversized route must still report a budget failure.
@@ -1877,7 +2212,9 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
         capabilities = ("shell", "filesystem", "network", "external_evidence_poll", "browser")
         for capability in capabilities:
             command.extend(["--available-capability", capability])
-        exit_code, text = _invoke_cli(command, read_context=True)
+        if bound_turn is not None:
+            command.extend(["--turn-instance-id", bound_turn])
+        exit_code, text = _invoke_cli(command)
         assert exit_code == 0, text
         payload = _json_payload(text)
         body, budget = payload["task_body"], payload["interface_budget"]
@@ -1888,8 +2225,16 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
         assert "ambiguous effects need readback/recovery, not blind retry" in body
         assert "refresh-state --goal-outcome-update-json" in body
         assert "Local outcomes never replace root continuation, budget or stop criteria." in body
+        if bound_turn is not None:
+            assert bound_turn in body
+            assert "LOOPX_TURN=<current_time_iso>" not in body
+            assert '$LOOPX_TURN = "<current_time_iso>"' not in body
+            # Timestamp binding retains the shared, version-neutral dispatch.
+            assert body.count("Settle current settlement_plan.ordered_steps in order") == 1
+            assert "follow returned read/recovery instructions with original capture/identity" in body
+            assert "never re-admit" in body
         # Preserve the historical 4,500-character failure as a characterized
-        # input; the allowance changes, not the complete emitted instructions.
+        # input; the existing allowance and complete workload stay unchanged.
         assert budget["budget_char_count"] > 4500
         assert budget["max_chars"] == 5100
         assert budget["within_budget"] is within_budget, budget
@@ -2213,9 +2558,12 @@ def test_todo_list_explicit_limit_bounds_monitor_and_blocker_lanes(
 
 
 
+@pytest.mark.parametrize("context_delivery", ["off", "on", "delta_only"])
 def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
-    tmp_path: Path,
+    tmp_path: Path, context_delivery: str,
 ) -> None:
+    if context_delivery != "off" and os.name != "posix":
+        pytest.skip("native context delivery requires the POSIX host transport")
     project, runtime, registry_path, state_file = _write_fixture(
         tmp_path,
         SCENARIOS[0],
@@ -2229,20 +2577,40 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
         output_format="json",
     )["quota_should_run_turn_envelope"]
 
-    exit_code, text = _invoke_cli([*command, "--codex-app"], read_context=True)
+    turn = "budget-native-host-binding"
+    command.extend(["--context-delivery", "off" if context_delivery == "delta_only" else context_delivery])
+    if context_delivery == "delta_only":
+        command.extend(["--delta-delivery", "auto"])
+    if context_delivery != "off":
+        # Own the synthetic native context; do not borrow the test process's
+        # real desktop session or machine-configured context root.
+        context = runtime / "native-context"
+        context.mkdir(mode=0o700)
+        command.extend(["--codex-context-dir", str(context)])
+    exit_code, text = _invoke_cli(
+        [*command, "--codex-app", "--turn-instance-id", turn]
+    )
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    full_decision = shlex.split(payload["detail_ref"]["full_decision"])
-    # A cold read must preserve the complete originating source and host profile.
-    assert full_decision == [
-        "loopx", "--registry", str(registry_path), "--runtime-root", str(runtime),
-        "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_IDS[0], "--codex-app",
-    ]
-    read_rc, read_text = _invoke_cli(full_decision[1:], read_context=True)
-    assert read_rc == 0, read_text
-    assert _json_payload(read_text)["goal_id"] == GOAL_ID
+    if context_delivery == "off":
+        assert payload["schema_version"] == "loopx_turn_envelope_v0"
+        assert payload["goal_id"] == GOAL_ID and payload["agent_id"] == AGENT_IDS[0]
+        assert payload["action_signature"]["matches"] is True
+        assert "--codex-app" in shlex.split(payload["detail_ref"]["full_decision"])
+        assert payload["scheduler"]["app_automation"]
+        return
+
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+    assert_complete_turn_decision(payload)
+    assert payload["goal_id"] == GOAL_ID
+    assert payload["agent_identity"]["agent_id"] == AGENT_IDS[0]
+    assert payload["heartbeat_receipt"]["turn_instance_id"] == turn
+    scheduler_args = shlex.split(payload["contract_binding"]["scheduler_execution_args"])
+    assert "--codex-app" in scheduler_args
+    assert payload["scheduler_hint"]["app_automation"]
+    assert payload["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 
 def test_quota_should_run_cli_actions_keep_explicit_runtime_root(
@@ -2353,12 +2721,16 @@ def test_first_class_runtime_profiles_fit_thin_prompt_budget_and_cli_round_trip(
                     AGENT_IDS[0],
                     "--runtime-profile",
                     profile.value,
-                ],
-                read_context=True,
+                    "--turn-instance-id",
+                    f"budget-profile-{index}",
+                    "--context-delivery",
+                    "off",
+                ]
             )
 
             assert exit_code == 0, text
             payload = _json_payload(text)
+            assert payload["heartbeat_receipt"]["turn_instance_id"] == f"budget-profile-{index}"
             assert payload["scheduler_hint"].get("action") != (
                 "repair_scheduler_execution_context"
             )

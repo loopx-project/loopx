@@ -275,14 +275,24 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     assert authoring["schema_version"] == "goal_vision_replan_contract_v0"
     if threshold_override is None and device_count is None:
         rc, envelope = _run_cli(
-            registry, runtime, "quota", "should-run", "--codex-app", "--turn-envelope",
+            registry, runtime, "quota", "should-run", "--codex-app", "--complete-turn",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", "effective-turn-next",
         )
         assert rc == 0, envelope
         assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
-        assert envelope["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
-        assert envelope["writeback"]["settlement_plan"] == plan
+        # The App's ordinary and explicitly complete paths both retain the
+        # original replan identity and its same-Turn successor commands.
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, build_turn_envelope
+
+        assert_complete_turn_decision(selected)
+        assert_complete_turn_decision(envelope)
+        bound_writer = envelope["replan_action_packet"]["writeback_contract"]
+        assert bound_writer == contract
+        assert shlex.split(bound_writer["successor_binding_args"]) == ["--turn-instance-id", "effective-turn-next"]
+        assert "before ending; do not run the successor" in bound_writer["successor_settlement"]
+        assert envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
+        assert build_turn_envelope(envelope)["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
     vision_path = tmp_path / "periodic-vision.json"
     vision = json.loads(json.dumps(authoring["minimal_example"]))
     vision["vision_patch"] = {"acceptance_summary": "Original acceptance remains open."}

@@ -294,6 +294,20 @@ and the service admission suite against a disposable server, so the path stays
 qualified in CI as well as locally. If no safe real environment is available,
 hold delivery.
 
+Timeout recovery tests distinguish expiry before a Session event from expiry
+after an observed event. A short wall deadline alone establishes neither
+observation nor a resumable binding. A known-observed case may control only the
+supervisor clock after the real event reaches its output pipe, retaining actual
+spawn, parsing, cleanup and persistence. Keep a separate real-deadline case that
+cannot receive the event and rejects a fabricated binding. A fixture readiness
+watchdog does not qualify the runtime's wall deadline or explain an earlier
+failure whose event evidence is unavailable.
+
+超时恢复分别验证事件前到期和已观察到 Session 事件后到期。短墙钟时限不能证明事件
+已被观察或存在可恢复绑定。已知事件的用例可以只控制 supervisor 时钟，保留实际
+进程、管道、解析、清理和持久化；另用真实截止时间覆盖事件前超时并拒绝虚构绑定。
+fixture 就绪看门狗不认证运行时的墙钟时限，也不能解释已丢失事件证据的历史失败。
+
 重构交付前必须验证受影响的真实生产入口和真实后端。单测、mock 与内存 conformance
 不能替代这项证据。影响 PostgreSQL authority 时，配置指向隔离临时实例的
 `LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store`；跳过不算
@@ -1682,6 +1696,19 @@ Heartbeat 的正文回归计量先归一化已选择的 runtime、registry 和 a
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
+The capture cursor fixture uses a 2,048-byte positive page budget. The old
+1,600-byte success case fails on both the matched main and C1: with the same
+137-byte capture path, mandatory recovery guidance and a one-character
+continuation already require 1,759 JSON bytes. Keep the guidance and original
+failure; the separate oversized-reader case still requires refusal at 1,600
+bytes without changing the caller's limit. This changes only the positive test
+fixture, not production page budgets, UTF-8/digest checks or recovery authority.
+
+capture 游标成功用例使用 2,048 字节页预算。同一 137 字节路径下，main 与 C1 的
+必需恢复说明和一个字符的续页已需 1,759 JSON 字节，原 1,600 字节成功用例均失败。
+保留说明、原失败及超长 reader 在原 1,600 字节下拒绝且不修改调用方预算的负例；
+仅调整成功场景 fixture，不改变生产预算、UTF-8／digest 校验或恢复权限。
+
 The auxiliary-monitor recovery fixture measures the complete original
 writeback step with indented JSON, using fixed-width disposable routes on
 both File and SQLite. The release base emits 8,642 characters and fails the
@@ -2387,15 +2414,16 @@ and fresh terminal checks; `vision_closed` + `stop` is not Goal closure.
 
 ### MCP vision authoring and recovery / MCP vision 写入与恢复
 
-The MCP guard projects `interaction_contract.mcp_channel`. For admitted normal
-Todo delivery, it replaces the raw CLI writeback/spend instructions with
-`complete_task` ownership; those are alternate transports, not two obligations.
-Replan-only and blocked lanes preserve their live CLI actions and binding.
+The MCP guard returns the original complete decision and a separate
+`mcp_channel`. For admitted Todo delivery the channel names `complete_task`
+as the executor for writeback and quota spending. Replan-only and blocked
+lanes preserve their live CLI actions and binding.
 Vision field and total limits come from the same TS validator, not copied prompt
 constants. Quota admission, permission and workspace facts are unchanged.
 
-MCP 的普通 Todo 交付不再同时要求模型执行 CLI 记账和 MCP 结算两套流程；独立 replan
-仍使用动态 CLI 契约。vision 字段与预算直接来自 TS 校验器，不要求模型猜格式或翻测试。
+MCP 原样交付完整决定，单独的 `mcp_channel` 指定普通 Todo 由
+`complete_task` 写回和扣额。独立重规划沿用当前 CLI 契约，vision 字段与预算直接
+来自 TypeScript 校验器。
 
 `complete_task` accepts either `agent_vision` (the existing bounded
 `goal_vision_replan_contract_v0` JSON packet) or `vision_unchanged_reason`.

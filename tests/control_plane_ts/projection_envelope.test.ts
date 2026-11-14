@@ -6,9 +6,12 @@ import {
   PROJECTION_ENVELOPE_SCHEMA_VERSION,
   PROJECTION_ENVELOPE_SEAL_REQUEST,
   PROJECTION_ENVELOPE_SERVE_REQUEST,
+  expandProjectionSourceFields,
   sealProjectionEnvelope,
+  shareProjectionSourceFields,
 } from "../../loopx/control_plane/projection_envelope.ts";
 import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
+import { contextSourceIdentity } from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 
 const OBSERVED = "2026-09-26T10:00:00+00:00";
 const at = (seconds: number) => new Date(Date.parse(OBSERVED) + seconds * 1000).toISOString();
@@ -126,6 +129,63 @@ test("serving a cached copy keeps observed_at and recomputes staleness", () => {
   assert.equal(sources(served)[0].status, "stale");
   assert.deepEqual(served.alert_reasons, ["stale_sources"]);
   assert.deepEqual(coverage(served), coverage(sealed));
+});
+
+test("shared source facts restore exact freshness, scope and optional future values", () => {
+  const projection = sealProjectionEnvelope(sealRequest({
+    projection: "quota_should_run",
+    sources: [
+      { source_id: "registry", read_status: "read", last_read_at: OBSERVED, item_count: 1 },
+      { source_id: "goals", via: "status", read_status: "read", last_read_at: at(-1), item_count: 1 },
+      { source_id: "cadence", read_status: "read", last_read_at: at(-400), item_count: 1 },
+      { source_id: "optional", read_status: "missing", required: false },
+      { source_id: "authority", read_status: "unreadable" },
+    ],
+  }));
+  const rows = sources(projection);
+  rows[0].future_evidence = null;
+  rows[1].future_evidence = { digest: "original" };
+  const input = { projection_envelope: projection };
+  const identity = contextSourceIdentity(input, [
+    [["projection_envelope", "sources", 0, "item_count"], "1.0"],
+    [["projection_envelope", "sources", 1, "item_count"], "1.0"],
+    [["projection_envelope", "sources", 2, "item_count"], "1.0"],
+  ]);
+  const shared = shareProjectionSourceFields(projection, identity, ["projection_envelope"]);
+  assert.notEqual(shared, projection);
+  const defaults = shared.source_defaults as Row;
+  assert.equal(defaults.window_seconds, 300);
+  assert.ok(!Object.hasOwn(defaults, "item_count"));
+  assert.ok(!Object.hasOwn(defaults, "future_evidence"));
+  assert.ok(sources(shared).every(row => !Object.hasOwn(row, "status") && !Object.hasOwn(row, "alert")));
+  assert.equal(sources(expandProjectionSourceFields(shared))[1].staleness_seconds, 1);
+  assert.ok(JSON.stringify(shared).length < JSON.stringify(projection).length);
+  assert.deepEqual(expandProjectionSourceFields(shared), projection);
+  const serve = (envelope: Row) => sealProjectionEnvelope({
+    schema_version: PROJECTION_ENVELOPE_SERVE_REQUEST, envelope, served_at: at(600),
+  });
+  assert.deepEqual(serve(shared), serve(projection));
+  assert.equal(shared.schema_version, "loopx_projection_envelope_v2");
+  assert.throws(() => expandProjectionSourceFields({...shared, source_defaults: {...defaults, source_id: "other"}}),
+    /registered sealed source fields/);
+  const overrides = sources(shared).map((row, index) => index === 0 ? {...row, alert: true} : row);
+  assert.throws(() => expandProjectionSourceFields({...shared, sources: overrides}), /cannot override derived source facts/);
+  const historical = {...projection, sources: [{...rows[0], alert: true}, ...rows.slice(1)]};
+  assert.equal(shareProjectionSourceFields(historical, contextSourceIdentity({projection_envelope: historical}),
+    ["projection_envelope"]), historical);
+});
+
+test("the projection reader accepts earlier inline responses with stored derived facts", () => {
+  const projection = sealProjectionEnvelope(sealRequest());
+  const previous = {
+    ...projection,
+    schema_version: "loopx_projection_envelope_v1",
+    source_defaults: {window_seconds: 300, alert: false, alert_reasons: []},
+    sources: sources(projection).map(({window_seconds, alert, alert_reasons, ...row}) => row),
+  };
+  assert.deepEqual(expandProjectionSourceFields(previous), projection);
+  const altered = {...previous, source_defaults: {...previous.source_defaults, alert: true}};
+  assert.throws(() => expandProjectionSourceFields(altered), /does not reconstruct a sealed source row/);
 });
 
 test("a derived projection inherits upstream sources and completeness", () => {

@@ -3,8 +3,10 @@
 The worker's probe consumes the Core decision through `quota should-run
 --scheduler-observation`. It gets the current wake decision, cadence, stop and
 recovery identity without sending the model's work packet or overriding context
-delivery. This request does not admit a Turn, capture model input or spend
-quota; an actual wake still uses its own normal entry point and context policy.
+delivery. A non-terminal response must succeed and supply the boolean
+`interaction_contract.agent_channel.must_attempt` before the worker can wake
+the Host. The Core stop directive still takes precedence. The probe leaves
+Turn admission, model input capture and quota settlement to the actual wake.
 
 Use the worker and CLI from the same LoopX build. An older CLI that rejects the
 observation request prevents the worker from waking; pair the versions before

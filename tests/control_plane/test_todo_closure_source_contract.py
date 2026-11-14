@@ -4,6 +4,8 @@ from copy import deepcopy
 
 import pytest
 
+from loopx.cli_commands.quota_presentation import project_scheduler_observation
+
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.control_plane.todos.quota_summary import summarize_user_todos_for_quota
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
@@ -85,4 +87,14 @@ def test_valid_complete_source_still_closes_without_changing_its_proof() -> None
     decision = build_quota_should_run(status, goal_id="goal-proof-test")
     assert decision["effective_action"] == "terminal_no_followup"
     assert decision["should_run"] is False
+    observer = project_scheduler_observation(decision)
+    assert observer["should_run"] is False and observer["effective_action"] == "terminal_no_followup"
+    frontier = observer["goal_frontier_projection"]
+    assert frontier["terminal_state"] == {
+        "schema_version": "goal_terminal_state_v0", "kind": "no_followup",
+        "derived": True, "source": "validated_goal_closure",
+    }
+    assert frontier["source_completeness"] == {
+        "schema_version": "goal_terminal_source_completeness_v0", "user_todos": "valid", "agent_todos": "valid",
+    }
     assert parsed == before

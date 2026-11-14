@@ -907,6 +907,7 @@ def test_heartbeat_should_run_routes_into_shared_turn_context(
         "agent_id": "a1",
         "decision": payload,
         "turn_instance_id": "hb-1",
+        "embed_in_complete_source": False,
     }
 
 

@@ -1,19 +1,157 @@
 """Settlement remains executable and signed through the opt-in compact view."""
 from copy import deepcopy
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
+import loopx
 import pytest
 
 from loopx.control_plane.quota.turn_envelope import (
     build_turn_envelope,
+    compose_turn_decision,
+    compose_turn_decision_with_raw_envelope,
     quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
 from tests.test_turn_envelope import _full_decision
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID,
     _configure_read_only_todo, _run_cli, _run_generated_cli,
-    _spend_run_count, _write_fixture, _initialize_fixture_authority,
+    _spend_run_count, _write_fixture, _initialize_fixture_authority, _heartbeat_receipt_count,
 )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("delivery", [None, "auto", "off"])
+@pytest.mark.parametrize("envelope", [False, True])
+def test_markdown_reads_complete_source_except_explicit_off_compatibility(
+    tmp_path, monkeypatch, record_property, provider, delivery, envelope,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    capture = tmp_path / "original-capture"
+    root = Path(loopx.__file__).resolve().parent.parent
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+         "--runtime-root", str(runtime), "--format", "markdown", "quota", "should-run",
+         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+         "--turn-instance-id", TURN_ID, "--decision-output-dir", str(capture),
+         *(["--turn-envelope"] if envelope else []),
+         *(["--context-delivery", delivery] if delivery else [])],
+        cwd=root, env={**os.environ, "PYTHONPATH": str(root)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    record_property("markdown_chars", len(result.stdout))
+    record_property("markdown_utf8_bytes", len(result.stdout.encode("utf-8")))
+    original = (capture / "decision.json").read_bytes()
+    source = json.loads(original)
+    if not envelope:
+        assert result.stdout.startswith("# LoopX Quota Should Run\n")
+        assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
+        assert "normal_run" in result.stdout
+        assert "schema_version" not in source and "contract_binding" not in source
+    elif delivery == "off":
+        assert result.stdout.startswith("# LoopX Turn Envelope\n")
+        assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
+        assert "- should_run: `True`" in result.stdout
+        assert "- effective_action: `normal_run`" in result.stdout
+        assert not result.stdout.startswith("# LoopX Turn Envelope\n\n```json\n")
+        assert len(result.stdout) <= 4800
+    else:
+        assert result.stdout.startswith("# LoopX Turn Envelope\n")
+        # Follow the same pinned recovery as JSON; no second admission is
+        # needed to recover every field of this complete synthetic decision.
+        body, cost = read_cli_context_for_oracle(result.stdout, output_format="markdown")
+        record_property("context_delivery", json.dumps(cost))
+        shown = json.loads(body)
+        assert shown["should_run"] is True
+        assert shown["effective_action"] == "normal_run"
+        assert json.dumps(shown, ensure_ascii=False) == json.dumps(source, ensure_ascii=False)
+    if envelope:
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
+    # Both readers recover the identical admitted source without a second guard.
+    assert source["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    assert source["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == TURN_ID
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    _, recovered, restored = read_context_capture_file(
+        str(capture / "decision.json"), hashlib.sha256(original).hexdigest(), private=True,
+    )
+    assert recovered == original and restored == source
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("unsafe", ["symlink", "public"])
+@pytest.mark.skipif(os.name != "posix", reason="Unsafe POSIX private transport; other hosts retain complete inline recovery")
+def test_markdown_keeps_original_turn_when_optional_private_transport_is_unsafe(tmp_path, monkeypatch, provider, unsafe):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    transport = runtime / "context-delivery"
+    target = tmp_path / "untrusted"
+    target.mkdir(mode=0o755)
+    if unsafe == "symlink":
+        transport.symlink_to(target, target_is_directory=True)
+    else:
+        transport.mkdir(mode=0o755)
+        transport.chmod(0o755)
+    physical = target if unsafe == "symlink" else transport
+    before_mode = physical.stat().st_mode
+    root = Path(loopx.__file__).resolve().parent.parent
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+         "--runtime-root", str(runtime), "--format", "markdown", "quota", "should-run",
+         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+         "--turn-instance-id", TURN_ID, "--runtime-profile", "generic_cli", "--turn-envelope"],
+        cwd=root, env={**os.environ, "PYTHONPATH": str(root)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    body, cost = read_cli_context_for_oracle(result.stdout, output_format="markdown")
+    complete = json.loads(body)
+    assert complete["schema_version"] == "loopx_turn_envelope_v1" and not cost
+    assert complete["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    identity = complete["heartbeat_receipt"]["settlement_identity"]
+    assert identity["turn_instance_id"] == TURN_ID
+    assert identity == complete["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+    assert physical.stat().st_mode == before_mode and not list(physical.iterdir())
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0
+
+
+def test_compatibility_display_preserves_the_same_complete_source(tmp_path):
+    payload = _full_decision()
+    payload["future_requirement"] = {
+        "raw": 'Preserve the final stop: 汉🙂"\\\n',
+        "numbers": [1.0, -0.0, 2**60 + 1], "unknown": [None, False, {}, []],
+    }
+    before = deepcopy(payload)
+    complete = compose_turn_decision(payload)
+    source, view = compose_turn_decision_with_raw_envelope(
+        payload, captured_decision_path=str(tmp_path / "decision.json"),
+    )
+    assert json.dumps(source, ensure_ascii=False) == json.dumps(complete, ensure_ascii=False)
+    assert json.dumps(source["future_requirement"], ensure_ascii=False) == json.dumps(
+        before["future_requirement"], ensure_ascii=False,
+    )
+    assert payload == before
+    assert view is not None and view["schema_version"] == "loopx_turn_envelope_v0"
 
 
 def _plan():
@@ -86,24 +224,62 @@ def test_absent_plan_is_not_invented_for_historical_or_unbound_packets():
     assert envelope["writeback"]["spend_after_validation"] is False
 
 
-@pytest.mark.parametrize("profile_args", [
-    ("--codex-app",),
-    ("--runtime-profile", "generic_cli"),
-    ("--runtime-profile", "codex_app_ssh_goal"),
+@pytest.mark.parametrize("profile_args, output_format, provider, ordinary_app", [
+    (("--codex-app",), "json", "file", False),
+    (("--runtime-profile", "generic_cli"), "json", "file", False),
+    (("--runtime-profile", "codex_app_ssh_goal"), "json", "file", False),
+    (("--runtime-profile", "generic_cli"), "markdown", "file", False),
+    (("--runtime-profile", "generic_cli"), "markdown", "sqlite", False),
+    (("--codex-app",), "json", "file", True),
+    (("--runtime-profile", "codex_app_heartbeat"), "json", "sqlite", True),
+    (("--codex-app",), "markdown", "sqlite", True),
 ])
-def test_generated_json_commands_settle_original_turn_once(tmp_path, profile_args):
+def test_generated_commands_settle_original_turn_once(
+    tmp_path, monkeypatch, profile_args, output_format, provider, ordinary_app,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
     project, runtime, registry = _write_fixture(tmp_path / "quoted inputs")
     _configure_read_only_todo(project)
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     args = ("quota", "should-run", *profile_args, "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", TURN_ID, )
-    rc, full = _run_cli(registry, runtime, *args)
-    assert rc == 0, full
-    rc, envelope = _run_cli(registry, runtime, *args, "--turn-envelope")
-    assert rc == 0, envelope
-    assert envelope["schema_version"] == "loopx_turn_envelope_v0"
-    plan = envelope["writeback"]["settlement_plan"]
+    presentation = ("--context-delivery", "off") if ordinary_app else ("--turn-envelope",)
+    if output_format == "markdown":
+        root = Path(loopx.__file__).resolve().parent.parent
+        delivered = subprocess.run(
+            [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+             "--runtime-root", str(runtime), "--format", "markdown", *args, *presentation],
+            cwd=root, env={**os.environ, "PYTHONPATH": str(root)},
+            capture_output=True, text=True, check=False,
+        )
+        assert delivered.returncode == 0, delivered.stderr or delivered.stdout
+        body, _ = read_cli_context_for_oracle(delivered.stdout, output_format="markdown")
+        full = json.loads(body)
+        plan = full["interaction_contract"]["cli_channel"]["settlement_plan"]
+    elif ordinary_app:
+        rc, full = _run_cli(registry, runtime, *args, *presentation, cwd=project)
+        assert rc == 0, full
+        plan = full["interaction_contract"]["cli_channel"]["settlement_plan"]
+    else:
+        rc, response = _run_cli(registry, runtime, *args, "--context-delivery", "auto", "--turn-envelope")
+        assert rc == 0, response
+        body, _ = read_cli_context_for_oracle(json.dumps(response), output_format="json")
+        full = json.loads(body)
+        rc, envelope = _run_cli(registry, runtime, *args, "--context-delivery", "off", "--turn-envelope")
+        assert rc == 0, envelope
+        assert envelope["schema_version"] == "loopx_turn_envelope_v0"
+        plan = envelope["writeback"]["settlement_plan"]
+    assert full["schema_version"] == "loopx_turn_envelope_v1"
+    if ordinary_app:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(full)
+        assert not {"context_delivery", "reference_file", "first_read_command"} & full.keys()
+        assert plan["schema_version"] == "quota_settlement_plan_v1"
+        assert plan["ordered_steps"][2]["owner"] == "agent"
     assert plan == full["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == full["heartbeat_receipt"]["settlement_identity"]
     assert [step["kind"] for step in plan["ordered_steps"]] == [

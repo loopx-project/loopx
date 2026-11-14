@@ -6,8 +6,8 @@ replace the host TUI. On every tick it asks LoopX whether the registered agent
 should run, projects a one-line public-safe status, and either:
 
   * observe-only (default): sleeps until the scheduler hint says to re-check;
-  * with --wake-cmd: runs when the interaction contract requires an agent attempt
-    (legacy packets without that contract use the strict should_run boolean).
+  * with --wake-cmd: runs when the scheduler observation's interaction contract
+    requires an agent attempt.
 
 The generic CLI scheduler hint carries only the *initial* interval plus a
 progression ladder and an unchanged-poll limit. Unlike codex-app's stateful
@@ -88,11 +88,10 @@ def _extract_local_scheduler(payload: dict[str, Any]) -> dict[str, Any]:
     local = _mapping(detail.get(SCHEDULER_DETAIL_KEY))
     if local:
         return local
-    # Without --include-detail scheduler only the hot-path limit strings are
-    # present; fail closed instead of inventing a cadence.
+    # The observation must include the local worker's actual cadence.
     raise ValueError(
         "scheduler_hint.cold_path_detail.local_scheduler missing; "
-        "run quota should-run with --include-detail scheduler"
+        "run quota should-run with --scheduler-observation"
     )
 
 
@@ -107,6 +106,13 @@ def _local_scheduler_directive(hint: dict[str, Any]) -> str:
 
 
 def parse_tick(payload: dict[str, Any]) -> TickDecision:
+    # Versioned source must pass the same semantic/integrity owner as managed
+    # hosts before scheduler or wake facts are used. Never reinterpret an
+    # unsupported or damaged complete contract as an unversioned legacy packet.
+    if "schema_version" in payload or "contract_binding" in payload:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(payload)
     hint = _mapping(payload.get("scheduler_hint"))
     action = str(hint.get("action") or "").strip()
     cadence_class = str(hint.get("cadence_class") or "").strip()
@@ -130,22 +136,14 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
             reset_token=_extract_reset_token(payload),
             terminal=True,
         )
-    # The final interaction contract owns wake permission. Raw should_run is
-    # advisory: it can remain true during quiet waits or false for required
-    # repair. Consume the existing projection without reclassifying its mode.
-    # A present but malformed contract must never fall back to legacy admission.
-    # The terminal directive above still wins over malformed admission values.
-    if payload.get("ok") is False:
+    # The interaction contract owns wake permission. The terminal directive
+    # above still wins over missing or malformed wake facts.
+    if payload.get("ok") is not True:
         raise ValueError("quota decision failed; refusing model wake")
-    if "interaction_contract" in payload:
-        contract = _mapping(payload["interaction_contract"])
-        should_run = _mapping(contract.get("agent_channel")).get("must_attempt")
-        admission_field = "interaction_contract.agent_channel.must_attempt"
-    else:
-        should_run = payload.get("should_run")
-        admission_field = "quota should_run"
+    contract = _mapping(payload.get("interaction_contract"))
+    should_run = _mapping(contract.get("agent_channel")).get("must_attempt")
     if not isinstance(should_run, bool):
-        raise ValueError(f"{admission_field} must be a boolean; refusing model wake")
+        raise ValueError("interaction_contract.agent_channel.must_attempt must be a boolean; refusing model wake")
     local = _extract_local_scheduler(payload)
 
     recheck = local.get("recheck_after_seconds")
@@ -1142,7 +1140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--wake-cmd",
-        help="Optional shell command to run when should_run is true. "
+        help="Optional shell command to run when the current observation requires an agent attempt. "
         "Without it the worker is observe-only.",
     )
     parser.add_argument(

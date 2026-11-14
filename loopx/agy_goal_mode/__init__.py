@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ..command_invocation import loopx_cli_argv
+
 AGY_INSTALL_SURFACE = "agy"
 ANTIGRAVITY_APP_INSTALL_SURFACE = "antigravity-app"
 ANTIGRAVITY_APP_AGENT_TYPE = "antigravity-app"
@@ -111,38 +113,24 @@ def build_antigravity_sidecar_template(
     goal_id: str = "<goal-id>",
     agent_id: str | None = None,
     runtime_root: str | None = None,
+    registry: str | None = None,
     cli_bin: str = "loopx",
     interval_seconds: int = 180,
 ) -> dict[str, Any]:
     """Build a public-safe Antigravity 2.0 ``sidecar.json`` periodic heartbeat template."""
-    quota_args = [cli_bin, "--format", "json"]
+    cli_args = [*loopx_cli_argv(cli_bin), "--format", "json"]
     if runtime_root:
-        quota_args.extend(["--runtime-root", runtime_root])
-    quota_args.extend(
-        [
-            "quota",
-            "should-run",
-            "--goal-id",
-            goal_id,
-            "--runtime-profile",
-            "antigravity_app",
-        ]
-    )
+        cli_args.extend(["--runtime-root", runtime_root])
+    if registry:
+        cli_args.extend(["--registry", registry])
+    profile_args = ["--goal-id", goal_id, "--runtime-profile", "antigravity_app"]
+    quota_args = [*cli_args, "quota", "should-run", *profile_args]
     if agent_id:
-        quota_args.extend(["--agent-id", agent_id])
-    heartbeat_args = [cli_bin, "--format", "json"]
-    if runtime_root:
-        heartbeat_args.extend(["--runtime-root", runtime_root])
-    heartbeat_args.extend(
-        [
-            "heartbeat-prompt",
-            "--thin",
-            "--goal-id",
-            goal_id,
-            "--runtime-profile",
-            "antigravity_app",
-        ]
-    )
+        quota_args.extend(["--agent-id", agent_id, "--scheduler-observation"])
+    else:
+        # Unbound templates have no Agent for the scheduler observation.
+        quota_args.extend(["--context-delivery", "off"])
+    heartbeat_args = [*cli_args, "heartbeat-prompt", "--thin", *profile_args]
     if agent_id:
         heartbeat_args.extend(["--agent-id", agent_id])
     bootstrap_prompt = (
@@ -364,13 +352,21 @@ def antigravity_app_activation_extras(
     goal_id: str = "<goal-id>",
     agent_id: str | None = None,
     runtime_root: str | None = None,
+    registry: str | None = None,
     cli_bin: str = "loopx",
 ) -> dict[str, Any]:
     """Keyword overrides for ``antigravity_app_activation``'s facade call."""
+    # An explicit global override can be inherited when the host builder uses
+    # the default name. The native Stop adapter accepts only a single program,
+    # so leave its default unchanged when the invocation route is a module.
+    route = loopx_cli_argv(None if cli_bin == "loopx" else cli_bin)
+    if route[1:] == ["--cli-bin", route[0]]:
+        cli_bin = route[0]
     sidecar_template = build_antigravity_sidecar_template(
         goal_id=goal_id,
         agent_id=agent_id,
         runtime_root=runtime_root,
+        registry=registry,
         cli_bin=cli_bin,
     )
     hooks_template = build_antigravity_hooks_template(
@@ -378,6 +374,7 @@ def antigravity_app_activation_extras(
         goal_id=goal_id,
         agent_id=agent_id,
         runtime_root=runtime_root,
+        registry=registry,
         resolve_local_executable=False,
     )
     wake_prompt = sidecar_template["sidecar"]["loopx-heartbeat"]["bootstrap_prompt"]

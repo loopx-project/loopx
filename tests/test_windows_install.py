@@ -771,6 +771,8 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
         launcher=launcher,
         args=[
             *common,
+            "--cli-bin",
+            str(launcher),
             "quota",
             "should-run",
             "--goal-id",
@@ -782,10 +784,40 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
         env=launch_env,
     )
     assert quota.returncode == 0, quota.stderr or quota.stdout
-    quota_payload = json.loads(quota.stdout)
-    assert quota_payload["should_run"] is True
-
     todo_id = json.loads(todo.stdout)["todo_id"]
+    navigation = json.loads(quota.stdout)
+    assert navigation["ok"] is True
+    assert navigation["schema_version"] == "context_capture_navigation_v1"
+
+    command = navigation["first_read_command"]
+    decision = bytearray()
+    for _ in range(30):
+        reader = subprocess.run(
+            [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=launch_env,
+            timeout=180,
+        )
+        assert reader.returncode == 0, reader.stderr or reader.stdout
+        page = json.loads(reader.stdout)
+        assert page["ok"] is True and page["offset"] == len(decision)
+        decision.extend(page["content"].encode("utf-8"))
+        if page["eof"]:
+            assert page["next_offset"] is None and len(decision) == page["total_bytes"]
+            break
+        assert page["next_offset"] == len(decision) > page["offset"]
+        command = page["next_command"]
+    else:
+        pytest.fail("Installed quota reader did not finish its initial selection")
+
+    selected = json.loads(decision)
+    assert selected["schema_version"] == "context_capture_selection_v1"
+    values = {item["pointer"]: item["value"] for item in selected["selections"]}
+    assert values["/should_run"] is True
+    assert values["/selected_todo"]["todo_id"] == todo_id
 
     acquired = _run_loopx(
         pwsh=pwsh,

@@ -148,7 +148,9 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
 
     def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         commands.append(command)
-        if "--turn-instance-id" not in command:
+        if "--complete-turn" in command:
+            payload = '{"ok": false, "reason": "fixture guard diagnostic"}'
+        elif "--turn-instance-id" not in command:
             payload = '{"ok": true}'
         else:
             args = command[command.index("json") + 1 :]
@@ -162,8 +164,8 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
                 payload = json.dumps(
                     {
                         "ok": True,
-                        "should_run": True,
-                        "selected_todo": {"todo_id": "todo_333333333333"},
+                        "schema_version": "loopx_host_todo_settlement_guard_v0",
+                        "settlement_identity": identity.as_dict(),
                     }
                 )
             elif "complete" in command:
@@ -197,8 +199,9 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
     assert json.loads(control.claim_task("todo-1", "cc"))["ok"] is False
     assert commands == []
 
-    assert json.loads(control.should_run())["ok"] is True
-    assert commands[-1][-2:] == ["--runtime-profile", "kunluncode"]
+    assert json.loads(control.should_run())["reason"] == "fixture guard diagnostic"
+    assert "--complete-turn" in commands[-1]
+    assert commands[-1][commands[-1].index("--runtime-profile") + 1] == "kunluncode"
     assert commands[-1][3:5] == ["--format", "json"]
 
     assert json.loads(control.claim_task("todo-1", "kunlun"))["ok"] is True
@@ -268,8 +271,8 @@ def test_fastmcp_complete_task_forwards_complete_task_lease_fence(
                 payload = json.dumps(
                     {
                         "ok": True,
-                        "should_run": True,
-                        "selected_todo": {"todo_id": "todo_777777777777"},
+                        "schema_version": "loopx_host_todo_settlement_guard_v0",
+                        "settlement_identity": identity.as_dict(),
                     }
                 )
             elif "complete" in command:
@@ -344,8 +347,13 @@ def test_mcp_spends_only_after_typed_completed_state(
             json.dumps(
                 {
                     "ok": True,
-                    "should_run": True,
-                    "selected_todo": {"todo_id": "todo_111111111111"},
+                    "schema_version": "loopx_host_todo_settlement_guard_v0",
+                    "settlement_identity": SettlementIdentity(
+                        goal_id="shared-goal",
+                        agent_id="claude",
+                        todo_id="todo_111111111111",
+                        turn_instance_id=command[command.index("--turn-instance-id") + 1],
+                    ).as_dict(),
                 }
             )
             if "should-run" in command
@@ -393,11 +401,8 @@ def test_complete_task_spends_bound_to_selected_todo_and_refreshes_state(
             payload = json.dumps(
                 {
                     "ok": True,
-                    "should_run": True,
-                    "selected_todo": {
-                        "todo_id": "todo_222222222222",
-                        "source": "agent_lane_next_action",
-                    },
+                    "schema_version": "loopx_host_todo_settlement_guard_v0",
+                    "settlement_identity": identity.as_dict(),
                 }
             )
         elif "complete" in command:
@@ -444,6 +449,7 @@ def test_complete_task_spends_bound_to_selected_todo_and_refreshes_state(
         result["settlement_identity"]["turn_instance_id"],
         "--runtime-profile",
         "claude_code",
+        "--host-todo-settlement",
     ]
     assert complete[complete.index("--todo-id") + 1] == "todo_222222222222"
     assert complete[complete.index("--turn-instance-id") + 1] == (
@@ -494,10 +500,10 @@ def test_complete_task_classifies_terminal_no_selection_and_fails_closed(
         commands.append(command)
         payload = json.dumps(
             {
-                "ok": True,
-                "should_run": False,
-                "effective_action": "terminal_no_followup",
-                "selected_todo": None,
+                "ok": False,
+                "schema_version": "loopx_host_todo_settlement_guard_v0",
+                "guard_state": "terminal_no_selection",
+                "reason": "quota guard has no selected Todo",
             }
         )
         return subprocess.CompletedProcess(command, 0, payload, "")
@@ -1264,6 +1270,10 @@ def test_native_controller_blocks_model_visible_mcp_mutations(
     monkeypatch.setenv(NATIVE_CONTROLLER_ENV, "1")
 
     guard_native_controller_writeback(control)
+
+    rejected_admission = asyncio.run(server.call_tool("should_run", {"todo_id": "todo-fixture"}))
+    assert json.loads(rejected_admission.content[0].text)["ok"] is False
+    assert "outer controller" in json.loads(rejected_admission.content[0].text)["reason"]
 
     claim_content, _ = asyncio.run(
         server.call_tool(

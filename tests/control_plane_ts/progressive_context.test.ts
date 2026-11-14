@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {settlementIdentity, settlementIdentityPayload} from "../../loopx/control_plane/effect_program.ts";
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {contextReadSectionDigests, initialContextReadPointers,
   progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
@@ -221,4 +222,35 @@ test("first read keeps decision rules and preserves nonstandard Vision obligatio
     required.vision_authoring = {...schema, new_stop: "Keep this changed policy visible."};
     assert.ok(initialContextReadPointers(context, []).includes(base));
   }
+});
+
+test("soft-claim first read shares only the original bound settlement commands", () => {
+  const identity = settlementIdentityPayload(settlementIdentity({goal_id: "goal", agent_id: "agent",
+    todo_id: "todo_work", turn_instance_id: "turn"}));
+  const receipt = {status: "upgraded", closeout_required: true, turn_instance_id: "turn", settlement_identity: identity};
+  const actions = ["refresh-state --settle-turn --settlement-receipt"];
+  const plan = {schema_version: "quota_settlement_plan_v2", identity, ordered_steps: [
+    {kind: "durable_writeback", owner: "agent", command_template: actions[0]},
+    {kind: "quota_spend", owner: "runtime"},
+  ]};
+  const cli = {spend_after_validation: true, next_cli_actions: actions, settlement_plan: plan};
+  const interaction = {schema_version: "loopx_interaction_contract_v0", user_channel: {action_required: false},
+    agent_channel: {delivery_allowed: true}, cli_channel: cli};
+  const context = {ok: true, should_run: true, effective_action: "normal_run", normal_delivery_allowed: true,
+    goal_id: "goal", agent_identity: {agent_id: "agent"}, selected_todo: {todo_id: "todo_work"},
+    goal_boundary: {handoff_mode: "soft_claim"}, heartbeat_receipt: receipt, interaction_contract: interaction};
+  const next = "/interaction_contract/cli_channel/next_cli_actions";
+  const kept = initialContextReadPointers(context, [], context.goal_boundary.handoff_mode);
+  assert.ok(!kept.includes(next));
+  assert.ok(kept.includes("/interaction_contract/cli_channel/settlement_plan/ordered_steps/0/command_template"));
+  const withCli = (changed: unknown) => ({...context, interaction_contract: {...interaction, cli_channel: changed}});
+  for (const changed of [
+    {...context, heartbeat_receipt: {...receipt, turn_instance_id: "another-turn"}},
+    {...context, heartbeat_receipt: {...receipt, settlement_binding_owed: true}},
+    {...context, goal_boundary: {handoff_mode: "hard_lease"}},
+    withCli({...cli, selection_required: true}),
+    withCli({...cli, execution_preparation: {state: "claim_required"}}),
+    withCli({...cli, next_cli_actions: [...actions, "recover a separate effect"]}),
+    withCli({...cli, settlement_plan: {...plan, schema_version: "future"}}),
+  ]) assert.ok(initialContextReadPointers(changed, [], changed.goal_boundary.handoff_mode).includes(next));
 });

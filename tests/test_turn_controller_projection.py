@@ -23,7 +23,6 @@ def test_managed_current_source_uses_one_controller_call_and_rejects_modified_co
         agent_identity={"agent_id": AGENT_ID},
         selected_todo={"todo_id": TODO_ID, "text": "Advance."})
     decision["interaction_contract"]["user_channel"]["action_required"] = user_action_required
-    historical = turn_envelope.build_turn_envelope(decision)
     expected_source = turn_envelope.compose_turn_decision(decision)
     calls = []
     original = turn_envelope._turn_envelope_result
@@ -44,8 +43,6 @@ def test_managed_current_source_uses_one_controller_call_and_rejects_modified_co
     changed["interaction_contract"]["agent_channel"]["delivery_allowed"] = False
     assert current == expected_source
     journal = _failed_journal()
-    expected = _decide(journal, envelope=historical)
-    assert expected["disposition"] == ("user_action_required" if user_action_required else "wait")
     calls.clear()
     controller_calls = []
     original_runtime = loop_controller.effect_runtime_projection_result
@@ -57,7 +54,8 @@ def test_managed_current_source_uses_one_controller_call_and_rejects_modified_co
     monkeypatch.setattr(loop_controller, "effect_runtime_projection_result", record_runtime)
     actual = decide_managed_step(journal, current, goal_id=GOAL_ID,
         agent_id=AGENT_ID, turn_key=journal["turn_key"])
-    assert actual == expected
+    assert actual["disposition"] == ("user_action_required" if user_action_required else "wait")
+    assert actual["lineage"] == {"goal_id": GOAL_ID, "agent_id": AGENT_ID, "todo_id": TODO_ID}
     assert calls == []
     assert controller_calls == [("turn.controller", "managed")]
     with pytest.raises(ValueError, match="integrity"):

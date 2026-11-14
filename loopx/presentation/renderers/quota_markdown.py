@@ -352,6 +352,10 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
     from ...control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
+    if payload.get("schema_version") in ("loopx_turn_envelope_v0", "loopx_turn_envelope_v1"):
+        from .turn_envelope_markdown import render_turn_envelope_markdown
+
+        return render_turn_envelope_markdown(payload)
     quota = as_dict(payload.get("quota"))
     lines = [
         "# LoopX Quota Should Run",
@@ -804,6 +808,16 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
         )
     if payload.get("reason"):
         lines.append(f"- reason: {payload.get('reason')}")
+    if payload.get("error_code") == "quota_decision_transport_failed":
+        if code := payload.get("diagnostic_code"):
+            lines.append(f"- diagnostic_code: {markdown_scalar(code)}")
+        if turn := as_dict(payload.get("heartbeat_receipt")).get("turn_instance_id"):
+            lines.append(f"- turn_instance_id: {markdown_scalar(turn)}")
+        capture = as_dict(payload.get("captured_decision"))
+        if saved := capture.get("path"):
+            lines.append(f"- captured_decision: {markdown_scalar(saved)}")
+            if digest := capture.get("sha256"):
+                lines.append(f"- capture_sha256: {markdown_scalar(digest)}")
     handoff_readiness = as_dict(payload.get("handoff_readiness"))
     if handoff_readiness:
         lines.append(

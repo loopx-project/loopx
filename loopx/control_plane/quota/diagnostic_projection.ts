@@ -173,62 +173,109 @@ const DIAGNOSTIC_LANES = new Set([
   "other_agent_bound_user_action_items",
 ]);
 
-/** Complete contracts keep one literal copy of equal summary lanes. A reference
- * names an array in this same signed document, never a fresh Todo read. Only
- * registered lanes participate; counts, candidate collections and unknown fields
- * retain their original values. Consumers resolve before applying display caps. */
-export function resolveQuotaSummaryLanes(payload: JsonObject): JsonObject {
+const CLAIM_SCOPE_LANES = new Set(["other_agent_claimed_items", "blocked_claimed_items"]);
+
+function mapQuotaSummaryLanes(payload: JsonObject,
+    visit: (summary: JsonObject, scope: JsonObject | null, root: string, preferred: string) => JsonObject): JsonObject {
   let result = payload;
   for (const role of ["agent", "user"] as const) {
     const root = `${role}_todo_summary`, summary = jsonObject(payload[root]);
     if (!summary || summary.schema_version !== undefined && summary.schema_version !== "todo_summary_v0") continue;
-    let expanded = summary;
-    for (const lane of DIAGNOSTIC_LANES) {
-      const key = `${lane}_ref`;
-      if (!Object.hasOwn(summary, key)) continue;
-      const reference = summary[key];
-      const prefix = `$.${root}.`;
-      const owner = typeof reference === "string" && reference.startsWith(prefix)
-        ? reference.slice(prefix.length) : "";
-      if (Object.hasOwn(summary, lane) || !DIAGNOSTIC_LANES.has(owner)
-          || !Array.isArray(summary[owner]) || Object.hasOwn(summary, `${owner}_ref`)) {
-        throw new EffectRuntimeRequestError("Todo summary lane reference requires one literal array in the same summary");
-      }
-      expanded = {...expanded, [lane]: summary[owner]};
-      delete expanded[key];
-    }
-    if (expanded !== summary) result = {...result, [root]: expanded};
+    const scope = role === "agent" ? jsonObject(summary.claim_scope) : null;
+    const preferred = role === "agent" ? "first_executable_items" : "first_open_items";
+    const projected = visit(summary, scope?.schema_version === "agent_claim_scope_v0" ? scope : null, root, preferred);
+    if (projected !== summary) result = {...result, [root]: projected};
   }
   return result;
 }
 
-export function referenceQuotaSummaryLanes(payload: JsonObject,
-    identity = contextSourceIdentity(payload)): JsonObject {
-  let result = resolveQuotaSummaryLanes(payload);
-  for (const role of ["agent", "user"] as const) {
-    const root = `${role}_todo_summary`, summary = jsonObject(result[root]);
-    if (!summary || summary.schema_version !== undefined && summary.schema_version !== "todo_summary_v0") continue;
-    const owners = new Map<string, string>();
-    let shared = summary;
-    // Retain the normally visible lane first. Full-source composition shares
-    // exact arrays, including any future item fields, without selecting work.
-    const preferred = role === "agent" ? "first_executable_items" : "first_open_items";
-    for (const lane of [preferred, ...DIAGNOSTIC_LANES].filter((key, index, keys) => keys.indexOf(key) === index)) {
-      const value = summary[lane];
-      if (!Array.isArray(value) || value.length === 0 || Object.hasOwn(summary, `${lane}_ref`)) continue;
-      const encoded = identity(value, [root, lane]);
-      const owner = owners.get(encoded);
-      if (!owner) { owners.set(encoded, lane); continue; }
-      const reference = `$.${root}.${owner}`;
-      const inlineBytes = Buffer.byteLength(JSON.stringify({[lane]: value}), "utf8");
-      const referenceBytes = Buffer.byteLength(JSON.stringify({[`${lane}_ref`]: reference}), "utf8");
-      if (inlineBytes <= referenceBytes) continue;
-      shared = {...shared, [`${lane}_ref`]: reference};
-      delete shared[lane];
+function resolveSummaryLaneReferences(container: JsonObject, fields: Iterable<string>,
+    literalOwner: (address: unknown) => unknown): JsonObject {
+  let expanded = container;
+  for (const field of fields) {
+    const key = `${field}_ref`;
+    if (!Object.hasOwn(container, key)) continue;
+    const value = literalOwner(container[key]);
+    if (Object.hasOwn(container, field) || !Array.isArray(value)) {
+      throw new EffectRuntimeRequestError("Todo summary lane reference requires one literal array in the same summary");
     }
-    if (shared !== summary) result = {...result, [root]: shared};
+    if (expanded === container) expanded = {...container};
+    expanded[field] = value;
+    delete expanded[key];
   }
-  return result;
+  return expanded;
+}
+
+function literalTodoPrefix(rows: unknown, length: number): unknown[] | undefined {
+  if (!Array.isArray(rows) || length >= rows.length) return undefined;
+  const prefix = rows.slice(0, length);
+  // Object rows retain original numeric lineage when the array is sliced.
+  return prefix.every(row => jsonObject(row)?.schema_version === "todo_item_v0") ? prefix : undefined;
+}
+
+/** Complete contracts share literal arrays inside each signed summary.
+ * Claim-scope aliases may point to their enclosing summary or own scope.
+ * A slice may only name a proper prefix of the literal preferred lane. */
+export function resolveQuotaSummaryLanes(payload: JsonObject): JsonObject {
+  return mapQuotaSummaryLanes(payload, (summary, scope, root, preferred) => {
+    const prefix = `$.${root}.`;
+    const scopePrefix = `${prefix}claim_scope.`;
+    const owner = (address: unknown, allowScope: boolean): unknown => {
+      if (typeof address !== "string") return undefined;
+      if (address.startsWith(preferred + "[")) {
+        const length = /^\[0:([1-9]\d*)\]$/.exec(address.slice(preferred.length));
+        return length && !Object.hasOwn(summary, `${preferred}_ref`)
+          ? literalTodoPrefix(summary[preferred], Number(length[1])) : undefined;
+      }
+      if (!address.startsWith(prefix)) return undefined;
+      const nested = allowScope && scope && address.startsWith(scopePrefix);
+      const field = address.slice(nested ? scopePrefix.length : prefix.length);
+      const container = nested ? scope : summary;
+      const fields = nested ? CLAIM_SCOPE_LANES : DIAGNOSTIC_LANES;
+      if (!fields.has(field) || Object.hasOwn(container, `${field}_ref`)) return undefined;
+      return container[field];
+    };
+    const expanded = resolveSummaryLaneReferences(summary, DIAGNOSTIC_LANES, address => owner(address, false));
+    if (!scope) return expanded;
+    const expandedScope = resolveSummaryLaneReferences(scope, CLAIM_SCOPE_LANES, address => owner(address, true));
+    return expandedScope === scope ? expanded : {...expanded, claim_scope: expandedScope};
+  });
+}
+
+export function referenceQuotaSummaryLanes(payload: JsonObject,
+    identity = contextSourceIdentity(payload), sharePreferredPrefixes = false): JsonObject {
+  return mapQuotaSummaryLanes(resolveQuotaSummaryLanes(payload), (summary, scope, root, preferred) => {
+    const owners = new Map<string, string>();
+    // A prefix uses the coordinates of the actual input literal.
+    const leading = sharePreferredPrefixes ? jsonObject(payload[root])?.[preferred] : undefined;
+    const share = (container: JsonObject, fields: Iterable<string>, parent: string[]) => {
+      let projected = container;
+      for (const field of fields) {
+        const value = container[field];
+        if (!Array.isArray(value) || !value.length) continue;
+        const path = [...parent, field], encoded = identity(value, path);
+        const key = `${field}_ref`;
+        const prefix = literalTodoPrefix(leading, value.length);
+        const owner = owners.get(encoded) ?? (prefix && identity(prefix, [root, preferred]) === encoded
+          ? `${preferred}[0:${value.length}]` : undefined);
+        if (!owner || Buffer.byteLength(JSON.stringify({[field]: value})) <= Buffer.byteLength(JSON.stringify({[key]: owner}))) {
+          if (!owners.has(encoded)) owners.set(encoded, `$.${path.join(".")}`);
+          continue;
+        }
+        owners.set(encoded, owner);
+        if (projected === container) projected = {...container};
+        projected[key] = owner;
+        delete projected[field];
+      }
+      return projected;
+    };
+    // Keep the normally visible lane as the literal and keep existing
+    // top-level reference addresses stable for older consumers.
+    const shared = share(summary, new Set([preferred, ...DIAGNOSTIC_LANES]), [root]);
+    if (!scope) return shared;
+    const sharedScope = share(scope, CLAIM_SCOPE_LANES, [root, "claim_scope"]);
+    return sharedScope === scope ? shared : {...shared, claim_scope: sharedScope};
+  });
 }
 // The read codec adds these display fields to canonical records. Retain them
 // on visible items; they do not make a known diagnostic list a future schema.
@@ -265,7 +312,7 @@ export function quotaSummaryReferences(payload: JsonObject): JsonObject[] {
       if (DIAGNOSTIC_LANES.has(lane)) referenceRows(rows, [root, lane]);
     const scope = jsonObject(summary.claim_scope);
     if (root === "agent_todo_summary" && scope?.schema_version === "agent_claim_scope_v0")
-      for (const lane of ["other_agent_claimed_items", "blocked_claimed_items"])
+      for (const lane of CLAIM_SCOPE_LANES)
         referenceRows(scope[lane], [root, "claim_scope", lane]);
   }
   return references;
@@ -297,7 +344,7 @@ function compactSummary(summary: JsonObject, role: "agent" | "user", detail: str
     if (value.length > retained.length) omitted[key] = value.length - retained.length;
   }
   for (const [parentKey, fields] of [
-    ["claim_scope", ["other_agent_claimed_items", "blocked_claimed_items"]],
+    ["claim_scope", CLAIM_SCOPE_LANES],
     ["todo_succession_warning", ["items"]],
   ] as const) {
     const parent = jsonObject(summary[parentKey]);

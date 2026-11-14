@@ -96,7 +96,11 @@ def test_small_codec_delta_uses_cheaper_complete_native_delivery(tmp_path, monke
     event = setup(tmp_path, monkeypatch)
     payload = _payload()
     _, first = project(tmp_path, payload=payload)
-    _, projected = project(tmp_path, "warm", payload=payload)
+    directory = tmp_path / "warm"
+    directory.mkdir(mode=0o700)
+    prepared = context.prepare_codex_context(payload, directory=str(tmp_path), capture_directory=directory,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="warm")
+    projected = prepared.delivery
     assert projected["mode"] == "delta", "The counterexample must reach the codec's delta path"
     original = copy.deepcopy(projected)
     before = context._state(tmp_path)
@@ -121,6 +125,7 @@ def test_small_codec_delta_uses_cheaper_complete_native_delivery(tmp_path, monke
         observing.setattr(turn_envelope, "_turn_envelope_result", observe_index_request)
         chosen = native_context_capture_view(
             projected, tmp_path / "warm", context_directory=str(tmp_path),
+            initial_read_plan=prepared.initial_read_plan,
         )
     pages = _pages(chosen)
     assert "read_instruction" in pages[0], "Count the actual first-page guidance too"
@@ -131,7 +136,7 @@ def test_small_codec_delta_uses_cheaper_complete_native_delivery(tmp_path, monke
     assert "baseline_reference" not in chosen
     assert projected == original
     assert len(registrations) == 1
-    assert len(index_requests) == 1, "Comparing two transports must not plan the same field index twice"
+    assert not index_requests, "Both transports reuse the original native preparation's field index"
     assert chosen["field_index"] == full["field_index"]
     state = context._state(tmp_path)
     assert state["recovery"] == before["recovery"]

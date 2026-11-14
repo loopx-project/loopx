@@ -7,10 +7,35 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+
+
+_POWERSHELL_READER_WORDS = re.compile(r"'(?:''|[^'])*'|[^'\s]+")
+_POWERSHELL_DOUBLED_QUOTE = re.compile(r"(['\u2018\u2019\u201a\u201b])\1")
+_DIRECT_POWERSHELL_READER = re.compile(r"^([A-Za-z0-9_./-]+) '")
+
+
+def _reader_argv(command: str) -> list[str]:
+    """Decode the literal-only form of the generated read command into argv."""
+    direct = _DIRECT_POWERSHELL_READER.match(command)
+    if not command.startswith("& ") and not (
+        direct and (os.name == "nt" or direct[1].lower().endswith(".ps1"))
+    ):
+        return shlex.split(command)
+    # The host renderer uses '& ' only for a quoted executable. It also
+    # selects PowerShell for .ps1 on POSIX. shlex drops its doubled quotes.
+    literal_command = command.removeprefix("& ")
+    words = _POWERSHELL_READER_WORDS.findall(literal_command)
+    assert " ".join(words) == literal_command, "unexpected syntax in the generated reader command"
+    return [
+        _POWERSHELL_DOUBLED_QUOTE.sub(r"\1", word[1:-1])
+        if word.startswith("'") and word.endswith("'") else word
+        for word in words
+    ]
 
 
 def budget_fixture_path(root: Path) -> Path:
@@ -33,15 +58,23 @@ def stable_budget_fixture_root(root: Path):
         shutil.rmtree(fixture)
 
 
-def read_cli_context_for_oracle(text: str) -> tuple[str, dict[str, int]]:
+def read_cli_context_for_oracle(text: str, *, output_format: str = "json") -> tuple[str, dict[str, int]]:
     """Read a fixture's pinned recovery without another decision or admission.
 
     Full traversal is a test oracle, not a model read requirement or retention
     claim. Keep its cost separate from the original, untouched CLI stdout.
     """
-    payload = json.loads(text)
+    body = text
+    if output_format == "markdown":
+        if not text.startswith("# LoopX Turn Envelope\n") or "```json\n" not in text:
+            return text, {}
+        body = text.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+    payload = json.loads(body)
+    if output_format == "markdown" and (not isinstance(payload, dict) or payload.get("schema_version")
+            not in ("loopx_turn_envelope_v1", "context_capture_navigation_v1")):
+        return text, {}  # A historical narrative's work-context block is not its carrier.
     if not isinstance(payload, dict) or payload.get("schema_version") != "context_capture_navigation_v1":
-        return text, {}
+        return body, {}
     body, calls, reader_bytes = read_pinned_cli_body(payload["recovery"]["command"])
     navigation_bytes = len(text.encode("utf-8"))
     return body, {
@@ -61,7 +94,7 @@ def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
     reader_bytes = calls = 0
     identity = total = digest = None
     while True:
-        words = shlex.split(command)
+        words = _reader_argv(command)
         quota = words.index("quota")
         if words[quota + 1] != "context-read":
             raise AssertionError("context recovery must be a read, never another guard")
@@ -75,6 +108,10 @@ def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
         if identity is None:
             identity = scope
         assert scope == identity, ("context continuation changed its source or reader route", scope, identity)
+        if words[0].lower().endswith(".ps1"):
+            from loopx.command_invocation import command_argv
+
+            words = command_argv(Path(words[0]), words[1:])
         result = subprocess.run(words, capture_output=True, text=True, encoding="utf-8",
             errors="strict", check=False, timeout=30)
         assert result.returncode == 0, result.stdout + result.stderr
@@ -100,11 +137,10 @@ def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
 def measure_cli_context_for_oracle(text, *, output_format, measure):
     """Keep body semantics and both observable output costs in one receipt."""
     measurement = measure(text, output_format=output_format)
-    if output_format != "json":
-        return measurement
-    body, cost = read_cli_context_for_oracle(text)
-    if cost:
+    body, cost = read_cli_context_for_oracle(text, output_format=output_format)
+    if cost or body != text:
         measurement["resolved_payload"] = json.loads(body)
-        measurement["context_body"] = measure(body, output_format=output_format)
+    if cost:
+        measurement["context_body"] = measure(body, output_format="json")
         measurement["context_delivery"] = cost
     return measurement

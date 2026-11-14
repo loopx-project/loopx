@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -141,15 +142,20 @@ def test_progress_cli_reads_policy_with_context_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
     context_delivery: str,
 ) -> None:
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
     tmp_path = tmp_path.resolve()
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     native, captures = tmp_path / "native", tmp_path / "captures"
     native.mkdir(mode=0o700)
     captures.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "replan-progress-session")
+    codex_context_hook(str(native), {"session_id": "replan-progress-session",
+        "cwd": str(fixture["project"]), "hook_event_name": "SessionStart", "source": "startup"})
     try:
         presented = call_progress_cli(
-            fixture, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            fixture, "quota", "should-run", "--codex-app", "--complete-turn", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", TURN, "--todo-id", TODO,
             "--context-delivery", context_delivery,
             "--codex-context-dir", str(native), "--decision-output-root", str(captures),
@@ -165,6 +171,89 @@ def test_progress_cli_reads_policy_with_context_delivery(
         assert (identity["goal_id"], identity["agent_id"]) == (GOAL, AGENT)
         assert identity["todo_id"] == TODO
         assert policy["execution_obligation"]["must_attempt_work"] is True
+        [original] = captures.glob("decision-*/decision.json")
+        source = json.loads(original.read_bytes())
+        assert source["heartbeat_receipt"] == policy["heartbeat_receipt"]
+        if context_delivery == "on":
+            view = read_cli_policy_payload(json.dumps(presented), returncode=0, unwrap_complete_source=False)
+            packet = view["replan_action_packet"]
+            reader = shlex.split(packet["review"])
+            assert reader[reader.index("--decision-file") + 1] == str(original)
+            assert "replan_context" not in view["autonomous_replan_obligation"]
+            assert "settlement_plan" not in view["interaction_contract"]["cli_channel"]
+        else:
+            assert policy["replan_action_packet"] == source["replan_action_packet"]
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="Requires PowerShell 7")
+@pytest.mark.parametrize(("provider", "complete", "python_route"), [
+    pytest.param("file", False, False, id="launcher-file"),
+    pytest.param("sqlite", True, False, id="launcher-sqlite"),
+    pytest.param("sqlite", True, True, id="windows-python-sqlite",
+                 marks=pytest.mark.skipif(os.name != "nt", reason="Native Windows Python route")),
+])
+def test_replan_stage_commands_run_verbatim_in_powershell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, complete: bool, python_route: bool,
+) -> None:
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    workspace = tmp_path / "reader's O’Neil workspace"
+    workspace.mkdir()
+    fixture = make_progress_cli_fixture(workspace, provider, "advanced")
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    powershell = shutil.which("pwsh")
+    assert powershell is not None
+
+    def run(*args: str) -> dict:
+        result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", *args],
+            cwd=fixture["project"], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    try:
+        opening_args = ["--format", "json",
+            "--registry", str(fixture["registry"]), "--runtime-root", str(fixture["runtime"]),
+            "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--context-delivery", "on", "--delta-delivery", "off",
+            *(["--complete-turn"] if complete else [])]
+        if python_route:
+            result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", *opening_args],
+                cwd=fixture["project"], capture_output=True, encoding="utf-8", timeout=60)
+            assert result.returncode == 0, (result.stdout, result.stderr)
+            opening = json.loads(result.stdout)
+        else:
+            launcher = workspace / "loopx.ps1"
+            checkout = Path(__file__).resolve().parents[2]
+            shutil.copyfile(checkout / "scripts/loopx.ps1", launcher)
+            launcher.with_name("loopx-current-release.json").write_text(json.dumps({
+                "release_root": str(checkout), "python": sys.executable,
+            }), encoding="utf-8")
+            monkeypatch.delenv("LOOPX_CURRENT_RELEASE_FILE", raising=False)
+            opening = run("-File", str(launcher), "--cli-bin", str(launcher), *opening_args)
+        if os.name == "nt":
+            from tests.control_plane.windows_private_acl import assert_private_acl
+
+            reference = Path(opening["recovery"]["reference_file"])
+            capture = Path(json.loads(reference.read_text(encoding="utf-8"))["path"])
+            for leaf in (reference, capture, capture.parent, capture.parent.parent):
+                assert_private_acl(leaf)
+        command = opening["first_read_command"]
+        body = bytearray()
+        while command:
+            page = run("-Command", command)
+            assert page["ok"] and page["offset"] == len(body)
+            body.extend(page["content"].encode("utf-8"))
+            command = page.get("next_command")
+            assert page["next_offset"] == (len(body) if command else None)
+        assert page["eof"] and page["total_bytes"] == len(body)
+        command = selected_context_values(body.decode("utf-8"))["/replan_action_packet/review"]
+        review = run("-Command", command)
+        writeback = run("-Command", review["next"]["writeback"])
+        assert review["stage"] == "review" and writeback["stage"] == "writeback"
+        assert review["context_id"] == writeback["context_id"]
+        assert review["source_hash"] == writeback["source_hash"]
     finally:
         restart_effect_runtime(wait_for_exit=True)
 
@@ -197,22 +286,49 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
     journal.mkdir(mode=0o700)
     try:
         code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-            "quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+            "quota", "should-run", "--codex-app", "--complete-turn", "--goal-id", GOAL, "--agent-id", AGENT,
             "--todo-id", TODO, "--turn-instance-id", TURN, "--decision-output-dir", str(capture),
             "--context-delivery", "on", "--delta-delivery", "auto", "--codex-context-dir", str(journal),
             "--prepared-capture-reference", "--defer-context-presentation"])
         output = capsys.readouterr().out
         assert code == 0, output
-        captured = (capture / "decision.json").read_bytes()
-        assert json.loads(output)["capture_sha256"] == hashlib.sha256(captured).hexdigest()
+        original = capture / "decision.json"
+        captured = original.read_bytes()
+        digest = hashlib.sha256(captured).hexdigest()
+        assert json.loads(output)["capture_sha256"] == digest
         source = json.loads(captured)
         assert source["replan_action_packet"]["decision"] == "replan_required"
         assert source["reward_memory_recall"]["status"] == "applied" and memory.calls == 1
         projected = project_turn_context(source)
         assert projected["reward_memory_recall"]["context"]["guidance"]
-        relocated = {**source, "replan_read_path": str(tmp_path / "other-location.json")}
-        assert project_turn_context(relocated) == projected
-        changed = deepcopy(relocated)
+        authority = _authority(fixture)
+        moved = original.rename(tmp_path / "other-location.json")
+        response = call_progress_cli(fixture, "quota", "context-project", "--codex-app",
+            "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--capture-file", str(moved), "--capture-sha256", digest, "--initial-read",
+            "--context-delivery", "on", "--delta-delivery", "auto", "--codex-context-dir", str(journal))
+        assert response["navigation"]["mode"] == "full"
+        assert "baseline_reference" not in response["navigation"]
+        view = read_cli_policy_payload(json.dumps(response), returncode=0, unwrap_complete_source=False)
+        assert view["reward_memory_recall"] == source["reward_memory_recall"]
+        assert view["heartbeat_receipt"] == source["heartbeat_receipt"]
+        reader = shlex.split(view["replan_action_packet"]["review"])
+        assert reader[reader.index("--decision-file") + 1] == str(moved)
+        review = call_progress_cli(fixture, *reader[reader.index("quota"):])
+        assert review["source_hash"] == source["contract_binding"]["content_hash"]
+        writer = shlex.split(review["next"]["writeback"])
+        writeback = call_progress_cli(fixture, *writer[writer.index("quota"):])
+        assert writeback["writeback"]["settlement_plan"]["identity"] == (
+            source["heartbeat_receipt"]["settlement_identity"])
+        assert moved.read_bytes() == captured and not original.exists()
+        assert project_turn_context(json.loads(moved.read_bytes())) == projected
+        assert _authority(fixture) == authority and memory.calls == 1
+        assert not (journal / "session.json").exists()
+
+        # Relocating the file does not edit the signed source. Changing either
+        # its recorded path or executable settlement must reject scoped recall.
+        assert project_turn_context({**source, "replan_read_path": str(moved)}) == {}
+        changed = deepcopy(source)
         plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
         plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
         assert project_turn_context(changed) == {}
@@ -221,12 +337,22 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("native", [False, True], ids=["stateless", "native"])
+def test_progressive_replan_uses_the_saved_decision(tmp_path, monkeypatch, provider, native):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     capture = tmp_path / "capture"
     scope = ("--codex-app", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
     delivery = ("--context-delivery", "on", "--delta-delivery", "off")
+    if native:
+        from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+        journal = tmp_path / "native"
+        journal.mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_THREAD_ID", "saved-replan-session")
+        codex_context_hook(str(journal), {"session_id": "saved-replan-session",
+            "cwd": str(fixture["project"]), "hook_event_name": "SessionStart", "source": "startup"})
+        delivery = ("--context-delivery", "on", "--delta-delivery", "auto", "--codex-context-dir", str(journal))
 
     def read_stage(command, status=0):
         result = subprocess.run(command, capture_output=True, text=True, timeout=30)
@@ -252,12 +378,13 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
         return shlex.split(fields["/replan_action_packet/review"])
 
     try:
-        initial = call_progress_cli(fixture, "quota", "should-run", *scope, "--todo-id", TODO,
+        initial = call_progress_cli(fixture, "quota", "should-run", *scope, "--complete-turn", "--todo-id", TODO,
             "--decision-output-dir", str(capture), *delivery)
         original = capture / "decision.json"
         raw = original.read_bytes()
         source = json.loads(raw)
         receipt = source["heartbeat_receipt"]
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
         authority = _authority(fixture)
         review_command = review_for(read_pages(read_stage(shlex.split(initial["first_read_command"]))))
         assert review_command[review_command.index("--decision-file") + 1] == str(original)
@@ -275,26 +402,53 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
         recovered_path = original.with_name("recovered.json")
         original.rename(recovered_path)
-        saved = ("quota", "context-project", *scope, "--capture-file", str(recovered_path), "--initial-read")
         digest = hashlib.sha256(raw).hexdigest()
-        first = call_progress_cli(fixture, *saved, *delivery, "--capture-sha256", digest,
+        saved = ("quota", "context-project", *scope, "--capture-file", str(recovered_path))
+        if native:
+            navigation = call_progress_cli(fixture, *saved, *delivery, "--capture-sha256", digest,
+                "--max-page-output-bytes", "8192")
+            detached_review = review_for(read_pages(read_stage(shlex.split(navigation["first_read_command"])), 8192))
+        first = call_progress_cli(fixture, *saved, "--initial-read", *delivery, "--capture-sha256", digest,
             "--max-page-output-bytes", "8192")
-        assert not first["eof"] and list(first).index("content") < list(first).index("navigation")
+        assert list(first).index("content") < list(first).index("navigation")
         nav = first["navigation"]
         assert nav["mode"] == "full" and "top-level content" in nav["instruction"]
         body = read_pages(first, 8192)
         assert read_pages(read_stage(shlex.split(nav["first_read_command"])), 8192) == body
         recovered_review = review_for(body)
         assert recovered_review[recovered_review.index("--decision-file") + 1] == str(recovered_path)
-        assert read_stage(recovered_review)["source_hash"] == review["source_hash"]
-        recovered_review[recovered_review.index("--source-hash") + 1] = "sha256:" + "0" * 64
-        refused = read_stage(recovered_review, status=1)
+        assert recovered_review[recovered_review.index("--capture-sha256") + 1] == digest
+        if native:
+            assert detached_review == recovered_review
+        recovered = read_stage(recovered_review)
+        assert recovered["source_hash"] == review["source_hash"]
+        recovered_writer = shlex.split(recovered["next"]["writeback"])
+        assert recovered_writer[recovered_writer.index("--capture-sha256") + 1] == digest
+        assert read_stage(recovered_writer)["writeback"]["settlement_plan"]["identity"] == receipt["settlement_identity"]
+        wrong_source = recovered_review.copy()
+        wrong_source[wrong_source.index("--source-hash") + 1] = "sha256:" + "0" * 64
+        refused = read_stage(wrong_source, status=1)
         assert refused["ok"] is False and "matching source hash" in refused["reason"]
-        wrong_capture = call_progress_cli(fixture, *saved, *delivery, "--capture-sha256", "0" * 64, expected_code=1)
+        try:
+            recovered_path.write_bytes(raw + b" ")
+            for reader in (recovered_review, recovered_writer):
+                refused = read_stage(reader, status=1)
+                assert refused["ok"] is False and "capture digest mismatch" in refused["reason"]
+        finally:
+            recovered_path.write_bytes(raw)
+        wrong_capture = call_progress_cli(fixture, *saved, "--initial-read", *delivery,
+            "--capture-sha256", "0" * 64, expected_code=1)
         assert not wrong_capture["ok"] and "content" not in wrong_capture
-        disabled = call_progress_cli(fixture, *saved, "--context-delivery", "off", "--delta-delivery", "off",
-            "--capture-sha256", digest, expected_code=1)
+        disabled = call_progress_cli(fixture, *saved, "--initial-read", "--context-delivery", "off",
+            "--delta-delivery", "off", "--capture-sha256", digest, expected_code=1)
         assert not disabled["ok"] and "content" not in disabled
+        public_copy = recovered_path.with_name("manual-copy.json")
+        public_copy.write_bytes(raw)
+        public_copy.chmod(0o644)
+        compatible = call_progress_cli(fixture, "quota", "context-project", *scope,
+            "--capture-file", str(public_copy), "--initial-read", *delivery, "--capture-sha256", digest)
+        assert read_stage(review_for(read_pages(compatible)))["source_hash"] == review["source_hash"]
+        assert public_copy.stat().st_mode & 0o077
         assert recovered_path.read_bytes() == raw
         assert _authority(fixture) == authority
     finally:
@@ -303,18 +457,20 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("envelope", [(), ("--complete-turn",)], ids=["quota", "complete"])
-def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, provider, envelope):
+def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, capsys, provider, envelope):
+    from loopx.control_plane.turn_driver import decision_capture
+    from loopx.entrypoint import main
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    # An installed CLI can carry a long, quoted registry and runtime path.
-    root = tmp_path / ("source with apostrophe's permission " + "x" * 110)
-    root.mkdir()
-    fixture = make_progress_cli_fixture(root, provider, "advanced")
+    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     scope = ("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, *envelope)
 
-    def read(command, expected=0):
+    def read(command, expected=0, output_limit=None):
         result = subprocess.run(shlex.split(command), cwd=fixture["project"], capture_output=True,
             text=True, timeout=30)
         assert result.returncode == expected, result.stdout + result.stderr
+        if output_limit is not None:
+            assert len(result.stdout.encode()) <= output_limit
         return json.loads(result.stdout)
 
     try:
@@ -328,7 +484,7 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         first = read(opening["first_read_command"])
         assert first["eof"]
         selected = selected_context_values(first["content"])
-        entry = read_cli_policy_payload(json.dumps(opening), returncode=0)
+        entry = read_cli_policy_payload(json.dumps(opening), returncode=0, unwrap_complete_source=False)
         packet = entry["replan_action_packet"]
         review_command = selected["/replan_action_packet/review"]
         assert review_command == packet["review"]
@@ -354,22 +510,125 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         assert writer["obligation_id"] == review["obligation_id"] == packet["obligation_id"]
         assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
         assert writer["allowed_terminal"] == source["replan_action_packet"]["allowed_terminal"]
-        original_actions = source["interaction_contract"]["cli_channel"]["next_cli_actions"]
-        original_writer = next(command for command in original_actions if "refresh-state" in shlex.split(command))
-        delivered_writer = next(command for command in writer["writeback"]["next_cli_actions"]
-                                if "refresh-state" in shlex.split(command))
-        assert len(original_writer) > 420
-        argv = shlex.split(delivered_writer)
-        assert argv == shlex.split(original_writer)
-        assert "--turn-instance-id" not in argv
+
+        recovery_root = path.parent / "context-delivery"
+        prior_recoveries = set(recovery_root.glob("recovery-*"))
+        for limit in (80, 96, 256, 400):
+            denied = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
+            assert denied["ok"] is False and "command" not in denied
+            reason = denied["reason"].lower()
+            assert "budget" in reason and "retry" in reason and "read" in reason
+        # Below the compact reason, preserve the process error and diagnostic
+        # without emitting a partial JSON response.
+        minimal_failure = b'{"ok":false}' + os.linesep.encode()
+        for limit in (len(minimal_failure) - 1, len(minimal_failure)):
+            args = shlex.split(f"{writer_command} --max-page-output-bytes {limit}")
+            denied = subprocess.run(args, cwd=fixture["project"], capture_output=True, timeout=30)
+            assert denied.returncode == 1 and len(denied.stdout) <= limit
+            assert b"output budget" in denied.stderr
+            assert denied.stdout == (minimal_failure if limit == len(minimal_failure) else b"")
+
+        # Exercise the production printer with CRLF even on a POSIX test host.
+        writer_argv = shlex.split(writer_command)
+        cli_args = writer_argv[writer_argv.index("--format"):]
+        crlf_cli = (
+            "import os, sys; from loopx.entrypoint import main; "
+            "os.linesep = '\\r\\n'; sys.stdout.reconfigure(newline=os.linesep); raise SystemExit(main())"
+        )
+        for limit in (13, 14, 77):
+            denied = subprocess.run([sys.executable, "-c", crlf_cli, *cli_args, "--max-page-output-bytes", str(limit)],
+                cwd=fixture["project"], capture_output=True, timeout=30)
+            assert denied.returncode == 1 and len(denied.stdout) <= limit
+            assert b"output budget" in denied.stderr
+            if limit == 13:
+                assert denied.stdout == b""
+            else:
+                assert denied.stdout.endswith(b"\r\n") and json.loads(denied.stdout)["ok"] is False
+        assert set(recovery_root.glob("recovery-*")) == prior_recoveries
+
+        moved = path.with_name("unavailable-source.json")
+        path.rename(moved)
+        try:
+            missing = subprocess.run(shlex.split(f"{writer_command} --max-page-output-bytes 80"),
+                cwd=fixture["project"], capture_output=True, text=True, timeout=30)
+            assert missing.returncode == 1 and len(missing.stdout.encode()) <= 80
+            refusal = json.loads(missing.stdout)
+            assert refusal["ok"] is False and "stderr" in refusal["reason"]
+            assert str(path) in missing.stderr
+        finally:
+            moved.rename(path)
+
+        output_limit = 1450
+        bounded = read(f"{writer_command} --max-page-output-bytes {output_limit}", output_limit=output_limit)
+        assert bounded["source_hash"] == writer["source_hash"]
+        published_recoveries = set(recovery_root.glob("recovery-*"))
+        assert len(published_recoveries - prior_recoveries) == 1
+        denied = read(f"{writer_command} --max-page-output-bytes 400", expected=1, output_limit=400)
+        assert denied["ok"] is False and "command" not in denied
+        assert set(recovery_root.glob("recovery-*")) == published_recoveries
+
+        write_capture = decision_capture.write_decision_capture
+        failed_captures = []
+
+        def fail_after_capture(destination, payload):
+            digest = write_capture(destination, payload)
+            if destination.name == "required-context.json" and destination.parent.parent == recovery_root:
+                assert hashlib.sha256(destination.read_bytes()).hexdigest() == digest
+                failed_captures.append(destination)
+                raise OSError("could not finish publishing the private capture")
+            return digest
+
+        with monkeypatch.context() as fault:
+            fault.setattr(decision_capture, "write_decision_capture", fail_after_capture)
+            fault.chdir(fixture["project"])
+            for _ in range(2):
+                assert main([*cli_args, "--max-page-output-bytes", str(output_limit)]) == 1
+                stdout = capsys.readouterr().out
+                assert len(stdout.encode()) <= output_limit
+                rejected = json.loads(stdout)
+                assert rejected["ok"] is False and "command" not in rejected
+                assert "repair private capture storage" in rejected["reason"].lower()
+        assert len(failed_captures) == 2
+        assert set(recovery_root.glob("recovery-*")) == published_recoveries
+        assert path.read_bytes() == raw
+        assert _authority(fixture) == authority
+
+        page_command = bounded["command"]
+        body = bytearray()
+        while True:
+            page = read(page_command, output_limit=output_limit)
+            assert page["offset"] == len(body)
+            body.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(body) == page["total_bytes"]
+                break
+            assert page["content"] and page["next_offset"] == len(body)
+            page_command = page["next_command"]
+        fields = json.loads(body)["selections"]
+        assert len(fields) == len(writer)
+        restored = {field["pointer"].removeprefix("/"): field["value"] for field in fields}
+        assert restored == writer
+
+        # The staged writeback is the executable source for this observation.
+        # Long launcher paths and quoted values must survive the presentation.
+        original_refresh = next(action for action in source["interaction_contract"]["cli_channel"]["next_cli_actions"]
+                                if "refresh-state" in shlex.split(action))
+        staged_refresh = next(action for action in restored["writeback"]["next_cli_actions"]
+                              if "refresh-state" in shlex.split(action))
+        assert len(original_refresh.encode()) > 420
+        staged_argv = shlex.split(staged_refresh)
+        assert staged_argv == shlex.split(original_refresh)
+        assert "--turn-instance-id" not in staged_argv
         values = {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
                   "<surface-id>": "surface-existing", "<hypothesis-id>": "hypothesis-existing",
                   "<probe-kind>": "probe-independent", "<evidence-id>": "evidence-current"}
+        command = [sys.executable, "-m", "loopx.entrypoint",
+            *[values.get(arg, arg) for arg in staged_argv[1:]], "--dry-run", "--no-global-sync",
+            "--suppress-external-sinks"]
         index_before = fixture["index"].read_bytes()
-        dry_run = read(shlex.join([sys.executable, "-m", "loopx.entrypoint",
-            *[values.get(arg, arg) for arg in argv[1:]], "--dry-run", "--no-global-sync",
-            "--suppress-external-sinks"]))
-        assert dry_run["ok"] is True
+        dry_run = subprocess.run(command, cwd=fixture["project"], capture_output=True, text=True, timeout=30)
+        assert dry_run.returncode == 0, (dry_run.stdout, dry_run.stderr)
+        assert json.loads(dry_run.stdout)["ok"] is True
         assert fixture["index"].read_bytes() == index_before
 
         # Even a byte-only change that keeps the decoded object identical
@@ -379,6 +638,11 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
             for command in (packet["review"], writer_command):
                 rejected = read(command, expected=1)
                 assert rejected["ok"] is False and "capture digest mismatch" in rejected["reason"]
+            for limit in (80, 96, 256):
+                rejected = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
+                assert rejected["ok"] is False and "command" not in rejected
+                reason = rejected["reason"].lower()
+                assert all(word in reason for word in ("digest", "restore", "do not rerun admission"))
         finally:
             path.write_bytes(raw)
         assert read(writer_command) == writer
@@ -548,10 +812,11 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
     def call(*args: str, expected_code: int = 0) -> dict:
         return call_progress_cli(fixture, *args, expected_code=expected_code)
 
-    def guard(turn: str, *, todo: str | None = TODO) -> dict:
-        return call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+    def guard(turn: str, *, todo: str | None = TODO, capture: Path | None = None) -> dict:
+        return call("quota", "should-run", "--codex-app", "--complete-turn", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", turn,
-            *(["--todo-id", todo] if todo else []), )
+            *(["--todo-id", todo] if todo else []),
+            *(["--decision-output-dir", str(capture)] if capture is not None else []))
 
     def spend(turn: str, *, todo: str | None = TODO, obligation: str | None = None) -> dict:
         return call("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
@@ -580,7 +845,8 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
         call("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO,
             "--text", complete_scope)
         guard(TURN, todo=None)
-        admitted = guard(TURN)
+        capture = tmp_path / "original-decision"
+        admitted = guard(TURN, capture=capture)
         obligation = admitted["autonomous_replan_obligation"]
         assert [item["kind"] for item in obligation["triggers"]] == ["typed_progress_repeat"]
         assert "fresh_vision_path_outcome" in obligation["replan_context"]["uncovered_frontier"]["required_any_of"]
@@ -592,7 +858,46 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
 
         control = admitted["replan_action_packet"]["stride_control"]
         assert control["review_reference_limit"] == 3
-        decision = {**control["minimal_example"], "basis": "unexplained_gap", "action": "verify",
+        captured = capture / "decision.json"
+        source = json.loads(captured.read_bytes())
+        original_bytes = captured.read_bytes()
+        def read_generated(command):
+            words = shlex.split(command)
+            return call(*words[words.index("quota"):])
+
+        projected = call("quota", "context-project", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--turn-instance-id", TURN, "--capture-file", str(captured),
+            "--capture-sha256", hashlib.sha256(original_bytes).hexdigest(), "--initial-read",
+            "--context-delivery", "on", "--delta-delivery", "off", "--max-page-output-bytes", "64000")
+        content = []
+        while True:
+            content.append(projected["content"])
+            if projected["eof"]:
+                break
+            projected = read_generated(projected["next_command"])
+        review_path = "/replan_action_packet/review"
+        review_command = next(row["value"] for row in json.loads("".join(content))["selections"]
+                              if row["pointer"] == review_path)
+        review = read_generated(review_command)
+        writer = read_generated(review["next"]["writeback"])
+        plan = writer["writeback"]["settlement_plan"]
+        index, step = next((i, step) for i, step in enumerate(plan["ordered_steps"])
+                           if step["kind"] == "durable_writeback")
+        authoring = step["vision_authoring"]
+        assert writer["writeback_contract"]["vision_authoring_ref"] == (
+            f"$.writeback.settlement_plan.ordered_steps[{index}].vision_authoring")
+        assert "vision_authoring" not in writer["writeback_contract"]
+        assert "minimal_example" not in writer["stride_control"]
+        assert authoring["total_text_limit"] == 1800
+        assert "shared" in authoring["authoring_hint"] and "stride_decision" in authoring["authoring_hint"]
+        example = authoring["minimal_example"]
+        assert example["stride_decision"] == control["minimal_example"]
+        assert plan["identity"] == source["heartbeat_receipt"]["settlement_identity"]
+        assert captured.read_bytes() == original_bytes and fixture["index"].read_bytes() == original_index
+        historical = read_generated(review["next"]["writeback"].replace("--context-delivery on", "--context-delivery off"))
+        assert historical["stride_control"]["minimal_example"] == control["minimal_example"]
+        assert "vision_authoring" in historical["writeback_contract"]
+        decision = {**example["stride_decision"], "basis": "unexplained_gap", "action": "verify",
             "axes": {
                 "work_slice": {"plan": "Run and compare three complete assignment methods.",
                                "reason": "Repeated local changes have not resolved the cost gap."},
@@ -614,7 +919,7 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
             decision["explore_review"] = {"revision": basis["revision"], "disposition": "used",
                 "considered_refs": [choice["finding_id"]], "selected_candidate": choice,
                 "reason": "Use the recorded outcome to compare mechanisms within the original unfinished task."}
-        packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        packet = {**example,
             "vision_patch": {"acceptance_summary": "The original minimum-cost validation remains open."},
             "path_delta": {"outcome": "continue", "prior_assumption": "Local changes can resolve the gap.",
                 "observed_reality": "Repeated observations do not establish that explanation.",
@@ -627,6 +932,18 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
             "--todo-id", TODO, "--turn-instance-id", TURN, "--agent-vision-json", str(vision),
             "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
             "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks")
+        oversized = {**packet,
+            "vision_patch": {**packet["vision_patch"], "vision_summary": "Verified outcome. " * 22,
+                             "role_scope": "Keep the original scope. " * 10},
+            "path_delta": {**packet["path_delta"], "prior_assumption": "A gap remains. " * 20,
+                           "observed_reality": "The check was inconclusive. " * 11}}
+        current_state = fixture["state"].read_bytes()
+        vision.write_text(json.dumps(oversized))
+        over_limit = call(*refresh_args, expected_code=1)
+        assert "total_agent_vision" in over_limit["error"] and "limit is 1800" in over_limit["error"]
+        assert all(f"{field}=" in over_limit["error"] for field in ("vision_patch", "path_delta", "stride_decision"))
+        assert fixture["state"].read_bytes() == current_state and fixture["index"].read_bytes() == original_index
+        vision.write_text(json.dumps(packet))
         if comparison_binding:
             # Reuse the admitted current context, but falsify only the source
             # digest. The typed progress exit must not hide this mismatch.

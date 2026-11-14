@@ -13,24 +13,62 @@ from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decisi
 from loopx.control_plane.turn_driver.host_candidate import (
     complete_host_input, extract_turn_authority, extract_turn_work_identity,
 )
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.control_plane.test_turn_host_decision_capture import (
     complete_host_request as complete_host_request,
 )
 
 
-def _captured_request(original, tmp_path):
-    request, source = original
-    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=source,
+def _captured_request(source, tmp_path):
+    plan = build_loopx_turn_plan(source,
         host="generic-cli", execution_mode="isolated-headless", turn_instance_id="complete-wire")
     plan = prepare_turn_decision_capture(plan, journal_path=tmp_path / "wire" / "journal.json",
         decision=source, existing_journal=False)
     return build_loopx_turn_host_request(plan)
 
 
+@pytest.mark.parametrize("field", ["work_contract", "source_decision_hash", "fixture_context"])
+@pytest.mark.parametrize("location", ["context_fields", "result_fields"])
+def test_optional_context_preserves_the_complete_host_source(
+    complete_host_request, field, location,
+):
+    from loopx.control_plane.capability_hooks import (
+        TurnContextHookRegistration, dispatch_turn_context_hooks, project_turn_context,
+    )
+
+    _, contract = complete_host_request
+    plan = build_loopx_turn_plan(contract, host="generic-cli",
+        execution_mode="isolated-headless", turn_instance_id="context-source-boundary")
+    ordinary = build_loopx_turn_host_request(plan)
+    result = {"readback": {"fixture_readback": {}}, "context_fields": {},
+              "instructions": [], "result_fields": {}}
+    result[location] = {field: ("optional advice" if location == "context_fields"
+                               else {"type": "string", "maxLength": 240})}
+    registration = TurnContextHookRegistration(
+        "fixture.context", "fixture", ("fixture_readback",), lambda: deepcopy(result),
+    )
+    dispatch_turn_context_hooks(plan, (registration,))
+    request = build_loopx_turn_host_request(plan)
+    assert request["work_contract"] == ordinary["work_contract"]
+    assert request["source_decision_hash"] == ordinary["source_decision_hash"]
+    assert request["turn_key"] == ordinary["turn_key"]
+    if field == "fixture_context":
+        projected = project_turn_context(plan)
+        if location == "context_fields":
+            assert field in projected
+        else:
+            assert field in projected["capability_result_fields"]
+        assert "turn_context_hook_failures" not in plan
+    else:
+        assert plan["turn_context_hook_failures"] == [
+            {"hook_id": "fixture.context", "error_code": "context_hook_failed"}]
+        assert project_turn_context(plan) == {}
+
+
 def test_complete_wire_roundtrip_has_one_source_and_original_readers(complete_host_request, tmp_path):
     from loopx.control_plane.turn_driver.codex_cli import _prompt
 
-    internal = _captured_request(complete_host_request, tmp_path)
+    internal = _captured_request(complete_host_request[1], tmp_path)
     legacy, _ = complete_host_request
     before = deepcopy(internal)
     wire = complete_host_input(internal)
@@ -44,7 +82,9 @@ def test_complete_wire_roundtrip_has_one_source_and_original_readers(complete_ho
     assert extract_turn_work_identity(wire) == extract_turn_work_identity(legacy)
     assert extract_turn_authority(wire)["primary_action"] == extract_turn_authority(legacy)["primary_action"]
     rendered = json.loads(_prompt(wire).split("Turn request:\n", 1)[1])
-    assert rendered == wire
+    assert_host_task_context(rendered, wire["work_contract"])
+    assert rendered["detail_ref"] == wire["detail_ref"]
+    assert rendered["turn_key"] == wire["turn_key"]
     assert internal == before
 
 
@@ -95,7 +135,9 @@ def test_open_goal_acceptance_judgment_keeps_its_read_audit(
         assert "vision_continuation_audit" not in instructions
     assert "Do not write LoopX state" in instructions
     assert "owns those effects" in instructions
-    assert json.JSONDecoder().raw_decode(encoded)[0] == wire
+    model_input = json.JSONDecoder().raw_decode(encoded)[0]
+    assert_host_task_context(model_input, wire["work_contract"])
+    assert model_input["detail_ref"] == wire["detail_ref"]
     assert request == before
 
 
@@ -106,7 +148,7 @@ def test_complete_host_keeps_notification_and_execution_boundaries(
     from loopx.control_plane.turn_driver.codex_cli import _prompt
     from loopx.control_plane.turn_driver.host_candidate import render_prompt
 
-    request = _captured_request(complete_host_request, tmp_path)
+    request = _captured_request(complete_host_request[1], tmp_path)
     wire = complete_host_input(request)
     prompt = (_prompt(request) if host == "codex"
               else render_prompt(extract_turn_authority(request), allow_completion=False))
@@ -118,12 +160,14 @@ def test_complete_host_keeps_notification_and_execution_boundaries(
     assert "alternatives and capability intents do not override admission or scope" in instructions
     assert "Do not write LoopX state" in instructions
     assert "owns those effects" in instructions
-    assert json.JSONDecoder().raw_decode(encoded)[0] == wire
+    model_input = json.JSONDecoder().raw_decode(encoded)[0]
+    assert_host_task_context(model_input, wire["work_contract"])
+    assert model_input["detail_ref"] == wire["detail_ref"]
 
 
 def test_private_plan_lineage_is_not_a_host_wire(complete_host_request):
     request, source = complete_host_request
-    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=source,
+    plan = build_loopx_turn_plan(source,
         host="generic-cli", execution_mode="isolated-headless", turn_instance_id="private-plan")
     assert turn_host_lineage(plan) == turn_host_lineage(request)
     with pytest.raises(ValueError, match="host request schema"):
@@ -174,6 +218,24 @@ def test_status_readback_is_independent_of_executable_host_source(
         # An observation of provider status cannot authorize a Host or advice.
         with pytest.raises((ValueError, RuntimeError)):
             build_loopx_turn_host_request(plan)
+
+
+def test_preparation_reads_checked_identity_without_an_executor_adapter(complete_host_request):
+    legacy, source = complete_host_request
+    before = deepcopy(source)
+    request = {"work_contract": source}
+    assert turn_host_lineage(request) == turn_host_lineage(legacy)
+    # Identity facts do not make this internal preparation argument a Host wire.
+    with pytest.raises((ValueError, RuntimeError)):
+        complete_host_input(request)
+    for damaged in (None, {}, {**source, "reason": "changed after capture"},
+                    {**source, "schema_version": "unsupported_future_version"}):
+        with pytest.raises((ValueError, RuntimeError)):
+            turn_host_lineage({"work_contract": damaged})
+    for adapter in (None, {}):
+        with pytest.raises((ValueError, RuntimeError)):
+            turn_host_lineage({**request, "turn_envelope": adapter})
+    assert source == before
 
 
 @pytest.mark.parametrize("change", ["capability", "stop", "turn"])
@@ -345,7 +407,7 @@ def test_recorded_complete_result_recovers_previous_optional_schema(complete_hos
 
 
 def test_complete_wire_rejects_downgrade_mixed_carriers_and_capture_drift(complete_host_request, tmp_path):
-    original = _captured_request(complete_host_request, tmp_path)
+    original = _captured_request(complete_host_request[1], tmp_path)
     wire = complete_host_input(original)
     assert wire["schema_version"] == "loopx_turn_host_request_v1"
     malformed = []
@@ -391,14 +453,14 @@ def test_historical_v0_wire_keeps_its_original_decoder(complete_host_request):
 
 
 def test_complete_wire_keeps_original_numbers_through_capture_and_readback(complete_host_request, tmp_path):
-    from loopx.control_plane.quota.turn_envelope import compose_turn_decision, build_turn_envelope
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
 
     _, original = complete_host_request
     source = deepcopy({key: value for key, value in original.items()
                        if key not in {"schema_version", "contract_binding"}})
     source["observations"] = [1.0, -0.0, 1e-7, 2**60 + 1]
     contract = compose_turn_decision(source)
-    request = _captured_request(({"turn_envelope": build_turn_envelope(contract)}, contract), tmp_path)
+    request = _captured_request(contract, tmp_path)
     wire = complete_host_input(request)
     assert wire["schema_version"] == "loopx_turn_host_request_v1"
     restored = extract_turn_authority(wire)

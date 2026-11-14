@@ -671,7 +671,7 @@ def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         or contract["quiet_noop_allowed"]
         or ordered_steps != _EXPECTED_RECEIPT_STEPS
     ):
-        raise ValueError("real quota packet did not expose terminal settlement v1")
+        raise ValueError("real quota packet did not expose the terminal settlement sequence")
     return contract
 
 
@@ -965,13 +965,27 @@ def _execute_terminal_cli(
                     else "fixture_unchanged_cli_rejection")
             return json.dumps(payload, ensure_ascii=False, sort_keys=True), kind
         receipt_steps = _settlement_receipt_steps(payload)
-        if receipt_steps != _EXPECTED_RECEIPT_STEPS[:2]:
+        composed = "--settle-turn" in tokens
+        expected_steps = _EXPECTED_RECEIPT_STEPS[:3] if composed else _EXPECTED_RECEIPT_STEPS[:2]
+        if receipt_steps != expected_steps:
             raise _TerminalToolViolation("writeback_receipt_mismatch")
+        if composed:
+            identity = payload.get("settlement_identity") or {}
+            progress = payload.get("settlement_progress") or {}
+            if (payload.get("ok") is not True or progress.get("state") != "settled"
+                    or identity.get("goal_id") != TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID
+                    or identity.get("agent_id") != TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID
+                    or identity.get("todo_id") != TERMINAL_SETTLEMENT_FIXTURE_TODO_ID
+                    or identity.get("turn_instance_id") != state.turn_instance_id):
+                raise _TerminalToolViolation("writeback_receipt_mismatch")
+            state.spend_committed = True
         state.writeback_committed = True
         state.receipt_steps = receipt_steps
-        kind = "durable_writeback"
+        kind = "settle_turn" if composed else "durable_writeback"
         output = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     elif command_kind == "quota" and command_action == "spend-slot":
+        if state.spend_committed:
+            raise _TerminalToolViolation("quota_spend_already_committed")
         if not state.writeback_committed:
             raise _TerminalToolViolation("quota_spend_before_writeback")
         if not tokens or not _matches_identity(tokens, state):

@@ -26,6 +26,60 @@ import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummary
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
 
+test("complete composition rejects retired source and settlement switches", () => {
+  const request = {operation: "compose_complete", payload: payload(), scheduler_execution_args: "", source_edits: true};
+  for (const [name, value] of [
+    ["source_transport", {encoding: "deflate-base64-json-v0", data: "old private transport"}],
+    ["source_transport", null], ["composed_settlement", true], ["composed_settlement", false],
+  ]) {
+    assert.throws(() => evaluateTurnEnvelope({...request, [name as string]: value}),
+      /literal source and canonical settlement plan/);
+  }
+});
+
+test("complete composition retains the common settlement plan across readiness and recovery facts", () => {
+  const source = payload() as JsonObject;
+  const plan = settlementPlanPayload(turnScopedCliSettlementPlan({
+    identity: {goal_id: source.goal_id, agent_id: source.agent_id, todo_id: "todo-1", turn_instance_id: "turn"},
+    delivery_batch_scale_choices: ["implementation"], command_templates: {
+      todo_claim: "claim", todo_completion: "completion", durable_writeback: "writeback",
+      quota_spend: "spend", terminal_closeout: "terminal",
+    },
+  }));
+  const preparation = {schema_version: "execution_preparation_v0", state: "ready",
+    todo_id: "todo-1", agent_id: source.agent_id, delivery_allowed: true};
+  const cli = {settlement_plan: plan, execution_preparation: preparation, spend_after_validation: true,
+    next_cli_actions: ["supporting action", "writeback", "spend"]};
+  const receipt = {status: "committed", closeout_required: true, turn_instance_id: "turn",
+    settlement_identity: plan.identity};
+  Object.assign(source, {normal_delivery_allowed: true, heartbeat_receipt: receipt,
+    interaction_contract: {...source.interaction_contract as object, cli_channel: cli}});
+  const changed = [
+    {}, ...["committed", "upgraded", "replayed", "pending"].map(status => ({heartbeat_receipt: {...receipt, status}})),
+    {selected_todo: {...source.selected_todo as object, todo_id: "other"}},
+    {heartbeat_receipt: {...receipt, turn_instance_id: "other"}},
+    {heartbeat_receipt: {...receipt, settlement_identity: {...plan.identity as object, effect_id: "changed"}}},
+    {heartbeat_receipt: {...receipt, settlement_binding_owed: true}},
+    {heartbeat_receipt: {...receipt, closeout_required: false}},
+    {cli: {...cli, execution_preparation: {...preparation, state: "claim_required"}}},
+    {cli: {...cli, execution_preparation: null}},
+    {cli: {...cli, spend_after_validation: false}},
+    {cli: {...cli, next_cli_actions: ["spend", "writeback"]}},
+    {cli: {...cli, next_cli_actions: ["writeback", "spend", "spend"]}},
+    {ok: false}, {normal_delivery_allowed: false},
+    {goal_boundary: {...source.goal_boundary as object, handoff_mode: "soft_claim"}},
+  ];
+  for (const {cli: changedCli, ...patch} of changed) {
+    const input = {...source, ...patch, interaction_contract: {
+      ...source.interaction_contract as object, cli_channel: changedCli ?? cli}};
+    const before = structuredClone(input);
+    const result = evaluateTurnEnvelope({operation: "compose_complete", payload: input, scheduler_execution_args: ""});
+    assert.deepEqual((result.interaction_contract as JsonObject).cli_channel,
+      (input.interaction_contract as JsonObject).cli_channel);
+    assert.deepEqual(input, before);
+  }
+});
+
 test("complete captures reuse progressive presentation only after source validation", () => {
   const source = payload();
   source.planning_horizon = {core_goal: {acceptance_contract: {outcome_requirements: {
@@ -79,6 +133,8 @@ test("complete diagnostic lanes share exact arrays without losing distinct facts
   const lane = [item, {...item, todo_id: "dependency", status: "open"}];
   const source: JsonObject = {agent_todo_summary: {schema_version: "todo_summary_v0", open_count: 2,
     first_open_items: structuredClone(lane), first_executable_items: lane,
+    claim_scope: {schema_version: "agent_claim_scope_v0", other_agent_claimed_items: structuredClone(lane),
+      blocked_claimed_items: structuredClone(lane), removed_continuation_blocked_items: structuredClone(lane)},
     backlog_items: structuredClone(lane), claimed_open_items: [...lane].reverse(),
     deferred_items: [{...item, future: {may_publish: 0, value: null}}, lane[1]],
     future_items: structuredClone(lane), future_control: {requires_stop: true}},
@@ -92,6 +148,12 @@ test("complete diagnostic lanes share exact arrays without losing distinct facts
   }
   for (const key of ["first_executable_items", "claimed_open_items", "deferred_items", "future_items", "future_control", "open_count"])
     assert.deepEqual(summary[key], (source.agent_todo_summary as JsonObject)[key]);
+  const scope = summary.claim_scope as JsonObject;
+  for (const key of ["other_agent_claimed_items", "blocked_claimed_items"]) {
+    assert.equal(scope[key], undefined);
+    assert.equal(scope[`${key}_ref`], "$.agent_todo_summary.first_executable_items");
+  }
+  assert.deepEqual(scope.removed_continuation_blocked_items, lane);
   assert.deepEqual(resolveQuotaSummaryLanes(shared), source);
   assert.deepEqual(referenceQuotaSummaryLanes(shared), shared);
   assert.deepEqual(projectQuotaDiagnostics(resolveQuotaSummaryLanes(shared), {capture_ref: "$.source_capture"}),
@@ -118,6 +180,26 @@ test("diagnostic references reject ambiguity, chains, wrong roots and missing li
     assert.throws(() => resolveQuotaSummaryLanes(invalid), /summary lane reference/);
     assert.deepEqual(invalid, before);
   }
+});
+
+test("nested summary references reject missing owners, cycles and conflicting literals", () => {
+  const lane = [{todo_id: "task", text: "Keep complete requirements. ".repeat(30)}];
+  const source = (claim: JsonObject): JsonObject => ({agent_todo_summary: {
+    schema_version: "todo_summary_v0", first_executable_items: lane,
+    claim_scope: {schema_version: "agent_claim_scope_v0", ...claim},
+  }});
+  const key = "blocked_claimed_items_ref";
+  const target = "$.agent_todo_summary.claim_scope.other_agent_claimed_items";
+  for (const claim of [
+    {[key]: target},
+    {[key]: target, other_agent_claimed_items: lane, blocked_claimed_items: lane},
+    {[key]: target, other_agent_claimed_items_ref: "$.agent_todo_summary.claim_scope.blocked_claimed_items"},
+    {[key]: "$.user_todo_summary.first_open_items"},
+  ]) assert.throws(() => resolveQuotaSummaryLanes(source(claim)), /summary lane reference/);
+  assert.deepEqual(resolveQuotaSummaryLanes(source({[key]: target, other_agent_claimed_items: lane})),
+    source({other_agent_claimed_items: lane, blocked_claimed_items: lane}));
+  const unfamiliar = source({schema_version: "future_claim_scope", blocked_claimed_items_ref: "unknown"});
+  assert.deepEqual(resolveQuotaSummaryLanes(unfamiliar), unfamiliar);
 });
 
 test("complete producer and Host preserve action semantics when diagnostic lanes share a source", () => {
@@ -230,7 +312,7 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
   assert.deepEqual(complete, before);
 });
 
-test("complete Host recovery preserves the existing driver route and hash preimage", () => {
+test("complete Host recovery returns only checked Session binding facts", () => {
   const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: payload(), scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
   const before = structuredClone(complete);
@@ -238,9 +320,10 @@ test("complete Host recovery preserves the existing driver route and hash preima
   const header = {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`};
   const current = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete,
     envelope: {}, complete_host_request: header});
-  assert.equal(current.scoped_settlement_identity, null);
-  delete current.scoped_settlement_identity;
-  assert.deepEqual(current, historicalCarrier);
+  const {goal_id, agent_id, todo_id} = historicalCarrier;
+  assert.deepEqual(current, {goal_id, agent_id, todo_id, scoped_settlement_identity: null});
+  assert.equal(historicalCarrier.route, "ready_for_host");
+  assert.ok(historicalCarrier.action_signature);
   for (const changed of [{...header, turn_key: "invalid"}, {...header, source_decision_hash: "wrong"}]) {
     assert.throws(() => evaluateTurnEnvelope({operation: "driver_lineage", payload: complete,
       envelope: {}, complete_host_request: changed}));
@@ -250,7 +333,7 @@ test("complete Host recovery preserves the existing driver route and hash preima
   assert.deepEqual(complete, before);
 });
 
-test("complete recovery and historical readers share all admitted route facts", () => {
+test("complete planning and historical readers share all admitted route facts", () => {
   for (const [effectiveAction, shouldRun, mustAttempt, delivery, quiet, userAction, route] of [
     ["normal_run", true, true, true, false, false, "ready_for_host"],
     ["control_plane_repair", true, true, true, false, false, "repair_required"],
@@ -272,14 +355,18 @@ test("complete recovery and historical readers share all admitted route facts", 
     const before = structuredClone({complete, envelope});
     const historical = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, envelope});
     assert.equal(historical.route, route);
-    const current = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, complete_host_request: {
-      schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`,
-    }});
-    assert.equal(current.scoped_settlement_identity, null);
-    delete current.scoped_settlement_identity;
-    assert.deepEqual(current, historical);
+    const current = evaluateTurnEnvelope({operation: "planning_facts", payload: complete});
+    assert.equal(current.route, route);
+    assert.deepEqual(current.action_signature, historical.action_signature);
     assert.deepEqual({complete, envelope}, before);
   }
+});
+
+test("complete planning refuses the retired dual input even when the adapter agrees", () => {
+  const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: payload(), scheduler_execution_args: ""});
+  const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
+  assert.throws(() => evaluateTurnEnvelope({operation: "planning_facts", payload: complete, envelope}),
+    /requires one source without an executor adapter/);
 });
 
 test("complete recovery keeps request and replan identity qualification with the historical owner", () => {
@@ -302,11 +389,11 @@ test("complete recovery keeps request and replan identity qualification with the
     const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
     const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
     const current = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, complete_host_request: header});
-    assert.equal(current.route, requestScope ? "ready_for_host" : "replan_required");
-    assert.deepEqual(current.scoped_settlement_identity, identity);
+    assert.deepEqual(current, {goal_id: scope.goal_id, agent_id: scope.agent_id,
+      todo_id: "", scoped_settlement_identity: identity});
     assert.deepEqual(turnEnvelopeScopedSettlementIdentity(envelope), identity);
-    delete current.scoped_settlement_identity;
-    assert.deepEqual(current, evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, envelope}));
+    const historical = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, envelope});
+    assert.equal(historical.route, requestScope ? "ready_for_host" : "replan_required");
     for (const changedScope of [{...scope, goal_id: "other-goal"}, {...scope, agent_id: "other-agent"}]) {
       const changed = structuredClone(source);
       const plan = ((changed.interaction_contract as JsonObject).cli_channel as JsonObject).settlement_plan as JsonObject;
@@ -371,6 +458,34 @@ function completeAcceptanceRead(source: JsonObject, outcomeRef = ""): JsonObject
     source_hash: sourceHash, stage: outcomeRef ? "acceptance" : "review", outcome_ref: outcomeRef});
   return outcomeRef ? read : {outcomes: (read.acceptance_index as JsonObject | undefined)?.outcomes};
 }
+
+test("digest-bound replan readers render Windows commands for an installed Python route", () => {
+  const source = payload();
+  source.replan_action_packet = {obligation_id: "original-obligation"};
+  source.autonomous_replan_obligation = {replan_context: {
+    obligation_id: "original-obligation", context_id: "original-context"}};
+  const payloadCaptured = evaluateTurnEnvelope({operation: "compose_complete", payload: source,
+    scheduler_execution_args: ""});
+  const request = {operation: "replan_view", payload: payloadCaptured,
+    captured_decision_path: "C:\\Reader's O’Neil workspace\\decision.json",
+    reader_argv: ["C:\\Program Files\\LoopX\\python.exe", "-m", "loopx.entrypoint"],
+    source_hash: (payloadCaptured.contract_binding as JsonObject).content_hash, stage: "review"};
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  try {
+    Object.defineProperty(process, "platform", {...platform, value: "darwin"});
+    const legacy = evaluateTurnEnvelope(request);
+    Object.defineProperty(process, "platform", {...platform, value: "win32"});
+    const digest = "a".repeat(64);
+    const review = evaluateTurnEnvelope({...request, capture_sha256: digest});
+    const command = String((review.next as JsonObject).writeback);
+    assert.ok(command.startsWith("& 'C:\\Program Files\\LoopX\\python.exe' '-m' 'loopx.entrypoint' "));
+    assert.ok(command.includes("'--decision-file' 'C:\\Reader''s O’’Neil workspace\\decision.json'"));
+    assert.ok(command.endsWith(`'--capture-sha256' '${digest}' '--replan-stage' 'writeback'`));
+    assert.deepEqual(evaluateTurnEnvelope(request), legacy);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+});
 
 test("both replan readers surface an opted-in reversal for the bound task only", () => {
   const conflict = {todo_id: "todo-1", source_finding_id: "finding-1",
@@ -517,13 +632,12 @@ test("task text commitment has one selected-Todo carrier without changing legacy
   }
 });
 
-test("complete settlement transport is explicit, typed and never rewrites a saved complete source", () => {
-  const request = {operation: "compose_complete", payload: payload(), scheduler_execution_args: ""};
+test("complete composition preserves a saved source and rejects a different Host binding", () => {
+  const request = {operation: "compose_complete", payload: payload(), scheduler_execution_args: "--goal-id goal"};
   const complete = evaluateTurnEnvelope(request);
-  assert.deepEqual(evaluateTurnEnvelope({...request, composed_settlement: false}), complete);
-  for (const composed_settlement of [null, 0, 1, "true", {}, []])
-    assert.throws(() => evaluateTurnEnvelope({...request, composed_settlement}), /must be a boolean/);
-  assert.deepEqual(evaluateTurnEnvelope({...request, payload: complete, composed_settlement: true}), complete);
+  assert.deepEqual(evaluateTurnEnvelope({...request, payload: complete}), complete);
+  assert.throws(() => evaluateTurnEnvelope({...request, payload: complete,
+    scheduler_execution_args: "--goal-id other"}), /cannot change its host binding/);
 });
 
 function payload(): Record<string, unknown> {

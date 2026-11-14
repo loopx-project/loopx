@@ -617,11 +617,15 @@ def _receipt_bound_recovery_todo(
     """Keep finished/replan-only Turns out of generic Todo wait recovery."""
     if (not receipt_bound_todo_id or not agent_id or not turn_instance_id
             or replay_phase is ReceiptBoundReplayPhase.SETTLED
-            or _historical_ack_writeback_required(payload)
             or payload.get("effective_action") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value):
         return None
+    # A Todo-backed review with verified writeback still uses the existing
+    # current-Turn, spend-only recovery contract. An ACK without writeback does
+    # not enter that phase and keeps its receipt-bound replan settlement route.
     if replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING:
         return receipt_bound_todo_id
+    if (payload.get("replan_action_packet") or {}).get("settlement_only") is True:
+        return None
     selected_value = payload.get("selected_todo")
     selected = selected_value if isinstance(selected_value, Mapping) else {}
     if (selected.get("todo_id") != receipt_bound_todo_id

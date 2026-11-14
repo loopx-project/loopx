@@ -145,7 +145,7 @@ def test_bound_todoless_planning_executes_and_settles_once(tmp_path, monkeypatch
     assert identity["replan_obligation_id"] in prompt
     # Inspect the actual model input, not only the saved complete fixture.
     request = json.loads(prompt.split("Turn request:\n", 1)[1])
-    authority = request["work_contract"]
+    authority = request["task_context"]
     assert authority["replan_action_packet"]["obligation_id"] == identity["replan_obligation_id"]
     packet = request["detail_ref"]["replan_action_packet"]
     assert "read autonomous_replan_obligation.replan_context" not in prompt

@@ -1,4 +1,4 @@
-"""Read-only managed continuation over one complete journal and fresh decision.
+"""Read-only managed continuation over a saved journal and a fresh complete decision.
 
 The typed owner composes current journal qualification with the ordered
 controller. Host scheduling, retries, dispatch and settlement keep their owners.

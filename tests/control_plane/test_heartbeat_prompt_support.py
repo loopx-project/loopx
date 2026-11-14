@@ -25,7 +25,10 @@ from loopx.control_plane.heartbeat.host import (
     uses_ark_managed_agent_goal_host,
     uses_native_goal_host_loop,
 )
-from loopx.control_plane.heartbeat.rules import SCOPE_BOUNDED_WORK_RULE
+from loopx.control_plane.heartbeat.rules import (
+    SCOPE_BOUNDED_PROGRESS_RULE,
+    SCOPE_BOUNDED_WORK_RULE,
+)
 from loopx.control_plane.heartbeat.task_body import render_heartbeat_generator_inputs_markdown
 from loopx.control_plane.heartbeat.visible_goal import (
     build_visible_goal_initial_runtime_capability_projection,
@@ -43,6 +46,36 @@ def test_heartbeat_prompt_mode_defaults_to_thin() -> None:
     assert heartbeat_prompt_mode(compact=True) == "compact"
     assert heartbeat_prompt_mode(brief=True) == "brief"
     assert heartbeat_prompt_mode(thin=True) == "thin"
+
+
+@pytest.mark.parametrize("app", [False, True])
+@pytest.mark.parametrize("context_off", [False, True])
+def test_thin_cli_keeps_dependency_reads_and_original_capture_recovery(tmp_path, app, context_off):
+    from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
+
+    state, registry, runtime = tmp_path / "goal.md", tmp_path / "registry.json", tmp_path / "runtime"
+    state.write_text("---\nstatus: active\n---\n# Goal\nReview evidence; no external actions.\n")
+    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="read-scope-fixture", domain="software", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["worker-a"])
+    flags = (["--codex-app"] if app else []) + (["--context-delivery", "off"] if context_off else [])
+    code, payload = run_json_cli_result("heartbeat-prompt", "--goal-id", "read-scope-fixture",
+        "--agent-id", "worker-a", "--thin", *flags, registry_path=registry, runtime_root=runtime)
+    assert code == 0 and payload["ok"], payload
+    body = payload["task_body"]
+    assert "Read full capture, work_context, required_reads before acting" not in body
+    # The bootstrap retains ordering/identity and delegates section selection
+    # to the returned source/reader, whose real delivery is qualified in the
+    # worker transport tests for complete and supported bounded responses.
+    for obligation in (
+        "work_context and required_reads before acting", "applicable goals/criteria/constraints/stops",
+        "selection/replan or missing details", "follow returned read/recovery instructions",
+        "with original capture/identity",
+        "never re-admit", "explicit full reads", "capture/handoff flags",
+        "same-Turn repair", "settlement_plan.ordered_steps",
+    ):
+        assert obligation in body, obligation
+    assert payload["interface_budget"]["within_budget"] is True
 
 
 def test_prompt_budget_text_redacts_goal_and_active_state() -> None:
@@ -90,10 +123,13 @@ def test_native_profile_long_routes_retain_one_complete_settlement_contract() ->
         "selection_command", "settlement_plan.ordered_steps", "next_cli_actions",
         "identities/effect ids and actual outcomes", "Preserve command flags",
         "truthful evidence", "ambiguous effects need readback/recovery",
-        "retain original and cumulative outcome requirements",
         "root continuation, budget or stop criteria",
     ):
         assert obligation in body, obligation
+    assert any(clause in body for clause in (
+        "retain original and cumulative outcome requirements",
+        "keep original/cumulative outcome requirements",
+    ))
 
 
 @pytest.mark.parametrize("mode,limit", [
@@ -426,7 +462,9 @@ def test_sizing_guidance_survives_prompt_compaction(mode: str) -> None:
     payload = build_heartbeat_prompt(goal_id="sizing-fixture", **{mode: True})
     body = payload["task_body"]
     # Compaction must not discard how to size work while keeping only "one step".
-    assert body.count(SCOPE_BOUNDED_WORK_RULE) == 1
+    assert body.count(SCOPE_BOUNDED_PROGRESS_RULE) == 1
+    assert "work_context" in body and "required_reads" in body
+    assert "before acting" in body if mode == "thin" else "before work" in body
     assert "bounded slice" not in body
     assert payload["interface_budget"]["within_budget"] is True
     # This is guidance, not a new execution profile, scheduler or authority field.

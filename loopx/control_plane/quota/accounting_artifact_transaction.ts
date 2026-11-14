@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { access, lstat, readFile } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { access, lstat, readFile, realpath } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -109,6 +109,7 @@ export interface QuotaAccountingArtifactCommitRequest {
   expectedIndexDigest: string | null;
   goalRef?: JsonObject;
   indexLockHeld?: boolean;
+  matchesRetainedRequest?: (record: JsonObject) => boolean;
   prepare: (
     context: QuotaAccountingArtifactPrepareContext,
   ) =>
@@ -505,6 +506,59 @@ export function resolveQuotaAccountingEffect(
     if (resolution.kind !== "absent") return resolution;
   }
   return { kind: "absent" };
+}
+
+export async function readQuotaSpendEventFromRun(
+  runsDir: string,
+  run: JsonObject,
+  goalId: string,
+): Promise<JsonObject | null> {
+  const inline = jsonObject(run.quota_event);
+  if (inline) return inline;
+  if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
+  let targetPath: string;
+  try {
+    targetPath = await realpath(resolve(run.json_path.trim()));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  const relativePath = relative(await realpath(runsDir), targetPath);
+  if (
+    !relativePath ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  ) {
+    throw new EffectRuntimeRequestError(
+      "quota spend json_path must stay inside the goal runs directory",
+    );
+  }
+  let content: string;
+  try {
+    content = await readFile(targetPath, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new EffectRuntimeRequestError("quota spend JSON artifact is malformed");
+  }
+  const record = requiredObject(value, "quota spend JSON artifact");
+  if (
+    record.classification !== contractFor("spend").classification ||
+    (record.goal_id !== undefined && record.goal_id !== goalId)
+  ) {
+    throw new EffectRuntimeRequestError(
+      "quota spend JSON artifact identity does not match its index row",
+    );
+  }
+  return jsonObject(record.quota_event);
 }
 
 export async function lookupQuotaAccountingReplay(
@@ -920,7 +974,8 @@ export async function commitQuotaAccountingArtifactTransaction(
       }
       if (
         existingReceipt.effect_id !== request.effectId ||
-        existingReceipt.request_digest !== request.requestDigest
+        (existingReceipt.request_digest !== request.requestDigest &&
+          request.matchesRetainedRequest?.(existingReceipt.record) !== true)
       ) {
         return {
           status: "conflict",

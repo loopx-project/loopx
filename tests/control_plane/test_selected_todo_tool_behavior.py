@@ -151,7 +151,7 @@ def test_real_tool_loop_executes_action_selected_by_real_quota(
                 "relative paths from the selected Todo there. Choose each next "
                 "action from the latest tool result. If quota sets "
                 "selection_required, choose any currently eligible Todo; "
-                "selection_command is non-binding. Replace {todo_id}, then run "
+                "suggestions are non-binding. In selection_command replace {todo_id}, then run "
                 "exactly `<route_prefix> <command_args_template>` for the second "
                 "quota guard before delivery. Only when the visible packet lacks "
                 "the Todo identity you need, run exactly `<route_prefix> "
@@ -168,7 +168,7 @@ def test_real_tool_loop_executes_action_selected_by_real_quota(
     assert first["tool_choice"] == "auto"
     assert "response_format" not in first
     assert "todo_portfolio001" not in first["messages"][1]["content"]
-    assert "use selection_command when required" in first["messages"][1]["content"]
+    assert "selection_command" in first["messages"][1]["content"]
 
     quota_result = QuotaToolContext.from_output(requests[2]["messages"][-1]["content"]).packet
     assert quota_result["selected_todo"]["todo_id"] == "todo_portfolio001"

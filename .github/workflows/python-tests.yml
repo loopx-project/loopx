@@ -921,6 +921,7 @@ jobs:
           tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery
           tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement
           tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once
+          tests/control_plane/test_replan_progress_native_cli.py::test_replan_stage_commands_run_verbatim_in_powershell
 
       - name: Restore the primary Windows Node runtime
         uses: actions/setup-node@v6
@@ -955,7 +956,7 @@ jobs:
           --basetemp "${{ runner.temp }}/lxb-${{ github.run_id }}-${{ github.run_attempt }}"
           tests/control_plane/test_cli_output_budget.py
           tests/control_plane/test_cli_output_differential.py
-          -k "stable_budget_fixture or long_path_budget or probe_process_failure_preserves_utf8_diagnostics"
+          -k "stable_budget_fixture or long_path_budget or probe_process_failure_preserves_utf8_diagnostics or pinned_reader_follows"
 
       - name: Qualify the native Windows CLI output differential
         timeout-minutes: 12

@@ -357,7 +357,8 @@ LoopX quota/heartbeat Turn-start path; arbitrary host Turns that do not invoke
 that path are outside this integration. Frontend/Lark conversations retain their
 existing request and return views; no new screen or setting is introduced.
 
-The progressive quota hook's required command requests the Inbox Markdown view.
+The progressive quota hook uses the same CLI release for the required Inbox
+command and context reader, and requests the Inbox Markdown view.
 When every item on a page has the same `instruction`, `next_action` or
 `receiver_followthrough`, apply that exact field from `shared_item_guidance`
 to each item on that page. Differing values and all request bodies, current state, read receipts, warnings, and
@@ -372,7 +373,8 @@ second Inbox read, consume a return, or qualify context retention. Plain or JSON
 CLI reads retain the per-item fields, including the required read when context
 delivery is explicitly off.
 
-渐进 quota 的必读命令使用 Inbox Markdown 视图。当前页每条的 `instruction`、
+渐进 quota 的必读命令与上下文 reader 使用同一 CLI 版本，并请求 Inbox Markdown 视图。
+当前页每条的 `instruction`、
 `next_action` 或 `receiver_followthrough` 完全相同时，从 `shared_item_guidance`
 读取原值并应用到本页每条。
 不同指引、请求全文、当前状态、读回执、警告和游标均完整交付。Markdown 页超出

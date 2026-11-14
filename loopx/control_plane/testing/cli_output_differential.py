@@ -709,6 +709,71 @@ def _complete_turn_plan_migration(base: dict[str, Any], candidate: dict[str, Any
         and candidate.get("output_contract_version") == ("loopx_turn_plan_v1" if row.startswith("variant/") else None))
 
 
+def _matching_quota_controls(base: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    before, after = base.get("quota_controls"), candidate.get("quota_controls")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    fields = before.get("field_sha256")
+    # The frozen probe owns the source-field inventory; its independent tests
+    # pin every field and mutation. Compare its bounded witness here without
+    # creating another inventory/consumer of retired source fields.
+    return bool(isinstance(fields, dict) and len(fields) == 19
+        and all(isinstance(key, str) and key for key in fields)
+        and all(isinstance(value, str) and len(value) == 64 for value in fields.values())
+        and fields == after.get("field_sha256")
+        and isinstance(before.get("controls_sha256"), str) and len(before["controls_sha256"]) == 64
+        and before["controls_sha256"] == after.get("controls_sha256"))
+
+
+def _complete_quota_source_migration(base: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    """Qualify this declared carrier transition, not arbitrary or later growth.
+
+    The fixture compares 19 original control values, not a schema name alone.
+    This does not certify full instruction equivalence, recovery or model use.
+    """
+    formats = {"json", "markdown"}
+    variants = {
+        "quota_should_run_scheduler_detail", "quota_should_run_todo_summary_detail",
+        "quota_should_run_user_todo_summary_detail", "quota_should_run_goal_boundary_detail",
+        "quota_should_run_vision_detail", "quota_should_run_all_detail",
+    }
+    scenario, output_format = base.get("scenario"), base.get("format")
+    variant = base.get("variant_id")
+    policy = "explicit_opt_in_cold_path" if variant else "absolute_hot_path"
+    row = (f"variant/{variant}/{scenario}/{output_format}" if variant
+           else f"surface/quota_should_run/{scenario}/{output_format}")
+    if not (base.get("row_id") == candidate.get("row_id") == row
+        and base.get("surface_id") == candidate.get("surface_id") == "quota_should_run"
+        and base.get("variant_id") == candidate.get("variant_id")
+        and scenario == candidate.get("scenario") and scenario in {"small", "crowded", "multi_agent"}
+        and (scenario == "small" if variant else True)
+        and output_format == candidate.get("format") and output_format in formats
+        and (variant in variants if variant else True)
+        and base.get("qualification_policy") == candidate.get("qualification_policy") == policy
+        and base.get("output_contract_version") is None
+        and candidate.get("output_contract_version") == "loopx_turn_envelope_v1"
+        and base.get("markdown_anchor") == "# LoopX Quota Should Run"
+        and candidate.get("markdown_anchor") == "# LoopX Turn Envelope"
+        and _matching_quota_controls(base, candidate)):
+        return False
+    return (base["quota_controls"].get("source_schema") is None
+            and candidate["quota_controls"].get("source_schema") == "loopx_turn_envelope_v1")
+
+
+def _complete_quota_source_allowance(base: dict[str, Any], candidate: dict[str, Any]) -> dict[Metric, int]:
+    if not _complete_quota_source_migration(base, candidate):
+        return {}
+    # Complete-source changes in the matched main 36289306 / C1 94cd16bb
+    # workload. Explicit raw v0 readers retain their old limits and keys.
+    # Absolute v1 ceilings and collection growth remain enforced.
+    variant = str(base.get("variant_id") or "")
+    if base["format"] == "json":
+        chars = {"small": 1_024, "crowded": 2_048, "multi_agent": 4_096}[base["scenario"]]
+        return {"chars": chars, "utf8_bytes": chars, "compact_payload_chars": chars}
+    chars = 18_112 if variant else {"small": 17_184, "crowded": 36_512, "multi_agent": 23_552}[base["scenario"]]
+    return {"chars": chars, "utf8_bytes": chars, "lines": 6 if variant else 3}
+
+
 def _projection_envelope_migration(
     base: dict[str, Any], candidate: dict[str, Any], *, output_format: str,
 ) -> tuple[dict[Metric, int], list[str], list[str]]:
@@ -877,6 +942,13 @@ def _continuation_instruction_migration(
             # text in brief; retain authority/recovery clauses. Once present,
             # ordinary growth limits resume; no new line or shape allowance.
             chars += 512
+        if (surface == "heartbeat_prompt_thin"
+                and base.get("format") == candidate.get("format") == "markdown"
+                and migrated("source_read")):
+            # In the matched CLI fixtures, the complete ordered block adds
+            # 37 Markdown characters and three lines. JSON fits its usual budget.
+            chars = max(chars, 40)
+            lines = max(lines, 3)
     if row_id.startswith((
         "surface/heartbeat_prompt_thin/",
         "variant/heartbeat_prompt_brief/",
@@ -920,6 +992,10 @@ def _turn_projection_migration(
     stride_route = stride_routes.get(str(base.get("row_id")))
     if stride_route and candidate.get("row_id") == base.get("row_id"):
         root, bound = stride_route
+        # A same-carrier Stride addition has the same bound. The carrier
+        # replacement itself cannot use this allowance.
+        if root == "$.turn_envelope" and "$.work_contract" in old_paths & new_paths:
+            root = "$.work_contract"
         control = f"{root}.replan_action_packet.stride_control"
         strategy = f"{root}.autonomous_replan_obligation.replan_context.stride_strategy"
         required = {f"{control}.{key}" for key in (
@@ -1024,6 +1100,9 @@ def _compare_row_growth(
     review_signals.extend(continuation_signals)
     context_allowance, context_signals = _turn_projection_migration(base, candidate)
     review_signals.extend(context_signals)
+    quota_allowance = _complete_quota_source_allowance(base, candidate)
+    if quota_allowance:
+        review_signals.append("Quota v0 -> complete v1: matching current fixture controls; additional carrier cost requires review")
     # The source-complete detail replaces the old summary; default inspection
     # retains a small pinned-source route. Absolute ceilings stay unchanged.
     if _complete_turn_plan_migration(base, candidate):
@@ -1074,6 +1153,7 @@ def _compare_row_growth(
             authoring_allowance.get(metric, 0),
             continuation_allowance.get(metric, 0),
             context_allowance.get(metric, 0),
+            quota_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK
@@ -1127,10 +1207,20 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
     review_signals: list[str] = []
     policy = str(base.get("qualification_policy") or "")
     output_format = str(base.get("format") or "")
+    quota_migration = _complete_quota_source_migration(base, candidate)
     if candidate.get("qualification_policy") != policy:
         failures.append("qualification_policy changed")
     if candidate.get("format") != output_format:
         failures.append("format changed")
+    if "quota_controls" in base or "quota_controls" in candidate:
+        if not _matching_quota_controls(base, candidate):
+            before, after = base.get("quota_controls"), candidate.get("quota_controls")
+            old = before.get("field_sha256") if isinstance(before, dict) else None
+            new = after.get("field_sha256") if isinstance(after, dict) else None
+            old = old if isinstance(old, dict) else {}
+            new = new if isinstance(new, dict) else {}
+            changed = sorted(key for key in old.keys() | new.keys() if old.get(key) != new.get(key))
+            failures.append("Quota current controls changed: " + (", ".join(changed) or "invalid witness"))
 
     before_controls, after_controls = base.get("turn_plan_controls"), candidate.get("turn_plan_controls")
     if (isinstance(before_controls, dict) and isinstance(after_controls, dict)
@@ -1153,6 +1243,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         candidate_output_contract != base_output_contract
         and not heartbeat_agent_input_migration
         and not _complete_turn_plan_migration(base, candidate)
+        and not quota_migration
     ):
         failures.append("output_contract_version changed")
 
@@ -1178,7 +1269,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             preview = ", ".join(missing[:5])
             suffix = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
             message = f"semantic_json_keys removed: {preview}{suffix}"
-            if heartbeat_agent_input_migration or _complete_turn_plan_migration(base, candidate):
+            if heartbeat_agent_input_migration or _complete_turn_plan_migration(base, candidate) or quota_migration:
                 review_signals.append(message)
             else:
                 failures.append(message)
@@ -1197,10 +1288,10 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
 
     base_anchor = base.get("markdown_anchor")
     if base_anchor and candidate.get("markdown_anchor") != base_anchor:
-        failures.append("markdown_anchor changed")
+        (review_signals if quota_migration else failures).append("markdown_anchor changed")
     if migration.signature_changed:
         if migration.signature_migration is None:
-            if _complete_turn_plan_migration(base, candidate):
+            if _complete_turn_plan_migration(base, candidate) or quota_migration:
                 review_signals.append("historical action signature replaced by the checked complete source")
             else:
                 failures.append("action_signature semantic digest changed")

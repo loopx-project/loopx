@@ -9,8 +9,13 @@ from loopx.control_plane.quota.cli_projection import (
     compact_quota_should_run_cli_payload,
 )
 from loopx.control_plane.quota.turn_envelope import (
+    _turn_envelope_result,
     build_turn_envelope,
+    compose_turn_decision,
+    prepare_context_delivery,
+    restore_context_delivery,
 )
+from test_complete_turn_decision import _source_digest, _resign_contract
 from test_replan_host_context_projection import _quota_payload
 
 
@@ -60,9 +65,12 @@ def nested(source):
     ]
 
 
-@pytest.fixture
-def share():
-    return compact_quota_should_run_cli_payload
+@pytest.fixture(
+    params=[compact_quota_should_run_cli_payload, compose_turn_decision],
+    ids=["legacy", "complete"],
+)
+def share(request):
+    return request.param
 
 
 def test_exact_audit_is_retained_once_with_complete_judge_and_history(share):
@@ -148,6 +156,113 @@ def test_numeric_audit_identity_preserves_each_original_carrier(left, right, sha
     assert json.dumps(share(shared)) == json.dumps(shared)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "empty",
+        "malformed",
+        "wrong-owner",
+        "chain",
+        "judge-chain",
+        "conflict",
+        "type-conflict",
+        "extra-clause",
+        "judge-only",
+    ],
+)
+def test_dangling_or_conflicting_audit_reference_is_rejected_with_valid_hash(mutation):
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+
+    contract = compose_turn_decision(packet())
+    envelope = build_turn_envelope(contract)
+    audit = nested(contract)[1]["vision_continuation_audit"]
+    if mutation == "missing":
+        contract.pop("vision_continuation_audit")
+    elif mutation == "empty":
+        contract["vision_continuation_audit"] = {}
+    elif mutation == "malformed":
+        audit["projection_ref"] = {"path": "$.vision_continuation_audit"}
+    elif mutation == "wrong-owner":
+        audit["projection_ref"] = "$.another_audit"
+    elif mutation == "chain":
+        contract["vision_continuation_audit"]["projection_ref"] = "$.another_audit"
+    elif mutation == "judge-chain":
+        contract["vision_continuation_audit"]["vision_gap_judge"]["projection_ref"] = (
+            "$.another_judge"
+        )
+    elif mutation == "conflict":
+        audit["vision_gap_judge"]["done"] = True
+    elif mutation == "type-conflict":
+        audit["required"] = 1
+    elif mutation == "extra-clause":
+        audit["required_before_closeout"] = ["skip_review"]
+    else:
+        audit.pop("projection_ref")
+    contract, _ = _resign_contract(contract)
+    for read in (
+        lambda: compose_turn_decision(contract),
+        lambda: build_turn_envelope(contract),
+        lambda: _prompt({"work_contract": contract, "turn_envelope": envelope}),
+        lambda: _turn_envelope_result(
+            "replan_view",
+            payload=contract,
+            source_hash=_source_digest(contract),
+            stage="review",
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="Vision audit reference"):
+            read()
+
+
+@pytest.mark.parametrize(
+    "changed, complete", [(False, True), (True, True), (True, False)]
+)
+def test_audit_survives_delta_full_and_lost_baseline_recovery(changed, complete):
+    source = packet()
+    source["interaction_contract"]["agent_channel"]["work_context"]["complete"] = (
+        complete
+    )
+    before = compose_turn_decision(source)
+    if changed:
+        source["vision_continuation_audit"]["vision_gap_judge"][
+            "agent_judge_instruction"
+        ] += " Wait for new evidence."
+        for carrier in nested(source):
+            carrier["vision_continuation_audit"] = deepcopy(
+                source["vision_continuation_audit"]
+            )
+    else:
+        source["reason"] = "A new observation"
+    after = compose_turn_decision(source)
+    scope = dict(
+        goal_id="fixture", agent_id="worker", session_id="session", context_epoch="one"
+    )
+    baseline = prepare_context_delivery(
+        before, scope=scope, capture_id="one", surface="complete_turn"
+    )
+    full = prepare_context_delivery(
+        after, scope=scope, capture_id="two", surface="complete_turn"
+    )
+    delta = prepare_context_delivery(
+        after,
+        scope=scope,
+        capture_id="two",
+        surface="complete_turn",
+        baseline=baseline,
+        retained={"complete": True, "target": baseline["target"]},
+    )
+    assert delta["mode"] == ("delta" if complete else "full")
+    for retained in (baseline, None):
+        restored = restore_context_delivery(delta, baseline=retained, current=full)[
+            "context"
+        ]
+        assert restored == after
+        assert (
+            restored["vision_continuation_audit"] == source["vision_continuation_audit"]
+        )
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
     tmp_path, monkeypatch, provider
@@ -214,6 +329,7 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
         "--turn-instance-id",
         "vision-read",
         "--context-delivery", "off",
+        "--complete-turn",
         "--decision-output-dir",
         str(capture),
         cwd=project,
@@ -221,6 +337,7 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
     assert code == 0 and full["should_run"], full
     assert "context_delivery" not in full
     saved = json.loads((capture / "decision.json").read_text())
+    assert saved == full
     assert "projection_ref" not in saved["vision_continuation_audit"]
     audit = full["vision_continuation_audit"]
     assert "projection_ref" not in audit
@@ -235,10 +352,11 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
         == audit["vision_gap_judge"]
     )
     assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
-    invalid = deepcopy(full)
+    invalid = deepcopy(saved)
     invalid["goal_frontier_projection"]["vision_continuation_audit"][
         "required"
     ] = not audit["required"]
+    invalid, _ = _resign_contract(invalid)
     invalid_path = tmp_path / "invalid.json"
     invalid_path.write_text(json.dumps(invalid))
     rc, refused = _run_cli(
@@ -249,11 +367,18 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
         "--decision-file",
         str(invalid_path),
         "--source-hash",
-        build_turn_envelope(invalid)["action_signature"]["source_decision_hash"],
+        _source_digest(invalid),
         "--replan-stage",
         "review",
         cwd=project,
     )
+    assert rc != 0 and "Vision audit reference" in json.dumps(refused)
+    # The same conflicting projection must be rejected in a historical capture
+    # with an independently matching file digest and no current inner binding.
+    historical = {key: value for key, value in invalid.items() if key not in {"schema_version", "contract_binding"}}
+    invalid_path.write_text(json.dumps(historical))
+    rc, refused = _run_cli(registry, runtime, "quota", "replan-view", "--decision-file", str(invalid_path),
+        "--source-hash", _source_digest(historical), "--replan-stage", "review", cwd=project)
     assert rc != 0 and "Vision audit reference" in json.dumps(refused)
     assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
 

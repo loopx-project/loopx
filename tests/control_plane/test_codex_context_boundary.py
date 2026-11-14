@@ -6,6 +6,7 @@ does not qualify a product adapter or model effectiveness.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -151,6 +152,208 @@ def _configure_provider(home, url):
         'responses_websockets_v2=false\n'
         f'[model_providers.fixture]\nname="Synthetic local"\nbase_url="{url}"\n'
         'wire_api="responses"\nrequires_openai_auth=false\n')
+
+
+@pytest.mark.parametrize(("restore_missing", "complete_capture", "next_change"), [
+    (mode, complete, None) for mode in ("original", "unobserved", "verified") for complete in (False, True)
+] + [
+    ("unobserved", True, change) for change in ("stop", "todo", "source", "content", "compact")
+])
+def test_native_code_mode_resume_requires_observed_coverage(
+    tmp_path, monkeypatch, restore_missing, complete_capture, next_change,
+):
+    """Native Bash hooks and replayed Code Mode emissions must cover the same bytes."""
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    from loopx.cli_commands.quota_capture import model_context_reference, native_context_capture_view
+    from loopx.command_invocation import loopx_cli_route
+    from loopx.control_plane.turn_driver.codex_context import prepare_codex_context
+    from loopx.control_plane.turn_driver.decision_capture import CODE_MODE_EXEC_RESULT_FORWARDER
+    from tests.control_plane.codex_checkpoint_fixture import last_context_page, selected_context_values
+    from tests.control_plane.test_codex_context_lifecycle import project
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    binary, env, workspace, home = _native_fixture(tmp_path)
+    env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
+    context = workspace / "context"
+    context.mkdir(mode=0o700)
+    program = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI") or str(Path(sys.executable).with_name("loopx"))
+    cli = [program, "--cli-bin", program, "--format", "json", "quota"]
+    hook = shlex.join(cli + ["context-hook", "--context-delivery", "on", "--codex-app",
+                             "--codex-context-dir", str(context)])
+    handler = {"type": "command", "command": hook, "timeout": 10}
+    (home / "hooks.json").write_text(json.dumps({"hooks": {
+        **{name: [{"hooks": [handler]}] for name in ("SessionStart", "PreCompact", "PostCompact")},
+        "PostToolUse": [{"matcher": "^Bash$", "hooks": [handler]}],
+    }}))
+    short_pointer, long_pointer = "/goal_boundary/stop_condition", "/required_work"
+    payload = {"ok": True, "goal_id": "fixture",
+        "goal_boundary": {"stop_condition": "Keep the original scope."},
+        "required_work": "Verify the selected evidence before publishing. " * 220}
+    independent_pointer = short_pointer
+    narrative = "Preserve the complete original Goal context. " * 250
+    if next_change:
+        independent_pointer = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+        payload = {"ok": True, "goal_id": "fixture", "selected_todo": {"todo_id": "todo_current"},
+            "goal_boundary": {"stop_condition": "Keep the original scope."},
+            "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
+                "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                    "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                    "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+                }}]}}, "user_channel": {}, "cli_channel": {}}}
+    errors = []
+    opening = ""
+    saved_page = workspace / "first-page.json"
+    initial_requests = None
+    resume_state = first_read = None
+    first_pages = []
+    current_stop = "Stop before submitting the new result."
+
+    def read_command(cmd):
+        return "await tools.exec_command(" + json.dumps({"cmd": cmd, "max_output_tokens": 8000}) + ")"
+
+    def resumed_response(request, number, message):
+        nonlocal resume_state, first_read
+        state = json.loads((context / "session.json").read_bytes())
+        if number == 1:
+            resume_state = state
+            if next_change == "compact":
+                assert independent_pointer in state.get("consumed_pointers", {})
+                return "const result=" + read_command("printf synthetic-work") + ";" + CODE_MODE_EXEC_RESULT_FORWARDER
+        if next_change == "compact" and number == 2:
+            message["content"][0]["text"] = "Synthetic summary without the selected Goal narrative."
+            return None
+        if first_read:
+            page = last_context_page(request, allow_selection=True)
+            assert page and page["ok"]
+            first_pages.append(page)
+            if page["eof"]:
+                return None
+            command = page["next_command"]
+        else:
+            if next_change == "compact":
+                assert "consumed_pointers" not in state
+                assert narrative not in _input_text(request)
+            directory = context / "next-capture"
+            directory.mkdir(mode=0o700)
+            with loopx_cli_route(program):
+                prepared = prepare_codex_context(payload, directory=str(context), capture_directory=directory,
+                    goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="next")
+                first_read = native_context_capture_view(prepared.delivery, directory,
+                    context_directory=str(context), initial_read_plan=prepared.initial_read_plan)
+            command = model_context_reference(first_read)["first_read_command"]
+        return "const result=" + read_command(command) + ";" + CODE_MODE_EXEC_RESULT_FORWARDER
+
+    def response(request, number, message):
+        nonlocal opening
+        try:
+            if initial_requests is not None and next_change:
+                code = resumed_response(request, number - initial_requests, message)
+                if code is None:
+                    return message
+            elif number == 1:
+                # The real SessionStart initialized the journal before inference.
+                session = json.loads((context / "session.json").read_bytes())["session_id"]
+                monkeypatch.setenv("CODEX_THREAD_ID", session)
+                monkeypatch.chdir(workspace)
+                _, wire = project(context, payload=payload)
+                source = wire["recovery"]
+                reader = cli + ["context-read", "--capture-file", source["path"], "--capture-sha256", source["sha256"]]
+                fields = [] if complete_capture else ["--select", long_pointer]
+                opening = shlex.join(reader + [*fields, "--page-bytes", "3000"])
+                independent = shlex.join(reader + ["--select", independent_pointer])
+                code = "{const result=" + read_command(independent) + ";" + CODE_MODE_EXEC_RESULT_FORWARDER + ";}"
+                if restore_missing == "original":
+                    code += "const result=" + read_command(opening) + ";" + CODE_MODE_EXEC_RESULT_FORWARDER + ";"
+                else:
+                    # The nested Bash hook observes the first page. Suppress
+                    # its original parent emission and preserve an exact copy.
+                    code += read_command("set -o pipefail\n" + opening + " | " + shlex.join(["tee", str(saved_page)])) + ";"
+            elif number == 2:
+                first = (last_context_page(request, allow_selection=True) if restore_missing == "original"
+                         else json.loads(saved_page.read_bytes()))
+                assert first and first["ok"] and not first["eof"]
+                code = ("let cmd=" + json.dumps(first["next_command"]) + ";while(cmd){"
+                        "const result=await tools.exec_command({cmd,max_output_tokens:8000});"
+                        + CODE_MODE_EXEC_RESULT_FORWARDER +
+                        ";const page=JSON.parse(result.output);if(!page.ok)throw Error('read failed');"
+                        "cmd=page.next_command;}")
+            elif number == 3 and restore_missing != "original":
+                if restore_missing == "verified":
+                    code = "const result=" + read_command(opening) + ";" + CODE_MODE_EXEC_RESULT_FORWARDER + ";"
+                else:
+                    # Code Mode can re-emit known bytes without a new Bash hook.
+                    code = "text(" + json.dumps(saved_page.read_text()) + ");"
+            else:
+                return message
+            return {"type": "custom_tool_call", "id": f"fixture-{number}", "call_id": f"call_{number}",
+                    "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\n' + code}
+        except Exception as error:
+            errors.append(error)
+            return message
+
+    def usage(_request, number):
+        count = 30000 if next_change == "compact" and initial_requests == number - 1 else 1
+        return {"input_tokens": count, "output_tokens": 1, "total_tokens": count + 1}
+
+    with local_inference_provider(response, usage) as (url, calls, _):
+        _configure_provider(home, url)
+        config = home / "config.toml"
+        config.write_text('tool_output_token_limit=24000\n'
+            + config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
+        session = _app_server(binary, env, workspace, home, True, sandbox="danger-full-access")
+        assert not errors, errors
+        before = json.loads((context / "session.json").read_bytes())
+        pointers = before.get("consumed_pointers", {})
+        assert set(pointers) == ({independent_pointer, ""} if complete_capture else {short_pointer, long_pointer})
+        if complete_capture:
+            assert before["candidate"]["capture_bytes_verified"]
+        if next_change:
+            payload["goal_boundary"]["stop_condition"] = current_stop
+            source = payload["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]
+            if next_change == "todo":
+                payload["selected_todo"]["todo_id"] = "todo_other"
+            elif next_change == "source":
+                source["state_file"] = "replacement-goal.md"
+            elif next_change == "content":
+                source["text"] += " The evidence requirement changed."
+                source["revision"] = "sha256:" + hashlib.sha256(source["text"].encode()).hexdigest()
+        initial_requests = len(calls)
+        assert _app_server(binary, env, workspace, home, True,
+                           sandbox="danger-full-access", resume=session) == session
+    assert not errors
+    after = resume_state if next_change else json.loads((context / "session.json").read_bytes())
+    if complete_capture:
+        assert bool(after.get("candidate")) is (restore_missing != "unobserved")
+        if restore_missing == "unobserved":
+            assert after.get("consumed_pointers", {}) == {independent_pointer: pointers[independent_pointer]}
+            assert after["context_epoch"] != before["context_epoch"]
+            assert after["recovery"] == before["recovery"]
+    else:
+        assert after.get("consumed_pointers", {}) == (
+            pointers if restore_missing != "unobserved" else {short_pointer: pointers[short_pointer]})
+
+    if next_change is None:
+        return
+    assert first_read["mode"] == "full"
+    assert first_read["target"]["context_epoch"] == after["context_epoch"]
+    assert first_read["recovery"]["sha256"] != before["recovery"]["sha256"]
+    assert first_pages and first_pages[-1]["eof"]
+    first_page = first_pages[0]
+    offset = 0
+    for page in first_pages:
+        assert page["offset"] == offset and page["total_bytes"] == first_page["total_bytes"]
+        offset += len(page["content"].encode())
+    assert offset == first_page["total_bytes"]
+    values = selected_context_values("".join(page["content"] for page in first_pages))
+    assert values[short_pointer] == current_stop
+    reused = independent_pointer in first_page.get("previously_delivered_fields", [])
+    assert reused == (next_change == "stop"), (next_change, first_page["total_bytes"])
+    if reused:
+        assert independent_pointer not in values
+        assert first_page["total_bytes"] < len(narrative.encode())
+    else:
+        assert values[independent_pointer] == source["text"]
 
 
 @pytest.mark.parametrize("early_yield", [False, True])

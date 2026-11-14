@@ -412,6 +412,7 @@ def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> 
                 if is_legacy_saved_quota_decision(saved):
                     recovery_command = context_capture_read_command(
                         path, ready_sha256, reader_argv=current_loopx_cli_argv(),
+                        select=["/heartbeat_receipt"] if request.get("complete_turn") is True else None,
                     )
                 else:
                     # Re-open the exact ready source through its checked path.
@@ -523,6 +524,7 @@ def execute_codex_execution_preparation(
         "--context-delivery", "on", "--codex-context-dir", str(context_directory), "--defer-context-presentation",
         "--todo-id", todo_id, "--turn-instance-id", turn_instance_id,
         "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
+        *(["--complete-turn"] if request.get("complete_turn") is True else []),
     ]
     after = _run_json(
         guard,

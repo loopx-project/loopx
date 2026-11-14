@@ -1,8 +1,10 @@
 """Reader references hide repeated digests without weakening byte verification."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
+import subprocess
 import sys
 
 import pytest
@@ -647,6 +649,135 @@ def test_compact_recovery_reference_rejects_changed_source_or_route(tmp_path, da
         "unsafe_route": "invalid CLI route", "different_launcher": "original LoopX",
     }
     assert expected[damage] in rejected["reason"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Private reader references require POSIX")
+@pytest.mark.parametrize("fault", ["missing_pointer", "selection_digest", "observed_scope", "tiny_budget",
+    "invalid_read_option", "attached_selection"])
+def test_bounded_context_read_refusal_preserves_recovery(tmp_path, fault):
+    from loopx.control_plane.turn_driver import codex_context
+    from loopx.control_plane.turn_driver.decision_capture import (
+        write_decision_capture, write_initial_context_read_reference,
+    )
+
+    capture_dir = tmp_path / ("original " + "nested " * 15)
+    capture_dir.mkdir(mode=0o700)
+    source = capture_dir / "decision.json"
+    fields = {f"child_{i:02d}": "private body" for i in range(18)}
+    receipt = {"turn_instance_id": "original-turn"}
+    payload = {"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": receipt, "task": fields, "tail": "完整原文。" * 240,
+        "stop": "Do not continue past the original limit."}
+    digest = write_decision_capture(source, payload)
+    old_bytes = source.read_bytes()
+    registry, runtime = tmp_path / "never-open-registry.json", tmp_path / "never-open-runtime"
+    env = {**os.environ, "CODEX_THREAD_ID": "test-read-failure"}
+    # The installed CLI can also be used to replay this regression unchanged.
+    binary = env.get("LOOPX_CONTEXT_READER_TEST_CLI")
+    launcher = [binary, "--cli-bin", binary] if binary else [sys.executable, "-m", "loopx.entrypoint"]
+    base = [*launcher, "--registry", str(registry), "--runtime-root", str(runtime),
+            "--format", "json", "quota", "context-read"]
+    explicit = ["--capture-file", str(source), "--capture-sha256", digest]
+    bound = 720
+
+    def run(words):
+        return subprocess.run(words, env=env, capture_output=True, check=False, timeout=20)
+
+    def invoke(*options, cap=bound):
+        return run([*base, *explicit, "--max-page-output-bytes", str(cap), *options])
+
+    def read_pages(command, *, limit):
+        raw = b""
+        for _ in range(30):
+            result = run(shlex.split(command))
+            assert result.returncode == 0 and 0 < len(result.stdout) <= limit, result.stdout
+            page = json.loads(result.stdout)
+            assert page["ok"] and page["offset"] == len(raw)
+            raw += page["content"].encode()
+            if page["eof"]:
+                assert len(raw) == page["total_bytes"]
+                return json.loads(raw)["selections"]
+            assert page["next_offset"] == len(raw)
+            command = page["next_command"]
+        pytest.fail("The returned same-capture recovery cursor did not reach EOF")
+
+    if fault in {"tiny_budget", "invalid_read_option"}:
+        options = ("--list", "--list-depth", "9") if fault == "invalid_read_option" else ("--select", "/task/missing")
+        response = invoke(*options, cap=14)
+        assert response.returncode == 1 and len(response.stdout) <= 14
+        assert json.loads(response.stdout) == {"ok": False}
+        response = invoke(*options, cap=2)
+        assert response.returncode == 1 and response.stdout == b""
+        assert source.read_bytes() == old_bytes and not registry.exists() and not runtime.exists()
+        return
+    if fault == "missing_pointer":
+        response = invoke("--select", "/task/child_00", "--select", "/task/missing", "--page-bytes", "720")
+    elif fault == "attached_selection":
+        context_dir = tmp_path / "native"
+        context_dir.mkdir(mode=0o700)
+        project = [*base[:-1], "context-project", *explicit, "--max-page-output-bytes", str(bound),
+            "--codex-app", "--context-delivery", "on", "--codex-context-dir", str(context_dir),
+            "--goal-id", "g", "--agent-id", "a", "--turn-instance-id", receipt["turn_instance_id"],
+            "--select", "/tail"]
+        response = run(project)
+    elif fault == "selection_digest":
+        first = invoke("--select", "/tail", "--page-bytes", "256", cap=4000)
+        page = json.loads(first.stdout)
+        assert first.returncode == 0 and not page["eof"] and page["next_offset"] > 0
+        cursor = shlex.split(page["next_command"])
+        cursor[cursor.index("--selection-sha256") + 1] = "0" * 64
+        cursor[cursor.index("--max-page-output-bytes") + 1] = str(bound)
+        response = run(cursor)
+    else:
+        context_dir = tmp_path / "native"
+        context_dir.mkdir(mode=0o700)
+        event = {"session_id": env["CODEX_THREAD_ID"], "cwd": str(tmp_path), "hook_event_name": "SessionStart",
+                 "source": "startup"}
+        assert codex_context.codex_context_hook(str(context_dir), event) == {}
+        state = codex_context._state(context_dir)
+        # The observation's input is already qualified. The actual CLI and
+        # lifecycle hook own validation, paging, invalidation and readback.
+        target = {"context_epoch": state["context_epoch"], "session_id": env["CODEX_THREAD_ID"]}
+        recovery = {"path": str(source), "sha256": digest, "target": target, "continuity_basis": "captured_file"}
+        fingerprint = hashlib.sha256(payload["stop"].encode()).hexdigest()
+        state.update(recovery=recovery, consumed_pointers={"/stop": fingerprint})
+        codex_context._save(context_dir, state)
+        ordinary = [{"pointer": "/stop", "path": ["stop"]}, {"pointer": "/tail", "path": ["tail"]}]
+        fallback, body = write_initial_context_read_reference(source, digest, payload, ordinary)
+        observed, _ = write_initial_context_read_reference(source, digest, payload, ordinary[1:],
+            observed_read={"directory": str(context_dir), "target": target, "fields": {"/stop": fingerprint},
+                "fallback_reference": {"filename": fallback.name, "selection_sha256": hashlib.sha256(body).hexdigest()}})
+        start = run([*base, "--reference-file", str(observed), "--page-bytes", "256", "--max-page-output-bytes", "4000"])
+        page = json.loads(start.stdout)
+        assert start.returncode == 0 and not page["eof"] and page["previously_delivered_fields"] == ["/stop"]
+        assert codex_context.codex_context_hook(str(context_dir), {**event, "hook_event_name": "PostCompact"}) == {}
+        assert codex_context._state(context_dir)["context_epoch"] != target["context_epoch"]
+        cursor = shlex.split(page["next_command"])
+        cursor[cursor.index("--max-page-output-bytes") + 1] = str(bound)
+        # Long released CLI aliases may carry their own pin flag. The same
+        # executable must remain selected after the failed observation.
+        response = run(cursor)
+
+    failure = json.loads(response.stdout)
+    assert response.returncode == 1 and failure["ok"] is False and "content" not in failure
+    assert len(response.stdout) <= bound, (len(response.stdout), failure)
+    assert "recovery_command" in failure, failure
+    selection = read_pages(failure["recovery_command"], limit=bound)
+    if fault == "missing_pointer":
+        assert failure["diagnostic_code"] == "context_selection_missing_pointer"
+        assert len(selection) == 1 and selection[0]["pointer"] == "/task"
+        assert {item["pointer"] for item in selection[0]["fields"]} == {"/task/" + key for key in fields}
+    elif fault in {"selection_digest", "attached_selection"}:
+        if fault == "selection_digest":
+            assert "digest changed" in failure["reason"]
+        else:
+            assert failure["error_code"] == "quota_decision_transport_failed"
+        assert selection == [{"pointer": "/tail", "value": payload["tail"]}]
+    else:
+        assert "scope changed" in failure["reason"]
+        assert {item["pointer"]: item["value"] for item in selection} == {
+            "/stop": payload["stop"], "/tail": payload["tail"]}
+    assert source.read_bytes() == old_bytes and not registry.exists() and not runtime.exists()
 
 
 def test_reference_publication_never_overwrites_an_existing_document(tmp_path):

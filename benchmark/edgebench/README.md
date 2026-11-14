@@ -1003,30 +1003,28 @@ budget or submissions. Freeze it with exact sources under a new run ID; do not
 change live workers. Receipts qualify requested configuration, while actual
 review, proposal adoption and task gains require trajectory evidence.
 
-## Optional short-context treatment
+## Complete Turn contract
 
-Add `--turn-envelope` to an otherwise identical `heartbeat-resume` or
-`heartbeat-explore` command to use the product's short normal packet and local
-same-invocation full detail. Other workers reject the option before creating a
-trial. The default remains off; the runtime and worker-profile receipts record
-it explicitly. Use a new run ID and freeze this as a separate context treatment,
-keeping objective guidance, task/scorer version, model and budgets matched.
-Omit the flag on the next run to disable it. No active experiment is changed by
-installing this code. Inspect wake receipts and the saved decisions before
-claiming adoption; score countability still requires the usual integrity review.
+New `heartbeat-resume` and `heartbeat-explore` runs use the complete v1
+decision (C1) with the original ready claim, receipt and single-command
+settlement. `--complete-turn` records an explicit selection in the worker
+and runtime receipts. `--context-delivery off` disables native context
+delivery while keeping the same decision contract.
 
-For an explicitly complete v1 Host contract, choose `--complete-turn` instead
-on either heartbeat profile. The shared worker forwards that choice through
-the real heartbeat renderer and guard; it retains the original ready claim,
-receipt and single-command settlement. It cannot be combined with the legacy
-short-envelope option. Context delivery remains independent, and unselected
-runs keep their existing behavior. See the [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
-for source readback, failure recovery and rollback. User task time requirements
-remain readable; private Host deadlines stay outside model context.
+Use `--turn-envelope --context-delivery off` to reproduce the v0 presentation
+of a signed C1 decision. A successful checkpoint handoff preserves that
+presentation; interrupted-tool recovery reads the complete source. Match
+task/scorer version, model and budget under a new run ID. To compare against the
+original quota source, pin the pre-C1 runner and LoopX revision. Wake receipts
+show the requested settings; verify actual delivery in native tool output and
+any recovery reads. See the
+[Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
+for source readback and recovery.
 
-中文：heartbeat profile 可显式选择 `--complete-turn` 以消费完整 v1，不能与旧短包
-选项同时启用；共用原 ready claim、回执和单条结算 owner，不改变未选择的运行。
-按原 source reader 核实采用与恢复；该开关不新增模型、子 worker、时钟或权限。
+中文：新 heartbeat 运行默认用 C1 决策，关闭上下文交付后仍用同一份决策契约。
+同时传 `--turn-envelope --context-delivery off` 可复现旧短包展示，工具中断后
+从完整来源恢复。回执记录配置；实际交付看原生工具结果和恢复读取。原 quota
+对照需要固定 C1 之前的 runner 与 LoopX 版本。
 
 ## Close a managed native attempt
 

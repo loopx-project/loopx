@@ -21,7 +21,7 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.hosts.research_checkpoint import (
     _participant_id, native_binding_participant, verify_native_binding_participant,
-    research_participants, verify_research_participants,
+    research_participants, select_checkpoint_replan, verify_research_participants,
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 from .codex import explicit_turn_display
@@ -122,10 +122,8 @@ def _prior_replan_guard_seen(env: dict[str, str], current: Path, obligation_id: 
         if path.resolve(strict=True) != path:
             raise ValueError("prior checkpoint guard must be a physical Host file")
         guard = json.loads(path.read_text())
-        prior = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "select_replan", "quota": guard, "goal_id": env["LOOPX_GOAL_ID"],
-            "agent_id": env["LOOPX_AGENT_ID"], "turn_instance_id": path.parent.name,
-        }, large_local_snapshot=True)
+        prior = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
+            agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=path.parent.name, allow_legacy_source=True)
         if prior["capture"] and prior["obligation_id"] == obligation_id:
             return True
     return False
@@ -222,9 +220,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("fresh_replan checkpoint trigger requires a heartbeat execute wake")
     started = time.monotonic()
     guard_path = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
-    # Use the CLI's original-decision capture, including with TurnEnvelope off.
-    # The checkpoint selector needs the full source; the model consumes the
-    # ordinary CLI projection of those same bytes, never a second guard.
+    # The selector and the model both use the original CLI guard. The explicit
+    # compatibility display can still render v0 from that signed source.
     capture_root = Path(tempfile.mkdtemp(prefix="checkpoint-start-", dir=guard_path.parent))
     command = [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
                "--runtime-root", env["LOOPX_RUNTIME_ROOT"], "quota", "should-run",
@@ -232,9 +229,12 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write"]
     display = explicit_turn_display(env)
-    if display.complete_turn:
-        command.append("--complete-turn")
     native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
+    if display.uses_complete_heartbeat_guard:
+        command.append("--complete-turn")
+    elif display.turn_envelope:
+        command.append("--turn-envelope")
+    legacy_display = display.turn_envelope and env.get("LOOPX_CONTEXT_DELIVERY", "off") == "off"
     if native_context:
         # The native reader selects full/delta after SessionStart. Ask the
         # existing preparation route for the committed capture reference now.
@@ -244,6 +244,10 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                     "--defer-context-presentation"]
     else:
         command += ["--decision-output-root", str(capture_root)]
+        if legacy_display:
+            # Forward the explicit raw display to the same CLI that renders
+            # ordinary wakes. The checkpoint selector still reads the source.
+            command += ["--context-delivery", "off"]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
     projected = json.loads(guard_run.stdout)
@@ -259,6 +263,9 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("checkpoint requires a successful original quota guard")
     if native_context and projected.get("capture_sha256") != guard_digest:
         raise ValueError("checkpoint prepared capture differs from the original guard; do not replay the guard")
+    # A fresh guard always captures signed C1, including for the v0 display.
+    intent = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
+        agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"])
     # A previous preflight on this wake may already have allowed model work,
     # even if its optional attempt marker (or final receipt) could not be saved.
     # Such reentry can verify an existing point, but cannot capture a later one.
@@ -278,23 +285,33 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
             CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
         )
 
+        reader_argv = loopx_cli_argv(env["LOOPX_CLI"])
+
+        def bounded_read(path: Path, raw: bytes) -> str:
+            return context_capture_read_command(path, hashlib.sha256(raw).hexdigest(),
+                page_bytes=8000, max_page_output_bytes=8000, reader_argv=reader_argv)
+
         view_path = capture_root / "checkpoint-start-view.json"
         view = guard_run.stdout
         atomic_write_state_text(view_path, view, private=True)
-        reader = context_capture_read_command(view_path, hashlib.sha256(view.encode("utf-8")).hexdigest(),
-            page_bytes=8000, max_page_output_bytes=8000, reader_argv=loopx_cli_argv(env["LOOPX_CLI"]))
-        reading = ("Read the complete saved CLI view before work, then follow its interaction_contract "
+        reader = bounded_read(view_path, view.encode("utf-8"))
+        action = "action, required reads and settlement instructions" if legacy_display else "interaction_contract"
+        reading = (f"Read the complete saved CLI view before work, then follow its {action} "
             "and replan review/writeback reads when present.\n```sh\n" + reader + "\n```\n"
             + CONTEXT_CAPTURE_PAGE_GUIDANCE + " ")
+        if legacy_display:
+            reading += (
+                "Use this paged command for the short view's detail_ref.full_decision. "
+                "To read only a required field, append --select with its JSON pointer, for example "
+                "--select /interaction_contract/cli_channel/selection_command when Todo selection is required. "
+                "Apply the same byte checks and follow this source's own page cursors.\n```sh\n"
+                + bounded_read(source_path, raw_guard) + "\n```\n"
+            )
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)
     receipt["checkpoint"] = {"captured": False, "research_point_qualified": False, "phase": "before_replan"}
     try:
-        intent = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "select_replan", "quota": guard, "goal_id": env["LOOPX_GOAL_ID"],
-            "agent_id": env["LOOPX_AGENT_ID"], "turn_instance_id": receipt["turn_id"],
-        }, large_local_snapshot=True)
         from .checkpoint_continuation import restored_capture_gate
         restore_gate = restored_capture_gate(env, intent.get("obligation_id"),
             full_history=not request.get("native_session", False))
@@ -685,11 +702,9 @@ def held_quota_decision(listener, capture_root: Path, *, goal_id: str, agent_id:
         if failed_readback:
             intent = {"capture": False, "reason": "quota_readback_failed", "execution_authority_granted": False}
         else:
-            intent = effect_runtime_result("runtime.checkpoint_artifacts", {
-                "action": "select_replan", "quota": quota, "goal_id": goal_id,
-                "agent_id": agent_id, "turn_instance_id": (turn_instance_id if turn_instance_id is not None
-                    else (quota.get("heartbeat_receipt") or {}).get("turn_instance_id")),
-            }, timeout=remaining(), large_local_snapshot=True)
+            intent = select_checkpoint_replan(quota, goal_id=goal_id, agent_id=agent_id,
+                turn_instance_id=(turn_instance_id if turn_instance_id is not None
+                    else (quota.get("heartbeat_receipt") or {}).get("turn_instance_id")), timeout=remaining())
         if not failed_readback and native_process is not None and interrupt_when is not None and interrupt_when(intent):
             from .worker import interrupt_checkpoint_process
 

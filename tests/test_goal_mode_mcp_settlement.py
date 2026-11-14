@@ -25,6 +25,36 @@ GOAL_ID = "mcp-settlement-fixture"
 AGENT_ID = "claude"
 
 
+def test_mcp_diagnostic_keeps_its_string_result_schema(monkeypatch):
+    import asyncio
+
+    pytest.importorskip("mcp.server.fastmcp")
+    from mcp.types import CallToolResult
+    from loopx.goal_mode_mcp import create_fastmcp_server
+
+    server, control = create_fastmcp_server(
+        GoalModeMCPConfig(server_name="synthetic-mcp", runtime_profile="claude_code",
+                          legacy_host_surface="claude_code"),
+        lambda: {"goal_id": GOAL_ID, "agent_id": AGENT_ID})
+    diagnostic = '{"ok":false,"reason":"no current quota decision"}'
+    monkeypatch.setattr(control, "run_cli", lambda *_args, **_kwargs: diagnostic)
+
+    async def exercise():
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        for name in ("should_run", "list_todos"):
+            schema = tools[name].outputSchema
+            assert schema["properties"]["result"]["type"] == "string"
+            assert schema["required"] == ["result"]
+            result = await server.call_tool(name, {})
+            assert isinstance(result, CallToolResult)
+            assert len(result.content) == 1
+            assert result.structuredContent == {"result": result.content[0].text}
+            assert result.content[0].text == diagnostic
+            assert getattr(control, name)() == diagnostic
+
+    asyncio.run(exercise())
+
+
 def test_host_settlement_adapter_uses_two_runtime_crossings_and_stops_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -33,9 +63,6 @@ def test_host_settlement_adapter_uses_two_runtime_crossings_and_stops_provider(
         agent_id="agent",
         todo_id="todo_abc123",
         runtime_profile="claude_code",
-        legacy_host_surface="claude_code",
-        scheduler_owner="agent_cli_loop",
-        execution_mode="interactive",
         completion_args=("todo", "complete", "todo_abc123"),
     )
     identity = {
@@ -63,7 +90,6 @@ def test_host_settlement_adapter_uses_two_runtime_crossings_and_stops_provider(
                         {
                             "step_kind": "guard",
                             "args": ["guard"],
-                            "legacy_args": None,
                             "continue_when": {
                                 "kind": "equals",
                                 "path": ["ok"],
@@ -73,7 +99,6 @@ def test_host_settlement_adapter_uses_two_runtime_crossings_and_stops_provider(
                         {
                             "step_kind": "lifecycle_completion",
                             "args": ["complete"],
-                            "legacy_args": None,
                             "continue_when": {
                                 "kind": "equals",
                                 "path": ["ok"],
@@ -83,7 +108,6 @@ def test_host_settlement_adapter_uses_two_runtime_crossings_and_stops_provider(
                         {
                             "step_kind": "durable_writeback",
                             "args": ["writeback"],
-                            "legacy_args": None,
                             "continue_when": {
                                 "kind": "equals",
                                 "path": ["ok"],
@@ -93,7 +117,6 @@ def test_host_settlement_adapter_uses_two_runtime_crossings_and_stops_provider(
                         {
                             "step_kind": "quota_spend",
                             "args": ["spend"],
-                            "legacy_args": None,
                             "continue_when": None,
                         },
                     ],
@@ -118,8 +141,7 @@ def test_host_settlement_adapter_uses_two_runtime_crossings_and_stops_provider(
 
     provider_calls: list[list[str]] = []
 
-    def fake_provider(args: list[str], *, legacy_args: list[str] | None = None) -> str:
-        del legacy_args
+    def fake_provider(args: list[str]) -> str:
         provider_calls.append(args)
         return '{"ok": true}' if args == ["guard"] else '{"ok": false}'
 
@@ -138,9 +160,6 @@ def test_typescript_provider_plan_short_circuits_typed_completion_rejection() ->
         agent_id="agent",
         todo_id="todo_abc123",
         runtime_profile="claude_code",
-        legacy_host_surface="claude_code",
-        scheduler_owner="agent_cli_loop",
-        execution_mode="interactive",
         completion_args=("todo", "complete", "todo_abc123"),
     )
     provider_calls: list[list[str]] = []
@@ -151,14 +170,22 @@ def test_typescript_provider_plan_short_circuits_typed_completion_rejection() ->
         "reason": "validation failed",
     }
 
-    def provider(args: list[str], *, legacy_args: list[str] | None = None) -> str:
-        del legacy_args
+    def provider(args: list[str]) -> str:
         provider_calls.append(args)
         if args[:2] == ["quota", "should-run"]:
             return json.dumps(
                 {
                     "ok": True,
-                    "selected_todo": {"todo_id": request.todo_id.upper()},
+                    "schema_version": "loopx_host_todo_settlement_guard_v0",
+                    "settlement_identity": {
+                        "schema_version": "quota_settlement_identity_v0",
+                        "goal_id": request.goal_id,
+                        "agent_id": request.agent_id,
+                        "todo_id": request.todo_id,
+                        "turn_instance_id": args[args.index("--turn-instance-id") + 1],
+                        "effect_id": f"{request.goal_id}:{request.agent_id}:{request.todo_id}:"
+                                     f"{args[args.index('--turn-instance-id') + 1]}",
+                    },
                 }
             )
         return json.dumps(rejection)
@@ -171,7 +198,7 @@ def test_typescript_provider_plan_short_circuits_typed_completion_rejection() ->
     assert provider_calls[1][:2] == ["todo", "complete"]
 
 
-def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _write_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[Path, Path]:
     project = tmp_path / "project"
     project.mkdir()
     state_file = project / "ACTIVE_GOAL_STATE.md"
@@ -218,7 +245,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
                             "registered_agents": [AGENT_ID],
                             "storage_target": {
                                 "schema_version": "loopx_new_goal_storage_target_v1",
-                                "provider": "file",
+                                "provider": provider,
                                 "handoff_mode": "soft_claim",
                             },
                         },
@@ -275,6 +302,118 @@ def _control(registry: Path) -> GoalModeMCPControlPlane:
     return control
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_mcp_rejects_corrupt_turn_decision_before_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = _write_fixture(tmp_path.resolve(), provider=provider)
+    todo = add_goal_todo(
+        registry_path=registry, goal_id=GOAL_ID, role="agent",
+        text="Verify completion through the original guard.",
+        task_class="advancement_task", claimed_by=AGENT_ID,
+    )
+    todo_id = todo["todo_id"]
+    control = _control(registry)
+    original = control.run_cli
+    calls = []
+
+    # Mutate the decision after it was bound, on the CLI side of the MCP
+    # boundary. The guard receipt itself still belongs to this Todo and Turn.
+    script = """
+from loopx.control_plane.quota import turn_envelope as owner
+from loopx.cli import main
+
+transport = owner._turn_envelope_result
+
+def corrupt(operation, **params):
+    if operation != "compose_complete":
+        return transport(operation, **params)
+    if not params.pop("host_todo_settlement", False):
+        return transport(operation, **params)
+    packet = transport(operation, **params)
+    packet["contract_binding"]["content_hash"] = "sha256:" + "0" * 64
+    return transport(operation, payload=packet, host_todo_settlement=True,
+                     scheduler_execution_args=params["scheduler_execution_args"])
+
+owner._turn_envelope_result = corrupt
+main()
+"""
+
+    def guard_with_damage(args):
+        calls.append(args[:2])
+        if args[:2] != ["quota", "should-run"]:
+            return original(args)
+        if "--host-todo-settlement" not in args:
+            # The pre-fix adapter received the full decision across stdout.
+            packet = json.loads(original([*args, "--complete-turn"]))
+            packet["contract_binding"]["content_hash"] = "sha256:" + "0" * 64
+            return json.dumps(packet)
+        prefix = control.command_prefix
+        control.command_prefix = lambda: [sys.executable, "-c", script]
+        try:
+            return original(args)
+        finally:
+            control.command_prefix = prefix
+
+    before = state.read_bytes()
+    control.run_cli = guard_with_damage
+    result = json.loads(control.complete_task(todo_id, AGENT_ID, "Verified fixture completion."))
+    assert result["ok"] is False, result
+    assert result["settlement"]["failed_stage"] == "guard"
+    assert "complete Turn decision content integrity mismatch" in result["settlement"]["reason"]
+    assert calls == [["quota", "should-run"]]
+    assert state.read_bytes() == before
+    control.run_cli = original
+    assert json.loads(control.should_run())["quota"]["spent_slots"] == 0
+
+    recovered = json.loads(control.complete_task(todo_id, AGENT_ID, "Verified fixture completion."))
+    assert recovered["ok"] is True, recovered
+    assert recovered["settlement"]["quota_spend"]["appended"] is True
+
+
+@pytest.mark.parametrize("observation", ["legacy", "missing_identity", "wrong_todo", "wrong_turn"])
+def test_mcp_requires_the_compact_observation_and_its_exact_identity(
+    tmp_path: Path, observation: str,
+) -> None:
+    registry, state = _write_fixture(tmp_path)
+    todo_id = add_goal_todo(
+        registry_path=registry, goal_id=GOAL_ID, role="agent",
+        text="Check a mismatched completion guard.",
+        task_class="advancement_task", claimed_by=AGENT_ID,
+    )["todo_id"]
+    control = _control(registry)
+    original = control.run_cli
+    calls = []
+
+    def substitute_guard(args):
+        calls.append(args[:2])
+        output = original(args)
+        if args[:2] != ["quota", "should-run"]:
+            return output
+        packet = json.loads(output)
+        if observation == "legacy":
+            return json.dumps({"ok": True, "selected_todo": {"todo_id": todo_id}})
+        if observation == "missing_identity":
+            del packet["settlement_identity"]
+        elif observation == "wrong_todo":
+            packet["settlement_identity"]["todo_id"] = "todo_wrong123"
+        else:
+            packet["settlement_identity"]["turn_instance_id"] = "mcp-other-turn"
+        return json.dumps(packet)
+
+    control.run_cli = substitute_guard
+    before = state.read_bytes()
+    result = json.loads(control.complete_task(todo_id, AGENT_ID, "Must not settle this guard."))
+    assert result["ok"] is False, result
+    assert result["settlement"]["failed_stage"] == "guard"
+    assert calls == [["quota", "should-run"]]
+    assert state.read_bytes() == before
+
+
 def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identity(
     tmp_path: Path,
 ) -> None:
@@ -294,9 +433,6 @@ def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identit
         agent_id=AGENT_ID,
         todo_id=todo_id,
         runtime_profile="claude_code",
-        legacy_host_surface="claude_code",
-        scheduler_owner="agent_cli_loop",
-        execution_mode="interactive",
         completion_args=(),
     )
     turn_instance_id = host_adapter_turn_instance_id(request)
@@ -418,6 +554,36 @@ def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identit
     )
     assert replay_status_rc == 0, replay_status
     assert replay_status["quota"]["spent_slots"] == 1  # type: ignore[index]
+
+
+def test_mcp_uses_its_package_when_path_has_an_older_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    registry, _ = _write_fixture(tmp_path.resolve())
+    todo_id = add_goal_todo(
+        registry_path=registry, goal_id=GOAL_ID, role="agent",
+        text="Complete with the MCP server's own CLI.",
+        task_class="advancement_task", claimed_by=AGENT_ID,
+    )["todo_id"]
+    bin_dir = tmp_path / "old-bin"
+    bin_dir.mkdir()
+    (bin_dir / "loopx").write_text("#!/bin/sh\nexit 99\n")
+    (bin_dir / "loopx").chmod(0o700)
+    workspace = tmp_path / "project"
+    (workspace / "loopx").mkdir()
+    (workspace / "loopx/__init__.py").write_text('raise RuntimeError("workspace version loaded")\n')
+    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), os.environ["PATH"]]))
+    monkeypatch.chdir(workspace)
+
+    control = GoalModeMCPControlPlane(
+        GoalModeMCPConfig(server_name="fixture", runtime_profile="claude_code", legacy_host_surface="claude_code"),
+        lambda: {"goal_id": GOAL_ID, "registry": str(registry), "agent_id": AGENT_ID},
+    )
+    result = json.loads(control.complete_task(todo_id, AGENT_ID, "Verified through the matching CLI."))
+    assert result["ok"] is True, result
+    assert result["settlement"]["quota_spend"]["appended"] is True
 
 
 def test_real_mcp_terminal_completion_closes_out_after_spend(

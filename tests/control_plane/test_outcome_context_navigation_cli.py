@@ -16,10 +16,12 @@ from loopx.cli_commands.quota_capture import read_context_capture
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 
 
+@pytest.mark.parametrize("legacy_spelling", [False, True])
 @pytest.mark.parametrize("inherited", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("marked_goal", [True, False])
-def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_path, monkeypatch, marked_goal, provider, inherited):
+def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_path, monkeypatch, marked_goal, provider, inherited, legacy_spelling):
+    alias = ("--turn-envelope",) if legacy_spelling else ()
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     goal, agent = "scope-cli", "author"
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
@@ -33,7 +35,8 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
         if marked_goal else body)
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry, goal_id=goal,
         domain="software", adapter_kind="generic_project_goal_v0", state_file=str(state),
-        registered_agents=[agent, "peer"], quota_allowed_slots=None)
+        registered_agents=[agent, "peer"], quota_allowed_slots=None,
+        peer_independent_worktree_required=False)
     initialize_canonical_authority(runtime, goal,
         build_todo_runtime_shadow_projection(goal_id=goal, todos=todos, handoff_mode="soft_claim"), state_path=state, provider=provider)
 
@@ -57,8 +60,14 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
         from tests.control_plane.test_context_machine_configuration import configure
         code, applied = configure(registry, runtime, tmp_path, "on", delta="auto")
         assert code == 0 and applied["readback_verified"], applied
-    off = cli("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
-    source = next(row["content"] for row in off["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    off = cli("quota", "should-run", *alias, "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
+    if legacy_spelling:
+        assert off["schema_version"] == "loopx_turn_envelope_v0"
+        work_context = off["work_context"]
+    else:
+        assert "schema_version" not in off and "contract_binding" not in off
+        work_context = off["interaction_contract"]["agent_channel"]["work_context"]
+    source = next(row["content"] for row in work_context["sources"]
         if row.get("source") == "goal_acceptance")
     assert "outcome_context" not in source
     assert len(source["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]) == 2
@@ -68,7 +77,7 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
     monkeypatch.setenv("CODEX_THREAD_ID", "scope-session")
     codex_context_hook(str(native), {"hook_event_name": "SessionStart", "session_id": "scope-session",
         "cwd": str(tmp_path), "source": "startup"})
-    first = cli("quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+    first = cli("quota", "should-run", *alias, "--goal-id", goal, "--agent-id", agent,
         *([] if inherited else ["--context-delivery", "on", "--delta-delivery", "auto"]),
         "--codex-app", "--codex-context-dir", str(native),
         "--decision-output-root", str(tmp_path / "captures"), "--turn-instance-id", "scope-turn")

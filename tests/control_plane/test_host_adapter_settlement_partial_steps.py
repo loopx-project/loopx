@@ -42,24 +42,28 @@ def _request() -> HostTodoSettlementRequest:
         agent_id="agent",
         todo_id=TODO_ID,
         runtime_profile="claude_code",
-        legacy_host_surface="claude_code",
-        scheduler_owner="agent_cli_loop",
-        execution_mode="interactive",
         completion_args=("todo", "complete", TODO_ID),
     )
 
 
-def _guard_payload() -> str:
-    """The guard shape the TypeScript owner accepts as a Todo selection."""
-    return json.dumps({"ok": True, "selected_todo": {"todo_id": TODO_ID}})
+def _guard_payload(args: list[str]) -> str:
+    turn_id = args[args.index("--turn-instance-id") + 1]
+    return json.dumps({
+        "ok": True,
+        "schema_version": "loopx_host_todo_settlement_guard_v0",
+        "settlement_identity": {
+            "schema_version": "quota_settlement_identity_v0", "goal_id": "goal",
+            "agent_id": "agent", "todo_id": TODO_ID, "turn_instance_id": turn_id,
+            "effect_id": f"goal:agent:{TODO_ID}:{turn_id}",
+        },
+    })
 
 
 def test_an_unreadable_step_output_stops_the_plan_and_the_owner_classifies_it() -> None:
     """The adapter stops; the TypeScript owner decides what the stop means."""
     calls: list[list[str]] = []
 
-    def provider(args: list[str], *, legacy_args: list[str] | None = None) -> str:
-        del legacy_args
+    def provider(args: list[str]) -> str:
         calls.append(args)
         # A CLI failure returns its stderr, which is not JSON at all.
         return "quota should-run failed: synthetic CLI failure"
@@ -88,12 +92,11 @@ def test_a_raising_step_leaves_no_finalize_and_no_adapter_local_resume(
 
     calls: list[list[str]] = []
 
-    def provider(args: list[str], *, legacy_args: list[str] | None = None) -> str:
-        del legacy_args
+    def provider(args: list[str]) -> str:
         calls.append(args)
         if len(calls) == 2:
             raise RuntimeError("synthetic CLI step failure")
-        return _guard_payload()
+        return _guard_payload(args)
 
     with pytest.raises(RuntimeError, match="synthetic CLI step failure"):
         settle_host_todo_completion(_request(), run_cli=provider)

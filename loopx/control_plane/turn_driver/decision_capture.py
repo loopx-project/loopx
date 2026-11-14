@@ -16,6 +16,7 @@ from pathlib import Path
 from ..quota.turn_envelope import bind_turn_decision_capture
 from ..quota.error_codes import QuotaCommandValidationError
 from ..content_digest import BARE_SHA256_PATTERN
+from ..runtime.private_permissions import protect_private_path, require_private_path
 from .native_context_profile import (
     NATIVE_CONTEXT_PAGE_BYTES as NATIVE_CONTEXT_PAGE_BYTES,
     NATIVE_CONTEXT_PAGE_OUTPUT_BYTES as NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
@@ -27,20 +28,52 @@ from .native_context_profile import (
 
 
 def private_capture_supported() -> bool:
-    """Whether this host has the POSIX identity needed for private capture IO."""
+    """Whether this host can prove private ownership using POSIX file identity."""
     return os.name == "posix" and callable(getattr(os, "getuid", None))
 
 
 def private_capture_uid() -> int:
-    """Fail closed until this IO boundary has a qualified non-POSIX ACL reader.
-
-    POSIX mode bits cannot establish Windows privacy. Check before creating or
-    reading private captures, and before evaluating bounded settlement commands.
-    """
+    """Require the POSIX identity used by the legacy bounded spend path."""
     if not private_capture_supported():
         raise ValueError("private capture validation is unsupported on this platform; "
                          "use the same Turn command without --max-page-output-bytes")
     return cast(int, getattr(os, "getuid")())
+
+
+def require_private_capture_directory(path: Path) -> None:
+    """Require a physical, owner-only capture directory without changing it."""
+    require_private_path(path, directory=True)
+    if os.name == "nt" and path.resolve(strict=True) != path:
+        raise OSError("private capture directory traverses a redirected path")
+
+
+def private_capture_root(runtime_root: Path) -> Path:
+    """Allocate the shared private transport leaf, checking existing ACLs in place."""
+    if os.name != "nt":
+        private_capture_uid()
+    root = runtime_root.expanduser().resolve() / "context-delivery"
+    root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        root.mkdir(mode=0o700)
+    except FileExistsError:
+        require_private_capture_directory(root)
+    else:
+        protect_private_path(root, directory=True)
+    return root
+
+
+def private_capture_subdirectory(root: Path, prefix: str) -> Path:
+    directory = Path(tempfile.mkdtemp(prefix=prefix, dir=root))
+    if os.name == "nt":
+        try:
+            protect_private_path(directory, directory=True)
+        except OSError as error:
+            try:
+                directory.rmdir()
+            except OSError as cleanup_error:
+                error.add_note(f"Could not discard the empty capture directory: {cleanup_error}")
+            raise
+    return directory
 
 
 def _decision_json(payload: Mapping[str, Any]) -> str:
@@ -59,6 +92,11 @@ def write_decision_capture(
     descriptor, temporary = tempfile.mkstemp(prefix=".decision-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
+            if os.name == "nt":
+                # The empty temporary file may initially inherit its parent's ACL.
+                leaf = Path(temporary)
+                protect_private_path(leaf)
+                require_private_path(leaf, descriptor=stream.fileno())
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
@@ -84,8 +122,9 @@ def open_regular_capture(path: Path) -> int:
         entry = os.lstat(path)
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError("capture must be a regular file")
-        if stat.S_ISLNK(entry.st_mode):
-            raise ValueError("capture must not be a symlink")
+        if (stat.S_ISLNK(entry.st_mode)
+                or getattr(entry, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError("capture must not be a symlink or reparse point")
         if (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino):
             raise ValueError("capture changed while it was opened")
     except BaseException:
@@ -394,6 +433,7 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
 def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
                                  navigation: dict[str, Any] | None = None, observed_read: dict[str, Any] | None = None,
                                  selection_paths: list[list[str | int]] | None = None,
+                                 reference_directory: Path | None = None,
                                  reference_file: Path | None = None,
                                  reader_argv: list[str] | None = None) -> Path:
     """Immutable reader IO metadata, not a new identity or authority store.
@@ -419,9 +459,12 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
             payload = with_paths
     suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
               if selection is not None or navigation is not None else "")
+    directory = path.parent if reference_directory is None else reference_directory
     if reference_file is not None and selection is not None:
         reference_file = reference_file.with_name(reference_file.name + suffix)
-    reference = reference_file or path.with_name(path.stem + suffix + ".reader.json")
+    reference = reference_file or directory / (path.stem + suffix + ".reader.json")
+    if os.name == "nt":
+        require_private_capture_directory(reference.parent)
     try:
         write_decision_capture(reference, payload)
     except FileExistsError:
@@ -443,17 +486,22 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     """Read one private physical descriptor; the caller verifies capture bytes."""
     from ..effect_runtime import MAX_REQUEST_BYTES
 
-    uid = private_capture_uid()
     path = Path(value).expanduser().absolute()
+    if os.name == "nt":
+        require_private_capture_directory(path.parent)
+    else:
+        private_capture_uid()
     path = path.parent.resolve(strict=True) / path.name
     if path.is_symlink():
         raise ValueError("reader reference must be a physical file, not a symlink")
     descriptor = open_regular_capture(path)
     with os.fdopen(descriptor, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if (info.st_uid != uid or info.st_mode & 0o077
-                or info.st_size > MAX_REQUEST_BYTES):
-            raise ValueError("reader reference must be a private regular file owned by this user")
+        try:
+            require_private_path(path, descriptor=stream.fileno())
+        except OSError as exc:
+            raise ValueError("reader reference must be a private regular file owned by this user") from exc
+        if os.fstat(stream.fileno()).st_size > MAX_REQUEST_BYTES:
+            raise ValueError("reader reference exceeds the existing transport limit")
         raw = stream.read(MAX_REQUEST_BYTES + 1)
     if len(raw) > MAX_REQUEST_BYTES:
         raise ValueError("reader reference exceeds the existing transport limit")
@@ -468,10 +516,12 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     if "reader_argv" in payload:
         from ...command_invocation import validate_context_reader_route
 
-        # A compact reference may inherit one exact CLI override. Arbitrary
-        # executable strings are not interpreted by the reader.
         validate_context_reader_route(payload["reader_argv"])
     return path, payload
+
+
+class ContextCaptureDigestMismatch(ValueError):
+    """The saved capture does not match the digest supplied by its reader."""
 
 
 def read_context_capture_file(value: str, digest: str, *, private: bool = False) -> tuple[Path, bytes, dict[str, Any]]:
@@ -480,8 +530,12 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
 
     if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
         raise ValueError("context-read requires the original capture file and its exact SHA-256")
-    uid = private_capture_uid() if private else None
     path = Path(value).expanduser().absolute()
+    if private:
+        if os.name == "nt":
+            require_private_capture_directory(path.parent)
+        else:
+            private_capture_uid()
     # Parent aliases such as macOS /tmp are normal capture locations.
     # Resolve those once, but never follow a substituted final file.
     path = path.parent.resolve(strict=True) / path.name
@@ -492,11 +546,14 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
         metadata = os.fstat(stream.fileno())
         if metadata.st_size > MAX_REQUEST_BYTES:
             raise ValueError("capture must be a regular JSON file within the existing transport size limit")
-        if private and (metadata.st_uid != uid or metadata.st_mode & 0o077):
-            raise ValueError("native context requires a private capture owned by this user")
+        if private:
+            try:
+                require_private_path(path, descriptor=stream.fileno())
+            except OSError as exc:
+                raise ValueError("context reader requires a private capture owned by this user") from exc
         raw = stream.read(metadata.st_size + 1)
     if len(raw) != metadata.st_size or hashlib.sha256(raw).hexdigest() != digest:
-        raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
+        raise ContextCaptureDigestMismatch("capture digest mismatch; restore the original capture, do not rerun admission")
     payload = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("capture must contain a complete JSON object")
@@ -545,16 +602,20 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
                                 surface: str = "quota_packet",
                                 selection_command_args_template: str | None = None,
                                 captured_decision_path: str | None = None,
-                                replan_reader_argv: list[str] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+                                captured_recovery: dict[str, Any] | None = None,
+                                replan_review_source: dict[str, Any] | None = None,
+                                replan_reader_argv: list[str] | None = None,
+                                ) -> tuple[dict[str, Any], dict[str, Any], Path | None]:
     """Publish the complete current source before optional stateless presentation.
 
     The typed owner applies the shrink guard. This neither creates a native
     journal nor requires/adopts an execution Turn. All recovery is same-capture.
-    A caller may supply the exact decision it just verified for staged reads.
+    A caller may supply the exact decision it just saved or verified for staged
+    reads and use that same capture's digest for the optional successor reader.
     """
     from ..quota.turn_envelope import prepare_progressive_context
 
-    source = capture_context_projection(payload, directory=directory)
+    source = captured_recovery or capture_context_projection(payload, directory=directory)
     transaction = prepare_progressive_context(payload, surface=surface, source_reference={
         **{key: source[key] for key in ("path", "sha256")},
         **({"selection_command_args_template": selection_command_args_template}
@@ -564,10 +625,26 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
         "source_path": source["path"],
         "command_template": source["command"] + " --select '<pointer>'",
     })
+    review = pin_source_replan_review(payload, replan_review_source or source, transaction)
     if not transaction["projected"]:
-        return payload, source
+        return payload, source, review
     required = transaction["context"]
-    return required, capture_context_projection(required, directory=directory, filename="required-context.json")
+    recovery = capture_context_projection(required, directory=directory, filename="required-context.json")
+    return required, recovery, review
+
+
+def pin_source_replan_review(payload: dict[str, Any], source: dict[str, Any],
+                             transaction: dict[str, Any]) -> Path | None:
+    """Pin the typed owner's optional selection against its original input."""
+    review = transaction.get("source_replan_review")
+    if review is None:
+        return None
+    try:
+        reference, _ = write_initial_context_read_reference(
+            Path(source["path"]), source["sha256"], payload, review["selections"])
+        return reference
+    except (OSError, ValueError):
+        return None  # The ordinary staged reader remains available.
 
 
 def project_captured_context(
@@ -777,7 +854,8 @@ def initial_context_selection_bytes(payload: dict[str, Any], selections: list[di
 
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
-                                        observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
+                                        observed_read: dict[str, Any] | None = None,
+                                        reference_directory: Path | None = None) -> tuple[Path, bytes]:
     """Pin the shared rendered selection and return its exact rendered bytes."""
     text_append = observed_read.get("text_append") if observed_read else None
     raw, presented = initial_context_selection_bytes(payload, selections, text_append=text_append)
@@ -785,7 +863,7 @@ def write_initial_context_read_reference(path: Path, digest: str, payload: dict[
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
             list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
         selection_paths=[item["path"] for item in selections],
-        observed_read=observed_read)
+        observed_read=observed_read, reference_directory=reference_directory)
     return reference, raw
 
 

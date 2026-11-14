@@ -65,7 +65,7 @@ def register_quota_command(
         help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
     quota_parser.add_argument("--decision-file", help="Original captured decision for read-only replan-view.")
-    quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view.")
+    quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view. Use context-read --select for saved-file detail.")
     quota_parser.add_argument("--source-hash", help="Original source_decision_hash for replan-view.")
     quota_parser.add_argument("--replan-stage", choices=["review", "writeback", "acceptance", "explore"], default="review",
                               help="Read decision context before opening its writeback format.")
@@ -111,8 +111,9 @@ def register_quota_command(
         "--scheduler-observation",
         action="store_true",
         help=(
-            "Return the shell worker's scheduler facts as JSON from should-run, "
-            "without starting a Turn or preparing model context."
+            "Return scheduler facts as JSON from should-run without starting a Turn "
+            "or preparing model context. Existing capability declarations and "
+            "--record-host-poll apply when supplied."
         ),
     )
     quota_parser.add_argument(
@@ -220,13 +221,16 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "For `quota should-run`, return the additive bounded TurnEnvelope view. "
-            "The default full decision remains unchanged."
+            "Request the bounded v0 Turn envelope with raw --context-delivery off. "
+            "Progressive or Delta delivery use the complete decision. Managed handoff "
+            "requires the Host to release the complete capture before rendering the selected view."
         ),
     )
     turn_view.add_argument("--complete-turn", action="store_true",
         help="For JSON quota should-run, explicitly consume the complete v1 Turn contract and its shared exact-Turn settlement. "
-             "The legacy --turn-envelope and unselected output keep their existing versions. Context/Delta delivery remain independent.")
+             "Ordinary quota keeps its existing source and settlement. Context/Delta delivery remain independent.")
+    turn_view.add_argument("--host-todo-settlement", action="store_true", help=argparse.SUPPRESS)
+    quota_parser.add_argument("--host-todo-admission", action="store_true", help=argparse.SUPPRESS)
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(
         "--decision-output-dir",
@@ -287,7 +291,8 @@ def register_quota_command(
         help="For context-read --list: expand 1 to 8 levels in one index (default: 1). "
              "Select the nearest useful parent to avoid unrelated fields; known pointers can be read directly with repeated --select.")
     quota_parser.add_argument("--selection-sha256",
-        help="For selected context-read continuations: exact derived-view digest from the preceding page.")
+        help="For selected context-read continuations: exact derived-view digest from the preceding page, "
+             "including captured outcome reads. Follow next_command rather than computing it.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int,
         help="For context-read or an attached native JSON context-project page: maximum UTF-8 content bytes per page. "
@@ -297,7 +302,7 @@ def register_quota_command(
              "use only with known sufficient direct and retained-history output budgets.")
     quota_parser.add_argument("--max-page-output-bytes", type=int,
         help="For JSON context-read, native should-run/context-project, progressive context-project --initial-read, "
-             "or Turn-bound JSON spend-slot: optional positive output byte limit. "
+             "Turn-bound JSON spend-slot or digest-bound JSON replan writeback: optional positive output byte limit. "
              "Reader pages shrink at UTF-8 boundaries; oversized settlement diagnostics remain complete in a private immutable result with reader references. "
              "An insufficient metadata budget returns an error; this option does not enable native context continuity.")
     quota_parser.add_argument(

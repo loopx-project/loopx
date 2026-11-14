@@ -15,10 +15,12 @@ from tests.test_loopx_turn_managed_step import _failed_journal
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("source_fault", [None, "unknown_action", "missing_read_command", "unknown_read_order"])
-def test_real_managed_entrypoint_checks_and_preserves_the_complete_source(
-    tmp_path, monkeypatch, provider, source_fault,
+@pytest.mark.parametrize("entrypoint", ["quota", "managed"])
+def test_real_current_entrypoints_check_and_preserve_the_complete_source(
+    tmp_path, monkeypatch, provider, source_fault, entrypoint,
 ):
     from loopx.cli import main as cli_main
+    from loopx.cli_commands import quota as quota_command
     from loopx.cli_commands.turn_decision import FreshTurnDecisionOwner
     from loopx.control_plane.turn_driver import loop_controller, turn_journal_path
 
@@ -52,6 +54,15 @@ def test_real_managed_entrypoint_checks_and_preserves_the_complete_source(
         return current
 
     monkeypatch.setattr(FreshTurnDecisionOwner, "resolve", lambda self: source_data(resolve(self)))
+    exported = quota_command._export
+
+    def with_quota_source(name):
+        function = exported(name)
+        if name == "build_live_quota_should_run_decision":
+            return lambda *args, **kwargs: source_data(function(*args, **kwargs))
+        return function
+
+    monkeypatch.setattr(quota_command, "_export", with_quota_source)
     observed = []
     request = loop_controller.effect_runtime_projection_result
 
@@ -66,10 +77,15 @@ def test_real_managed_entrypoint_checks_and_preserves_the_complete_source(
     argv = [*prefix, "turn", "managed-step", "--goal-id", lineage["goal_id"], "--agent-id", lineage["agent_id"],
         "--turn-key", journal["turn_key"], "--host", "dsh", "--execution-mode", "isolated-headless",
         "--observed-attempt", "1", "--observed-max-attempts", "3"]
+    turn_id = "complete-source-qualification"
+    if entrypoint == "quota":
+        argv = [*prefix, "quota", "should-run", "--goal-id", lineage["goal_id"],
+            "--agent-id", lineage["agent_id"], "--todo-id", lineage["todo_id"],
+            "--turn-instance-id", turn_id, "--context-delivery", "off", "--complete-turn"]
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = cli_main(argv)
-        result = json.loads(output.getvalue())
+    result = json.loads(output.getvalue())
     if source_fault:
         assert code == 1 and result["ok"] is False, result
         expected = {"unknown_action": "Turn effective_action",
@@ -77,10 +93,42 @@ def test_real_managed_entrypoint_checks_and_preserves_the_complete_source(
                     "unknown_read_order": "required read ordering"}[source_fault]
         assert expected in result["error"], result
         assert observed == []
+        if entrypoint == "quota":
+            assert result["should_run"] is False
+            assert result["error_code"] == "quota_decision_transport_failed"
+            assert result["diagnostic_code"] == "invalid_request"
+            assert result["reason"] == result["error"]
+            assert "receipt" in result["recommended_action"]
+            assert "saved" not in result["recommended_action"]
+            assert "captured_decision" not in result and "source_diagnostic" not in result
+            assert "interaction_contract" not in result and "execution_preparation" not in result
+            assert result["heartbeat_receipt"]["turn_instance_id"] == turn_id
+            assert result["heartbeat_receipt"]["event_id"]
+            if source_fault == "missing_read_command":
+                markdown_argv = list(argv)
+                markdown_argv[markdown_argv.index("--format") + 1] = "markdown"
+                markdown_argv[markdown_argv.index("--complete-turn")] = "--turn-envelope"
+                markdown = io.StringIO()
+                with contextlib.redirect_stdout(markdown):
+                    assert cli_main(markdown_argv) == 1
+                assert expected in markdown.getvalue()
+                assert turn_id in markdown.getvalue()
+                assert "saved" not in markdown.getvalue()
+            receipt_log = runtime / "goals" / lineage["goal_id"] / "rollout-event-log.jsonl"
+            events = (json.loads(line) for line in receipt_log.read_text().splitlines())
+            guard_ids = [event["event_id"] for event in events
+                if event["event_kind"] == "quota_should_run" and event["run_id"] == turn_id
+                and event["agent_id"] == lineage["agent_id"]]
+            assert guard_ids == [result["heartbeat_receipt"]["event_id"]]
     else:
-        assert code == 0 and result["disposition"] == "wait", result
-        assert len(observed) == 1
-        source = observed[0]
+        if entrypoint == "managed":
+            assert code == 0 and result["disposition"] == "wait", result
+            assert len(observed) == 1
+            source = observed[0]
+        else:
+            assert code == 0 and result["should_run"] is True, result
+            assert observed == []
+            source = result
         assert source["schema_version"] == "loopx_turn_envelope_v1"
         assert "action_signature" not in source
         assert source["future_supporting_evidence"] == evidence

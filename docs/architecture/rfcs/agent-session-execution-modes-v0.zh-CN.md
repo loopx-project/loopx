@@ -395,7 +395,7 @@ host resume 后 Core 仍停止；已验证终态不待机轮询。读回 binding
 
 | 环节 | 实际 owner 与交接 | 必须验证的反例 |
 |---|---|---|
-| 下发前 | `external_scheduler_worker` 先消费 Core 本地停止指令，再严格检查布尔型 `should_run`。现有 monitor／reset-token／退避规则保留等待，变化信号仍需当前准入。 | 字符串 `"false"`、数字、缺失或其他错误准入值不能启动 wake 命令，`run_now` 也不能覆盖；停止直接退出，不轮询或做最后修复探测。 |
+| 下发前 | `external_scheduler_worker` 优先执行 Core 本地停止指令。成功的调度观测提供布尔型 `interaction_contract.agent_channel.must_attempt`。现有 monitor、reset token 和退避规则保留等待，变化信号仍需当前准入。 | 字符串 `"false"`、数字、缺失或其他错误唤醒值都无法启动 wake 命令。`run_now` 也不能覆盖。收到停止指令后直接退出。 |
 | 当前指令 | 稳定心跳入口读取新 guard；类型化 `interaction_contract` 投影当前工作来源、范围内阻塞与尚需完整读取的 Goal／验收，`turn_envelope` 和 Codex Host 消费同一次观察。形成有界工作摘要：有证据的变化、阻塞、下一步、验收与停止条件。 | 同一 Todo 身份的要求变化必须带入新条件；来源缺失禁止依赖工作，缺少对照证据是 unknown，不能当作无变化。展示摘要不替代完整要求或来源版本。 |
 | 纠偏与复核 | 复用操作恢复、所选工作纠偏及 `replan_action_packet.planning_guidance`。仅在 Goal／路线／依赖／验收证据支持时扩大重规划；Core 到期复核可以保留原路线。 | 安静 monitor 回执不能触发模板自设的“两次停滞重规划／暂停”；决定回执不证明后续工作已采纳或结果已改善。 |
 

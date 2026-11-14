@@ -236,11 +236,10 @@ async function runQuotaProbe(binding, directory, execFileImpl) {
     binding.goalId,
     "--runtime-profile",
     "generic_cli",
-    "--include-detail",
-    "scheduler",
     "--record-host-poll",
   ]
-  if (binding.agentId) args.push("--agent-id", binding.agentId)
+  if (binding.agentId) args.push("--agent-id", binding.agentId, "--scheduler-observation")
+  else args.push("--include-detail", "scheduler", "--context-delivery", "off")
   for (const capability of binding.availableCapabilities || []) {
     args.push("--available-capability", capability)
   }
@@ -287,8 +286,10 @@ function shouldRunNow(decision) {
 
 
 function waitPlan(decision, binding) {
-  const local = decision?.scheduler_hint?.unchanged_poll?.local_scheduler
-  if (!local || local === "stop") return { stop: true }
+  const hint = decision?.scheduler_hint
+  const directive = hint?.unchanged_poll?.local_scheduler
+  const local = hint?.cold_path_detail?.local_scheduler ?? directive
+  if (!local || directive === "stop") return { stop: true }
   const token = decision?.scheduler_hint?.reset_policy?.reset_token || ""
   const sameIdentity = token && token === binding.schedulerToken
   const unchangedPolls = sameIdentity ? Number(binding.unchangedPolls || 0) : 0

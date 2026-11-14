@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import sys
 
 import pytest
@@ -22,6 +23,74 @@ from loopx.control_plane.testing.cli_output_semantics import (
     command_route_counts,
     todo_work_counts_schema_versions,
 )
+
+
+def test_pinned_reader_follows_a_powershell_command_with_literal_paths(tmp_path, monkeypatch):
+    import hashlib
+    import os
+    from pathlib import Path
+
+    from loopx import install_contract
+    from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
+    executable = Path(sys.executable)
+    if os.name != "nt":
+        # A path requiring PowerShell's call operator reproduces the native
+        # command shape even when the reader itself runs on POSIX.
+        launcher = tmp_path / "test Python"
+        launcher.symlink_to(executable)
+        executable = launcher
+    repository = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("PYTHONPATH", str(repository))
+    monkeypatch.setattr(install_contract, "_is_windows_host", lambda: True)
+    source = tmp_path / "owner's ‘saved capture’.json"
+    payload = {"requirements": "保留原要求和停止条件。🙂" * 40, "turn": "original"}
+    raw = json.dumps(payload, ensure_ascii=False).encode()
+    source.write_bytes(raw)
+    command = install_contract.render_host_cli_command([
+        str(executable), "-m", "loopx.entrypoint", "--format", "json",
+        "quota", "context-read", "--capture-file", str(source),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(),
+        "--page-bytes", "256", "--max-page-output-bytes", "4000",
+    ])
+    assert command.startswith("& ")
+
+    body, calls, reader_bytes = read_pinned_cli_body(command)
+    assert body.encode() == source.read_bytes() == raw
+    assert calls > 1 and reader_bytes > len(raw)
+
+
+def test_pinned_reader_follows_a_relative_powershell_launcher(tmp_path, monkeypatch):
+    import hashlib
+    import os
+    from pathlib import Path
+
+    from loopx.command_invocation import loopx_cli_argv
+    from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
+    from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
+    if os.name != "nt" and shutil.which("pwsh") is None:
+        pytest.skip("Requires PowerShell 7")
+    repository = Path(__file__).resolve().parents[2]
+    monkeypatch.chdir(tmp_path)
+    launcher_arg = "./bin/loopx.ps1"
+    launcher = tmp_path / launcher_arg
+    launcher.parent.mkdir()
+    shutil.copyfile(repository / "scripts" / "loopx.ps1", launcher)
+    pointer = tmp_path / "release.json"
+    pointer.write_text(json.dumps({"release_root": str(repository), "python": sys.executable}), encoding="utf-8")
+    monkeypatch.setenv("LOOPX_CURRENT_RELEASE_FILE", str(pointer))
+    source = tmp_path / "owner's ‘saved capture’.json"
+    raw = json.dumps({"requirements": "完整的验收条件🙂" * 30}, ensure_ascii=False).encode("utf-8")
+    source.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    route = loopx_cli_argv(launcher_arg)
+    command = context_capture_read_command(source, digest, reader_argv=route,
+        page_bytes=256, max_page_output_bytes=4000)
+    assert command.startswith(launcher_arg + " '")
+
+    body, calls, reader_bytes = read_pinned_cli_body(command)
+    assert body.encode("utf-8") == raw and calls > 1 and reader_bytes > len(raw)
 
 
 def test_probe_process_failure_preserves_utf8_diagnostics(tmp_path):
@@ -519,6 +588,10 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     git("init", "-b", "main")
     packet = repo / "packet.json"
     common_payload = {
+        # This test varies ancestry and size inside the current declared
+        # carrier; version rejection has its own negative qualification.
+        "schema_version": "loopx_turn_envelope_v1",
+        "contract_binding": {},
         "interaction_contract": {}, "scheduler_hint": {}, "selected_todo": {},
         "note": "x" * 4000,
     }
@@ -619,13 +692,21 @@ def test_host_safety_restoration_budget_is_one_time_bounded_and_prompt_only(
     )
     from loopx.control_plane.heartbeat.rules import HOST_LOOP_SAFETY_RULE
 
-    assert (
-        host_prompt_static_safety_revision(HOST_LOOP_SAFETY_RULE)
-        == "host_prompt_static_safety_v1"
+    # This allowance belongs to its original restoration, not whatever wording
+    # the current renderer emits. Equivalent compaction earns no new allowance.
+    restored_safety = (
+        "Follow user authority and repository rules. Protect credentials/private material; "
+        "publish public-safe evidence. Destructive Git/production requires explicit authorization. "
+        "Gate only the affected path; continue independent allowed work."
     )
     assert (
+        host_prompt_static_safety_revision(restored_safety)
+        == "host_prompt_static_safety_v1"
+    )
+    assert host_prompt_static_safety_revision(HOST_LOOP_SAFETY_RULE) is None
+    assert (
         host_prompt_static_safety_revision(
-            HOST_LOOP_SAFETY_RULE.replace(
+            restored_safety.replace(
                 "requires explicit authorization", "is always allowed"
             )
         )
@@ -1590,12 +1671,22 @@ def test_inline_context_transition_is_bounded_one_time_and_fixture_scoped():
     assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
 
 
-def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
+def test_public_multi_subagent_probe_preserves_bounded_orchestration(tmp_path, monkeypatch):
     import runpy
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
     from loopx.control_plane.testing import cli_output_semantics as semantics
 
+    emitted = []
+    invoke = probe._invoke_cli
+
+    def observe(command):
+        code, text = invoke(command)
+        if code == 0:
+            emitted.append(json.loads(text))
+        return code, text
+
+    monkeypatch.setattr(probe, "_invoke_cli", observe)
     runner = runpy.run_path(
         str(
             Path(__file__).resolve().parents[2]
@@ -1604,11 +1695,16 @@ def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
     )
     with probe._stable_budget_fixture_root(tmp_path) as root:
         rows = runner["_multi_subagent_rows"](probe, semantics, root)
-    assert len(rows) == 1
-    assert rows[0]["action_signature_coverages"] == [
-        "turn_envelope_action_dimensions_v4"
-    ]
-    assert any("agent_context" in path for path in rows[0]["json_shape_paths"])
+    assert len(rows) == len(emitted) == 1
+    view = emitted[0]
+    assert view["boundary"]["orchestration"] == {
+        "mode": "multi_subagent", "spawn_allowed": True, "max_children": 4,
+        "model_config": {"model": "example-small", "reasoning_effort": "max"},
+    }
+    assert view["schema_version"] == "loopx_turn_envelope_v0"
+    assert view["action_signature"]["matches"] is True
+    assert rows[0]["action_signature_coverages"] == ["turn_envelope_action_dimensions_v4"]
+    assert "$.boundary.orchestration.max_children" in rows[0]["json_shape_paths"]
 
 
 def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None:
@@ -2129,3 +2225,192 @@ def test_complete_plan_migration_is_scoped_to_matching_current_controls(damage):
         head["chars"] = head["utf8_bytes"] = head["compact_payload_chars"] = 12_001
     result = compare_cli_output_receipts(_receipt(base), _receipt(head))
     assert result["ok"] is (damage == "none")
+
+
+def _quota_source_rows(output_format="json", *, variant=None, scenario="small"):
+    # The contract's independent control inventory, not an import of the
+    # comparator's accepted set. Real producer values are tested by the probe.
+    fields = {key: "b" * 64 for key in (
+        "goal_id", "agent_id", "decision", "should_run", "effective_action", "selected_todo",
+        "execution", "boundary", "required_reads", "next_cli_actions", "spend", "work_lane_contract",
+        "execution_obligation", "execution_profile", "task_scope", "replan_action_packet",
+        "notify", "user_action_required", "scheduler_action",
+    )}
+    row_id = (f"variant/{variant}/{scenario}/{output_format}" if variant
+              else f"surface/quota_should_run/{scenario}/{output_format}")
+    legacy = str(variant or "").startswith("quota_should_run_turn_envelope")
+    base = _row(row_id=row_id, surface_id="quota_should_run", variant_id=variant,
+        scenario=scenario, format=output_format, chars=10_000, utf8_bytes=10_000,
+        compact_payload_chars=10_000 if output_format == "json" else None,
+        qualification_policy="explicit_opt_in_cold_path" if variant else "absolute_hot_path",
+        lines=1, markdown_anchor="# LoopX Turn Envelope" if legacy else "# LoopX Quota Should Run",
+        action_signature_sha256="a" * 64 if legacy else None,
+        action_signature_coverages=["turn_envelope_action_dimensions_v3"] if legacy else [],
+        semantic_json_keys=["schema_version", "contract_capsule", "action_signature"] if legacy else ["interaction_contract", "selected_todo"],
+        quota_controls={"source_schema": "loopx_turn_envelope_v0" if legacy else None,
+                        "controls_sha256": "a" * 64, "field_sha256": fields})
+    head = copy.deepcopy(base)
+    head.update(output_contract_version="loopx_turn_envelope_v1", markdown_anchor="# LoopX Turn Envelope")
+    if legacy:
+        head.update(action_signature_sha256=None, action_signature_coverages=[],
+            semantic_json_keys=["schema_version", "contract_binding", "interaction_contract", "selected_todo"])
+    head["quota_controls"]["source_schema"] = "loopx_turn_envelope_v1"
+    return base, head
+
+
+@pytest.mark.parametrize("output_format,variant,scenario,growth", [
+    ("json", None, "small", 959), ("json", None, "crowded", 1958),
+    ("json", None, "multi_agent", 4060),
+    ("markdown", None, "small", 17060), ("markdown", None, "crowded", 36373),
+    ("markdown", None, "multi_agent", 23425),
+    ("markdown", "quota_should_run_vision_detail", "small", 17984),
+])
+def test_complete_quota_migration_keeps_measured_controls_and_bounded_cost(output_format, variant, scenario, growth):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    base, head = _quota_source_rows(output_format, variant=variant, scenario=scenario)
+    head["chars"] += growth
+    head["utf8_bytes"] += growth
+    if output_format == "json":
+        head["compact_payload_chars"] += growth
+    else:
+        head["lines"] += 3
+    result = _compare_row(base, head)
+    assert not result["failures"] and result["review_signals"]
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        if base[metric] is not None:
+            assert _compare_row(base, {**head, metric: base[metric] + result["allowances"][metric] + 1})["failures"]
+    # After the carrier has landed, its ordinary policy applies again.
+    same_version = copy.deepcopy(base)
+    same_version.update(output_contract_version=head["output_contract_version"], markdown_anchor=head["markdown_anchor"])
+    same_version["quota_controls"]["source_schema"] = "loopx_turn_envelope_v1"
+    assert _compare_row(same_version, head)["failures"]
+
+
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_complete_quota_migration_never_waives_explicit_off_carrier(output_format):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    base, head = _quota_source_rows(output_format, variant="quota_should_run_turn_envelope")
+    result = _compare_row(base, head)
+    assert result["failures"]
+    assert not any("Quota v0 -> complete v1" in signal for signal in result["review_signals"])
+
+
+@pytest.mark.parametrize("damage", ["wrong-goal", "dropped-read", "missing-field", "missing-witness", "wrong-carrier",
+    "same-source-version", "other-surface", "other-variant", "wrong-heading", "split-format"])
+def test_complete_quota_migration_never_waives_changed_or_unknown_controls(damage):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    base, head = _quota_source_rows()
+    head.update(chars=10_959, utf8_bytes=10_959, compact_payload_chars=10_959)
+    if damage in {"wrong-goal", "dropped-read"}:
+        field = "goal_id" if damage == "wrong-goal" else "required_reads"
+        head["quota_controls"]["field_sha256"][field] = "d" * 64
+        head["quota_controls"]["controls_sha256"] = "c" * 64
+    elif damage == "missing-field":
+        base["quota_controls"]["field_sha256"].pop("boundary")
+        head["quota_controls"]["field_sha256"].pop("boundary")
+    elif damage == "missing-witness":
+        head.pop("quota_controls")
+    elif damage == "wrong-carrier":
+        head["output_contract_version"] = "unknown"
+    elif damage == "same-source-version":
+        base["quota_controls"]["source_schema"] = "loopx_turn_envelope_v1"
+    elif damage == "other-surface":
+        base["surface_id"] = head["surface_id"] = "status"
+    elif damage == "other-variant":
+        base["variant_id"] = head["variant_id"] = "unrelated"
+    elif damage == "wrong-heading":
+        head["markdown_anchor"] = "# Unrelated heading"
+    elif damage == "split-format":
+        head["format"] = "markdown"
+    assert _compare_row(base, head)["failures"]
+
+
+def test_same_version_quota_still_rejects_control_change_without_any_growth():
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    _, current = _quota_source_rows()
+    assert not _compare_row(current, current)["failures"]
+    changed = copy.deepcopy(current)
+    changed["quota_controls"]["field_sha256"]["required_reads"] = "c" * 64
+    changed["quota_controls"]["controls_sha256"] = "d" * 64
+    failures = _compare_row(current, changed)["failures"]
+    assert failures == ["Quota current controls changed: required_reads"]
+
+
+@pytest.mark.parametrize("side", ["base", "candidate"])
+@pytest.mark.parametrize("damage", ["absent", "null", "partial", "invalid-fields"])
+def test_same_version_quota_cannot_drop_its_control_witness(side, damage):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    _, current = _quota_source_rows()
+    base, candidate = copy.deepcopy(current), copy.deepcopy(current)
+    damaged = base if side == "base" else candidate
+    if damage == "absent":
+        damaged.pop("quota_controls")
+    elif damage == "null":
+        damaged["quota_controls"] = None
+    elif damage == "partial":
+        damaged["quota_controls"]["field_sha256"].pop("required_reads")
+    else:
+        damaged["quota_controls"]["field_sha256"] = []
+    assert any("Quota current controls changed" in failure
+               for failure in _compare_row(base, candidate)["failures"])
+
+
+@pytest.mark.parametrize("damage", ["empty", "missing", "extra", "empty-key", "invalid-digest"])
+def test_equal_but_malformed_quota_witnesses_do_not_qualify(damage):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    _, current = _quota_source_rows()
+    fields = current["quota_controls"]["field_sha256"]
+    if damage == "empty":
+        fields.clear()
+    elif damage == "missing":
+        fields.pop("required_reads")
+    elif damage == "extra":
+        fields["unrelated"] = "a" * 64
+    elif damage == "empty-key":
+        fields[""] = fields.pop("required_reads")
+    else:
+        fields["required_reads"] = None
+    assert _compare_row(current, copy.deepcopy(current))["failures"]
+
+
+def test_thin_source_read_guidance_requires_complete_ordered_recovery_contract():
+    from pathlib import Path
+    from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations as observe
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    from loopx.heartbeat_prompt import build_heartbeat_prompt
+
+    # Independent before observation: the former instruction required current
+    # context before work but had no explicit original-section recovery block.
+    before = {"source_read_before": True, "source_read_after": False}
+    body = build_heartbeat_prompt(goal_id="fixture", active_state=Path("goal.md"),
+        agent_id="worker-a", thin=True)["task_body"]
+    after = observe(body)
+    assert after["source_read_after"] and not after["source_read_before"]
+    assert observe(json.dumps({"task_body": body}))["source_read_after"]
+    base = _row(row_id="surface/heartbeat_prompt_thin/small/markdown", format="markdown",
+        chars=4_000, utf8_bytes=4_000, compact_payload_chars=None, lines=40,
+        continuation_instructions=before)
+    head = {**base, "chars": 4_037, "utf8_bytes": 4_039, "lines": 43, "continuation_instructions": after}
+    assert not _compare_row(base, head)["failures"]
+    assert _compare_row({**base, "continuation_instructions": after}, head)["failures"]
+    for clause in ("work_context and required_reads", "before acting", "goals/criteria/constraints/stops",
+                   "selection/replan", "missing details", "returned read/recovery instructions",
+                   "original capture/identity", "never re-admit", "explicit full reads",
+                   "capture/handoff flags", "selection/same-Turn repair"):
+        partial = observe(body.replace(clause, "omitted", 1))
+        assert not partial["source_read_after"], clause
+        assert _compare_row(base, {**head, "continuation_instructions": partial})["failures"]
+    lines = body.splitlines()
+    first = next(index for index, line in enumerate(lines) if line.startswith("Read work_context and required_reads"))
+    second = next(index for index, line in enumerate(lines) if line.startswith("For selection/replan"))
+    lines[first], lines[second] = lines[second], lines[first]
+    reordered = observe("\n".join(lines))
+    assert not reordered["source_read_after"]
+    assert _compare_row(base, {**head, "continuation_instructions": reordered})["failures"]
+    result = _compare_row(base, head)
+    for metric in ("chars", "utf8_bytes", "lines"):
+        assert _compare_row(base, {**head, metric: base[metric] + result["allowances"][metric] + 1})["failures"]
+    json_base = {**base, "format": "json", "row_id": "surface/heartbeat_prompt_thin/small/json"}
+    json_head = {**json_base, "continuation_instructions": after}
+    assert _compare_row(json_base, json_head)["allowances"] == _compare_row(json_base, json_base)["allowances"]

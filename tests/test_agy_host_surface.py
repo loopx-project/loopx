@@ -9,12 +9,18 @@ the facade dead-ends at argparse and the surface is decorative.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import shlex
+import subprocess
+import sys
 
 import pytest
 from host_surface_cli_probes import (
+    connected_project,
     onboarding_setup_command_installs,
+    run_cli,
     selection_gate_offers_surface,
     start_goal_accepts_surface,
 )
@@ -50,6 +56,164 @@ from loopx.agy_goal_mode import (
 )
 
 HOST_SURFACE = "agy"
+
+
+@pytest.mark.parametrize(
+    "entry", [
+        ("bootstrap-command-pack", "--host-surface", "antigravity-app"),
+        ("agent-onboard", "--agent-type", "antigravity-app"),
+    ],
+)
+def test_antigravity_generated_commands_read_the_project_registry_from_another_directory(
+    tmp_path: Path, entry: tuple[str, ...],
+) -> None:
+    project = connected_project(tmp_path / "project with spaces")
+    registry = project / ".loopx" / "registry.json"
+    runtime = tmp_path / "isolated-runtime"
+    state = project / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\nUse the registered project state.\n", encoding="utf-8")
+    data = json.loads(registry.read_text())
+    data["common_runtime_root"] = str(runtime)
+    data["goals"][0].update(
+        state_file=state.name,
+        coordination={"registered_agents": ["probe-agent"], "agent_model": "peer_v1"},
+    )
+    registry.write_text(json.dumps(data), encoding="utf-8")
+    foreign = tmp_path / "other"
+    foreign.mkdir()
+    # The host may be in another project which happens to use the same Goal id.
+    other = connected_project(foreign)
+    foreign_registry = other / ".loopx" / "registry.json"
+    foreign_registry.write_text(json.dumps({
+        "goals": [{**data["goals"][0], "repo": str(other)}],
+    }), encoding="utf-8")
+    env = {**os.environ, "LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_USAGE_PING": "0"}
+    env.pop("LOOPX_REGISTRY", None)
+    result = run_cli(
+        *entry, "--project", str(project), "--goal-id", "surface-goal",
+        "--agent-id", "probe-agent", cwd=other, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    activation = json.loads(result.stdout)["host_loop_activation"]
+    assert activation["activation_allowed"]
+    mutation = activation["host_mutation"]
+    sidecar = mutation["sidecar_template"]
+    prompt = sidecar["sidecar_json"]["args"][-1]
+    bootstrap, = [line for line in prompt.splitlines() if " heartbeat-prompt " in line]
+    for command in (bootstrap, activation["activation_input_command"]):
+        argv = shlex.split(command)
+        result = run_cli(*argv[1:], cwd=other, env=env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["ok"]
+        guard = next(line for line in payload["task_body"].splitlines() if " quota should-run " in line)
+        guard_argv = shlex.split(guard)
+        assert Path(guard_argv[guard_argv.index("--registry") + 1]) == registry
+    hook = shlex.split(mutation["hooks_template"]["loopx"]["Stop"][0]["command"])
+    assert hook[hook.index("--registry") + 1] == str(registry)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Executes real Antigravity POSIX launchers")
+@pytest.mark.parametrize(
+    "entry",
+    [
+        ("bootstrap-command-pack", "--host-surface", "antigravity-app"),
+        ("agent-onboard", "--agent-type", "antigravity-app"),
+        ("start-goal", "--guided", "--host-surface", "antigravity-app",
+         "--goal-text", "Wake using the selected LoopX installation.", "--include-command-pack-detail"),
+    ],
+)
+@pytest.mark.parametrize("global_option", [True, False], ids=["global", "local"])
+def test_antigravity_activation_keeps_selected_cli_through_regeneration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: tuple[str, ...], global_option: bool,
+) -> None:
+    project = connected_project(tmp_path / "selected")
+    registry = project / ".loopx" / "registry.json"
+    state = project / "ACTIVE_GOAL_STATE.md"
+    state.write_text(
+        "# Goal\n\n## Objective\n\nUse the selected command route.\n\n"
+        "## Agent Todo\n\n- [ ] Verify the selected command.\n"
+        "  <!-- loopx:todo todo_id=todo_launch_route status=open claimed_by=probe-agent "
+        "task_class=advancement_task action_kind=validate -->\n",
+        encoding="utf-8",
+    )
+    data = json.loads(registry.read_text())
+    data["goals"][0].update(
+        state_file=state.name,
+        coordination={"registered_agents": ["probe-agent"], "agent_model": "peer_v1"},
+    )
+    registry.write_text(json.dumps(data), encoding="utf-8")
+    foreign = connected_project(tmp_path / "foreign")
+    runtime = tmp_path / "selected runtime"
+    if entry[0] == "start-goal":
+        from tests.control_plane.canonical_authority_fixture import (
+            initialize_canonical_source_fixture,
+            isolate_sqlite_runtime,
+        )
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+        initialize_canonical_source_fixture(runtime, "surface-goal", state_path=state)
+    fallback = tmp_path / "fallback-bin"
+    fallback.mkdir()
+    wrong = fallback / "loopx"
+    wrong.write_text("#!/bin/sh\nexit 73\n", encoding="utf-8")
+    wrong.chmod(0o700)
+    pinned = tmp_path / "selected loopx"
+    pinned.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -m loopx.cli "$@"\n',
+        encoding="utf-8",
+    )
+    pinned.chmod(0o700)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("LOOPX_", "CODEX_"))}
+    env.update(
+        PATH=str(fallback) + os.pathsep + env.get("PATH", os.defpath),
+        PYTHONPATH=str(Path(__file__).resolve().parents[1]),
+        LOOPX_USAGE_PING="0",
+    )
+    def launch(command):
+        argv = shlex.split(command)
+        # Read the command pack as JSON without supplying any routing options.
+        if "--format" not in argv:
+            argv[1:1] = ["--format", "json"]
+        result = subprocess.run(argv, env=env, cwd=foreign, text=True,
+                                capture_output=True, timeout=30)
+        assert result.returncode == 0, (argv, result.returncode, result.stdout, result.stderr)
+        payload = json.loads(result.stdout)
+        assert payload["ok"] is True
+        return payload
+
+    def assert_activation(payload):
+        activation = payload["host_loop_activation"]
+        assert activation["activation_allowed"]
+        mutation = activation["host_mutation"]
+        template = mutation["sidecar_template"]
+        sidecar = template["sidecar"]["loopx-heartbeat"]
+        assert template["sidecar_json"]["agent_permissions"]["access_grants"] == [f"command({pinned})"]
+        for command in (sidecar["prompt_command"], activation["activation_input_command"]):
+            heartbeat = launch(command)
+            guard = next(line for line in heartbeat["task_body"].splitlines() if " quota should-run " in line)
+            argv = shlex.split(guard)
+            assert argv[:3] == [str(pinned), "--cli-bin", str(pinned)]
+            assert argv[argv.index("--runtime-root") + 1] == str(runtime)
+            assert argv[argv.index("--registry") + 1] == str(registry)
+        gate = shlex.split(sidecar["gate_command"])
+        assert gate[:3] == [str(pinned), "--cli-bin", str(pinned)]
+        assert "--scheduler-observation" in gate
+        hook = shlex.split(mutation["hooks_template"]["loopx"]["Stop"][0]["command"])
+        assert hook[hook.index("--cli-bin") + 1] == str(pinned)
+
+    override = ["--cli-bin", str(pinned)]
+    argv = [*override, *entry] if global_option else [*entry, *override]
+    result = run_cli("--runtime-root", str(runtime), *argv, "--project", str(project),
+                     "--goal-id", "surface-goal", "--agent-id", "probe-agent", cwd=foreign, env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    initial = json.loads(result.stdout)
+    if entry[0] == "start-goal":
+        initial = initial["command_pack"]
+    assert_activation(initial)
+    if entry[0] == "agent-onboard":
+        for key in ("bootstrap_command_pack", "agent_onboard_recheck"):
+            assert_activation(launch(initial["commands"][key]))
 
 
 def test_start_goal_accepts_the_agy_host_surface(tmp_path: Path) -> None:

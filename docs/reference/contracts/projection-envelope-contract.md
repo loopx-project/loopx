@@ -1,12 +1,10 @@
 # Projection Envelope Contract
 
-Every operator- or agent-facing read model carries one `projection_envelope`
-(`loopx_projection_envelope_v0`). It says when the projection observed its
-sources, how old each source read is at the moment this copy is served, and
-how much of the requested scope the projection covers. The rule that
-[RFC §2.6](../../architecture/rfcs/typescript-control-plane-migration-v0.md#26-projection-envelope-is-a-kernel-read-contract)
-makes kernel-owned is simple: `ok: true`, a passing check, a healthy host, or
-a cache hit never implies fresh or complete sources.
+Every operator- or agent-facing read model carries one `projection_envelope`.
+It says when the projection observed its sources, how old each source read is
+at the moment this copy is served, and how much of the requested scope the
+projection covers. A consumer uses that envelope to establish freshness and
+coverage. [RFC §2.6](../../architecture/rfcs/typescript-control-plane-migration-v0.md#26-projection-envelope-is-a-kernel-read-contract)
 
 The TypeScript kernel (`loopx/control_plane/projection_envelope.ts`, runtime
 method `projection.envelope.seal`) is the only implementation that decides
@@ -56,6 +54,18 @@ empty read. `owner_read_failed` makes automation cadence unreadable, while
 `runtime_root_unavailable` means that source was not read.
 
 ## Shape
+
+Most responses carry `loopx_projection_envelope_v0` with literal `sources`.
+An unbound JSON `quota should-run --complete-turn --context-delivery off`
+response may carry `loopx_projection_envelope_v2` when sharing fields saves
+space. Reconstruct each source in order by copying `source_defaults` and then
+applying that row's fields, including explicit `null` overrides. Each row
+retains its own `source_id` and any `via`. The kernel reconstructs each
+row's `staleness_seconds`, `status`, `alert` and `alert_reasons` at the
+envelope's original `served_at`. The reader also accepts earlier
+`loopx_projection_envelope_v1` responses, which carry those derived values
+explicitly or in `source_defaults`. Re-serving a projection uses the same
+calculation at the new serve time.
 
 ```json
 {

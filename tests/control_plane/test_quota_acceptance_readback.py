@@ -92,3 +92,27 @@ def test_acceptance_sharing_keeps_unrelated_facts_outside_the_projection_request
     assert len(calls) == 1 and "future_observation" not in calls[0]
     assert result["future_observation"] == source["future_observation"] == extra
     assert result["agent_todo_summary"]["goal_acceptance_contract_ref"] == "$.planning_horizon.core_goal.acceptance_contract"
+
+
+def test_a_single_inline_owner_stays_local_when_todo_display_still_runs(monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    source = compact_quota_should_run_cli_payload(packet(with_context=True))
+    captured_requests = []
+    evaluate = turn_envelope.effect_runtime_projection_result
+
+    def observe(method, params, **kwargs):
+        if params["operation"] == "reference_context":
+            captured_requests.append(params)
+        return evaluate(method, params, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observe)
+    displayed = compact_quota_should_run_cli_payload(source)
+    assert displayed == source and len(captured_requests) == 1
+    request = captured_requests[0]
+    assert request["goal_acceptance"] is False
+    original_rows = source["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    wire_rows = request["payload"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    index = next(i for i, row in enumerate(original_rows) if row.get("source") == "goal_acceptance")
+    assert original_rows[index]["content"]["goal_acceptance_contract"]
+    assert wire_rows[index] is None

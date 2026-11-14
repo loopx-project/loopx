@@ -120,7 +120,6 @@ def test_turn_milestone_intent_is_replay_stable(
         "import json, shlex, subprocess\n"
         f"candidate = {candidate!r}\n"
         "def authored_candidate(request):\n"
-        "    assert request['schema_version'] == 'loopx_turn_host_request_v1'\n"
         "    packet = request['detail_ref']['replan_action_packet']\n"
         "    review = json.loads(subprocess.check_output(\n"
         "        shlex.split(packet['review']), text=True))\n"
@@ -140,6 +139,8 @@ def test_turn_milestone_intent_is_replay_stable(
             "    counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
             "    Path(workspace, 'validated-artifact.txt').write_text('validated')\n"
             "    request, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])\n"
+            "    assert request['schema_version'] == 'loopx_turn_model_context_v0'\n"
+            "    assert request['source_schema_version'] == 'loopx_turn_host_request_v1'\n"
             "    return json.dumps(authored_candidate(request))\n",
             encoding="utf-8",
         )
@@ -147,6 +148,7 @@ def test_turn_milestone_intent_is_replay_stable(
         host_runner.write_text(
             author_candidate + "import pathlib, sys\n"
             "request = json.load(sys.stdin)\n"
+            "assert request['schema_version'] == 'loopx_turn_host_request_v1'\n"
             "counter = pathlib.Path('host-count.txt')\n"
             "counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
             "pathlib.Path('validated-artifact.txt').write_text('validated')\n"

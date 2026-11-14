@@ -213,3 +213,40 @@ def test_explicit_null_text_override_preserves_raw_text_even_with_strip_requeste
     assert compact_todo_summary_items([row], texts=[None], strip_text=True)[0]["text"] == "  Work  "
     with pytest.raises(ValueError, match="cardinality"):
         compact_todo_summary_items([row], texts=[])
+
+
+def test_one_request_reuses_typed_lenses_without_stale_or_shared_mutable_views(monkeypatch):
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.todos.handoff_note import project_handoff_context, todo_read_source
+    from loopx.control_plane.todos.summary_item import compact_todo_summary_items
+
+    request, calls = effect_runtime.effect_runtime_request, []
+
+    def track(method, params, **kwargs):
+        calls.append(method)
+        return request(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_request", track)
+    row = {"todo_id": "todo_current", "status": "open", "task_class": "advancement_task", "text": "Keep the full task.",
+           "note": "Read current evidence.", "successor_todo_ids": ["todo_original_successor"]}
+    with effect_runtime.effect_runtime_request_scope():
+        original = compact_todo_summary_items([row])[0]
+        original["handoff_note"]["successor_todo_ids"].clear()
+        original["text"] = "caller edit"
+        second = compact_todo_summary_items([row])[0]
+        assert second["text"] == row["text"]
+        assert second["continuation_hint"] == row["note"]
+        assert second["handoff_note"]["successor_todo_ids"] == ["todo_original_successor"]
+        source = todo_read_source(row)
+        assert project_handoff_context([source]) == project_handoff_context([source])
+        revised = {**row, "status": "blocked", "text": "Keep the revised full task.", "note": "Blocked on current evidence.",
+                   "successor_todo_ids": ["todo_revised_successor"]}
+        updated = compact_todo_summary_items([revised])[0]
+        assert updated["status"] == "blocked"
+        assert "continuation_hint" not in updated  # Open-work guidance cannot survive the changed status.
+        assert updated["text"] == revised["text"]
+        assert updated["handoff_note"]["summary"] == revised["text"]
+        assert updated["handoff_note"]["successor_todo_ids"] == ["todo_revised_successor"]
+        assert len(calls) == 3
+    assert compact_todo_summary_items([row])[0] == second
+    assert len(calls) == 4

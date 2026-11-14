@@ -12,6 +12,7 @@ from pathlib import Path
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.control_plane.turn_driver.codex_sessions import load_codex_cli_session
+from loopx.hosts.research_checkpoint import select_checkpoint_replan
 
 
 def retained_native_history(binding, metadata):
@@ -82,11 +83,9 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
         if hashlib.sha256(raw).hexdigest() != metadata.get("decision_sha256"):
             raise ValueError("restored pending replan packet digest differs")
         packet = json.loads(raw)
-        intent = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "select_replan", "quota": packet,
-            "goal_id": metadata["loopx_state"]["goal_id"], "agent_id": metadata["loopx_state"]["agent_id"],
-            "turn_instance_id": packet["heartbeat_receipt"]["turn_instance_id"],
-        }, large_local_snapshot=True)
+        intent = select_checkpoint_replan(packet, goal_id=metadata["loopx_state"]["goal_id"],
+            agent_id=metadata["loopx_state"]["agent_id"], turn_instance_id=packet["heartbeat_receipt"]["turn_instance_id"],
+            allow_legacy_source=True)
         if intent != pending or intent.get("capture") is not True:
             raise ValueError("restored original replan binding differs")
     result = effect_runtime_result("runtime.checkpoint_artifacts", {

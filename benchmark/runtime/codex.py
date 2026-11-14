@@ -88,11 +88,18 @@ class Execution:
     def native_goal(self) -> bool:
         return self.mode in {"native-goal", "loopx-goal"}
 
+    @property
+    def uses_complete_heartbeat_guard(self) -> bool:
+        return self.mode == "heartbeat" and not self.turn_envelope
 
-def turn_envelope_receipt(*, explicit: bool, complete: bool = False) -> dict:
-    """Record only the explicit display opt-in; checkpoint capture is independent."""
-    return {**({"turn_envelope": True, "turn_envelope_source": "explicit"} if explicit else {}),
-        **({"complete_turn": True, "complete_turn_source": "explicit"} if complete else {})}
+
+def turn_envelope_receipt(execution: Execution) -> dict:
+    """Record the configured heartbeat view, independently of delivered input."""
+    if execution.turn_envelope:
+        return {"turn_envelope": True, "turn_envelope_source": "explicit"}
+    if execution.uses_complete_heartbeat_guard:
+        return {"complete_turn": True, "complete_turn_source": "explicit" if execution.complete_turn else "default"}
+    return {}
 
 
 def explicit_turn_display(env: dict[str, str]) -> Execution:

@@ -449,7 +449,7 @@ json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_k
         assert "reward_memory_reflection_json" not in request.get("capability_result_fields", {})
         assert not any("reward_memory" in instruction
                        for instruction in request.get("capability_instructions", []))
-        if host_kind != "generic-cli" and "work_contract" not in request:
+        if host_kind != "generic-cli" and "task_context" not in request:
             assert "reward_memory" not in observed["prompt"]
         # A complete captured source retains inactive configuration/diagnostics.
         # Those facts must not activate recall instructions or reflection output;

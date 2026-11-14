@@ -887,6 +887,24 @@ export function assertGoalContextDelivered(channel: JsonObject): void {
   }
 }
 
+/** The complete selected Todo is the source for current task text and notes. */
+export function verifiedSelectedTodoSource(context: JsonObject, todoId: unknown):
+    {index: number; source: JsonObject; content: JsonObject; todo: JsonObject} | null {
+  if (context.complete !== true || context.selected_todo_text_verified !== true ||
+      typeof todoId !== "string" || !todoId || !Array.isArray(context.sources)) return null;
+  const matches = context.sources.flatMap((value, index) => {
+    const source = jsonObject(value);
+    return source?.source === "selected_todo" ? [{source, index}] : [];
+  });
+  if (matches.length !== 1) return null;
+  const {source, index} = matches[0];
+  const content = jsonObject(source.content), todo = jsonObject(content?.todo);
+  if (content?.ok !== true || content.matched !== true || content.ambiguous === true ||
+      content.read_complete === false || typeof todo?.text !== "string" ||
+      todo.archive_state === "archive" || todo.status === "done" || todo.todo_id !== todoId) return null;
+  return {index, source, content, todo};
+}
+
 async function readSelectedTodoContext(source: JsonObject, todoId: unknown): Promise<JsonObject> {
   if (typeof todoId !== "string" || !todoId) return {error_code: "context_source_unavailable"};
   const {readCanonicalSnapshot, CANONICAL_SNAPSHOT_PAGE_REQUEST} =

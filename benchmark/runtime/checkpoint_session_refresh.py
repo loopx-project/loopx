@@ -45,6 +45,7 @@ def _prepare_fresh_replan(env, session, wake, declaration):
     is manufactured or fed to the fresh decision maker.
     """
     from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.hosts.research_checkpoint import select_checkpoint_replan
     from benchmark.runtime.sforge_warm_start import admit_warm_session
 
     unit = Path(declaration["root"])
@@ -61,11 +62,9 @@ def _prepare_fresh_replan(env, session, wake, declaration):
     if hashlib.sha256(raw).hexdigest() != metadata.get("decision_sha256"):
         raise ValueError("fresh replan pending packet digest differs")
     packet = json.loads(raw)
-    selected = effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "select_replan", "quota": packet,
-        "goal_id": metadata["loopx_state"]["goal_id"],
-        "agent_id": metadata["loopx_state"]["agent_id"],
-        "turn_instance_id": packet["heartbeat_receipt"]["turn_instance_id"]}, large_local_snapshot=True)
+    selected = select_checkpoint_replan(packet, goal_id=metadata["loopx_state"]["goal_id"],
+        agent_id=metadata["loopx_state"]["agent_id"], turn_instance_id=packet["heartbeat_receipt"]["turn_instance_id"],
+        allow_legacy_source=True)
     if selected.get("capture") is not True or selected != (
             metadata.get("replan") or metadata.get("operator_metadata", {}).get("replan")):
         raise ValueError("fresh replan requires the original pending decision boundary")

@@ -24,7 +24,7 @@ def _controller_result(operation: str, **facts: Any) -> dict[str, Any]:
     decision = facts.get("decision")
     if isinstance(decision, Mapping):
         facts["decision"] = dict(decision)
-        if "contract_binding" not in decision:
+        if operation == "disposition" and "contract_binding" not in decision:
             # Recorded v0 decisions retain their original scalar codec. New
             # complete sources use their exact number tokens below.
             facts["historical_route_text"] = _historical_route_text(decision)

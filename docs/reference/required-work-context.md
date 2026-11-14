@@ -237,6 +237,10 @@ Its `context-read --initial-read` uses the same exact-address selector. New priv
 selection references pin the resolved addresses and complete selection digest;
 continuations use the existing explicit reader instead of rerunning initial
 navigation. A later navigation change cannot replace the saved selection.
+Initial navigation can replace fully selected children with their complete
+captured parent to avoid repeating addresses. An unselected child, including
+optional or unknown material, prevents that merge; selected facts and obligations
+stay identical. Explicit selectors and index entries keep their original addresses.
 Historical recipe-only references and explicit-file initial cursors still reject
 a changed selection digest. If the original capture passes file-digest
 verification, the recovery command restarts at offset zero. Historical
@@ -269,8 +273,8 @@ pointer order. Current controls, required sources and settlement obligations
 precede the complete unread-material index. A coalesced parent keeps
 its first selected child's position; explicit selectors retain canonical order.
 This reorders the same selected facts without reducing the total body or
-guaranteeing that all requirements fit one page. Earlier initial-selection
-digests still reject a changed profile; recover from the original full capture.
+guaranteeing that all requirements fit one page. Historical recipe-only references and raw initial cursors still reject a changed
+profile; recover from the original full capture.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. A warm
 delta's existing `command` still reads its wire delta; its initial read and
@@ -279,6 +283,22 @@ This is a starting selection, not all required sources: read applicable criteria
 evidence and the complete operation/settlement contract before depending on them.
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
+
+A complete quota decision may advertise `replan_review_command` when the
+current bound review can create a runnable successor. It selects the current
+Goal and replan evidence, applicable controls, and exact successor binding from
+the same capture. Follow its cursor and the current read obligations before
+choosing work. When creating that successor, settle the original Turn from
+the creation receipt. For another outcome, use the ordinary reader and read
+the complete applicable authoring contract before acting. Cadence and stall
+reviews, capability-owned outcomes, and original settlement recovery keep
+the ordinary reader. This optional read does not admit work or prove retention.
+
+中文：如果当前绑定的重规划允许创建可运行的后继，完整 quota 决策可提供
+`replan_review_command`。它从同一捕获读取当前 Goal、重规划证据、适用控制和后继的
+精确绑定。选择工作前读完续页并履行当前读取义务；创建后继时，用创建回执结算原
+Turn。选择其他结果时，先沿常规读取取得完整适用的写回契约。周期与停滞复盘、
+能力专属结果和原结算恢复继续走常规读取。这个按需入口不重新准入，也不证明上下文已保留。
 
 For an exact complete Turn bound to a Todo whose dated resume condition has
 fired, the starting selection puts the existing reopen and same-Turn guard
@@ -299,6 +319,22 @@ existing budgets.
 中文：调用方未指定工具预算时，生成的 `first_read_command` 与续页默认每次最多
 返回 12,000 个序列化 UTF-8 字节。显式选择 Todo 后的首读也适用。调用方可以显式
 指定首读预算，完整读取与恢复命令继续使用原有预算。
+
+After a captured refusal, the returned command reads the original decision
+and Turn receipt. If the full-file reader cannot page within the caller's
+budget, the refusal links to a digest-bound selection of the original
+diagnostic. Follow that command and its cursor. When its framing requires a
+larger reader budget, `recovery_page_output_bytes` gives the size used by the
+returned command. If the private selection reference cannot be published,
+the command reads the original file by path and digest, with a budget that
+allows its pages to advance. This fallback does not need runtime selection
+to read the file. Reading the diagnostic performs no admission or spend.
+
+中文：捕获后的拒绝会提供读取原决定及 Turn 回执的命令。如果全文读端在调用方预算内
+无法分页，命令会改为读取由原摘要固定的诊断选区。按返回命令和游标读完。若分页头需要
+更大的读端预算，`recovery_page_output_bytes` 指出返回命令采用的大小。若无法保存私有
+选区引用，返回命令会按原路径和摘要直接分页读取，并带上足够推进的读端预算。此时可直接
+读文件，无需运行时选择字段。读取诊断不会重新准入或扣额。
 
 For a saved benchmark preflight, the ordinary wake prompt carries the command for
 the first page: native JSON `quota context-project --initial-read` publishes the
@@ -322,6 +358,11 @@ immutable capture.
 `navigation.recovery.command` for other fields. If the response is lost, use the
 original digest-bound capture in the wake prompt. Recovery reuses the saved
 decision and its original receipt.
+
+New saved-decision openings use the live reader's priority. When the capture
+has execution preparation, the recorded admission or claim requirement and
+required reads precede detailed work context. Resume an already-issued cursor
+with its original reference and selection digest.
 
 When native quota navigation requires explicit Todo selection, the opening
 keeps the discovery and same-Turn selection commands with the read obligations
@@ -361,6 +402,9 @@ presentation changes neither admission nor the explicit off view.
 这条命令。工作前沿这条命令及其游标读完余下的首读内容。两个选区绑定同一份不可变捕获。
 `navigation.first_read_command` 可重读首屏，其他字段沿
 `navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
+
+新发起的保存决策首读沿用实时读取的优先顺序。捕获含执行准备信息时，先交付记录中的
+准入结果或申领要求，以及必读项，再交付工作明细。已经发出的游标沿用原引用和选区摘要续读。
 
 原生额度导航要求显式选择 Todo 时，首读把候选发现、同一轮次的选择命令、必读项和执行
 约束放在一起。推荐候选的明细导致这些信息超出单页预算时，同一捕获的续读保留完整
@@ -609,6 +653,19 @@ retains its complete body and declaration. Todo-less reads and the explicit
 `goal-acceptance inspect` command keep their existing full inventory. This
 reduces repeated binding observations without treating a shorter context as
 acceptance, authority or a measured model benefit.
+
+The complete Turn contract stores equal, nonempty registered Todo-summary lanes
+once when a local reference is smaller. A `<lane>_ref` names a literal array in
+the same signed summary. Equality preserves array order, original numeric source
+identity, JSON types and unknown item fields. Resolve references before display
+caps; ambiguous, missing, chained or foreign targets are rejected. Counts,
+candidate collections, selection, authority and settlement retain their owners.
+
+For an unbound JSON `quota should-run --complete-turn --context-delivery off`,
+a lane reference may also name a nonempty proper prefix of its summary's
+literal preferred lane. For example, `first_executable_items[0:2]` means the
+first two complete Agent Todo rows in that lane. The corresponding User lane
+is `first_open_items`.
 
 For enabled native quota with selected work, the same acceptance snapshot may
 include `outcome_context` navigation. `suggested_outcome_ids` prioritizes work
@@ -874,16 +931,19 @@ epoch, and a matching digest of the current visible field. A revised field
 appears in full. Losing the observation restores the ordinary initial read.
 A saved delta on its own provides no evidence of model retention.
 
-A ready native Turn can use the same observation for an unchanged
-`vision_authoring` body already delivered in this task and epoch. The initial
-read marks its exact current address and still delivers this Turn's
-precondition, command and settlement identity. If the full instructions are
-unavailable, select the current complete body before composing the Vision.
-Explicit selection and stateless readers keep the literal body.
+A ready native Turn can use the same observation for unchanged
+`vision_authoring` and writeback preconditions already delivered for this task
+and epoch. The initial read names their current addresses and carries this
+Turn's commands and settlement identity. A soft claim uses the same rule when
+its original receipt binds the current plan. When that plan already carries
+the exact `next_cli_actions` commands in order, the initial read shows them
+once. Use the current capture to retrieve any instruction that is unavailable.
+An explicit field read still returns the original value.
 
-中文：同一任务、同一原生上下文周期内，首读可以标记已完整交付且未变化的
-`vision_authoring`。本轮前提、命令和结算身份仍读取当前值。如果无法使用完整
-说明，在编写 Vision 前从本次捕获取回该字段。显式选择和无会话读取保留原文。
+中文：同一任务、同一原生上下文周期内，已完整交付且未变化的 `vision_authoring`
+与写回前提可以按本轮地址复用。首读仍给出本轮命令与结算身份。软认领由原回执绑定
+本轮计划时使用同一规则。如果计划已经按顺序给出与 `next_cli_actions` 完全相同的
+命令，首读只展示一次。缺少说明时，从本次捕获取回。显式选读仍返回原值。
 
 Each progressive `context_details.source_path` names this Turn's complete immutable
 `projection.json`, including when a warm wire omits unchanged material. The current
@@ -994,27 +1054,34 @@ that observation and rotate the file epoch for the next work Turn. A resume may 
 does not attest retention. The shared Codex adapter can qualify a resume against
 the complete read's native replay checkpoint: the native-selected physical
 rollout must retain the digest-bound interval beginning at the current baseline's
-first reader and every observed reader output,
-including complete byte coverage of the pinned capture, with
+first reader and the outputs of observed native calls covering every byte of
+the pinned capture, with
 matching session, workspace, model and permission mode, and no intervening
 compaction, rollback, replacement or unknown replay record. This bounded IO
-profile is qualified on Codex 0.162.1 and 0.167.0-alpha.3.2 paginated rollouts. It streams only the
+profile is qualified on Codex 0.162.1, 0.167.0-alpha.3.2 and 0.167.0-alpha.4.1 paginated rollouts. It streams only the
 baseline's reader interval and subsequent records; unrelated earlier history is
 neither hashed nor decoded, and total file size does not decide reuse. The
 session metadata's creator version is not the running host version. Code-mode
-parent emissions must retain the same complete page bytes observed by nested
-reader hooks. Several nested reads may share one parent call; their individual
-emission digests and full byte coverage remain required. Missing or changed evidence and unqualified replay records fall
-back to full. One decoded record remains bounded; this is not a history-size
-limit. Legacy whole-prefix checkpoints require a fresh complete read. It retains the
+parent emissions contribute page bytes only for hooks bound to that exact call
+occurrence. Several nested reads may share one parent. An observed reread can
+cover a missing range using its own retained output; an unrelated emission
+with identical bytes cannot. Missing coverage or unqualified replay records
+fall back to full. One decoded record remains bounded; this is not a history-size
+limit. Legacy checkpoints without call binding require a fresh complete read
+to attest cross-process retention; the saved capture remains readable. It retains the
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
-For a complete one-page selection from the current capture, the adapter can
-verify that exact selected output across an ordinary resume. The source and
-read scope must still match. Only the replayed literal sections remain
-eligible for reuse in the next progressive view. Partial or inherited
-selections still need their ordinary recovery, and a selected read cannot
-establish a whole-input baseline.
+For a complete selection from the current capture, the adapter can verify
+that exact output across an ordinary resume. Each observed page is bound to
+its native call occurrence. Several nested reads can share one Code Mode call.
+An independently verified reread can fill a missing range when its own output
+is present in replay. An emission with no matching hook observation contributes
+no coverage. If whole-capture replay fails but an independent selection still
+verifies, its digests carry into the new epoch. The next progressive view
+checks the current scope, source and body before reusing a section. Changed
+controls stay current and compaction clears the earlier selection proofs.
+Partial or inherited selections still use ordinary recovery.
+A selected read cannot establish a whole-input baseline.
 Opted-in benchmark native children create owner-only files automatically; the
 parent process and off-mode file creation policy stay unchanged. Group-writable
 existing replay sources cannot establish cross-process continuity.
@@ -1075,6 +1142,12 @@ all-Goal adoption, actual solver costs or outcome benefit.
 Vision audit 和 replan authoring 副本复用该本地序列化身份。原始 JSON 编码不同的
 布尔／数值、整数／整值浮点表示及带符号零分别保留；仅键顺序不同仍可共享。不增加
 模型补读或 runtime 往返；不同来源事实保留完整指引。
+未绑定 Turn 的 JSON `quota should-run --complete-turn --context-delivery off` 可在
+同一摘要中复用字面前缀。`first_executable_items[0:2]` 指 Agent 首批可执行 Todo
+的前两条完整记录。User 摘要对应 `first_open_items`。同一响应的来源清单可复用
+`source_defaults`，逐条以行内字段覆盖共同值，显式 `null` 也覆盖。来源顺序、
+原始时间戳和观测范围均可读回。v2 读端以响应中的原始 `served_at` 重建各来源的
+时效与告警，同一读端也可读取 v1 已存的派生值。
 Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
 显式标记时，`work_context.sources` 原样携带完整非生成正文，保留目标、frontmatter、
 任意章节、注释、历史和末尾停止条件。当前 writer 和旧版无 Goal 参数的 writer 生成的
@@ -1301,7 +1374,7 @@ context journal。当前工作到达正常安全边界后，沿宿主正常启�
 共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
 须保留从当前基线首次 reader 开始的摘要固定区间，以及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
 会话、工作区、模型和权限模式相同，
-中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1 和 0.167.0-alpha.3.2 的分页
+中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1、0.167.0-alpha.3.2 和 0.167.0-alpha.4.1 的分页
 rollout 上验证；流式读取当前基线对应区间及后续记录，不哈希或解码无关旧历史，
 文件总大小不决定是否差分。session metadata 的创建版本不等于当前宿主版本。
 code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部精确页字节。
@@ -1309,6 +1382,12 @@ code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部
 证据缺失、改写或重放记录不受支持时回退全量；单条记录的解码内存仍有边界，
 不是历史文件容量限制。旧版全前缀检查点须重新完整读取后建立新检查点。仍采用正常读取后的
 工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。
+普通 resume 可以单独核对当前捕获中已读的选区。每页绑定到 hook 观察到的原生调用，
+同一个 Code Mode 父调用可以有多份嵌套读取输出。只有独立核验、且其自身输出出现在重放中的
+重读才能补齐缺页。没有对应 hook 观察的同字节输出不计入覆盖。完整捕获回放失败时，
+通过独立核验的选区摘要可以带入新的上下文周期。下次渐进式交付按当前范围、来源和正文
+重新核对后才复用，变化的控制条件仍按当前捕获交付。实际压缩会清除先前的选区凭据。
+不完整或继承的选区仍走正常恢复，选读不能建立全量基线。
 开启后的 benchmark 原生子进程自动以仅所有者可访问的权限创建文件，父进程与关闭态
 保持原权限策略；既有可组写的重放来源不能建立跨进程连续性。
 新的独立决定走正常准入与上下文命令。实际压缩后，下一个新工作 Turn 建立新的完整
@@ -1437,6 +1516,14 @@ their diagnostic code. These failures do not require restoring a healthy
 capture. Missing or damaged capture files still fail closed through the
 original file/digest checks. Reading again never reruns admission.
 
+The captured reader's serialized output budget also applies to invalid read
+options and refusals. If the budget cannot carry a JSON object, the command
+exits unsuccessfully with no stdout.
+If an ordinary recovery command cannot fit or its pages cannot advance, the
+reader can return a compact private reference for the same source and scope.
+If even that will not fit, retry the original read with a sufficient tool
+budget. Do not reuse a rejected offset or rerun admission.
+
 The `context_capture_index_v1` view shares the digest-bound pagination contract.
 An expanded index includes its `list_depth`; `next_command` preserves the depth,
 selectors and both hashes. Changing depth rejects the prior view's continuation.
@@ -1495,6 +1582,11 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 故障保留自身分类；启动故障保留原诊断码。这些故障不要求恢复健康的 capture。
 文件缺失或损坏仍由原文件/摘要检查拒绝，重新读取不会重新准入。
 
+捕获读取器的序列化输出预算也适用于参数无效和其他拒绝回包。如果预算连 JSON 对象
+都装不下，命令以失败退出，stdout 为空。普通恢复命令过长或无法在预算内
+翻页时，可以返回绑定同一来源及选区的私有短引用。若短引用也放不下，请用足够
+的工具预算重试原读取命令。不要复用被拒绝的偏移，也不要重新准入。
+
 `context_capture_index_v1` 沿用双摘要分页；展开的目录包含 `list_depth`，
 `next_command` 保留深度、路径和两个摘要。更改深度会拒绝旧视图的续读，目录 cursor
 也不能用作正文 cursor。遇到输出截断或缺页，用足够的输出预算恢复同一 capture
@@ -1534,8 +1626,11 @@ all of them: read those pages completely before acting. No control text is cut.
 Omitting the option preserves the existing full-result API. A nonpositive
 budget is rejected before execution. Platforms without qualified POSIX private
 capture validation reject this option before settlement; remove only the output
-option to use the same Turn's full-result API. Reader references also fail closed
-there; mode bits are not a substitute for Windows ACL verification.
+option to use the same Turn's full-result API. On Windows, stateless progressive
+delivery and the explicit `refresh-state --settle-turn --settlement-receipt`
+readback use protected native ACLs for saved files and reader references.
+Use `--delta-delivery off` for the stateless path. An explicit progressive
+capture destination requires a private, physical parent directory.
 A capture failure after evaluation keeps every original control field (including
 `ok`, refusal reason, identity and receipts), omits only `before` / `after`, and
 adds `result_delivery_error`; the process exits nonzero. This fallback prioritizes
@@ -1566,7 +1661,9 @@ Codex App heartbeat 有原生会话，且当前 Todo 已准入并就绪时，可
 
 省略选项保留原有完整结果 API；非正预算在执行前拒绝。缺少已验证 POSIX 私有捕获
 校验的平台在结算前拒绝此选项；仅移除输出选项即可使用同一 Turn 的完整结果 API。
-reader reference 在该平台也安全拒绝，不能用 mode bits 代替 Windows ACL 校验。
+Windows 上的无状态渐进投递及显式 `refresh-state --settle-turn --settlement-receipt`
+读回使用原生受保护 ACL 保存并校验文件与读取引用。无状态路径使用
+`--delta-delivery off`。显式指定渐进捕获路径时，父目录须是私有实体目录。
 求值后捕获失败时保留全部原始控制字段（包括 `ok`、拒绝原因、身份和回执），只省略
 `before`／`after`，追加 `result_delivery_error` 并非零退出。此故障兜底优先保全控制
 信息，不保证展示预算；被拒绝的操作不一定存在 spend receipt。修复捕获权限或以

@@ -214,7 +214,8 @@ def kiro_cli_activation_extras() -> dict[str, Any]:
             "`should_run`, `claim_task` and `complete_task` instead of "
             "hand-typed CLI: they act only for the agent this session's "
             f"`{KIRO_CLI_SESSION_ID_ENV}` is bound to and settle through the "
-            "shared typed completion path.",
+            "shared typed completion path. If the MCP channel requires a Todo "
+            "choice or Turn binding, call `should_run` with the chosen todo_id before work.",
             "Steer a running goal in place instead of expecting a status "
             "readback: the host exposes cancellation and mid-loop steering, "
             "not a goal status subcommand.",

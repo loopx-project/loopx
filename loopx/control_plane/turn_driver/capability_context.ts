@@ -2,12 +2,16 @@ import type {JsonObject} from "../effect_program.ts";
 import {ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
-import {decodeTurnSource, quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
+import {
+  COMPLETE_TURN_DECISION_VERSION, decodeTurnSource, evaluateTurnEnvelope, quotaActionSignatureDocument,
+  requireCompleteTurnDecision, turnEnvelopeActionSignatureDocument,
+} from "../quota/turn_envelope.ts";
 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
 // Capability providers own enablement. These rules only bound their contributions.
 const RESERVED = new Set([
   "schema_version", "turn_key", "turn_envelope", "work_contract", "source_decision_hash",
+  "contract_binding", "turn_context_contributions",
   "session", "goal_ref", "route",
   "result_contract", "capability_context_fields", "capability_instructions",
   "capability_result_fields", "result_kind", "completed_phases", "classification",
@@ -63,7 +67,7 @@ export function validateTurnContextRegistration(input: unknown): JsonObject {
   return {hook_id: hookId, capability_id: capabilityId, readback_slots: slots, max_result_bytes: maximum};
 }
 
-export function validateTurnContextContribution(input: JsonObject): JsonObject {
+function normalizeTurnContextContribution(input: JsonObject) {
   const registration = validateTurnContextRegistration(input.registration);
   const result = requireJsonObject(input.result, "context result");
   if (Buffer.byteLength(JSON.stringify(result)) > Number(registration.max_result_bytes)) throw new Error("context budget exceeded");
@@ -81,19 +85,38 @@ export function validateTurnContextContribution(input: JsonObject): JsonObject {
       throw new Error("capability result must be bounded optional text");
     }
   }
-  const normalized = {hook_id: registration.hook_id, capability_id: registration.capability_id,
+  return {hook_id: registration.hook_id, capability_id: registration.capability_id,
     readback_slots: slots, context_fields: context, instructions, result_fields: resultFields, readback};
+}
+
+export function validateTurnContextContribution(input: JsonObject): JsonObject {
+  const normalized = normalizeTurnContextContribution(input);
+  const embed = input.embed_in_complete_source !== undefined &&
+    requireBoolean(input.embed_in_complete_source, "embed_in_complete_source");
+  const hasSource = Object.hasOwn(input, "source") || Object.hasOwn(input, "source_transport");
   if (input.readback_only !== undefined && requireBoolean(input.readback_only, "readback_only")) {
-    // A status-only result is returned to the guard and is never a reusable
-    // context contribution. Keep its registration, slot and budget checks.
-    if (Object.hasOwn(input, "source") || Object.hasOwn(input, "source_transport") || Object.keys(context).length ||
-        instructions.length || Object.keys(resultFields).length) {
+    // Status has no advice to bind and remains available independently.
+    if (embed || hasSource || Object.keys(normalized.context_fields).length ||
+        normalized.instructions.length || Object.keys(normalized.result_fields).length) {
       throw new Error("readback-only context validation cannot carry a source or a contribution");
     }
     return normalized;
   }
+  if (embed) {
+    if (hasSource) throw new Error("embedded context cannot carry a separate source");
+    // A draft for the quota producer. Only the verified complete capture can
+    // deliver it. Standalone Host/journal contributions still need a basis.
+    return normalized;
+  }
   const source = Object.hasOwn(input, "source_transport") ? decodeTurnSource(input, "source") : input.source;
   return {...normalized, basis_digest: canonicalAuthoritySha256({source: contextSource(source), ...normalized})};
+}
+
+function storedContributionInput(contribution: JsonObject, readback: JsonObject): JsonObject {
+  return {registration: {hook_id: contribution.hook_id, capability_id: contribution.capability_id,
+      readback_slots: contribution.readback_slots, max_result_bytes: 65536},
+    result: {context_fields: contribution.context_fields, instructions: contribution.instructions,
+      result_fields: contribution.result_fields, readback}};
 }
 
 export function projectTurnContextContribution(input: JsonObject): JsonObject {
@@ -101,10 +124,7 @@ export function projectTurnContextContribution(input: JsonObject): JsonObject {
   const readback = requireJsonObject(input.readback, "current context readback");
   // Revalidate serialized contributions on journal recovery and before host input.
   const normalized = validateTurnContextContribution({source: input.source,
-    registration: {hook_id: contribution.hook_id, capability_id: contribution.capability_id,
-      readback_slots: contribution.readback_slots, max_result_bytes: 65536},
-    result: {context_fields: contribution.context_fields, instructions: contribution.instructions,
-      result_fields: contribution.result_fields, readback}});
+    ...storedContributionInput(contribution, readback)});
   if (contribution.basis_digest !== normalized.basis_digest) {
     const source = requireJsonObject(input.source, "context source");
     const {basis_digest: _currentBasis, ...value} = normalized;
@@ -131,16 +151,42 @@ export function projectTurnContextContribution(input: JsonObject): JsonObject {
 
 /** Project one Host's optional contributions against its one governing source. */
 export function projectTurnContext(input: JsonObject): JsonObject {
-  if (!Array.isArray(input.contributions)) throw new Error("context contributions must be an array");
-  const readback = requireJsonObject(input.readback, "current context readback");
+  const source = requireJsonObject(input.source, "context source");
+  const complete = source.schema_version === COMPLETE_TURN_DECISION_VERSION ||
+    Object.hasOwn(source, "contract_binding");
+  if (complete) {
+    if (Object.hasOwn(input, "contributions") || Object.hasOwn(input, "readback")) {
+      throw new Error("complete context must read contributions from its original source");
+    }
+    requireCompleteTurnDecision(source, input.source_number_tokens);
+  }
+  const contributions = complete ? source.turn_context_contributions : input.contributions;
+  if (!Array.isArray(contributions)) throw new Error("context contributions must be an array");
+  const readback = complete ? source : requireJsonObject(input.readback, "current context readback");
   const context: JsonObject = {}, resultFields: JsonObject = {};
   const instructions: string[] = [];
-  for (const value of input.contributions) {
+  let recordedSource: JsonObject | undefined;
+  for (const value of contributions) {
     try {
       const contribution = requireJsonObject(value, "context contribution");
       const slots = requireStringArray(contribution.readback_slots, "context readback slots");
-      const projected = projectTurnContextContribution({contribution, source: input.source,
-        readback: Object.fromEntries(slots.map(key => [key, readback[key] ?? null]))});
+      const currentReadback = Object.fromEntries(slots.map(key => [key, readback[key] ?? null]));
+      const embedded = complete && !Object.hasOwn(contribution, "basis_digest");
+      let projected: JsonObject;
+      if (embedded) {
+        if (slots.some(key => !Object.hasOwn(readback, key))) continue;
+        projected = normalizeTurnContextContribution(storedContributionInput(contribution, currentReadback));
+      } else {
+        // Older complete captures still carry the registered quota basis.
+        // Recover it with its original codec, after checking the capture.
+        if (complete && recordedSource === undefined) {
+          const identity = evaluateTurnEnvelope({operation: "capability_automation_source", payload: source,
+            source_number_tokens: input.source_number_tokens});
+          recordedSource = {...source, agent_id: identity.agent_id};
+        }
+        projected = projectTurnContextContribution({contribution, source: recordedSource ?? source,
+          readback: currentReadback});
+      }
       const fields = requireJsonObject(projected.context_fields, "context fields");
       const results = requireJsonObject(projected.result_fields, "capability result fields");
       const advice = requireStringArray(projected.instructions, "context instructions");

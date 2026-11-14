@@ -4,7 +4,7 @@ import {deflateSync} from "node:zlib";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {evaluateTurnEnvelope, quotaActionSignatureDocument} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import {validateTurnContextRegistration, validateTurnContextContribution,
-  projectTurnContextContribution} from "../../loopx/control_plane/turn_driver/capability_context.ts";
+  projectTurnContext, projectTurnContextContribution} from "../../loopx/control_plane/turn_driver/capability_context.ts";
 
 const registration = {hook_id: "fixture.context", capability_id: "fixture-capability",
   readback_slots: ["fixture_readback"], max_result_bytes: 4096};
@@ -45,6 +45,26 @@ const quotaSource = {goal_id: "fixture-goal", agent_id: "fixture-agent",
   goal_boundary: {write_scope: ["fixture/**"], capabilities: {reward_memory: {
     enabled: true, configured_for_agent: true, experiment_available: true,
     automatic_recall: true, automatic_ingest: false}}}};
+
+test("native context is readable only within its checked complete source", () => {
+  const request = {registration, result, embed_in_complete_source: true};
+  const {readback, ...draft} = validateTurnContextContribution(request);
+  assert.throws(() => validateTurnContextContribution({...request, source: quotaSource}), /separate source/);
+  assert.throws(() => projectTurnContextContribution({contribution: draft, readback, source: quotaSource}));
+  const payload = {...quotaSource, ...readback as object, turn_context_contributions: [draft]};
+  const compose = {operation: "compose_complete", payload, scheduler_execution_args: ""};
+  assert.throws(() => evaluateTurnEnvelope(compose), /requires the original quota composition/);
+  const captured = evaluateTurnEnvelope({...compose, embed_in_complete_source: true});
+  assert.deepEqual(projectTurnContext({source: captured}).fixture_context, result.context_fields.fixture_context);
+  assert.throws(() => projectTurnContext({source: captured, contributions: [draft]}), /original source/);
+  assert.throws(() => projectTurnContext({source: {...captured, fixture_readback: {value: "substituted"}}}),
+    /content integrity mismatch/);
+  assert.throws(() => projectTurnContext({source: {...captured, turn_context_contributions: [
+    {...draft, instructions: ["Substituted instruction."]},
+  ]}}), /content integrity mismatch/);
+  assert.throws(() => evaluateTurnEnvelope({...compose, payload: captured, embed_in_complete_source: true}),
+    /cannot be rebound/);
+});
 
 test("the shared quota source transport preserves capability gates and contribution binding", () => {
   const source = {...quotaSource, goal_boundary: {...quotaSource.goal_boundary, stop_condition: "保留原停止条件"}};
@@ -129,7 +149,7 @@ for (const change of ["goal", "agent", "authority", "readback", "instructions", 
 }
 
 for (const field of ["write_scope", "primary_action", "turn_envelope", "work_contract", "source_decision_hash",
-  "result_contract", "work_evidence", "validation_evidence"]) {
+  "contract_binding", "turn_context_contributions", "result_contract", "work_evidence", "validation_evidence"]) {
   test(`capability cannot replace ${field}`, () => {
     assert.throws(() => validateTurnContextRegistration({...registration, readback_slots: [field]}));
     assert.throws(() => validateTurnContextContribution({registration, source,

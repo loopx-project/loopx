@@ -158,6 +158,8 @@ flowchart TB
 | 统一工作契约 | [#7430](https://github.com/loopx-project/loopx/pull/7430) 已合入，随后由 [#8265](https://github.com/loopx-project/loopx/pull/8265) 回退；C1 替换由 [#8266](https://github.com/loopx-project/loopx/pull/8266) 继续。[#8238](https://github.com/loopx-project/loopx/pull/8238) 和 [#8323](https://github.com/loopx-project/loopx/pull/8323) 已分别改善结算读取和叙事读取。[#8304](https://github.com/loopx-project/loopx/pull/8304) 已合入分阶段重规划路径。 [#8499](https://github.com/loopx-project/loopx/pull/8499) 独立交付 EdgeBench 单 Worker 入口和按原唤醒恢复，C1 写入格式切换另行推进。 | 继续将可独立验收的修复合入主干。切换 profile 前，按原 quota 单会话验收替换路径。此前传输或写回测量只适用于各自测过的路径。 |
 | 通用 Host transport | [#7568](https://github.com/loopx-project/loopx/pull/7568) 仍为 Draft，本次核对头 `e3a3c06524fae99519a72d751a16a5e8dd6f9a5d` | 可作为适配器候选；bounded 调用不证明双向长期 session/异步控制，不把 OAR 或全 Host 重写设为先决条件 |
 
+在 C1 `853eb8f56c1a` 上，benchmark 已走通任务规划、quota 准入，以及在隔离 SQLite 环境下经过独立验证的两次 Turn 结算。原生 Codex 连接脚本化模型端点，Host 收到了 v1 工作契约。quota 原有兼容视图通过哈希标识签名 capture。这些检查覆盖派发和恢复。比较成果与成本仍需在同等条件下运行原生评分器。
+
 旧的逐字段审计与实验保留原版本，位于下面的技术附录；其中历史 Draft/测试记录不能
 代替本表的状态，也不能用本表给旧结果重新标注版本。下一次认领须重查实时 PR 与任务。
 
@@ -1055,6 +1057,37 @@ judge 评分。分别记录最后验证的分数、黑盒调用次数、完整 t
 本改动不改变必读义务、准入、结算或关闭路径，也不代表 C1/C2 采用资格或
 模型结果与完整成本收益已经验收。
 
+原生 quota emission 与延迟的 saved-capture presentation 现在也从同一次 TypeScript
+调用取得首读导航。两个真实调用方复用与当前已发布 capture 绑定的本次调用计划；
+独立 reader 共用同一选读规则和 decision 字段 owner。文件变化或其他 capture 的计划，
+在原生发布前拒绝。共享私有 writer 返回确切已发布字节的摘要，capture、recovery 和
+settlement 调用方不再仅为哈希而重新打开新文件。独立完整恢复副本、原始数值／Unicode、
+reader 校验、先发布当前恢复再做可选操作以及 off 路径均保留；历史 projection-only
+调用方保留委托同一实现的兼容 API。
+
+匹配的合成 File／SQLite quota／读取／工作／验收／结算／重放对照计入准备过程和内部
+spend 子进程。SQLite 温态 RPC 从 321 降至 319，带 framing 的 RPC 字节约降 3.16%，
+观察到的 Python 文件读取字节约降 31.5%；模型可见输出仍是 66,839 字节。
+IO 计量器已避免重复计算同一 fd-backed stream，所有对照 CLI 进程使用同一解释器，
+并核对实际源码来源。这些只是组件结果：原 quota 当前步骤输出仍为 34,736 对
+40,929 字节，RPC 流量和观察到的 Python 读写总字节仍整体更高。原生／kernel／provider
+IO、内存／CPU、延迟和模型成果不由这些计数取得资格。C1 继续开放；capture 运输更小
+不能证明完整净收益。
+
+现有请求作用域内的 runtime adapter 现在让 quota、status、refresh 调用方复用完全相同的
+`todo.context.page` 结果。该处理器仍是原 TypeScript owner 对已提供记录的纯投影。
+复用随原有固定版本的请求作用域结束，复制的 context 也遵守退役边界；输入／输出保留
+JSON 顺序和类型，记录变化不命中，调用方取得独立可修改的视图。保留的输入／输出编码
+总字节受既有请求字节上限约束。权威读取、时钟、写入和结算从不复用；错误和过大条目
+仍走原路径，不新增跨 Turn 缓存或模型保留假设。
+
+另一次匹配 File／SQLite 对照中，温态 RPC 从 319 降至 284，带 framing 的 RPC 字节约少
+5.4%；模型可见输出不变，合成任务的独立验收产物及一次扣额相同。计量包含基线准备与
+内部子进程。原 quota 温态当前步骤输出仍为 34,298／34,628 对 40,474／40,817 字节
+（File／SQLite），RPC 流量仍约高 1.3%。这只证明避免了重复 transport 工作，不资格化
+模型 token、延迟、内存、自然成果或完整净收益。历史组及其失败分别保留，C1 验收缺口
+继续开放。
+
 现有首读还消费与捕获的 Goal/Agent/Todo 及来源版本绑定的完整 acceptance 导航，
 将建议成果正文直接放入起始读取，包括 peer 依赖；其他成果仍可按地址展开。导航缺失
 或错配时保留原详情路线。复用既有关系 owner，不新增按归属/正文猜 scope 的规则；
@@ -1069,6 +1102,77 @@ retention。选读不会清除覆盖未知状态或新增第二账本。当前�
 及前序不可用，并进入合成后继产物；这只资格化运输，不证明自然模型采用。跨宿主默认、
 其他省略材料、可信 Host 覆盖、writer/reader 切换及第9节成果/完整成本对照仍开放。
 索引开销计入原完整/折叠字节守卫。
+
+C1 候选的 journal 检查、发布、按结算查找及受管重试，现在通过与 Host dispatch
+相同的 checked-source owner 消费已携带的完整契约。来源变化、不支持的版本或内部
+签名自洽但偏离来源的 executor adapter 会阻止恢复／发布，不能选择历史 decoder。
+原生文件读取与 Python 传输保留原始稀疏数值写法。没有完整契约的历史 journal 仍保留
+原 adapter-only decoder。这是增加校验成本的来源完整性修复，不代表已安装采用、
+全部 reader 退役或原 quota 成果／净成本资格已完成。
+
+候选版的外部 generic CLI stdin 现在与原生模型输入共用完整来源的 Host request v1。
+这条 wire 移除第二份可执行 envelope，保留原契约、capture reader、Turn key 和结果
+传输。共享 checked-source owner 直接验证 v1；原生 adapter 共用版本解码，DSH stdio
+消费者同时接受 v1 与历史 v0。来源缺失／无效、混合载体或 capture 偏移会拒绝，不能
+选择历史 decoder。Ark 与 MemT 分发 adapter 也通过既有受支持 Host seam 使用 Core
+decoder，provider 权限、receipt 恢复和精确 memory lifetime 门保持，并明确须匹配
+同一 Core。私有 executor adapter 和分版本历史 journal reader 仍保留，直到
+各自替换经过验收。此源码 wire 切换要求外部 v0 adapter 迁移；它不代表已安装采用、
+原 quota 成果／完整成本资格或模型保留收益。
+
+候选版内置 Codex／DSH 的会话索引读取，现在从一份已校验的完整来源取得身份。
+普通 CLI 规划、失败会话解析及 journal 检查，不再为这次读取传输第二份 executor
+adapter。既有 TypeScript 身份 owner 和原生会话存储保留相同 Goal／Agent／Todo
+作用域、namespace 与 lifetime 检查。显式传入的历史 adapter 仍选择原 decoder 及
+一致性校验；已提供但损坏的来源不能回退。Host dispatch、注入 callback 和私有
+executor／journal adapter 保留各自资格边界。这次只读调用方替换不授权启动，也不
+代表整个 C1 退役、模型采用或原 quota 完整成本收益已获资格。
+
+候选版 Codex strict result 归一化也通过既有 checked-source owner 读取材料成果的
+证据适用条件，CLI 与 operation Host 共用。完整来源不能因省略 executor adapter
+丢失该义务；损坏的已提供来源不能回退。严格输出 schema 保留必填可空字段，停止
+结果把 null evidence 归一化为缺省，非空证据的内容校验仍由 executor validator
+负责；未携带完整来源的历史 v0 结果保持原规则。这只替换一处实际 metadata reader，并在 provider
+返回后新增一次完整来源校验，不代表整个 C1 切换或净成本／模型收益已获资格。
+
+operation Host 的准备和规范会话身份也复用该 dispatch owner。Codex 在原生初始化前
+检查完整工作与 Goal 正文交付，启动后仍重新检查 prompt/schema；DSH 复用本次准备已
+校验的身份，不再另发一次身份读取。可选投影 metadata 不进入模型输入或持久权限；
+未请求它的调用方保持原投影。历史 codec、会话 scope/lifetime、确认与消费门以及
+provider 后校验保留原 owner。这些调用方修改须分别提供启动／拒绝、原生协议和
+匹配组件成本证据，不完成剩余 private adapter 切换，也不证明原 quota 成果／完整
+成本收益。
+
+共享 Turn Host-request producer 现在也为内置 Host 和注入 callback 选择同一份完整
+v1 输入，与 generic CLI stdin 一致；先核 private plan 的来源／
+版本一致性，并在 dispatch 前拒绝第二 carrier。原始 capture 发布保持 v1 及不可变 reader header，只有原始历史
+observation 能恢复旧 request codec。没有 journal key 的 quota capture 保留原来源
+Turn 引用；已提供的 journal key 仍须精确匹配，不补造绑定。失败会话恢复检查完整
+来源／header，保留原生 scope、action-hash 数字 codec 和有作用域的 request/replan
+身份。完整输入的 `driver_lineage` reader 现在直接消费已校验的 action facts，不再
+重新生成 v0 adapter、cold reader 命令或 compaction 诊断。两种 reader 共享同一
+route 和 scoped-identity 规则；历史 envelope 保留自己的版本／签名证明与 scalar codec。
+当前 v1 private plan/journal 保存完整契约及原始来源绑定，不再保存 executor adapter；
+历史 v0 journal 保留自己的 decoder。这不等于退出全部 Core adapter。
+实际 dispatch、恢复／重放和来源校验／派生成本分别验收；bridge 流量
+相同不代表测得延迟收益，原已完整的模型输入不再算一次压缩收益，也不建立原 quota
+成果资格。
+
+薄的来源 header、计划选择和 lineage 传输现归既有 `quota.turn_envelope` adapter。
+捕获、journal、lane 和身份读取器直接使用它，不再导入上层 driver 或 Host 结果转换器。
+已发布的 driver／Host 导出保留显式别名，三个旧私有 helper 实现删除；来源／版本拒绝、
+精确数字、历史恢复及只结算一次仍走原 TypeScript owner 和原 wire 版本。
+未改变严格配置和 import 跟随后，配置内 17 个 Python 检查入口在空缓存下通过。
+这只资格该配置边界，不表示修完全部被导入 Python 模块，也不建立运行性能、整体 C1
+或父 PR 已显著缩小的结论。
+
+共享 thin heartbeat renderer 保留按依赖读取的边界。完整 capture 可供恢复，普通执行
+不因此承担无条件通读整份 capture 的义务。Agent 行动前仍须读取当前工作上下文与
+必读材料，包括适用目标、验收、约束和停止条件；selection、replan、缺失／截断输入
+及所引用详情需要读取相关原始段落。原执行或丢上下文恢复须还原完整原来源与身份，
+显式全读义务和所供 capture／handoff flags 继续有效。普通／App、默认／显式 off
+入口都由同一个 renderer 修正。这是 Agent 可见义务的变化，须对照 main 与候选的
+真实 CLI 生成结果验证，不能当作纯文本压缩、模型采用、token 节省或完整任务净收益。
 
 C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余
@@ -1183,3 +1287,13 @@ C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿�
 目录即索引。规划/源码检查记录不证明 runtime 交付；当前优先级与认领仍在 roadmap 和
 canonical 工作中维护。历史记录保持 append-only，当前规范性计划在本文修订，不能把
 某日审计当作永久执行队列。
+
+[来源收敛检查点](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.zh-CN.md)
+将候选的详细沿革保留在本规范计划之外。集成保留 main 的展示／journal owner，让验收、
+summary、authoring 与 Vision 共用数值来源身份和编辑运输。这不证明 writer／consumer
+切换、installed 采用或原 quota 的验收成果／完整成本对照。剩余 reader 退出与负成本
+观察继续使 C1 保持未完成。
+
+Ledger 的原生命令归属增量采用既有 combined refresh/spend owner，并在 replay 保留
+三步精确回执。全部 stdout 缩减尚未消除重复 warm 输入回归和新增 transport／IO
+成本；原 quota 的完整成本资格继续开放。

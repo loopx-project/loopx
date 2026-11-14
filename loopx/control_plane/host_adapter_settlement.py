@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from .effect_program import SettlementIdentity
-from .effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from .effect_runtime import EffectRuntimeRejected, effect_runtime_result, source_number_tokens
 from .goals.vision_checkpoint import prepare_vision_refresh
 
 
@@ -54,9 +54,6 @@ class HostTodoSettlementRequest:
     agent_id: str
     todo_id: str
     runtime_profile: str
-    legacy_host_surface: str
-    scheduler_owner: str
-    execution_mode: str
     completion_args: tuple[str, ...]
     no_follow_up: bool = False
     vision_path: str | None = None
@@ -66,19 +63,13 @@ class HostTodoSettlementRequest:
 
 
 class HostCliRunner(Protocol):
-    def __call__(
-        self,
-        args: list[str],
-        *,
-        legacy_args: list[str] | None = None,
-    ) -> str: ...
+    def __call__(self, args: list[str]) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
 class _ProviderStep:
     step_kind: str
     args: tuple[str, ...]
-    legacy_args: tuple[str, ...] | None
     continue_when: Mapping[str, Any] | None
 
 
@@ -95,9 +86,6 @@ def _request_payload(
         "agent_id": request.agent_id,
         "todo_id": request.todo_id,
         "runtime_profile": request.runtime_profile,
-        "legacy_host_surface": request.legacy_host_surface,
-        "scheduler_owner": request.scheduler_owner,
-        "execution_mode": request.execution_mode,
         "completion_args": list(request.completion_args),
         "no_follow_up": request.no_follow_up,
     }
@@ -153,21 +141,36 @@ def refresh_host_todo_vision(request: HostTodoSettlementRequest, *, run_cli: Hos
     return run_cli(args)
 
 
-def project_host_interaction(output: str) -> str:
+@dataclass(frozen=True, slots=True)
+class McpGuardContent:
+    """Local transport: unchanged Core source and its separate existing host channel."""
+
+    source: str
+    channel: Mapping[str, Any]
+
+
+def project_host_interaction(
+    output: str, *, controller_owns_settlement: bool = False,
+) -> str | McpGuardContent:
     """Keep admission facts; let the typed host lens choose the transport instructions."""
     try:
         packet = json.loads(output)
-    except ValueError:
-        return output
+    except ValueError as exc:
+        raise ValueError("MCP quota guard did not return valid JSON") from exc
     if not isinstance(packet, dict):
-        return output
+        raise ValueError("MCP quota guard did not return a JSON object")
     projection = _runtime_reduction({
         "schema_version": "loopx_host_todo_completion_transaction_v1",
         "phase": "project_guard", "packet": packet,
+        "source_number_tokens": source_number_tokens(packet),
+        "controller_owns_settlement": controller_owns_settlement,
     }, phase="project_guard")
     if not isinstance(projection.get("packet"), dict):
         raise RuntimeError("TypeScript host interaction projection shape mismatch")
-    return json.dumps(projection["packet"], ensure_ascii=False)
+    projected = projection["packet"]
+    if projected.get("schema_version") == "host_mcp_interaction_v0":
+        return McpGuardContent(source=output, channel=projected)
+    return output
 
 
 def _runtime_reduction(params: Mapping[str, Any], *, phase: str) -> dict[str, Any]:
@@ -284,9 +287,6 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
     for index, raw in enumerate(raw_steps):
         if not isinstance(raw, Mapping) or raw.get("step_kind") != expected[index]:
             raise RuntimeError("TypeScript host provider step order mismatch")
-        legacy_value = raw.get("legacy_args")
-        if legacy_value is not None and not isinstance(legacy_value, list):
-            raise RuntimeError("TypeScript host provider legacy_args shape mismatch")
         condition = raw.get("continue_when")
         condition_required = index < len(raw_steps) - 1
         if condition_required != isinstance(condition, Mapping):
@@ -295,11 +295,6 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
             _ProviderStep(
                 step_kind=expected[index],
                 args=_string_tuple(raw.get("args"), label="args"),
-                legacy_args=(
-                    _string_tuple(legacy_value, label="legacy_args")
-                    if legacy_value is not None
-                    else None
-                ),
                 continue_when=dict(condition) if condition is not None else None,
             )
         )
@@ -345,17 +340,6 @@ def _condition_matches(
         return value is _MISSING or value is None
     if kind == "object":
         return isinstance(value, Mapping)
-    if kind == "not_object":
-        return not isinstance(value, Mapping)
-    if kind == "normalized_string_equals":
-        normalization = condition.get("normalization")
-        if normalization not in {"trim", "trim_lowercase"}:
-            raise RuntimeError("TypeScript host provider normalization is unsupported")
-        candidate = str(value or "").strip()
-        if normalization == "trim_lowercase":
-            candidate = candidate.lower()
-        expected = condition.get("value")
-        return isinstance(expected, str) and candidate == expected
     raise RuntimeError("TypeScript host provider condition kind is unsupported")
 
 
@@ -374,10 +358,7 @@ def _run_provider_plan(
 ) -> list[dict[str, str]]:
     outcomes: list[dict[str, str]] = []
     for step in steps:
-        output = run_cli(
-            list(step.args),
-            legacy_args=(list(step.legacy_args) if step.legacy_args else None),
-        )
+        output = run_cli(list(step.args))
         outcomes.append({"step_kind": step.step_kind, "output": output})
         if step.continue_when is not None and not _provider_condition_matches(
             output, step.continue_when

@@ -15,13 +15,14 @@ from loopx.control_plane.turn_driver.driver import (
 )
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.control_plane.test_turn_host_decision_capture import (
     complete_host_request as complete_host_request,
 )
 
 
 def _plan(contract, *, scope="todo", turn="complete-request-cutover"):
-    return build_loopx_turn_plan(build_turn_envelope(contract), work_contract=contract,
+    return build_loopx_turn_plan(contract,
         host="codex-cli" if scope == "agent" else "generic-cli",
         execution_mode="isolated-headless", session_scope=scope,
         turn_instance_id=turn)
@@ -120,6 +121,8 @@ def test_current_plan_invalid_carrier_cannot_dispatch_or_recover(complete_host_r
                    read_turn_plan_work, turn_lane_agent_id):
         with pytest.raises((ValueError, RuntimeError)):
             reader(plan)
+    with pytest.raises(FailedTurnSessionRecoveryError):
+        reconcile_failed_turn_session_request(plan, session_binding=None)
     assert not (tmp_path / "decisions").exists()  # staging is read-only
 
 
@@ -142,12 +145,46 @@ def test_disabled_memory_does_not_read_or_activate_complete_plan(complete_host_r
 
     _legacy, contract = complete_host_request
     plan = _plan(contract)
-    monkeypatch.setattr("loopx.control_plane.capability_hooks.turn_context_source",
+    monkeypatch.setattr("loopx.control_plane.quota.turn_envelope.complete_turn_host_source",
         lambda *_a, **_kw: pytest.fail("disabled capability must not read its source or provider"))
     for recall in ({}, {"experiment": {"enabled": False}}, {"experiment": {
         "enabled": True, "available": False, "configured_for_agent": True, "automatic_ingest": True}}):
         assert reward_memory_automation_enabled({**plan, "reward_memory_recall": recall},
                                                 operation="automatic_ingest") is False
+
+
+@pytest.mark.parametrize("damage", ["body", "identity", "mixed-adapter"])
+def test_memory_participation_rejects_damaged_complete_source(complete_host_request, damage):
+    from loopx.capabilities.reward_memory.turn_hooks import memory_context_result
+
+    _, contract = complete_host_request
+    source = deepcopy({key: value for key, value in contract.items()
+                       if key not in {"schema_version", "contract_binding"}})
+    policies = {"automatic_recall": True, "automatic_ingest": True}
+    source.setdefault("goal_boundary", {})["capabilities"] = {"reward_memory": {
+        "enabled": True, "configured_for_agent": True, "experiment_available": True, **policies,
+    }}
+    contract = compose_turn_decision(source)
+    plan = _plan(contract)
+    recall = {"experiment": {"goal_id": source["goal_id"],
+        "agent_id": source["agent_identity"]["agent_id"],
+        "enabled": True, "available": True, "configured_for_agent": True, **policies},
+        "context": {"guidance": [{"content_summary": "Use the independent test evidence."}]}}
+    intact = memory_context_result(plan, recall)
+    assert intact["context_fields"]["reward_memory_recall"]["context"] == recall["context"]
+    assert "reward_memory_reflection_json" in intact["result_fields"]
+
+    damaged = deepcopy(plan)
+    if damage == "body":
+        damaged["work_contract"]["goal_boundary"]["write_scope"] = ["another-scope"]
+    elif damage == "identity":
+        damaged["source_decision_hash"] = "sha256:" + "0" * 64
+    else:
+        damaged["turn_envelope"] = build_turn_envelope(contract)
+    outcome = memory_context_result(damaged, recall)
+    assert outcome["context_fields"] == {} and outcome["instructions"] == []
+    assert outcome["result_fields"] == {}
+    assert outcome["readback"]["reward_memory_recall"]["context"] is None
 
 
 def test_original_capture_publication_keeps_the_complete_request_version(
@@ -211,6 +248,7 @@ def test_failed_complete_request_resumes_the_same_native_session(
     recovered = reconcile_failed_turn_session_request(request, session_binding=binding)
     assert recovered["session"]["action"] == "resume"
     assert recovered["session"]["binding_status"] == "failed_turn_recovery"
+    assert recovered["turn_key"] == request["turn_key"]
     assert codex_sessions.select_codex_cli_session(runtime, lineage=turn_host_lineage(recovered),
         session_scope=scope)["session_id"] == "original-session"
     assert "turn_envelope" not in recovered and recovered["work_contract"] == contract
@@ -219,6 +257,9 @@ def test_failed_complete_request_resumes_the_same_native_session(
     assert {p: p.read_bytes() for p in runtime.rglob("*.json")} == stored
     with pytest.raises(FailedTurnSessionRecoveryError):
         reconcile_failed_turn_session_request(request, session_binding={**binding, "agent_id": "other-agent"})
+    if scope == "todo":
+        with pytest.raises(FailedTurnSessionRecoveryError):
+            reconcile_failed_turn_session_request(request, session_binding={**binding, "todo_id": "other-todo"})
     for bad in (None, {**contract, "reason": "source changed before recovery"}):
         with pytest.raises(FailedTurnSessionRecoveryError):
             reconcile_failed_turn_session_request({**request, "work_contract": bad}, session_binding=binding)
@@ -269,25 +310,28 @@ def test_complete_todoless_scoped_recovery_preserves_its_original_identity(
     assert {p: p.read_bytes() for p in runtime.rglob("*.json")} == stored
 
 
-def test_complete_recovery_retains_the_original_number_codec_and_action_hash(complete_host_request):
-    from loopx.control_plane.turn_driver.driver import _turn_lineage
-    from loopx.control_plane.quota.turn_envelope import complete_turn_host_source
-
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_complete_planning_retains_the_original_turn_key_codec(complete_host_request, adaptive):
     _legacy, original = complete_host_request
     source = deepcopy({key: value for key, value in original.items()
                        if key not in {"schema_version", "contract_binding"}})
     source["selected_todo"]["future_numeric_context"] = [1.0, -0.0, 1e-7, 2**60 + 1]
+    source["selected_todo"]["future_text_context"] = "验收"
+    if adaptive:
+        source["task_orchestration_contract"] = {"schema_version": "task_orchestration_contract_v2",
+            "mode": "adaptive", "primary_todo_id": source["selected_todo"]["todo_id"]}
     contract = compose_turn_decision(source)
-    plan = _plan(contract)
-    request = build_loopx_turn_host_request(plan)
-    # The retained v0 codec is an independent numeric/hash oracle; the current
-    # private plan intentionally has no such carrier.
-    expected = _turn_lineage(build_turn_envelope(contract), work_contract=contract)
-    checked = complete_turn_host_source(request, operation="driver_lineage")
-    assert _turn_lineage({}, work_contract=contract, projection=checked) == expected
+    options = dict(host="generic-cli", execution_mode="isolated-headless", session_scope="todo",
+                   turn_instance_id="numeric-codec")
+    # The historical envelope path still supplies the persisted key preimage.
+    original_plan = build_loopx_turn_plan(build_turn_envelope(contract), **options)
+    current_plan = build_loopx_turn_plan(contract, **options)
+    assert original_plan["ok"] and current_plan["ok"]
+    assert current_plan["transaction"] == original_plan["transaction"]
+    assert "turn_envelope" not in current_plan
 
 
-def test_original_source_capture_keeps_its_read_reference_without_a_fabricated_journal_key(
+def test_transitional_plan_keeps_original_quota_read_reference_without_a_fabricated_journal_key(
     complete_host_request, tmp_path,
 ):
     from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
@@ -298,15 +342,20 @@ def test_original_source_capture_keeps_its_read_reference_without_a_fabricated_j
     write_decision_capture(path, contract)
     original = path.read_bytes()
     envelope = build_turn_envelope(contract, captured_decision_path=str(path))
-    plan = build_loopx_turn_plan(envelope, work_contract=contract, host="generic-cli",
+    historical = build_loopx_turn_plan(envelope, host="generic-cli",
         execution_mode="isolated-headless", session_scope="todo", turn_instance_id="source-reader")
-    request = build_loopx_turn_host_request(plan)
+    # Read the recorded transitional shape, where the quota capture
+    # predates the Host journal and carries no transaction key.
+    request = build_loopx_turn_host_request({**historical, "work_contract": contract})
     wire = complete_host_input(request)
     capture = wire["detail_ref"]["captured_decision"]
     assert "turn_key" not in capture
     assert capture["turn_instance_id"] == contract.get("heartbeat_receipt", {}).get("turn_instance_id")
     assert capture["path"] == str(path) and wire["work_contract"] == contract
-    assert extract_turn_authority(wire)["_model_input"] == wire
+    model_input = extract_turn_authority(wire)["_model_input"]
+    assert_host_task_context(model_input, contract)
+    assert model_input["detail_ref"] == wire["detail_ref"]
+    assert model_input["turn_key"] == wire["turn_key"]
     for field, value in (("goal_id", "other-goal"), ("agent_id", "other-agent"),
                          ("turn_instance_id", "other-turn"), ("path", "bad\0path"),
                          ("source_hash_ref", "$.unverified")):
