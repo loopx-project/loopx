@@ -33,6 +33,8 @@ export interface SchedulerHeartbeatFollowupRequest extends JsonObject {
   schema_version: typeof SCHEDULER_HEARTBEAT_FOLLOWUP_REQUEST_SCHEMA;
   runtime_root: string;
   turn_instance_id: string | null;
+  /** The Goal instance the Python transport resolved for this follow-up. */
+  goal_ref: JsonObject | null;
   require_heartbeat_receipt: boolean;
   before: JsonObject;
   host_facts: JsonObject;
@@ -95,6 +97,9 @@ function requestObject(value: unknown): SchedulerHeartbeatFollowupRequest {
     schema_version: SCHEDULER_HEARTBEAT_FOLLOWUP_REQUEST_SCHEMA,
     runtime_root: runtimeRoot,
     turn_instance_id: turnInstanceId,
+    goal_ref: input.goal_ref === undefined || input.goal_ref === null
+      ? null
+      : requireJsonObject(input.goal_ref, "goal_ref"),
     require_heartbeat_receipt: requireReceipt,
     before: requireJsonObject(input.before ?? {}, "before"),
     host_facts: hostFacts,
@@ -341,6 +346,7 @@ export async function evaluateSchedulerHeartbeatFollowup(
       goalId: String(facts.goal_id),
       agentId: String(facts.agent_id),
       turnInstanceId: String(request.turn_instance_id),
+      goalRef: request.goal_ref,
     });
     if (status !== "fresh") return receiptFailure(request, status);
   }
@@ -350,6 +356,9 @@ export async function evaluateSchedulerHeartbeatFollowup(
   }, {
     heartbeatReceiptTurnInstanceId: request.require_heartbeat_receipt
       ? request.turn_instance_id
+      : null,
+    heartbeatReceiptGoalRef: request.require_heartbeat_receipt
+      ? request.goal_ref
       : null,
   });
   const receiptStatus = commitReceiptFailureStatus(commit);

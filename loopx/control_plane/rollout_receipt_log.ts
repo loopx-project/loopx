@@ -11,6 +11,11 @@ import { relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
+import {
+  quotaProjectionScope,
+  quotaScopeOwnsProjection,
+  type QuotaProjectionScope,
+} from "./quota/source_admission.ts";
 import { requireNonEmptyString } from "./runtime_decode.ts";
 import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
@@ -172,7 +177,9 @@ export async function heartbeatReceiptStatus(params: {
   goalId: string;
   agentId: string;
   turnInstanceId: string;
+  goalRef?: unknown;
 }): Promise<HeartbeatReceiptStatus> {
+  const requestedScope = requestedReceiptScope(params.goalId, params.goalRef);
   const snapshot = await readGoalRolloutEventSnapshot(
     params.runtimeRoot,
     params.goalId,
@@ -183,21 +190,59 @@ export async function heartbeatReceiptStatus(params: {
     params.agentId,
   );
   if (snapshot === null || receipts === null) return "missing";
-  const firstReceipt = receipts.find(
-    (event) => event.run_id === params.turnInstanceId,
+  const firstReceipt = receipts.find((event) =>
+    event.run_id === params.turnInstanceId &&
+    (requestedScope === null ||
+      quotaScopeOwnsProjection(requestedScope, event.goal_ref))
   );
-  const firstMatch = firstReceipt === undefined
-    ? -1
-    : snapshot.events.indexOf(firstReceipt);
+  if (firstReceipt === undefined) return "missing";
+  const firstMatch = snapshot.events.indexOf(firstReceipt);
   if (firstMatch < 0) return "missing";
+  // The receipt itself states the scope its successor scan may use: a legacy
+  // receipt is only superseded by another legacy receipt, and an instance
+  // receipt only by that same Goal instance. A differently named Goal that
+  // happens to share this log therefore cannot expire an admitted Turn, and an
+  // unscopable `goal_ref` fails closed instead of authorizing a writeback.
+  const receiptScope = quotaProjectionScope(firstReceipt.goal_ref);
+  if (receiptScope === null) return "missing";
   // Only a real Turn receipt expires an admitted one. Identity-less quota rows
   // are diagnostics: the protocol neither grants them host writeback nor lets
   // them supersede the receipt they follow, so the successor scan reuses the
   // discovery predicate rather than re-deciding what a receipt is.
   return snapshot.events.slice(firstMatch + 1).some((event) =>
     isHeartbeatReceiptEvent(event, params.goalId, params.agentId) &&
-    event.run_id !== params.turnInstanceId
+    event.run_id !== params.turnInstanceId &&
+    quotaScopeOwnsProjection(receiptScope, event.goal_ref)
   )
     ? "stale"
     : "fresh";
+}
+
+/**
+ * Resolve the scope a caller asked the receipt fence to run in.
+ *
+ * Absent means "use the scope the matching receipt states", so the persisted
+ * receipt stays the only authority. A caller that does know its Goal instance
+ * passes it, and a malformed or foreign scope is refused rather than silently
+ * widening the comparison.
+ */
+function requestedReceiptScope(
+  goalId: string,
+  value: unknown,
+): QuotaProjectionScope | null {
+  if (value === undefined || value === null) return null;
+  const scope = quotaProjectionScope(value);
+  if (scope === null || scope.kind === "alias") {
+    throw new EffectRuntimeRequestError(
+      "heartbeat receipt scope requires goal_id and goal_instance_id",
+      "heartbeat_receipt_scope_invalid",
+    );
+  }
+  if (scope.goalRef.goalId.value !== goalId) {
+    throw new EffectRuntimeRequestError(
+      "heartbeat receipt scope does not belong to the requested goal",
+      "heartbeat_receipt_scope_mismatch",
+    );
+  }
+  return scope;
 }

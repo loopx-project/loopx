@@ -113,14 +113,56 @@ export function requireQuotaOwnerProjection(
   }
 }
 
+/**
+ * The Goal-instance scope one persisted fact was written under.
+ *
+ * `alias` is the legacy projection: the fact carries no `goal_ref` at all.
+ * Anything else is the one Goal instance the writer presented, so two goals
+ * that share a display name stay separate even inside one shared log.
+ */
+export type QuotaProjectionScope =
+  | Readonly<{ kind: "alias" }>
+  | Readonly<{ kind: "exact_source"; goalRef: ExactGoalRef }>;
+
+/**
+ * Read one fact's scope, or null when its `goal_ref` is not a usable scope.
+ *
+ * Absent and unparseable refs are different facts: absent is the legacy
+ * projection every pre-instance writer produced, while a present-but-unusable
+ * ref belongs to no scope at all and must not be compared loosely.
+ */
+export function quotaProjectionScope(
+  value: unknown,
+): QuotaProjectionScope | null {
+  if (value === undefined) return { kind: "alias" };
+  const projected = parseExactGoalRef(value);
+  return projected.kind === "parsed"
+    ? { kind: "exact_source", goalRef: projected.value }
+    : null;
+}
+
+/**
+ * One judge for "did this fact belong to that scope".
+ *
+ * Legacy facts only compare with legacy facts and an exact GoalRef only
+ * compares with that same instance, so a caller cannot widen a scope by
+ * asking a looser question than the writer answered.
+ */
+export function quotaScopeOwnsProjection(
+  scope: QuotaProjectionScope,
+  value: unknown,
+): boolean {
+  if (scope.kind === "alias") return value === undefined;
+  const projected = parseExactGoalRef(value);
+  return projected.kind === "parsed"
+    && sameGoalRef(projected.value, scope.goalRef);
+}
+
 export function quotaOwnerOwnsProjection(
   owner: QuotaAccountingOwner,
   value: unknown,
 ): boolean {
-  if (owner.kind === "alias") return value === undefined;
-  const projected = parseExactGoalRef(value);
-  return projected.kind === "parsed"
-    && sameGoalRef(projected.value, owner.goalRef);
+  return quotaScopeOwnsProjection(owner, value);
 }
 
 function quotaSourceLock(
