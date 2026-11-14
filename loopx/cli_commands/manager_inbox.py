@@ -83,7 +83,7 @@ def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
                     "If output is missing or truncated, reread that range of the same capture with a smaller page. "
                     + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE
                     + "Apply any shared_item_guidance to the items on this page. After the page is complete, "
-                      "follow its next_cursor or operation_handoff_next_cursor with the original Inbox command. "
+                      "follow its next_cursor, operation_handoff_next_cursor, or native_child_results.next_cursor with the original Inbox command. "
                       "A captured page is not request adoption, result consumption or completion."}
             if private_capture_supported():
                 try:
@@ -188,7 +188,7 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--evidence-id", action="append", default=[])
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=8)
-    parser.add_argument("--cursor", help="For read: continue with the previous page's next_cursor.")
+    parser.add_argument("--cursor", help="For read: continue with the previous request or native child result cursor.")
     parser.add_argument("--operation-cursor", help="For read: continue the independent original-operation page.")
     parser.add_argument("--decision", choices=("adopt", "defer", "reject", "no_change"))
     parser.add_argument("--reason")

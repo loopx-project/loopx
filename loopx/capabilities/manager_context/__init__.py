@@ -257,6 +257,9 @@ def turn_start_hook(
             count = (
                 max(len(inbox["items"]), agenda["incoming_count"])
                 + max(len(inbox.get("peer_returns", {}).get("items", [])), agenda["outgoing_count"])
+                + len(inbox.get("native_child_results", {}).get("items", []))
+                + int(inbox.get("native_child_results", {}).get("unavailable_count", 0))
+                + int(inbox.get("native_child_results", {}).get("scan_complete") is False)
                 + len(inbox.get("operation_handoffs", []))
             )
             incomplete = not agenda["scan_complete"]
