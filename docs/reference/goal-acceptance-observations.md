@@ -994,3 +994,70 @@ model preparation or a complete one-round request.
 | --- | --- | --- |
 | Desktop | ![Earlier desktop](../../examples/personal-workspace-browser/check-overview-before-desktop.png) | ![Check in the Goal brief](../../examples/personal-workspace-browser/check-overview-desktop.png) |
 | 390px | ![Earlier phone](../../examples/personal-workspace-browser/check-overview-before-phone.png) | ![Phone check and folded details](../../examples/personal-workspace-browser/check-overview-phone.png) |
+
+## Long-horizon record storage
+
+An authorized correction can now outlive the legacy declaration's 128 KiB,
+32-requirement, 24-outcome and 64-origin collection limits. Keep the original
+Goal and outcome. In `goal-acceptance refine`, add `"storage_format":"records"`
+to the usual refinement document, preview it without `--execute`, then execute
+with the same inspected provider revision and operation id. The first committed
+refinement losslessly selects `loopx_goal_outcome_records_v1` in the existing
+atomic authority transaction. Reads, previews and installation do not migrate.
+App **Supporting outcomes → Add a requirement** selects that format with the
+requested addition. Native `refine_outcome` accepts the same field; Lark's native
+conversation uses that tool owner, with no separate acceptance configuration.
+
+```json
+{
+  "outcome_id": "release-readiness",
+  "storage_format": "records",
+  "requirements": [{"id": "restart", "description": "Recovery preserves the original work identity."}],
+  "source": {"ref": "owner:recovery", "summary": "Authorized recovery requirement"}
+}
+```
+
+For native conversations, use `source_summary` instead of `source`; the host
+retains its source/actor identity. Prepare a **new** operation id when changing
+intent after a confirmed rejection. Recover an ambiguous operation unchanged
+before preparing a different request. Restart and exact retries preserve the
+original outcome, requirements, sources, work links and exactly-once operation.
+Unsupported old readers must be upgraded; after a record-format commit, use a
+compatible runtime for rollback, never restore an old backup over new requirements.
+
+The format separates retained records from the mutation budget: each operation
+and collection page remains at most 128 KiB UTF-8; a page has at most 32 records.
+Individual text/evidence bounds remain unchanged. Additions still contain at most
+32 requirements at a time. Each outcome's ordered collection digest detects
+missing or altered pages. These pages remain **inside the existing authority
+snapshot**: this release does not provide an indexed store, constant-cost reads,
+record-level concurrency, unlimited transport or less model context. Existing
+capture/field selectors provide bounded detail from one complete capture; do
+not silently truncate a full acceptance read. Full snapshot and transport costs
+still grow and retain their existing limits.
+
+For large outcomes, `review_patch` contains up to 32 named requirement reviews
+with the existing `{id, conclusion, evidence_refs, note}` shape. It changes only
+those reviews. Each item retains its own reviewed basis; reviewing one item
+cannot refresh older evidence for another. `review` retains its complete-review
+meaning. Independent configured checks remain authoritative, and an Agent's
+self-assessment never becomes an independent acceptance result.
+
+A correction to success conditions uses this refinement path; a change of the
+shared purpose still uses the existing objective proposal/apply/adopt path.
+Replacement/withdrawal and atomic objective-plus-condition amendments are not
+introduced by a storage migration. Other Agents retain their work ownership,
+leases, permissions and their own objective adoption obligations. Subsequent
+context and replan read the same preserved requirements; Vision remains the
+execution response, not an alternative acceptance ledger.
+
+中文：已有 Goal 满额后，沿用原成果，在 refinement 文档中加入
+`storage_format: "records"`，以同一 revision/operation 预演、提交。App 的
+“补充要求”随这次明确的写入选择新格式；读取、安装和预演不迁移。
+新格式把长期记录与单次写入／分页预算分开，保留每条原始要求、来源、身份和
+顺序。分页仍存在原 authority 快照中，并非独立索引存储；整份快照的读写和
+传输成本仍随内容增长。大成果可用 `review_patch` 分批自查，每条证据保留自己的
+依据，不能借复审另一条刷新旧证据。修改整体目标继续走已有 proposal/apply/adopt，
+本次不授予替换、撤销、跨 Agent 采用或完成验收的权限。已确认拒绝后改变意图需新
+operation；结果不明时先恢复原操作。旧运行时不能读写新格式，回滚须使用兼容版本，
+不能用旧备份覆盖新要求。
