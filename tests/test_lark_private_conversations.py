@@ -7,6 +7,7 @@ import http.client
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
@@ -1014,6 +1015,605 @@ def connect(fixture):
         bindings.configure(transport_ref=profile, project_ref=contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
     return store, runtime, provider, LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
                                                              runner=provider, cli_bin="lark-cli")
+
+
+@pytest.fixture
+def source_https(monkeypatch):
+    from loopx.extensions import public_source_reader
+
+    requests, resolutions = [], []
+
+    def resolve(host):
+        resolutions.append(host)
+        return ["8.8.8.8"]
+
+    def serve(response_for):
+        class Socket:
+            def settimeout(self, value):
+                pass
+
+            def makefile(self, *args):
+                return BytesIO(self.wire_response)
+
+        class Connection:
+            def __init__(self, host, address, timeout):
+                self.host = host
+                self.sock = Socket()
+
+            def request(self, method, path, *, headers):
+                assert method == "GET"
+                assert set(headers) == {"Accept-Encoding", "User-Agent"}
+                url = f"https://{self.host}{path}"
+                requests.append(url)
+                redirect, mime, body = response_for(url)
+                if redirect:
+                    self.sock.wire_response = f"HTTP/1.1 302 Found\r\nLocation: {redirect}\r\nContent-Length: 0\r\n\r\n".encode()
+                else:
+                    headers = f"HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {len(body)}\r\n\r\n"
+                    self.sock.wire_response = headers.encode() + body
+
+            def getresponse(self):
+                response = http.client.HTTPResponse(self.sock)
+                response.begin()
+                return response
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(public_source_reader, "public_addresses", resolve)
+        monkeypatch.setattr(public_source_reader, "_PinnedHTTPS", Connection)
+        return requests, resolutions
+
+    return serve
+
+
+@pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request",
+    "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
+    "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect", "stopped", "stopped_after_fetch",
+    "closed_on_upload_preview", "stopped_on_upload_source_read", "closed_on_upload_source_read",
+    "closed_on_source_controls_read", "stopped_before_upload_intent", "closed_before_upload_intent",
+    "edited_after_upload_intent"])
+def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, source_https, monkeypatch, fault):  # noqa: F811
+    from test_chat_image_attachments import PNG_BYTES
+    from test_lark_app_image_projection import ImageIO
+
+    store, runtime, provider, transport = connect(ordinary)
+    capture, fake = ordinary[4:6]
+    url = ("https://unrelated.example" if fault == "foreign_source" else "https://source.example") + "/chart.png"
+    authored = f'Original explanation.\n\n![Source chart](<{url}> "Figure 6")'
+    script = fake.read_text()
+    default = '"message": "Runtime response.",'
+    assert default in script
+    fake.write_text(script.replace(default,
+        f'"message": {authored!r} if turn_count == 1 else "Next original reply.",', 1))
+    article_url = "https://source.example/article"
+    stopped = fault in ("stopped", "stopped_after_fetch", "stopped_on_upload_source_read", "stopped_before_upload_intent")
+    closed = fault in ("closed_on_upload_preview", "closed_on_upload_source_read", "closed_on_source_controls_read",
+                       "closed_before_upload_intent")
+    redirect_targets = {
+        "listed_redirect": "/canonical.png",
+        "same_host_redirect": "/unlisted.png",
+        "foreign_redirect": "https://unrelated.example/foreign.png",
+        "foreign_round_trip": "https://unrelated.example/foreign.png",
+        "query_redirect": "/chart.png?private=fixture",
+    }
+
+    def respond(target):
+        if target == article_url and fault == "article_redirect":
+            return "/other-article", None, b""
+        if target in (article_url, "https://source.example/other-article"):
+            basename = "different-chart.png" if fault == "unlisted_image" else "chart.png"
+            listings = f'<img src="/{basename}">'
+            if fault == "listed_redirect":
+                listings += '<img src="/canonical.png">'
+            return None, "text/html", listings.encode()
+        if target == url and fault in redirect_targets:
+            return redirect_targets[fault], None, b""
+        if target == "https://unrelated.example/foreign.png" and fault == "foreign_round_trip":
+            return "https://source.example/unlisted.png", None, b""
+        if target == url and fault == "stopped_after_fetch":
+            transport.admit("notes-app", provider.event("notes-app", "stop-during-image-fetch", "/stop"))
+        return None, "image/png", PNG_BYTES
+
+    fetched, resolutions = source_https(respond)
+    images_delivered = fault in ("none", "listed_redirect")
+    io = ImageIO(provider)
+    io.corrupt_download = fault in ("corrupt_readback", "legacy_cached_readback")
+    upload_previewed = False
+    control_committed = False
+    source_edited_after_intent = False
+    if fault == "edited_after_upload_intent":
+        from loopx.extensions.lark import return_files
+
+        write_receipt = return_files._write
+
+        def edit_after_upload_intent(path, value):
+            nonlocal source_edited_after_intent
+            write_receipt(path, value)
+            if value.get("upload_started") and not source_edited_after_intent:
+                assert json.loads(path.read_text())["upload_started"] is True
+                provider.messages[source["message_id"]]["content"] = "The source changed after upload intent."
+                source_edited_after_intent = True
+
+        monkeypatch.setattr(return_files, "_write", edit_after_upload_intent)
+
+    if fault in ("stopped_before_upload_intent", "closed_before_upload_intent"):
+        from loopx.extensions.lark import return_files
+        write_receipt = return_files._write
+
+        def control_before_upload_intent(path, value):
+            nonlocal control_committed
+            if value.get("upload_started") and not control_committed:
+                control_committed = True
+                if stopped:
+                    transport.admit("notes-app", provider.event("notes-app", "stop-before-resource-intent", "/stop"))
+                    assert any(row.get("command") == "stop" for row in transport.core.source_controls())
+                else:
+                    assert runtime.close_session(sid)
+                    assert store.load_session(sid)["status"] == "closed"
+            return write_receipt(path, value)
+
+        monkeypatch.setattr(return_files, "_write", control_before_upload_intent)
+
+    if fault == "closed_on_source_controls_read":
+        read_controls = transport.core.source_controls
+
+        def close_during_control_read():
+            nonlocal control_committed
+            if upload_previewed and not control_committed:
+                control_committed = True
+                assert runtime.close_session(sid)
+                assert store.load_session(sid)["status"] == "closed"
+            return read_controls()
+
+        monkeypatch.setattr(transport.core, "source_controls", close_during_control_read)
+
+    def media(args, cwd=None, timeout=None):
+        nonlocal upload_previewed, control_committed
+        if "images" in args and "create" in args and "--dry-run" in args:
+            upload_previewed = True
+            if fault == "closed_on_upload_preview":
+                runtime.close_session(sid)
+        if (fault in ("stopped_on_upload_source_read", "closed_on_upload_source_read")
+                and upload_previewed and not control_committed and (
+                    ("+messages-mget" in args and source["message_id"] in args) or
+                    f"/open-apis/im/v1/messages/{source['message_id']}" in args)):
+            control_committed = True
+            if stopped:
+                transport.admit("notes-app", provider.event("notes-app", "stop-during-source-read", "/stop"))
+                assert any(control.get("command") == "stop" for control in transport.core.source_controls())
+            else:
+                runtime.close_session(sid)
+                assert store.load_session(sid)["status"] == "closed"
+        if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
+            return {"returncode": 3, "stderr": '{"ok":false,"error":{"code":99991672}}'}
+        return io(args, cwd, timeout)
+
+    transport.runner = media
+    try:
+        source = provider.event("notes-app", "answer-with-original-image", "Read https://source.example/article")
+        transport.admit("notes-app", source)
+        original = transport.core.pending()[0]
+        sid, tid, ref = (original[key] for key in ("session_id", "turn_id", "request_ref"))
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed"
+        if fault == "changed_request":
+            provider.messages[source["message_id"]]["content"] = "Source URL removed."
+        path = transport.root / f"{ref}.json"
+        assert path in transport.pending_body_paths()
+        assert transport.reconcile_request(path) == 0
+        text_only = json.loads(path.read_text())
+        assert text_only["deliveries"]["terminal"]["verified"] is True
+        assert transport.core.read_request(ref).get("delivery_verified", False) is False
+        assert fetched == [] and io.uploads == 0
+        assert path not in transport.pending_body_paths()
+        assert path in transport.pending_delivery_paths() and transport.is_recovery_path(path)
+        if fault == "stopped":
+            transport.admit("notes-app", provider.event("notes-app", "stop-before-image-work", "/stop"))
+        assert transport.reconcile_request(path) == int(images_delivered)
+        saved = json.loads(path.read_text())
+        assert saved["answer_images"]["status"] == ("delivered" if images_delivered else "unverified")
+        out = [(mid, row, json.loads(row["body"]["content"])["zh_cn"]["content"])
+               for mid, row in provider.messages.items() if mid.startswith("om_out_") and row["msg_type"] == "post"]
+        assert all(row["chat_id"] == source["chat_id"] for _, row, _ in out)
+        assert any("[Source chart](" in nodes[0][0]["text"] for _, _, nodes in out)
+        assert all(not any("![Source chart]" in node.get("text", "") for line in nodes for node in line) for _, _, nodes in out)
+        if fault in ("stopped_on_upload_source_read", "closed_on_upload_source_read", "closed_on_source_controls_read",
+                     "stopped_before_upload_intent", "closed_before_upload_intent"):
+            assert control_committed
+        if fault in ("stopped_before_upload_intent", "closed_before_upload_intent"):
+            from loopx.extensions.lark.return_files import _root
+            assert list((_root(transport.runtime_root) / "lark-chat-images").glob("*.json")) == []
+        if fault == "edited_after_upload_intent":
+            from loopx.extensions.lark.return_files import _root
+
+            assert source_edited_after_intent and io.uploads == 0
+            assert list((_root(transport.runtime_root) / "lark-chat-images").glob("*.json")) == []
+            assert "answer_images.terminal" not in saved["deliveries"]
+        if stopped or closed:
+            assert io.uploads == 0 and transport.core.read_request(ref).get("delivery_verified", False) is False
+            assert not any(name.startswith(("answer_images.", "answer_image_notice.")) for name in saved["deliveries"])
+            if stopped:
+                assert any(control.get("command") == "stop" for control in transport.core.source_controls())
+            else:
+                assert store.load_session(sid)["status"] == "closed"
+        assert transport.core.read_request(ref).get("delivery_verified", False) is images_delivered
+        native_images = [node["image_key"] for _, _, nodes in out for line in nodes for node in line if node["tag"] == "img"]
+        assert native_images == list(io.resources)
+        assert all(io.resources[k] == PNG_BYTES for k in native_images)
+        expected_requests = {
+            "foreign_source": [], "changed_request": [], "stopped": [], "unlisted_image": [article_url],
+            "article_redirect": [article_url], "listed_redirect": [article_url, url, "https://source.example/canonical.png"],
+        }.get(fault, [article_url, url])
+        assert fetched == expected_requests
+        assert resolutions == ["source.example"] * len(expected_requests)
+        if fault in {"same_host_redirect", "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect"}:
+            assert io.uploads == 0 and native_images == []
+        assert ("图片尚未核验送达" in str(out)) == (not images_delivered and not stopped and not closed)
+        if fault in ("corrupt_readback", "legacy_cached_readback"):
+            io.corrupt_download = False
+            from loopx.chat_store import _atomic_write_json
+            restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                                  runner=media, cli_bin="lark-cli")
+            writes = list(provider.writes)
+            assert path not in restarted.pending_body_paths()
+            assert path not in restarted.pending_delivery_paths()
+            assert restarted.reconcile_request(path) == 0
+            assert provider.writes == writes and io.uploads == 1 and fetched == [article_url, url]
+            saved["answer_images"]["next_check_at"] = 0
+            if fault == "legacy_cached_readback":
+                saved["answer_images"].pop("source_urls_verified")
+            _atomic_write_json(path, saved)
+            assert path in restarted.pending_delivery_paths()
+            assert restarted.reconcile_request(path) == 1
+            assert transport.core.read_request(ref)["delivery_verified"] is True
+            assert provider.writes == writes and io.uploads == 1
+            assert fetched == [article_url, url] * (2 if fault == "legacy_cached_readback" else 1)
+        expected_turns = 1
+        if fault == "upload_denied":
+            followup = provider.event("notes-app", "text-after-image-denial", "Answer the next question")
+            retry = transport.admit("notes-app", followup)
+            assert retry["status"] == "durably_accepted"
+            later_ref = identity_ref(transport._binding("notes-app")["provider_ref"], followup["message_id"])
+            later = transport.core.read_request(later_ref)
+            assert later["session_id"] == sid
+            assert runtime.wait_for_turn(session_id=sid, turn_id=later["turn_id"], timeout_sec=10)["status"] == "completed"
+            later_path = transport.root / f"{later_ref}.json"
+            assert path not in transport.pending_body_paths() and path not in transport.pending_delivery_paths()
+            assert later_path in transport.pending_body_paths()
+            assert transport.reconcile_request(later_path) == 1
+            assert transport.core.read_request(later_ref)["delivery_verified"] is True
+            assert transport.core.read_request(ref).get("delivery_verified", False) is False
+            expected_turns = 2
+        packets = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(packet.get("method") == "turn/start" for packet in packets) == expected_turns
+        assert any(row["text"].endswith(authored) for row in store.messages(sid) if row["role"] == "agent")
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("fault", ["readback", "raw_paired_post", "edited_source", "edited_original_reply", "edit_on_image_get",
+    "edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_preview", "edit_on_send_source_read",
+    "edit_reply_after_upload_intent", "edit_source_on_final_pair_read", "edit_source_on_dispatch_lock",
+    "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied", "upload_scope_then_granted",
+    "upload_scope_with_conflicting_stdout", "closed_on_source_controls_read",
+    "unlisted_redirect", "unlisted_cached_redirect"])
+def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, source_https, fault):  # noqa: F811
+    from hashlib import sha256
+    from loopx.chat_store import _atomic_write_json
+    from test_chat_image_attachments import PNG_BYTES
+    from test_lark_app_image_projection import ImageIO
+
+    store, runtime, provider, transport = connect(ordinary)
+    fake = ordinary[5]
+    origin = "https://source.example/article"
+    urls = [f"https://source.example/figure-{i}.png" for i in range(1, 5)]
+    figures = {url: PNG_BYTES + bytes([i]) for i, url in enumerate(urls)}
+    answer = f"Original explanation.\n\n![One]({urls[0]})\n\n![Two]({urls[1]})"
+    script = fake.read_text()
+    marker = '"message": "Runtime response.",'
+    assert marker in script
+    fake.write_text(script.replace(marker, f'"message": {answer!r},', 1))
+    io = ImageIO(provider)
+    edited_body = None
+    late_source_edit = False
+    committed_resource_path = None
+    upload_previews = 0
+    send_preview_seen = False
+    denied_uploads = 0
+    scope_granted = False
+
+    def edit_original_reply():
+        nonlocal edited_body
+        edited_body = {"content": json.dumps({"zh_cn": {"content": [[{"tag": "text", "text": "The original answer was edited."}]]}})}
+        provider.messages[prior_id]["body"] = edited_body
+
+    def provider_io(args, cwd=None, timeout=None):
+        nonlocal upload_previews, send_preview_seen, denied_uploads, late_source_edit
+        image_upload = "images" in args and "create" in args and "--dry-run" not in args
+        pair_read = "/open-apis/im/v1/messages/mget" in args and "--params" in args
+        source_read = (("+messages-mget" in args and event["message_id"] in args)
+                       or (pair_read and event["message_id"] in json.loads(args[args.index("--params") + 1])["message_ids"]))
+        if fault == "upload_denied" and image_upload:
+            provider.calls.append(list(args))
+            return {"returncode": 3, "stderr": '{"ok":false,"error":{"type":"authorization","code":99991672}}'}
+        typed_scope_fault = fault in ("upload_scope_then_granted", "upload_scope_with_conflicting_stdout")
+        if image_upload and typed_scope_fault and io.uploads == 1 and not scope_granted:
+            provider.calls.append(list(args))
+            denied_uploads += 1
+            return {"returncode": 3,
+                    "stderr": json.dumps({"ok": False, "identity": "bot", "error": {
+                        "type": "authorization", "subtype": "app_scope_not_applied", "code": 99991672,
+                        "identity": "bot"}}),
+                    "stdout": "invalid provider acknowledgement" if fault == "upload_scope_with_conflicting_stdout" else ""}
+        if (fault == "edit_source_on_final_pair_read" and committed_resource_path is not None
+                and not late_source_edit
+                and (("+messages-mget" in args and prior_id in args)
+                     or pair_read)):
+            assert json.loads(committed_resource_path.read_text())["upload_started"] is True
+            provider.messages[event["message_id"]]["content"] = "The source changed during the final reply read."
+            late_source_edit = True
+        uploads_before_edit = {"edit_on_upload_source_read": 0, "edit_on_next_upload_source_read": 1}
+        if (fault in uploads_before_edit and upload_previews == uploads_before_edit[fault] + 1 and edited_body is None
+                and io.uploads == uploads_before_edit[fault]
+                and source_read):
+            edit_original_reply()
+        if (fault == "edit_on_send_source_read" and send_preview_seen and edited_body is None
+                and source_read):
+            edit_original_reply()
+        result = io(args, cwd, timeout)
+        if pair_read and fault == "raw_paired_post":
+            body = json.loads(result["stdout"])
+            historical = next(row for row in body["data"]["items"] if row["message_id"] == prior_id)
+            original_rows = json.loads(historical["body"]["content"])["zh_cn"]["content"]
+            historical["body"] = {"content": json.dumps({
+                "title": "", "content_v2": original_rows,
+                "content": [[{"tag": "text", "text": "A rendered preview only."}]],
+            })}
+            result = {**result, "stdout": json.dumps(body)}
+        if "images" in args and "create" in args and "--dry-run" in args:
+            upload_previews += 1
+        if "+messages-send" in args and "--dry-run" in args and "--content" in args:
+            if "原图（按原文顺序）" in args[args.index("--content") + 1]:
+                send_preview_seen = True
+                if fault == "edit_on_send_preview":
+                    edit_original_reply()
+        return result
+
+    transport.runner = provider_io
+
+    unlisted = "https://source.example/unlisted.png"
+
+    def respond(url):
+        if url == origin:
+            return None, "text/html", "".join(f'<img src="{url}">' for url in urls).encode()
+        if fault == "edit_on_image_get":
+            edit_original_reply()
+        if fault in ("unlisted_redirect", "unlisted_cached_redirect") and url == urls[-1]:
+            return "/unlisted.png", None, b""
+        return None, "image/png", figures[urls[-1] if url == unlisted else url]
+
+    fetched, resolutions = source_https(respond)
+
+    def restart():
+        return LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                       runner=provider_io, cli_bin="lark-cli")
+
+    try:
+        event = provider.event("notes-app", "historical-image-answer", f"Read {origin}")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        original = transport.core.pending()[0]
+        sid, tid, ref = (original[key] for key in ("session_id", "turn_id", "request_ref"))
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)["status"] == "completed"
+        path = transport.root / f"{ref}.json"
+        # Produce an actual legacy reply and provider receipt before installing
+        # the media-only repair. The stored answer and Core are real.
+        with monkeypatch.context() as legacy:
+            legacy.setattr(transport, "_deliver_completed_answer", lambda p, row, text, *, inbox:
+                           transport._deliver(p, row, "terminal", text, inbox=inbox))
+            assert transport.reconcile_request(path) == 1
+        saved = json.loads(path.read_text())
+        terminal = saved["deliveries"]["terminal"]
+        prior_id = terminal["attempt"]["message_ref"]
+        prior_body = json.dumps(provider.messages[prior_id]["body"])
+        core = (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
+        writes = len(provider.writes)
+        worker = restart()
+        assert path not in worker.pending_delivery_paths()
+        assert worker.reconcile_request(path) == 0 and io.uploads == 0
+
+        if fault == "closed_on_source_controls_read":
+            read_controls = worker.core.source_controls
+
+            def close_during_control_read():
+                if upload_previews and store.load_session(sid)["status"] != "closed":
+                    assert runtime.close_session(sid)
+                return read_controls()
+
+            monkeypatch.setattr(worker.core, "source_controls", close_during_control_read)
+
+        plan = {"binding_id": saved["binding_id"], "turn_id": tid, "message_id": prior_id,
+                "answer_sha256": sha256(answer.encode()).hexdigest(),
+                "images": [{"url": url, "sha256": sha256(figures[url]).hexdigest()} for url in urls]}
+        manifest = worker.root / "historical-answer-images" / path.name
+        _atomic_write_json(manifest, plan)
+        if fault == "unlisted_cached_redirect":
+            import base64
+            from loopx.chat_attachments import normalize_chat_image_attachments
+
+            legacy_attachments = normalize_chat_image_attachments([
+                {"id": f"reply-image-{index}", "name": f"original-{index}.png", "mime_type": "image/png",
+                 "data_url": "data:image/png;base64," + base64.b64encode(data).decode(), "size": len(data)}
+                for index, data in enumerate(figures.values(), 1)])
+            saved["historical_answer_images"] = {"plan": plan, "status": "pending", "attachments": legacy_attachments}
+            _atomic_write_json(path, saved)
+        assert path not in worker.pending_body_paths()
+        assert path in worker.pending_delivery_paths() and worker.is_recovery_path(path)
+        if fault == "edited_source":
+            provider.messages[event["message_id"]]["content"] = "Changed source."
+        elif fault == "edited_original_reply":
+            edit_original_reply()
+        elif fault == "foreign_sender":
+            provider.messages[prior_id]["sender"]["id"] = provider.profile_apps["steward-app"]
+        elif fault == "changed_bytes":
+            figures[urls[-1]] = PNG_BYTES
+        elif fault == "stop":
+            # The authoritative Stop predates any possible file recovery.
+            control = {**core[0], "command": "stop"}
+            _atomic_write_json(transport.core.root / ("d" * 24 + ".json"), control)
+        elif fault == "readback":
+            io.corrupt_download = True
+        elif fault == "unknown_send":
+            provider.lose_next_reply = True
+        elif fault in {"edit_reply_after_upload_intent", "edit_source_on_final_pair_read", "edit_source_on_dispatch_lock"}:
+            from loopx.extensions.lark import return_files
+
+            write_receipt = return_files._write
+
+            def edit_after_upload_intent(path, value):
+                nonlocal committed_resource_path
+                write_receipt(path, value)
+                if value.get("upload_started") and committed_resource_path is None:
+                    committed_resource_path = path
+                    if fault == "edit_reply_after_upload_intent":
+                        assert json.loads(path.read_text())["upload_started"] is True
+                        edit_original_reply()
+
+            monkeypatch.setattr(return_files, "_write", edit_after_upload_intent)
+            if fault == "edit_source_on_dispatch_lock":
+                from loopx.extensions.lark import private_delivery_discovery
+
+                enter_lock = private_delivery_discovery.try_exclusive_file_lock
+
+                def edit_source_before_lock(path, **kwargs):
+                    nonlocal late_source_edit
+                    if kwargs.get("operation") == "dispatch_external_answer_media" and not late_source_edit:
+                        assert json.loads(committed_resource_path.read_text())["upload_started"] is True
+                        provider.messages[event["message_id"]]["content"] = "The original changed before the dispatch lock."
+                        late_source_edit = True
+                    return enter_lock(path, **kwargs)
+
+                monkeypatch.setattr(private_delivery_discovery, "try_exclusive_file_lock", edit_source_before_lock)
+
+        if fault == "raw_paired_post":
+            assert worker.reconcile_request(path) == 1
+            assert io.uploads == 4 and len(provider.writes) == writes + 1
+            assert json.loads(path.read_text())["deliveries"]["answer_images.historical"]["images_verified"] is True
+            assert worker.reconcile_request(path) == 0 and io.uploads == 4
+            assert core == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
+            return
+        assert worker.reconcile_request(path) == 0
+        if fault == "closed_on_source_controls_read":
+            assert upload_previews == 1 and store.load_session(sid)["status"] == "closed"
+        if fault in {"readback", "unknown_send", "upload_scope_then_granted", "upload_scope_with_conflicting_stdout"}:
+            pending = json.loads(path.read_text())
+            assert pending["historical_answer_images"]["status"] == "pending"
+            if fault.startswith("upload_scope_"):
+                assert denied_uploads == 1 and io.uploads == 1 and len(provider.writes) == writes
+                assert "answer_images.historical" not in pending["deliveries"]
+                scope_granted = True
+            else:
+                assert io.uploads == 4 and len(provider.writes) == writes + 1
+            worker = restart()
+            assert path not in worker.pending_delivery_paths()
+            pending["historical_answer_images"]["next_check_at"] = 0
+            _atomic_write_json(path, pending)
+            io.corrupt_download = False
+            assert path in worker.pending_delivery_paths()
+            delivered = fault in ("readback", "upload_scope_then_granted")
+            assert worker.reconcile_request(path) == int(delivered)
+            if fault == "upload_scope_with_conflicting_stdout":
+                assert denied_uploads == 1 and io.uploads == 1 and len(provider.writes) == writes
+                assert json.loads(path.read_text())["historical_answer_images"]["status"] == "pending"
+                return
+            assert io.uploads == 4 and len(provider.writes) == writes + 1
+            row = json.loads(path.read_text())
+            assert row["historical_answer_images"]["status"] == ("delivered" if delivered else "pending")
+            outputs = [m for m in provider.messages.values() if m["msg_type"] == "post"
+                       and "原图（按原文顺序）" in m["body"]["content"]]
+            assert len(outputs) == 1
+            post = outputs[0]
+            assert post["chat_id"] == event["chat_id"] and post["sender"]["id"] == provider.profile_apps["notes-app"]
+            lines = json.loads(post["body"]["content"])["zh_cn"]["content"]
+            keys = [node["image_key"] for line in lines for node in line if node["tag"] == "img"]
+            assert len(keys) == 4 and [io.resources[key] for key in keys] == list(figures.values())
+            assert worker.reconcile_request(path) == 0
+        else:
+            expected_uploads = {"edit_on_send_preview": 4, "edit_on_send_source_read": 4,
+                                "edit_on_next_upload_source_read": 1}
+            assert io.uploads == expected_uploads.get(fault, 0) and len(provider.writes) == writes
+            if fault == "edit_reply_after_upload_intent":
+                from loopx.extensions.lark.return_files import _root
+
+                assert edited_body is not None
+                assert list((_root(worker.runtime_root) / "lark-chat-images").glob("*.json")) == []
+            if fault in {"edit_source_on_final_pair_read", "edit_source_on_dispatch_lock"}:
+                assert late_source_edit and not committed_resource_path.exists()
+                assert "answer_images.historical" not in json.loads(path.read_text())["deliveries"]
+            if fault in {"edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_source_read",
+                         "edit_reply_after_upload_intent"}:
+                assert edited_body is not None
+                pending = json.loads(path.read_text())
+                pending["historical_answer_images"]["next_check_at"] = 0
+                _atomic_write_json(path, pending)
+                assert restart().reconcile_request(path) == 0
+                assert io.uploads == expected_uploads.get(fault, 0) and len(provider.writes) == writes
+            if fault in ("unlisted_redirect", "unlisted_cached_redirect"):
+                assert fetched == [origin, *urls] and resolutions == ["source.example"] * len(fetched)
+                assert unlisted not in fetched
+            if fault == "upload_denied":
+                pending = json.loads(path.read_text())
+                assert pending["historical_answer_images"]["status"] == "pending"
+                assert "answer_images.historical" not in pending["deliveries"]
+                assert any("images" in cmd and "create" in cmd and "--dry-run" not in cmd for cmd in provider.calls)
+        assert provider.messages[prior_id]["body"] == (edited_body if edited_body is not None else json.loads(prior_body))
+        assert json.loads(path.read_text())["deliveries"]["terminal"] == terminal
+        assert core == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
+        assert sum(json.loads(line).get("method") == "turn/start" for line in ordinary[4].read_text().splitlines()) == 1
+    finally:
+        runtime.close()
+
+
+def test_private_delivery_keeps_retired_steward_cards_out_of_image_recovery(
+    ordinary,  # noqa: F811
+):
+    from loopx.chat_store import _atomic_write_json
+
+    store, runtime, provider, transport = connect(ordinary)
+    bindings = transport.bindings
+    workspace = runtime.project_contexts.available()[0]["project_ref"]
+    binding = bindings.configure(transport_ref="steward-app", project_ref=workspace,
+                                 executor_endpoint_id="codex", context_kind="steward")
+    try:
+        event = provider.event("steward-app", "retired-card-before-image-repair", "/triage")
+        assert transport.admit("steward-app", event)["status"] == "triage_queued"
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        card = transport.root / f"{ref}.json"
+        assert card in transport.pending_body_paths()
+        assert card in transport.pending_delivery_paths()
+        assert transport.health()[binding["binding_id"]]["pending_count"] == 1
+
+        provider.messages[event["message_id"]]["content"] = "/status"
+        assert transport.reconcile_request(card) == 0
+        retired = json.loads(card.read_text())
+        assert retired["triage"]["retired"] == "original_source_changed"
+
+        # Even an orphaned descriptor with this filename cannot turn an
+        # upstream transport-only record into image or model recovery work.
+        _atomic_write_json(transport.root / "historical-answer-images" / card.name, {})
+        worker = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                          runner=provider, cli_bin="lark-cli")
+        assert card not in worker.pending_body_paths()
+        assert card not in worker.pending_delivery_paths()
+        assert worker.health()[binding["binding_id"]]["pending_count"] == 0
+        assert not (worker.core.root / card.name).exists()
+
+        assert worker.reconcile_request(card) == 0
+        assert json.loads(card.read_text()) == retired
+        assert not store.list_sessions()
+        assert not provider.writes
+    finally:
+        runtime.close()
 
 
 @pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished", "source-changed", "closed", "lost-ack", "message-crash",
