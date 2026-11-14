@@ -28,6 +28,7 @@ from ...control_plane.coordination.local_authority import (
 )
 from ...control_plane.projects.registry_codec import load_registry
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ...control_plane.runtime.time import chronology_key
 from ...control_plane.todos.contract import (
     TODO_STATUS_BLOCKED,
@@ -39,7 +40,6 @@ from ...control_plane.todos.contract import (
 )
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...history import load_index_snapshot
-from ...paths import resolve_runtime_root
 from ...registry import registry_goals
 
 PORTFOLIO_TRIAGE_SCHEMA_VERSION = "steward_portfolio_triage_v0"
@@ -323,12 +323,6 @@ def build_portfolio_triage_projection(
         requested_goal_ids=requested_goal_ids,
     )
     registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(
-        registry,
-        runtime_root_arg,
-        registry_path=registry_path,
-    )
-
     all_gates: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     all_attention_todos: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     all_progress: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
@@ -337,10 +331,18 @@ def build_portfolio_triage_projection(
 
     for goal_id in scoped_goal_ids:
         try:
+            route = resolve_goal_source_runtime_route(
+                registry_path=registry_path, registry=registry, goal_id=goal_id,
+            )
+            # The Chat host's root is only a local default. A declared Goal
+            # source owns both the authoritative Todo read and its history.
+            source_root = Path(route["source_runtime_root"])
+            if runtime_root_arg and not route["routed_to_source_registry"]:
+                source_root = Path(runtime_root_arg).expanduser().resolve()
             todo_snapshot = list_goal_todos(
-                registry_path=registry_path,
+                registry_path=Path(route["source_registry"]),
                 goal_id=goal_id,
-                runtime_root_arg=runtime_root_arg,
+                runtime_root_arg=str(source_root),
             )
             todos = todo_snapshot.get("todos")
             if (todo_snapshot.get("ok") is not True or not isinstance(todos, list)
@@ -468,7 +470,7 @@ def build_portfolio_triage_projection(
                     )
                 )
 
-        runs_index = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
+        runs_index = source_root / "goals" / goal_id / "runs" / "index.jsonl"
         if focus == "all":
             try:
                 index_snapshot = load_index_snapshot(

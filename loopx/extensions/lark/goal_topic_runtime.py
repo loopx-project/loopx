@@ -670,6 +670,7 @@ def stream_lark_goal_topic_profile(
     configuration_removed = threading.Event()
 
     def stop_consumer() -> None:
+        previous_callback_ready: bool | None = None
         while not watcher_done.wait(1.0):
             if stop.is_set():
                 if process.poll() is None:
@@ -699,6 +700,14 @@ def stream_lark_goal_topic_profile(
                 if process.poll() is None:
                     process.terminate()
                 return
+            if callback_stream is not None and callback_availability_sink is not None and health_sink is not None:
+                ready = callback_stream.ready()
+                if ready != previous_callback_ready:
+                    with result_lock:
+                        health_sink({
+                            "callback_error_code": None if ready else "lark_review_callback_source_disconnected",
+                        })
+                    previous_callback_ready = ready
             try:
                 configured = profile in _active_profile_configs(snapshot_provider())
             except Exception:

@@ -486,6 +486,7 @@ class LarkGoalTopicRuntimeService:
                     profile,
                     status="starting" if restart_count == 0 else "retrying",
                     error_code=None,
+                    callback_error_code=None,
                     restart_count=restart_count,
                 )
                 try:

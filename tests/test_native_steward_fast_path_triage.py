@@ -66,11 +66,8 @@ def portfolio(monkeypatch, tmp_path: Path, reads: list[str]) -> Path:
         return {"ok": True, "todos": [dict(row) for row in TODOS.get(goal_id, [])]}
 
     monkeypatch.setattr(steward_triage, "list_goal_todos", fake_list)
-    monkeypatch.setattr(steward_triage, "load_registry", lambda _path: {"goals": []})
-    monkeypatch.setattr(steward_triage, "resolve_runtime_root",
-                        lambda *_a, **_kw: tmp_path / "runtime")
     registry = tmp_path / "registry.json"
-    registry.write_text("{}", encoding="utf-8")
+    registry.write_text(json.dumps({"common_runtime_root": str(tmp_path / "runtime"), "goals": []}), encoding="utf-8")
     return registry
 
 

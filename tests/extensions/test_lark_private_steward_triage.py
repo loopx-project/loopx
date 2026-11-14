@@ -234,6 +234,109 @@ def test_private_callback_consumer_dispatches_the_steward_action_on_its_original
     assert observed == [{**event, "action_value": action}]
 
 
+@pytest.mark.parametrize("authority_provider", ["file", "sqlite"])
+def test_triage_reads_declared_source_before_shared_runtime(steward, monkeypatch, authority_provider):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "control_plane"))
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.testing.canary_harness import write_fixture_registry
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    isolate_sqlite_runtime(workspace.parent, monkeypatch)
+    shared_root = runtime.coordination_runtime_root
+    source_root, source_registry = workspace / "source-runtime", workspace / "registry.json"
+    state = workspace / "STATE.md"
+    state.write_text("# Source Goal\n\n## User Todo\n\n## Agent Todo\n")
+    write_fixture_registry(
+        project=workspace, runtime_root=source_root, registry_path=source_registry,
+        goal_id="demo-a", domain="fixture", adapter_kind="generic_project_goal_v0", state_file=str(state),
+    )
+    global_registry = json.loads(source_registry.read_text())
+    global_registry.update(registry_role="global-local", common_runtime_root=str(shared_root))
+    source_goal = global_registry["goals"][0]
+    global_registry["goals"] = [
+        {**source_goal, "source_registry": str(source_registry)},
+        {**source_goal, "id": "demo-empty"},
+        {**source_goal, "id": "demo-unready"},
+    ]
+    runtime.registry_path.write_text(json.dumps(global_registry))
+
+    gate = {
+        "schema_version": "todo_item_v0", "todo_id": "todo_source_report", "role": "user", "status": "open",
+        "text": "Review the source report", "done": False, "task_class": "user_gate",
+        "index": 1, "source_section": "User Todo", "archive_state": "active",
+    }
+    for root, goal_id, todos in (
+        (source_root, "demo-a", [gate]), (shared_root, "demo-a", []), (shared_root, "demo-empty", []),
+    ):
+        projection = build_todo_runtime_shadow_projection(
+            goal_id=goal_id, handoff_mode="soft_claim", todos=todos,
+        )
+        initialize_canonical_authority(root, goal_id, projection, state_path=state, provider=authority_provider)
+    for root, summary in ((source_root, "Source export verified"), (shared_root, "Stale shared progress")):
+        index = root / "goals" / "demo-a" / "runs" / "index.jsonl"
+        index.parent.mkdir(parents=True, exist_ok=True)
+        index.write_text(json.dumps({"summary": summary}) + "\n", encoding="utf-8")
+
+    writes, _ = fixture_card_provider(provider, transport, monkeypatch)
+    profile = "steward-app"
+    transport.steward_callback_readiness[(profile, provider.profile_apps[profile])] = lambda: True
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {"private_profiles": transport.profiles()},
+        runtime_root=transport.runtime_root, runtime_controller=runtime, private_conversations=transport,
+    )
+
+    def read_card():
+        message_id = writes[-1]
+        observed = provider.messages[message_id]
+        assert observed["chat_id"] == "oc_steward_app"
+        return message_id, json.loads(observed["body"]["content"])
+
+    def send(name, text):
+        event = provider.event(profile, name, text)
+        assert transport.admit(profile, event)["status"] == "triage_queued"
+        assert transport.reconcile() == 1
+        return read_card()
+
+    def require_source_result(card):
+        contents = json.dumps(card, ensure_ascii=False)
+        assert card["header"]["template"] == "orange"
+        assert "Review the source report" in contents
+        assert "Source export verified" in contents
+        assert "Stale shared progress" not in contents
+        assert "1 个项目暂时读不到" in contents and "全部正常" not in contents
+
+    try:
+        _, text_card = send("source-text", "/triage all")
+        require_source_result(text_card)
+        menu_id, menu = send("source-menu", "/triage")
+        action = buttons(menu)["总览"]
+        callback = event_for(menu_id, action, suffix="source")
+        assert service._handle_private_steward_callback(profile, callback, action)["status"] == "triage_callback_queued"
+        assert transport.reconcile() == 1
+        require_source_result(read_card()[1])
+        assert service._handle_private_steward_callback(profile, callback, action)["status"] == "triage_callback_already_captured"
+        assert transport.reconcile() == 0
+
+        _, unavailable = send("unpromoted-goal", "/triage all --goal demo-unready")
+        assert unavailable["header"]["template"] == "orange"
+        assert "暂时读不到项目状态" in json.dumps(unavailable, ensure_ascii=False)
+        _, empty = send("verified-empty", "/triage all --goal demo-empty")
+        assert empty["header"]["template"] == "green"
+        assert "全部正常" in json.dumps(empty, ensure_ascii=False)
+
+        source_registry.rename(source_registry.with_suffix(".offline"))
+        _, disconnected = send("missing-source", "/triage all --goal demo-a")
+        contents = json.dumps(disconnected, ensure_ascii=False)
+        assert disconnected["header"]["template"] == "orange"
+        assert "暂时读不到项目状态" in contents
+        assert "Stale shared progress" not in contents and "全部正常" not in contents
+    finally:
+        service.close()
+    assert not store.list_sessions() and not capture.exists()
+    assert not list(transport.core.root.glob("*.json"))
+
+
 @pytest.mark.parametrize("shared_app", [False, True])
 def test_private_callback_recovers_without_restarting_messages(steward, monkeypatch, shared_app):  # noqa: F811
     from loopx.extensions.lark import goal_topic_runtime
@@ -365,10 +468,14 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
         assert all(cmd in json.dumps(menu) for cmd in ("/gates", "/todos", "/triage all"))
         first.ready()
         eventually(available)
+        eventually(lambda: service.health_snapshot()[profile].get("callback_error_code") is None)
         menu, _ = request("live-menu", "/triage")
         assert set(buttons(menu)) == {"待我处理", "任务速览", "总览"}
         first.terminate()
         assert not available()
+        eventually(lambda: service.health_snapshot()[profile].get("callback_error_code")
+                   == "lark_review_callback_source_disconnected")
+        assert service.health_snapshot()[profile]["status"] == "listening"
         fallback, _ = request("callback-outage", "/triage")
         assert not buttons(fallback)
         result, _ = request("canonical-gate", "/gates")
@@ -419,6 +526,7 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
         assert messages.poll() is None
         health = service.health_snapshot()[profile]
         assert health["status"] == "listening" and health["restart_count"] == 0
+        eventually(lambda: service.health_snapshot()[profile].get("callback_error_code") is None)
     finally:
         service.close()
     assert not transport.steward_callback_readiness
