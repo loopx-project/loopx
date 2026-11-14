@@ -16,6 +16,28 @@ assert.equal(reconcileConversationReturns(cancelled, "queued-session", [editedIn
 assert.equal(reconcileConversationReturns(queuedInput, "other-session", [cancelledInput], () => assert.fail()), queuedInput);
 const liveAnswer = [{...queuedInput[0], role: "assistant", pending: true, text: "Live answer"}];
 assert.equal(reconcileConversationReturns(liveAnswer, "queued-session", [{...cancelledInput, role: "agent"}], () => assert.fail())[0].text, "Live answer");
+
+const historyImage = (sessionId, hash) => `/api/chat/sessions/${sessionId}/messages/original-image/images/0/${hash.repeat(64)}`;
+const priorImage = {id: "image", mimeType: "image/png", name: "image.png", size: 70, dataUrl: historyImage("steward", "a")};
+const imageRow = {sourceSessionId: "steward", sourceMessageId: "original-image", role: "user", text: "Original image", attachments: [priorImage]};
+const currentImage = {message_id: "original-image", session_id: "steward", role: "user", attachments: [
+  {id: "image", mime_type: "image/png", name: "image.png", size: 75, data_url: historyImage("steward", "b")},
+]};
+const noDuplicate = () => assert.fail("already observed message");
+const reloaded = reconcileConversationHistory([imageRow], [currentImage], noDuplicate, "steward");
+assert.equal(reloaded[0].attachments[0].dataUrl, historyImage("steward", "b"));
+assert.equal(reloaded[0].attachments[0].size, 75);
+assert.equal(reloaded[0].text, imageRow.text);
+for (const [scope, attachment] of [
+  [undefined, currentImage.attachments[0]],
+  ["different", currentImage.attachments[0]],
+  ["steward", {...currentImage.attachments[0], data_url: historyImage("different", "b")}],
+  ["steward", {...currentImage.attachments[0], data_url: historyImage("steward", "b").replace("/images/0/", "/images/1/")}],
+]) {
+  assert.equal(reconcileConversationHistory([imageRow], [{...currentImage, attachments: [attachment]}], noDuplicate, scope)[0], imageRow);
+}
+const pendingImage = {...imageRow, pending: true};
+assert.equal(reconcileConversationHistory([pendingImage], [currentImage], noDuplicate, "steward")[0], pendingImage);
 const original = [
   { sourceSessionId: "old", sourceMessageId: "brief", collaboration, text: "Original brief" },
   { sourceSessionId: "current", sourceMessageId: "brief", text: "New conversation" },

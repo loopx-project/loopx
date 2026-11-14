@@ -11,7 +11,6 @@ from typing import Any, Mapping, Sequence
 from .agent_registry import (
     agent_profile_for_goal,
     registered_agent_ids_for_goal,
-    registered_agent_ids_from_registry,
 )
 from .control_plane.projects.identity import GoalCreationConflictError
 from .control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
@@ -25,7 +24,8 @@ from .chat_action_store import (
 from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
-from .chat.todo_actions import ChatTodoActionMixin, todo_create_source
+from .chat.todo_actions import ChatTodoActionMixin
+from .chat.todo_source import ChatTodoSource, resolve_chat_todo_source
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
 from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal
@@ -45,6 +45,7 @@ from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .quota import build_quota_should_run
 from .registry import registry_goals
 from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
+from .file_lock import try_exclusive_file_lock
 
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
@@ -296,12 +297,11 @@ class ChatActionService(
     def _registry(self) -> dict[str, Any]:
         return load_registry(self.registry_path)
 
-    def _goal(self, goal_id: str, *, registry_path: Path | None = None) -> dict[str, Any]:
-        registry = self._registry() if registry_path is None else load_registry(registry_path)
+    def _goal(self, goal_id: str) -> dict[str, Any]:
         goal = next(
             (
                 goal
-                for goal in registry_goals(registry)
+                for goal in registry_goals(self._registry())
                 if str(goal.get("id") or "") == goal_id
             ),
             None,
@@ -310,7 +310,7 @@ class ChatActionService(
             raise ValueError("goal_id was not found in the active LoopX registry")
         return goal
 
-    def _registry_fingerprint(self, registry_path: Path | None = None) -> str:
+    def _registry_fingerprint(self) -> str:
         """Identity of the registry a proposal was previewed against.
 
         A fresh install has no registry until its first Goal is created. That
@@ -320,21 +320,19 @@ class ChatActionService(
         """
 
         try:
-            content = (registry_path or self.registry_path).read_bytes()
+            content = self.registry_path.read_bytes()
         except FileNotFoundError:
             return "registry-absent"
         except OSError as exc:
             raise ValueError("the active LoopX registry is unavailable") from exc
         return hashlib.sha256(content).hexdigest()
 
-    def _monitor_create_fingerprint(self, source_registry: Path) -> str:
-        invoked = self._registry_fingerprint()
-        if source_registry == self.registry_path:
-            return invoked
-        # A directory can stay unchanged while the Goal moves to a different
-        # provider or changes its registered Agents in its source registry.
-        return _digest({"directory": invoked, "source": self._registry_fingerprint(source_registry),
-                        "source_registry": str(source_registry)})
+    @staticmethod
+    def _monitor_create_fingerprint(source: ChatTodoSource) -> str:
+        return _digest({
+            "source_identity": source.source_identity,
+            "registry_sha256": source.registry_sha256,
+        })
 
     def _creation_agent_eligibility(
         self, agent_id: str, *, project: Path | None = None
@@ -434,11 +432,14 @@ class ChatActionService(
                 return family
         return token
 
-    def _resolve_goal_agent(self, goal_id: str, endpoint_id: str) -> str:
+    def _resolve_goal_agent(
+        self, goal_id: str, endpoint_id: str, *, goal: dict[str, object] | None = None,
+    ) -> str:
         """Resolve a runtime Endpoint to the Goal's durable peer identity."""
 
         self._agent_eligibility(endpoint_id)
-        goal = self._goal(goal_id)
+        if goal is None:
+            goal = self._goal(goal_id)
         registered = registered_agent_ids_for_goal(goal)
         if endpoint_id in registered:
             return endpoint_id
@@ -1108,15 +1109,15 @@ class ChatActionService(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
     ) -> dict[str, Any]:
         goal_id = str(parameters["goal_id"])
-        registry_path, runtime_root_arg = todo_create_source(self, goal_id)
-        current_fingerprint = self._monitor_create_fingerprint(registry_path)
+        source = resolve_chat_todo_source(self, goal_id)
+        current_fingerprint = self._monitor_create_fingerprint(source)
         if current_fingerprint != proposal.get("expected_state_fingerprint"):
             stale = self.store.apply(
                 proposal_id, current_state_fingerprint=current_fingerprint, receipt={}
             )
             return {"proposal": stale, "turn": None}
         agent_id = str(parameters["agent_id"])
-        if agent_id not in registered_agent_ids_from_registry(registry_path, goal_id):
+        if agent_id not in registered_agent_ids_for_goal(source.goal):
             raise ValueError("monitor Agent must be registered for the Goal")
         stop_condition = str(parameters.get("stop_condition") or "").strip()
         resume_when = None
@@ -1133,9 +1134,8 @@ class ChatActionService(
         ):
             metadata["watch_only"] = "true"
         result = add_goal_todo(
-            registry_path=registry_path,
+            **source.writer_scope(),
             goal_id=goal_id,
-            runtime_root_arg=runtime_root_arg,
             role="agent",
             text=_monitor_text(parameters) or str(parameters["target"]),
             task_class="continuous_monitor",
@@ -1316,20 +1316,20 @@ class ChatActionService(
             ]
             permission = "protected"
         elif action_kind == "todo.create":
-            registry_path, runtime_root_arg = todo_create_source(self, normalized["goal_id"])
+            source = resolve_chat_todo_source(self, normalized["goal_id"])
             canonical_preview = build_todo_review_preview(
-                registry_path=registry_path,
+                **source.writer_scope(),
                 goal_id=normalized["goal_id"],
-                runtime_root_arg=runtime_root_arg,
                 text=normalized["text"],
                 priority=normalized.get("priority"),
+                source_identity=source.source_identity,
             )
             fingerprint = str(canonical_preview["preview_id"])
             evidence = ["Canonical LoopX Todo dry-run validated the proposal."]
             permission = "durable_write"
         elif action_kind == "monitor.create":
-            registry_path, _ = todo_create_source(self, normalized["goal_id"])
-            fingerprint = self._monitor_create_fingerprint(registry_path)
+            source = resolve_chat_todo_source(self, normalized["goal_id"])
+            fingerprint = self._monitor_create_fingerprint(source)
             evidence = ["Canonical LoopX contracts validated the bounded request shape."]
             permission = "durable_write"
         elif action_kind == "run.correct":
@@ -1565,7 +1565,21 @@ class ChatActionService(
                     "next_action": "Confirm the exact request through its authenticated operation card.",
                 },
             )
+        parameters = proposal.get("normalized_parameters")
+        if proposal.get("action_kind") == "todo.create" and isinstance(parameters, dict):
+            key = _opaque(proposal_id, field="proposal_id")
+            with try_exclusive_file_lock(
+                self.store.root / "task-starts" / f"{key}.json", operation="confirm_task_start",
+            ) as held:
+                if held is None:
+                    raise ActionConflictError("The original Task confirmation is in progress. Retry it when it finishes.")
+                return self._apply_confirmed_action(proposal_id)
+        return self._apply_confirmed_action(proposal_id)
+
+    def _apply_confirmed_action(self, proposal_id: str) -> dict[str, object]:
         proposal = self.store.start_apply(proposal_id)
+        if proposal["status"] == "applied":
+            return {"proposal": proposal, "turn": self._turn_from_receipt(proposal.get("receipt"))}
         action_kind = str(proposal.get("action_kind") or "")
         parameters = proposal.get("normalized_parameters")
         if not isinstance(parameters, dict):
@@ -1611,10 +1625,9 @@ class ChatActionService(
             )
         if action_kind == "todo.create":
             goal_id = str(parameters["goal_id"])
-            registry_path, runtime_root_arg = todo_create_source(self, goal_id)
+            source = resolve_chat_todo_source(self, goal_id)
             agent_id = parameters.get("agent_id")
-            if agent_id and agent_id not in registered_agent_ids_from_registry(registry_path, goal_id):
-                raise ValueError("the selected Agent is no longer registered for this Goal")
+            start_execution = parameters.get("start_execution") is True
             checkpoint = proposal.get("checkpoint")
             steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else {}
             steps = steps if isinstance(steps, dict) else {}
@@ -1624,16 +1637,25 @@ class ChatActionService(
                 canonical_receipt = todo_step.get("canonical_receipt")
                 if not isinstance(canonical_receipt, dict):
                     raise ValueError("Todo creation checkpoint is malformed")
+                binding = todo_step.get("source")
+                if not isinstance(binding, dict):
+                    raise ValueError("The created Task predates source binding. Recover the original Todo before assigning it.")
+                source.require_review(binding)
                 current_fingerprint = str(
                     proposal.get("expected_state_fingerprint") or ""
                 )
             else:
+                if agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
+                    raise ValueError("the selected Agent is no longer registered for this Goal")
+                authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
+                if not isinstance(authority.get("store_identity"), str):
+                    raise ValueError("The Goal's Todo authority identity is unavailable")
                 current = build_todo_review_preview(
-                    registry_path=registry_path,
+                    **source.writer_scope(),
                     goal_id=goal_id,
-                    runtime_root_arg=runtime_root_arg,
                     text=str(parameters["text"]),
                     priority=parameters.get("priority"),
+                    source_identity=source.source_identity,
                 )
                 current_fingerprint = str(current["preview_id"])
                 if current_fingerprint != proposal.get("expected_state_fingerprint"):
@@ -1644,32 +1666,47 @@ class ChatActionService(
                     )
                     return {"proposal": stale, "turn": None}
                 applied = apply_todo_review_preview(
-                    registry_path=registry_path,
+                    **source.writer_scope(),
                     goal_id=goal_id,
-                    runtime_root_arg=runtime_root_arg,
                     text=str(parameters["text"]),
                     priority=parameters.get("priority"),
                     preview_id=current_fingerprint,
+                    expected_registry_sha256=source.registry_sha256,
+                    source_identity=source.source_identity,
+                    return_authority_write=True,
                 )
                 canonical_receipt = applied["receipt"]
                 todo_id = _opaque(canonical_receipt["todo_id"], field="todo_id")
+                binding = {
+                    **applied["authority_write"],
+                    "source_identity": source.source_identity,
+                    "store_identity": authority["store_identity"],
+                    "registry_sha256": source.registry_sha256,
+                }
                 self.store.save_checkpoint(
                     proposal_id,
                     step="todo_created",
                     receipt={
                         "todo_id": todo_id,
                         "canonical_receipt": canonical_receipt,
+                        "source": binding,
                     },
                 )
-            if agent_id and not isinstance(steps.get("todo_assigned"), dict):
+            if agent_id and not start_execution and not isinstance(steps.get("todo_assigned"), dict):
+                source = resolve_chat_todo_source(self, goal_id)
+                source.require_review(binding)
+                authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
+                source.require_created_todo(binding, authority)
                 update_goal_todo(
-                    registry_path=registry_path,
+                    **source.writer_scope(),
                     goal_id=goal_id,
-                    runtime_root_arg=runtime_root_arg,
                     todo_id=todo_id,
                     claimed_by=str(agent_id),
                     agent_id=str(agent_id),
                     authority_reason="owner-confirmed typed Chat action",
+                    update_operation_id=f"chat-assign:{proposal_id}",
+                    update_expected_provider_revision=binding["provider_revision"],
+                    update_expected_registry_sha256=binding["registry_sha256"],
                     dry_run=False,
                 )
                 self.store.save_checkpoint(
@@ -1689,60 +1726,16 @@ class ChatActionService(
                 "canonical_receipt": canonical_receipt,
             }
             turn_result = None
-            if parameters.get("start_execution"):
-                if self.runtime_controller is None:
-                    raise ValueError("Chat Runtime Controller is unavailable")
-                execution_agent_id = str(
-                    parameters.get("endpoint_id") or parameters["agent_id"]
+            if start_execution:
+                source = resolve_chat_todo_source(self, goal_id)
+                source.require_review(binding)
+                turn_result = self._start_confirmed_task(
+                    proposal_id, parameters, todo_id, steps, source=source, binding=binding,
                 )
-                execution_step = steps.get("execution_started")
-                if isinstance(execution_step, dict) and execution_step.get(
-                    "session_id"
-                ):
-                    session_id = _opaque(
-                        execution_step.get("session_id"), field="session_id"
-                    )
-                    turn_id = _opaque(execution_step.get("turn_id"), field="turn_id")
-                    created = False
-                else:
-                    goal = self._goal(goal_id, registry_path=registry_path)
-                    project = Path(str(goal.get("repo") or ".")).expanduser().resolve()
-                    if not project.is_dir():
-                        raise ValueError("the Goal project root is unavailable")
-                    self._agent_eligibility(execution_agent_id, project=project)
-                    session, _resumed = self.runtime_controller.open_session(
-                        goal_id=str(parameters["goal_id"]),
-                        agent_id=execution_agent_id,
-                        work_dir=project,
-                        objective=str(parameters["text"]),
-                        mode="resume_latest",
-                        channel_id=f"task.{todo_id}",
-                        agent_goal_id=str(parameters["goal_id"]),
-                    )
-                    session_id = _opaque(session.get("session_id"), field="session_id")
-                    turn, created = self.runtime_controller.submit_turn(
-                        session_id=session_id,
-                        client_turn_id=f"task-start-{proposal_id}",
-                        message=str(parameters["text"]),
-                        work_dir=project,
-                        objective=str(parameters["text"]),
-                    )
-                    turn_id = _opaque(turn.get("turn_id"), field="turn_id")
-                    self.store.save_checkpoint(
-                        proposal_id,
-                        step="execution_started",
-                        receipt={"session_id": session_id, "turn_id": turn_id},
-                    )
                 receipt["resource_ids"].update(
-                    {"session_id": session_id, "turn_id": turn_id}
+                    {"session_id": turn_result["session_id"], "turn_id": turn_result["turn_id"]}
                 )
                 receipt["outcome"] = "task_execution_started"
-                turn_result = {
-                    "session_id": session_id,
-                    "turn_id": turn_id,
-                    "status": "queued",
-                    "created": created,
-                }
             stored = self.store.apply(
                 proposal_id,
                 current_state_fingerprint=current_fingerprint,
@@ -1808,8 +1801,7 @@ class ChatActionService(
             }
         raise ValueError(f"unsupported action_kind: {action_kind}")
 
-    @staticmethod
-    def _turn_from_receipt(receipt: Any) -> dict[str, Any] | None:
+    def _turn_from_receipt(self, receipt: Any) -> dict[str, Any] | None:
         if not isinstance(receipt, dict) or not isinstance(
             receipt.get("resource_ids"), dict
         ):
@@ -1817,12 +1809,17 @@ class ChatActionService(
         resource_ids = receipt["resource_ids"]
         if not resource_ids.get("turn_id"):
             return None
+        session_id = resource_ids.get("session_id")
+        turn_id = str(resource_ids["turn_id"])
+        status = "accepted"
+        if receipt.get("outcome") == "task_execution_started" and session_id:
+            chat = getattr(self.runtime_controller, "store", None) or self.chat_store
+            turn = chat.load_turn(str(session_id), turn_id) if chat is not None else None
+            if turn and turn.get("session_id") == session_id and turn.get("turn_id") == turn_id:
+                status = str(turn.get("status") or status)
         return {
-            "session_id": str(resource_ids["session_id"])
-            if resource_ids.get("session_id")
-            else None,
-            "turn_id": str(resource_ids["turn_id"]),
-            "status": "accepted",
-            "created": receipt.get("outcome")
-            in {"turn_created", "task_execution_started"},
+            "session_id": str(session_id) if session_id else None,
+            "turn_id": turn_id,
+            "status": status,
+            "created": receipt.get("outcome") == "turn_created",
         }

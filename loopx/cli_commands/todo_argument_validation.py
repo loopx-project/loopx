@@ -5,7 +5,7 @@ import shlex
 from collections.abc import Iterable
 from pathlib import Path
 
-from ..command_invocation import loopx_cli_argv
+from ..command_invocation import cli_option_args, loopx_cli_argv
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 
 TODO_OPTION_FIELDS = (
@@ -388,17 +388,24 @@ class TodoClaimArgumentError(ValueError):
         if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
             missing.append("--task-lease-idempotency-key")
         route = loopx_cli_argv()
-        cli_args = [*route[1:], "--registry", str(registry_path), "--format", "json"]
+        cli_args = [*route[1:], *cli_option_args("--registry", registry_path), "--format", "json"]
         if runtime_root_arg is not None:
-            cli_args.extend(["--runtime-root", runtime_root_arg])
-        cli_args.extend(["todo", "claim", "--goal-id", args.goal_id])
-        # Reuse the grammar owner; preserve identities and zero-valued CAS versions.
+            cli_args.extend(cli_option_args("--runtime-root", runtime_root_arg))
+        cli_args.extend(["todo", "claim", *cli_option_args("--goal-id", args.goal_id)])
+        # Omit inputs the caller must supply. Preserve other explicit values for
+        # the authority owner to validate, including an empty operation ID.
         for flag, field in TODO_OPTION_FIELDS:
+            if field not in _TODO_CLAIM_FIELDS or flag in missing:
+                continue
             value = getattr(args, field, None)
-            if field in _TODO_CLAIM_FIELDS and value is not None and value != "":
-                cli_args.extend([flag, str(value)])
-        if args.project:
-            cli_args.extend(["--project", args.project])
+            if value is None or value is False:
+                continue
+            if value is True:
+                cli_args.append(flag)
+            else:
+                cli_args.extend(cli_option_args(flag, value))
+        if args.project is not None:
+            cli_args.extend(cli_option_args("--project", args.project))
         if args.dry_run:
             cli_args.append("--dry-run")
         return {

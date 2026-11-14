@@ -53,9 +53,10 @@ from ..status_server import (
 from ..control_plane.todos.list_readback import list_goal_todos
 
 
-def goal_read_runtime_root(server: Any) -> str | None:
+def goal_read_runtime_root(server: Any, *, registry: dict[str, Any] | None = None) -> str | None:
     """Keep registry source routing; Chat storage is only an unbound fallback."""
-    registry = _discovery_registry(server.registry_path)
+    if registry is None:
+        registry = _discovery_registry(server.registry_path)
     if registry.get("common_runtime_root") or registry.get("registry_role") == "global-local":
         # Passing the coordinator's resolved root as an explicit override
         # suppresses the collector's per-Goal source_registry routing. A
@@ -75,7 +76,7 @@ def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
             goal_id=goal_id,
             runtime_root_arg=str(runtime_root) if runtime_root else None,
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, LocalCoordinationAuthorityUnavailable):
         # An unreadable Todo source leaves the rest of the review usable.
         return None
     todos = [row for row in listed.get("todos") or [] if isinstance(row, dict)]

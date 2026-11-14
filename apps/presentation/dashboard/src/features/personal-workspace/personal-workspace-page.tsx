@@ -1,4 +1,5 @@
 import {DocumentAttachment, isTextDocument} from "./document-attachment";
+import {appStewardUnavailableMessage} from "./app-steward-entry";
 import {AlertCircle, Bot, CalendarClock, CircleHelp, FileText, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, Square, X} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import {readSettingsRoute, writeSettingsRoute} from "./workspace-settings-route";
@@ -125,7 +126,7 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   const latest = new Map<string, WorkspaceActionPreview>();
   proposals.forEach((proposal) => {
     const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
-    const key = proposal.actionKind === "operation.execute" ? proposal.previewId
+    const key = proposal.actionKind === "operation.execute" || proposal.reviewPlan?.taskExecution ? proposal.previewId
       : [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
     // Two records can describe the same draft; keep the newest by its stored
     // time rather than whichever one this list happened to end with, since a
@@ -1376,10 +1377,15 @@ export function PersonalWorkspacePage({
     [items, managerSessionProposalIds, managerChannelProposalIds],
   );
   const conversationOpen = (!agentWorkActive || managedWorkActive) && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
+  const boundHistory = Boolean(originalConversation);
+  const historyPositionScope = JSON.stringify([selectionScope, conversationKey, selectedAgentId,
+    conversationMessageFocus?.sessionId, conversationMessageFocus?.messageId]);
+  const [positionedHistoryScope, setPositionedHistoryScope] = useState<string | null>(null);
   const timelineReading = {
     queuedTurnKeys,
     messageFocus: conversationMessageFocus,
     historyPhase: conversationHistoryState?.phase,
+    historyPositionReady: !boundHistory || (conversationOpen && positionedHistoryScope === historyPositionScope),
     onRetryHistory: conversationHistoryState?.retry,
     onReadMessage: () => { followConversationRef.current = false; },
   };
@@ -1410,9 +1416,18 @@ export function PersonalWorkspacePage({
     readReturnRef.current = undefined;
     followConversationRef.current = !conversationMessageFocus;
     conversationScrollTopRef.current = channelScrollRef.current?.scrollTop ?? 0;
+    setPositionedHistoryScope(null);
     setShowLatestMessage(false);
     if (conversationOpen && !conversationMessageFocus) readReturnedAnswer();
-  }, [conversationKey, selectedAgentId, conversationOpen, conversationMessageFocus?.sessionId, conversationMessageFocus?.messageId]);
+  }, [historyPositionScope, conversationOpen]);
+  useLayoutEffect(() => {
+    if (!boundHistory || !conversationOpen || !managerMessages.length || conversationHistoryState?.phase === "loading"
+      || positionedHistoryScope === historyPositionScope) return;
+    // Linked images have no src until the scroll anchor is in place. Native
+    // lazy loading can otherwise start fetching at the top before we move.
+    if (followConversationRef.current && !readReturnedAnswer()) scrollToLatestMessage();
+    setPositionedHistoryScope(historyPositionScope);
+  }, [boundHistory, conversationOpen, managerMessages.length, conversationHistoryState?.phase, historyPositionScope, positionedHistoryScope]);
   useEffect(() => {
     if (!conversationOpen) return;
     let frame = 0;
@@ -1714,10 +1729,15 @@ export function PersonalWorkspacePage({
       .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
         || compileActionReviewPlan(proposal).retryOriginal === true
         || (proposal.action_kind === "team.plan" && proposal.status === "applied")
+        || (proposal.action_kind === "todo.create" && proposal.status === "applied")
         // Terminal operations replace cached gated cards, including in an
         // already-open drawer. They never authorize local execution.
         || proposal.action_kind === "operation.execute")
-      .map((proposal) => workspaceProposal(proposal, t));
+      .map((proposal) => workspaceProposal(proposal, t))
+      // Keep a launch receipt reachable after a reload; plain creation does
+      // not have a Turn to revisit.
+      .filter(proposal => proposal.actionKind !== "todo.create" || proposal.status !== "applied"
+        || Boolean(proposal.reviewPlan?.taskExecution));
     const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
     const previousIds = restoredProposalIdsRef.current;
     restoredProposalIdsRef.current = new Set(Object.keys(restored));
@@ -2146,14 +2166,15 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      if (!stored && ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) && !readbackMismatch) {
+      const scopedReadback = ["team.plan", "goal.create", "todo.update", "todo.create"].includes(proposal.actionKind);
+      if (!stored && scopedReadback && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
         if (readback.isSuccess) stored = readback.data?.find(item => item.proposal_id === proposal.previewId);
       }
       if (stored?.proposal_id === proposal.previewId && stored.action_kind === proposal.actionKind
         && matchesTodoTarget(stored)
-        && (!["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
+        && (!scopedReadback || stored.normalized_parameters.goal_id === proposal.goalId)) {
         await actionReadback.acceptProposal(stored);
         const observed = workspaceProposal(stored, t);
         const reconciled = { ...observed, errorMessage: observed.status === "error"
@@ -2828,7 +2849,8 @@ export function PersonalWorkspacePage({
           else setSelection(entry.destination.selection);
         }} />}
       notice={serviceNotice}
-      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={drawerReadOnly ? [] : larkConnections}
+      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })}
+        callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={drawerReadOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && !goal.loadState && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
@@ -2840,7 +2862,8 @@ export function PersonalWorkspacePage({
         onRetryProposalReadback={() => void (creationProposalId ? proposalReadback.refetch() : actionReadback.refetch())} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)
-          && !(drawerSelection.item.status === "applied" && ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind))) {
+          && !(drawerSelection.item.status === "applied" && (drawerSelection.item.reviewPlan?.taskExecution
+            || ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind)))) {
           setProposals((current) => {
             const next = { ...current };
             delete next[drawerSelection.item.previewId];
@@ -3044,7 +3067,7 @@ export function PersonalWorkspacePage({
           {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive && !managedWorkActive}>
             {workspaceConversations?.entryGate ? <div className="personal-history-notice" role={workspaceConversations.entryGate.unavailable ? "alert" : "status"}>
               <span>{workspaceConversations.entryGate.unavailable
-                ? (locale === "zh-CN" ? "原管家会话暂不可用。请检查所选连接后重试。" : "The original steward conversation is unavailable. Check the selected connection and retry.")
+                ? appStewardUnavailableMessage(workspaceConversations.entryGate.ownerLoginUnavailable === true, locale === "zh-CN")
                 : (locale === "zh-CN" ? "正在核验管家会话…" : "Verifying the steward conversation…")}</span>
               {workspaceConversations.entryGate.unavailable ? <>
                 <button type="button" onClick={workspaceConversations.entryGate.retry}>{t("history.retry")}</button>

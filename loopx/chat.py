@@ -1038,7 +1038,7 @@ def _compact_todo_payload(payload: dict[str, Any], *, applied: bool) -> dict[str
     }
 
 
-def _todo_preview_fingerprint(payload: dict[str, Any]) -> str:
+def _todo_preview_fingerprint(payload: dict[str, Any], *, source_identity: str | None = None) -> str:
     compact = _compact_todo_payload(payload, applied=False)
     if payload.get("decision_read_from_provider") is True:
         # Bind the transport operation to reviewed intent and provider head.
@@ -1051,6 +1051,7 @@ def _todo_preview_fingerprint(payload: dict[str, Any]) -> str:
             "added": compact["added"],
             "already_exists": compact["already_exists"],
             "expected_revision": _todo_revision(payload),
+            **({"source_identity": source_identity} if source_identity is not None else {}),
         }
     )
 
@@ -1084,6 +1085,7 @@ def _todo_no_write_receipt(
     current_preview: dict[str, Any],
     write_attempted: bool = False,
     state_revision: str | None = None,
+    source_identity: str | None = None,
 ) -> dict[str, Any]:
     receipt = {
         "schema_version": CHAT_TODO_NO_WRITE_RECEIPT_SCHEMA_VERSION,
@@ -1092,7 +1094,7 @@ def _todo_no_write_receipt(
         "outcome": "preview_stale",
         "write_attempted": write_attempted,
         **(
-            {"current_preview_id": _todo_preview_fingerprint(current_preview)}
+            {"current_preview_id": _todo_preview_fingerprint(current_preview, source_identity=source_identity)}
             if not write_attempted and state_revision is None
             else {}
         ),
@@ -1112,6 +1114,7 @@ def _add_review_todo(
     dry_run: bool,
     expected_provider_revision: str | None = None,
     operation_id: str | None = None,
+    expected_registry_sha256: str | None = None,
 ) -> dict[str, Any]:
     return add_goal_todo(
         registry_path=registry_path,
@@ -1129,6 +1132,8 @@ def _add_review_todo(
             if expected_provider_revision is not None
             else {}
         ),
+        **({"expected_registry_sha256": expected_registry_sha256}
+           if expected_registry_sha256 is not None else {}),
     )
 
 
@@ -1139,6 +1144,7 @@ def _bound_todo_review_preview(
     runtime_root_arg: str | None,
     text: str,
     priority: str | None,
+    source_identity: str | None,
 ) -> dict[str, Any]:
     payload = _add_review_todo(
         registry_path=registry_path,
@@ -1161,7 +1167,7 @@ def _bound_todo_review_preview(
             text=text,
             priority=priority,
             dry_run=True,
-            operation_id="chat-todo:" + _todo_preview_fingerprint(payload),
+            operation_id="chat-todo:" + _todo_preview_fingerprint(payload, source_identity=source_identity),
             expected_provider_revision=_todo_revision(payload),
         )
     except LocalCoordinationAuthorityUnavailable as exc:
@@ -1184,6 +1190,7 @@ def build_todo_review_preview(
     text: str,
     priority: str | None = None,
     runtime_root_arg: str | None = None,
+    source_identity: str | None = None,
 ) -> dict[str, Any]:
     payload = _bound_todo_review_preview(
         registry_path=registry_path,
@@ -1191,9 +1198,10 @@ def build_todo_review_preview(
         runtime_root_arg=runtime_root_arg,
         text=text,
         priority=priority,
+        source_identity=source_identity,
     )
     compact = _compact_todo_payload(payload, applied=False)
-    compact["preview_id"] = _todo_preview_fingerprint(payload)
+    compact["preview_id"] = _todo_preview_fingerprint(payload, source_identity=source_identity)
     return compact
 
 
@@ -1205,6 +1213,9 @@ def apply_todo_review_preview(
     priority: str | None = None,
     preview_id: str,
     runtime_root_arg: str | None = None,
+    expected_registry_sha256: str | None = None,
+    source_identity: str | None = None,
+    return_authority_write: bool = False,
 ) -> dict[str, Any]:
     current_preview = _bound_todo_review_preview(
         registry_path=registry_path,
@@ -1212,13 +1223,15 @@ def apply_todo_review_preview(
         runtime_root_arg=runtime_root_arg,
         text=text,
         priority=priority,
+        source_identity=source_identity,
     )
-    if not preview_id or preview_id != _todo_preview_fingerprint(current_preview):
+    if not preview_id or preview_id != _todo_preview_fingerprint(current_preview, source_identity=source_identity):
         raise TodoReviewPreviewConflict(
             "stale todo preview; preview the proposal again before applying",
             receipt=_todo_no_write_receipt(
                 goal_id=goal_id,
                 current_preview=current_preview,
+                source_identity=source_identity,
             ),
         )
     try:
@@ -1229,6 +1242,8 @@ def apply_todo_review_preview(
             text=text,
             priority=priority,
             dry_run=False,
+            **({"expected_registry_sha256": expected_registry_sha256}
+               if expected_registry_sha256 is not None else {}),
             **(
                 {
                     "expected_provider_revision": _todo_revision(current_preview),
@@ -1239,7 +1254,7 @@ def apply_todo_review_preview(
             ),
         )
     except LocalCoordinationAuthorityUnavailable as exc:
-        if exc.code != "provider_revision_mismatch":
+        if exc.code not in {"provider_revision_mismatch", "authority_source_changed"}:
             raise
         # Only a conclusive owner rejection proves no write. Unknown commit
         # responses keep their existing original-operation recovery contract.
@@ -1259,4 +1274,10 @@ def apply_todo_review_preview(
         preview_payload=current_preview,
         applied_payload=applied,
     )
+    if return_authority_write and applied.get("decision_read_from_provider") is True:
+        compact["authority_write"] = {
+            "provider_revision": applied["provider_revision"],
+            "source_authority": applied["source_authority"],
+            "operation_id": applied["operation_id"],
+        }
     return compact
