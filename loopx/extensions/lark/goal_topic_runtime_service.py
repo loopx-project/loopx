@@ -22,6 +22,7 @@ from ..background_runtime import HostedWorker
 from .cli_resolution import LarkCliUnavailableError
 from .goal_channel_contracts import bindings_for_goal
 from .manager_context import session_turn_effect
+from .private_steward_triage import TRIAGE_CARD_ACTION, capture_callback, profile_supports_cards
 from .team_plan_confirmation import (
     active_profile_chat_ids,
     deliver_team_plan_review_cards_from_runtime,
@@ -276,6 +277,15 @@ class LarkGoalTopicRuntimeService:
         # Admission owns persistence and authorization. Only after it returns
         # may the existing reply worker look for its durable work; duplicates
         # and denied inputs still cannot manufacture a pending journal entry.
+        self._delivery_wakeup.set()
+        return result
+
+    def _handle_private_steward_callback(
+        self, profile: str, event: Mapping[str, Any], action: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if self.private_conversations is None or self._closed.is_set():
+            raise ValueError("private Steward callback route is unavailable")
+        result = capture_callback(self.private_conversations, profile, event, action)
         self._delivery_wakeup.set()
         return result
 
@@ -544,6 +554,9 @@ class LarkGoalTopicRuntimeService:
                     def handle_review_callback(
                         event: Mapping[str, Any],
                     ) -> Mapping[str, Any]:
+                        action = event.get("action_value")
+                        if isinstance(action, Mapping) and action.get("schema_version") == TRIAGE_CARD_ACTION:
+                            return self._handle_private_steward_callback(profile, event, action)
                         if self.action_service is None:
                             raise ValueError(
                                 "Lark manager review callbacks require Chat actions"
@@ -600,6 +613,9 @@ class LarkGoalTopicRuntimeService:
                         and isinstance(binding_id, str) and bool(binding_id)
                         and isinstance(private_binding, Mapping)
                         and private_binding.get("audience") == "owner"
+                    )
+                    private_steward_callbacks = (
+                        self.private_conversations is not None and profile_supports_cards(profile_config)
                     )
                     if bound_owner:
                         def admit_bound_private(profile_name: str, event: dict[str, Any]) -> dict[str, Any]:
@@ -662,6 +678,12 @@ class LarkGoalTopicRuntimeService:
                                 route, self.runtime_controller
                             )
 
+                        def register_callback_probe(probe: Callable[[], bool]) -> None:
+                            readiness = self.private_conversations.steward_callback_readiness
+                            key = (profile, app_id)
+                            readiness[key] = probe
+                            leases.callback(readiness.pop, key, None)
+
                         process_options = {"process_factory": start_consumer} if self.private_conversations is not None else {}
                         try:
                             result = runtime.stream_lark_goal_topic_profile(
@@ -675,9 +697,12 @@ class LarkGoalTopicRuntimeService:
                                 capture_mention=capture,
                                 private_admitter=private_admitter,
                                 proposal_deliverer=deliver_proposals,
+                                callback_availability_sink=register_callback_probe if private_steward_callbacks else None,
                                 review_callback_handler=(
                                     handle_review_callback
-                                    if self.action_service is not None and profile in runtime._active_group_profile_configs(snapshot)
+                                    if private_steward_callbacks or (
+                                        self.action_service is not None and profile in runtime._active_group_profile_configs(snapshot)
+                                    )
                                     else None
                                 ),
                                 health_sink=lambda update: self._update_health(
