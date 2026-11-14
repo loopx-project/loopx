@@ -1030,6 +1030,79 @@ def test_later_plain_measurement_cannot_replace_cited_decision_evidence(tmp_path
     assert "candidate:a" in page["content"]
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ordinary_execution_keeps_method_feedback_without_redeclaring_choice(tmp_path, provider):
+    project, runtime, path = setup(tmp_path, provider=provider)
+    source = tmp_path / "choice.json"
+    source.write_text(json.dumps(attachment()))
+    first = refresh(project, runtime, path, "choice", source, "--delivery-boundary", "in_flight_continuation")
+    original = first["explore_result_delivery"]
+    run(project, runtime, path, *_projected_cli_args(first["settlement_owed"]["command"], turn_instance_id="choice"))
+
+    # The declared direct check produces a real candidate and result. Its
+    # ordinary finding omits a decision and has no quantitative measurement.
+    artifact = project / "direct-result.json"
+    artifact.write_text(json.dumps({"correct": True, "accepted_score": 8}, sort_keys=True))
+    candidate = json.loads(artifact.read_bytes())
+    assert candidate["correct"] and candidate["accepted_score"] == 8
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    observed = attachment()
+    observed.pop("work_yardstick_decision")
+    observed.update(node_id=original["node_id"], evidence_refs=["result:direct"],
+                    observation="The direct check returned the correct candidate with score 8")
+    observed["execution_observation"] = dict(schema_version="explore_execution_observation_v0",
+        candidate_sha256=digest, input_revision="inputs-v1", planned_method_id="method:direct", executed_method_id="method:direct",
+        change_reason=None, elapsed_seconds=None, limit_seconds=None, search_iterations=1, stop_reason="verified",
+        evidence_refs=["result:direct"], result_ref="result:direct", result_candidate_sha256=digest, exit_code=0)
+    result_file = tmp_path / "ordinary-result.json"
+    result_file.write_text(json.dumps(observed))
+    second = refresh(project, runtime, path, "execute", result_file, "--delivery-boundary", "in_flight_continuation")
+    result = second["explore_result_delivery"]
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert cue["source_finding_id"] == original["finding_id"]
+    assert cue["next_action"] == decision()["next_action"]
+    expected = dict(source_finding_id=original["finding_id"], result_finding_id=result["finding_id"],
+        proposed_method_id="method:direct", executed_method_id="method:direct", change_reason=None,
+        candidate_sha256=digest, evidence_refs=["result:direct"], recorded_planned_method_matches=True)
+    assert cue["previous_decision_followthrough"] == expected
+
+    # Recovery returns the same finding and never changes the prior choice.
+    log = explore_result_log_path(runtime, GOAL_ID)
+    before = log.read_bytes()
+    replay = run(project, runtime, path, "refresh-state", *binding("execute"), "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--explore-result-json", str(result_file),
+        "--no-global-sync", "--suppress-external-sinks")
+    assert replay["explore_result_delivery"]["finding_id"] == result["finding_id"]
+    assert log.read_bytes() == before
+    run(project, runtime, path, *_projected_cli_args(second["settlement_owed"]["command"], turn_instance_id="execute"))
+
+    # A subsequent choice consumes the actual feedback while the earlier
+    # execution keeps its own record, rather than being copied into a decision.
+    follow = attachment()
+    follow.update(node_id=original["node_id"], evidence_refs=["result:direct"])
+    follow["work_yardstick_decision"].update(prior_finding_id=original["finding_id"], counterevidence_refs=[], proxy=None)
+    follow["work_yardstick_decision"]["next_action"] = dict(method_id="method:confirm",
+        reason="Retain the correct direct result and independently confirm its result", cost_bound="One remaining check")
+    source.write_text(json.dumps(follow))
+    third = refresh(project, runtime, path, "next-choice", source, "--delivery-boundary", "in_flight_continuation")
+    revised = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert revised["source_finding_id"] == third["explore_result_delivery"]["finding_id"]
+    assert revised["next_action"]["method_id"] == "method:confirm"
+    assert revised["previous_decision_followthrough"] == expected
+    assert hashlib.sha256(artifact.read_bytes()).hexdigest() == revised["previous_decision_followthrough"]["candidate_sha256"]
+    run(project, runtime, path, *_projected_cli_args(third["settlement_owed"]["command"], turn_instance_id="next-choice"))
+
+    config = json.loads(path.read_text())
+    config["goals"][0]["execution_profile"]["yardstick_enabled"] = False
+    path.write_text(json.dumps(config))
+    assert "work_yardsticks" not in context(runtime, path)["graph"]
+    rows = _result_rows(runtime, GOAL_ID, path)
+    actual = next(row for row in rows if row["finding_id"] == result["finding_id"])
+    assert actual["execution_observation"]["candidate_sha256"] == digest and "work_yardstick" not in actual
+    assert "recorded_order" not in actual  # Public history keeps its original wire.
+
+
 def test_sqlite_current_work_to_ordinary_turn_to_concrete_action_and_readback(tmp_path):
     project, runtime, path = setup(tmp_path)
     source = tmp_path / "capture.json"

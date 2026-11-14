@@ -192,6 +192,15 @@ original server commit is provably later than that decision and their canonical
 log position follows its original prefix. A delayed old delivery, tied time or
 unknown time does not become new work evidence. Original results and explicitly
 cited, verified prefix history remain available.
+The detail read also connects confirmed `execution_observation` records to the
+current or explicitly preceding decision through `previous_decision_followthrough`.
+An ordinary result can omit `work_yardstick_decision`, including when it has no
+quantitative measurements; the existing choice remains current. A later choice
+keeps the preceding execution's original finding reference. Attribution requires
+the same Goal/Agent/Todo, question and tested input, plus the original commit and
+visible work window. Foreign, tentative, stale and late-visible records cannot
+become that choice's execution. This reuses existing findings and readback;
+the association does not independently verify method adoption or benefit.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use

@@ -99,6 +99,14 @@
 `selected_candidate`，仍核对来源修订、Todo 关联和后续实际工作。未带测量的手动笔记
 保持既有摘要/审计路径。读取或选择某条成绩不认证实际采用或执行。
 
+开启 work Yardstick 后，详情读取通过既有 `previous_decision_followthrough`，
+把 confirmed 的 `execution_observation` 关联到当前或显式前驱决策。普通结果可以
+省略 `work_yardstick_decision`，也可以没有量化测量；原选择继续有效。后续选择
+保留此前执行的原始 finding 引用。关联要求相同 Goal/Agent/Todo、问题和测试输入，
+并核对原始提交时间及证据可见的工作窗口；其他归属、tentative、过时或迟到的
+记录不能成为该选择的执行。复用现有 finding 与回读入口；关联本身不独立认证
+方法采用或收益。
+
 ## 概览
 
 LoopX Explore 是面向长程探索目标（软件研究、安全攻击面测绘、领域调研）的受支持、默认关闭的可选能力。它把“到处看看”变成有界、可观测、有门控的流程，包含三根支柱：

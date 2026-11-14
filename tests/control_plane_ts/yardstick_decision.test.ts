@@ -55,6 +55,61 @@ test("a late replay cannot replace a newer committed choice; exact profiles sele
   assert.equal(Object.hasOwn(cue, "fidelity_validated"), false);
 });
 
+test("ordinary execution follows its current or preceding decision without a repeated declaration", () => {
+  const observation = {schema_version: "explore_execution_observation_v0", candidate_sha256: "a".repeat(64),
+    input_revision: "inputs-v1", planned_method_id: "method:direct", executed_method_id: "method:direct",
+    change_reason: null, elapsed_seconds: null, limit_seconds: null, search_iterations: 1,
+    stop_reason: "verified", evidence_refs: ["result:direct"]};
+  const result = {finding_id: "executed", node_id: "question", status: "confirmed", agent_id: "worker",
+    last_updated_at: "2026-01-01T00:00:02Z", recorded_order: 2,
+    work_binding: {...binding, turn_instance_id: "turn-two"}, execution_observation: observation};
+  const project = (rows: unknown[]) => projectWorkYardstickCue({...binding, enabled: true, findings: rows})!;
+  const before = project([finding, result]);
+  const expected = {source_finding_id: "finding-one", result_finding_id: "executed", proposed_method_id: "method:direct",
+    executed_method_id: "method:direct", change_reason: null, candidate_sha256: "a".repeat(64),
+    evidence_refs: ["result:direct"], recorded_planned_method_matches: true};
+  assert.deepEqual(before.previous_decision_followthrough, expected);
+  assert.deepEqual(before.next_action, decision.next_action);
+  const next = {...finding, finding_id: "next-choice", recorded_order: 3, last_updated_at: "2026-01-01T00:00:03Z",
+    work_yardstick: {binding: {...binding, turn_instance_id: "turn-three"},
+      decision: {...decision, prior_finding_id: "finding-one", next_action: {...decision.next_action, method_id: "method:confirm"}}}};
+  assert.deepEqual(project([finding, result, next]).previous_decision_followthrough, expected);
+  const confirmed = {...result, finding_id: "confirmed", recorded_order: 4, last_updated_at: "2026-01-01T00:00:04Z",
+    execution_observation: {...observation, planned_method_id: "method:confirm", executed_method_id: "method:confirm"}};
+  const after = project([finding, result, next, confirmed]);
+  assert.deepEqual(after.previous_decision_followthrough, {...expected, source_finding_id: "next-choice",
+    result_finding_id: "confirmed", proposed_method_id: "method:confirm", executed_method_id: "method:confirm"});
+});
+
+test("method feedback excludes foreign, unconfirmed, stale and late-visible execution records", () => {
+  const result = {finding_id: "executed", node_id: "question", status: "confirmed", agent_id: "worker",
+    last_updated_at: "2026-01-01T00:00:02Z", recorded_order: 2, work_binding: binding,
+    execution_observation: {candidate_sha256: "a".repeat(64), input_revision: "inputs-v1",
+      planned_method_id: "method:direct", executed_method_id: "method:alternative", change_reason: "The check refuted the original route",
+      evidence_refs: ["result:alternative"]}};
+  const project = (rows: unknown[]) => projectWorkYardstickCue({...binding, enabled: true, findings: rows})!;
+  const expected = project([finding, result]).previous_decision_followthrough;
+  assert.ok(expected);
+  for (const invalid of [
+    {work_binding: {...binding, goal_id: "foreign"}}, {work_binding: {...binding, agent_id: "foreign"}},
+    {work_binding: {...binding, todo_id: "todo_foreign"}}, {node_id: "other-question"}, {status: "tentative"},
+    {last_updated_at: "2026-01-01T00:00:00Z"}, {last_updated_at: ""},
+    {execution_observation: {...result.execution_observation, input_revision: "other-inputs"}},
+  ]) {
+    const row = {...result, finding_id: "unrelated", recorded_order: 9, last_updated_at: "2026-01-01T00:00:09Z", ...invalid};
+    assert.deepEqual(project([finding, result, row]).previous_decision_followthrough, expected);
+  }
+  const next = {...finding, finding_id: "next-choice", recorded_order: 3, last_updated_at: "2026-01-01T00:00:03Z",
+    work_yardstick: {binding, decision: {...decision, prior_finding_id: "finding-one"}}};
+  const delayed = {...result, finding_id: "late-visible", recorded_order: 9, last_updated_at: "2026-01-01T00:00:02.5Z"};
+  assert.deepEqual(project([finding, result, next, delayed]).previous_decision_followthrough, expected);
+  const captured = {...next, recorded_order: 5, work_yardstick: {...next.work_yardstick,
+    source_snapshot: {event_count: 3, event_ids_sha256: "b".repeat(64)}}};
+  const afterRead = {...delayed, recorded_order: 4};
+  assert.deepEqual(project([finding, result, captured, afterRead]).previous_decision_followthrough, expected);
+  assert.equal(projectWorkYardstickCue({...binding, enabled: false, findings: [finding, result]}), null);
+});
+
 test("goal and proxy join the same two candidates regardless of declared order and metric direction", () => {
   const timeProxy = {...proxy, higher_is_better: false, unit: "seconds"};
   const measured = {...finding, work_yardstick: {binding, decision: {...decision, proxy: timeProxy}}, measurements: [
