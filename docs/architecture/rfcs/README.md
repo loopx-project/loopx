@@ -541,6 +541,15 @@ Paired diffs do not certify translation accuracy.
   - **Current boundary:** The RFC remains a discussion contract. Runtime work is
     held until repeated real usage demonstrates a second need without weakening
     non-blocking authority boundaries.
+- [Calli Workbench and Session Fabric v0](calli-workbench-and-session-fabric-v0.md)
+  ([中文版](calli-workbench-and-session-fabric-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; no `apps/**` or `packages/**` delivery yet.
+  - **Current boundary:** Two default-off units are proposed — an
+    `apps/presentation/calli-workbench/` projection-consumer UI and a
+    `packages/loopx-session-fabric/` optional package — with Goal/Todo/Gate
+    authority staying in `loopx-core` and Calli's own task tables retired.
+    Directory placement, L0 package boundary and naming await maintainer
+    decisions D1–D3.
 
 ## Benchmark And Reliability Engineering
 

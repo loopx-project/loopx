@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (51)
+## 已接受 (52)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -25,6 +25,7 @@
 | [App 会话与可复用的异步工作投递](app-conversation-and-async-inbox-v0.zh-CN.md) | 已接受 | none | — |
 | [RFC：自动执行准入（v0）](automatic-execution-admission-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | 已接受 | none | — |
+| [RFC：Calli 工作台与会话底座合入 LoopX（v0）](calli-workbench-and-session-fabric-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：强能力 Agent 管家与语义工作交接（v0）](capable-manager-semantic-handoff-v0.zh-CN.md) | 已接受 | [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md) | [2 条](ledger/capable-manager-semantic-handoff-v0/) |
 | [RFC：完整状态恢复与受控重新激活（v0）](complete-state-recovery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：可组合状态机与恢复验证（v0）](composable-state-machines-recovery-verification-v0.zh-CN.md) | 已接受 | 无 | — |
