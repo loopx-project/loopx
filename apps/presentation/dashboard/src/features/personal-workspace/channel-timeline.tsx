@@ -2,7 +2,7 @@ import {DocumentAttachment, isDocumentAttachment} from "./document-attachment";
 import { MessageActivity } from "./message-activity";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import {Fragment, useLayoutEffect, useRef, useState} from "react";
+import {Fragment, useEffectEvent, useLayoutEffect, useRef, useState} from "react";
 import { CollaborationCards } from "./collaboration-card";
 import {ConversationReplyContext} from "./conversation-requests";
 import { Activity, Bot, Sparkles } from "lucide-react";
@@ -19,6 +19,7 @@ import { ReturnDeliveryStatus } from "./return-delivery-status";
 import {ManagerTeamResult} from "./manager-team-result";
 import { compareProposalRecency } from "./proposal-recency";
 import { conversationOrder } from "./conversation-order";
+import { ConversationFind, conversationMessageKey } from "./conversation-find";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 function answerLink(sessionId: string, messageId: string) {
@@ -69,6 +70,20 @@ export function ChannelTimeline({
   onAdjustTurn?: (turnId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
+  const [findNavigation, setFindNavigation] = useState(0);
+  const [findMessageId, setFindMessageId] = useState<string | null>(null);
+  const timeline = useRef<HTMLDivElement>(null);
+  const readMessage = useEffectEvent(() => onReadMessage?.());
+  useLayoutEffect(() => {
+    if (!findMessageId) return;
+    readMessage();
+    const frame = requestAnimationFrame(() => {
+      const row = Array.from(timeline.current?.querySelectorAll<HTMLElement>("[data-timeline-id]") ?? [])
+        .find(node => node.dataset.timelineId === findMessageId);
+      row?.scrollIntoView({block: "start"});
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [findMessageId, findNavigation]);
   const orderedItems = conversationOrder(items.filter(item => {
     if (item.kind !== "message") return true;
     if (item.message.queued) return false;
@@ -78,8 +93,7 @@ export function ChannelTimeline({
       && messageFocus?.messageId === item.message.sourceMessageId;
     return !queued || focused;
   }));
-  const messageKey = (message: Extract<WorkspaceTimelineItem, {kind: "message"}>["message"]) =>
-    JSON.stringify([message.sourceSessionId, message.sourceMessageId]);
+  const messageKey = conversationMessageKey;
   const [historical, setHistorical] = useState<Set<string> | null>(null);
   // Freeze only the first settled historical batch. A live or newly completed
   // response, or a message already being read, never folds on a later refresh.
@@ -200,7 +214,8 @@ export function ChannelTimeline({
       );
     }
     return (
-      <article className={`personal-message is-${item.message.role}`} key={item.id}
+      <article className={`personal-message is-${item.message.role}${messageKey(item.message) === findMessageId ? " is-find-match" : ""}`} key={item.id}
+        data-timeline-id={messageKey(item.message)}
         data-message-session={item.message.sourceSessionId} data-message-id={item.message.sourceMessageId}
         data-returned-answer={item.message.role === "assistant" && !item.message.pending && item.message.returnDelivery ? true : undefined}
         ref={messageFocus && messageKey(item.message) === focusKey ? focusTarget : undefined}
@@ -213,7 +228,8 @@ export function ChannelTimeline({
           {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => isDocumentAttachment(attachment.mimeType) ? <DocumentAttachment key={attachment.id} {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <HistoricalMessageText text={item.message.text}
             initiallyCollapsed={Boolean(historical?.has(messageKey(item.message)))}
-            focused={Boolean(messageFocus && messageKey(item.message) === focusKey)} zh={locale === "zh-CN"} onRead={onReadMessage}/> : null}
+            focusRequest={messageKey(item.message) === findMessageId ? findNavigation : undefined}
+            focused={messageKey(item.message) === findMessageId || Boolean(messageFocus && messageKey(item.message) === focusKey)} zh={locale === "zh-CN"} onRead={onReadMessage}/> : null}
           <ConversationReplyContext context={item.message.replyContext} zh={locale === "zh-CN"}/>
           {item.message.role === "assistant" && !item.message.pending && item.message.text.length >= MIN_SEPARATE_ANSWER_LENGTH
             && item.message.sourceSessionId && item.message.sourceMessageId
@@ -233,7 +249,9 @@ export function ChannelTimeline({
     <>
       <p aria-atomic="true" aria-live="polite" className="personal-live-region" role="status"><span key={latestAnnounceable?.id}>{liveAnnouncement}</span></p>
       {focusNotice}
-      <div className="personal-channel-timeline">
+      {orderedItems.some(item => item.kind === "message") ? <ConversationFind items={orderedItems.flatMap(item => item.kind === "message" ? [item.message] : [])}
+        incomplete={historyPhase !== "ready"} zh={locale === "zh-CN"} onSelect={setFindMessageId} onNavigate={() => setFindNavigation(value => value + 1)}/> : null}
+      <div className="personal-channel-timeline" ref={timeline}>
         {backgroundIds.size ? <details className="personal-activity-summary">
           <summary><Activity size={16} aria-hidden="true"/><strong>{t("timeline.background")}</strong><span>{activitySummary}</span></summary>
           <div>{scheduleItems.map(renderItem)}{routineRuns.map(renderItem)}</div>

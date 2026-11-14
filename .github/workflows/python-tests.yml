@@ -195,6 +195,7 @@ jobs:
           npm run smoke:manager-goal-routing
           LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 npm run smoke:manager-goal-routing-browser
           npm run smoke:managed-goal-result-schema
+          npm run smoke:conversation-find
       - name: Qualify packaged team evidence and feedback recovery
         if: matrix.shard == 2
         working-directory: apps/presentation/dashboard
