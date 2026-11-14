@@ -763,9 +763,14 @@ def test_original_turn_history_keeps_complete_rows_and_scope_fences(ordinary, mo
         store.append_message(sid, role="agent", text=f"Original response {i}", turn_id=tid,
             attachments=[{"name": "original.png", "data_url": "data:image/png;base64,AA=="}] if i == 201 else None)
     store.update_turn(sid, tid, status="completed", response={"message": "Original response 201"})
+    later, _ = store.create_turn(sid, client_turn_id="later-correction", message="Check another case", origin="web")
+    store.update_turn(sid, later["turn_id"], status="running")
+    store.update_session(sid, active_turn_id=later["turn_id"])
     path = f"/api/chat/sessions/{sid}"
     before = capture.read_bytes()
     whole = request(path)[1]
+    assert whole["active_turn"]["turn_id"] == later["turn_id"]
+    assert "selected_turn" not in whole
     expected = [row for row in whole["messages"] if row.get("turn_id") == tid]
     recovered, recover = [], runtime.recover_exited_turn
     def observe_recovery(source):
@@ -775,19 +780,21 @@ def test_original_turn_history_keeps_complete_rows_and_scope_fences(ordinary, mo
     query = {"message_limit": 200, "turn_id": tid}
     code, first = request(path + "?" + urlencode(query))
     assert code == 200 and first["message_page"]["turn_id"] == tid
+    assert first["selected_turn"] == {"turn_id": tid, "status": "completed", "terminal": True}
+    assert first["active_turn"] is None, "The scoped response must not carry another Turn's details"
     assert len(first["messages"]) == 200 and first["message_page"]["total"] == len(expected) == 203
     cursor = first["message_page"]["next_cursor"]
     store.append_message(sid, role="agent", text="Outside the frozen original prefix", turn_id=tid)
     code, rest = request(path + "?" + urlencode({**query, "message_cursor": cursor}))
     assert code == 200 and rest["message_page"]["next_cursor"] is None
     assert first["messages"] + rest["messages"] == expected
+    _, current = request(path + "?" + urlencode({**query, "turn_id": later["turn_id"]}))
+    assert current["selected_turn"] == {"turn_id": later["turn_id"], "status": "running", "terminal": False}
     assert recovered == [], "A historical Turn read must not recover the Session's active execution"
     assert capture.read_bytes() == before, "A scoped read cannot execute or recover model work"
     assert "turn_id" not in request(path + "?message_limit=200")[1]["message_page"]
     assert recovered == [sid], "An unscoped Chat refresh keeps its ordinary recovery behavior"
-    other, _ = store.create_turn(sid, client_turn_id="other-original", message="Other question", origin="web")
-    store.update_turn(sid, other["turn_id"], status="completed", response={"message": "Other answer"})
-    for selected in [None, other["turn_id"]]:
+    for selected in [None, later["turn_id"]]:
         wrong = {"message_limit": 200, "message_cursor": cursor, **({"turn_id": selected} if selected else {})}
         assert request(path + "?" + urlencode(wrong))[0] == 400
     for invalid in ["turn_id=missing", "message_limit=200&turn_id=missing", "message_limit=200&turn_id=..",
