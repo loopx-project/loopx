@@ -24,6 +24,22 @@ from ...file_lock import exclusive_file_lock
 # shapes are stated once here instead of being rebuilt at each use site.
 RESULT_FILE_KEY_PATTERN = re.compile(r"file_[A-Za-z0-9_-]{1,240}")
 CHAT_IMAGE_KEY_PATTERN = re.compile(r"img_[A-Za-z0-9_-]{1,240}")
+LARK_APP_SCOPE_NOT_APPLIED = 99991672
+
+
+def _image_upload_scope_rejected(result):
+    """Recognize the CLI's explicit App rejection before resource creation."""
+    if result.get("returncode") != 3 or str(result.get("stdout") or "").strip():
+        return False
+    rejected = _json_object(result.get("stderr"))
+    error = rejected.get("error")
+    return (
+        rejected.get("ok") is False and rejected.get("identity") == "bot"
+        and isinstance(error, dict) and error.get("identity") == "bot"
+        and error.get("type") == "authorization"
+        and error.get("subtype") == "app_scope_not_applied"
+        and error.get("code") == LARK_APP_SCOPE_NOT_APPLIED
+    )
 
 
 def _call(args, cwd, *, runner, private_transport):
@@ -81,10 +97,14 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
         with exclusive_file_lock(cache):
             saved = _read(cache) if cache.exists() else None
             if saved is not None:
-                if saved.get("identity") != identity or not key_pattern.fullmatch(str(saved.get(key_field, ""))):
+                if saved.get("identity") != identity:
                     raise ValueError("resource upload identity conflict or acknowledgement unavailable")
-                keys.append(saved[key_field])
-                continue
+                if key_pattern.fullmatch(str(saved.get(key_field, ""))):
+                    keys.append(saved[key_field])
+                    continue
+                # Prior timeouts and missing acknowledgements remain fenced.
+                if not (fence_upload and saved == {"identity": identity, "upload_rejected_scope": LARK_APP_SCOPE_NOT_APPLIED}):
+                    raise ValueError("resource upload identity conflict or acknowledgement unavailable")
             if verify_only:
                 raise ValueError("sent result file resource record unavailable")
             raw = read_bytes(attachment)
@@ -104,8 +124,12 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
                 if fence_upload:
                     _write(cache, {"identity": identity, "upload_started": True})
                 uploaded = _call(args, cwd, runner=runner, private_transport=private_transport)
+                if fence_upload and _image_upload_scope_rejected(uploaded):
+                    _write(cache, {"identity": identity, "upload_rejected_scope": LARK_APP_SCOPE_NOT_APPLIED})
+                    raise ValueError("result file upload unavailable")
                 payload = _json_object(uploaded.get("stdout"))
-                key = (payload.get("data") or {}).get(key_field)
+                data = payload.get("data")
+                key = data.get(key_field) if isinstance(data, dict) else None
                 if uploaded.get("returncode") != 0 or payload.get("ok") is False or not key_pattern.fullmatch(str(key or "")):
                     raise ValueError("result file upload unavailable")
             _write(cache, {"identity": identity, key_field: key})

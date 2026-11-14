@@ -1200,7 +1200,8 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
 
 @pytest.mark.parametrize("fault", ["readback", "edited_source", "edited_original_reply", "edit_on_image_get",
     "edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_preview", "edit_on_send_source_read",
-    "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied",
+    "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied", "upload_scope_then_granted",
+    "upload_scope_with_conflicting_stdout",
     "unlisted_redirect", "unlisted_cached_redirect"])
 def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, source_https, fault):  # noqa: F811
     from hashlib import sha256
@@ -1222,6 +1223,8 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
     edited_body = None
     upload_previews = 0
     send_preview_seen = False
+    denied_uploads = 0
+    scope_granted = False
 
     def edit_original_reply():
         nonlocal edited_body
@@ -1229,10 +1232,20 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         provider.messages[prior_id]["body"] = edited_body
 
     def provider_io(args, cwd=None, timeout=None):
-        nonlocal upload_previews, send_preview_seen
-        if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
+        nonlocal upload_previews, send_preview_seen, denied_uploads
+        image_upload = "images" in args and "create" in args and "--dry-run" not in args
+        if fault == "upload_denied" and image_upload:
             provider.calls.append(list(args))
             return {"returncode": 3, "stderr": '{"ok":false,"error":{"type":"authorization","code":99991672}}'}
+        typed_scope_fault = fault in ("upload_scope_then_granted", "upload_scope_with_conflicting_stdout")
+        if image_upload and typed_scope_fault and io.uploads == 1 and not scope_granted:
+            provider.calls.append(list(args))
+            denied_uploads += 1
+            return {"returncode": 3,
+                    "stderr": json.dumps({"ok": False, "identity": "bot", "error": {
+                        "type": "authorization", "subtype": "app_scope_not_applied", "code": 99991672,
+                        "identity": "bot"}}),
+                    "stdout": "invalid provider acknowledgement" if fault == "upload_scope_with_conflicting_stdout" else ""}
         result = io(args, cwd, timeout)
         if "images" in args and "create" in args and "--dry-run" in args:
             upload_previews += 1
@@ -1328,20 +1341,30 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             provider.lose_next_reply = True
 
         assert worker.reconcile_request(path) == 0
-        if fault in {"readback", "unknown_send"}:
+        if fault in {"readback", "unknown_send", "upload_scope_then_granted", "upload_scope_with_conflicting_stdout"}:
             pending = json.loads(path.read_text())
             assert pending["historical_answer_images"]["status"] == "pending"
-            assert io.uploads == 4 and len(provider.writes) == writes + 1
+            if fault.startswith("upload_scope_"):
+                assert denied_uploads == 1 and io.uploads == 1 and len(provider.writes) == writes
+                assert "answer_images.historical" not in pending["deliveries"]
+                scope_granted = True
+            else:
+                assert io.uploads == 4 and len(provider.writes) == writes + 1
             worker = restart()
             assert path not in worker.pending_delivery_paths()
             pending["historical_answer_images"]["next_check_at"] = 0
             _atomic_write_json(path, pending)
             io.corrupt_download = False
             assert path in worker.pending_delivery_paths()
-            assert worker.reconcile_request(path) == int(fault == "readback")
+            delivered = fault in ("readback", "upload_scope_then_granted")
+            assert worker.reconcile_request(path) == int(delivered)
+            if fault == "upload_scope_with_conflicting_stdout":
+                assert denied_uploads == 1 and io.uploads == 1 and len(provider.writes) == writes
+                assert json.loads(path.read_text())["historical_answer_images"]["status"] == "pending"
+                return
             assert io.uploads == 4 and len(provider.writes) == writes + 1
             row = json.loads(path.read_text())
-            assert row["historical_answer_images"]["status"] == ("delivered" if fault == "readback" else "pending")
+            assert row["historical_answer_images"]["status"] == ("delivered" if delivered else "pending")
             outputs = [m for m in provider.messages.values() if m["msg_type"] == "post"
                        and "原图（按原文顺序）" in m["body"]["content"]]
             assert len(outputs) == 1
