@@ -1618,8 +1618,11 @@ all of them: read those pages completely before acting. No control text is cut.
 Omitting the option preserves the existing full-result API. A nonpositive
 budget is rejected before execution. Platforms without qualified POSIX private
 capture validation reject this option before settlement; remove only the output
-option to use the same Turn's full-result API. Reader references also fail closed
-there; mode bits are not a substitute for Windows ACL verification.
+option to use the same Turn's full-result API. On Windows, stateless progressive
+delivery and the explicit `refresh-state --settle-turn --settlement-receipt`
+readback use protected native ACLs for saved files and reader references.
+Use `--delta-delivery off` for the stateless path. An explicit progressive
+capture destination requires a private, physical parent directory.
 A capture failure after evaluation keeps every original control field (including
 `ok`, refusal reason, identity and receipts), omits only `before` / `after`, and
 adds `result_delivery_error`; the process exits nonzero. This fallback prioritizes
@@ -1650,7 +1653,9 @@ Codex App heartbeat 有原生会话，且当前 Todo 已准入并就绪时，可
 
 省略选项保留原有完整结果 API；非正预算在执行前拒绝。缺少已验证 POSIX 私有捕获
 校验的平台在结算前拒绝此选项；仅移除输出选项即可使用同一 Turn 的完整结果 API。
-reader reference 在该平台也安全拒绝，不能用 mode bits 代替 Windows ACL 校验。
+Windows 上的无状态渐进投递及显式 `refresh-state --settle-turn --settlement-receipt`
+读回使用原生受保护 ACL 保存并校验文件与读取引用。无状态路径使用
+`--delta-delivery off`。显式指定渐进捕获路径时，父目录须是私有实体目录。
 求值后捕获失败时保留全部原始控制字段（包括 `ok`、拒绝原因、身份和回执），只省略
 `before`／`after`，追加 `result_delivery_error` 并非零退出。此故障兜底优先保全控制
 信息，不保证展示预算；被拒绝的操作不一定存在 spend receipt。修复捕获权限或以

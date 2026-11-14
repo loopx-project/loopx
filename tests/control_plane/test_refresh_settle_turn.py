@@ -791,14 +791,15 @@ def test_pinned_powershell_launcher_settles_original_turn_once(
 
     def run(args):
         process = subprocess.run([powershell, "-NoProfile", "-NonInteractive", *args], cwd=project,
-            env={**os.environ, "LOOPX_CURRENT_RELEASE_FILE": str(pointer)}, capture_output=True, timeout=60)
+            env={**os.environ, "LOOPX_CURRENT_RELEASE_FILE": str(pointer)},
+            capture_output=True, encoding="utf-8", timeout=60)
         assert process.returncode == 0, (process.stdout, process.stderr)
         result = json.loads(process.stdout)
         assert result["ok"] and result["settlement_identity"] == identity
         return result
 
     if composed:
-        action = [*prefix, *refresh, "--settle-turn"]
+        action = [*prefix, *refresh, "--settle-turn", "--settlement-receipt"]
     else:
         owed = run([*prefix, *refresh])["settlement_owed"]
         assert _spend_run_count(runtime) == 0
@@ -806,6 +807,24 @@ def test_pinned_powershell_launcher_settles_original_turn_once(
     first = run(action)
     assert first["settlement_progress"]["state"] == "settled"
     assert _spend_run_count(runtime) == 1
+    if composed:
+        from tests.control_plane.windows_private_acl import assert_private_acl
+
+        details = first["result_details"]
+        reference = Path(details["reference_file"])
+        source = Path(json.loads(reference.read_text(encoding="utf-8"))["path"])
+        assert_private_acl(reference)
+        assert_private_acl(source)
+        readback = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-Command",
+            details["command"] + " --select /settlement_identity --select /settlement_result"],
+            cwd=project, env={**os.environ, "LOOPX_CURRENT_RELEASE_FILE": str(pointer)},
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert readback.returncode == 0, (readback.stdout, readback.stderr)
+        page = json.loads(readback.stdout)
+        assert page["ok"] and page["eof"]
+        assert {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]} == {
+            "/settlement_identity": identity, "/settlement_result": first["settlement_result"],
+        }
     if not composed:
         argv = owed["command_argv"]
         assert argv[:3] == [launcher_arg, "--cli-bin", launcher_arg]

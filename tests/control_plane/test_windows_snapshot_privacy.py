@@ -98,6 +98,44 @@ def test_readonly_context_capture_protects_without_native_continuity(tmp_path, m
     assert list(path.parent.parent.iterdir()) == children
 
 
+@pytest.mark.parametrize("damage", ["reference", "capture", "directory", "junction"])
+def test_private_c1_reader_rejects_untrusted_storage(tmp_path, damage):
+    from loopx.control_plane.turn_driver.decision_capture import (
+        private_capture_root, private_capture_subdirectory, write_context_read_reference, write_decision_capture,
+    )
+
+    runtime = tmp_path.resolve()
+    root = private_capture_root(runtime)
+    directory = private_capture_subdirectory(root, "test-")
+    capture = directory / "required-context.json"
+    payload = {"scope": "synthetic", "marker": "private-c1-content"}
+    digest = write_decision_capture(capture, payload)
+    reference = write_context_read_reference(capture, digest)
+    alias = None
+    if damage == "junction":
+        alias = runtime / "junction"
+        junction = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(root)],
+            capture_output=True, text=True, timeout=30)
+        assert junction.returncode == 0, junction.stdout + junction.stderr
+        # The immediate capture directory remains physically private through
+        # this alias. A check of the leaf ACL alone would accept it.
+        reference = alias / directory.name / reference.name
+    else:
+        broaden({"reference": reference, "capture": capture, "directory": directory}[damage])
+    try:
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json",
+            "quota", "context-read", "--reference-file", str(reference)],
+            capture_output=True, encoding="utf-8", timeout=30)
+        assert result.returncode == 1, (result.stdout, result.stderr)
+        denied = json.loads(result.stdout)
+        assert denied["ok"] is False and "content" not in denied
+        assert payload["marker"] not in result.stdout + result.stderr
+        assert hashlib.sha256(capture.read_bytes()).hexdigest() == digest
+    finally:
+        if alias is not None:
+            os.rmdir(alias)
+
+
 @pytest.mark.parametrize(
     ("broaden_target", "fact_bytes"),
     [(None, er.MAX_LOCAL_SNAPSHOT_BYTES), ("file", 8192), ("parent", 8192)],

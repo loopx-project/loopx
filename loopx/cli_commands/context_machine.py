@@ -8,8 +8,6 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import stat
-import tempfile
 from typing import Any
 
 from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
@@ -32,14 +30,12 @@ def _private_transport_root(runtime_root: Path) -> str:
     """Create only our leaf; never repair permissions or follow a replaced leaf."""
     if os.name != "posix":
         raise ValueError("native context continuity is unavailable on this platform")
-    runtime_root = runtime_root.expanduser().resolve()
-    runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    root = runtime_root / "context-delivery"
-    root.mkdir(mode=0o700, exist_ok=True)
-    info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("machine context transport requires a private physical directory owned by this user")
-    return str(root)
+    from ..control_plane.turn_driver.decision_capture import private_capture_root
+
+    try:
+        return str(private_capture_root(runtime_root))
+    except OSError as exc:
+        raise ValueError("machine context transport requires a private physical directory owned by this user") from exc
 
 
 def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
@@ -51,30 +47,12 @@ def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
     unchanged; retry that same operation after repairing its private transport.
     """
     from ..control_plane.turn_driver.decision_capture import (
-        capture_context_projection, context_capture_read_command,
+        capture_context_projection, context_capture_read_command, private_capture_root, private_capture_subdirectory,
     )
 
     try:
-        from ..control_plane.runtime.private_permissions import protect_private_path, require_private_path
-
-        # This is a write-once recovery file, not native continuity. Reuse the
-        # cross-platform private IO owner without enabling a native baseline.
-        runtime_root = runtime_root.expanduser().resolve()
-        runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        root = runtime_root / "context-delivery"
-        try:
-            root.mkdir(mode=0o700)
-        except FileExistsError:
-            try:
-                require_private_path(root, directory=True)  # Never repair an existing leaf.
-            except OSError as error:
-                raise ValueError("machine context transport requires a private physical directory owned by this user") from error
-        else:
-            protect_private_path(root, directory=True)
-        directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=root))
-        protect_private_path(directory, directory=True)
+        directory = private_capture_subdirectory(private_capture_root(runtime_root), "recovery-")
         reference = capture_context_projection(value, directory=directory, filename="required-context.json")
-        protect_private_path(Path(reference["path"]))
         if not index_and_select:
             return {key: reference[key] for key in ("path", "sha256", "command")}
         path, digest = Path(reference["path"]), reference["sha256"]

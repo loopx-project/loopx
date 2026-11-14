@@ -550,7 +550,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
             raise ValueError("context-read requires the original capture file and its exact SHA-256")
         _validate_context_page_window(offset, size, output_limit)
-        path, raw, payload = _read_capture(value, digest)
+        path, raw, payload = _read_capture(value, digest, private=bool(reference_file) and os.name == "nt")
 
         def restart(failure: dict[str, Any], *, select: list[str] | None = None, list_fields: bool = False,
                     list_depth: int | None = None, initial_read: bool = False,

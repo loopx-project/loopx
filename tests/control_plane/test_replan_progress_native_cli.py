@@ -186,8 +186,7 @@ def test_progress_cli_reads_policy_with_context_delivery(
         restart_effect_runtime(wait_for_exit=True)
 
 
-@pytest.mark.skipif(os.name != "posix" or shutil.which("pwsh") is None,
-                    reason="The private capture reader needs a POSIX host with PowerShell 7")
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="Requires PowerShell 7")
 @pytest.mark.parametrize(("provider", "complete"), [("file", False), ("sqlite", True)])
 def test_replan_stage_commands_run_verbatim_in_powershell(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, complete: bool,
@@ -210,7 +209,7 @@ def test_replan_stage_commands_run_verbatim_in_powershell(
 
     def run(*args: str) -> dict:
         result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", *args],
-            cwd=fixture["project"], capture_output=True, text=True, timeout=60)
+            cwd=fixture["project"], capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert result.returncode == 0, (result.stdout, result.stderr)
         return json.loads(result.stdout)
 
@@ -220,9 +219,23 @@ def test_replan_stage_commands_run_verbatim_in_powershell(
             "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
             "--context-delivery", "on", "--delta-delivery", "off",
             *(["--complete-turn"] if complete else []))
-        page = run("-Command", opening["first_read_command"])
-        assert page["eof"]
-        command = selected_context_values(page["content"])["/replan_action_packet/review"]
+        if os.name == "nt":
+            from tests.control_plane.windows_private_acl import assert_private_acl
+
+            reference = Path(opening["recovery"]["reference_file"])
+            capture = Path(json.loads(reference.read_text(encoding="utf-8"))["path"])
+            for leaf in (reference, capture, capture.parent, capture.parent.parent):
+                assert_private_acl(leaf)
+        command = opening["first_read_command"]
+        body = bytearray()
+        while command:
+            page = run("-Command", command)
+            assert page["ok"] and page["offset"] == len(body)
+            body.extend(page["content"].encode("utf-8"))
+            command = page.get("next_command")
+            assert page["next_offset"] == (len(body) if command else None)
+        assert page["eof"] and page["total_bytes"] == len(body)
+        command = selected_context_values(body.decode("utf-8"))["/replan_action_packet/review"]
         review = run("-Command", command)
         writeback = run("-Command", review["next"]["writeback"])
         assert review["stage"] == "review" and writeback["stage"] == "writeback"
