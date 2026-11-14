@@ -658,9 +658,10 @@ def test_antigravity_wake_defaults_to_complete_source_and_recovers_agent_spend(
     template = build_antigravity_sidecar_template(
         goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_root=str(runtime),
     )["sidecar"]["loopx-heartbeat"]
-    rc, observation = _run_generated_cli(template["gate_command"], registry_path=registry, cwd=project)
+    gate = shlex.split(template["gate_command"])
+    rc, observation = _run_cli(registry, runtime, *gate[gate.index("quota"):], cwd=project, raw_guard=False)
     assert rc == 0 and observation[template["wake_when_json_field_true"]] is True, observation
-    assert not {"schema_version", "contract_binding", "heartbeat_receipt"} & observation.keys()
+    assert not {"contract_binding", "heartbeat_receipt", "first_read_command"} & observation.keys()
 
     if loader == "saved-alias-off":
         rc, prompt = _run_cli(
