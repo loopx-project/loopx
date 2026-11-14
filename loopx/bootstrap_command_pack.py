@@ -50,7 +50,7 @@ from .project_prompt import (
     render_refresh_state_command,
     shell_arg_for_host,
 )
-from .paths import global_registry_path, resolve_runtime_root
+from .paths import global_registry_path, registry_project_root, resolve_runtime_root
 from .registry import registry_goals, resolve_state_file
 from .slash_commands import build_slash_command_catalog
 from .thread_agent_binding import normalize_thread_id, resolve_thread_agent_binding
@@ -563,11 +563,26 @@ def _read_registry(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
-def resolve_bootstrap_runtime_override(project: Path, override: str | None) -> str | None:
-    """Anchor an explicit route to the requested project before looking for aliases."""
+class BootstrapRegistryConflict(ValueError):
+    def __init__(self) -> None:
+        super().__init__("--registry must match the source selected by --project")
+
+
+def resolve_bootstrap_runtime_override(
+    project: Path, override: str | None, *, explicit_registry: Path | None = None,
+) -> str | None:
+    """Check the explicit project route before it can anchor runtime discovery."""
+    registry_path = _resolve_project(project) / ".loopx" / "registry.json"
+    if explicit_registry is not None and explicit_registry.resolve() != registry_path.resolve():
+        from .project_alias import projects_share_git_common_dir
+
+        if not projects_share_git_common_dir(project, registry_project_root(explicit_registry)):
+            raise BootstrapRegistryConflict()
+        # Canonical linked-worktree activation can pass the owning registry.
+        # Inspection still verifies that this registry is the selected alias.
+        registry_path = explicit_registry
     if not override:
         return None
-    registry_path = _resolve_project(project) / ".loopx" / "registry.json"
     return str(resolve_runtime_root({}, override, registry_path=registry_path))
 
 
@@ -612,11 +627,13 @@ def inspect_bootstrap_connection(
     goal_id: str | None = None,
     resolve_linked_worktree_alias: bool = True,
     runtime_root: str | None = None,
+    explicit_registry: Path | None = None,
 ) -> dict[str, Any]:
     """Inspect either the canonical project route or the caller's exact route."""
     return _inspect_bootstrap_connection(
         project, goal_id=goal_id, resolve_linked_worktree_alias=resolve_linked_worktree_alias,
         runtime_root=runtime_root,
+        explicit_registry=explicit_registry,
     )[0]
 
 
@@ -626,6 +643,7 @@ def _inspect_bootstrap_connection(
     goal_id: str | None,
     resolve_linked_worktree_alias: bool,
     runtime_root: str | None = None,
+    explicit_registry: Path | None = None,
 ) -> _BootstrapConnectionSnapshot:
     """Capture the connection and the registry used to build it together."""
     input_project = _resolve_project(project)
@@ -649,6 +667,8 @@ def _inspect_bootstrap_connection(
         else input_project
     )
     registry_path = resolved_project / ".loopx" / "registry.json"
+    if explicit_registry is not None and explicit_registry.resolve() != registry_path.resolve():
+        raise BootstrapRegistryConflict()
     registry_exists = registry_path.exists()
     registry, registry_error = _read_registry(registry_path) if registry_exists else (None, None)
     inferred_goal_id = goal_id or default_goal_id(resolved_project)
@@ -836,12 +856,16 @@ def build_loopx_bootstrap_command_pack(
     resolve_linked_worktree_alias: bool = True,
     display_name: str | None = None,
     runtime_root_arg: str | None = None,
+    explicit_registry: Path | None = None,
     _connection_snapshot: _BootstrapConnectionSnapshot | None = None,
 ) -> dict[str, Any]:
-    runtime_root_override = resolve_bootstrap_runtime_override(project, runtime_root_arg)
+    runtime_root_override = resolve_bootstrap_runtime_override(
+        project, runtime_root_arg, explicit_registry=explicit_registry,
+    )
     inspection, registry_payload = _connection_snapshot or _inspect_bootstrap_connection(
         project, goal_id=goal_id, resolve_linked_worktree_alias=resolve_linked_worktree_alias,
         runtime_root=runtime_root_override,
+        explicit_registry=explicit_registry,
     )
     resolved_project = str(inspection["project"])
     resolved_goal_id = str(inspection["goal_id"])

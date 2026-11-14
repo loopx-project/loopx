@@ -98,6 +98,11 @@ def _same_path(left: Path | None, right: Path | None) -> bool:
     return _resolve_path(left) == _resolve_path(right)
 
 
+def projects_share_git_common_dir(project: Path, other: Path) -> bool:
+    """Recognize linked worktrees without treating another clone as the same project."""
+    return _same_path(_git_common_dir(project), _git_common_dir(other))
+
+
 def resolve_canonical_project_alias(
     project: Path,
     *,

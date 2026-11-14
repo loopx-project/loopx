@@ -141,9 +141,24 @@ def test_activation_relative_runtime_uses_requested_project_not_environment(
             }},
         }), encoding="utf-8")
     _configure_read_only_todo(project)
+    _configure_read_only_todo(other_project)
     _initialize_fixture_authority(project, runtime, provider=provider)
+    _initialize_fixture_authority(other_project, foreign_runtime, provider=provider)
     source_bytes = (registry.read_bytes(), foreign_registry.read_bytes())
     monkeypatch.setenv("LOOPX_REGISTRY", str(foreign_registry))
+
+    for override in (runtime.name, str(runtime), None):
+        runtime_arg = ("--runtime-root", override) if override is not None else ()
+        refused = run_cli(
+            "--registry", str(foreign_registry), *runtime_arg, *entry, "--project", str(project),
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=tmp_path,
+        )
+        assert refused.returncode != 0, refused.stdout
+        refusal = json.loads(refused.stdout)
+        assert refusal["ok"] is False
+        assert "--registry" in refusal["error"] and "--project" in refusal["error"]
+        assert "host_loop_activation" not in refusal
+        assert "skill_delivery" not in refusal
 
     generated = run_cli("--runtime-root", runtime.name, *entry, "--project", str(project),
                         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=tmp_path)

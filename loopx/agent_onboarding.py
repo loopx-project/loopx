@@ -440,10 +440,15 @@ def build_agent_onboarding_packet(
     task_text: str | None = None,
     available_capabilities: list[str] | None = None,
     runtime_root_arg: str | None = None,
+    explicit_registry: Path | None = None,
 ) -> dict[str, Any]:
     canonical_agent_type = normalize_agent_type(agent_type)
-    runtime_root_override = resolve_bootstrap_runtime_override(project, runtime_root_arg)
-    inspection = inspect_bootstrap_connection(project, goal_id=goal_id, runtime_root=runtime_root_override)
+    runtime_root_override = resolve_bootstrap_runtime_override(
+        project, runtime_root_arg, explicit_registry=explicit_registry,
+    )
+    inspection = inspect_bootstrap_connection(
+        project, goal_id=goal_id, runtime_root=runtime_root_override, explicit_registry=explicit_registry,
+    )
     resolved_project = str(inspection["project"])
     resolved_goal_id = str(inspection["goal_id"])
     registry_path = Path(str(inspection["registry"]))
