@@ -1,6 +1,7 @@
 """Handoff states, durable receipts and audience separation through real stores."""
 
 import json
+import shlex
 import subprocess
 import sys
 from argparse import Namespace
@@ -44,7 +45,8 @@ def test_delivery_read_decision_are_separate_and_restart_safe(fixture, capsys):
     assert first["delivery"]["at"] and first["read"]["status"] == "not_recorded"
     hook = turn_start_hook(root, registry, "research", "worker")
     assert hook.producer()["agent_read_required"] is True
-    assert "manager-inbox read" in hook.required_read["command"]
+    argv = shlex.split(hook.required_read["command"])
+    assert argv[argv.index("manager-inbox") + 1] == "read"
     assert status()["read"]["status"] == "not_recorded"
     args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker")
     assert handle_manager_inbox(args, registry, root) == 0

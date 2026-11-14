@@ -223,31 +223,39 @@ def _dispatch_quota_turn_start_hooks(
     _export("validate_quota_command_context_request")(args)
     if args.quota_command != "should-run":
         return None, False
-    from .lark_inbox import dispatch_goal_lark_turn_start_hooks
+    preview = bool(getattr(args, "dry_run", False))
+    if preview and not args.agent_id:
+        return None, False
+    dispatch = {}
+    if not preview:
+        from .lark_inbox import dispatch_goal_lark_turn_start_hooks
 
-    dispatch = dispatch_goal_lark_turn_start_hooks(
-        registry_path=registry_path,
-        runtime_root_arg=runtime_root_arg,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-    )
+        dispatch = dispatch_goal_lark_turn_start_hooks(
+            registry_path=registry_path,
+            runtime_root_arg=runtime_root_arg,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+        )
     if args.agent_id:
         from ..capabilities.manager_context import turn_start_hook
-        from ..capabilities.turn_start import (
-            extend_turn_start_dispatch as extend_registered_capabilities,
-        )
         from ..control_plane.capability_hooks import dispatch_turn_start_hooks
         from ..history import load_registry
         from ..paths import resolve_runtime_root
         root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg, registry_path=registry_path)
-        dispatch = extend_registered_capabilities(
-            dispatch,
-            registry_path=registry_path,
-            runtime_root=root,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            available=args.available_capabilities,
-        )
+        if not preview:
+            from ..capabilities.turn_start import (
+                extend_turn_start_dispatch as extend_registered_capabilities,
+            )
+            dispatch = extend_registered_capabilities(
+                dispatch,
+                registry_path=registry_path,
+                runtime_root=root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                available=args.available_capabilities,
+            )
+        # A preview still needs the current local Inbox and preferences. These
+        # hooks observe existing context without recording reads or delivery.
         model_read = (not getattr(args, "scheduler_observation", False)
                       and native_context_activation(args)["progressive_enabled"])
         context_dispatch = dispatch_turn_start_hooks((
@@ -263,11 +271,12 @@ def _dispatch_quota_turn_start_hooks(
             dispatch[key] = list(dispatch.get(key) or []) + list(context_dispatch.get(key) or [])
         for key in ("registered_count", "invoked_count"):
             dispatch[key] = int(dispatch.get(key) or 0) + int(context_dispatch.get(key) or 0)
-        from ..capabilities.periodic_report.cadence_runtime import (
-            extend_cadence_turn_start_dispatch,
-        )
-        dispatch = extend_cadence_turn_start_dispatch(dispatch, registry_path=registry_path,
-            runtime_root=root, goal_id=args.goal_id, agent_id=args.agent_id)
+        if not preview:
+            from ..capabilities.periodic_report.cadence_runtime import (
+                extend_cadence_turn_start_dispatch,
+            )
+            dispatch = extend_cadence_turn_start_dispatch(dispatch, registry_path=registry_path,
+                runtime_root=root, goal_id=args.goal_id, agent_id=args.agent_id)
     local_private_state_mutated = bool(dispatch.get("uncertain_local_effects")) or any(
         isinstance(result, Mapping)
         and result.get("local_private_state_mutated") is not False
@@ -351,6 +360,25 @@ def _prepare_quota_result_context(
     return payload, activation
 
 
+def _observe_live_quota_result(
+    args: argparse.Namespace,
+    payload: Mapping[str, object],
+    *,
+    context: QuotaCommandContext | None,
+    registry_path: Path,
+    heartbeat_turn_id: str | None,
+    started_at: int,
+) -> None:
+    preview = args.quota_command == "should-run" and getattr(args, "dry_run", False)
+    if context is None or preview:
+        return
+    observe_quota_result(
+        args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
+        turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
+        started_at=started_at,
+    )
+
+
 def _emit_scheduler_observation_result(
     payload: dict[str, object],
     args: argparse.Namespace,
@@ -362,12 +390,10 @@ def _emit_scheduler_observation_result(
     print_payload: PrintPayload,
 ) -> int:
     """Emit the bounded observer without entering native capture or settlement."""
-    if context is not None:
-        observe_quota_result(
-            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
-            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
-            started_at=usage_quota_started,
-        )
+    _observe_live_quota_result(
+        args, payload, context=context, registry_path=registry_path,
+        heartbeat_turn_id=heartbeat_turn_id, started_at=usage_quota_started,
+    )
     succeeded = payload.get("ok") is True
     print_payload(project_scheduler_observation(payload), args.format,
                   _quota_renderer(args, failure=not succeeded))
@@ -457,12 +483,10 @@ def _publish_quota_result(
             cli["settlement_plan"], registry_path=registry_path,
             runtime_root=context.runtime_root if context is not None else None,
         )
-    if context is not None:
-        observe_quota_result(
-            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
-            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
-            started_at=usage_quota_started,
-        )
+    _observe_live_quota_result(
+        args, payload, context=context, registry_path=registry_path,
+        heartbeat_turn_id=heartbeat_turn_id, started_at=usage_quota_started,
+    )
     if budgeted_spend:
         assert context is not None
         return _emit_bounded_settlement(payload, args, runtime_root=context.runtime_root,
@@ -474,7 +498,7 @@ def _publish_quota_result(
     if capture_directory is not None and payload.get("replan_action_packet"):
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": reader_argv}
-    if args.quota_command == "should-run" and context is not None:
+    if args.quota_command == "should-run" and not getattr(args, "dry_run", False) and context is not None:
         # Capture the one liveness observation with the decision that produced
         # it. Presentation and evidence recovery must not record it again.
         _export("attach_host_poll_receipt")(
@@ -931,7 +955,8 @@ def _execute_quota_command(
             print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
             capture_directory=capture_directory, retained_action_selection_todo_id=retained_todo_id,
         )
-    if _export("should_log_quota")(args.quota_command, payload):
+    preview = args.quota_command == "should-run" and getattr(args, "dry_run", False)
+    if not preview and _export("should_log_quota")(args.quota_command, payload):
         spend_turn_instance_id = _effective_spend_turn_instance_id(
             payload,
             heartbeat_turn_id=heartbeat_turn_id,

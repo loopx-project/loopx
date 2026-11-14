@@ -5,7 +5,6 @@ from typing import Any, cast
 
 import hashlib
 import json
-import shlex
 import os
 import socket
 import stat
@@ -372,13 +371,14 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  reader_argv: list[str] | None = None,
                                  compact: bool = False) -> str:
     from ...command_invocation import loopx_cli_argv
+    from ...install_contract import render_host_cli_command
 
     if page_bytes is None and not compact:
         page_bytes = NATIVE_CONTEXT_PAGE_BYTES
         if max_page_output_bytes is None:
             max_page_output_bytes = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
     route = reader_argv if reader_argv is not None else loopx_cli_argv()
-    return shlex.join([*route, "--format", "json", "quota", "context-read",
+    return render_host_cli_command([*route, "--format", "json", "quota", "context-read",
         *(["--reference-file", str(reference_file)] if reference_file is not None
           else ["--capture-file", str(path), "--capture-sha256", digest]),
         *(["--offset", str(offset)] if offset or not compact else []),
