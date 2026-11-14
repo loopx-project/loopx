@@ -333,12 +333,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/previous-desktop
-          mapfile -t assets < <(
-            gh release view "${RELEASE_TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --json assets \
-              --jq '.assets[].name | select(. == "DESKTOP-SHA256SUMS" or (startswith("LoopX") and (endswith(".dmg") or endswith(".zip") or endswith(".exe") or endswith(".msi"))))'
-          )
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+          [[ "${release_id}" =~ ^[0-9]+$ ]]
+          asset_list="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
+            --jq '.[].name | select(. == "DESKTOP-SHA256SUMS" or (startswith("LoopX") and (endswith(".dmg") or endswith(".zip") or endswith(".exe") or endswith(".msi"))))')"
+          assets=()
+          if [ -n "${asset_list}" ]; then mapfile -t assets <<<"${asset_list}"; fi
           for asset in "${assets[@]}"; do
             gh release download "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
