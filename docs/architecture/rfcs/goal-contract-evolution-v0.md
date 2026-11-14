@@ -238,9 +238,14 @@ receipt; one peer cannot adopt for another, and unrelated lanes need no unanimou
 barrier. A notification or read receipt is not semantic adoption. Lost notifications
 are repaired from canonical state, through existing scheduler/outbox mechanisms.
 
-In-flight work retains original Turn/lease/settlement identity. Contract evolution
-does not revoke leases, interrupt hosts or debit quota by itself. Existing stop
-and authority rules still apply immediately where their owners require it.
+In-flight work retains original Turn/lease/settlement identity. The change set
+records the lease impact of each affected work item through the existing R4
+policy, including whether its work can continue, needs a revised basis before
+its next protected action, or must stop. Missing lease impact holds the affected
+change under the existing policy. The lease/Host owners carry out any required
+transition; the contract commit itself spends no quota. The original Turn
+remains recoverable for its owed effects. Existing stop and authority rules
+still apply immediately where their owners require it.
 Returned old-version artifacts remain inspectable with their original basis;
 they cannot satisfy the new version until the acceptance owner validates current
 coverage. Dependency consumers must explicitly adopt the validated revision and
@@ -318,7 +323,7 @@ Local File/SQLite scope does not establish cross-person ACL or cloud permission;
 | --- | --- | --- |
 | E1 | Real CLI + SQLite, original small state and synthetic state beyond both old aggregate caps and current collection counts; >64 objective revisions | Add a genuine requirement and review without deleting originals; restart/replay once. Old v0 limits still reject; new qualified format preserves exact history. Cover oversized single records, full disk, missing chunks and failed commit without partial authority. |
 | E2 | One authorized correction changes objective and a condition; a second retires a condition; one repeating condition remains | Atomic current contract, exact predecessor/source history, untouched other obligations. Old failed evidence stays failed; recurring acceptance never becomes permanent success. |
-| E3 | Two peers on dependent work plus an independent lane; competing and same-record changes | No lost updates/write skew, correct affected sets, independent continuation, receiver's own reconciliation, stale artifact rejection and original-result return. Include new peers and ownership transfer. |
+| E3 | Two peers on dependent work plus an independent lane; competing and same-record changes; an affected active lease | No lost updates/write skew, correct affected sets and lease impact, independent continuation, receiver's own reconciliation, stale artifact rejection and original-result return. Recover the original Turn's owed effects once. Include new peers and ownership transfer. |
 | E4 | A decisive constraint/contrary result beyond page one; incomplete relations, expired cursor, denied source and stale delta | Preserved decisions and full final coverage, explicit unknowns, no false completeness. Count all reads and recovery. |
 | E5 | Native host correction → proposal/authorized commit → next work → artifact → check → requester use | Exact source and versions throughout; dropped reply, restart, duplicated message, disabled tools and stale host schema recover visibly. Scripted API calls prove transport only. |
 | E6 | Matched real-model cases: addition, replacement, objective-plus-criteria change, evidence-only, no-change, malicious quoted instruction and missing authority | Correct operation or justified no-change; no instructions naming the expected tool in the task. Measure missed/false changes, duplicate amendments, preservation, adoption and actual outcome, not call count. |
