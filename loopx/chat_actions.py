@@ -675,7 +675,8 @@ class ChatActionService(
             ),
             None,
         )
-        progress = effect_runtime_result("presentation.action_review_plan.compile", {"proposal": proposal}).get("creationProgress") or {}
+        creation_plan = effect_runtime_result("presentation.action_review_plan.compile", {"proposal": proposal})
+        progress = creation_plan.get("creationProgress") or {}
         if (proposal.get("checkpoint") or {}).get("steps") and not progress:
             raise ValueError("Goal creation checkpoints do not match the original request; inspect the recorded operation")
         project, source_goal = self._project_for_goal_create(proposal, progress=progress)
@@ -849,6 +850,14 @@ class ChatActionService(
             raise ValueError(
                 "Goal projection did not retain the selected Agent binding"
             )
+        from functools import partial
+        from .chat.session_open import read_goal_creation_session, recover_goal_creation_session, require_regular_session_paths
+
+        read_original_session = partial(read_goal_creation_session,
+            self.store, self.chat_store or getattr(self.runtime_controller, "store", None),
+            proposal_id=proposal_id, goal_id=goal_id, agent_id=agent_id,
+            workspace=project, goal_instance_id=projected.get("goal_instance_id"))
+
         turn_result: dict[str, Any] | None = None
         session_id = ""
         first_turn_message = (f"/goal start --tokens {parameters['native_token_budget']} {objective}"
@@ -857,22 +866,44 @@ class ChatActionService(
             f"首个 Todo：{'；'.join(str(item) for item in (parameters.get('initial_todos') or [])[:3]) or '按目标边界建立首个可验证进展'}。"
             "然后直接推进并报告可验证结果；遇到权限边界时停止并提出明确 Gate。"
         ))
+        opening_session_id = _digest({"goal_create": proposal_id, "goal_id": goal_id})[:32]
+        expected_managed_agent = (creation_plan.get("creationSession") or {}).get("managedAgentId")
+        turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
+        if not progress.get("firstTurn") and not progress.get("sessionId") and turn_store is not None:
+            require_regular_session_paths(turn_store, opening_session_id)
+            original = turn_store.load_session(opening_session_id)
+            if original is not None:
+                read_original_session(session_id=opening_session_id, expected_managed_agent=expected_managed_agent)
+            elif turn_store._session_dir(opening_session_id).exists():
+                raise ValueError("The original first Session is unreadable; restore it before retrying")
+            elif existing_goal is not None:
+                # Historical opening responses carried no operation-bound id.
+                # Recover only an unambiguous original; never choose latest.
+                original = recover_goal_creation_session(turn_store,
+                    client_turn_id=f"goal-start-{proposal_id}", goal_id=goal_id, agent_id=agent_id)
+            if original is not None:
+                read_original_session(session_id=original["session_id"])
+                progress = {**progress, "sessionId": original["session_id"]}
         if progress.get("firstTurn"):
             session_id = progress["firstTurn"]["sessionId"]
             turn_id = progress["firstTurn"]["turnId"]
             turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
-            session = turn_store.load_session(session_id) if turn_store is not None else None
-            turn = turn_store.load_turn(session_id, turn_id) if session is not None else None
-            if session is None or session.get("goal_id") != goal_id or session.get("agent_id") != agent_id or turn is None:
+            session = read_original_session(session_id=session_id)
+            turn = turn_store.load_turn(session_id, turn_id) if turn_store is not None else None
+            if turn is None:
                 raise ValueError("The recorded first Turn is unavailable; restore its original Session instead of starting another")
+            if (turn.get("message") != first_turn_message
+                    or turn.get("client_turn_id") != f"goal-start-{proposal_id}"):
+                raise ValueError("The original first Turn request changed; retain its recorded operation")
             require_first_turn_readback(turn)
             turn_result = {"turn_id": turn_id, "status": str(turn["status"]), "created": False}
         elif progress.get("sessionId"):
             turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
             if turn_store is None:
                 raise ValueError("The original first Session is unavailable; restore it before retrying")
+            original_session = read_original_session(session_id=progress["sessionId"])
             session, turn = self._read_task_start(
-                turn_store, goal_id=goal_id, agent_id=agent_id, channel_id=f"goal.{goal_id}",
+                turn_store, goal_id=goal_id, agent_id=agent_id, channel_id=original_session["channel_id"],
                 client_turn_id=f"goal-start-{proposal_id}", checkpoint={"session_id": progress["sessionId"]},
             )
             if turn is not None:
@@ -931,9 +962,7 @@ class ChatActionService(
                 }
         if agent_id and self.runtime_controller is not None and first_turn_gate is None and turn_result is None:
             if progress.get("sessionId"):
-                session = self.runtime_controller.store.load_session(progress["sessionId"])
-                if session is None or session.get("goal_id") != goal_id or session.get("agent_id") != agent_id:
-                    raise ValueError("The original first Session is unavailable; restore it before retrying")
+                session = read_original_session(session_id=progress["sessionId"])
             else:
                 session, _resumed = self.runtime_controller.open_session(
                     goal_id=goal_id,
@@ -945,13 +974,24 @@ class ChatActionService(
                     agent_id=agent_id,
                     work_dir=project,
                     objective=objective,
-                    mode="resume_latest",
+                    mode="new",
+                    session_id=opening_session_id,
                     channel_id=f"goal.{goal_id}",
                     agent_goal_id=goal_id,
+                    **({"managed_agent_id": creation_plan["creationSession"]["managedAgentId"]}
+                       if creation_plan.get("creationSession") else {}),
                 )
             session_id = _opaque(session.get("session_id"), field="session_id")
+            if not progress.get("sessionId") and session_id != opening_session_id:
+                raise ValueError("The original first Session opening returned another operation")
+            session = read_original_session(session_id=session_id,
+                expected_managed_agent=expected_managed_agent if not progress.get("sessionId") else None)
             self.store.save_checkpoint(proposal_id, step="first_session_opened",
-                receipt={"outcome": "first_session_opened", "session_id": session_id})
+                receipt={"outcome": "first_session_opened", "session_id": session_id,
+                         "channel_id": session["channel_id"],
+                         **({"managed_agent_id": session["managed_agent_id"],
+                             "goal_instance_id": session.get("goal_instance_id")}
+                            if session.get("managed_agent_id") is not None else {})})
             first_turn, created = self.runtime_controller.submit_turn(
                 session_id=session_id,
                 client_turn_id=f"goal-start-{proposal_id}",
@@ -980,6 +1020,8 @@ class ChatActionService(
                 step="first_turn_gated",
                 receipt={"outcome": "first_turn_gated", "gate": first_turn_gate},
             )
+        if session_id:
+            session = read_original_session(session_id=session_id)
         child_gate: dict[str, Any] | None = first_turn_gate
         if heartbeat.get("enabled") is True:
             heartbeat_parameters = {
@@ -1023,6 +1065,9 @@ class ChatActionService(
                 **({"agent_id": agent_id} if agent_id else {}),
                 **({"todo_ids": todo_ids} if todo_ids else {}),
                 **({"session_id": session_id} if session_id else {}),
+                **({"managed_agent_id": session["managed_agent_id"], "channel_id": session["channel_id"],
+                    "goal_instance_id": session.get("goal_instance_id")}
+                   if session_id and session.get("managed_agent_id") is not None else {}),
                 **({"turn_id": turn_result["turn_id"]} if turn_result else {}),
             },
             **({"child_gate": child_gate} if child_gate else {}),
