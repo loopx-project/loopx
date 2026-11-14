@@ -1558,7 +1558,7 @@ class LarkPrivateConversations:
                 state = self._load_historical_image_plan(path, record)
             except (KeyError, ValueError, OSError):
                 return 0
-            now = time.time()
+            now = datetime.now(timezone.utc).timestamp()
             if not state or state.get("status") != "pending" or state.get("next_check_at", 0) > now:
                 return 0
             state["next_check_at"] = now + ANSWER_IMAGE_RETRY_SECONDS
@@ -1808,7 +1808,7 @@ class LarkPrivateConversations:
         """The durable transport store is the queue; no in-memory admission."""
         paths = []
         recovery_candidate = self.core.context_recovery_observer()
-        now = time.time()
+        now = datetime.now(timezone.utc).timestamp()
         planned_repairs = {item.name for item in (self.root / "historical-answer-images").glob("*.json")}
         for path, row, repairs in self._delivery_discovery.rows():
             if row["status"] != "delivered":
