@@ -105,6 +105,70 @@ def test_scoped_gate_cannot_reopen_an_exact_settled_monitor(tmp_path, monkeypatc
     assert not any(row["classification"] in {"state_refreshed", "quota_slot_spent"} for row in rows)
 
 
+def test_file_gate_can_complete_before_primary_monitor_poll(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _state = _write_fixture(tmp_path)
+    scope = "resource:action:prices_file"
+    gated = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent",
+        text="Implement inventory value using the supplied prices", task_class="advancement_task",
+        status="blocked", claimed_by=AGENT_ID, agent_id=AGENT_ID,
+        required_decision_scopes=[scope])
+    gate = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="user",
+        text="Supply inputs/prices.json", task_class="user_gate", bound_agent=AGENT_ID,
+        blocks_agent=AGENT_ID, unblocks_todo_id=gated["todo_id"],
+        decision_scope=scope, agent_id=AGENT_ID)
+    monitor = _add_monitor(registry, text="Observe the authorized prices file",
+        target_key="prices-file", next_due_at="2000-01-01T00:00:00Z")
+    turn = "file-gate-monitor-turn"
+    common = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
+    turn_args = [*common, "--runtime-profile", "generic_cli", "--turn-instance-id", turn,
+        "--available-capability", "network", "--available-capability", "external_evidence_poll"]
+    def call(*args):
+        return run_json_cli(*args, registry_path=registry, runtime_root=runtime)
+    admitted = call("quota", "should-run", *turn_args)
+    assert admitted["selected_todo"]["todo_id"] == monitor["todo_id"]
+    binding = admitted["heartbeat_receipt"]["settlement_identity"]
+
+    prices = registry.parent.parent / "inputs" / "prices.json"
+    prices.parent.mkdir()
+    prices.write_text('{"A":199}', encoding="utf-8")
+    observed = prices.read_text(encoding="utf-8")
+    assert json.loads(observed) == {"A": 199}
+    # Gate control is not completion of the monitor's Turn settlement Todo.
+    completed = call("todo", "complete", *common, "--todo-id", gate["todo_id"],
+        "--role", "user", "--decision-outcome", "approve",
+        "--evidence", f"inputs/prices.json supplied and validated: {observed}")
+    assert completed["completed"] is True
+    assert completed["decision_scope_resolution"]["state"] == "resolved"
+    assert completed["unblock_resume"]["state"] == "resumed"
+    rows = {row["todo_id"]: row for row in call("todo", "list", "--goal-id", GOAL_ID)["todos"]}
+    assert rows[gate["todo_id"]]["status"] == "done"
+    assert rows[gated["todo_id"]]["status"] == "open"
+    assert not rows[gated["todo_id"]].get("required_decision_scopes")
+    before_poll = call("quota", "should-run", *turn_args)
+    assert before_poll["heartbeat_receipt"]["settlement_identity"] == binding
+    assert before_poll["selected_todo"]["todo_id"] == monitor["todo_id"]
+
+    poll = call("quota", "monitor-poll", *turn_args, "--todo-id", monitor["todo_id"],
+        "--target-key", "prices-file", "--result-hash", observed, "--material-change", "--execute")
+    assert poll["turn_continuation"]["current_turn_settled"] is True
+    assert poll["turn_continuation"]["same_turn_independent_settlement_allowed"] is False
+    assert poll["turn_continuation"]["next_turn_required"] is True
+    replay = call("quota", "should-run", *turn_args)
+    assert replay["heartbeat_receipt"]["settlement_identity"] == binding
+    assert replay["selected_todo"]["todo_id"] == monitor["todo_id"]
+    assert replay["should_run"] is False
+    assert replay["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    fresh_args = ["file-gate-implementation-turn" if arg == turn else arg for arg in turn_args]
+    fresh = call("quota", "should-run", *fresh_args)
+    assert fresh["selected_todo"]["todo_id"] == gated["todo_id"]
+    assert fresh["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    events = [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
+    assert sum(row["classification"] == "quota_monitor_poll" for row in events) == 1
+    assert not any(row["classification"] in {"state_refreshed", "quota_slot_spent"} for row in events)
+
+
 def _primary_monitor_fixture(
     tmp_path, monkeypatch, provider, route="source", *,
     resume_when=None, handoff_mode="soft_claim",
