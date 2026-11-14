@@ -199,7 +199,7 @@ Registry 适合保存：
 
 ### 2. Event ledger：追加式事实
 
-事件流保存“发生过什么”。协议见 `docs../../reference/protocols/event-sourced-state-contract-v0.md`。
+事件流保存“发生过什么”。协议见 `docs/reference/protocols/event-sourced-state-contract-v0.md`。
 
 代表性事件包括：
 
@@ -692,7 +692,7 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id>
 | --- | --- | --- |
 | 1 | `examples/registry.example.json` | 注册配置的边界 |
 | 2 | `examples/active-goal-state.example.md` | 人可读工作台 |
-| 3 | `docs../../reference/protocols/event-sourced-state-contract-v0.md` | 事件与 replay |
+| 3 | `docs/reference/protocols/event-sourced-state-contract-v0.md` | 事件与 replay |
 | 4 | `docs/reference/protocols/active-state-structured-projection-v0.md` | projection 非写 API |
 | 5 | `docs/status-data-contract.md` | status read model |
 | 6 | `loopx/control_plane/todos/`、`loopx/control_plane/work_items/lifecycle.py` | todo contract 与 transition lifecycle |
