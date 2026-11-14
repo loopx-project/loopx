@@ -28,6 +28,7 @@ from .openai_keys import NoRedirect, api_policy
 SCHEMA = "codex_openai_api_relay_v1"
 API_SLOT = "openai-api"
 RUNTIME_SCHEMA = "codex_openai_api_relay_runtime_v1"
+REQUEST_IDLE_TIMEOUT = 10
 # Loaded once. Replacing an installed wheel cannot make its old daemon claim
 # the newly installed implementation. No credential or request data is hashed.
 BUILD = hashlib.sha256(b"".join(Path(__file__).with_name(name).read_bytes() for name in (
@@ -133,9 +134,32 @@ class RelayServer(ThreadingHTTPServer):
         self.opener = opener or urllib.request.build_opener(NoRedirect())
         self.instance_id = secrets.token_hex(16)
         self._admission_lock = threading.Lock()
+        self._receiving: set[socket.socket] = set()
         self.draining, self.active_requests = False, 0
         self.started = time.monotonic()
         super().__init__(("127.0.0.1", value["port"]), RelayHandler)
+
+    def process_request(self, request, client_address):
+        with self._admission_lock:
+            self._receiving.add(request)
+        super().process_request(request, client_address)
+
+    def shutdown_request(self, request):
+        with self._admission_lock:
+            self._receiving.discard(request)
+        super().shutdown_request(request)
+
+    def server_close(self):
+        with self._admission_lock:
+            self.draining = True
+            # Stop reads on connections still outside model admission. Keep their
+            # write half open for the control acknowledgement and error responses.
+            for request in self._receiving:
+                try:
+                    request.shutdown(socket.SHUT_RD)
+                except OSError:
+                    pass
+        super().server_close()
 
     def runtime(self):
         with self._admission_lock:
@@ -163,6 +187,7 @@ class RelayServer(ThreadingHTTPServer):
 
 class RelayHandler(BaseHTTPRequestHandler):
     server: RelayServer
+    timeout = REQUEST_IDLE_TIMEOUT
 
     def log_message(self, *_args):
         pass
@@ -237,19 +262,10 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._json(401, "relay_auth_required")
             return
         with self.server._admission_lock:
-            admitted = not self.server.draining
-            if admitted:
-                self.server.active_requests += 1
-        if not admitted:
+            draining = self.server.draining
+        if draining:
             self._json(503, "api_relay_draining")
             return
-        try:
-            self._model_request()
-        finally:
-            with self.server._admission_lock:
-                self.server.active_requests -= 1
-
-    def _model_request(self):
         upstream_path = self.path.removeprefix("/steward") if self.consumer == "steward" else self.path
         if upstream_path not in ("/v1/responses", "/v1/responses/compact"):
             self._json(404, "unsupported_route")
@@ -258,10 +274,18 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._json(503, "api_fallback_disabled")
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) != 1 or "Transfer-Encoding" in self.headers:
+                raise ValueError()
+            declared = lengths[0].strip(" \t")
+            if not re.fullmatch(r"[0-9]+", declared):
+                raise ValueError()
+            length = int(declared)
             if not 1 <= length <= 32 * 1024 * 1024:
                 raise ValueError()
             body = self.rfile.read(length)
+            if len(body) != length:
+                raise ValueError()
             value = json.loads(body)
             model = value["model"]
             if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", model) or model.startswith("sk-"):
@@ -269,6 +293,23 @@ class RelayHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError, KeyError):
             self._json(400, "invalid_request")
             return
+        with self.server._admission_lock:
+            admitted = not self.server.draining
+            if admitted:
+                self.server._receiving.discard(self.connection)
+                self.server.active_requests += 1
+        if not admitted:
+            self._json(503, "api_relay_draining")
+            return
+        try:
+            # The request idle timeout applies only before model admission.
+            self.connection.settimeout(None)
+            self._forward(upstream_path, body, model)
+        finally:
+            with self.server._admission_lock:
+                self.server.active_requests -= 1
+
+    def _forward(self, upstream_path, body, model):
         keys = self.server.owner.api_keys()
         candidates = keys.candidates(model)
         last_status, last_code = 429, "api_keys_unavailable"
