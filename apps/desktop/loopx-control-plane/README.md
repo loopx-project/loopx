@@ -55,15 +55,41 @@ failed journal retirement or unknown installation failure still requires recover
 ## Updates And Recovery
 
 From a terminal, `loopx upgrade` coordinates the owning CLI installer and this
-App's signed updater, restarts the App and waits for native service readiness.
+App's signed updater. On writable macOS installations that advertise native
+preparation support, the CLI first runs the installed App's windowless updater.
+The existing workspace stays open while the native owner checks, downloads and
+verifies the signed archive. A matching verified background cache is reused.
+Preparation failure leaves the current window running. Only after preparation
+succeeds does the CLI quit/reopen the App and wait for qualified services.
+
+The handoff pins that prepared version in a request-scoped disposable cache.
+Restart verifies its bytes again and binds the version to the sealed App bundle;
+it never downloads or chases a moving channel feed. Missing, mismatched or corrupt
+bytes fail explicitly. The replacement process acknowledges the frozen target,
+then reports both service identities. A failed check cannot become success just
+because the workspace is healthy. Older Apps and administrator-protected install
+locations retain the existing interactive native update/authorization path until
+an App with preparation support is installed or the installation is writable.
+
 Archive users can select Main with `loopx upgrade --ref main`; `--dry-run` is
-read-only. The terminal passes only a bounded request id and an official channel
-to the App. A private request receipt contains versions, source revisions,
-update phase and the qualified service runtime identity; it contains no Goal
-content or credentials. An update check failure remains a failed terminal
-upgrade even when the workspace can still open. Normal launches without that
-request perform their network check after local services are ready; an explicit
-terminal upgrade retains its thirty-second interactive check budget.
+read-only. The terminal passes a bounded request id, official channel and prepared
+version, never an arbitrary download URL or installation path. Receipts contain
+versions, source revisions, phase and qualified runtime identity, without Goal
+content or credentials. Normal launch/background behavior is unchanged.
+
+macOS 可写安装目录下，`loopx upgrade` 先通过已安装 App 的无窗口原生更新器检查、
+下载并验签，保持原工作区可用；已有匹配的验签缓存会复用。准备成功后才退出、重开
+App，并核验服务身份。准备失败不关闭窗口。切换阶段固定本次版本、重新验签并核对
+密封包版本，不在启动时追逐更新源；缓存丢失、损坏或版本不符明确失败。旧 App 及
+需要管理员授权的目录保留原交互式升级路径。普通启动与后台更新行为不变。
+
+This separates usable-workspace time from transfer time, following the same
+preparation-before-restart principle visible in
+[VS Code's Downloaded/Ready and quit-and-install transitions](https://github.com/microsoft/vscode/blob/4ebcba98631cbacfbf469338653b5d98f9c392b1/src/vs/platform/update/electron-main/updateService.darwin.ts#L177)
+and [Zed's asynchronous download/install and restart-path preparation](https://github.com/zed-industries/zed/blob/48741fd17d0dec28be6ad664b0a06dc7202086be/crates/auto_update/src/auto_update.rs#L785).
+Their packaging differs from LoopX's independently owned CLI runtime; this does
+not combine package owners, remove integrity checks, or claim faster networks.
+
 The existing update panel shows the same native maintenance phases and recovery
 actions. Main is the latest complete signed build, which can lag Git HEAD.
 
