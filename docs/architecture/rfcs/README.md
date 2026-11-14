@@ -254,6 +254,14 @@ Paired diffs do not certify translation accuracy.
     governed commit policy/verifier, lease-impact handling and Stage 3+
     qualification remain unshipped. Manager handoff consumes these boundaries;
     it does not provide another amendment writer.
+- [Goal contract evolution and bounded working context v0](goal-contract-evolution-v0.md)
+  ([中文版](goal-contract-evolution-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; existing objective revision and additive
+    outcome maintenance remain the implemented boundary.
+  - **Current boundary:** One authorized change set for objective and requirements,
+    retained version history, scoped peer adoption and bounded indexed context.
+    R4/R5 own migration; real model recognition, packaged recovery, shared-store
+    concurrency and outcome/cost qualification remain open.
 - [Persistent Goal outcome refinement v0](goal-outcome-refinement-v0.md)
   ([中文版](goal-outcome-refinement-v0.zh-CN.md))
   - **Current boundary:** Supporting outcomes preserve cumulative requirements
