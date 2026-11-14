@@ -740,7 +740,8 @@ export interface HostInfo {
   label: string;
   /** What ssh calls it. */
   target: string;
-  status: 'connecting' | 'online' | 'offline';
+  /** `unknown`: listed but never probed, which is not the same as offline. */
+  status: 'connecting' | 'online' | 'offline' | 'unknown';
   code?: HostFailure;
   /** The failure in ssh's own words. */
   error?: string;
@@ -754,54 +755,12 @@ export function hostPath(host: string, path: string): string {
 
 export class AuthError extends Error {}
 
-export interface VoiceProvider {
-  login?: 'ready' | 'required';
-  id: string;
-  available: boolean;
-  supported: boolean;
-  reason?: string;
-}
-
-export interface VoiceSnapshot {
-  id: string;
-  hostId: string;
-  providerId: string;
-  threadId: string;
-  state: 'connecting' | 'connected' | 'stopping' | 'closed' | 'failed';
-  startAccepted: boolean;
-  upstreamStarted: boolean;
-  mediaConnected: boolean;
-  reason?: 'ended' | 'expired' | 'startup_timeout' | 'revoked' | 'provider_error' | 'provider_closed' | 'shutdown';
-}
-
-export type VoiceEvent =
-  | { type: 'state'; session: VoiceSnapshot }
-  | { type: 'sdp'; sdp: string }
-  | { type: 'transcript'; itemId: string; text: string; final: boolean;
-      role?: 'user' | 'assistant'; at?: string; afterSeq?: number; order?: number };
-
-/**
- * Random UUID per browser tab session, sent in X-Calli-Voice-Owner header.
- * Generated in memory; never saved to storage and never exposed to extensions.
- */
-const TAB_VOICE_OWNER =
-  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `tab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-
-export function getTabVoiceOwner(): string {
-  return TAB_VOICE_OWNER;
-}
-
-/** The server pings every 15 seconds; a stream silent for this long is dead, not quiet. */
-const STREAM_IDLE_MS = 40_000;
-/** Back in the foreground, a stream that has said nothing for this long is reconnected at once. */
-const STREAM_WAKE_MS = 5_000;
-
 export class Api {
 
   /** True for the made-up workspace shown before the page is connected: nothing reaches a daemon. */
   readonly demo: boolean = false;
+  /** True where nothing may be changed: every write is refused before it leaves the page. */
+  readonly readOnly: boolean = false;
 
   constructor(
     private readonly token: string,
@@ -823,17 +782,9 @@ export class Api {
     return this.send(method, this.url(path), body);
   }
 
-  protected async send<T>(method: string, url: string, body?: unknown): Promise<T> {
-    const res = await fetch(url, {
-      method,
-      headers: this.headers(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (res.status === 401) throw new AuthError('unauthorized');
-    if (res.status === 204) return undefined as T;
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new ApiError((json as { error?: string }).error ?? `HTTP ${res.status}`, json as Record<string, unknown>, res.status);
-    return json as T;
+  /** The one door to a daemon. This build talks to LoopX through `LoopxApi`, so the base class has no transport. */
+  protected send<T>(method: string, url: string, _body?: unknown): Promise<T> {
+    return Promise.reject(new ApiError(`no transport: ${method} ${url}`, {}, 0));
   }
 
   // The machines themselves are the hub's own, whichever machine this client is for.
@@ -1181,11 +1132,8 @@ export class Api {
   }
 
   /** An image file in the thread's directory that the agent made or mentioned. Rejects if there is none. */
-  async threadFile(threadId: string, path: string): Promise<Blob> {
-    const res = await fetch(this.url(`/api/threads/${threadId}/files?path=${encodeURIComponent(path)}`), { headers: this.headers() });
-    if (res.status === 401) throw new AuthError('unauthorized');
-    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, {}, res.status);
-    return res.blob();
+  threadFile(_threadId: string, _path: string): Promise<Blob> {
+    return Promise.reject(new ApiError('no transport', {}, 0));
   }
 
   /** One folder of the thread's directory, for the file browser. No path: the directory itself. */
@@ -1234,11 +1182,8 @@ export class Api {
   }
 
   /** An image attached to a turn. Fetched with the token, since an <img> tag cannot send it. */
-  async attachment(threadId: string, attachmentId: string): Promise<Blob> {
-    const res = await fetch(this.url(`/api/threads/${threadId}/attachments/${attachmentId}`), { headers: this.headers() });
-    if (res.status === 401) throw new AuthError('unauthorized');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.blob();
+  attachment(_threadId: string, _attachmentId: string): Promise<Blob> {
+    return Promise.reject(new ApiError('no transport', {}, 0));
   }
 
   /** Stops the running turn. Messages that were waiting are not sent; their text comes back. */
@@ -1546,147 +1491,8 @@ export class Api {
     return this.request('GET', `/api/directory-tree?root=${encoded}&maxDepth=${maxDepth}`);
   }
 
-  /**
-   * Opens an SSE stream and calls `onEvent` for each message. Resolves when the server closes the stream.
-   * The caller aborts via `signal`. Uses fetch (not EventSource) so the Authorization header can be sent.
-   */
-  /**
-   * Reads a server-sent event stream until it ends, and returns so the caller can reconnect. A
-   * stream can also die without ending: a phone that slept or changed network leaves a read that
-   * never resolves. The server writes at least a ping every 15 seconds, so a stream silent for
-   * `idleMs` is taken for dead; and when the page comes back to the foreground, one that has been
-   * silent for a few seconds is not waited on at all.
-   */
-  async stream<T = StoredEvent>(path: string, onEvent: (ev: T) => void, signal: AbortSignal, idleMs = STREAM_IDLE_MS, onOpen?: () => void): Promise<void> {
-    const res = await fetch(this.url(path), { headers: this.headers({ Accept: 'text/event-stream' }), signal });
-    if (res.status === 401) throw new AuthError('unauthorized');
-    if (!res.ok || !res.body) throw new Error(`stream failed: HTTP ${res.status}`);
-    onOpen?.();
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    let heardAt = Date.now();
-    const giveUp = () => void reader.cancel().catch(() => undefined);
-    let idle = setTimeout(giveUp, idleMs);
-    const onVisible = () => {
-      if (!document.hidden && Date.now() - heardAt > STREAM_WAKE_MS) giveUp();
-    };
-    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) return;
-        heardAt = Date.now();
-        clearTimeout(idle);
-        idle = setTimeout(giveUp, idleMs);
-        buf += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buf.indexOf('\n\n')) >= 0) {
-          const block = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const data = block
-            .split('\n')
-            .filter((l) => l.startsWith('data: '))
-            .map((l) => l.slice(6))
-            .join('\n');
-          if (data) onEvent(JSON.parse(data) as T);
-        }
-      }
-    } finally {
-      clearTimeout(idle);
-      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
-    }
-  }
-
-  // ---------------------------------------------------------------- Realtime Voice
-
-  private voiceHeaders(extra: Record<string, string> = {}): Record<string, string> {
-    return this.headers({ 'X-Calli-Voice-Owner': TAB_VOICE_OWNER, ...extra });
-  }
-
-  protected async sendVoice<T>(method: string, url: string, body?: unknown): Promise<T> {
-    const res = await fetch(url, {
-      method,
-      headers: this.voiceHeaders(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (res.status === 401) throw new AuthError('unauthorized');
-    if (res.status === 204) return undefined as T;
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new ApiError((json as { error?: string }).error ?? `HTTP ${res.status}`, json as Record<string, unknown>, res.status);
-    return json as T;
-  }
-
-  /** Lists available native realtime voice providers on the machine. */
-  voiceProviders(): Promise<{ providers: VoiceProvider[] }> {
-    return this.sendVoice('GET', this.url('/api/voice/providers'));
-  }
-
-  /** Starts a realtime voice session with SDP offer and tab owner header. */
-  startVoiceSession(threadId: string, offer: string, extensionId = 'voice'): Promise<VoiceSnapshot> {
-    return this.sendVoice('POST', this.url('/api/voice'), { extensionId, threadId, offer });
-  }
-
-  /** Sends a voice session heartbeat (sent every 10 seconds). */
-  voiceHeartbeat(sessionId: string): Promise<VoiceSnapshot> {
-    return this.sendVoice('POST', this.url(`/api/voice/${encodeURIComponent(sessionId)}/heartbeat`));
-  }
-
-  /** Notifies the daemon that the WebRTC peer connection has connected. */
-  voiceConnected(sessionId: string): Promise<VoiceSnapshot> {
-    return this.sendVoice('POST', this.url(`/api/voice/${encodeURIComponent(sessionId)}/connected`));
-  }
-
-  appendVoiceText(sessionId: string, text: string, images: OutgoingImage[] = [], videos: string[] = []): Promise<void> {
-    return this.sendVoice('POST', this.url(`/api/voice/${encodeURIComponent(sessionId)}/text`), { text, images, videos });
-  }
-
-  voiceHistory(threadId: string, sessionId: string, cursor?: number): Promise<{ events: StoredEvent[]; nextCursor: number | null }> {
-    return this.request('GET', `/api/threads/${encodeURIComponent(threadId)}/history/voice?session=${encodeURIComponent(sessionId)}${cursor ? `&cursor=${cursor}` : ''}`);
-  }
-
-  /** Stops and releases a realtime voice session. */
-  stopVoiceSession(sessionId: string): Promise<void> {
-    return this.sendVoice('DELETE', this.url(`/api/voice/${encodeURIComponent(sessionId)}`));
-  }
-
-  /**
-   * Opens an SSE stream for voice session events using fetch so the Authorization
-   * and X-Calli-Voice-Owner headers are passed.
-   */
-  async streamVoiceEvents(sessionId: string, onEvent: (ev: VoiceEvent) => void, signal: AbortSignal): Promise<void> {
-    const res = await fetch(this.url(`/api/voice/${encodeURIComponent(sessionId)}/events`), {
-      headers: this.voiceHeaders({ Accept: 'text/event-stream' }),
-      signal,
-    });
-    if (res.status === 401) throw new AuthError('unauthorized');
-    if (!res.ok || !res.body) throw new Error(`voice stream failed: HTTP ${res.status}`);
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) return;
-        buf += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buf.indexOf('\n\n')) >= 0) {
-          const block = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const data = block
-            .split('\n')
-            .filter((l) => l.startsWith('data: '))
-            .map((l) => l.slice(6))
-            .join('\n');
-          if (data) {
-            try {
-              onEvent(JSON.parse(data) as VoiceEvent);
-            } catch {}
-          }
-        }
-      }
-    } finally {
-      void reader.cancel().catch(() => undefined);
-    }
+  /** A server-sent event stream; the base class has none. `LoopxApi` supplies the real one. */
+  stream<T = StoredEvent>(_path: string, _onEvent: (ev: T) => void, _signal: AbortSignal, _idleMs?: number, _onOpen?: () => void): Promise<void> {
+    return Promise.reject(new ApiError('no transport', {}, 0));
   }
 }

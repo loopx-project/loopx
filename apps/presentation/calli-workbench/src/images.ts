@@ -190,7 +190,15 @@ export function downloadBlob(blob: Blob, name: string): void {
 
 /** Saves a picture shown from `url` as the file it is. The name gets an ending if it lacks one. */
 export async function savePicture(url: string, name?: string): Promise<void> {
-  const blob = await (await fetch(url)).blob();
+  const m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(url);
+  if (!m) {
+    // A blob: address already is a saved-file source; nothing needs to be read first.
+    saveAs(url, pictureFileName(name, ''));
+    return;
+  }
+  const raw = m[2] ? atob(m[3]) : decodeURIComponent(m[3]);
+  const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  const blob = new Blob([bytes], { type: m[1] || 'application/octet-stream' });
   // Always from a blob: address: some browsers open a data: link instead of saving it.
   const href = URL.createObjectURL(blob);
   saveAs(href, pictureFileName(name, blob.type));

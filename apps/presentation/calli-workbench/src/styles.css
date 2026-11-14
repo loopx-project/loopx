@@ -12421,3 +12421,19 @@ button.pet-summon:hover { background: var(--surface-2); color: var(--text); }
 .topbar-pet .pet-bust { animation: topbar-pet-in 0.18s ease-out; }
 @keyframes topbar-pet-in { from { opacity: 0; transform: scale(0.8); } }
 @media (prefers-reduced-motion: reduce) { .topbar-pet .pet-bust { animation: none; } }
+
+.triage-panel { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin: 0 0 28px; }
+.triage-group { min-width: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.triage-group h2 { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.triage-group h2 span { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.triage-group ul, .triage-quiet ul { margin: 0; padding: 0; list-style: none; }
+.triage-row { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 8px 0; border-top: 1px dashed var(--border); font-size: 12px; text-align: left; }
+button.triage-row { border: 0; border-top: 1px dashed var(--border); border-radius: 0; background: transparent; box-shadow: none; color: inherit; cursor: pointer; }
+button.triage-row:hover strong { color: var(--muted); }
+.triage-row strong { min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.triage-meta { display: flex; gap: 8px; min-width: 0; color: var(--muted); font-size: 11px; }
+.triage-meta span:first-child { flex: none; white-space: nowrap; }
+.triage-meta span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.triage-quiet { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.triage-quiet summary { cursor: pointer; }
+@media (max-width: 900px) { .triage-panel { grid-template-columns: 1fr; } }

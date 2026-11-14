@@ -3,18 +3,36 @@
 The Calli web UI (React 18 / Vite 5), ported from the Calli repository
 (`packages/web`) into LoopX as a separate presentation
 surface, then stripped to the part M1 needs: the thread sidebar, the thread view,
-the launch bar and the desk. No change to `loopx/`.
+the launch bar and the desk. It is milestone M1 of the Calli workbench and
+session fabric RFC. No change to `loopx/`.
 
-## Data layer: pending replacement
+## Data layer
 
-The app currently runs on the fixture-backed `DemoApi` (`src/demo/`), which
-answers from made-up data and refuses every write. It reaches no service.
+`App.tsx` builds a `LoopxApi` (`src/loopx/LoopxApi.ts`), a read-only subclass of
+`Api`. Reads come from the LoopX adapter (`src/loopx/`): zod contracts for
+`/status.json` and `/api/chat`, mappers to the app's own types, a schema-version
+gate, and an SSE-to-polling stream. `Api.send()` is closed, so every write
+rejects with `ReadOnlyError`; `Api.readOnly` is what the UI reads to disable
+composing and write buttons. The base `Api` has no transport of its own, and
+`fetch` appears only under `src/loopx/`.
 
-`src/api.ts` is still the Calli daemon client and its method signatures are the
-interface the M1 adapter has to implement (`LoopxApi`, read-only). Until that
-lands, `npm run dev` shows the demo workspace. `vite.config.ts` already proxies
-`/status.json` (8766) and `/api/chat`, `/ssh-hosts` (8767) for the adapter,
-with the same-origin `Origin` rewrite the official dashboard uses.
+`vite.config.ts` proxies `/status.json` (8766) and `/api/chat`, `/ssh-hosts`
+(8767), with the same-origin `Origin` rewrite the official dashboard uses.
+
+`?fixture=1` answers from `src/loopx/fixtures/status.demo.json` (a public-safe
+copy of the status example plus synthetic sessions) and makes no network
+request. An unsupported or malformed contract shows "update the local LoopX
+service" with a retry button instead of a blank page.
+
+`src/demo/` (`DemoApi`) is no longer used by the app; only `test/demo.test.ts`
+reaches it.
+
+## Checks
+
+```sh
+npm run smoke:projection      # fixture (zero fetch) and, if 8766 is up, live counts
+npm run check:no-second-state # src/ keeps only display-preference storage, no fetch outside src/loopx/
+```
 
 ## Layout
 
@@ -49,7 +67,7 @@ still carries the rules for those features.
 - Dev port 5174 / preview 4174 (upstream 5173), and the LoopX proxy above
   instead of the Calli daemon proxy.
 - `App.tsx` and `main.tsx` no longer take a token or connect dialog; the
-  workspace is the demo until the adapter lands.
+  workspace is `LoopxApi`.
 - The Composer accepts pictures only; mentions, videos and files, notes and
   takeover are gone.
 - The merged handover history is replaced by a plain `ThreadView`.

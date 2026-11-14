@@ -46,7 +46,7 @@ export function MachinePicker({ hosts, current, onPick, onManage }: SwitcherProp
           {current === null && <span className="pop-item-check"><IconCheck size={16} /></span>}
         </button>
         {hosts.length > 0 && <div className="pop-sep">{t('hosts.remoteMachines')}</div>}
-        {hosts.map((host) => <button key={host.id} type="button" role="menuitemradio" aria-checked={current === host.id} className="pop-item compact" title={host.target}
+        {hosts.map((host) => <button key={host.id} type="button" role="menuitemradio" aria-checked={current === host.id} className="pop-item compact" title={host.target} disabled={host.status === 'unknown'}
           onClick={() => { close(); onPick(host.id); }}>
           <span className="pop-item-icon"><IconGlobe size={17} /></span>
           <span className="pop-item-text"><span className="pop-item-label">{host.label}</span><span className="pop-item-hint machine-status"><StatusDot status={host.status} />{hostStatus(host.status)}</span></span>
@@ -88,6 +88,7 @@ export function HostSwitcher({ hosts, current, onPick, all = false, onAll }: Swi
           aria-selected={at(h.id)}
           className={`host-chip${at(h.id) ? ' active' : ''}`}
           title={h.target}
+          disabled={h.status === 'unknown'}
           onClick={() => onPick(h.id)}
         >
           <StatusDot status={h.status} />

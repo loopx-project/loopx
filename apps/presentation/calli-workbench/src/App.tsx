@@ -43,7 +43,8 @@ import { currentPlan, PlanButton } from './components/PlanPanel';
 import { TurnRuler } from './components/TurnRuler';
 import { NewProjectDialog, ProjectPicker, RootsDialog } from './components/Projects';
 import { Toast, type ToastState } from './components/Toast';
-import { DemoApi, DemoError } from './demo/DemoApi';
+import { ContractFormatError, LoopxApi, ReadOnlyError, SchemaVersionError, SourceUnavailableError } from './loopx/index.ts';
+import type { TriageView } from './loopx/types.ts';
 import { IconArrowDown, IconBack, IconClose, IconEdit, IconList, IconMenu, IconMore, IconPalette, IconSidebar, AgentMark, IconLanguage } from './components/icons';
 import { chooseLocale, LOCALES, localeChoice, t } from './i18n';
 
@@ -251,13 +252,15 @@ export type AppStart = 'list' | { thread: string };
 
 export function App({ hostId = null, onHost, start }: AppProps) {
   // Looking at another machine, every call is answered by that machine's service.
-  const { hosts, loaded: hostsLoaded, reload: reloadHosts } = useHosts(false);
+  // `?fixture=1` answers from the bundled demo data and makes no request at all.
+  const api = useMemo<Api>(() => new LoopxApi({ fixture: new URLSearchParams(window.location.search).get('fixture') === '1' }), []);
+  const { hosts, loaded: hostsLoaded, reload: reloadHosts } = useHosts(api);
   const host = hostId ? hosts.find((h) => h.id === hostId) : undefined;
   // Until the machines are known, one is taken to be up: asking it is how the page finds out.
   const hostUp = !hostId || !hostsLoaded || host?.status === 'online';
-  // DATA LAYER PENDING: the fixture-backed DemoApi stands in until the LoopX adapter replaces it.
-  const api = useMemo<Api>(() => new DemoApi(), [hostId, hostUp]);
-  const demo = api.demo;
+  /** The local LoopX service cannot be used: it needs an update, or does not answer. Null while it works. */
+  const [serviceIssue, setServiceIssue] = useState<'update' | 'unreachable' | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [workdirs, setWorkdirs] = useState<string[]>([]);
@@ -277,6 +280,7 @@ export function App({ hostId = null, onHost, start }: AppProps) {
   const [threadsKnown, setThreadsKnown] = useState(false);
   const [sections, setSections] = useState<Section[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [triage, setTriage] = useState<TriageView | null>(null);
   const [todosLoading, setTodosLoading] = useState(true);
   const [todosError, setTodosError] = useState('');
   /** What the main area shows: a thread (or the blank one a new thread starts from) or the desk. */
@@ -310,7 +314,7 @@ export function App({ hostId = null, onHost, start }: AppProps) {
     const update = (id: string | null, change: (s: HostSource) => HostSource) => setElsewhere((prev) => prev.map((s) => (s.hostId === id ? change(s) : s)));
     const read = () => {
       for (const x of targets.filter((x) => x.online)) {
-        new DemoApi().threads().then(
+        api.threads().then(
           (list) => { if (alive) update(x.id, (s) => ({ ...s, state: 'live', at: new Date().toISOString(), threads: list })); },
           () => { if (alive) update(x.id, (s) => ({ ...s, state: 'failed' })); },
         );
@@ -589,9 +593,10 @@ export function App({ hostId = null, onHost, start }: AppProps) {
 
   const handleError = (e: unknown) => {
     // Doing something the read-only workbench cannot do is refused, not reported as a failure.
-    if (e instanceof DemoError) {
-      if (e.write) setToast({ message: t('app.connectToSend') });
-    }
+    if (e instanceof ReadOnlyError) setToast({ message: t('app.readOnly') });
+    // A service this page cannot read is explained once, with a way to try again.
+    else if (e instanceof SchemaVersionError || e instanceof ContractFormatError) setServiceIssue('update');
+    else if (e instanceof SourceUnavailableError) setServiceIssue((current) => current ?? 'unreachable');
     // A machine that dropped is explained in the main area; the machines are asked at once how they are.
     else if (e instanceof ApiError && e.details.code === 'host_offline') void reloadHosts();
     else setError(message(e));
@@ -602,8 +607,8 @@ export function App({ hostId = null, onHost, start }: AppProps) {
   const reloadTodos = useCallback(async () => {
     const request = ++todosRequest.current;
     try {
-      const value = await api.todos();
-      if (request === todosRequest.current) { setTodos(value); setTodosError(''); }
+      const [value, groups] = await Promise.all([api.todos(), api instanceof LoopxApi ? api.triage() : Promise.resolve(null)]);
+      if (request === todosRequest.current) { setTodos(value); setTriage(groups); setTodosError(''); }
     } catch (e) { if (request === todosRequest.current) setTodosError(String(e)); }
     finally { if (request === todosRequest.current) setTodosLoading(false); }
   }, [api]);
@@ -616,6 +621,7 @@ export function App({ hostId = null, onHost, start }: AppProps) {
   // Initial data.
   useEffect(() => {
     let cancelled = false;
+    setServiceIssue(null);
     (async () => {
       try {
         const [a, c, , s] = await Promise.all([
@@ -641,7 +647,7 @@ export function App({ hostId = null, onHost, start }: AppProps) {
     };
     // handleError only touches state setters, so it is stable enough to leave out.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api]);
+  }, [api, retryKey]);
 
   // Thread-list changes, pushed by the service. Refresh is debounced.
   useEffect(() => {
@@ -1522,6 +1528,13 @@ export function App({ hostId = null, onHost, start }: AppProps) {
           )}
         </header>
 
+        {serviceIssue && (
+          <div className="banner" role="alert">
+            <span>{t(serviceIssue === 'update' ? 'loopx.needsUpdate' : 'loopx.unreachable')}</span>
+            <button className="text-btn" onClick={() => { setServiceIssue(null); setRetryKey((n) => n + 1); void refreshThreads(); void reloadTodos(); }}>{t('common.retry')}</button>
+          </div>
+        )}
+
         {error && (
           <div className="banner" role="alert">
             <span>{error}</span>
@@ -1538,12 +1551,12 @@ export function App({ hostId = null, onHost, start }: AppProps) {
           </div>
         ) : onDesk ? (
           <div key="desk" className="scroller">
-            <DeskPage api={api} todos={todos} loading={todosLoading} error={todosError}
+            <DeskPage api={api} todos={todos} triage={triage} loading={todosLoading} error={todosError}
               refreshKey={todosKey} onReload={reloadTodos} onOpenThread={pick} />
           </div>
         ) : (
         <div key="thread" className="scroller" ref={scrollerRef} onScroll={onScroll} {...gestureProps}>
-          {selected && <TurnRuler key={selected.id} threadId={selected.id} scrollerRef={scrollerRef} previews={turnPreviewMap} turnIds={rulerTurnIds} onJump={turnId => setJump({ threadId: selected.id, turnId })} />}
+          {selected && <TurnRuler key={`ruler-${selected.id}`} threadId={selected.id} scrollerRef={scrollerRef} previews={turnPreviewMap} turnIds={rulerTurnIds} onJump={turnId => setJump({ threadId: selected.id, turnId })} />}
           {selected && eventsLoading && <div className="loading-note">{t('common.loading')}</div>}
           {selected ? (
             <ThreadView
@@ -1600,7 +1613,8 @@ export function App({ hostId = null, onHost, start }: AppProps) {
           draftKey={composerDraftKey}
           running={running}
           disabled={modeBusy || (!selected && !draftCwd)}
-          placeholder={demo ? t('app.placeholder.demo') : workMode === 'plan' && !running ? t('composerMenu.planOn') : selected ? (running ? t('sideChat.queuePlaceholder') : t('app.placeholder.continue')) : draftScratch ? t('app.placeholder.scratch') : t('app.placeholder.startIn', folderName(draftCwd))}
+          readOnly={api.readOnly ? t('app.placeholder.readOnly') : null}
+          placeholder={api.readOnly ? t('app.placeholder.readOnly') : workMode === 'plan' && !running ? t('composerMenu.planOn') : selected ? (running ? t('sideChat.queuePlaceholder') : t('app.placeholder.continue')) : draftScratch ? t('app.placeholder.scratch') : t('app.placeholder.startIn', folderName(draftCwd))}
           onSend={send}
           onStop={stop}
           header={header}

@@ -37,7 +37,7 @@ export function mergeHistory(previous: StoredEvent[], updates: StoredEvent[]): S
 }
 
 export async function historyPage(api: Api, id: string, before?: number, after?: number, chain = false): Promise<HistoryPage> {
-  if (api.demo) {
+  if (api.readOnly) {
     const events = before ? await api.eventsBefore(id, before) : await api.eventsTail(id);
     const nextCursor = (events[0]?.seq ?? 0) > 1 ? events[0].seq : null;
     return { events, nextCursor, hasOlder: nextCursor !== null, snapshotSeq: events.at(-1)?.seq ?? 0 };

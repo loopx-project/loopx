@@ -26,6 +26,7 @@ const untilAborted = (signal: AbortSignal) =>
  */
 export class DemoApi extends Api {
   override readonly demo = true;
+  override readonly readOnly = true;
   private data: Promise<DemoData> | null = null;
 
   constructor(private readonly load: () => Promise<DemoData> = () => import('./data').then((m) => m.demoData())) {

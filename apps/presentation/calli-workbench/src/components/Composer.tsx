@@ -94,6 +94,8 @@ interface Props {
   draftKey?: string;
   running: boolean;
   disabled?: boolean;
+  /** Why nothing can be sent here, or null when sending works. The box still takes text; the send button does not. */
+  readOnly?: string | null;
   placeholder: string;
   onSend: (text: string, images: PreparedImage[]) => Promise<void> | void;
   onStop: () => void;
@@ -155,6 +157,7 @@ export function Composer({
   draftKey,
   running,
   disabled,
+  readOnly = null,
   placeholder,
   onSend,
   onStop,
@@ -528,7 +531,7 @@ export function Composer({
   const goalControl = text.trim() === '/goal' ? 'show' : text.trim() === '/goal pause' ? 'pause' : text.trim() === '/goal clear' ? 'clear' : null;
   const immediate = !!goalControl && !!goal?.controls.includes(goalControl) && !images.length;
   const queueFull = running && !immediate && queued.length >= MAX_QUEUED;
-  const canSend = hasContent && !busy && !menuBusy && !disabled && preparing === 0 && !queueFull;
+  const canSend = hasContent && !busy && !menuBusy && !disabled && !readOnly && preparing === 0 && !queueFull;
   const sendPress = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
   const suppressSendClick = useRef(false);
   const sendClickReset = useRef<number | null>(null);
@@ -940,7 +943,7 @@ export function Composer({
                 }}
                 disabled={!canSend}
                 aria-label={slow ? t('composer.sending') : running && !immediate ? t('composer.queueSend') : t('common.send')}
-                title={slow ? t('composer.sendingEllipsis') : queueFull ? t('composer.queueMax', MAX_QUEUED) : running ? immediate ? t('composer.goalNow') : t('composer.afterTurn') : undefined}
+                title={readOnly ?? (slow ? t('composer.sendingEllipsis') : queueFull ? t('composer.queueMax', MAX_QUEUED) : running ? immediate ? t('composer.goalNow') : t('composer.afterTurn') : undefined)}
               >
                 {slow ? <span className="send-spinner" aria-hidden="true" /> : <IconSend size={16} />}
               </button>
