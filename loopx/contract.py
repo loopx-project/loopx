@@ -480,15 +480,22 @@ def _git_worktree_root(path: Path) -> Path | None:
 
     path = path.resolve()
     target = path if path.is_dir() else path.parent
-    answer = _git_query("-C", str(target), "rev-parse", "--show-toplevel")
+    # The root is a directory name like any other: it may carry a CR, an LF or
+    # bytes UTF-8 cannot encode. A text read turns those bytes into LF/U+FFFD,
+    # the rebuilt root then names no directory, and every tracked file below it
+    # silently leaves the scan. Read the answer as bytes and remove only the
+    # terminator Git appends, so the root keeps its own identity.
+    answer = _git_query_bytes("-C", str(target), "rev-parse", "--show-toplevel")
     if answer is None:
         raise GitProbeUnavailable("git did not answer the worktree probe")
     if answer.returncode != 0:
         return None
-    root = answer.stdout.strip()
-    if not root:
+    record = answer.stdout
+    if record.endswith(b"\n"):
+        record = record[: -1]
+    if not record:
         return None
-    return Path(root).resolve()
+    return Path(os.fsdecode(record)).resolve()
 
 
 def _git_probe(path: Path) -> dict[str, Any]:
