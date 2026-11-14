@@ -186,6 +186,10 @@ try {
   const nullAttachments = {...legacy, messages: [{...legacy.messages[0], attachments: null}]};
   globalThis.fetch = async () => new Response(JSON.stringify(nullAttachments));
   assert.deepEqual((await fetchChatSessionHistory("old")).messages, nullAttachments.messages);
+  const duplicates = {...legacy, messages: [legacy.messages[0], {...legacy.messages[0]}]};
+  globalThis.fetch = async () => new Response(JSON.stringify(duplicates));
+  await assert.rejects(() => fetchChatSessionHistory("old"), "Legacy history must reject duplicate message IDs");
+  await assert.rejects(() => fetchChatSession("old"), "Direct reads must reject duplicate message IDs");
   const selectedTurn = {...legacy.messages[0], turn_id: "selected-turn"};
   const unrelated = {...legacy.messages[0], message_id: "other", turn_id: "other-turn", text: null};
   globalThis.fetch = async () => new Response(JSON.stringify({...legacy, messages: [selectedTurn, unrelated]}));

@@ -1008,7 +1008,8 @@ const chatVisibleMessagesSchema = z.array(z.object({
 }).passthrough());
 
 function requireValidChatMessages(messages: unknown): void {
-  if (!chatVisibleMessagesSchema.safeParse(messages).success) {
+  const parsed = chatVisibleMessagesSchema.safeParse(messages);
+  if (!parsed.success || new Set(parsed.data.map(message => message.message_id)).size !== parsed.data.length) {
     throw new Error("The original Session messages could not be verified.");
   }
 }
