@@ -6,6 +6,7 @@ from typing import Any
 
 from .core import (
     TRIGGER_DECISION_SCHEMA,
+    _REPORTABLE_TRIGGER_KINDS,
     _boolean,
     _digest,
     _integer,
@@ -21,16 +22,6 @@ from .core import (
 
 TRIGGER_REQUEST_SCHEMA = "periodic_report_trigger_request_v0"
 
-_REPORTABLE_KINDS = {
-    "bounded_segment_milestone",
-    "cadence_due",
-    "manual",
-    "material_blocker",
-    "material_decision",
-    "material_recovery",
-    "primary_goal_outcome",
-    "vision_closed",
-}
 _NON_REPORTABLE_KINDS = {
     "monitor_unchanged",
     "state_refreshed",
@@ -84,11 +75,11 @@ def _normalize_profile(raw: object) -> dict[str, str]:
 
 def _normalize_policy(raw: object) -> dict[str, Any]:
     policy = _object(raw, "trigger_policy")
-    enabled_raw = policy.get("enabled_kinds", sorted(_REPORTABLE_KINDS))
+    enabled_raw = policy.get("enabled_kinds", sorted(_REPORTABLE_TRIGGER_KINDS))
     enabled: list[str] = []
     for index, value in enumerate(_list(enabled_raw, "trigger_policy.enabled_kinds")):
         kind = _token(value, f"trigger_policy.enabled_kinds[{index}]")
-        if kind not in _REPORTABLE_KINDS:
+        if kind not in _REPORTABLE_TRIGGER_KINDS:
             raise ValueError(f"trigger_policy.enabled_kinds[{index}] is not reportable")
         if kind not in enabled:
             enabled.append(kind)
@@ -388,7 +379,7 @@ def _normalize_candidates(raw: object, evaluated_at: str) -> list[dict[str, Any]
         label = f"candidates[{index}]"
         item = _object(value, label)
         kind = _token(item.get("trigger_kind"), f"{label}.trigger_kind")
-        if kind not in _REPORTABLE_KINDS | _NON_REPORTABLE_KINDS:
+        if kind not in _REPORTABLE_TRIGGER_KINDS | _NON_REPORTABLE_KINDS:
             raise ValueError(f"{label}.trigger_kind is invalid")
         observed_at = _timestamp(item.get("observed_at"), f"{label}.observed_at")
         observed_value = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
