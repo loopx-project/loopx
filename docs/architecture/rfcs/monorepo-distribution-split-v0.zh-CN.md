@@ -3068,3 +3068,28 @@ retry 复用既有 result builder。初始有两次 Host 调用、一次产物�
 失败测试保留为负面证据，原验收仍开放。完整 V1–V5/V10、R1/M3、默认闭包、
 渐进产品控制、可比完整成本、Standard/workspace 交付和原 Goal 回归仍开放。
 没有升级已安装 Host、启动模型服务、改写 authority history 或改变冻结预算。
+
+### 2026-11-14 — 已安装组合结算恢复原回执链
+
+PR #8707（`d695b40f633742fb0a5e1cb6b970a56c46dba5e9`，合入提交
+`dd44cdcd0c9482bdf135e54ae0b71eb398b4cfe7`）修复 Core 在写回后显式请求的
+组合结算。适配器复用 canonical parser、quota registrar 和 registry codec，
+核对完整当前 CLI 前缀及原 binding，再执行已打包 entrypoint；原 TypeScript
+结算 owner 与产出工作目录继续保留。
+
+独立 Python 3.11 安装的 File/SQLite 对照覆盖默认及显式路由：基线提交写回后
+因 facade 缺失而失败；候选恢复同一身份、返回三条回执，replay 后仍只消费一次。
+普通 refresh 继续保留待消费步骤，不自动扣额。额外安装对照在 PYTHONPATH 和
+工作目录放置导入即拒绝的 foreign module，实际仍选择原 Core。
+
+保留的已安装治理语料在 `78e936f9d1f1a00505c4026ee0a5857de95cee27` 上，Core 与
+普通版各有 16 项确认结果；此前资源失败仍为失败。扩大源码回归保留了一项既有
+不完整 mocked readback 的失败，同一基线和候选都复现。现有 settled-intent
+测试改为提供 canonical identity/result 类型，受影响的 32 项全部通过；没有
+放宽生产 readback，也没有改变“独立 intent 不重开 work”的语义 oracle。此前
+整组失败不会改写成通过记录。
+
+这只资格化 V2/V3 的已安装结算前提。完整 V1–V5/V10、R1/M3、真实 Host
+compaction／线程保留、渐进控制、可比完整成本、Standard/workspace 交付和
+原 Goal 回归仍开放。协议 fixture 不表示默认激活、Host 升级、发行或冻结预算
+发生变化。

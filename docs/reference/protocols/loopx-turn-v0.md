@@ -105,9 +105,11 @@ and the complete inline contract.
 `turn run-once` retains and validates the original complete contract before
 dispatch; an inspection does not authorize that operation.
 
-In the C1 proposal, ordinary quota keeps its existing decision view.
-`--complete-turn` and a managed handoff use the checked
-`loopx_turn_envelope_v1` source. With `--turn-envelope`, raw delivery with
+In the C1 proposal, Codex App heartbeat and guided start use the checked
+`loopx_turn_envelope_v1` source, including when both delivery layers are off.
+The ordinary agent-owned settlement plan stays the same. Other ordinary quota
+callers keep their existing decision view; `--complete-turn` and a managed
+handoff select the checked source explicitly. With `--turn-envelope`, raw delivery with
 Progressive and Delta off and no managed handoff still selects the bounded v0
 view of the same admitted decision; the saved source is complete. The
 [versioned presentation budgets](../contracts/interface-budget-contract.md#canonical-cli-fixture-qualification)

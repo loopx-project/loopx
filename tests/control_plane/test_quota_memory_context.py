@@ -91,10 +91,7 @@ def test_real_app_guard_delivers_scoped_memory_once(
     args += ["--context-delivery", progressive, "--delta-delivery", delta]
     first = run_cli(args)
     assert first["should_run"] is True
-    if complete:
-        assert_complete_turn_decision(first)
-    else:
-        assert "schema_version" not in first and "contract_binding" not in first
+    assert_complete_turn_decision(first)
     plan = first["interaction_contract"]["cli_channel"]["settlement_plan"]
     # The admitted explicit Host owns composed settlement across presentations.
     spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
@@ -107,7 +104,7 @@ def test_real_app_guard_delivers_scoped_memory_once(
     contributions = {item["hook_id"]: item for item in first["turn_context_contributions"]}
     assert set(contributions) == ({"reward-memory.turn-context", "anti-entropy.turn-context"}
                                  if retire else {"reward-memory.turn-context"})
-    assert all(("basis_digest" not in item) is complete for item in contributions.values())
+    assert all("basis_digest" not in item for item in contributions.values())
     contribution = contributions["reward-memory.turn-context"]
     guidance = contribution["context_fields"]["reward_memory_recall"]["context"]["guidance"]
     assert len(guidance) == 1 and guidance[0]["content_summary"]
@@ -117,11 +114,10 @@ def test_real_app_guard_delivers_scoped_memory_once(
         assert first["anti_entropy_guidance"]["target_symbols"] == ["old_api"]
         assert projected["anti_entropy_context"] == (
             contributions["anti-entropy.turn-context"]["context_fields"]["anti_entropy_context"])
-    if complete:
-        changed = deepcopy(first)
-        changed_plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
-        changed_plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
-        assert project_turn_context(changed) == {}
+    changed = deepcopy(first)
+    changed_plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
+    changed_plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
+    assert project_turn_context(changed) == {}
     assert contribution["result_fields"]["reward_memory_reflection_json"]["maxLength"] == 2400
     assert "private, non-authoritative" in contribution["instructions"][0]
     repeated = run_cli(args)

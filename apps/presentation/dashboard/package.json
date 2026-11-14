@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "smoke:conversation-find": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/conversation-find-browser-smoke.mjs",
     "smoke:queue-input-recovery": "vite build --ssr smoke/queue-input-recovery-smoke.mjs --outDir node_modules/.cache/queue-input-recovery --emptyOutDir && node node_modules/.cache/queue-input-recovery/queue-input-recovery-smoke.js",
     "smoke:todo-ownership": "vite build --ssr smoke/todo-ownership-smoke.mjs --outDir node_modules/.cache/todo-ownership --emptyOutDir && node node_modules/.cache/todo-ownership/todo-ownership-smoke.js",
     "smoke:workspace-progressive-loader": "node smoke/workspace-progressive-status-smoke.mjs",

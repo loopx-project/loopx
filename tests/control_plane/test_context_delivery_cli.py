@@ -264,8 +264,16 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
     summary = guard["agent_todo_summary"]
     # The complete writer retains the original bounded source rows. It no
     # longer emits the legacy display projection as its canonical decision.
-    assert [item["todo_id"] for item in summary["backlog_items"]] == [TODO_ID, "todo_work_1"]
-    condition = summary["backlog_items"][1]["resume_condition"]
+    # App inline delivery can name an exact prefix of the original lane.
+    literal_guard = deepcopy(guard)
+    literal_summary = literal_guard["agent_todo_summary"]
+    if profile == "codex_app":
+        assert "backlog_items" not in summary
+        assert literal_summary.pop("backlog_items_ref") == "first_executable_items[0:2]"
+        literal_summary["backlog_items"] = summary["first_executable_items"][:2]
+    rows = literal_summary["backlog_items"]
+    assert [item["todo_id"] for item in rows] == [TODO_ID, "todo_work_1"]
+    condition = rows[1]["resume_condition"]
     assert condition["satisfied"] and condition["target_todo_id"] == "todo_dependency"
     assert len(summary["first_executable_items"]) == 3
     candidates = guard["capability_gate"]["runnable_candidates"]
@@ -274,7 +282,7 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
     # The shared historical display owner still isolates the exceptional row;
     # no resumed row expands known diagnostic siblings in that projection.
     from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
-    displayed = compact_quota_should_run_cli_payload(deepcopy(guard))["agent_todo_summary"]
+    displayed = compact_quota_should_run_cli_payload(literal_guard)["agent_todo_summary"]
     assert [item["todo_id"] for item in displayed["backlog_items"]] == ["todo_work_1"]
     assert displayed["backlog_items"][0]["resume_condition"] == condition
     assert len(displayed["first_executable_items"]) == 3
@@ -686,7 +694,9 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     from loopx.cli_commands import quota, quota_context_reader
     from loopx.control_plane.turn_driver import codex_context
 
-    args = build_parser().parse_args(["--format", "json", "quota", "should-run",
+    # This publication seam has no live scheduler context. The real App
+    # guard tests qualify profile-based source selection without this flag.
+    args = build_parser().parse_args(["--format", "json", "quota", "should-run", "--complete-turn",
         "--goal-id", "fixture", "--agent-id", "worker", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)])
     from loopx.control_plane.quota.effective_action import EffectiveAction
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, compose_turn_decision

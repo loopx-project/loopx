@@ -1005,9 +1005,12 @@ durable writeback precedes spend, and replay leaves one debit. The native Codex
 profile still requires JSON and its capture destination; this ordinary-reader
 migration does not make native Markdown an executable transport.
 
-New native Codex App heartbeat captures use the checked complete source
-through the ordinary guard, same-Turn selection, and the Host's post-claim
-guard. Existing thin bootstrap commands use the same path without a new flag.
+New Codex App heartbeat decisions use the checked complete source through
+the ordinary guard, same-Turn selection, and the Host's post-claim guard.
+The resolved scheduler profile selects the source before capture. Existing
+thin bootstrap commands use it without a new flag. With both delivery layers
+off, the App receives the complete source inline, without native context IO;
+the ordinary agent-owned writeback and spend plan is unchanged.
 When an old pre-claim capture is resumed, the ready capture is newly produced
 under the complete contract; the original claim and Turn remain bound to their
 original receipts. A ready capture expected to be complete cannot be used as a
@@ -1030,8 +1033,8 @@ the capture's format fields.
 
 | Reader boundary | Current behavior and retirement condition |
 | --- | --- |
-| Native Codex App thin heartbeat | Retire the unsigned writer for new native captures. The quota CLI calls the existing TypeScript complete composer; the native hook pins the expected ready version for same-Turn recovery. |
-| Other ordinary quota and thin heartbeat | Keep the existing compact decision and settlement until their actual callers qualify. With both delivery layers off, ordinary App guards stay on this route too. Saved unsigned captures retain their original source and pinned recovery. |
+| Codex App thin heartbeat and guided start | New decisions use the existing TypeScript composer with or without native delivery. The native hook pins the expected ready version for same-Turn recovery. |
+| Other ordinary quota and thin heartbeat | Keep the existing compact decision and settlement until their actual callers qualify. Saved unsigned captures retain their original source and pinned recovery. |
 | Explicit `--complete-turn` and managed handoff | Keep the checked complete source through selection and lease preparation. If a ready capture loses its complete version and binding, it offers receipt diagnosis only. |
 | Explicit `--turn-envelope` | Progressive or Delta uses the complete source. With both off and without a managed handoff, retain the bounded v0 compatibility display from the same composition. |
 | Recorded v0 captures, plans and requests | Keep their pinned integrity/recovery reader until outstanding admitted work and the supported recovery window are reconciled. An invalid new source cannot select this fallback. |

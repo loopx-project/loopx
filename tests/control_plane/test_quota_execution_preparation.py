@@ -718,12 +718,15 @@ def test_native_hook_recovers_the_original_claim_after_guard_timeout(
     after_ready = case.startswith("after-ready-")
     released = not case.endswith("same-execution")
     native_args = () if legacy else ("--defer-context-presentation", "--codex-context-dir", str(native))
-    before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
+    profile_args = ("--runtime-profile", "generic_cli") if legacy else ("--codex-app",)
+    before = _run(tmp_path, monkeypatch, provider, [], *profile_args,
         "--turn-instance-id", turn, "--todo-id", TODO, "--decision-output-dir", str(capture),
         *native_args, context_delivery="off" if legacy else "on")
     assert before["execution_preparation"]["state"] == "claim_required"
     source = capture / "decision.json"
     original_bytes = source.read_bytes()
+    if legacy:
+        assert not {"schema_version", "contract_binding"} & json.loads(original_bytes).keys()
     digest = _present_saved_guard(tmp_path, native, capture, "codex_app_heartbeat", turn)
 
     run = codex_execution_preparation._default_runner
