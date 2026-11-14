@@ -47,7 +47,7 @@ class ChatTodoActionMixin:
         # Claim used this runtime. Recheck it after taking the same maintenance
         # guard as canonical writers, in the order used by Goal deletion.
         runtime = effective_runtime_root(invoked, None).resolve()
-        targets = (shadow_maintenance_lock_target(runtime, goal_id), source)
+        targets: tuple[Path, ...] = (shadow_maintenance_lock_target(runtime, goal_id), source)
         if source != invoked:
             targets += (invoked,)
         with ExitStack() as locks:

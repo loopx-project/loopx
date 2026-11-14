@@ -422,7 +422,7 @@ class ChatActionService(
         return token
 
     def _resolve_goal_agent(
-        self, goal_id: str, endpoint_id: str, *, goal: dict[str, Any] | None = None,
+        self, goal_id: str, endpoint_id: str, *, goal: dict[str, object] | None = None,
     ) -> str:
         """Resolve a runtime Endpoint to the Goal's durable peer identity."""
 
