@@ -2553,9 +2553,13 @@ function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
   if ((stateless || request.surface === "complete_turn") && scopedReplanYardstickReversal(source)) return undefined;
   const precision = replanReadPrecision(request, request.source_number_tokens);
   const identity = precision?.identity ?? contextSourceIdentity(request);
+  // Use the byte digest only when it belongs to the actual replan source.
+  // A native projection of a historical capture can have its own file hash.
+  const captureSha256 = stateless || (request.surface === "complete_turn" && path === projection.source_path)
+    ? projection.sha256 : undefined;
   const view = replanCliView(source, (value, field) => identity(value, ["context", ...field]),
     replanReadCommands(source, path, stateless ? projection.replan_reader_argv : undefined,
-      undefined, true, stateless ? projection.sha256 : undefined), precision);
+      undefined, true, captureSha256), precision);
   return view === source ? undefined : stagedReplanContextPlan(view, request.surface === "complete_turn");
 }
 

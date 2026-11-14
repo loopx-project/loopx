@@ -263,12 +263,22 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("native", [False, True], ids=["stateless", "native"])
+def test_progressive_replan_uses_the_saved_decision(tmp_path, monkeypatch, provider, native):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     capture = tmp_path / "capture"
     scope = ("--codex-app", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
     delivery = ("--context-delivery", "on", "--delta-delivery", "off")
+    if native:
+        from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+        journal = tmp_path / "native"
+        journal.mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_THREAD_ID", "saved-replan-session")
+        codex_context_hook(str(journal), {"session_id": "saved-replan-session",
+            "cwd": str(fixture["project"]), "hook_event_name": "SessionStart", "source": "startup"})
+        delivery = ("--context-delivery", "on", "--delta-delivery", "auto", "--codex-context-dir", str(journal))
 
     def read_stage(command, status=0):
         result = subprocess.run(command, capture_output=True, text=True, timeout=30)
@@ -294,12 +304,13 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
         return shlex.split(fields["/replan_action_packet/review"])
 
     try:
-        initial = call_progress_cli(fixture, "quota", "should-run", *scope, "--todo-id", TODO,
+        initial = call_progress_cli(fixture, "quota", "should-run", *scope, "--complete-turn", "--todo-id", TODO,
             "--decision-output-dir", str(capture), *delivery)
         original = capture / "decision.json"
         raw = original.read_bytes()
         source = json.loads(raw)
         receipt = source["heartbeat_receipt"]
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
         authority = _authority(fixture)
         review_command = review_for(read_pages(read_stage(shlex.split(initial["first_read_command"]))))
         assert review_command[review_command.index("--decision-file") + 1] == str(original)
@@ -317,26 +328,53 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
         recovered_path = original.with_name("recovered.json")
         original.rename(recovered_path)
-        saved = ("quota", "context-project", *scope, "--capture-file", str(recovered_path), "--initial-read")
         digest = hashlib.sha256(raw).hexdigest()
-        first = call_progress_cli(fixture, *saved, *delivery, "--capture-sha256", digest,
+        saved = ("quota", "context-project", *scope, "--capture-file", str(recovered_path))
+        if native:
+            navigation = call_progress_cli(fixture, *saved, *delivery, "--capture-sha256", digest,
+                "--max-page-output-bytes", "8192")
+            detached_review = review_for(read_pages(read_stage(shlex.split(navigation["first_read_command"])), 8192))
+        first = call_progress_cli(fixture, *saved, "--initial-read", *delivery, "--capture-sha256", digest,
             "--max-page-output-bytes", "8192")
-        assert not first["eof"] and list(first).index("content") < list(first).index("navigation")
+        assert list(first).index("content") < list(first).index("navigation")
         nav = first["navigation"]
         assert nav["mode"] == "full" and "top-level content" in nav["instruction"]
         body = read_pages(first, 8192)
         assert read_pages(read_stage(shlex.split(nav["first_read_command"])), 8192) == body
         recovered_review = review_for(body)
         assert recovered_review[recovered_review.index("--decision-file") + 1] == str(recovered_path)
-        assert read_stage(recovered_review)["source_hash"] == review["source_hash"]
-        recovered_review[recovered_review.index("--source-hash") + 1] = "sha256:" + "0" * 64
-        refused = read_stage(recovered_review, status=1)
+        assert recovered_review[recovered_review.index("--capture-sha256") + 1] == digest
+        if native:
+            assert detached_review == recovered_review
+        recovered = read_stage(recovered_review)
+        assert recovered["source_hash"] == review["source_hash"]
+        recovered_writer = shlex.split(recovered["next"]["writeback"])
+        assert recovered_writer[recovered_writer.index("--capture-sha256") + 1] == digest
+        assert read_stage(recovered_writer)["writeback"]["settlement_plan"]["identity"] == receipt["settlement_identity"]
+        wrong_source = recovered_review.copy()
+        wrong_source[wrong_source.index("--source-hash") + 1] = "sha256:" + "0" * 64
+        refused = read_stage(wrong_source, status=1)
         assert refused["ok"] is False and "matching source hash" in refused["reason"]
-        wrong_capture = call_progress_cli(fixture, *saved, *delivery, "--capture-sha256", "0" * 64, expected_code=1)
+        try:
+            recovered_path.write_bytes(raw + b" ")
+            for reader in (recovered_review, recovered_writer):
+                refused = read_stage(reader, status=1)
+                assert refused["ok"] is False and "capture digest mismatch" in refused["reason"]
+        finally:
+            recovered_path.write_bytes(raw)
+        wrong_capture = call_progress_cli(fixture, *saved, "--initial-read", *delivery,
+            "--capture-sha256", "0" * 64, expected_code=1)
         assert not wrong_capture["ok"] and "content" not in wrong_capture
-        disabled = call_progress_cli(fixture, *saved, "--context-delivery", "off", "--delta-delivery", "off",
-            "--capture-sha256", digest, expected_code=1)
+        disabled = call_progress_cli(fixture, *saved, "--initial-read", "--context-delivery", "off",
+            "--delta-delivery", "off", "--capture-sha256", digest, expected_code=1)
         assert not disabled["ok"] and "content" not in disabled
+        public_copy = recovered_path.with_name("manual-copy.json")
+        public_copy.write_bytes(raw)
+        public_copy.chmod(0o644)
+        compatible = call_progress_cli(fixture, "quota", "context-project", *scope,
+            "--capture-file", str(public_copy), "--initial-read", *delivery, "--capture-sha256", digest)
+        assert read_stage(review_for(read_pages(compatible)))["source_hash"] == review["source_hash"]
+        assert public_copy.stat().st_mode & 0o077
         assert recovered_path.read_bytes() == raw
         assert _authority(fixture) == authority
     finally:
