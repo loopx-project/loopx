@@ -119,6 +119,39 @@ def test_objective_and_acceptance_guidance_share_real_inline_goal_read(acceptanc
         "ordinary reads must not proactively direct objective revision")
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("reason", "Explicit current direction"),
+    ("source_ref", "message:current"),
+])
+def test_same_objective_with_changed_provenance_prepares_a_distinct_proposal(acceptance_goal, field, value):
+    project, _, cli, _ = acceptance_goal
+    prepare_source(project)
+    document = project / "objective.json"
+    objective = "Maintain reliable exports and recovery"
+    original = {"objective": objective, "reason": "Earlier direction", "source_ref": "message:earlier"}
+    current = {**original, field: value}
+
+    def prepare(revision, operation_id):
+        document.write_text(json.dumps(revision), encoding="utf-8")
+        code, result = cli("prepare-objective", "--agent-id", "agent-a", "--document", str(document),
+            "--operation-id", operation_id, "--execute")
+        assert code == 0 and result["proposal"]["status"] == "preview_ready", result
+        return result["proposal"]
+
+    before = cli("inspect")[1]
+    earlier = prepare(original, "prepare-earlier-direction")
+    updated = prepare(current, "prepare-current-direction")
+    assert updated["proposal_id"] != earlier["proposal_id"]
+    assert updated["normalized_parameters"][field] == value
+    assert prepare(current, "prepare-current-direction") == updated
+    assert cli("inspect")[1] == before, "preparation leaves the canonical objective unchanged"
+
+    code, applied = cli("apply-proposal", "--proposal-id", updated["proposal_id"], "--execute")
+    assert code == 0 and applied["executed"], applied
+    revised = cli("inspect")[1]["goal_acceptance_contract"]["goal_objective"]
+    assert {key: revised[key] for key in current} == current
+
+
 def test_native_proposal_owner_apply_and_separate_peer_adoption(acceptance_goal, monkeypatch):
     project, _, cli, run = acceptance_goal
     prepare_source(project)
@@ -279,6 +312,73 @@ def test_pending_proposal_allows_independent_work_without_an_owner_gate(acceptan
     assert cli("inspect-proposal", "--proposal-id", proposal["proposal"]["proposal_id"])[1]["proposal"]["status"] == "preview_ready"
 
 
+def test_added_responsibility_expands_the_bound_goal_and_its_work(acceptance_goal):
+    project, _, cli, run = acceptance_goal
+    goal_id = "goal-acceptance"
+    original = "Maintain reliable exports"
+    state = project / "state.md"
+    state.write_text(state.read_text() + f"\n## Objective\n{original}\n")
+
+    def document(name, value):
+        path = project / f"{name}.json"
+        path.write_text(json.dumps(value))
+        return str(path)
+
+    before = cli("inspect", "--agent-id", "agent-a")[1]
+    outcome = {"outcome_id": "exports", "owner_agent_id": "agent-a", "objective": original,
+        "requirements": [{"id": "export", "description": "Keep producing a valid export"}],
+        "todo_ids": ["todo_export"], "source": {"ref": "message:exports", "summary": original}}
+    code, refined = cli("refine", "--agent-id", "agent-a", "--document", document("outcome", outcome),
+        "--operation-id", "retain-export-criteria", "--expected-provider-revision", before["provider_revision"], "--execute")
+    assert code == 0 and refined["status"] == "applied", refined
+    retained = refined["goal_acceptance_contract"]["outcome_requirements"]
+
+    revised = f"{original} and regularly verify restore drills"
+    code, prepared = cli("prepare-objective", "--agent-id", "agent-a", "--operation-id", "add-restore-duty",
+        "--document", document("objective", {"objective": revised, "reason": "The owner added regular restore drills",
+            "source_ref": "message:restore-duty"}), "--execute")
+    assert code == 0 and prepared["proposal"]["status"] == "preview_ready", prepared
+    assert "goal_objective" not in cli("inspect")[1]["goal_acceptance_contract"]
+    proposal_id = prepared["proposal"]["proposal_id"]
+    code, applied = cli("apply-proposal", "--proposal-id", proposal_id, "--execute")
+    assert code == 0 and applied["proposal"]["status"] == "applied", applied
+
+    text = "Run and verify the next restore drill"
+    add = ("todo", "add", "--goal-id", goal_id, "--role", "agent",
+        "--claimed-by", "agent-a", "--text", text, "--task-class", "advancement_task",
+        "--action-kind", "implement", "--operation-id", "add-restore-work")
+    code, added = run(*add)
+    assert code == 0 and added["ok"] and added["added"], json.dumps(added)
+    code, replay = run(*add)
+    assert code == 0 and replay["ok"], replay
+    code, listed = run("todo", "list", "--goal-id", goal_id, "--role", "agent")
+    assert code == 0, listed
+    todos = listed["todos"]
+    assert len(todos) == 2 and all(row["claimed_by"] == "agent-a" for row in todos), todos
+    assert any(row["todo_id"] == "todo_export" and row["status"] == "open" for row in todos)
+    assert sum(row["text"].endswith(text) for row in todos) == 1
+
+    own = cli("inspect", "--agent-id", "agent-a")[1]
+    current = own["goal_acceptance_contract"]
+    assert current["outcome_requirements"] == retained
+    objective = current["goal_objective"]
+    assert objective["original_objective"] == original and objective["objective"] == revised
+    adoption = {"revision": objective["revision"], "digest": objective["digest"],
+        "work_digest": own["objective_work_digest"], "review_summary": "Keep export work and add a restore drill."}
+    code, adopted = cli("adopt-objective", "--agent-id", "agent-a", "--document", document("adopt", adoption),
+        "--operation-id", "adopt-restore-duty", "--expected-provider-revision", own["provider_revision"], "--execute")
+    assert code == 0 and adopted["goal_acceptance_contract"]["goal_objective"]["peer_adoption"][0]["current"], adopted
+
+    code, admission = run("quota", "should-run", "--codex-app", "--goal-id", goal_id,
+        "--agent-id", "agent-a", "--todo-id", "todo_export", "--begin-turn")
+    assert code == 0 and admission["normal_delivery_allowed"], admission
+    source = next(row for row in admission["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if row["source"] == "goal_acceptance")
+    assert source["content"]["goal_acceptance_contract"]["goal_objective"]["objective"] == revised
+    reason = source["reason"]
+    assert "new lasting responsibility" in reason and "Todo in the same Goal" in reason, reason
+
+
 @pytest.mark.parametrize("arguments", [
     ("inspect-proposal",),
     ("inspect-proposal", "--proposal-id", "proposal-example", "--execute"),
@@ -298,6 +398,7 @@ def test_native_conversation_exposes_and_executes_revision_loop(conversation_che
     from loopx.chat_loopx_mode import TOOL, GUIDANCE
     # Ordinary conversation can call the API without a proactive revision nudge.
     assert "prepare_goal_objective" not in GUIDANCE
+    assert "new lasting responsibility" in GUIDANCE and "Todo in the same Goal" in GUIDANCE
     assert "adopt_goal_objective" in GUIDANCE
     state = project / "state.md"
     state.write_text(state.read_text() + "\n## Objective\nBootstrap the project\n")

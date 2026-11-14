@@ -58,8 +58,9 @@ const REPLAN_PLANNING_GUIDANCE = [
     "An empty Todo queue is not a scope limit. Otherwise explain why no such step remains; " +
     "do not invent work or consume budget merely to stay active.",
   "Record the evidence and judgment in existing Vision/path_delta, including justified no-change. " +
-    "Only material user direction making the objective misleading warrants goal-acceptance prepare-objective " +
-    "(native: prepare_goal_objective); distinguish scope conflict, missing evidence and stale display text. " +
+    "Material user direction changing purpose or adding a lasting responsibility warrants goal-acceptance prepare-objective " +
+    "(native: prepare_goal_objective). Preserve commitments and reconcile Todos in the same Goal. " +
+    "Distinguish scope conflict, missing evidence and stale display text. " +
     "Reuse a pending proposal and inline facts; inspect missing context only, without polling or per-Turn revision receipts. " +
     "Surfacing a proposal neither blocks authorized work nor forces a question. Use goal-acceptance --help for " +
     "owner apply and each peer's own adoption; neither proposal nor adoption grants permissions. " +

@@ -95,9 +95,10 @@ missing evidence remains unresolved, and display drift belongs to its projection
 owner. This is semantic Agent guidance, not a prose classifier or a new admission
 gate. The existing typed authority, stop and replan-discharge rules remain.
 
-Ordinary conversation keeps the callable API without proactively directing a
-revision. When a material user direction change makes the recorded objective
-misleading, preparation retains the existing owner-review boundary. The native
+Ordinary conversation exposes the revision route when direct user direction
+changes the Goal's purpose or adds a lasting responsibility. For an addition,
+carry the existing commitments into the revised objective and add or update
+the Todo in the same Goal. Preparation retains the owner-review boundary. The native
 `loopx_collaboration` tool exposes `prepare_goal_objective`, and fixes its
 Goal/Agent/source Turn instead of accepting caller-supplied routing. Preparation
 uses the existing `goal.update` review/apply channel, with no Goal effect.
@@ -190,7 +191,7 @@ adherence or a long-horizon benefit.
 The bound Agent distinguishes a direct human request from heartbeat instructions,
 quoted documents, tool results and peer messages using the actual host context.
 No substring classifier infers user authority or importance. Before continuing a
-material new deliverable or correction, the Agent reuses inline outcome context
+material new deliverable or a change to success criteria, the Agent reuses inline outcome context
 (or inspects it only when missing),
 refines the matching outcome and links work through normal Todo operations.
 It retains previously stated requirements and records the latest source reference.
@@ -322,7 +323,8 @@ not installed adoption, general atomicity or a model-efficiency claim.
 
 | Event | Default action | Existing mechanism |
 | --- | --- | --- |
-| Material direct-user deliverable/correction | Add to the matching outcome, retaining prior intent | Host context + native refinement or skill/CLI bridge |
+| Direct user adds a lasting responsibility to this project | Retain commitments, revise the current Goal objective, and add or update its Todo | Existing owner revision and Todo operations |
+| Material deliverable or changed success criteria | Refine the matching outcome, retaining prior requirements | Host context + native refinement or skill/CLI bridge |
 | Resume, focus switch, replan | Reuse full requirements, then choose work | Shared work context; missing-source required read only |
 | Meaningful artifact/experiment milestone | Review all retained requirements against actual evidence | One refinement, optionally batched with normal writeback |
 | Unmet/unreviewed outcome without linked active/waiting work | Carry a typed gap into planning | Existing frontier replan, only when no runnable advancement wins |

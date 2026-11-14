@@ -53,6 +53,7 @@ test("autonomous checkpoints reuse owner review while ordinary checkpoints keep 
       for (const clause of ["original intent", "every requirement", "full marginal cost",
         "Before no_followup, review unmet acceptance", "reasonable in-scope next step remains, continue or replan",
         "evidence and judgment in existing Vision/path_delta", "budget or stops", "planning grant no authority",
+        "adding a lasting responsibility", "Preserve commitments and reconcile Todos in the same Goal",
         "never forces a pivot", "do not invent work or consume budget merely to stay active"]) {
         assert.ok(guidance.includes(clause), clause);
       }
