@@ -180,13 +180,15 @@ def test_creation_does_not_rebase_a_conflicted_completion_write(environment, app
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("fault", ["declaration_response", "first_turn_response"])
+@pytest.mark.parametrize("fault", ["declaration_response", "admission_read", "admission_decision", "first_turn_response",
+                                  "first_turn_response_then_read_failure", "first_turn_response_then_denial"])
 def test_managed_creation_retains_requirements_before_one_host_dispatch(environment, app, monkeypatch, provider, fault):
     import runpy
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
     from loopx.capabilities.native_chat.project_context import ChatProjectContexts
     from loopx.control_plane.goals import acceptance
+    from loopx import chat_actions, status as status_owner
 
     configure, _, _, project, runtime = environment
     _, request, service = app
@@ -203,8 +205,14 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
         project_contexts=ChatProjectContexts([project]))
     service.chat_store, service.runtime_controller = chat, controller
     proposal = preview_goal(request)
-    target = acceptance if fault == "declaration_response" else controller
-    method = "refine_goal_outcome" if fault == "declaration_response" else "submit_turn"
+    target, method = {
+        "declaration_response": (acceptance, "refine_goal_outcome"),
+        "admission_read": (status_owner, "collect_status"),
+        "admission_decision": (chat_actions, "build_quota_should_run"),
+        "first_turn_response": (controller, "submit_turn"),
+        "first_turn_response_then_read_failure": (controller, "submit_turn"),
+        "first_turn_response_then_denial": (controller, "submit_turn"),
+    }[fault]
     original = getattr(target, method)
 
     def lose_response(*args, **kwargs):
@@ -214,11 +222,27 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
     monkeypatch.setattr(target, method, lose_response)
     try:
         status, failed = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
-        assert status == 424, failed
+        assert status == (400 if fault.startswith("admission_") else 424), failed
         assert inspect(project, runtime)["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 1
-        if fault == "declaration_response":
-            assert chat.list_sessions(goal_id="report") == [], "an uncertain declaration must block Host startup"
+        if not fault.startswith("first_turn_response"):
+            assert chat.list_sessions(goal_id="report") == [], "uncertain requirements or admission must block Host startup"
+            assert not capture.exists(), "no native request may precede a verified first-Turn admission"
+        retained = inspect(project, runtime)["goal_acceptance_contract"]
         monkeypatch.setattr(target, method, original)
+        confirmed = None
+        admission_calls = []
+        if fault.startswith("first_turn_response_then_"):
+            sid = chat.list_sessions(goal_id="report")[0]["session_id"]
+            accepted = chat.turn_for_client(sid, f"goal-start-{proposal['proposal_id']}")
+            confirmed = controller.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)
+            assert confirmed["status"] == "completed"
+            def changed_admission(*args, **kwargs):
+                admission_calls.append(True)
+                if fault.endswith("read_failure"):
+                    raise TimeoutError("The later admission source is unavailable")
+                return {"should_run": False, "state": "throttled", "reason": "No new work is eligible"}
+            monkeypatch.setattr(status_owner if fault.endswith("read_failure") else chat_actions,
+                "collect_status" if fault.endswith("read_failure") else "build_quota_should_run", changed_admission)
         submit = controller.submit_turn
 
         def assert_retained_then_submit(*args, **kwargs):
@@ -230,13 +254,36 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
         status, recovered = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
         assert status == 202, recovered
         ids = recovered["proposal"]["receipt"]["resource_ids"]
+        if confirmed is not None:
+            assert ids["session_id"] == sid and ids["turn_id"] == confirmed["turn_id"]
+            assert admission_calls == [], "confirmed first work is readback, not a new admission"
+            assert recovered.get("gate") is None
         controller.wait_for_turn(session_id=ids["session_id"], turn_id=ids["turn_id"], timeout_sec=10)
         assert len(chat.list_sessions(goal_id="report")) == 1
         starts = [json.loads(line) for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
         assert len(starts) == 1
-        assert inspect(project, runtime)["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 1
+        assert inspect(project, runtime)["goal_acceptance_contract"] == retained
     finally:
         controller.close()
+
+
+@pytest.mark.parametrize("agent_id", ["", "codex"])
+def test_creation_without_a_host_does_not_require_work_admission(environment, app, monkeypatch, agent_id):
+    from loopx import status as status_owner
+
+    store, request, _ = app
+    proposal = preview_goal(request, agent_id=agent_id, completion_criteria=CRITERIA if agent_id else "")
+    admission_calls = []
+    def unavailable(*args, **kwargs):
+        admission_calls.append(True)
+        raise TimeoutError("Admission is unavailable for new model work")
+    monkeypatch.setattr(status_owner, "collect_status", unavailable)
+    status, created = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
+    assert status == 200, created
+    assert created["proposal"]["receipt"]["outcome"] == "goal_created"
+    assert "session_id" not in created["proposal"]["receipt"]["resource_ids"]
+    assert "first_session_opened" not in store.load(proposal["proposal_id"])["checkpoint"]["steps"]
+    assert admission_calls == [], "configuration-only creation never dispatches model work"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
