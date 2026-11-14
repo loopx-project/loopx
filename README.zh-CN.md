@@ -8,13 +8,13 @@
 
 告诉你已经在用的 Agent 想完成什么。LoopX 在幕后持久保留目标、
 工作、审批与证据，让下一轮会话可以继续，而不要求你先学会 LoopX 内部机制。<br>
-<sub>连接 Codex、Claude Code、DeepSeek Harness 等运行时。高级文档仍会展开本地优先语义内核、ownership 模型与研究工作台。</sub>
+<sub>面向 7×24 常驻在线 Agent 的开源、Harness 中立控制面——连接 Codex、Claude Code、DeepSeek Harness 等运行时，从个人本地 SQLite 平滑延伸到多 Agent 团队协作。</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
 [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[快速上手](#快速开始) · [为什么需要 LoopX](#为什么需要-loopx) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
+[快速上手](#快速开始) · [为什么需要 LoopX](#为什么需要-loopx) · [7×24 常驻架构](#always-on-agents) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
 </div>
 
@@ -50,6 +50,7 @@ LoopX 会按需把它变成可见的任务、决策门和证据。Claude Code �
      not news. Keep both languages aligned, newest first, using verified publication
      dates (UTC). -->
 
+- **2026-11-01 · 📘 [面向 7×24 Agent 的渐进式上下文交付](https://loopx-project.github.io/loopx/blog/zh/context-delivery/)** — 受 Compaction 周期约束的结构化差分与按需视图在 213 次模型唤醒中将单层渐进载荷降至原文 `32.5%`，112 次同周期续跑的叠加首读入口降至 `3.0%` 正文 / `5.0%` 含封装，同时保留压缩失配时原子回切完整基线的能力（延伸阅读：[47 天保鲜事故复盘](https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/)）。
 - **2026-10-25 · 🤝 [长程 Agent 研究：欢迎学术与企业合作者](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/)** — 探索**等预算下的长期效果突破**：围绕 EdgeBench 和真实长程任务，研究反馈、重规划与可复现评测，同时核对效果与完整成本。欢迎学术与企业团队合作。[交流合作](https://github.com/loopx-project/loopx/discussions)。
 - **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — 共享 TypeScript 控制面与长程研究工作台。[迁移指南](docs/product/releases/v2.0.0.md#中文指南) · [重构历程](https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/)。
 - **2026-10-14 · 🤖 [Agentic Software](https://loopx-project.github.io/loopx/blog/zh/semantic-software-development/)** — 连接目标、证据、人的反馈与工程交付。
@@ -82,6 +83,7 @@ LoopX 会按需把它变成可见的任务、决策门和证据。Claude Code �
 | --- | --- |
 | 让编程或研究 Agent 跨会话持续干活 | [安装并开始](#快速开始) |
 | 在一个入口管理个人项目、定时任务与待决事项 | [个人 Agent 工作区](#认识个人-agent-工作区) |
+| 不从零手搓基础设施，直接搭建 7×24 常驻在线 Agent | [7×24 常驻 Agent 控制面](#always-on-agents) |
 | 让多个 Agent 分工协作，交付可验收的结果 | [Agent 协作指南](docs/product/use-cases/cross-runtime/README.md#中文指南) |
 
 LoopX 把长期控制状态留在同一层紧凑状态里：
@@ -125,6 +127,29 @@ LoopX 不是生产自动化控制器。危险权限、生产写入、公开发�
 仍由人类负责。
 
 </details>
+
+<a id="always-on-agents"></a>
+
+### 搭建 7×24 常驻在线 Agent：无需从零手搓 5 大底层组件
+
+[Anthropic 在《Building always-on agents》中指出](https://claude.com/resources/articles/building-always-on-agents)，真正能长期稳定运行的常驻 Agent 大部分时间其实在**零 Token 休眠**，只在事件到来时被唤醒执行一轮有界工作，围绕 **Event Inbox、Timers、Memory、Permissions、Outbox** 五个底层原语运转。现实工程中，团队常常为每个宿主机重复手搓 cron 脚本、JSON 队列、Prompt 压缩和临时审批检查，运行几周后还是会在状态过期、重复写入或消息刷屏中翻车。
+
+LoopX 把这套**开源、Harness 中立**的控制面直接做成可运行基础设施，让 Codex CLI、Claude Code、DeepSeek Harness 或自研运行时共享持久状态与人工决策门：
+
+| 常驻 Agent 原语 | LoopX 对应控制面子系统 | 解决跨周运行中的哪类故障 |
+| --- | --- | --- |
+| **Event Inbox（事件收件箱）** | Single-flight **Goal / Todo / Hard Lease** 队列、异步对话收件箱，以及飞书 / GitHub 事件监听 | 多 Worker 并发踩踏同一份仓库状态；运行中途用户消息丢失 |
+| **Timers（定时与唤醒）** | **Guarded Heartbeat** 与安全周期预设（`daily-triage`、`changelog-draft`、`pr-watch`，可用 `loopx preset list` 只读查看） | 盲目 cron 在零增量或人门尚未批准时反复唤醒模型白烧 Token |
+| **Memory（记忆与压缩恢复）** | [`Decision Context`](loopx/capabilities/decision_context/README.md) 来源追踪、受 Compaction 周期约束的 **Progressive + Delta** [`context_delivery`](https://loopx-project.github.io/loopx/blog/zh/context-delivery/)（213 次唤醒中单层渐进降至原文 `32.5%`，112 次同周期续跑首读降至原文 `3.0% / 5.0%`），以及可选 [`Reward Memory`](loopx/capabilities/reward_memory/README.md) | 数据源过期却一路亮绿灯（[47 天 / 253 轮中的 5 次保鲜事故](https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/)）；上下文压缩后全量重放或差分悬空 |
+| **Permissions（权限与延后批准）** | 显式 **Owner / 安全 / 公开发布 / 私有数据 Gate**、隔离 Worktree 与可评审交付交接 | 定时任务在无人确认时私自对外发布、强行合并或越界读写 |
+| **Outbox（低噪成果回传）** | 本地工作区与飞书共享同一份 Goal / 决策 / 证据视图，仅在真正完成、阻塞或待决时打扰人类 | 碎片化终端日志与各端高频无效推送，避免人肉盯盘 |
+
+**个人开发者本地运行 → 工程团队与组织级扩展，同一套协议无缝衔接：**
+
+| 使用形态 | LoopX 运行方式 | 权威存储、协作与治理形态 |
+| --- | --- | --- |
+| **个人开发者 & 本地 Agent** | `python3 -m pip install --upgrade loopx` 零外部依赖直接运行，接入已有 CLI / 桌面端 | 默认本地权威 **SQLite** + hard lease（兼顾既有 File 配置），跨重启、跨压缩保留现场且闲置零 Token |
+| **工程团队 & 组织级扩展** | 多 Agent 认领 Todo、基于同一 Goal 经工作区 / GitHub / 飞书协同交付与互审（[三 Agent 协作示例](examples/collaboration-delivery/README.md)） | 保留各自责任边界与人工审批门；支持向预置的 **PostgreSQL** 远程共享权威（[源码实现](loopx/control_plane/coordination/postgresql_authority_store.ts)）以及[组织治理路线图](docs/product/roadmaps/saas-opportunity-assessment.zh-CN.md)中的 RBAC、SSO 与审计能力平滑演进 |
 
 ## 看看 LoopX 如何工作
 
@@ -490,10 +515,12 @@ provider 的打包和生命周期，不是另一个控制面 owner。详见
 
 ### 个人 Agent、数字团队与自我改进
 
-[Meta Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/)
-与 [Grok Bot](https://x.ai/news/introducing-grok-bot) 正在让“把工作交给常驻的个人 Agent”
-变得更容易理解。LoopX 选择的是开放、Provider-neutral 的控制面路线，
-连接你已经在用的 Agent，而不是提供这两款托管产品的等价替代。
+[Meta Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/)、
+[Grok Bot](https://x.ai/news/introducing-grok-bot) 以及
+[Anthropic《Building always-on agents》](https://claude.com/resources/articles/building-always-on-agents)
+正在让“把工作交给 7×24 常驻个人 Agent”与“休眠—事件唤醒”成为越来越清晰的产品与架构共识。LoopX
+选择的是开放、Provider-neutral 的[7×24 控制面](#always-on-agents)路线，连接你已经在用的 Agent，
+而不是提供这两款托管产品的等价替代。
 
 - **个人 Agent：**通过已发布的工作区与关联飞书入口查看目标、调整方向、处理决策。
   [常驻管家与语义交接 RFC](docs/architecture/rfcs/capable-manager-semantic-handoff-v0.zh-CN.md)

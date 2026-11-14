@@ -9,13 +9,13 @@
 Tell the Agent you already use what you want done. LoopX keeps the goal, work,
 needed decisions and verifiable results durable behind the scenes, so the next
 session can continue without making you learn LoopX internals first.<br>
-<sub>Work with Codex, Claude Code, DeepSeek Harness and other runtimes. Advanced docs still expose the local-first architecture, ownership model and research workbench.</sub>
+<sub>An open, harness-neutral control plane for 24/7 always-on agents across Codex, Claude Code, DeepSeek Harness and other runtimes—scaling from local SQLite workflows to multi-agent teams.</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
 [![Local-first state](https://img.shields.io/badge/local--first-state-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[Get started](#quick-start) · [Why LoopX](#why-loopx) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
+[Get started](#quick-start) · [Why LoopX](#why-loopx) · [24/7 Always-On](#always-on-agents) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
 </div>
 
@@ -54,6 +54,7 @@ run? [Choose a task below](#try-loopx).
      not news. Keep both languages aligned, newest first, using verified publication
      dates (UTC). -->
 
+- **2026-11-01 · 📘 [Progressive context delivery for 24/7 agents](https://loopx-project.github.io/loopx/blog/context-delivery/)** — Compaction-cycle structured deltas and progressive views cut control-plane bytes across 213 model-facing wakes (`32.5%` single-layer progressive view; `3.0%` body / `5.0%` CLI stacked first-read entry across 112 in-cycle continuations) while preserving lossless baseline recovery ([47-day freshness postmortem](https://loopx-project.github.io/loopx/blog/five-freshness-incidents/)).
 - **2026-10-25 · 🤝 [Long-horizon agent research: collaborators welcome](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)** — Exploring **breakthroughs in long-horizon outcomes under equal budgets**, through feedback, replanning and reproducible evaluation on EdgeBench and real-world tasks. Academic labs and industry teams are welcome to collaborate, comparing outcomes and total cost. [Discuss collaboration](https://github.com/loopx-project/loopx/discussions).
 - **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript state layer and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
 - **2026-10-14 · 🤖 [Agentic software](https://loopx-project.github.io/loopx/blog/semantic-software-development/)** — Connecting goals, evidence and human feedback to engineering delivery.
@@ -96,6 +97,7 @@ protected actions.
 | --- | --- |
 | Keep a coding or research agent working across sessions | [Install and start](#quick-start) |
 | Manage personal projects, schedules and decisions in one place | [Personal Agent Workspace](#meet-the-personal-agent-workspace) |
+| Wire up a 24/7 always-on agent without hand-rolling infra | [24/7 Always-On Agent Control Plane](#always-on-agents) |
 | Let agents collaborate and deliver verifiable results | [Agent collaboration guide](docs/product/use-cases/cross-runtime/README.md) |
 
 LoopX keeps the durable work state in one compact layer:
@@ -141,6 +143,37 @@ LoopX is not an autonomous production controller. Dangerous permissions,
 publishing, production writes, and final ownership stay with the human.
 
 </details>
+
+<a id="always-on-agents"></a>
+
+### Building 24/7 Always-On Agents Without Hand-Rolling the 5 Subsystems
+
+[Anthropic's *Building always-on agents*](https://claude.com/resources/articles/building-always-on-agents)
+notes that effective persistent agents spend most of their wall-clock life
+asleep at zero tokens and wake for bounded runs across five surrounding
+subsystems: **Event Inbox**, **Timers**, **Memory**, **Permissions**, and an
+**Outbox**. In practice, teams often re-build fragile glue—cron scripts, JSON
+queues, prompt compaction, and ad-hoc approval checks—for every agent host, only
+to hit silent staleness, duplicate writes, or noisy status spam by week two.
+
+LoopX packages that open, harness-neutral control layer so the runtimes you
+already use (Codex CLI, Claude Code, DeepSeek Harness, or custom runners) can
+operate 24/7 with explicit durability and human gates:
+
+| Always-on primitive | LoopX control-plane subsystem | What it prevents in multi-week runs |
+| --- | --- | --- |
+| **Event Inbox** | Single-flight **Goal / Todo / Hard Lease** queue, async app inbox, and connected Lark / GitHub listeners | Duplicate workers mutating the same repo state; dropped human inputs mid-run |
+| **Timers & Wakeups** | **Guarded Heartbeat** and safe recurring presets (`daily-triage`, `changelog-draft`, `pr-watch`; inspect via `loopx preset list`) | Blind cron loops burning tokens when nothing changed or a gate is still waiting on a human |
+| **Memory & Compaction** | [`Decision Context`](loopx/capabilities/decision_context/README.md) source tracking, compaction-cycle **Progressive + Delta** [`context_delivery`](https://loopx-project.github.io/loopx/blog/context-delivery/) (`32.5%` view across 213 wakes; `3.0% / 5.0%` first-read entry across 112 in-cycle wakes), and optional [`Reward Memory`](loopx/capabilities/reward_memory/README.md) | Silent source staleness ([5 incidents across 253 turns / 47 days](https://loopx-project.github.io/loopx/blog/five-freshness-incidents/)); compounding prompt replay or broken deltas across compaction |
+| **Permissions & Deferred Calls** | Explicit **owner, safety, publication, and private-data gates**, isolated worktrees, and review-ready handoffs | Autonomous cron runs publishing externally, forcing merges, or leaking private context |
+| **Outbox** | Shared Workspace & Lark Goal/Decision/Evidence views surfacing genuine completions, blockers, and open gates | Fragmented terminal logs and high-noise pings that force humans to babysit runs |
+
+**Solo local to team & organizational scale—on one set of contracts:**
+
+| Scale | How LoopX runs | Authority, collaboration & governance posture |
+| --- | --- | --- |
+| **Solo developer & local agent** | `python3 -m pip install --upgrade loopx` with zero external infrastructure; connect your existing CLI/Desktop runtime | Canonical local **SQLite** store with hard leases (plus existing File setups), surviving restarts and compaction at zero idle tokens |
+| **Engineering team & enterprise path** | Peer workers claim todos and return reviewed artifacts on shared Goals via Desktop Workspace, GitHub, and Lark ([three-agent demo](examples/collaboration-delivery/README.md)) | Preserves worker ownership and human approval gates; extends to staged **PostgreSQL** remote authority ([provider](loopx/control_plane/coordination/postgresql_authority_store.ts)) and planned org governance—RBAC, SSO, quotas, signed audit—in the [adoption & SaaS roadmap](docs/product/roadmaps/saas-opportunity-assessment.md) |
 
 ## See LoopX in Action
 
@@ -550,11 +583,13 @@ owner. See [Architecture](docs/architecture.md) and
 
 ### Personal Agents, Teams, and Self-Improving Workflows
 
-[Meta Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/)
-and [Grok Bot](https://x.ai/news/introducing-grok-bot) make persistent personal
-agents and delegated work a familiar product idea. LoopX approaches that space
-as an open, provider-neutral control plane for agents you already run—not as a
-hosted replacement for either product.
+[Meta Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/),
+[Grok Bot](https://x.ai/news/introducing-grok-bot), and
+[Anthropic's *Building always-on agents*](https://claude.com/resources/articles/building-always-on-agents)
+make persistent personal agents and sleep/wake event-driven runs a familiar product
+and architecture model. LoopX approaches that space as an open, provider-neutral
+[24/7 control plane](#always-on-agents) for agents you already run—not as a hosted
+replacement for either product.
 
 - **Personal agent:** use the shipped Workspace and connected Lark surfaces to
   inspect goals, steer work and resolve decisions. The

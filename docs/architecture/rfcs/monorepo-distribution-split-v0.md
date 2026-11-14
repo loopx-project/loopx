@@ -4169,3 +4169,68 @@ File/SQLite negative cases guard this boundary without changing valid activation
   Full task-artifact success through this entry, installed native App/model
   adoption, compaction retention, complete D2/D5 closure, comparable total cost,
   V1–V5/V10, R1/M3 and C1 default cutover remain unqualified.
+
+### 2026-11-15 — First-Goal reply adopted by the original governed Task
+
+- **Source:** `main@74ca883d5bd3`. The same source combines without conflict
+  with C1 #8266 at `2c099be41e68`; the isolated combined tree passes 287
+  native-session, work-context, first-read and Turn-settlement tests using
+  isolated state and synthetic provider/model fixtures. This does not approve
+  C1 or qualify its default cutover.
+- **Observed product path:** the real Chat discovery/action/store creates one
+  Goal and its initial Task from a synthetic reviewed request. The current
+  Host model reads the retained request and input through a temporary stdio
+  relay, produces an eight-group read-only report, and the real packaged Goal
+  conversation renders it. Independent CSV/Decimal checks verify groups and
+  totals. A real Chat restart preserves the original Session, reply and action;
+  retrying that action dispatches no new Chat Turn.
+- **Governed adoption:** the fixture caller declares an independent argv
+  validator through the existing Task owner, then the current model adopts
+  that original reply through the existing Core + SQLite + generic Host route.
+  It uses the same Goal, Agent and initial Task. SIGKILL after durable
+  `typed_result` resumes the original Turn without another Core Host invocation.
+  A damaged reply fails validation with the Task open and zero debit; restoring
+  the checked reply completes that Task with one debit, retained on replay.
+- **Remaining entry gap:** the first Chat request is still a read-only planning
+  conversation with a separate explicit LoopX-mode control. Its observed model
+  input is 24,372 UTF-8 bytes; this is one observation, not a cost comparison.
+  The fixture's explicit validation declaration and governed adoption are not
+  automatic product behavior. Reuse the registered managed-session, Task
+  validation/admission and C1 owners for that missing integration; do not infer
+  write authority or weaken independent validation to activate it.
+- **Boundary:** these source and transport checks strengthen first-result
+  readback and original-Task recovery evidence. They do not qualify one-goal
+  native onboarding, installed native App/model adoption, model compaction
+  retention, complete D2/D5 closure, comparable full costs, V1–V5/V10, R1/M3 or
+  C1 cutover. No runtime, schema, activation, permission or public evidence
+  policy changes; one-run relay/validator files remain private qualification
+  artifacts rather than a new shipped execution pipeline or CI fixture.
+
+### 2026-11-15 — First-Goal admission failure preserves creation and confirmed work
+
+- **Gap:** a failed first-Goal admission read or decision was converted into
+  permission to dispatch. Conversely, retrying a lost submit response could
+  apply a later admission failure or denial to already dispatched work.
+- **Delta:** the existing creation owner retains Goal, initial Tasks and
+  completion requirements before checking admission. An unverifiable admission
+  now returns a safe retryable action failure without opening a Session or
+  sending model work. Creation without an executable Host does not read work
+  admission. Recovery first reads the original Session/client operation through
+  the existing Task-start reader, verifies its request and first-Turn state,
+  and retains dispatched work without new admission. Queued work still requires
+  admission; foreign Sessions and terminal-before-start work remain refused.
+- **Evidence:** on `main@58cc5817e35e`, the real Chat HTTP/action/store path with
+  synthetic Codex protocol passes 36 creation-completion cases and 11 existing
+  Session/checkpoint recovery cases. Independent review identified two recovery
+  defects in the first candidate; their failing cases were retained and the
+  final candidate resolves both. The final runtime/test files also pass 22
+  selected File/SQLite and creation-only cases in an isolated combination with
+  C1 #8266 at `b8ac1ec5443b`, with exact source-byte readback. These are bounded
+  source and synthetic-Host checks, not current native-model qualification.
+- **Boundary:** this repairs V2/V4/R1 admission and recovery using existing
+  Session, Task and quota owners; it adds no shared vocabulary, authority grant,
+  validator installation or alternate C1 pipeline. Automatic original-Task
+  adoption, selected D2/D5 closure, native App/model and compaction retention,
+  progressive controls, comparable complete costs, full V1–V5/V10, R1/M3 and
+  C1 cutover remain unqualified. Preserve original requirements and earlier
+  negative evidence; run full original-goal regression before completion.
