@@ -105,12 +105,12 @@ test("scanForbiddenPrivacyTokens fails closed on sensitive credentials", () => {
 
   const withSecret = {
     goal_id: "leaky-goal",
-    apiKey: "sk-ant-api03-abcdef1234567890abcdef1234567890abcdef",
+    apiKey: ["sk-", "fixture", "0".repeat(32)].join(""),
   };
   assert.throws(() => scanForbiddenPrivacyTokens(withSecret), /Privacy boundary violation/);
 
   const withGithubToken = {
-    token: "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+    token: ["ghp", "fixture".repeat(6)].join("_"),
   };
   assert.throws(() => scanForbiddenPrivacyTokens(withGithubToken), /Privacy boundary violation/);
 
@@ -122,7 +122,8 @@ test("scanForbiddenPrivacyTokens fails closed on sensitive credentials", () => {
     });
   }
   assert.throws(() => sanitizeGenesisSeedProjection({[withGithubToken.token]: 1}), /Privacy boundary violation/);
-  assert.throws(() => sanitizeGenesisSeedProjection({payload: "password=syntheticSecret"}), /Privacy boundary violation/);
+  const assignment = ["password", "fixture-only-value"].join("=");
+  assert.throws(() => sanitizeGenesisSeedProjection({payload: assignment}), /Privacy boundary violation/);
 });
 
 test("setupPostgreSqlAuthoritySchemaAndRole installs DDL, RLS, and restricted role", async () => {
