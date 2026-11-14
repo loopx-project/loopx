@@ -17,7 +17,7 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
@@ -428,6 +428,7 @@ DELEGATION_STOP_TERMINAL_PHASES = frozenset({"settled", "unknown"})
 # How long a signalled same-host worker may take to acknowledge before SIGKILL.
 DELEGATION_STOP_GRACE_SECONDS = 10.0
 DELEGATION_STOPPED_MESSAGE = "delegation operation was stopped; start a new operation id"
+_DELEGATION_STATUS_READ = "delegation_status_read"
 
 
 def execution_row_path(root: Path, goal_id: str, agent_id: str, operation_id: str) -> Path:
@@ -687,10 +688,19 @@ class Delegations:
     def revalidate(self, operation_id: str) -> dict:
         """Explicitly rerun the original postcondition; never repeat Host work."""
         path = self.path(require_operation_id(operation_id))
-        with try_exclusive_file_lock(path) as acquired:
+        with ExitStack() as locks:
+            acquired = locks.enter_context(try_exclusive_file_lock(path))
             if acquired is None:
                 # Terminal publication can precede the original worker's release.
-                return self.read(operation_id)
+                _, holder = lock_holder_liveness(path)
+                if holder.get("operation") != _DELEGATION_STATUS_READ:
+                    return self.read(operation_id)
+                # A status probe briefly takes this same fence. Give that read
+                # time to release it, then recheck authority under the fence.
+                try:
+                    locks.enter_context(exclusive_file_lock(path, timeout_seconds=0.25))
+                except LockAcquireTimeoutError:
+                    return self.read(operation_id)
             if self._read_stop(path) is not None:
                 raise ValueError(DELEGATION_STOPPED_MESSAGE)
             row = _read(path)
@@ -770,7 +780,9 @@ class Delegations:
         row = _read(path)
         binding = self._bound(row)
         try:
-            with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
+            with exclusive_file_lock(
+                path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT, operation=_DELEGATION_STATUS_READ
+            ):
                 active = False
         except LockAcquireTimeoutError:
             active = True
