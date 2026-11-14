@@ -563,7 +563,9 @@ def _dispatch_common_command(
 		)
 
 		runtime_root_arg = args.runtime_root
-		if runtime_root_arg and (not allow_missing_registry or os.environ.get("LOOPX_REGISTRY")):
+		# Only a registry selected by the caller can anchor an override here.
+		# Project inspection resolves other relative roots against its own project.
+		if runtime_root_arg and not allow_missing_registry:
 			from .paths import resolve_runtime_root
 
 			runtime_root_arg = (
