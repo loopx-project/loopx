@@ -1,4 +1,5 @@
 import {DocumentAttachment, isTextDocument} from "./document-attachment";
+import {appStewardUnavailableMessage} from "./app-steward-entry";
 import {AlertCircle, Bot, CalendarClock, CircleHelp, FileText, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, Square, X} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import {readSettingsRoute, writeSettingsRoute} from "./workspace-settings-route";
@@ -3044,7 +3045,7 @@ export function PersonalWorkspacePage({
           {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive && !managedWorkActive}>
             {workspaceConversations?.entryGate ? <div className="personal-history-notice" role={workspaceConversations.entryGate.unavailable ? "alert" : "status"}>
               <span>{workspaceConversations.entryGate.unavailable
-                ? (locale === "zh-CN" ? "原管家会话暂不可用。请检查所选连接后重试。" : "The original steward conversation is unavailable. Check the selected connection and retry.")
+                ? appStewardUnavailableMessage(workspaceConversations.entryGate.ownerLoginUnavailable === true, locale === "zh-CN")
                 : (locale === "zh-CN" ? "正在核验管家会话…" : "Verifying the steward conversation…")}</span>
               {workspaceConversations.entryGate.unavailable ? <>
                 <button type="button" onClick={workspaceConversations.entryGate.retry}>{t("history.retry")}</button>
