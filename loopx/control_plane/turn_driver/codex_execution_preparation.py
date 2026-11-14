@@ -360,6 +360,36 @@ def builtin_execution_preparation_claim(
     return todo_id
 
 
+def unconsumed_preparation_refusal(decision: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Typed refusal when an advertised preparation claim was not consumed.
+
+    The builtin run-once bridge only executes the exact ordinary claim a
+    decision published as Host-executable.  When it declines, the caller must
+    not be sent back into the generic not-host-executable rejection: that
+    route stays blocked and identical retries never invoke the Host.  Surface
+    the advertised claim and a typed reason so a bounded caller can act.
+    """
+
+    preparation = decision.get("execution_preparation")
+    if not isinstance(preparation, Mapping) or preparation.get("state") != "claim_required":
+        return None
+    claim = preparation.get("claim")
+    command = claim.get("command_line") if isinstance(claim, Mapping) else None
+    refusal: dict[str, Any] = {
+        "reason_code": "turn_execution_preparation_claim_not_consumed",
+        "todo_id": preparation.get("todo_id"),
+        "message": (
+            "This should-run decision advertised a managed claim before work, but the "
+            "builtin run-once preparation did not consume it, so the Turn route stays "
+            "blocked. Execute the advertised claim or repair why it was not consumed; "
+            "retrying this route repeats the same refusal without invoking the Host."
+        ),
+    }
+    if isinstance(command, str) and command.strip():
+        refusal["claim_command"] = command
+    return refusal
+
+
 def _native_claim_operation_id(request: Mapping[str, Any]) -> str:
     """Reuse the captured managed claim identity on an authorized retry."""
     digest = request.get("claim_source_sha256")
