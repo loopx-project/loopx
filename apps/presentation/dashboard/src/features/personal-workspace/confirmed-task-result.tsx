@@ -37,6 +37,9 @@ export function ConfirmedTaskResult({receipt}: {receipt: TaskReceipt}) {
     ? result.messages.filter(message => ["agent", "assistant", "error"].includes(message.role))
       .map(message => ({...message, text: visibleAgentMessage(message.text)})).filter(message => message.text)
     : [];
+  const failure = result?.turn.terminal && result.turn.error ? visibleAgentMessage(result.turn.error) : "";
+  const showFailure = failure && !messages.some(message => message.role === "error" && message.text === failure);
+  const retryRead = () => {setRead(null); setRetry(value => value + 1);};
   return <>
     <button aria-controls={panelId} aria-expanded={open} className="personal-primary-action"
       onClick={() => {setRead(null); setOpen(!open);}} type="button">{t(open ? "drawer.taskReceiptHideResult" : "drawer.taskReceiptShowResult")}</button>
@@ -45,17 +48,21 @@ export function ConfirmedTaskResult({receipt}: {receipt: TaskReceipt}) {
       <h3>{t("drawer.taskReceiptResult")}</h3>
       {read instanceof Error ? <>
         <p role="status">{t("drawer.taskReceiptMissing")}</p>
-        <button className="personal-secondary-action" onClick={() => {setRead(null); setRetry(value => value + 1);}}
+        <button className="personal-secondary-action" onClick={retryRead}
           type="button">{t("proposal.readbackRetry")}</button>
       </> : !result ? <p role="status">{t("drawer.taskReceiptReading")}</p>
         : !result.turn.terminal ? <p role="status">{t("drawer.taskReceiptPending")}</p>
         : <>
           <p role="status">{result.turn.status === "timed_out" ? t("drawer.taskReceiptTimedOut")
             : localizedSessionStatus(result.turn.status, t)}</p>
-          {messages.length ? <div className="personal-task-receipt-answer">
+          {messages.length || showFailure ? <div className="personal-task-receipt-answer">
+            {showFailure ? <MarkdownText headingLevel={4} text={failure} /> : null}
             {messages.map(message => <MarkdownText key={message.message_id} headingLevel={4} text={message.text} />)}
-          </div>
-            : <p>{t("drawer.taskReceiptNoResult")}</p>}
+          </div> : <>
+            <p>{t("drawer.taskReceiptNoResult")}</p>
+            <button className="personal-secondary-action" onClick={retryRead}
+              type="button">{t("proposal.readbackRetry")}</button>
+          </>}
         </>}
     </section>
   </>;
