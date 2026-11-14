@@ -13,7 +13,12 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.todos import add_goal_todo, list_goal_todos
 
 
-def fixture(tmp_path: Path, provider: str, *, validation: str | None = None) -> tuple[Path, Path, str]:
+def fixture(
+    tmp_path: Path, provider: str, *,
+    validation: str | None = None,
+    validation_argv: list[str] | None = None,
+    validation_label: str | None = None,
+) -> tuple[Path, Path, str]:
     project = tmp_path / "project"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
@@ -37,7 +42,8 @@ def fixture(tmp_path: Path, provider: str, *, validation: str | None = None) -> 
         status="blocked", claimed_by="agent-a")
     added = add_goal_todo(registry_path=registry, goal_id="goal-a", role="user",
         text="Record the observed outcome", task_class="user_action", validation_command=validation,
-        unblocks_todo_id=dependent["todo_id"])
+        validation_command_json=json.dumps(validation_argv) if validation_argv is not None else None,
+        validation_label=validation_label, unblocks_todo_id=dependent["todo_id"])
     return registry, state, str(added["todo_id"])
 
 
@@ -182,16 +188,35 @@ def test_chat_user_validation_failure_never_creates_success_receipt(tmp_path: Pa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("passed", [True, False])
-def test_packaged_chat_http_user_completion(tmp_path: Path, provider: str, passed: bool) -> None:
+@pytest.mark.parametrize("case", ["multiline_command", "multiline_argv", "failed"])
+def test_packaged_chat_http_user_completion(tmp_path: Path, provider: str, case: str) -> None:
     from http.client import HTTPConnection
     from threading import Thread
     from loopx.chat_action_store import ChatActionStore
     from loopx.chat_actions import ChatActionService
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
 
-    registry, _state, todo_id = fixture(tmp_path, provider,
-        validation=validation_command(f"raise SystemExit({0 if passed else 1})"))
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    from loopx.control_plane.todos.completion_validation_projection import completion_validation_declaration
+
+    passed = case != "failed"
+    label = " Check  spacing \t "
+    marker = tmp_path / "validator-output"
+    validation_source = (
+        "from pathlib import Path\n"
+        "if __name__ == '__main__':\n"
+        f"    with Path({str(marker)!r}).open('a') as output:\n"
+        "        output.write('two  spaces % --><--')\n"
+    )
+    command = validation_command(validation_source if passed else "raise SystemExit(1)")
+    argv = [sys.executable, "-c", validation_source]
+    use_argv = case == "multiline_argv"
+    registry, state, todo_id = fixture(
+        tmp_path, provider,
+        validation=None if use_argv else command,
+        validation_argv=argv if use_argv else None,
+        validation_label=label if passed else None,
+    )
     store = ChatActionStore(tmp_path / "actions")
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.verbose = False
@@ -225,6 +250,25 @@ def test_packaged_chat_http_user_completion(tmp_path: Path, provider: str, passe
         dependent = next(row for row in rows if row["role"] == "agent")
         assert dependent["status"] == ("open" if passed else "blocked")
         assert dependent["claimed_by"] == "agent-a"
+        if passed:
+            displayed, _, _ = parse_todo_source(state.read_text(encoding="utf-8"))
+            row = next(item for item in displayed["user"] if item["todo_id"] == todo_id)
+            assert row["status"] == "done"
+            declaration = completion_validation_declaration(row)
+            assert declaration is not None
+            assert declaration["validation_label"] == label
+            if use_argv:
+                assert declaration["validation_command_argv"] == argv
+            else:
+                assert declaration["validation_command"] == command
+
+            connection.request("POST", f"/api/actions/{proposal_id}/apply", body="{}",
+                               headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            replay = json.loads(response.read())
+            assert response.status == 200, replay
+            assert replay["proposal"]["receipt"] == result["proposal"]["receipt"]
+            assert marker.read_text(encoding="utf-8") == "two  spaces % --><--"
     finally:
         connection.close()
         server.shutdown()
