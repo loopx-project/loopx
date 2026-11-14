@@ -223,7 +223,7 @@ def pending(
 
 def _pending_result(root, snapshot, scope, operation_cursor):
     result = snapshot["result"]
-    if "request_id" in result or snapshot.get("completed"):
+    if "request_id" in result or snapshot.get("completed") or snapshot.get("native_child_continuation"):
         return result
     from .operation_handoff import pending_operation_handoffs
 

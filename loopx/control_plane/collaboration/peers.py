@@ -60,7 +60,8 @@ class InboxReadResponseAmbiguous(RuntimeError):
     def __init__(self, error: EffectRuntimeResponseAmbiguous, *, stage: str,
                  scope: dict[str, Any], read_arguments: dict[str, Any],
                  items: list[dict[str, Any]] | None = None,
-                 deliveries: list[dict[str, Any]] | None = None) -> None:
+                 deliveries: list[dict[str, Any]] | None = None,
+                 native_child_result_ids: list[str] | None = None) -> None:
         super().__init__(str(error))
         self.result: dict[str, Any] = {
             "ok": False, "error": str(error), "error_code": error.diagnostic_code,
@@ -72,6 +73,7 @@ class InboxReadResponseAmbiguous(RuntimeError):
                 ) if key in item} for item in items],
                 "peer_returns": None if deliveries is None else [
                     {"request": item["request"], "result_key": item["key"]} for item in deliveries],
+                "native_child_result_ids": native_child_result_ids,
                 "automatic_retry_performed": False,
                 "instruction": (
                     "Inspect the exact request read receipts and peer result delivery receipts through the existing "
@@ -610,6 +612,8 @@ def read_inbox(
     from .turn_context_observation import delegation_read_command
     from .links import receiver_work_observations
     from ..effect_runtime import EffectRuntimeResponseAmbiguous
+    from ...command_invocation import loopx_cli_argv
+    from ...install_contract import render_host_cli_command
 
     read_command = delegation_read_command(root, registry, goal_id, agent_id)
     read_arguments = {"cursor": cursor, "operation_cursor": operation_cursor, "request_id": request_id}
@@ -632,6 +636,18 @@ def read_inbox(
         observed_goal = dict(goal_scope.goal)
         observed_goal_ref = dict(goal_scope.caller_goal_ref or {}) if goal_scope.exact else None
 
+    native_continuation = snapshot.get("native_child_continuation") is True
+    for child_result in result.get("native_child_results", {}).get("items", []):
+        command = [*loopx_cli_argv(), "--registry", str(registry), "--runtime-root", str(root),
+                   "--format", "json", "native-child", "acknowledge-result",
+                   "--goal-id", goal_id, "--agent-id", agent_id,
+                   "--turn-instance-id", child_result["turn_instance_id"],
+                   "--result-id", child_result["result_id"],
+                   "--disposition", "<accepted|deferred|rejected>", "--execute"]
+        if observed_goal_ref:
+            command.extend(["--goal-instance-id", observed_goal_ref["goal_instance_id"]])
+        child_result["acknowledge_command"] = render_host_cli_command(command)
+
     if not snapshot.get("completed"):
         work = receiver_work_observations(root, registry, result["items"])
         # Input hashing remains outside Goal lifetime admission.
@@ -648,11 +664,13 @@ def read_inbox(
                     "operation": "record_read", "goal_id": goal_id, "agent_id": agent_id,
                     "items": result["items"],
                     "deliveries": snapshot["deliveries"], "work_observations": work,
-                    "include_context": request_id is None, "read_command": read_command,
+                    "native_child_result_ids": snapshot.get("native_child_result_ids", []),
+                    "include_context": request_id is None and not native_continuation, "read_command": read_command,
                 }, scope=goal_scope)
             except EffectRuntimeResponseAmbiguous as exc:
                 raise InboxReadResponseAmbiguous(exc, stage="record_read", scope=read_scope,
-                    read_arguments=read_arguments, items=result["items"], deliveries=snapshot["deliveries"]) from exc
+                    read_arguments=read_arguments, items=result["items"], deliveries=snapshot["deliveries"],
+                    native_child_result_ids=snapshot.get("native_child_result_ids", [])) from exc
     else:
         final = snapshot
         for item in result["items"]:
@@ -662,7 +680,7 @@ def read_inbox(
         if receipt is not None:
             item["request_read_receipt"] = receipt
         item["receiver_followthrough"] = advice
-    if request_id is None:
+    if request_id is None and not native_continuation:
         result["unfinished_delegations"] = final["context"]["unfinished_delegations"]
     result["followthrough"] = (
         "Use each request's receiver_followthrough to reconcile it with actual Core work. "
@@ -677,6 +695,12 @@ def read_inbox(
         "Finish the original request with return_result, including evidence and remaining gaps. "
         "Adoption, file hashes and returned opinions are not independent acceptance or Todo completion."
     )
+    if result.get("native_child_results", {}).get("items"):
+        result["followthrough"] += (
+            " For each native_child_result, inspect the result and its evidence, then run native-child "
+            "acknowledge-result using its acknowledge_command and accepted/deferred/rejected disposition. "
+            "Until acknowledgement, the same stable result may be delivered again after restart."
+        )
     if request_id is not None:
         result["followthrough"] = (
             "Inspect this exact request's current source, revisions and receipts. "
