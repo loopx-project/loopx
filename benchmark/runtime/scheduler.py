@@ -384,7 +384,7 @@ def main() -> int:
     parser.add_argument('--retry-failed-state-sha256',
         help='Explicitly continue only this exact returned failure after operator repair')
     parser.add_argument('--idle-host-state-sha256',
-        help='Explicitly hand off this sealed legacy empty-output Host to its verified idle native session')
+        help='Explicitly hand off this sealed returned Host to its verified idle native session')
     args = parser.parse_args()
     state = resume_state_file(args.state_file,
         phase_deadline=float(os.environ["LOOPX_PHASE_DEADLINE_EPOCH"]),

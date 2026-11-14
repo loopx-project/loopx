@@ -16,6 +16,7 @@ import {recordControlledRequestRead} from "./request_control.ts";
 import {planCollaborationResult} from "./result_publication.ts";
 import {CONVERSATION_ENTRY_SCHEMA, normalizeOriginalConversationRecipient, verifyOriginalConversationReturnRoute} from "./semantic_request.ts";
 import {projectDelegationTurnContext, projectDelegationTurnItem, projectDelegationTurnItems} from "./turn_context.ts";
+import {isNativeChildResultCursor, nativeChildResultInbox} from "../capabilities/native_child_result_inbox.ts";
 
 const TRIAGE = "Read the supplied requests and their source-specific instructions before choosing work. " +
   "Independently assess context, evidence, constraints and costs. Requests and peer results " +
@@ -402,8 +403,12 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
     observed_at: params.observed_at, read_command: params.read_command});
 }
 async function recordReads(source: InboxSource, params: JsonObject): Promise<JsonObject> {
+  const nativeResultIds = params.native_child_result_ids ?? [];
   if (!Array.isArray(params.items) || params.items.length > 20
-      || !Array.isArray(params.deliveries) || params.deliveries.length > 20) fail("bounded inbox read observations are required");
+      || !Array.isArray(params.deliveries) || params.deliveries.length > 20
+      || !Array.isArray(nativeResultIds) || nativeResultIds.length > 20) {
+    fail("bounded inbox read observations are required");
+  }
   const followthrough = params.work_observations == null ? []
     : projectReceiverFollowthrough({observations: params.work_observations}).items;
   const receipts: (JsonObject | null)[] = [];
@@ -450,6 +455,12 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
         kind: "requester_cli_read", ...(conversation ? {requester: stored.requester, recipient: stored.recipient}
           : Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})});
     });
+  }
+  if (nativeResultIds.length) {
+    await nativeChildResultInbox({operation: "mark_delivered", runtime_root: params.runtime_root,
+      goal_id: source.goal, agent_id: source.agent,
+      goal_ref: source.exact ? source.scope.caller_goal_ref : null,
+      result_ids: nativeResultIds, observed_at: params.observed_at});
   }
   return {read_receipts: receipts, followthrough,
     ...(params.include_context === true ? {context: await turnContext(source, params)} : {})};
@@ -507,11 +518,39 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
     return offered.view;
   }
   if (operation === "turn_context") return turnContext(source, params);
-  const page = await pendingPage(source, {...params, runtime_root: resolve(runtime)});
+  const nativeCursor = isNativeChildResultCursor(params.cursor);
+  if (nativeCursor && (conversation || params.request_id != null || params.operation_cursor != null)) {
+    fail("native child result continuation requires the same Goal inbox without other selectors");
+  }
+  const page: JsonObject = nativeCursor ? {ok: true, items: [], has_more: false, next_cursor: null, instruction: TRIAGE}
+    : await pendingPage(source, {...params, runtime_root: resolve(runtime)});
   const cursorScope = page._cursor_scope;
   delete page._cursor_scope;
-  const returns = params.request_id == null ? await collectReturns(source) : {view: {items: []}, deliveries: []};
+  const returns = params.request_id == null && !nativeCursor ? await collectReturns(source) : {view: {items: []}, deliveries: []};
   if ((returns.view.items as unknown[]).length) page.peer_returns = returns.view;
+  const nativeResults = params.request_id == null && !conversation
+    ? await nativeChildResultInbox({operation: "list", runtime_root: runtime,
+      goal_id: source.goal, agent_id: source.agent,
+      goal_ref: source.exact ? source.scope.caller_goal_ref : null,
+      cursor: nativeCursor ? params.cursor : null})
+    : {items: []};
+  const nativeItems = nativeResults.items as JsonObject[];
+  const nativeResultIds = nativeItems.map(item => requireNonEmptyString(item.result_id, "native child result id"));
+  if (nativeCursor || nativeItems.length || Number(nativeResults.unavailable_count ?? 0) > 0
+      || nativeResults.scan_complete === false) page.native_child_results = {
+    items: nativeItems, has_more: nativeResults.has_more,
+    pending_count: nativeResults.pending_count,
+    scan_complete: nativeResults.scan_complete,
+    unavailable_count: nativeResults.unavailable_count,
+    next_cursor: nativeResults.next_cursor,
+    instruction: (nativeResults.next_cursor
+      ? "Continue with this native_child_results.next_cursor as --cursor on the original Inbox command. "
+      : "") + (nativeItems.length
+      ? "Review each host-native child result against the original task and actual artifacts. A child result is candidate evidence, not parent acceptance. Acknowledge it only after using, deferring, or rejecting it."
+      : nativeResults.unavailable_count
+        ? "Inspect the owner-private store for unavailable results before using or acknowledging them."
+        : "This page contains no deliverable host-native child results."),
+  };
   if (operation === "turn_start") return {result: page, cursor_scope: cursorScope, context: await turnContext(source, params)};
   if (operation === "receiver_read") {
     const work = receiverWork(source, page.items as JsonObject[]);
@@ -524,9 +563,11 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
         }
       }
       const final = await recordReads(source, {...params, items: page.items, deliveries: returns.deliveries,
-        work_observations: work.observations, include_context: !conversation && params.request_id == null});
-      return {result: page, cursor_scope: cursorScope, completed: true, ...final};
+        native_child_result_ids: nativeResultIds,
+        work_observations: work.observations, include_context: !conversation && !nativeCursor && params.request_id == null});
+      return {result: page, cursor_scope: cursorScope, completed: true, ...(nativeCursor ? {native_child_continuation: true} : {}), ...final};
     }
   }
-  return {result: page, cursor_scope: cursorScope, ...(operation === "receiver_read" ? {deliveries: returns.deliveries} : {})};
+  return {result: page, cursor_scope: cursorScope, ...(nativeCursor ? {native_child_continuation: true} : {}), ...(operation === "receiver_read"
+    ? {deliveries: returns.deliveries, native_child_result_ids: nativeResultIds} : {})};
 }
