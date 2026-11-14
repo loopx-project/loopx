@@ -21,7 +21,11 @@ from ...control_plane.todos.contract import normalize_todo_claimed_by
 from ..context_providers import build_context_provider
 from ..context_providers.base import ContextProvider
 from ..context_providers.openviking_scope import classify_openviking_scope
-from .application import TOKEN_RE, normalize_reward_memory_provider_binding
+from .application import (
+    RECALL_MODES,
+    TOKEN_RE,
+    normalize_reward_memory_provider_binding,
+)
 from .ingestion import normalize_reward_memory_standing_policy
 from .registry import MAX_CORPORA, normalize_reward_memory_corpus
 from .scoped_feedback import SCOPED_FEEDBACK_ADAPTER
@@ -63,7 +67,6 @@ _SURFACE_FIELDS = {
 }
 _RECALL_PROFILE_FIELDS = {"profile_id", "mode", "max_queries", "limit"}
 _AUTOMATION_FIELDS = {"automatic_recall", "automatic_ingest", "fail_open"}
-_RECALL_MODES = {"function_boundary", "bounded_agentic_search"}
 
 
 def canonical_reward_memory_actor_peer_id(*, goal_id: str, agent_id: str) -> str:
@@ -589,7 +592,7 @@ def _normalize_v1(raw: Mapping[str, Any]) -> dict[str, Any]:
             allowed=_RECALL_PROFILE_FIELDS,
         )
         mode = str(profile.get("mode") or "").strip()
-        if mode not in _RECALL_MODES:
+        if mode not in RECALL_MODES:
             raise ValueError("recall_profile.mode is unsupported")
         profile_id = str(profile.get("profile_id") or "").strip()
         if not profile_id:

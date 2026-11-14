@@ -19,6 +19,8 @@ from typing import Any, cast
 from .memory_utility import (
     ATTRIBUTION_LEVELS,
     RewardMemoryUtilityObservationValidationError,
+    _MEMORY_REF_DIGEST_RE,
+    _OPAQUE_REF_RE,
     _SCOPE_FIELDS,
     validate_reward_memory_utility_observation,
 )
@@ -37,8 +39,6 @@ MAX_CONFLICT_FINGERPRINTS = 16
 MAX_REVIEW_REASON_CODES = 12
 MAX_HISTORY_EVIDENCE_REFS = 16
 
-_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
-_MEMORY_DIGEST_RE = re.compile(r"^(?:[0-9a-f]{16}|sha256:[0-9a-f]{64})$")
 _OBSERVATION_ID_RE = re.compile(r"^muo_[0-9a-f]{64}$")
 _EVIDENCE_ORDER = (
     "insufficient",
@@ -91,7 +91,7 @@ def _ref(value: object, label: str) -> str:
     result = value.strip()
     if (
         result != value
-        or not _REF_RE.fullmatch(result)
+        or not _OPAQUE_REF_RE.fullmatch(result)
         or "://" in result
         or PurePosixPath(result).is_absolute()
         or PureWindowsPath(result).is_absolute()
@@ -113,7 +113,7 @@ def _memory_digests(value: object, label: str) -> list[str]:
     result = []
     for item in value:
         digest = _ref(item, label)
-        if not _MEMORY_DIGEST_RE.fullmatch(digest):
+        if not _MEMORY_REF_DIGEST_RE.fullmatch(digest):
             raise ValueError(f"{label} must contain canonical memory digests")
         result.append(digest)
     if result != value or result != sorted(result) or len(set(result)) != len(result):
