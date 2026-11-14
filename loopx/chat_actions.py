@@ -23,7 +23,6 @@ from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
 from .chat.todo_actions import ChatTodoActionMixin
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
-from .control_plane.goals.activation import goal_is_stopped
 from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal
 from .control_plane.goals.configure_goal_service import (
@@ -42,6 +41,7 @@ from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .quota import build_quota_should_run
 from .registry import registry_goals
 from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
+from .file_lock import try_exclusive_file_lock
 
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
@@ -1543,7 +1543,22 @@ class ChatActionService(
                     "next_action": "Confirm the exact request through its authenticated operation card.",
                 },
             )
+        parameters = proposal.get("normalized_parameters")
+        if (proposal.get("action_kind") == "todo.create" and isinstance(parameters, dict)
+                and parameters.get("start_execution") is True):
+            key = _opaque(proposal_id, field="proposal_id")
+            with try_exclusive_file_lock(
+                self.store.root / "task-starts" / f"{key}.json", operation="confirm_task_start",
+            ) as held:
+                if held is None:
+                    raise ActionConflictError("The original Task confirmation is in progress. Retry it when it finishes.")
+                return self._apply_confirmed_action(proposal_id)
+        return self._apply_confirmed_action(proposal_id)
+
+    def _apply_confirmed_action(self, proposal_id: str) -> dict[str, object]:
         proposal = self.store.start_apply(proposal_id)
+        if proposal["status"] == "applied":
+            return {"proposal": proposal, "turn": self._turn_from_receipt(proposal.get("receipt"))}
         action_kind = str(proposal.get("action_kind") or "")
         parameters = proposal.get("normalized_parameters")
         if not isinstance(parameters, dict):
@@ -1662,100 +1677,11 @@ class ChatActionService(
             }
             turn_result = None
             if start_execution:
-                if self.runtime_controller is None:
-                    raise ValueError("Chat Runtime Controller is unavailable")
-                execution_agent_id = str(
-                    parameters.get("endpoint_id") or parameters["agent_id"]
-                )
-                execution_step = steps.get("execution_started")
-                if isinstance(execution_step, dict) and execution_step.get(
-                    "session_id"
-                ):
-                    session_id = _opaque(
-                        execution_step.get("session_id"), field="session_id"
-                    )
-                    turn_id = _opaque(execution_step.get("turn_id"), field="turn_id")
-                    created = False
-                else:
-                    goal_id = str(parameters["goal_id"])
-                    owner = str(parameters["agent_id"])
-                    goal = self._goal(goal_id)
-                    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
-                        raise ValueError("The Task's Goal is no longer active")
-                    project = Path(str(goal.get("repo") or ".")).expanduser().resolve()
-                    if not project.is_dir():
-                        raise ValueError("the Goal project root is unavailable")
-                    channel_id = f"task.{todo_id}"
-                    client_turn_id = f"task-start-{proposal_id}"
-                    opened = steps.get("task_session_opened")
-                    session_id = None
-                    turn = None
-                    if opened is not None:
-                        session_id = _opaque(opened.get("session_id"), field="session_id")
-                        session = self.runtime_controller.store.load_session(session_id)
-                        if (session is None or session.get("goal_id") != goal_id
-                                or session.get("agent_id") != execution_agent_id or session.get("channel_id") != channel_id):
-                            raise ValueError("The original Task Session is unavailable")
-                        observed = self.runtime_controller.store.turn_for_client(session_id, client_turn_id)
-                        if observed and (observed.get("started_at") or observed.get("upstream_turn_id")):
-                            turn = observed
-
-                    created = False
-                    if turn is None:
-                        self._agent_eligibility(execution_agent_id, project=project)
-                        if parameters.get("endpoint_id") and self._resolve_goal_agent(goal_id, execution_agent_id) != owner:
-                            raise ValueError("The reviewed Agent endpoint now belongs to another Goal Agent")
-                        claim_operation_id = f"chat-task-start:{proposal_id}"
-                        claim = update_goal_todo(
-                            registry_path=self.registry_path, goal_id=goal_id, todo_id=todo_id,
-                            claimed_by=owner, agent_id=owner, claim_only=True, manage_execution=True,
-                            claim_operation_id=claim_operation_id, dry_run=False,
-                        )
-                        if claim["handoff_mode"] == "soft_claim" and claim["status"] in {"recovered", "replayed"}:
-                            # A soft-claim receipt records a past assignment.
-                            # Let the same owner recheck it without acquiring or changing it.
-                            current = update_goal_todo(
-                                registry_path=self.registry_path, goal_id=goal_id, todo_id=todo_id,
-                                claimed_by=owner, agent_id=owner, claim_only=True, manage_execution=True,
-                                dry_run=True,
-                            )
-                            if current["changed"]:
-                                raise ValueError("The reviewed Task assignment changed before launch")
-                        if not isinstance(steps.get("todo_assigned"), dict):
-                            self.store.save_checkpoint(
-                                proposal_id, step="todo_assigned",
-                                receipt={"todo_id": todo_id, "agent_id": owner},
-                            )
-                        if session_id is None:
-                            session, _resumed = self.runtime_controller.open_session(
-                                goal_id=goal_id, agent_id=execution_agent_id, work_dir=project,
-                                objective=str(parameters["text"]), mode="resume_latest",
-                                channel_id=channel_id, agent_goal_id=goal_id,
-                            )
-                            session_id = _opaque(session.get("session_id"), field="session_id")
-                            self.store.save_checkpoint(
-                                proposal_id, step="task_session_opened", receipt={"session_id": session_id},
-                            )
-                        turn, created = self.runtime_controller.submit_turn(
-                            session_id=session_id, client_turn_id=client_turn_id, message=str(parameters["text"]),
-                            work_dir=project, objective=str(parameters["text"]),
-                        )
-                    turn_id = _opaque(turn.get("turn_id"), field="turn_id")
-                    self.store.save_checkpoint(
-                        proposal_id,
-                        step="execution_started",
-                        receipt={"session_id": session_id, "turn_id": turn_id},
-                    )
+                turn_result = self._start_confirmed_task(proposal_id, parameters, todo_id, steps)
                 receipt["resource_ids"].update(
-                    {"session_id": session_id, "turn_id": turn_id}
+                    {"session_id": turn_result["session_id"], "turn_id": turn_result["turn_id"]}
                 )
                 receipt["outcome"] = "task_execution_started"
-                turn_result = {
-                    "session_id": session_id,
-                    "turn_id": turn_id,
-                    "status": "queued",
-                    "created": created,
-                }
             stored = self.store.apply(
                 proposal_id,
                 current_state_fingerprint=current_fingerprint,
@@ -1821,8 +1747,7 @@ class ChatActionService(
             }
         raise ValueError(f"unsupported action_kind: {action_kind}")
 
-    @staticmethod
-    def _turn_from_receipt(receipt: Any) -> dict[str, Any] | None:
+    def _turn_from_receipt(self, receipt: Any) -> dict[str, Any] | None:
         if not isinstance(receipt, dict) or not isinstance(
             receipt.get("resource_ids"), dict
         ):
@@ -1830,12 +1755,17 @@ class ChatActionService(
         resource_ids = receipt["resource_ids"]
         if not resource_ids.get("turn_id"):
             return None
+        session_id = resource_ids.get("session_id")
+        turn_id = str(resource_ids["turn_id"])
+        status = "accepted"
+        if receipt.get("outcome") == "task_execution_started" and session_id:
+            chat = getattr(self.runtime_controller, "store", None) or self.chat_store
+            turn = chat.load_turn(str(session_id), turn_id) if chat is not None else None
+            if turn and turn.get("session_id") == session_id and turn.get("turn_id") == turn_id:
+                status = str(turn.get("status") or status)
         return {
-            "session_id": str(resource_ids["session_id"])
-            if resource_ids.get("session_id")
-            else None,
-            "turn_id": str(resource_ids["turn_id"]),
-            "status": "accepted",
-            "created": receipt.get("outcome")
-            in {"turn_created", "task_execution_started"},
+            "session_id": str(session_id) if session_id else None,
+            "turn_id": turn_id,
+            "status": status,
+            "created": receipt.get("outcome") == "turn_created",
         }
