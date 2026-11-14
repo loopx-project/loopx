@@ -7,9 +7,10 @@ import {useWorkspaceI18n} from "./i18n";
 import type {WorkspaceGoal} from "./personal-workspace-model";
 
 /** Navigation uses the Goal directory; only the native provider can authorize a conversation. */
-export function GoalAgentWorkPage({goal, agentId, readOnly, sessionId, onSession, children, onSelect, onClose}: {
+export function GoalAgentWorkPage({goal, agentId, readOnly, sessionId, onSession, onRetryManagedSession, children, onSelect, onClose}: {
   goal: WorkspaceGoal; agentId: string; readOnly: boolean;
   sessionId?: string; onSession: (sessionId: string, replace?: boolean) => void; children?: ReactNode;
+  onRetryManagedSession?: () => void;
   onSelect: (agentId: string) => void; onClose: () => void;
 }) {
   const zh = useWorkspaceI18n().locale === "zh-CN";
@@ -37,14 +38,15 @@ export function GoalAgentWorkPage({goal, agentId, readOnly, sessionId, onSession
     </div> : readOnly ? <ContextHelp label={zh ? "来源仅有状态快照" : "Source contains a status snapshot only"} icon={CircleHelp}><p className="agent-work-unavailable" role="status">{zh ? "此来源仅提供状态快照，无法在这里读取或回复原会话。" : "This source provides a status snapshot; original conversations cannot be read or replied to here."}</p></ContextHelp>
       : !registered ? <p className="agent-work-unavailable" role="status">{zh ? "此 Agent 不在当前 Goal 的已注册列表中，请选择列表中的 Agent。" : "This Agent is not registered in the current Goal. Choose an Agent from its directory."}</p>
       : <AgentSessions key={`${goal.goalId}:${agentId}`} goalId={goal.goalId} agentId={agentId} hosts={hosts} attached={hosts.includes("codex-app")}
-        zh={zh} sessionId={sessionId} onSession={onSession}>{children}</AgentSessions>}
+        zh={zh} sessionId={sessionId} onSession={onSession} onRetryManagedSession={onRetryManagedSession}>{children}</AgentSessions>}
   </section>;
 }
 
 /** Both providers stay under the registered Agent; the reader retains its original owner. */
-function AgentSessions({goalId, agentId, hosts, attached, zh, sessionId, onSession, children}: {
+function AgentSessions({goalId, agentId, hosts, attached, zh, sessionId, onSession, onRetryManagedSession, children}: {
   goalId: string; agentId: string; hosts: string[]; attached: boolean; zh: boolean; sessionId?: string;
   onSession: (sessionId: string, replace?: boolean) => void; children?: ReactNode;
+  onRetryManagedSession?: () => void;
 }) {
   const selectionKey = `loopx-attached-selection:${goalId}:${agentId}`;
   const [selected, setSelected] = useState(() => {
@@ -53,7 +55,10 @@ function AgentSessions({goalId, agentId, hosts, attached, zh, sessionId, onSessi
   });
   const [directory, setDirectory] = useState<{bindings: Binding[]; managed: ChatSessionSummary[]; errors: string[]} | null>(null);
   const [revision, setRevision] = useState(0);
-  const reconnect = () => setRevision(value => value + 1);
+  const reconnect = () => {
+    setRevision(value => value + 1);
+    if (sessionId?.startsWith("managed:")) onRetryManagedSession?.();
+  };
   const previousRoute = useRef(sessionId);
   const selectedValue = sessionId !== undefined ? sessionId : previousRoute.current !== sessionId ? "" : selected;
   useEffect(() => {
