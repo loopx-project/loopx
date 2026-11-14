@@ -68,7 +68,11 @@ function receiptPath(runtimeRoot: string): string {
   return join(runtimeRoot, "goals", scope.goal_id, "rollout-event-log.jsonl");
 }
 
-async function appendReceipt(runtimeRoot: string, turnId: string): Promise<void> {
+async function appendReceipt(
+  runtimeRoot: string,
+  turnId: string,
+  goalRef?: Record<string, string>,
+): Promise<void> {
   const path = receiptPath(runtimeRoot);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify({
@@ -77,8 +81,17 @@ async function appendReceipt(runtimeRoot: string, turnId: string): Promise<void>
     goal_id: scope.goal_id,
     agent_id: scope.agent_id,
     run_id: turnId,
+    ...(goalRef === undefined ? {} : { goal_ref: goalRef }),
   })}\n`, { encoding: "utf8", flag: "a" });
 }
+
+const instanceScope = (suffix: string): Record<string, string> => ({
+  goal_id: scope.goal_id,
+  goal_instance_id: `ginst_${suffix.repeat(32)}`,
+});
+
+const ownInstance = instanceScope("a");
+const otherInstance = instanceScope("b");
 
 function request(
   runtimeRoot: string,
@@ -388,4 +401,94 @@ test("a quota audit cannot manufacture a missing heartbeat receipt", async (t) =
     surface: scope.surface, stateKey: scope.state_key,
   });
   await assert.rejects(readFile(statePath, "utf8"), { code: "ENOENT" });
+});
+
+test("a receipt from another Goal instance cannot supersede a legacy receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  // Same goal id and Agent, different Goal instance: the shared log must not
+  // let that instance expire the admitted Turn's receipt.
+  await appendReceipt(runtimeRoot, "turn-followup-other", otherInstance);
+
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(acknowledged.ok, true);
+  assert.equal((acknowledged.scheduler_commit as Record<string, unknown>).status, "written");
+
+  const base = request(runtimeRoot);
+  const failed = await evaluateSchedulerHeartbeatFollowup({
+    ...base,
+    host_facts: {
+      ...(base.host_facts as Record<string, unknown>),
+      operation: "host_failure",
+      failure_kind: "timeout",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=3",
+    },
+  });
+  assert.equal(failed.ok, true);
+  assert.equal(failed.failure_count, 1);
+});
+
+test("a scoped follow-up still rejects a successor of its own Goal instance", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1", ownInstance);
+  await appendReceipt(runtimeRoot, "turn-followup-2", ownInstance);
+
+  const stale = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+    goal_ref: ownInstance,
+  }));
+  assert.equal(stale.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE");
+  assert.equal(stale.scheduler_state_mutated, false);
+});
+
+test("a scoped follow-up ignores a successor from another Goal instance", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1", ownInstance);
+  await appendReceipt(runtimeRoot, "turn-followup-other", otherInstance);
+
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+    goal_ref: ownInstance,
+  }));
+  assert.equal(acknowledged.ok, true);
+  assert.equal((acknowledged.scheduler_commit as Record<string, unknown>).status, "written");
+});
+
+test("a scoped follow-up ignores a legacy successor in the same log", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1", ownInstance);
+  await appendReceipt(runtimeRoot, "turn-followup-2");
+
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+    goal_ref: ownInstance,
+  }));
+  assert.equal(acknowledged.ok, true);
+  assert.equal((acknowledged.scheduler_commit as Record<string, unknown>).status, "written");
+});
+
+test("a scoped follow-up does not adopt a legacy receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+
+  const missing = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+    goal_ref: ownInstance,
+  }));
+  assert.equal(missing.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_MISSING");
+  assert.equal(missing.scheduler_state_mutated, false);
+});
+
+test("a follow-up scope without a Goal instance is refused", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1", ownInstance);
+
+  await assert.rejects(
+    evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+      goal_ref: { goal_id: scope.goal_id },
+    })),
+    { code: "heartbeat_receipt_scope_invalid" },
+  );
+  await assert.rejects(
+    evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+      goal_ref: { ...ownInstance, goal_id: "another-goal" },
+    })),
+    { code: "heartbeat_receipt_scope_mismatch" },
+  );
 });

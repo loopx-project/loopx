@@ -19,6 +19,7 @@ from examples.control_plane.quota_plan_fixtures import (
     SCOPED_AGENT_ID,
     write_cli_fixture,
 )
+from loopx.control_plane.goals.goal_ref_validation import exact_goal_ref
 from loopx.control_plane.scheduler.state import (
     APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY as APP_KEY,
     build_scheduler_state,
@@ -35,13 +36,17 @@ from loopx.rollout_event_log import (
 GOAL = "needs-operator"
 TURN_1 = "stale-receipt-turn-1"
 TURN_2 = "stale-receipt-turn-2"
+# A different Goal that shares this display name and Agent, so it writes into
+# the same rollout-event log.
+OTHER_INSTANCE = "ginst_" + "b" * 32
+PROVIDERS = ["file", "sqlite"]
 
 
 def _fixture(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, provider: str = "file"
 ) -> tuple[Path, Path, Path]:
     registry, runtime, project = write_cli_fixture(
-        tmp_path / "fixture", scoped_agents=True, provider="file"
+        tmp_path / "fixture", scoped_agents=True, provider=provider
     )
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     monkeypatch.setenv("CODEX_THREAD_ID", "scheduler-fixture")
@@ -72,7 +77,28 @@ def _ack(
     )
 
 
-def _supercede(runtime: Path, turn: str) -> None:
+def _fail(
+    registry: Path,
+    runtime: Path,
+    project: Path,
+    turn: str,
+    *,
+    failed_rrule: str,
+    execute: bool = True,
+) -> tuple[int, dict]:
+    return run_json_cli_result(
+        "quota", "scheduler-fail-current", "--goal-id", GOAL,
+        "--agent-id", SCOPED_AGENT_ID, "--codex-app",
+        "--turn-instance-id", turn,
+        "--failed-rrule", failed_rrule,
+        *(["--execute"] if execute else []),
+        registry_path=registry, runtime_root=runtime, cwd=project,
+    )
+
+
+def _supercede(
+    runtime: Path, turn: str, goal_ref: dict[str, str] | None = None
+) -> None:
     """Append a later receipt for ``turn`` on the same goal and agent."""
 
     append_rollout_event(
@@ -80,6 +106,7 @@ def _supercede(runtime: Path, turn: str) -> None:
         build_rollout_event(
             goal_id=GOAL,
             event_kind="quota_should_run",
+            goal_ref=goal_ref,
             agent_id=SCOPED_AGENT_ID,
             run_id=turn,
             status="normal_run",
@@ -256,3 +283,76 @@ def test_a_real_successor_receipt_still_expires_the_receipt(
     assert not scheduler_state_path(
         runtime, goal_id=GOAL, agent_id=SCOPED_AGENT_ID, state_key=APP_KEY
     ).exists()
+
+
+def _writeback(
+    operation: str,
+    registry: Path,
+    runtime: Path,
+    project: Path,
+    turn: str,
+    hint: dict,
+) -> tuple[int, dict]:
+    """Run the ACK or the host-failure writeback this Turn is bound to."""
+
+    if operation == "ack":
+        return _ack(registry, runtime, project, turn)
+    return _fail(
+        registry,
+        runtime,
+        project,
+        turn,
+        failed_rrule=hint["scheduler_hint"]["app_automation"]["recommended_rrule"],
+    )
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("operation", ["ack", "failure"])
+def test_same_scope_successor_receipt_still_expires_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, operation: str
+) -> None:
+    """Control: a real successor in the same scope still blocks both writebacks.
+
+    Nothing in the instance-scoping relaxation may let an older Turn report
+    over a newer one that genuinely follows it.
+    """
+
+    registry, runtime, project = _fixture(tmp_path, monkeypatch, provider=provider)
+    hint = _should_run(registry, runtime, project, TURN_1)
+    _supercede(runtime, TURN_2)
+
+    code, result = _writeback(operation, registry, runtime, project, TURN_1, hint)
+
+    assert code == 1, result
+    assert result["status"] == "heartbeat_receipt_stale"
+    assert result["state"] == "blocked_receipt"
+    assert result["scheduler_state_mutated"] is False
+    assert not scheduler_state_path(
+        runtime, goal_id=GOAL, agent_id=SCOPED_AGENT_ID, state_key=APP_KEY
+    ).exists()
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("operation", ["ack", "failure"])
+def test_another_goal_instance_receipt_cannot_expire_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, operation: str
+) -> None:
+    """A receipt from another Goal instance is not this Turn's successor.
+
+    Both Goals share the display name and Agent, so they append to one log.
+    Only receipts of the admitted Turn's own scope may expire its receipt.
+    """
+
+    registry, runtime, project = _fixture(tmp_path, monkeypatch, provider=provider)
+    hint = _should_run(registry, runtime, project, TURN_1)
+    _supercede(runtime, TURN_2, exact_goal_ref(GOAL, OTHER_INSTANCE))
+
+    code, result = _writeback(operation, registry, runtime, project, TURN_1, hint)
+
+    assert code == 0, result
+    assert result["ok"] is True
+    assert result["scheduler_state_mutated"] is True
+    state = load_scheduler_state(
+        runtime, goal_id=GOAL, agent_id=SCOPED_AGENT_ID, state_key=APP_KEY
+    )
+    assert state is not None

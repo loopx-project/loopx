@@ -171,6 +171,8 @@ export interface SchedulerHeartbeatCommitResult extends JsonObject {
 
 export interface SchedulerHeartbeatCommitOptions {
   readonly heartbeatReceiptTurnInstanceId?: string | null;
+  /** The Goal instance the caller bound the follow-up to, when it knows it. */
+  readonly heartbeatReceiptGoalRef?: JsonObject | null;
 }
 
 function stableValue(value: unknown): unknown {
@@ -853,6 +855,7 @@ export async function evaluateSchedulerHeartbeatCommit(
         goalId: request.scope.goalId,
         agentId: request.scope.agentId,
         turnInstanceId: receiptTurnInstanceId,
+        goalRef: options.heartbeatReceiptGoalRef,
       });
       if (status !== "fresh") {
         return result(
