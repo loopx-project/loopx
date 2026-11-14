@@ -53,6 +53,13 @@ test("runtime boundary rejects malformed journal inspection request", async () =
   );
 });
 
+test("runtime exposes settlement-addressed Turn evidence-chain readback", async () => {
+  await assert.rejects(
+    dispatchEffectRuntimeMethod(handlers, "turn_journal.evidence_chain", {}),
+    /settlement_identity must be an object/,
+  );
+});
+
 test("runtime exposes the native task-lease acquire transaction", async () => {
   await assert.rejects(
     dispatchEffectRuntimeMethod(handlers, "task_lease.acquire.native", {
