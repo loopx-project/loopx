@@ -1,12 +1,14 @@
 /** Candidate wire contract. Clients submit intentions, never authority facts. */
 import type {JsonObject} from "../effect_program.ts";
-import {canonicalAuthorityObject, canonicalAuthoritySha256, hasExactAuthorityKeys,
+import {canonicalAuthorityObject, canonicalAuthoritySha256,
   requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {POSTGRESQL_STORE_IDENTITY_PATTERN} from "./postgresql_authority_store.ts";
 import {taskLeaseOperationIdentity} from "../work_items/task_lease_operation_identity.ts";
 import {normalizeTodoId, normalizeGoalId, normalizeOwner} from "../work_items/task_lease_acquire.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {parseIsoTimestamp} from "../runtime_timestamp.ts";
+import {normalizeTodoResumeWhen, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION} from "../todos/resume_condition.ts";
+import {normalizeTodoPriority} from "../todos/priority.ts";
 
 export const REMOTE_AUTHORITY_REQUEST = "loopx_remote_authority_request_v0";
 export const REMOTE_AUTHORITY_RESPONSE = "loopx_remote_authority_response_v0";
@@ -99,7 +101,7 @@ export function decodeRemoteAuthorityRequest(raw: unknown): RemoteAuthorityReque
     if (!allowed.has(key)) throw new TypeError(`Unexpected or missing request fields: unexpected ${key}`);
   }
   for (const key of ["tenant_id", "goal_id", "actor_id", "todo_id", "request_id", "claim_request_id", "idempotency_key", "claimed_by"]) {
-    if (key in value && typeof value[key] === "string") remoteAuthorityId(value[key], key);
+    if (Object.hasOwn(value, key)) remoteAuthorityId(value[key], key);
   }
   if (typeof value.todo_id === "string" && normalizeTodoId(value.todo_id) !== value.todo_id) {
     throw new TypeError("Use canonical task, Goal and actor identities");
@@ -116,10 +118,7 @@ export function decodeRemoteAuthorityRequest(raw: unknown): RemoteAuthorityReque
   if ("ttl_seconds" in value && (!Number.isSafeInteger(value.ttl_seconds) || Number(value.ttl_seconds) < 1 || Number(value.ttl_seconds) > 3600)) {
     throw new TypeError("Invalid lease duration");
   }
-  if (value.operation === "progress" && (typeof value.note !== "string" || !value.note.trim() || Buffer.byteLength(value.note) > 4096)) {
-    throw new TypeError("Progress requires a bounded note");
-  }
-  if ("note" in value && value.note !== undefined && (typeof value.note !== "string" || !value.note.trim() || Buffer.byteLength(value.note) > 4096)) {
+  if ("note" in value && (typeof value.note !== "string" || !value.note.trim() || Buffer.byteLength(value.note) > 4096)) {
     throw new TypeError("Note requires a bounded non-empty string");
   }
   if ("evidence" in value && (typeof value.evidence !== "string" || !value.evidence.trim() || Buffer.byteLength(value.evidence) > 16 * 1024)) {
@@ -128,28 +127,29 @@ export function decodeRemoteAuthorityRequest(raw: unknown): RemoteAuthorityReque
   if ("reason" in value && (typeof value.reason !== "string" || !value.reason.trim() || Buffer.byteLength(value.reason) > 4096)) {
     throw new TypeError("Reason requires a bounded non-empty string");
   }
-  if ("resume_when" in value && (typeof value.resume_when !== "string" || !value.resume_when.trim() || Buffer.byteLength(value.resume_when) > 1024)) {
-    throw new TypeError("Resume condition requires a bounded non-empty string");
+  if ("resume_when" in value && (typeof value.resume_when !== "string" || Buffer.byteLength(value.resume_when) > 1024 ||
+      normalizeTodoResumeWhen({schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION, resume_when: value.resume_when}) === null)) {
+    throw new TypeError("A bounded structured Todo resume condition is required");
   }
   if ("text" in value && (typeof value.text !== "string" || !value.text.trim() || Buffer.byteLength(value.text) > 4096)) {
     throw new TypeError("Text requires a bounded non-empty string");
   }
-  if ("priority" in value && value.priority !== undefined && !["P0", "P1", "P2", "P3", "P4"].includes(String(value.priority))) {
+  if ("priority" in value && (typeof value.priority !== "string" || normalizeTodoPriority(value.priority) !== value.priority)) {
     throw new TypeError("Invalid priority");
   }
-  if ("role" in value && value.role !== undefined && value.role !== "user" && value.role !== "agent") {
+  if ("role" in value && value.role !== "user" && value.role !== "agent") {
     throw new TypeError("Invalid role");
   }
-  if ("claimed_by" in value && value.claimed_by !== undefined && (typeof value.claimed_by !== "string" || normalizeOwner(value.claimed_by) !== value.claimed_by)) {
+  if ("claimed_by" in value && normalizeOwner(value.claimed_by) !== value.claimed_by) {
     throw new TypeError("Invalid claimed_by");
   }
-  if ("required_write_scopes" in value && value.required_write_scopes !== undefined) {
+  if ("required_write_scopes" in value) {
     if (!Array.isArray(value.required_write_scopes) || value.required_write_scopes.some(s => typeof s !== "string" || !s.trim() || s.length > 256)) {
       throw new TypeError("Invalid required_write_scopes");
     }
   }
   for (const strField of ["task_class", "action_kind", "task_repository"]) {
-    if (strField in value && value[strField] !== undefined && (typeof value[strField] !== "string" || !value[strField].trim() || value[strField].length > 256)) {
+    if (strField in value && (typeof value[strField] !== "string" || !value[strField].trim() || value[strField].length > 256)) {
       throw new TypeError(`Invalid ${strField}`);
     }
   }
@@ -173,6 +173,13 @@ export function remoteAuthorityResponse(request: unknown, mode: RemoteAuthorityM
   payload: JsonObject): JsonObject {
   return {...payload, schema_version: REMOTE_AUTHORITY_RESPONSE,
     request_sha256: canonicalAuthoritySha256({mode, request})};
+}
+
+export function remoteAuthoritySnapshotDigest(request: RemoteAuthorityScope, revision: unknown,
+  todos: readonly unknown[], leases: readonly unknown[]): string {
+  return canonicalAuthoritySha256({schema_version: "loopx_goal_snapshot_receipt_v0",
+    tenant_id: request.tenant_id, goal_id: request.goal_id, store_identity: request.store_identity,
+    provider_revision: revision, todos, leases});
 }
 
 function responseRequires(condition: unknown): asserts condition {
@@ -209,6 +216,36 @@ function responseLease(raw: unknown, request: RemoteAuthorityRequest, mutation: 
   }
   return lease;
 }
+
+function responseTodo(raw: unknown, todoId?: string): string {
+  const todo = canonicalAuthorityObject(raw, "response Todo");
+  const id = normalizeTodoId(todo.todo_id);
+  responseRequires(todo.todo_id === id && (todoId === undefined || id === todoId));
+  remoteAuthorityId(todo.status, "Todo status");
+  if (todo.claimed_by != null) responseRequires(typeof todo.claimed_by === "string" && normalizeOwner(todo.claimed_by) === todo.claimed_by);
+  if (todo.note !== undefined) responseRequires(todo.note === null || typeof todo.note === "string");
+  if (todo.note_omitted !== undefined) responseRequires(todo.note_omitted === true && !Object.hasOwn(todo, "note"));
+  return id;
+}
+
+function responseSnapshot(value: JsonObject, request: Extract<RemoteAuthorityRequest, {operation: "snapshot"}>): void {
+  responseRequires(value.status === "snapshot" && value.goal_id === request.goal_id && value.store_identity === request.store_identity &&
+    Array.isArray(value.todos) && Array.isArray(value.leases));
+  responseRevision(value.provider_revision, request);
+  const todoIds = value.todos.map(todo => responseTodo(todo, request.todo_id));
+  const todoSet = new Set(todoIds);
+  responseRequires(todoSet.size === todoIds.length);
+  const leaseIds = new Set<string>();
+  for (const raw of value.leases) {
+    const lease = responseLease(raw, request, false);
+    const id = normalizeTodoId(lease.todo_id);
+    responseRequires(lease.todo_id === id && lease.goal_id === request.goal_id && todoSet.has(id) &&
+      !leaseIds.has(id) && !Object.hasOwn(lease, "idempotency_key"));
+    leaseIds.add(id);
+  }
+  responseRequires(value.receipt_sha256 === remoteAuthoritySnapshotDigest(request, value.provider_revision, value.todos, value.leases));
+}
+
 function responseCommand(raw: unknown, request: RemoteAuthorityRequest, operationId: string, historical: boolean): void {
   const result = canonicalAuthorityObject(raw, "command response");
   if (!historical) {
@@ -225,14 +262,23 @@ function responseCommand(raw: unknown, request: RemoteAuthorityRequest, operatio
   }
   responseRequires(typeof result.changed === "boolean");
   if (result.operation_id !== undefined) responseRequires(result.operation_id === operationId);
-  if (["claim", "progress", "complete", "block", "defer", "todo_add"].includes(request.operation)) {
-    if (result.todo_id !== undefined && request.todo_id !== undefined) responseRequires(result.todo_id === request.todo_id);
-  }
+  if (request.operation !== "renew" && request.operation !== "release") responseRequires(result.todo_id === request.todo_id);
   if (request.operation === "claim") {
-    responseRequires(result.claimed_by === request.actor_id && result.claim_operation_id === operationId);
+    responseRequires(result.claimed_by === request.actor_id && result.claim_operation_id === operationId &&
+      result.handoff_mode === "hard_lease");
+    responseLease(result.lease, request, true);
   }
-  if (request.operation === "complete" && !historical && result.status === "applied") {
-    responseRequires(result.completed === true);
+  if (request.operation === "complete") {
+    responseRequires(typeof result.completed_at === "string" && parseIsoTimestamp(result.completed_at) !== null);
+    remoteAuthorityId(result.completion_receipt_id, "completion receipt id");
+  }
+  if (request.operation === "todo_add") responseTodo(result.todo, request.todo_id);
+  if ((request.operation === "block" || request.operation === "defer") && result.changed === true) {
+    const transition = canonicalAuthorityObject(request.operation === "block"
+      ? result.blocked_lifecycle_transition : result.deferred_transition, "Todo lifecycle transition");
+    responseRequires(transition.kind === (request.operation === "block" ? "todo_blocked" : "todo_deferred") &&
+      transition.execution_authority_granted === false &&
+      ["absent", "released", "already_released"].some(state => transition.lease_retirement === state));
   }
   if (request.operation === "renew" || request.operation === "release") {
     responseRequires(result.handoff_mode === "hard_lease");
@@ -271,20 +317,11 @@ export function decodeRemoteAuthorityResponse(raw: unknown, request: RemoteAutho
     if (value.status !== "missing") {
       responseRequires(value.status === "found");
       responseRevision(value.provider_revision, request);
-      const todo = canonicalAuthorityObject(value.todo, "read Todo");
-      responseRequires(todo.todo_id === request.todo_id);
-      remoteAuthorityId(todo.status, "Todo status");
-      if (todo.claimed_by != null) responseRequires(typeof todo.claimed_by === "string" && normalizeOwner(todo.claimed_by) === todo.claimed_by);
-      if (todo.note !== undefined) responseRequires(todo.note === null || typeof todo.note === "string");
-      if (todo.note_omitted !== undefined) responseRequires(todo.note_omitted === true && !Object.hasOwn(todo, "note"));
+      responseTodo(value.todo, request.todo_id);
       if (value.lease !== null) responseLease(value.lease, request, false);
     }
   } else if (mode === "execute" && request.operation === "snapshot") {
-    responseRequires(value.status === "snapshot");
-    responseRevision(value.provider_revision, request);
-    responseRequires(value.goal_id === request.goal_id && value.store_identity === request.store_identity &&
-      typeof value.receipt_sha256 === "string" && BARE_SHA256_PATTERN.test(value.receipt_sha256) &&
-      Array.isArray(value.todos) && Array.isArray(value.leases));
+    responseSnapshot(value, request);
   } else {
     responseRequires(mode === "execute" && request.operation !== "read" && request.operation !== "snapshot" && value.status === "result");
     responseCommand(value.result, request, responseOperationId(value.operation_id, request), false);

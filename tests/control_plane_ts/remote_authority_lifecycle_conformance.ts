@@ -191,4 +191,31 @@ export function registerRemoteAuthorityLifecycleConformance(connectionString: st
     assert.equal(defer.code, 0);
     assert.equal((defer.value.result as JsonObject).status, "applied");
   });
+
+  test("snapshot is bounded, targeted, and read only across independent clients", {skip: !connectionString}, async t => {
+    const fixture = await postgresRemoteFixture(t, connectionString!);
+    const running = await fixture.start();
+    const ids = Array.from({length: 24}, (_, i) => `todo_snapshot_${String(i).padStart(2, "0")}`);
+    await fixture.seed(ids, Object.fromEntries(ids.map(id => [id, "x".repeat(3100)])));
+    const initialHead = await fixture.store.loadAuthority();
+    const {request_id: _, todo_id, ...base} = claimRequest("a", ids[0]);
+    const wide: RemoteAuthorityRequest = {...base, operation: "snapshot"};
+    const tooLarge = await fixture.client(running.endpoint, "a", wide);
+    assert.equal(tooLarge.code, 1);
+    assert.equal(tooLarge.value.status, "unavailable");
+    assert.equal(tooLarge.value.reason_code, "remote_authority_response_too_large");
+
+    const targeted: RemoteAuthorityRequest = {...wide, todo_id};
+    const first = await fixture.client(running.endpoint, "a", targeted);
+    const second = await fixture.client(running.endpoint, "b", {...targeted, actor_id: "actor-b"});
+    assert.equal(first.code, 0); assert.equal(second.code, 0);
+    assert.deepEqual((first.value.todos as JsonObject[]).map(todo => todo.todo_id), [todo_id]);
+    assert.equal(first.value.receipt_sha256, second.value.receipt_sha256);
+    const wrongGoal = await fixture.client(running.endpoint, "a", {...targeted, goal_id: "another-goal"});
+    assert.equal(wrongGoal.code, 1); assert.equal(wrongGoal.value.status, "rejected");
+    const query = await fixture.client(running.endpoint, "a", targeted, true);
+    assert.equal(query.code, 1); assert.equal(query.value.status, "rejected");
+    assert.deepEqual(await fixture.store.loadAuthority(), initialHead);
+  });
+
 }

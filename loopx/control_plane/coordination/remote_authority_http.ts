@@ -23,7 +23,7 @@ export function createRemoteAuthorityServer(service: RemoteAuthorityService,
       response.writeHead(status, {Connection: "close"});
       response.end(JSON.stringify({status: "rejected", reason_code: code}));
     };
-    const mode = request.url === "/v0/tasks/execute" || request.url === "/v0/tasks/snapshot" ? "execute" : request.url === "/v0/tasks/recover" ? "recover" : null;
+    const mode = request.url === "/v0/tasks/execute" ? "execute" : request.url === "/v0/tasks/recover" ? "recover" : null;
     if (request.method !== "POST" || !mode) return reject(404, "route_unavailable");
     if (draining || active >= maxInFlight) return reject(503, "remote_authority_busy");
     const authorization = request.headers.authorization;

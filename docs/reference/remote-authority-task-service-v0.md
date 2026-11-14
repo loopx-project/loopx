@@ -4,7 +4,7 @@ This opt-in source-checkout service lets independent clients claim a canonical
 task, record progress, renew/release its execution lease and read back the result
 over authenticated HTTPS. It reuses PostgreSQL service admission and the existing
 Todo/lease transaction owners. It does not select a provider, seed or migrate a
-Goal, expose arbitrary authority commits, or enable a shipped App/CLI route.
+Goal, expose arbitrary authority commits, or allow the host scheduler to admit remote turns.
 
 ## Ownership and access
 
@@ -60,8 +60,9 @@ revocation does not claim to undo an in-flight commit.
 
 POST JSON to `/v0/tasks/execute` with a `Bearer` credential. Every command includes
 `schema_version: "loopx_remote_authority_request_v0"`, `tenant_id`, `goal_id`,
-`actor_id`, `store_identity`, `todo_id` and `operation`. Task IDs use canonical
-`todo_<token>` syntax. Unknown fields and operations are rejected.
+`actor_id`, `store_identity` and `operation`. Supply `todo_id` for individual
+task commands; omit it on `snapshot` for a whole Goal read. Task IDs use
+canonical `todo_<token>` syntax. Unknown fields and operations are rejected.
 
 | Operation | Additional fields | Behavior |
 | --- | --- | --- |
@@ -70,7 +71,7 @@ POST JSON to `/v0/tasks/execute` with a `Bearer` credential. Every command inclu
 | `progress` | `request_id`, `claim_request_id`, `note` | Update a note using the original claim and current execution fence. |
 | `renew` | `idempotency_key`, `expected_version`, `ttl_seconds` | Renew the current lease through the existing lifecycle owner. |
 | `release` | `idempotency_key`, `expected_version` | Release execution; this does not clear the task's assignment or complete it. |
-| `complete` | `request_id`, `claim_request_id`, `evidence`, `note?` | Settle task completion with verified evidence string, release lease, and generate receipt. |
+| `complete` | `request_id`, `claim_request_id`, `evidence`, `note?` | Record an evidence reference and complete the task through the existing completion and lease owners. |
 | `block` | `request_id`, `reason`, `claim_request_id?`, `resume_when?`, `note?` | Pause task as blocked with explicit reason, releasing execution lease. |
 | `defer` | `request_id`, `reason`, `resume_when`, `claim_request_id?`, `note?` | Defer task with resumption condition and rationale, releasing execution lease. |
 | `todo_add` | `request_id`, `text`, `priority?`, `role?`, ... | Create a canonical task under policy grant and tenant fence. |
@@ -99,6 +100,18 @@ Claim/progress request IDs identify immutable intent within
 the principal/tenant/Goal/actor scope. Reusing one with different intent fails.
 Renew/release retain the canonical lease operation identity. Their receipts also
 verify the admitted principal, actor and request digest before reuse.
+
+For `block` and `defer`, use the existing Todo resume condition syntax, such as
+`todo_done:todo_dependency` or `resume_at:2026-12-01T00:00:00Z`. A reason alone
+can block a task; deferral requires a valid condition.
+
+A snapshot observes one provider revision. The client recomputes its digest from
+the tenant, Goal, store incarnation, revision and ordered Todo and lease rows,
+and rejects rows outside the requested scope or without a matching Todo. Two
+authorized clients reading the same revision and scope get the same digest.
+The example client exits successfully for a valid snapshot. A response over
+64 KiB is unavailable; retry a narrower read if applicable. A snapshot has no
+recovery operation, produces no write, and never includes lease keys.
 
 The service clock decides expiry. Mutations require `hard_lease`; normal task
 eligibility, write-scope and lease checks still apply. A receipt is historical
@@ -165,6 +178,25 @@ socket has gone away. Disconnecting a client does not establish that its write r
 Stop the listener and remove access grants to disable this candidate; existing
 local provider selection is unaffected and durable receipts remain in PostgreSQL.
 
+## Optional host observation
+
+The local registry can explicitly opt one registered Goal into a **read-only**
+health observation. Set `remote_authority.enabled: true` on that Goal with a
+credential-free HTTPS `endpoint`, verified `tenant_id`, `store_identity`,
+registered `actor_id` and a stable existing `probe_todo_id`. Set `ca_file` to
+an absolute path to a trusted CA when using a private CA. Use the service
+credential environment variable above; the legacy environment-only canary flag
+does not activate any Goal. The binding and credentials stay private.
+
+A full `heartbeat-prompt` can describe the configuration as unverified.
+`quota should-run` runs one bounded read of the known Todo for the current
+registered actor. Missing credentials, wrong scope, an invalid TLS certificate,
+a missing probe Todo, revocation and an unreachable service never count as
+verified. A verified read still waits for shared Turn admission. The scheduler
+does not select local work, spend quota, or acquire a remote lease from this
+observation. Owner Stop and paused quota keep their precedence. Disabling the
+setting removes the observation; local File/SQLite behavior is unchanged.
+
 ## Qualification and remaining work
 
 `npm run test:remote-authority` runs decoding/policy/TLS tests. With
@@ -172,7 +204,9 @@ local provider selection is unaffected and durable receipts remain in PostgreSQL
 it additionally creates a private test database and a restricted runtime role,
 starts real TLS server/client processes, and checks races, replay, revocation,
 expiry/takeover, incarnation rotation and response loss followed by restart.
-It removes its own database and role afterwards. The dedicated PostgreSQL CI
+The suite also invokes the real quota CLI against that isolated TLS service;
+it checks revocation, disconnection and recovery without changing the remote
+head. It removes its own database and role afterwards. The dedicated PostgreSQL CI
 workflow requires a real integration subtest; a skipped backend is not a pass.
 
 This qualifies a source candidate on one host with independent client processes
