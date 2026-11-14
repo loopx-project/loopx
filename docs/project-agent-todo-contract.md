@@ -1328,6 +1328,20 @@ create/update/poll/terminal receipt is recovered before checking current source
 contents. Claim replay retains its current acceptance check and rejects a stale
 source while preserving `original_receipt`; this adds no new claim grant.
 
+Chat Task detail and reviewed actions resolve the Goal's source registry and
+runtime before reading or writing. The review basis carries the source identity,
+source registry digest and provider revision. A created Task checkpoint also
+retains the authority store identity and original operation. Assignment and
+managed claim use the retained revision. If an interrupted confirmation has no
+source witness, or the current source is different, restore and verify the
+original Todo before retrying the assignment. A matching Todo ID alone does not
+establish that it is the same task.
+
+The local v3 Todo create and managed claim wires require both
+`expected_provider_revision` and `expected_registry_sha256`. The source check
+uses the existing registry witness. Earlier wire versions retain their original
+behavior.
+
 On `authority_source_changed`, inspect current registration and the Todo again
 before issuing new work. The rejected attempt writes no canonical head or receipt;
 an external validator already executed may have its own effects. This is an

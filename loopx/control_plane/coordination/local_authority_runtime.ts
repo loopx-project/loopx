@@ -1061,7 +1061,7 @@ export async function claimLocalCoordinationTodo(
       throw new Error("local coordination Todo claim request schema mismatch");
     }
     if (Object.hasOwn(input, "manage_execution") && !managed)
-      throw new TypeError("Managed execution requires a managed claim request");
+      throw new TypeError("Managed execution requires claim request v2");
     if (reviewed ? input.manage_execution !== true || typeof input.expected_registry_sha256 !== "string"
         : Object.hasOwn(input, "expected_provider_revision") || Object.hasOwn(input, "expected_registry_sha256"))
       throw new TypeError("A Todo claim review basis requires a reviewed managed claim");
@@ -1167,7 +1167,7 @@ export async function createLocalCoordinationTodo(
       throw new TypeError("local coordination Todo create request schema mismatch");
     }
     if (!reviewed && Object.hasOwn(input, "expected_provider_revision")) {
-      throw new TypeError("expected_provider_revision requires a reviewed Todo create request");
+      throw new TypeError("expected_provider_revision requires Todo create request v2");
     }
     if (sourceBound ? typeof input.expected_registry_sha256 !== "string" : Object.hasOwn(input, "expected_registry_sha256")) {
       throw new TypeError("expected_registry_sha256 requires a source-bound Todo create request");
