@@ -12,8 +12,13 @@ LoopX and KunlunCode do not share one command namespace:
   LoopX control plane;
 - `/goal`, `/goal-pro`, `/plan`, and `/mcp` are native KunlunCode TUI slash
   commands with KunlunCode session state;
-- `should_run`, `list_todos`, `claim_task`, and `complete_task` are MCP tools
+- `should_run`, `list_todos`, `claim_task`, `complete_task`, and
+  `review_task_vision` are MCP tools
   called by the model, not slash commands typed by the user.
+
+`review_task_vision` repairs a missing vision decision for an already completed
+Todo without repeating completion or spending again. Native runs also block
+this write through the outer-controller guard.
 
 Within KunlunCode's native Goal family, `/goal-pro` keeps `/goal`'s persistent
 objective lifecycle and adds a mandatory independent verifier before completion.

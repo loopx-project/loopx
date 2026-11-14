@@ -184,8 +184,8 @@ def _codex_mcp_config_arguments(
     name = server["name"]
     command = server["command"]
     pairs = [
-        f"mcp_servers.{name}.command={json.dumps(command[0])}",
-        f"mcp_servers.{name}.args={json.dumps(command[1:])}",
+        f"mcp_servers.{name}.command={json.dumps(command[0], ensure_ascii=False)}",
+        f"mcp_servers.{name}.args={json.dumps(command[1:], ensure_ascii=False)}",
         f"mcp_servers.{name}.enabled=true",
         f"mcp_servers.{name}.required=true",
         f'mcp_servers.{name}.default_tools_approval_mode="approve"',

@@ -9,7 +9,8 @@ This adapter does not activate a native Goal or add a second scheduler.
 
 Install both packages from the same integrated LoopX checkout containing
 `loopx.extensions.turn_host.extract_turn_work_identity` and
-`assert_turn_host_request_version`. The shared decoder accepts complete-source
+`assert_turn_host_request_version`, plus `supervised_stdio_command` for MCP.
+The shared decoder accepts complete-source
 Host request v1 and historical v0; identity and provider permissions still use
 their existing owners. The package version alone
 does not establish that an older wheel contains this shared contract:
@@ -72,6 +73,8 @@ Supply an operator-owned stdio MCP server with `--mcp-command-json` and an exact
 `--tool` selection for each exposed tool. Discovery reads every page, rejects
 duplicate names, and allows at most eight selected tools. One MCP process is
 bound to one Turn; models cannot change its command, selected tools or identity.
+MCP uses LoopX's existing Node runtime and stdio supervisor to reap its process
+when the Turn finishes, is cancelled, times out, or exits abruptly.
 
 The server receives host-bound `LOOPX_TURN_KEY`, `LOOPX_TURN_GOAL_ID`,
 `LOOPX_TURN_AGENT_ID`, `LOOPX_TURN_TODO_ID` and `LOOPX_TURN_WORKSPACE`. Use these

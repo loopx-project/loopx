@@ -724,7 +724,7 @@ def test_text_read_exposes_image_indices_without_claiming_visual_read(configured
 
 
 def run_generated_script(config, url, image, path, *, redirect=None, readiness=None, ownership="agent",
-                         text="Source evidence"):
+                         text="Source evidence", alt="figure"):
     """Execute the production script in Node, without the user's browser/Page."""
     import shutil
     node = shutil.which("node")
@@ -735,7 +735,7 @@ def run_generated_script(config, url, image, path, *, redirect=None, readiness=N
     harness = """
 const vm=require('node:vm'),fs=require('node:fs');
 let href='',domReads=0,captures=0,loaded=!readiness||readiness.startsWith('sidebar_busy')||readiness==='empty_sibling_article';
-const image={alt:'figure',currentSrc:'https://example.com/image.png',
+const image={alt,currentSrc:'https://example.com/image.png',
  get complete(){return !readiness?.startsWith('image_')||loaded;},
  naturalWidth:2,naturalHeight:2,scrollIntoView(){},
  closest(){return null;},
@@ -806,6 +806,7 @@ async function taskSpace(){if(ownership!=='agent')throw Error('Page must not res
     import base64
     inputs = ("const source=" + json.dumps(script) + ";const redirect=" + json.dumps(redirect)
               + ";const readiness=" + json.dumps(readiness) + ";const text=" + json.dumps(text)
+              + ";const alt=" + json.dumps(alt)
               + ";const ownership=" + json.dumps(ownership) + ";const spaceId=" + json.dumps(config.task_space)
               + ";const pixels=" + json.dumps(base64.b64encode(png()).decode()) + ";")
     result = subprocess.run([node, "-e", inputs + harness], capture_output=True,
@@ -815,6 +816,34 @@ async function taskSpace(){if(ownership!=='agent')throw Error('Page must not res
     decoded = (reader._image_result(result.stdout, result.stderr, url, 0, str(path)) if image
                else reader._result(result.stdout, result.stderr, url))
     return decoded, json.loads(observed)
+
+
+@pytest.mark.parametrize("prefix_size,expected_size", [(99998, 99999), (99999, 99999)])
+def test_text_limit_preserves_complete_unicode_characters(
+    configured, tmp_path, prefix_size, expected_size,
+):
+    config = reader.ReaderConfig.from_environment()
+    text = "a" * prefix_size + "🙂tail"
+    result, _ = run_generated_script(config, URL, False, tmp_path / "image.png", text=text)
+    assert result["ok"] is True
+    assert result["text"] == text[:expected_size]
+    assert result["truncated"] is True
+    assert result["sha256"] == hashlib.sha256(result["text"].encode()).hexdigest()
+
+
+@pytest.mark.parametrize("image", [False, True])
+def test_image_alt_limit_survives_mcp_serialization(configured, tmp_path, image):
+    from mcp.types import CallToolResult, TextContent
+
+    config = reader.ReaderConfig.from_environment()
+    result, _ = run_generated_script(
+        config, URL, image, tmp_path / "image.png", alt="a" * 511 + "🙂tail",
+    )
+    assert result["ok"] is True
+    alt = result["alt"] if image else result["images"][0]["alt"]
+    assert alt == "a" * 511
+    content = TextContent(type="text", text=json.dumps(result, ensure_ascii=False))
+    CallToolResult(content=[content]).model_dump_json().encode("utf-8")
 
 
 @pytest.mark.parametrize("image", [False, True])

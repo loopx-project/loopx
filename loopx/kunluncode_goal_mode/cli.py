@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from loopx.command_invocation import pinned_python_module_command
 from loopx.control_plane.projects.registry_codec import (
     load_project_registry,
     mutate_project_registry,
@@ -61,8 +62,7 @@ def _run(
 
 
 def _loopx_prefix() -> list[str]:
-    executable = shutil.which("loopx")
-    return [executable] if executable else [sys.executable, "-m", "loopx.cli"]
+    return pinned_python_module_command("loopx.cli")
 
 
 def _venv_python(venv: Path) -> Path:

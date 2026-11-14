@@ -1350,8 +1350,10 @@ python -m loopx.collaboration_mcp \
   --execution-config "$DELEGATION_CONFIG"
 ```
 
-Without `--execution-config`, the original five collaboration tools are
-unchanged and cannot launch workers. With it, the Agent can:
+Without `--execution-config`, the scoped collaboration tools cannot launch
+workers. Use MCP tool discovery for the current tool set; exact Goal-instance
+bindings also expose `control_peer_request`. With execution configuration, the
+Agent can:
 
 1. Call `list_execution_bindings` to find its authorized work.
 2. Call `start_delegation(binding_id, operation_id, brief, parent_request_id?)`.
