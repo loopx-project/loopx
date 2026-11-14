@@ -346,6 +346,45 @@ def test_history_is_persisted_once_before_publishing_a_new_adapter(monkeypatch, 
     assert all(method != "turn/start" for method, _ in calls)
 
 
+def test_large_history_uses_observed_room_across_multiple_bounded_imports(monkeypatch, tmp_path):
+    history = [{"role": "user" if index % 2 else "assistant",
+                "content": f"{index:03d} " + "语🧭" * 24000} for index in range(7)]
+    calls = []
+    received = []
+    available = 260000
+
+    def request(method, params):
+        nonlocal available
+        calls.append(method)
+        if method == "thread/inject_items":
+            import json
+            items = params["items"]
+            wire_size = len(json.dumps(items, ensure_ascii=False).encode("utf-8"))
+            assert wire_size < 140000
+            available -= wire_size + len(items) * 8
+            assert available >= 0
+            received.extend(items)
+
+    def compact():
+        nonlocal available
+        calls.append("compact")
+        available = 350000
+        return available
+
+    native = SimpleNamespace(thread_id="native-thread", _request=request, compact_history=compact)
+    monkeypatch.setattr(chat_agent.CodexChatAgentSession, "start", lambda **kwargs: native)
+    CodexAppServerAdapter.start(codex_bin="fixture", work_dir=tmp_path, goal_id="fixture",
+        objective="Restore original context", history=history)
+
+    expected = "".join(row["content"] for row in history)
+    assert "".join(item["content"][0]["text"] for item in received) == expected
+    # The first prefix has no native usage. Once compaction reports headroom,
+    # subsequent compactions are driven by remaining capacity.
+    assert calls[:4] == ["thread/name/set", "thread/inject_items", "compact", "thread/inject_items"]
+    assert calls.count("compact") < calls.count("thread/inject_items") - 1
+    assert "turn/start" not in calls
+
+
 def test_one_large_utf8_message_survives_bounded_native_restore(monkeypatch, tmp_path):
     text = ('原始约束😀\\\"\n' * 40000) + "Keep the final constraint."
     injected, calls = [], []

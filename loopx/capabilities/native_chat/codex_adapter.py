@@ -28,9 +28,7 @@ if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController
 
 
-# Imported history has no model usage observation yet. Restore bounded prefixes
-# and let the native compactor carry its own opaque state into the next prefix;
-# a single oversized injection can fail before automatic compaction can start.
+# Keep each native import bounded independently of the model's available context.
 HISTORY_RESTORE_BATCH_BYTES = 128 * 1024
 _READ_ONLY_ITEM_TYPES = frozenset({"reasoning", "webSearch", "imageView", "contextCompaction"})
 
@@ -355,12 +353,27 @@ def _history_batches(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return batches
 
 
-def compact_native_history(session: CodexChatAgentSession, *, check: Callable[[], None] | None = None) -> None:
-    """Finish native history compaction before restoring another prefix.
+def _compacted_history_headroom(usage: object) -> int | None:
+    if not isinstance(usage, dict) or not isinstance(last := usage.get("last"), dict):
+        return None
+    window, occupied = usage.get("modelContextWindow"), last.get("totalTokens")
+    # Codex reports the recomputed context as totalTokens with zero usage
+    # components. The model call's billable usage is a separate notification.
+    components = ("inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens")
+    if (type(window) is not int or type(occupied) is not int or not 0 < occupied < window
+            or any(type(last.get(key)) is not int or last[key] != 0 for key in components)):
+        return None
+    # Reserve space for prompts and differences between estimates and input.
+    return max(0, window * 4 // 5 - occupied)
 
-    The RPC only acknowledges scheduling. Its exact compaction item and
-    terminal Turn, rather than that acknowledgement, fence the next input.
-    No user Turn or tool execution is requested by this operation.
+
+def compact_native_history(
+    session: CodexChatAgentSession, *, check: Callable[[], None] | None = None,
+) -> int | None:
+    """Finish native history compaction and return observed import headroom.
+
+    Only the exact completed compaction Turn can supply capacity for further
+    imports. An older native server may complete without reporting usage.
     """
     if check is not None:
         check()
@@ -369,6 +382,7 @@ def compact_native_history(session: CodexChatAgentSession, *, check: Callable[[]
     turn_id = ""
     started: set[str] = set()
     completed: set[str] = set()
+    import_headroom = None
     while True:
         # This is model work, not a control RPC. Reuse the native Turn's
         # idle/hard budgets and the caller's live lifecycle checks.
@@ -389,6 +403,8 @@ def compact_native_history(session: CodexChatAgentSession, *, check: Callable[[]
             turn_id = native_turn
         elif native_turn and turn_id and native_turn != turn_id:
             raise session._runtime_error("Native history compaction received another Turn.")
+        if method == "thread/tokenUsage/updated" and started and native_turn == turn_id:
+            import_headroom = _compacted_history_headroom(params.get("tokenUsage"))
         item = params.get("item")
         if method in {"item/started", "item/completed"} and isinstance(item, dict):
             if item.get("type") == "contextCompaction" and turn_id and native_turn == turn_id:
@@ -407,7 +423,7 @@ def compact_native_history(session: CodexChatAgentSession, *, check: Callable[[]
             if (not turn_id or native_turn != turn_id or turn.get("status") != "completed"
                     or not started or completed != started):
                 raise session._runtime_error("Native history compaction did not finish successfully.")
-            return
+            return import_headroom
 
 
 def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
@@ -946,17 +962,23 @@ class CodexAppServerAdapter:
                             if restore_deadline is not None and time.monotonic() >= restore_deadline:
                                 raise CodexChatTimeoutError("Native history restoration exceeded its Turn time budget.", error_code="response_timeout", gate=None)
 
+                        check = check_restore if history_check is not None or restore_deadline is not None else None
+                        import_headroom = 0
                         for index, batch in enumerate(batches):
                             check_restore()
-                            # Persist before Core publishes the upstream binding,
-                            # even if the service restarts before its first Turn.
-                            # An unknown outcome fails closed: never retry or
-                            # fall back to replaying history inside a user Turn.
+                            # Charge each UTF-8 byte as a token and leave room
+                            # for the provider's per-message framing.
+                            batch_cost = len(json.dumps(batch, ensure_ascii=False).encode("utf-8")) + 8 * len(batch)
+                            if index and batch_cost > import_headroom:
+                                headroom = session.compact_history(**({"check": check} if check is not None else {}))
+                                import_headroom = headroom or 0
+                                check_restore()
+                            # Persist before Core publishes the upstream binding.
+                            # An unknown injection outcome fails closed.
                             session._request("thread/inject_items", {
                                 "threadId": session.thread_id, "items": batch,
                             })
-                            if index + 1 < len(batches):
-                                session.compact_history(**({"check": check_restore} if history_check is not None or restore_deadline is not None else {}))
+                            import_headroom = max(0, import_headroom - batch_cost)
                     except Exception:
                         session.close()
                         raise

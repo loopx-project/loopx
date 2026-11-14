@@ -2949,3 +2949,214 @@ Python 3.11 wheel 现已通过真实 LoopX reader 和合成 Desktop peer，验�
 成功响应断流恢复、拒绝响应断流不重试及完整 Unicode 回读。这只资格化可选记录
 读取，不证明模型上下文保留、受管理 V4／R1、拆包 M3、已安装 App 采用或完整成本。
 原目标回归、未完成验收、权限边界与冻结失败全部保持。
+
+### 2026-11-13 — 独立 core 续接保留原安装
+
+此前即使调用者选择隔离的 core interpreter，独立启动仍返回环境中的 `loopx`
+命令；执行完整命令可能通过 PATH/PYTHONPATH 导入其他安装。旧安装测试丢弃
+executable 后重放参数，掩盖了失败。Core 生成的命令现在通过既有 invocation
+owner 保留同一环境的 Python，并使用 `-I -m loopx.entrypoint`。显式全局
+`--cli-bin` 与普通发行默认行为保持；非法参数保留完整 parser 诊断。
+多 Goal 选择也复用同一命令 renderer。
+
+Core module 诊断核验实际导入的 distribution、记录中的 module，以及真实存在
+且有记录的 console 入口。Version/catalog/help probe 使用同一隔离 module
+调用，foreign PYTHONPATH 无法静默改变被检查的 artifact。缺失或重定向的 module
+记录、缺失 console 记录／文件、未记录 launcher 与缺失 runtime 文件仍拒绝。
+安装资格测试执行完整的返回激活与诊断命令，使用 foreign-package sentinel 和
+显式 route 对照，并覆盖既有 SQLite/File 恢复与 context 检查。本轮修复命令来源，
+不新增生命周期、权限、配置或 protocol owner。
+
+完整 R1/V1–V5/V10、真实模型恢复／采用、渐进产品控制、最小依赖闭包、
+M3/Standard/workspace/meta 拆包与完整成本验收仍开放。本轮不升级已安装 Host、
+启动模型服务或从协议夹具推断效果。原九项要求、原 Goal 回归及此前失败全部保留。
+
+### 2026-11-13 — 成功工作在同一路线上记录新检查点
+
+Generic Host result 边界此前要求新 Vision 使用 `material_replan` 与
+`replan_required`。即使已有新成果证据，保留路线的成功任务也只能复用 unchanged
+reason。现在显式 `path_delta_mode: unchanged` 可携带既有 Vision packet，
+其 `path_delta.outcome` 必须为 `continue` 或 `no_change`，且不能同时声明
+unchanged reason。既有 TypeScript Vision、任务、验证与结算 owner 仍决定持久
+效果；material replan、停止决定、非法 packet 与矛盾声明继续拒绝。省略 mode
+保持旧推断，generic 与 Codex 指导说明同一边界。
+
+一个既有隔离库存任务通过 stdio adapter 使用当前模型工具，以及 Python 3.11
+standalone core artifact 与 SQLite。更正输入得到数量 22/10/5、价值 185.25，
+此前为 172.25。独立检查核验了 13.00 差额、全部六条排除记录、可复用生成器与
+五份原文件保持不变。Normalized result 写入 journal 后，SIGKILL 中断 driver
+与 validator。原 Turn 从 validation 恢复，没有再次调用 Host，完成 Todo 并
+只结算一次；完成后的 replay 没有增加 Host、writeback 或 spend。
+首次非法 completion/replan reply 与三次 resume setup 拒绝保留为失败。
+实际有两次 Host dispatch、一次模型工作；被拒绝的 reply 未冒充已确认工作。
+
+源码 executor/driver 检查与 Codex/dsh 回归通过。安装态 File、SQLite 检查保留
+legacy completion，并核验两种新 checkpoint outcome 与 replay；首次过长的
+inline 测试命令触发既有上限，夹具随后采用普通 script path。未改命令预算、
+权限、默认行为或历史 receipt。本轮只资格化所触及的成功／检查点与恢复路径，
+不关闭完整 V1–V5/V10 或 R1。完整 context retention、最小闭包、渐进产品控制、
+可比完整成本、M3/Standard/workspace 交付与原 Goal 回归仍开放。原九项要求和
+冻结失败全部保留；没有升级已安装 Host 或模型服务。
+
+### 2026-11-13 — 任务呈现省去外层执行器数据
+
+当前内置模型 renderer 从 adapter 请求内已校验的完整 v1 来源派生
+`loopx_turn_model_context_v0`。任务要求、范围、必需读取、backlog 和未知新增信息
+保留；来源绑定、effect projection 与 scheduler/automation 执行数据留在外层
+执行器。指向该 owner 的既有 replan 编写与 Explore 指导引用在隐藏 owner 前展开，
+保留来源数字和文本。模型视图不能代替签名来源。通用 adapter stdin、私有 journal、
+原始 reader 来源关系和仅携带 envelope 的历史 v0 renderer 保持既有合同。
+
+同一捕获库存请求上，交替执行七组新进程配对 probe，每版另有 49 次 warm render。
+模型 JSON 为 44,841 对 34,986 字节，Codex prompt 为 48,724 对 38,859 字节。
+Warm median/p95 为 9.31/11.27 ms 对 9.02/10.26 ms；较早候选批次为
+9.18/11.46 ms 对 10.09/12.44 ms。最终新进程 median/p95 为 25.03/435.52 ms
+对 23.81/1,405.85 ms；保留候选较高尾部及批次波动，不宣称延迟改善。OS/file cache
+为 warm。Model tokens、Node startup/IPC 分解、service/tool 成本和人工注意力仍
+不可得；这些 probe 不构成完整成本或长程收益结论。
+
+当前原生模型通过 stdio、Python 3.11 standalone core 和 SQLite，在既有隔离
+库存 Goal/Agent 内完成新的流水审计。独立核验全部 14 行、六条排除记录、数量
+22/10/5 与价值 185.25。故意更改报告后会拒绝且不覆盖审计产物；11 份既有输入、
+生成器及报告保持 hash。前一阶段已关闭，任务准入首先拒绝；正常的证据关联 replan
+建立审计阶段后才进入新 work Turn，额外 replan 结算保留为成本。完成后的 replay
+不调用 Host、不 writeback、不 spend。源码与安装态 Host 检查使用合成 provider，
+与该原生模型任务分开；最初兼容性失败和修复前悬空引用反例保留为负面证据。
+
+更广的 Ark adapter 回归最初有八项 SDK 模型输入检查失败、817 项通过。旧检查仍
+要求模型呈现含有 `work_contract`，其后的原 receipt 回放断言没有执行。配套检查
+复用任务／来源 parity oracle，要求操作方原输入及其 receipt binding 不变，并在
+任何 provider 调用前拒绝把模型视图版本用作来源。矩阵保留携带完整来源的历史
+v0/v1 输入及 running/completed 回放。可选 CI 命令在首个测试失败后退出，让
+traceback 在既有十分钟上限前显现；通过路径仍选择完整用例。基线与候选同在该
+上限取消，不能证明失败无关或语义成功。SDK HTTP 夹具资格化 transport 与恢复，
+不构成真实云端模型采用证据。
+
+本轮只资格化 V4/R1 的任务呈现切片。完整模型上下文保留、默认最小闭包、渐进
+产品控制、可比完整成本、V1–V5/V10、R1/M3、Standard/workspace 发布与原 Goal
+回归仍开放。原九项要求和冻结失败全部保留；没有升级已安装 Host 或模型服务。
+
+### 2026-11-14 — 独立安装的后继恢复保留原结算
+
+真实依赖的后继任务可以在 replan 准入后创建。新增依赖不能抹去原生命周期来源，
+导致该 Turn 无法结算。现在只有精确绑定原 review、owner/actor 一致、更新时间
+明确晚于准入的后继才允许重建原来源；既有 trigger/digest 检查继续生效。
+既有 runnable-successor ACK 随后可结算原 Turn，无需改写已完成 Todo。
+缺失或非法 ACK 保留生命周期恢复；执行后继仍须新准入。空 operation inbox
+同时延迟加载可选 workspace action-store；已有 action store 缺少 provider
+继续显式失败。
+
+当前原生模型通过 stdio、独立构建的 Python 3.11 core 和 SQLite，在既有隔离
+任务内执行。正常创建后继、写回 Vision 和原 replan 结算恢复了受阻路径。
+完整初始及未改任务读取产生可复用库存 close/check 工具与核验后的 JSON/Markdown：
+14 笔流水、六条排除记录、价值 185.25。错误的 185.26 候选被拒绝，原产物未覆盖。
+Controller 生成的修订在新任务／来源交付前对模型封存，新增六行。独立核验全部
+20 笔流水、九条排除记录、数量 31/7/7、价值 250.20 和 64.95 差额；原截止日、
+Decimal 规则和此前产物全部保留。
+
+模型拒绝用旧任务执行修订，读取完整当前要求与输入。这证明模型的来源选择决定，
+不构成自动拒绝过期输入的 gate。修订调用方的 JSON 回复被暂不读取后，精确的
+已提交 journal 恢复没有新增 Host、writeback 或 spend；历史消费计数仍为一次。
+初次原始 adapter 回复在产生效果前因 result binding 失败；受支持的同 Turn
+retry 复用既有 result builder。初始有两次 Host 调用、一次产物实现，最终只
+写回／消费一次；保留该修复成本。Generic bridge 没有持久 provider session id。
+这些检查资格化完整任务恢复和已提交结果 replay；自动 provider 线程保留及单独
+控制的真实 compaction 用例仍未测。
+
+源码恢复回归和新独立安装回归覆盖所触及的生命周期及可选 import 路径，包括
+非法 owner、时间、binding、ACK fallback 和已有但不可用的 provider。此前
+失败测试保留为负面证据，原验收仍开放。完整 V1–V5/V10、R1/M3、默认闭包、
+渐进产品控制、可比完整成本、Standard/workspace 交付和原 Goal 回归仍开放。
+没有升级已安装 Host、启动模型服务、改写 authority history 或改变冻结预算。
+
+### 2026-11-14 — 已安装组合结算恢复原回执链
+
+PR #8707（`d695b40f633742fb0a5e1cb6b970a56c46dba5e9`，合入提交
+`dd44cdcd0c9482bdf135e54ae0b71eb398b4cfe7`）修复 Core 在写回后显式请求的
+组合结算。适配器复用 canonical parser、quota registrar 和 registry codec，
+核对完整当前 CLI 前缀及原 binding，再执行已打包 entrypoint；原 TypeScript
+结算 owner 与产出工作目录继续保留。
+
+独立 Python 3.11 安装的 File/SQLite 对照覆盖默认及显式路由：基线提交写回后
+因 facade 缺失而失败；候选恢复同一身份、返回三条回执，replay 后仍只消费一次。
+普通 refresh 继续保留待消费步骤，不自动扣额。额外安装对照在 PYTHONPATH 和
+工作目录放置导入即拒绝的 foreign module，实际仍选择原 Core。
+
+保留的已安装治理语料在 `78e936f9d1f1a00505c4026ee0a5857de95cee27` 上，Core 与
+普通版各有 16 项确认结果；此前资源失败仍为失败。扩大源码回归保留了一项既有
+不完整 mocked readback 的失败，同一基线和候选都复现。现有 settled-intent
+测试改为提供 canonical identity/result 类型，受影响的 32 项全部通过；没有
+放宽生产 readback，也没有改变“独立 intent 不重开 work”的语义 oracle。此前
+整组失败不会改写成通过记录。
+
+这只资格化 V2/V3 的已安装结算前提。完整 V1–V5/V10、R1/M3、真实 Host
+compaction／线程保留、渐进控制、可比完整成本、Standard/workspace 交付和
+原 Goal 回归仍开放。协议 fixture 不表示默认激活、Host 升级、发行或冻结预算
+发生变化。
+
+### 2026-11-14 — Coordination 在选定终结路径加载证据适配器
+
+local-authority runtime 将 `ResearchTerminalEvidenceHost` 延后到合法的
+terminal lifecycle 请求选中它时加载。普通 coordination 不再加载该适配器
+及其研究实现依赖。完成操作仍由现有 typed terminal owner、registry witness、
+研究资格检查、writer lock 和资源清理负责；没有新增竞争的工作 schema 或
+执行流水线。
+
+新进程故障注入使 terminal 适配器不可用：普通 claim 仍落盘并重放原回执，
+非法 claim 保持状态不变，选中的 terminal 请求则明确失败，不产生新回执或
+状态变更。保留的基线在同一普通 claim 探针上失败。源码 authority/terminal
+整组 93 项通过。同一补丁应用到 C1 的精确候选 #8266（`b15c443ee64d`）和
+#8484（`b7e4e01cc423`）后，authority、context 与 recovery 分别有 188 和
+193 项通过；后者还覆盖真实 SQLite admission。
+
+这只是对齐 C1 现有 owner 的加载和故障隔离前提。合法 terminal 请求仍会加载
+适配器，包括 ordinary Todo 的 guard 随后提前返回的情况。完整工作流隔离、
+成对完整成本、真实 Host 采用、R1/M3 以及 C1 writer/consumer 切换仍开放。
+这些测试不授权 C1 默认推广，也不证明模型收益。
+
+
+### 2026-11-14 — 普通任务完成延后研究实现加载
+
+`ResearchTerminalEvidenceHost.qualify` 在原有 Todo 适用性检查之后才加载研究执行与
+配置实现。因此，即使任一研究实现不可用，没有研究或重规划适用性标记的 Todo 仍能持久化
+完成证据并重放原回执。需要研究资格的 Todo 继续选中原策略和证据 owner；模块失败保留错误且不提交
+完成状态或回执。原 source 检查、writer fence、资格判定、CAS 和清理继续执行。
+
+新进程故障用例在真实 File 与 SQLite authority 上覆盖两个不可用实现。两个保留的
+基线探针均在普通完成处失败；候选能够完成并独立回读结果，重放时不产生新效果，且
+重复的已选中研究失败仍被拒绝。模块可用时，同一组原有 107 项 native 用例全部通过；
+候选另通过故障隔离用例，共 108 项。真实研究 CLI 套件通过 11 项。同一 production
+改动与故障用例和 C1 精确候选 #8266（`b0b930bfb92a`）、#8484（`b7e4e01cc423`）
+组合后，分别通过 190 与 189 项 authority、上下文和恢复用例。独立构建并单独安装的 Core wheel 也通过同一 File/SQLite 故障路径，其 production 模块字节与源码一致；这不验证模型 Host 的安装或采用。
+
+这项交付通过原研究 guard 修复已证明的普通完成依赖故障，复用 C1 的工作契约与
+producer/consumer 管线。带研究或重规划标记的 Todo 仍进入原策略检查并加载其实现；策略禁用时也保留
+这项待隔离的加载依赖。完整 D2/D5 闭包、真实模型
+Host/上下文延续、渐进控制、可比完整成本、R1/M3 与 C1 默认切换仍未完成资格验证。
+
+### 2026-11-14 — 关闭研究组合先解析配置再加载执行实现
+
+既有 Explore 配置模块现在拥有面向已声明标量 mode 的组合策略和未改动的 public-safe 标识校验；研究执行与
+证据复用这个 owner，原导出入口继续可用。native 终态资格先检查当前 source 并解析
+同一策略，再加载研究执行。原适用性、source、资格、writer、lease、CAS、回执与
+清理规则继续由既有 owner 负责。
+
+新进程 File/SQLite 用例在组合关闭时，包括明确 Goal-off 覆盖，不加载研究执行或
+图实现也能完成普通与通用重规划任务并独立回读结果。启用和仅设置继承配置的路径
+保留已选中依赖故障，不写完成状态或回执。无效 mode 与 scope 标识仍被拒绝，执行
+实现不可用不能掩盖配置错误。启用路径依赖失败后，明确关闭策略的当前 source 能以
+同一失败操作身份完成一次并重放原回执；旧 source 请求仍被拒绝。保留的两个后端
+基线探针都在原加载依赖处失败，同一候选用例通过。
+
+同一 21 项策略和 13 项标识观察保留完整返回值与错误详情。独立构建并单独安装的
+Core wheel 通过同一 File/SQLite 故障与恢复路径，production 字节与源码一致。
+该改动与 C1 #8266（`b4f958186532`）、#8484（`b7e4e01cc423`）组合后也通过选中
+的 authority、上下文与恢复检查，保留其原测试和 producer/consumer owner。
+这验证依赖故障隔离，不测量延迟、完整成本或模型收益；配置错误现在有意优先于
+不可用的执行 IO。完整所选 D2/D5 闭包、真实模型 Host/上下文采用、渐进控制、
+R1/M3、C1 切换和原目标回归仍未完成资格验证。
+
+最终反例评审还拒绝非字符串组合 mode。此前 `["explicit_only"]` 这样的单元素数组
+通过字符串强制转换，却生成 inactive policy，静默跳过研究证据。既有配置 owner
+现在在 IO 之前拒绝这种错误形状；已声明的标量 mode、默认值和错误语义保持不变。
+真实 File/SQLite 负向用例保护这个边界，不改变合法激活规则。

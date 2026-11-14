@@ -16,7 +16,7 @@ from ..quota.turn_envelope import (
     COMPLETE_TURN_HOST_REQUEST_SCHEMA as COMPLETE_TURN_HOST_REQUEST_SCHEMA,
     LOOPX_TURN_HOST_REQUEST_SCHEMA as LOOPX_TURN_HOST_REQUEST_SCHEMA,
     assert_turn_envelope_consumer_version, turn_envelope_action_signature_document,
-    captured_turn_host_input, complete_turn_host_source,
+    captured_turn_host_input, complete_turn_host_source, projected_host_model_input,
     assert_turn_host_request_version as assert_turn_host_request_version,
 )
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
@@ -140,7 +140,8 @@ def extract_turn_authority(
 
     try:
         checked = complete_turn_host_source(request, operation="host_dispatch_context",
-                                        include_session_lineage=include_session_lineage)
+                                        include_session_lineage=include_session_lineage,
+                                        include_model_context=True)
     except RuntimeError as exc:
         raise ValueError("complete Turn contract rejected") from exc
     if checked is not None:
@@ -155,7 +156,7 @@ def extract_turn_authority(
             "replan_action_packet": decision.get("replan_action_packet") if checked["replan_admitted"] else None,
             "_work_identity": dict(checked["work_identity"]),
             **({"_session_lineage": dict(checked["session_lineage"])} if include_session_lineage else {}),
-            "_model_input": captured_turn_host_input(request)}
+            "_model_input": projected_host_model_input(request, checked)}
 
     envelope = _mapping(request.get("turn_envelope"))
     signature = _mapping(envelope.get("action_signature"))
@@ -331,7 +332,8 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         detail = _mapping(model_input.get("detail_ref"))
         input_prompt = (
             "You are executing one bounded LoopX-governed work segment.\n"
-            "Use work_contract as the complete source of truth. Read its "
+            "Use task_context for the admitted work. The outer executor retains "
+            "the complete original source and its control/effect instructions. Read "
             "interaction_contract.agent_channel.work_context and remaining required_reads "
             "before primary_action; do not repeat fulfilled reads. Perform work only "
             "when its contract allows it. Obey every supplied write scope, workspace "
@@ -441,8 +443,11 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         "result_kind to replan_required, and agent_vision_json to a JSON-encoded "
         "bounded goal_vision_replan_contract_v0 packet whose path_delta is "
         "goal_path_delta_v0 with outcome replan; leave vision_unchanged_reason "
-        "empty. For unchanged paths, set path_delta_mode to unchanged, omit "
-        "agent_vision_json, and provide vision_unchanged_reason. These fields "
+        "empty. For unchanged paths, explicitly set path_delta_mode to unchanged. "
+        "Reuse the current checkpoint with vision_unchanged_reason and no "
+        "agent_vision_json, or record new progress/completion evidence in a fresh "
+        "agent_vision_json packet with path_delta.outcome continue or no_change "
+        "and no vision_unchanged_reason. These fields "
         "describe the result only; they grant no authority. For stop results "
         "(wait, user_action_required, iteration_failed), omit both "
         "path_delta_mode and agent_vision_json.\n"

@@ -153,7 +153,9 @@ publishing, production writes, and final ownership stay with the human.
 
 Open a Goal to inspect its work, responsible Agents and recorded Explore history.
 Use **Deep analysis** to inspect a registered trajectory, its citations, native
-outcome readback and separately measured costs. An Agent prepares the source;
+outcome readback and separately measured costs. Research also shows source-bound
+[human attention](docs/reference/trajectory-assessment.md#human-attention-in-research-optional),
+with recorded inputs, timing coverage and inspectable optimization points. An Agent prepares the source;
 opening a page or reading a result does not start a model call. Explicit analysis
 uses the configured host and account.
 
@@ -364,12 +366,12 @@ an isolated causal estimate of LoopX's effect.
 · [Public task-level scores](benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json)
 
 Beyond benchmarks, LoopX also has inspectable long-running project evidence.
-The public OpenViking contribution sequence and the redacted, owner-run
-Auto ML showcase each span **200+ hours of elapsed loop lifetime**, preserving
+The public OpenViking contribution sequence spans
+**200+ hours of elapsed loop lifetime**, preserving
 bounded turns, decisions, and evidence updates. This measures wall-clock project
 time, not continuous model execution or unattended production autonomy. Open
-each visual to inspect the public-safe task graph, evidence branches, and
-cross-turn decisions; each case states its source and reproducibility boundary.
+the visual to inspect the public-safe task graph, evidence branches, and
+cross-turn decisions; the case states its source and reproducibility boundary.
 
 ### Open-Source Issue Fix
 
@@ -393,20 +395,6 @@ preferences separate; linked PRs plus current checkout source and tests remain
 authoritative.
 
 </details>
-
-### Auto ML Experiment
-
-**Redacted owner-run showcase: a 200+ hour experiment arc keeps hypotheses,
-matched evidence, invalid lineages, running replicates, and promote/stop gates
-visible in one graph.**
-
-<a href="docs/assets/long-running-loop-ml-experiment-trajectory.png">
-  <img src="docs/assets/long-running-loop-ml-experiment-trajectory.png" alt="Auto ML Experiment trajectory with experiment lineages, evidence gates, and promotion decisions" width="760">
-</a>
-
-The redacted public-safe graph preserves decision lineage across that 200+ hour
-elapsed window. It is an owner-run showcase, not a claim of continuous compute,
-independent reproduction, or a production result.
 
 ### Used In Real Projects
 

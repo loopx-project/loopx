@@ -183,9 +183,22 @@ function lifecycleSource(request: JsonObject): JsonObject {
   }
   const inferred = indexInferredSuccessors([...generations.values()].map(item => {
     const resume = readResume(item.resume_when) ?? "";
+    const updated = typeof item.updated_at === "string" ? parseTodoTimestampMicros(item.updated_at) : null;
+    // A successor bound to this review can add its dependency after admission.
+    // It closes the live frontier, but cannot remove the admitted source. The
+    // exact original trigger/digest checks below still fence reconstruction.
+    // This review id is created at admission, and canonical Todo timestamps are
+    // whole seconds, so an updated_at in the admission second or later is
+    // post-admission (the same bound closeout already uses). An earlier
+    // second, a different review, or a missing or invalid timestamp keeps the
+    // existing edge.
+    const reviewSuccessor = typeof request.selected_obligation_id === "string" &&
+      item.replan_obligation_id === request.selected_obligation_id &&
+      item.claimed_by === agent && item.last_actor_agent_id === agent &&
+      updated !== null && updated >= admissionSecond;
     return {id: todoId(item.todo_id), advancement: taskClass(item) === "advancement_task",
-      unblocks: todoId(item.unblocks_todo_id),
-      resumes: resume.startsWith("todo_done:") ? todoId(resume.slice(10)) : null};
+      unblocks: reviewSuccessor ? null : todoId(item.unblocks_todo_id),
+      resumes: !reviewSuccessor && resume.startsWith("todo_done:") ? todoId(resume.slice(10)) : null};
   }));
   const items = request.items.map(object).filter(item => {
     const completed = typeof item.completed_at === "string" ? parseTodoTimestampMicros(item.completed_at) : null;
@@ -265,6 +278,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   }
   let original: JsonObject | null = null;
   let openVisionReview: JsonObject | null = null;
+  let recoveredLifecycle: JsonObject | null = null;
   let delta: JsonObject | null = null;
   let historicalAckRecorded = false;
   for (const value of request.transition_candidates) {
@@ -273,7 +287,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
     if (request.guard_scoped && object(candidate.source_obligation).resolution_mode === "todo_lifecycle_settlement") {
       const recovered = lifecycleObligation({...candidate, obligation: candidate.source_obligation,
         selected_obligation_id: selected, agent_id: request.agent_id});
-      if (recovered) return {obligation: recovered};
+      if (recovered) recoveredLifecycle = recovered;
     }
     const historical = historicalAckDelta(request, candidate, selected);
     if (historical !== null) {
@@ -335,6 +349,9 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       },
     }};
   }
+  // A canonical successor can satisfy the original review without rewriting
+  // its completed Todo. With no such receipt, keep the lifecycle recovery.
+  if (recoveredLifecycle !== null) return {obligation: recoveredLifecycle};
   if (current?.obligation_id === selected) {
     return {obligation: {...current, selection_binding: "heartbeat_receipt"}};
   }

@@ -322,17 +322,20 @@ def load_index_snapshot(
     artifact_root: Path | None = None,
     include_artifact_status: bool = True,
     tolerate_undecodable: bool = False,
+    skip_invalid_encoding: bool = False,
 ) -> RunIndexSnapshot:
     """Decode the complete index; derived artifact status is optional internally.
 
     Full readers keep fresh status by default. History collection defers only
     filesystem observation until its complete semantic selection is known.
-
     A row cut inside a multibyte character is not text, so a caller cannot tell
     whether it was a spend, a Vision or a replan ack. By default that raises, so
     a reader that gates a write or an admission never proceeds on a list with a
     hole in it. A reader that reports the damage itself passes
     ``tolerate_undecodable=True`` and reads ``undecodable_count``.
+    An incomplete internal presentation may instead pass
+    ``skip_invalid_encoding=True`` and consume ``invalid_count``. Strict readers
+    still receive the decoding error.
     """
     try:
         stream = path.open("rb")
@@ -352,13 +355,14 @@ def load_index_snapshot(
             try:
                 line = encoded_line.decode("utf-8")
             except UnicodeDecodeError:
-                if not tolerate_undecodable:
+                if not (tolerate_undecodable or skip_invalid_encoding):
                     raise
                 # A write torn inside a multibyte character leaves bytes that
                 # are not text. The caller asked to see the damage as a count.
                 raw_count += 1
                 invalid_count += 1
-                undecodable_count += 1
+                if tolerate_undecodable:
+                    undecodable_count += 1
                 continue
             if not line.strip():
                 continue

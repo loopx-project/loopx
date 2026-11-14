@@ -2,7 +2,8 @@
 .research-goal-navigation { padding-block: 0 12px; }
 .research-goal-navigation h2 { font-size: 22px; font-weight: 600; margin-block: 16px; }
 .research-goal-navigation button { font: inherit; color: var(--pw-text); background: none; text-align: start; cursor: pointer; min-height: 44px; }
-.research-parent-goal { border: 0; padding: 8px 0; }
+.research-parent-goal { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 0; padding: 8px 0; }
+.research-parent-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .research-child-heading { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 12px; }
 .research-child-heading > span, .research-child-timing { color: var(--pw-muted); font-size: var(--text-caption); }
 .research-child-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px,100%), 1fr)); gap: 16px; }
@@ -15,11 +16,12 @@
 .case-reader-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--pw-line); padding-block: 8px 16px; }
 .case-reader-toolbar label { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: var(--text-body); }
 .case-reader-toolbar select { max-width: 100%; min-height: 44px; color: var(--pw-text); background: var(--pw-bg); border: 1px solid var(--pw-line); border-radius: 6px; padding: 8px; font: inherit; }
-.case-reader-toolbar button, .case-return-reader { color: var(--pw-text); background: none; border: 0; padding: 10px 0; min-height: 44px; font: inherit; cursor: pointer; }
+.research-reading-views { display: flex; flex-wrap: wrap; gap: 2px; width: fit-content; max-width: 100%; margin-block: 0 16px; padding: 2px; border-radius: 8px; background: var(--pw-hover); }
+.research-reading-views button { min-height: 44px; padding-inline: 14px; border: 0; border-radius: 6px; background: transparent; color: var(--pw-text); font: inherit; cursor: pointer; }
+.research-reading-views button[aria-pressed="true"] { background: var(--pw-text); color: var(--pw-bg); }
 .research-case-study { container-type: inline-size; font-size: var(--text-lead); line-height: var(--leading-prose); overflow-wrap: anywhere; }
 .research-case-study .case-opening { margin-block: 32px 40px; max-width: 84ch; }
 .research-case-study .case-eyebrow { color: var(--pw-text); font-size: var(--text-body); margin: 0 0 16px; }
-.case-eyebrow span { color: var(--pw-muted); }
 .research-case-study .case-opening h2 { font-size: clamp(26px, 3.4vw, 42px); line-height: 1.35; font-weight: 600; letter-spacing: -.025em; margin: 0 0 20px; max-width: 25em; }
 .research-case-study .case-lead { font-size: var(--text-lead); line-height: 1.9; max-width: 78ch; }
 .goal-research-workbench .research-case-reader .research-case-study .personal-md { font-size: 16px; line-height: 1.9; }
@@ -73,6 +75,6 @@
   }
 }
 .case-limitations { color: var(--pw-muted); }.case-limitations li { margin-block: 10px; }.case-read-warning { border-left: 3px solid currentColor; padding-left: 14px; }
-.research-case-reader :is(a,button,select,summary,[tabindex]):focus-visible, .case-return-reader:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; }
+.research-case-reader :is(a,button,select,summary,[tabindex]):focus-visible, .research-reading-views button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; }
 @container (max-width: 760px) { .case-reading-layout { grid-template-columns: 1fr; gap: 18px; }.case-outline { position: static; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 4px 20px; }.case-opening { margin-block: 24px; } }
 @media (max-width: 640px) { .case-reader-toolbar { align-items: start; }.case-reader-toolbar label { min-width: 0; width: 100%; }.case-reader-toolbar select { width: 100%; }.case-timeline li { grid-template-columns: 1fr; gap: 8px; }.case-timeline li > div { padding-left: 14px; }.research-case-study .case-opening h2 { font-size: 28px; }.case-provenance dl { grid-template-columns: 1fr; gap: 4px; }.case-provenance dd { margin-bottom: 10px; } }

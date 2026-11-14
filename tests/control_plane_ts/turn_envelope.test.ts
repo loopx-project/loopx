@@ -191,6 +191,45 @@ test("operation preflight optionally shares the existing normalized session line
   assert.deepEqual(complete, before);
 });
 
+test("Host task presentation is source-checked and keeps task and backlog facts", () => {
+  const source = payload();
+  source.future_task_data = {instructions: "Preserve the final stop. ".repeat(200), value: -0};
+  source.agent_todo_summary = {backlog_items: [{todo_id: "later", text: "Required dependency."}]};
+  const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
+  const before = structuredClone(complete);
+  for (const operation of ["host_context", "host_dispatch_context"]) {
+    const request = {operation, payload: complete, envelope};
+    const plain = evaluateTurnEnvelope(request);
+    assert.deepEqual(evaluateTurnEnvelope({...request, include_model_context: false}), plain);
+    const checked = evaluateTurnEnvelope({...request, include_model_context: true});
+    assert.equal(checked.model_context_schema_version, "loopx_turn_model_context_v0");
+    const view = structuredClone(complete);
+    const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>((row, key) =>
+      (row as Record<string | number, unknown>)[key], root);
+    for (const edit of (checked.model_context_changes as JsonObject).changes as JsonObject[]) {
+      const path = edit.path as (string | number)[], key = path.at(-1)!;
+      const parent = at(view, path.slice(0, -1)) as Record<string | number, unknown>;
+      if (edit.remove) delete parent[key];
+      else parent[key] = edit.from ? at(complete, edit.from as (string | number)[]) : edit.value;
+    }
+    assert.deepEqual(view.future_task_data, complete.future_task_data);
+    assert.deepEqual(view.agent_todo_summary, complete.agent_todo_summary);
+    assert.deepEqual(view.goal_boundary, complete.goal_boundary);
+    assert.deepEqual((view.interaction_contract as JsonObject).agent_channel,
+      (complete.interaction_contract as JsonObject).agent_channel);
+    assert.equal(Object.hasOwn(view.interaction_contract as JsonObject, "cli_channel"), false);
+    assert.equal(Object.hasOwn(view, "contract_binding"), false);
+    delete checked.model_context_schema_version; delete checked.model_context_changes;
+    assert.deepEqual(checked, plain);
+    for (const invalid of [null, 0, "true", {}, []])
+      assert.throws(() => evaluateTurnEnvelope({...request, include_model_context: invalid}), /must be a boolean/);
+    assert.throws(() => evaluateTurnEnvelope({...request, payload: {...complete, reason: "tampered"},
+      include_model_context: true}), /integrity mismatch/);
+  }
+  assert.deepEqual(complete, before);
+});
+
 test("complete Host recovery preserves the existing driver route and hash preimage", () => {
   const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: payload(), scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});

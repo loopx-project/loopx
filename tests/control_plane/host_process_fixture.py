@@ -1,8 +1,33 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
 from pathlib import Path
+
+
+def assert_host_task_context(model_input, source):
+    """Check source parity outside the executor-owned presentation boundary.
+
+    Every task field and unknown addition must survive, including backlog,
+    scopes, reads and replan authoring. The original commitment is carried
+    separately; a task view cannot masquerade as a complete signed source.
+    """
+    assert model_input["schema_version"] == "loopx_turn_model_context_v0"
+    assert model_input["source_schema_version"] == "loopx_turn_host_request_v1"
+    assert not {"work_contract", "turn_envelope", "turn_authority"}.intersection(model_input)
+    context = model_input["task_context"]
+    outer_fields = {"schema_version", "contract_binding", "projection_envelope", "scheduler_hint",
+                    "automation_cadence_readback", "automation_liveness", "scheduler_execution_context"}
+    assert set(context) == set(source) - outer_fields
+    for field in set(source) - outer_fields - {"interaction_contract"}:
+        assert json.dumps(context[field], sort_keys=True, ensure_ascii=False) == json.dumps(
+            source[field], sort_keys=True, ensure_ascii=False), field
+    interaction = source["interaction_contract"]
+    assert context["interaction_contract"] == {k: v for k, v in interaction.items() if k != "cli_channel"}
+    if "source_decision_hash" in model_input:
+        assert model_input["source_decision_hash"] == source["contract_binding"]["content_hash"]
+    return context
 
 
 def write_python_host_fixture(path: Path, source: str) -> Path:

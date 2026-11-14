@@ -17,6 +17,7 @@ def receipt_bound_lifecycle_candidate(
 ) -> dict[str, Any] | None:
     facts = project_replan_semantics({
         "operation": "lifecycle_source", "guard_recorded_at": guard_recorded_at,
+        "selected_obligation_id": selected_obligation_id,
         "agent_id": agent_id, "items": items,
     })
     if not facts.get("items"):
@@ -31,9 +32,13 @@ def receipt_bound_lifecycle_candidate(
         "selected_obligation_id": selected_obligation_id,
         "guard_recorded_at": guard_recorded_at, "agent_id": agent_id, "items": items,
     })
+    from ..goals.goal_frontier.ack_policy import replan_successor_transition_ack
+
     return {"obligation": result["obligation"], "source_obligation": source,
             "guard_recorded_at": guard_recorded_at, "items": items,
-            "ack": None, "lifecycle_settled": facts["settled"]}
+            "ack": replan_successor_transition_ack(None, agent_id=agent_id,
+                replan_obligation=source, agent_todo_items=items),
+            "lifecycle_settled": facts["settled"]}
 
 
 def attach_receipt_replan_context(

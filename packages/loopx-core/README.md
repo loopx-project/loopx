@@ -30,7 +30,12 @@ loopx start-goal --guided --project . --goal-text "Create and check an inventory
 Follow its returned host choice and ordered transaction. The preview preserves
 the exact goal text and writes no state. Its project bootstrap, fresh identity
 registration, session binding and subsequent Todo/guard commands execute in
-this standalone distribution through their existing owners. The host supplies
+this standalone distribution through their existing owners. Generated commands
+use this environment's Python with `-I -m loopx.entrypoint`, so continuation and
+installation diagnosis keep using the same core even when PATH or PYTHONPATH
+points to another installation. An explicit global `--cli-bin` retains the
+caller's selected executable. Deep diagnosis still requires recorded module and
+console entrypoints; redirected or missing records fail. The host supplies
 the model, tools and scheduler; the wheel does not provide them or activate an
 optional capability from goal wording. `connect` and `configure-goal` remain
 available for explicit setup. Create and claim work through the existing `todo`

@@ -92,7 +92,9 @@ Agent 明确记录验收；宿主完成不代表证据已被采纳。
    公开安全的证据与验证引用。结果和不采用评审的原因码可选，只需是紧凑的
    不透明诊断标识，不限定供应商词表，也不授予权限；未知时省略。结果与评审
    可重复携带一致的 `operation`、`entrypoint-id`，冲突值包括重放时仍被拒绝。
-   原始提示、宿主错误、对话、本地路径和凭据不进入回执。
+   原始提示、宿主错误、对话、本地路径和凭据不进入公开回执。支持的宿主若能
+   直接观察最终结果正文，会把正文写入按 Goal 实例和主 Agent 隔离的本机私有
+   inbox；公开活动投影仍只保留类型化终态和不透明身份。
 4. 同一身份和内容重放幂等，内容冲突会被拒绝。`read` 与带 Turn ID 的
    `agent-context` 读取同一模型。Goal 状态的 JSON 与 Markdown 只在能力启用且确有决策时投影
    最近一轮；仪表板读取该投影，未配置或无关 Goal 不显示活动行。
@@ -101,6 +103,46 @@ Agent 明确记录验收；宿主完成不代表证据已被采纳。
    不能借已关闭的 Turn 首次补建缺失决策。精确重复仍是读取，内容冲突仍拒绝。
    新写入在既有事件流锁内重新核对读回，每次报告只调用一个粗粒度 TS 边界，
    不增加第二套 Python 阶段判断。
+
+## Next-Turn result delivery / 下一 Turn 结果投递
+
+Supported managed hosts persist an observed child's final text before exposing
+the matching typed terminal receipt. The text is stored only in the
+owner-private local runtime, partitioned by the captured Goal lifetime and
+coordinator (or by Goal ID for a legacy registry without lifetime identity). It
+never enters the public rollout log, status projection, telemetry, or repository
+state. The Inbox projects the body only after the exact host terminal receipt
+commits. A crash between the private write and receipt append leaves the body
+unavailable until an admitted observation completes the receipt.
+
+The existing `manager-inbox` turn-start hook detects unread native results and
+adds one `before_work` read. A normal `manager-inbox read` returns short results
+inline and gives a digest-bound private file reference for larger results. That
+read records delivery but does not consume the result. Until the parent records
+an `accepted`, `deferred`, or `rejected` disposition with the supplied
+`native-child acknowledge-result` command, a restart may deliver the same stable
+result ID again. Exact ingest and acknowledgement replay are idempotent;
+conflicting text or disposition is rejected. A child conclusion remains
+candidate evidence and never performs parent work, validation, or adoption.
+For a bounded history scan, pass `native_child_results.next_cursor` as `--cursor`
+to the same Inbox command. This continuation reads native results only. Restart
+without a cursor to catch results added earlier in key order.
+
+支持的托管宿主会先把观察到的子 Agent 最终正文写入主 Agent 的本机私有
+runtime，再公开对应的类型化终态回执。存储按已捕获的 Goal 生命周期和主 Agent
+隔离；缺少生命周期身份的旧 registry 按 Goal ID 隔离。正文不会进入公开 rollout
+日志、状态投影、遥测或仓库状态。Inbox 只在对应宿主终态回执提交后投递正文。
+若私有写入与回执提交之间发生中断，正文保持不可用，直到获准的观察完成回执。
+
+既有 `manager-inbox` Turn-start hook 会发现未读结果，并在下一 Turn 的普通工作
+之前要求读取。`manager-inbox read` 对短结果内联返回，对长结果返回带摘要校验的
+私有文件引用。读取只记录 delivery，不会消费结果。主 Agent 使用返回的
+`native-child acknowledge-result` 命令明确记录 `accepted`、`deferred` 或
+`rejected` 之前，重启后仍可能看到同一个稳定结果 ID。相同写入与确认重放幂等，
+正文或 disposition 冲突会被拒绝。子 Agent 结论始终只是候选证据，不会替主
+Agent 执行工作、验证或采纳。历史记录触发扫描上限时，用原 Inbox 命令传入
+`--cursor` 和 `native_child_results.next_cursor`，接续只读取子 Agent 结果。
+去掉游标即可从头发现排序在游标之前的新结果。
 
 After a lawful deferred-Todo recovery, rerun `quota should-run` with the same
 explicit Turn and Todo. If the original bound guard denied delivery and the
@@ -196,7 +238,8 @@ replaying the same binding and item remains idempotent. Direct enabled CLI
 adapter calls require that attempt; feature-off calls retain their original
 request. Only compact hashed child references are retained for correlation;
 they do not enter public activity rows or replace independent parent review.
-No prompt or raw result is added to a receipt.
+No prompt or raw result is added to a public receipt. Supported managed hosts
+retain final result text only in the private next-Turn inbox described above.
 
 恢复 CLI 时可能只收到新的 `wait` 完成事件。适配器从同一已准入 Goal 实例、
 主 Agent、LoopX Turn 的最近一次已启动宿主 spawn 或 followup 回执恢复关联，
@@ -211,7 +254,8 @@ No prompt or raw result is added to a receipt.
 app-server 使用其原生 Turn ID。真实重试在启动前递增尝试次数；同一绑定与
 事件的重放仍幂等。直接调用已启用的 CLI 适配器须提供该尝试次数，关闭能力
 时请求不变。关联只保留紧凑的子代理哈希引用，不进入公开活动行，
-也不替代独立父任务验收。回执不增加原始提示或结果内容。
+也不替代独立父任务验收。公开回执不增加原始提示或结果内容；支持的托管宿主仅在
+上述私有下一 Turn inbox 中保留最终结果正文。
 
 A live isolated Codex 0.142.5 test observed one successful spawn, a second failed
 spawn at `agents.max_threads=1`, child completion and independent parent
