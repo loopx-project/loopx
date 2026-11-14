@@ -6,6 +6,7 @@ import io
 import json
 import tarfile
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -76,6 +77,54 @@ def test_success_retains_normal_cleanup_unless_writer_barrier_is_uncertain(tmp_p
         preservation.finish({"exit_code": 0, "execution_started": True, "timed_out": False})
         assert preservation.retain_source is (fault == "barrier")
         assert "capture" not in calls
+
+
+def test_native_fallback_failure_keeps_original_result_and_does_not_retry(tmp_path, monkeypatch):
+    preservation, calls = fixture_preservation(tmp_path, monkeypatch, "capture")
+    preservation.finish({"exit_code": 2, "execution_started": True})
+
+    def failed_export(*args, **kwargs):
+        calls.append("native")
+        raise OSError("private scorer transport details")
+
+    monkeypatch.setattr("benchmark.edgebench.checkpoint_controller.capture", failed_export)
+    preservation.finish_grading("unknown")
+    assert "native_scoring_checkpoint" not in preservation.receipt
+    preservation.finish_grading("complete")
+    preservation.finish_grading("complete")
+    receipt = json.loads((tmp_path / "terminal-preservation.json").read_text())
+    assert calls == ["close", "capture", "native"]
+    assert receipt["error_kind"] == "TimeoutError" and receipt["source_stopped"] is True
+    assert not receipt["capture_succeeded"] and not receipt["restore_qualified"]
+    assert receipt["native_scoring_checkpoint"]["error_kind"] == "OSError"
+    assert "private scorer" not in json.dumps(receipt)
+
+
+def test_native_fallback_uses_qualified_storage_with_relative_receipt(tmp_path, monkeypatch):
+    preservation, calls = fixture_preservation(tmp_path, monkeypatch, "capture")
+    exports = tmp_path / "isolated-export" / "checkpoints"
+    exports.mkdir(parents=True)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    monkeypatch.chdir(tmp_path)
+    preservation.supervisor.destination = exports
+    preservation.receipt_path = Path("logs/terminal-preservation.json")
+    preservation.finish({"exit_code": 2, "execution_started": True})
+
+    def export(controller_file, *, token, capture_id, destination):
+        calls.append("native")
+        assert destination == exports / f"terminal-native-{capture_id}"
+        destination.mkdir()
+        return {"path": str(destination), "research_point_qualified": False}
+
+    monkeypatch.setattr("benchmark.edgebench.checkpoint_controller.capture", export)
+    preservation.finish_grading("complete")
+    receipt = json.loads(preservation.receipt_path.read_text())
+    native = receipt["native_scoring_checkpoint"]
+    assert native["capture_succeeded"]
+    assert Path(native["capture"]["path"]).is_relative_to(exports)
+    assert not list(logs.glob("terminal-native-*"))
+    assert calls == ["close", "capture", "native"]
 
 
 def test_component_declaration_captures_full_workspace_and_no_auth():
@@ -314,6 +363,13 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
     assert result.solver_execution["status"] == "nonzero_exit"
     assert result.best_score == 7 and result.agent_submissions == 1
     assert drained == ["complete"] and result.archive == b""
+    if capture_failure:
+        supervisor.finish_grading_from_receipt(trial, run_id="other-run", task_id="fixture")
+        assert "native_scoring_checkpoint" not in supervisor.preservation.receipt
+        supervisor.finish_grading_from_receipt(trial, run_id="source", task_id="fixture")
+    else:
+        supervisor.finish_grading(result.grading_status)
+    supervisor.finish_grading(result.grading_status)  # A second notification cannot reseal.
     assert json.loads((trial / "run_history.json").read_text())["best_score"] == 7
     container.reload()
     assert not container.attrs["State"]["Running"] and container.attrs["State"]["Pid"] == 0
@@ -326,7 +382,27 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
     assert receipt["source_retained"] and receipt["source_stopped"]
     assert not receipt["restore_qualified"]
     assert receipt["capture_succeeded"] is not capture_failure
+    if capture_failure:
+        assert receipt["error_kind"] == "NotFound"
+        assert receipt["missing_component_id"] == "missing"
+        assert "/missing-participant" not in json.dumps(receipt)
+    else:
+        assert "missing_component_id" not in receipt
     assert len(grades) == 1  # Saving the tail did not create an evaluation opportunity.
+    if capture_failure:
+        native_capture = receipt["native_scoring_checkpoint"]
+        assert native_capture["capture_succeeded"]
+        assert native_capture["capture_id"] != receipt["capture_id"]
+        point, = supervisor.destination.glob("terminal-native-*")
+        manifest = json.loads((point / "components/native_judge/manifest.json").read_text())
+        assert [entry["score"] for entry in manifest["history"]] == [7]
+        assert manifest["opportunity"]["next_agent"] == 2
+        assert 0 < manifest["opportunity"]["remaining_cooldown_seconds"] <= 3600
+        assert (point / "components/native_judge/incumbent.tar.gz").read_bytes() == b"7"
+        assert not (point / "components/host_phase_deadline").exists()
+        assert not native_capture["capture"]["research_point_qualified"]
+    else:
+        assert "native_scoring_checkpoint" not in receipt
     if not capture_failure:
         point = supervisor.destination / receipt["capture_id"]
         manifest = json.loads((point / "checkpoint.json").read_text())

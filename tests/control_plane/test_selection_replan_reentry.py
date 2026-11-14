@@ -1,10 +1,14 @@
 """A deferred selection must expose a runnable recovery before settlement."""
+from hashlib import sha256
 import json
+import os
+from pathlib import Path
 import shlex
 import subprocess
+import sys
 
 import pytest
-from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from test_quota_settlement_cli import (
@@ -199,6 +203,43 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     assert _spend_run_count(runtime) == 1
 
 
+def _settle_replan_from_captured_actions(project, registry, runtime, turn, actions, identity):
+    refresh = next(c for c in actions if "refresh-state" in c)
+    decision = project.parent / "retained-selection-replan.json"
+    decision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {
+            "vision_summary": "Review the chain before selecting the next delivery.",
+            "acceptance_summary": "Independent validation still precedes dependent work.",
+            "advancement_policy": "as_needed",
+        },
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0", "outcome": "replan",
+            "prior_assumption": "A projected recommendation represented the explicit choice.",
+            "observed_reality": "The explicit choice and recommendation are different Todos.",
+            "retained": ["Existing acceptance and delivery boundaries"],
+            "changed": ["Complete the review before a fresh delivery Turn"],
+            "evidence_refs": ["evidence:recommendation-drift"],
+        },
+    }) + "\n", encoding="utf-8")
+    refresh = refresh.replace("<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", str(decision))
+    for key, value in {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
+                       "<surface-id>": "accepted-artifact", "<hypothesis-id>": "adoption",
+                       "<probe-kind>": "acceptance", "<evidence-id>": "evidence:readback"}.items():
+        refresh = refresh.replace(key, value)
+    rc, result = _run_cli(registry, runtime, *_projected_cli_args(refresh, turn_instance_id=turn), cwd=project)
+    assert rc == 0 and result["settlement_result"]["ok"], json.dumps(result, indent=2)
+    assert result["settlement_identity"] == identity
+    spend = next(c for c in actions if "spend-slot" in c)
+    for replay in (False, True):
+        rc, result = _run_cli(registry, runtime, *_projected_cli_args(spend, turn_instance_id=turn), cwd=project)
+        assert rc == 0 and result["settlement_result"]["ok"], result
+        if replay:
+            assert result["idempotent_replay"] and not result["appended"]
+    assert _spend_run_count(runtime) == 1
+
+
 @pytest.mark.parametrize(("initial_replan", "discovery"), [(False, True), (True, True), (True, False)])
 def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_path, initial_replan, discovery):
     project, runtime, registry = _write_fixture(tmp_path)
@@ -253,40 +294,10 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
         "--replan-obligation-id" in action and "--todo-id" not in action
         for action in resumed["interaction_contract"]["cli_channel"]["next_cli_actions"]
     )
-    actions = resumed["interaction_contract"]["cli_channel"]["next_cli_actions"]
-    refresh = next(c for c in actions if "refresh-state" in c)
-    decision = tmp_path / "recommendation-drift-replan.json"
-    decision.write_text(json.dumps({
-        "schema_version": "goal_vision_replan_contract_v0",
-        "state": "vision_patch_proposed",
-        "vision_patch": {
-            "vision_summary": "Review the chain before selecting the next delivery.",
-            "acceptance_summary": "Independent validation still precedes dependent work.",
-            "advancement_policy": "as_needed",
-        },
-        "path_delta": {
-            "schema_version": "goal_path_delta_v0", "outcome": "replan",
-            "prior_assumption": "A projected recommendation represented the explicit choice.",
-            "observed_reality": "The explicit choice and recommendation are different Todos.",
-            "retained": ["Existing acceptance and delivery boundaries"],
-            "changed": ["Complete the review before a fresh delivery Turn"],
-            "evidence_refs": ["evidence:recommendation-drift"],
-        },
-    }) + "\n", encoding="utf-8")
-    refresh = refresh.replace("<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", str(decision))
-    for key, value in {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
-                       "<surface-id>": "accepted-artifact", "<hypothesis-id>": "adoption",
-                       "<probe-kind>": "acceptance", "<evidence-id>": "evidence:readback"}.items():
-        refresh = refresh.replace(key, value)
-    rc, result = _run_cli(registry, runtime, *_projected_cli_args(refresh, turn_instance_id=turn), cwd=project)
-    assert rc == 0 and result["settlement_result"]["ok"], json.dumps(result, indent=2)
-    spend = next(c for c in actions if "spend-slot" in c)
-    for replay in (False, True):
-        rc, result = _run_cli(registry, runtime, *_projected_cli_args(spend, turn_instance_id=turn), cwd=project)
-        assert rc == 0 and result["settlement_result"]["ok"], result
-        if replay:
-            assert result["idempotent_replay"] and not result["appended"]
-    assert _spend_run_count(runtime) == 1
+    _settle_replan_from_captured_actions(
+        project, registry, runtime, turn,
+        resumed["interaction_contract"]["cli_channel"]["next_cli_actions"], identity,
+    )
     rc, conflict = _run_cli(
         registry, runtime, *guard, "--todo-id", SELECTED_REPLAN_TODO_ID
     )
@@ -483,6 +494,267 @@ def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path,
     assert _spend_run_count(runtime) == 0
 
 
+def _read_recovery_on_limited_host(reader, fields, *, project, limit):
+    """Run the emitted reader and every cursor under the original output cap."""
+    data = bytearray()
+    command = [*reader, *fields]
+    for _ in range(256):
+        result = subprocess.run(command, cwd=project, capture_output=True, timeout=30)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert len(result.stdout) <= limit
+        page = json.loads(result.stdout[:limit])
+        assert page["ok"] and page["offset"] == len(data)
+        data.extend(page["content"].encode())
+        if page["eof"]:
+            assert len(data) == page["total_bytes"]
+            return json.loads(data)
+        assert page["next_offset"] == len(data)
+        command = shlex.split(page["next_command"])
+    pytest.fail("reader did not reach EOF")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(("failure_stage", "limit"), [
+    ("collection", 4096), ("capture", 4096), ("registration", 4096),
+    ("publication", 4096), ("publication", 900), ("console", 900), ("wrapper", 900),
+    ("long_route", 900), ("long_route", 650), ("long_route", 550), ("long_route", 256),
+    ("long_no_capture", 650), ("long_named", 650), ("long_named", 900),
+    ("long_reference_io", 900), ("unresolved_cli", 900),
+    ("long_diagnostic_reference_io", 650), ("long_diagnostic_reference_io", 900),
+    ("direct_reference_io", 900),
+], ids=["collection", "capture", "registration", "publication", "tight-opening", "installed-console",
+        "explicit-wrapper", "strict-900", "strict-650", "no-page-room", "no-room", "strict-before-capture",
+        "named-650", "named-900", "short-reference-unwritable", "unresolved-cli",
+        "diagnostic-reference-io-650", "diagnostic-reference-io-900", "direct-reference-io-900"])
+def test_inline_replan_failure_reports_the_actual_receipt(
+    tmp_path, monkeypatch, capsys, provider, failure_stage, limit,
+):
+    from loopx.cli import main
+    from loopx.cli_commands import quota
+    from loopx.control_plane.turn_driver import codex_context, decision_capture
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "turn-inline-replan-publication"
+    retained = "todo_chain_000000000001"
+    capture = tmp_path / "original"
+    cli_prefix = []
+    if failure_stage == "console":
+        launcher = Path(sys.executable).with_name("loopx")
+        if os.name != "posix" or not launcher.is_file():
+            pytest.skip("Requires the console script installed with this test interpreter")
+        monkeypatch.delenv("LOOPX_RELEASE_ROOT", raising=False)
+        cli_prefix = ["--cli-bin", str(launcher)]
+    if failure_stage == "wrapper":
+        if os.name != "posix":
+            pytest.skip("Requires a POSIX shell")
+        launcher = tmp_path / "wrapper with spaces"
+        release = Path(__file__).resolve().parents[2] / "scripts" / "loopx"
+        launcher.write_text(f'#!/bin/sh\nexec {shlex.quote(str(release))} "$@"\n')
+        launcher.chmod(0o700)
+        monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
+        cli_prefix = ["--cli-bin", str(launcher)]
+    if failure_stage.startswith("long_"):
+        if os.name != "posix":
+            pytest.skip("Exercises a POSIX launcher with spaces")
+        release_prefix = tmp_path / "release "
+        missing = max(1, 227 - len(os.fsencode(release_prefix / "scripts" / "loopx")))
+        launcher = release_prefix.with_name(release_prefix.name + "a" * missing) / "scripts" / "loopx"
+        launcher.parent.mkdir(parents=True)
+        release = Path(__file__).resolve().parents[2] / "scripts" / "loopx"
+        if failure_stage in {"long_reference_io", "long_diagnostic_reference_io"} and limit >= 900:
+            launcher.write_text(f'#!/bin/sh\nexec {shlex.quote(str(release))} "$@"\n')
+            launcher.chmod(0o700)
+        else:
+            launcher.symlink_to(release)
+        monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
+        cli_prefix = ["--cli-bin", str(launcher)]
+        capture = tmp_path / ("capture " + "x" * 150) / ("nested " + "x" * 120) / "original"
+        capture.parent.mkdir(parents=True)
+    if failure_stage == "direct_reference_io":
+        if os.name != "posix":
+            pytest.skip("Exercises a POSIX launcher with spaces")
+        release = Path(__file__).resolve().parents[2] / "scripts" / "loopx"
+        prefix = tmp_path / "wrapper with spaces "
+        launcher = prefix.with_name(prefix.name + "a" * max(1, 127 - len(os.fsencode(prefix))))
+        launcher.write_text(f'#!/bin/sh\nexec {shlex.quote(str(release))} "$@"\n')
+        launcher.chmod(0o700)
+        monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
+        cli_prefix = ["--cli-bin", str(launcher)]
+    if failure_stage == "long_named":
+        launcher = launcher.rename(launcher.with_name("lxqa"))
+        original_path = os.environ["PATH"]
+        monkeypatch.setenv("PATH", str(launcher.parent) + os.pathsep + original_path)
+        cli_prefix = ["--cli-bin", launcher.name]
+    if failure_stage == "unresolved_cli":
+        cli_prefix = ["--cli-bin", str(tmp_path / "missing-launcher")]
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "fixture-inline-replan")
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    codex_context.codex_context_hook(str(native), {
+        "session_id": "fixture-inline-replan", "cwd": str(project),
+        "hook_event_name": "SessionStart", "source": "startup",
+    })
+    observed: list[bytes] = []
+
+    def observe_capture():
+        original = (capture / "decision.json").read_bytes()
+        receipt = json.loads(original)["heartbeat_receipt"]
+        assert receipt["status"] == "committed"
+        assert receipt["settlement_identity"]["binding_kind"] == "autonomous_replan"
+        assert receipt["pending_action_selection"]["todo_id"] == retained
+        assert _heartbeat_receipt_count(runtime, turn) == 1
+        observed.append(original)
+
+    def fail_publication(_payload, **_kwargs):
+        observe_capture()
+        raise RuntimeError("fixture private publication detail")
+
+    def fail_registration(_payload, digest, **_kwargs):
+        observe_capture()
+        assert sha256(observed[0]).hexdigest() == digest
+        raise OSError("fixture private registration detail")
+
+    def fail_collection(*_args, **_kwargs):
+        raise RuntimeError("fixture private collection detail")
+
+    def fail_capture(payload, *_args, **_kwargs):
+        assert payload["heartbeat_receipt"]["status"] == "committed"
+        assert _heartbeat_receipt_count(runtime, turn) == 1
+        raise RuntimeError("fixture private capture detail")
+
+    with monkeypatch.context() as patch:
+        if failure_stage in {"long_reference_io", "long_diagnostic_reference_io", "direct_reference_io"}:
+            def refuse_short_reference(*args, reference_file=None, **kwargs):
+                if reference_file is not None and reference_file.name == "r":
+                    raise PermissionError("fixture short reference cannot be written")
+                return write_reference(*args, reference_file=reference_file, **kwargs)
+
+            write_reference = decision_capture.write_context_read_reference
+            patch.setattr(decision_capture, "write_context_read_reference", refuse_short_reference)
+        if failure_stage in {"publication", "console", "wrapper", "long_route", "long_named", "long_reference_io", "direct_reference_io"}:
+            patch.setattr(codex_context, "prepare_codex_context", fail_publication)
+        elif failure_stage == "registration":
+            patch.setattr(codex_context, "record_native_claim_source", fail_registration)
+        elif failure_stage in {"capture", "long_no_capture", "long_diagnostic_reference_io"}:
+            patch.setattr(quota, "_prepare_quota_result_context", fail_capture)
+        else:
+            patch.setattr(quota, "build_live_quota_should_run_decision", fail_collection)
+        code = main([*cli_prefix, "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", turn, "--todo-id", retained, "--context-delivery", "on",
+            "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
+            "--max-page-output-bytes", str(limit)])
+    stdout = capsys.readouterr().out.encode()
+    assert len(stdout) <= limit and b"fixture private" not in stdout
+    reply = json.loads(stdout[:limit])
+    assert code == 1 and reply["ok"] is False
+    saved = capture / "decision.json"
+    assert _spend_run_count(runtime) == 0
+    if limit in {256, 550} or failure_stage == "unresolved_cli":
+        assert "no guard" in reply["reason"].lower()
+        assert _heartbeat_receipt_count(runtime, turn) == 0 and not saved.exists()
+        return
+    if failure_stage == "collection":
+        assert reply["error_code"] == "quota_unexpected_collection_error"
+        assert reply["heartbeat_receipt"]["status"] == "write_failed"
+        assert "event_id" not in reply["heartbeat_receipt"]
+        assert not observed and _heartbeat_receipt_count(runtime, turn) == 0
+        return
+
+    assert reply["error_code"] == "quota_decision_transport_failed"
+    if failure_stage == "capture":
+        receipt = reply["heartbeat_receipt"]
+        assert receipt["status"] == "committed"
+        assert receipt["pending_action_selection"]["todo_id"] == retained
+        assert "captured_decision" not in reply and not saved.exists()
+        assert _heartbeat_receipt_count(runtime, turn) == 1
+        return
+
+    if failure_stage == "long_no_capture":
+        assert not saved.exists() and _heartbeat_receipt_count(runtime, turn) == 1
+        reader = shlex.split(reply["command"])
+        assert reader[0] == cli_prefix[1]
+        assert "--reference-file" in reader and "Do not rerun" in reply["instruction"]
+        recovered = _read_recovery_on_limited_host(reader, ["--select", "/heartbeat_receipt"],
+            project=project, limit=limit)
+        receipt = recovered["selections"][0]["value"]
+        assert receipt["status"] == "committed"
+        assert receipt["settlement_identity"]["turn_instance_id"] == turn
+        return
+
+    if failure_stage == "long_diagnostic_reference_io":
+        assert not saved.exists()
+        locator = reply["captured_decision"]
+        diagnostic = Path(locator["path"])
+        assert diagnostic.name == "failure.json"
+        assert "command" not in reply and "command" not in locator
+        assert "Do not rerun admission" in reply["instruction"]
+        recovered = _read_recovery_on_limited_host(
+            [str(launcher), "--format", "json", "quota", "context-read",
+             "--capture-file", str(diagnostic), "--capture-sha256", locator["sha256"],
+             "--max-page-output-bytes", "4096"], ["--select", "/heartbeat_receipt"],
+            project=project, limit=4096)
+        receipt = recovered["selections"][0]["value"]
+        assert receipt["settlement_identity"]["turn_instance_id"] == turn
+        assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
+        return
+
+    [original] = observed
+    receipt = json.loads(original)["heartbeat_receipt"]
+    assert saved.read_bytes() == original
+    if failure_stage in {"long_reference_io", "direct_reference_io"}:
+        locator = reply["captured_decision"]
+        assert locator["path"] == str(saved)
+        assert locator["sha256"] == sha256(original).hexdigest()
+        assert "Do not rerun admission." in reply["instruction"]
+        assert "command" not in reply and "command" not in locator
+        assert "larger output" in reply["instruction"]
+        # Read the original by its write-time digest through an output channel
+        # large enough for the explicit capture path.
+        recovered = _read_recovery_on_limited_host(
+            [str(launcher), "--format", "json", "quota", "context-read", "--capture-file", locator["path"],
+             "--capture-sha256", locator["sha256"], "--max-page-output-bytes", "4096"],
+            ["--select", "/heartbeat_receipt"], project=project, limit=4096)
+        assert recovered["selections"][0]["value"] == receipt
+        assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
+        return
+    if limit == 4096:
+        assert reply["heartbeat_receipt"] == receipt
+        reader = shlex.split(reply["captured_decision"]["command"])
+    else:
+        reader = shlex.split(reply["command"])
+    if "--reference-file" in reader:
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+        ref_path = reader[reader.index("--reference-file") + 1]
+        _, reference = read_context_read_reference(ref_path)
+        assert reference["path"] == str(saved)
+        assert reference["sha256"] == sha256(original).hexdigest()
+    else:
+        assert reader[reader.index("--capture-sha256") + 1] == sha256(original).hexdigest()
+    fields = ["--select", "/heartbeat_receipt", "--select", "/interaction_contract/cli_channel/next_cli_actions"]
+    if cli_prefix:
+        assert reader[0] == str(launcher)
+        assert "--reference-file" in reader and "Do not rerun" in reply["instruction"]
+    if failure_stage == "long_named":
+        monkeypatch.setenv("PATH", original_path)
+    selection = _read_recovery_on_limited_host(reader, fields, project=project, limit=limit)
+    values = {item["pointer"]: item["value"] for item in selection["selections"]}
+    assert values["/heartbeat_receipt"] == receipt
+    actions = values["/interaction_contract/cli_channel/next_cli_actions"]
+    assert saved.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+
+    # Use the captured settlement, without a replacement admission.
+    _settle_replan_from_captured_actions(project, registry, runtime, turn, actions, receipt["settlement_identity"])
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, monkeypatch, provider):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
@@ -538,3 +810,82 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     assert json.loads(read["content"])["selections"][0]["value"] == original["heartbeat_receipt"]
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "turn-captured-composed-replan"
+    retained = "todo_chain_000000000001"
+    capture = tmp_path / "capture"
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "captured-composed-replan")
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    codex_context_hook(str(native), dict(session_id="captured-composed-replan", cwd=str(project),
+        hook_event_name="SessionStart", source="startup"))
+    cli = str(Path(sys.executable).with_name("loopx"))
+    rc, shown = _run_cli(registry, runtime, "--cli-bin", cli, "quota", "should-run", "--codex-app", "--complete-turn",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        "--todo-id", retained, "--context-delivery", "on", "--codex-context-dir", str(native),
+        "--decision-output-dir", str(capture), "--max-page-output-bytes", "64000", cwd=project)
+    assert rc == 0 and shown["ok"], shown
+    path = capture / "decision.json"
+    raw = path.read_bytes()
+    original = json.loads(raw)
+    assert original["schema_version"] == "loopx_turn_envelope_v1"
+    receipt = original["heartbeat_receipt"]
+    identity = receipt["settlement_identity"]
+    assert receipt["status"] == "committed" and identity["binding_kind"] == "autonomous_replan"
+    assert receipt["pending_action_selection"]["todo_id"] == retained
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
+
+    def run(command, expected=0):
+        result = subprocess.run(shlex.split(command) if isinstance(command, str) else command,
+            cwd=project, capture_output=True, check=False, timeout=30)
+        assert result.returncode == expected, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    # This mainline reader accepts an explicitly captured complete decision;
+    # newer C1 hosts generate the same review route in their first-read view.
+    source_hash = original["contract_binding"]["content_hash"]
+    review = run([cli, "--cli-bin", cli, "--format", "json", "quota", "replan-view",
+        "--decision-file", str(path), "--source-hash", source_hash, "--replan-stage", "review"])
+    writer = run(review["next"]["writeback"])
+    assert writer["context_id"] == review["context_id"]
+    assert writer["writeback"]["settlement_plan"] == original["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert writer["writeback"]["settlement_plan"]["identity"] == identity
+    assert _spend_run_count(runtime) == 0 and path.read_bytes() == raw
+    vision = tmp_path / "measured decision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Validate the new evidence before dependent work."},
+        "path_delta": {"outcome": "replan", "prior_assumption": "The existing route was supported.",
+            "observed_reality": "The validation found an independent alternate route.",
+            "changed": ["Review before a fresh delivery."], "evidence_refs": ["evidence:independent-validation"]},
+    }))
+    placeholder = "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>"
+    args = [str(vision) if token == placeholder else token for token in shlex.split(writer["settlement_command"])]
+    assert str(vision) in args and "--settlement-receipt" in args
+    args += ["--no-global-sync", "--suppress-external-sinks"]
+
+    # Missing semantic evidence must never trigger the composed debit.
+    withheld = [token if token != str(vision) else str(vision.with_name("missing decision.json")) for token in args]
+    refusal = run(withheld, expected=1)
+    assert not refusal["ok"] and _spend_run_count(runtime) == 0
+    settled = run(args)
+    assert settled["settlement_progress"]["state"] == "settled"
+    assert settled["settlement_identity"] == identity and settled["quota_spend"]["appended"]
+    assert settled["autonomous_replan_ack"]["semantic_delta"]["accepted"]
+    assert "settlement_owed" not in settled
+    assert _spend_run_count(runtime) == 1
+    replay = run(args)
+    assert replay["idempotent_replay"] and not replay["appended"]
+    assert replay["settlement_result"] == settled["settlement_result"]
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 1
+    assert path.read_bytes() == raw

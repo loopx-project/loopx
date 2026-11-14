@@ -1,4 +1,5 @@
 import type { ChatVisibleMessage } from "./chat";
+import type { WorkspaceImageAttachment } from "../features/personal-workspace/personal-workspace-model";
 
 type ConversationMessage = {
   queueInputRevision?: number;
@@ -14,8 +15,29 @@ type ConversationMessage = {
   collaborations?: ChatVisibleMessage["collaborations"];
   returnDelivery?: ChatVisibleMessage["return_delivery"];
   replyContext?: ChatVisibleMessage["reply_context"];
+  attachments?: WorkspaceImageAttachment[];
   text?: string;
 };
+
+function refreshHistoryImageLinks(row: ConversationMessage, source: ChatVisibleMessage, sessionId: string) {
+  if (row.pending || row.queued || row.queueInputCancelled || !row.sourceMessageId || row.sourceMessageId !== source.message_id
+      || source.session_id !== sessionId || row.role !== (source.role === "user" ? "user" : "assistant")
+      || !row.attachments?.length || source.attachments?.length !== row.attachments.length) return row.attachments;
+  const oldAttachments = row.attachments;
+  const freshAttachments = source.attachments;
+  const imageBase = `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(source.message_id)}/images/`;
+  let updated: WorkspaceImageAttachment[] | undefined;
+  for (const [index, old] of oldAttachments.entries()) {
+    const given = freshAttachments[index];
+    const prefix = `${imageBase}${index}/`;
+    if (given.id !== old.id || given.mime_type !== old.mimeType || given.data_url === old.dataUrl
+        || !old.dataUrl.startsWith(prefix) || !given.data_url.startsWith(prefix)
+        || !/^[a-f0-9]{64}$/.test(given.data_url.slice(prefix.length))) continue;
+    updated ??= oldAttachments.slice();
+    updated[index] = {...old, dataUrl: given.data_url, name: given.name, size: given.size};
+  }
+  return updated ?? oldAttachments;
+}
 
 /** Delivery of one result does not close the conversation or its later updates. */
 export function conversationReturnSessions(activeSessionId: string | undefined, messages: ConversationMessage[]): string[] {
@@ -49,7 +71,7 @@ export function conversationPendingReturnSessions(messages: ConversationMessage[
 /** A snapshot may refresh only its own session; it never replaces streamed text. */
 export function reconcileConversationReturns<T extends ConversationMessage>(
   previous: T[], sessionId: string, messages: ChatVisibleMessage[],
-  createReply: (message: ChatVisibleMessage) => T,
+  createReply: (message: ChatVisibleMessage) => T, refreshLinkedImages = false,
 ): T[] {
   const byId = new Map(messages.map((row) => [row.message_id, row]));
   const byTurn = new Map<string, ChatVisibleMessage>();
@@ -75,6 +97,7 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     const collaborations = source.collaborations ?? row.collaborations;
     const sourceCreatedAt = source.created_at ?? row.sourceCreatedAt;
     const replyContext = source.reply_context ?? row.replyContext;
+    const attachments = refreshLinkedImages ? refreshHistoryImageLinks(row, source, sessionId) : row.attachments;
     // Only the exact canonical user body can switch to its source-backed view.
     // A background read never replaces a live answer or a different draft.
     const inputChanged = row.role === "user" && source.role === "user"
@@ -90,11 +113,12 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     if (row.sourceMessageId === source.message_id && JSON.stringify(row.returnDelivery) === JSON.stringify(returnDelivery)
       && JSON.stringify(row.collaboration) === JSON.stringify(collaboration)
       && JSON.stringify(row.collaborations) === JSON.stringify(collaborations) && row.sourceCreatedAt === sourceCreatedAt
-      && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text
+      && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text && row.attachments === attachments
       && row.queueInputRevision === queueInputRevision && row.queueInputCancelled === queueInputCancelled && row.queued === queued) return row;
     changed = true;
     return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, collaborations, replyContext, text,
-      queueInputRevision, queueInputCancelled, ...(queueAnswered ? {queued: false} : {}) };
+      ...(attachments === row.attachments ? {} : {attachments}), queueInputRevision, queueInputCancelled,
+      ...(queueAnswered ? {queued: false} : {}) };
   });
   for (const message of messages) {
     if (message.origin !== "manager_followup" || seen.has(message.message_id)) continue;
@@ -108,11 +132,13 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
 /** Recover missing history without retracting messages or overwriting live text. */
 export function reconcileConversationHistory<T extends ConversationMessage>(
   previous: T[], messages: ChatVisibleMessage[], createMessage: (message: ChatVisibleMessage) => T,
+  verifiedBoundSessionId?: string,
 ): T[] {
   let updated = previous;
   const sessions = new Set(messages.map((message) => message.session_id).filter((id): id is string => Boolean(id)));
   for (const sessionId of sessions) {
-    updated = reconcileConversationReturns(updated, sessionId, messages.filter((message) => message.session_id === sessionId), createMessage);
+    updated = reconcileConversationReturns(updated, sessionId, messages.filter((message) => message.session_id === sessionId),
+      createMessage, sessionId === verifiedBoundSessionId);
   }
   // A history read can arrive before admission hydrates the optimistic row.
   // Deduplicate only established Session/message identities, never body text.
