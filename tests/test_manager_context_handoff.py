@@ -1,4 +1,5 @@
 import json
+import shlex
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -672,7 +673,8 @@ def test_hook_keeps_decided_requests_open_until_receiver_returns_conclusion(
     )
     assert not dispatch["failures"]
     assert dispatch["required_reads"][0]["ordering"] == "before_work"
-    assert "manager-inbox read" in dispatch["required_reads"][0]["command"]
+    argv = shlex.split(dispatch["required_reads"][0]["command"])
+    assert argv[argv.index("manager-inbox") + 1] == "read"
     assert turn["message"] not in json.dumps(dispatch["results"])
     assert dispatch["results"][0]["agent_read_required"]
     acknowledge(
