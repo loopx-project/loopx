@@ -200,14 +200,17 @@ establish safe recovery, the command returns a typed transport failure with the
 original full-read reference and receipt; use that explicit reference without
 rerunning admission. An optional cache write after recovery is established can
 still fall back to the same full input. A bad source hash/scope is refused before
-publication. This does not renew decision
-freshness or establish autonomous solver benefit. With context delivery off,
-preflight forwards an explicit short-envelope request and pins that choice in
-same-Turn Todo selection. The short view links to the original complete
-capture used by the checkpoint selector. The wake receipt records the
-requested treatment, so check the delivered view when qualifying a comparison.
-Include the projection command, descriptor, recovery and page reads in
-subsequent total-cost comparisons.
+publication. This does not renew decision freshness or establish autonomous
+solver benefit. With context delivery off, the worker supplies a bounded,
+digest-checked reader for the entire saved CLI view. Follow its page cursors
+before acting on that view; reading it requires no hooks and performs no new
+admission. If the worker explicitly requests the short envelope, preflight
+pins that choice in same-Turn Todo selection. Use the second paged command
+when the short view needs a field from the original complete capture, such
+as the Todo selection command. The wake receipt records the requested
+treatment, so check the delivered view when qualifying a comparison. Include
+the projection command, descriptor, recovery and page reads in subsequent
+total-cost comparisons.
 Across distinct worker wakes, settle the prior Turn before selecting new work;
 reading an old prompt from resumed history cannot supply the next wake's guard.
 Do not modify an active/frozen trial. Set `context_delivery: "off"` for a new trial
