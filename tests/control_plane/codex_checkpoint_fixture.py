@@ -163,11 +163,12 @@ def reference_metadata_oracle(view):
     return view
 
 
-def read_cli_policy_payload(stdout, *, returncode):
+def read_cli_policy_payload(stdout, *, returncode, unwrap_complete_source=True):
     """Read the current policy capture for tests, without claiming model retention.
 
     Preserve failed commands and inline/off output. Successful native full/delta
     navigation uses its complete current recovery, never a cached or delta body.
+    Callers verifying presentation can inspect that view before source unwrapping.
     """
     from loopx.control_plane.turn_driver.decision_capture import (
         read_context_capture_file,
@@ -182,7 +183,7 @@ def read_cli_policy_payload(stdout, *, returncode):
         if "reference_file" in recovery:
             recovery = read_context_read_reference(recovery["reference_file"])[1]
         payload = read_context_capture_file(recovery["path"], recovery["sha256"], private=True)[2]
-    if returncode == 0 and payload.get("schema_version") == "loopx_turn_envelope_v1":
+    if unwrap_complete_source and returncode == 0 and payload.get("schema_version") == "loopx_turn_envelope_v1":
         details = payload.get("context_details", {})
         command = details.get("command_template") if isinstance(details, dict) else None
         if isinstance(command, str):

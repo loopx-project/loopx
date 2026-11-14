@@ -898,10 +898,15 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
         return "".join(content)
 
     content = read_initial(view["first_read_command"])
-    # An independent dynamic read of the same source has identical ordered facts.
-    assert content == read_initial(view["recovery"]["command"] + " --initial-read")
     values = selected_context_values(content)
     cli_path = "/interaction_contract/cli_channel"
+    # New pinned openings prioritize the execution decision. An independent
+    # dynamic reader keeps the historical cursor order and the same values.
+    historical = selected_context_values(read_initial(view["recovery"]["command"] + " --initial-read"))
+    assert values == historical
+    preparation_path = cli_path + "/execution_preparation"
+    assert list(values).index(preparation_path) < list(values).index("/goal_boundary")
+    assert list(historical).index("/goal_boundary") < list(historical).index(preparation_path)
     expected_cli = selected_context_values(json.dumps({"selections": [
         {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))
     vision_path = next(path for path in expected_cli if path.endswith("/vision_authoring"))

@@ -175,11 +175,12 @@ def test_progress_cli_reads_policy_with_context_delivery(
         source = json.loads(original.read_bytes())
         assert source["heartbeat_receipt"] == policy["heartbeat_receipt"]
         if context_delivery == "on":
-            packet = policy["replan_action_packet"]
+            view = read_cli_policy_payload(json.dumps(presented), returncode=0, unwrap_complete_source=False)
+            packet = view["replan_action_packet"]
             reader = shlex.split(packet["review"])
             assert reader[reader.index("--decision-file") + 1] == str(original)
-            assert "replan_context" not in policy["autonomous_replan_obligation"]
-            assert "settlement_plan" not in policy["interaction_contract"]["cli_channel"]
+            assert "replan_context" not in view["autonomous_replan_obligation"]
+            assert "settlement_plan" not in view["interaction_contract"]["cli_channel"]
         else:
             assert policy["replan_action_packet"] == source["replan_action_packet"]
     finally:
@@ -308,7 +309,7 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
             "--context-delivery", "on", "--delta-delivery", "auto", "--codex-context-dir", str(journal))
         assert response["navigation"]["mode"] == "full"
         assert "baseline_reference" not in response["navigation"]
-        view = read_cli_policy_payload(json.dumps(response), returncode=0)
+        view = read_cli_policy_payload(json.dumps(response), returncode=0, unwrap_complete_source=False)
         assert view["reward_memory_recall"] == source["reward_memory_recall"]
         assert view["heartbeat_receipt"] == source["heartbeat_receipt"]
         reader = shlex.split(view["replan_action_packet"]["review"])
@@ -483,7 +484,7 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         first = read(opening["first_read_command"])
         assert first["eof"]
         selected = selected_context_values(first["content"])
-        entry = read_cli_policy_payload(json.dumps(opening), returncode=0)
+        entry = read_cli_policy_payload(json.dumps(opening), returncode=0, unwrap_complete_source=False)
         packet = entry["replan_action_packet"]
         review_command = selected["/replan_action_packet/review"]
         assert review_command == packet["review"]

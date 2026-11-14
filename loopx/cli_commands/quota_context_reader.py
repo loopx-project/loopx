@@ -977,13 +977,15 @@ def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
                           attach_page: bool = True, remaining_reference: Path | None = None,
                           ordinary_page: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Try the typed opening and keep the remainder pinned to the same capture."""
-    if "opening" not in plan or "first_read_command" not in navigation:
+    if "first_read_command" not in navigation:
         return None
     try:
         path, _, document = _read_capture(plan["capture"]["path"], plan["capture"]["sha256"])
         digest = plan["capture"]["sha256"]
         if ordinary_page and _contains_ordinary_opening(ordinary_page["content"], document, plan):
             return ordinary_page
+        if "opening" not in plan:
+            return None
         opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"])
         if len(content) > page_bytes or len(content) >= output_bytes:
             return None
@@ -1007,14 +1009,14 @@ def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
         # page. Keep the ordinary cursor when even the opening cannot fit.
         if not attach_page:
             navigation["first_read_reference"] = str(opening)
-            return (navigation if len(_native_output_bytes(page)) <= output_bytes
-                and len(_native_output_bytes(navigation)) <= min(output_bytes, 7900) else None)
+            return (navigation if _json_output_size(page) <= output_bytes
+                and _json_output_size(navigation) <= min(output_bytes, 7900) else None)
         page["read_instruction"] = (
             "EOF ends the opening. Before work, read its content and follow navigation.remaining_read_command "
             "and its next_command cursor through the remaining initial context. Both views pin the same capture. "
             "EOF does not establish retention, authority or freshness.")
         page["navigation"] = navigation
-        return page if len(_native_output_bytes(page)) <= output_bytes else None
+        return page if _json_output_size(page) <= output_bytes else None
     except (OSError, ValueError):
         return None  # The same-capture ordinary reader is already available.
 
@@ -1042,15 +1044,15 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
                     page_bytes=args.page_bytes if args.page_bytes is not None else output_limit,
                     output_bytes=output_limit, reader_argv=reader_argv, ordinary_page=page)) is not None):
             return bounded
-    if (prioritize_opening and pinned and "first_read_command" in navigation
+    if (prioritize_opening and pinned and navigation.get("mode") == "full"
+            and navigation.get("schema_version") == "context_capture_navigation_v1"
+            and "first_read_command" in navigation
             and "replan_review_command" not in navigation and not page.get("eof")
             and "previously_delivered_fields" not in page):
         # Reserve more room for the pinned controls and retain both read
         # routes. Replan keeps its separate review command and instructions.
         opening_navigation = {
-            **{key: navigation[key] for key in ("ok", "schema_version", "mode",
-                "context_delivery", "first_read_command") if key in navigation},
-            "recovery": recovery,
+            **navigation,
             "instruction": (
                 "Follow next_command through EOF for this selection. Read applicable acceptance, stop conditions and required "
                 "sources before dependent work, and the operation and settlement plan before effects. Use recovery.command "
