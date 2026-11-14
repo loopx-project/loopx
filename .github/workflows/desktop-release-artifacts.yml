@@ -391,12 +391,10 @@ jobs:
           RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
         run: |
           set -euo pipefail
-          if gh release view "${RELEASE_TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --json assets \
-            --jq 'any(.assets[]; .name == "DESKTOP-SHA256SUMS")' \
-            | grep -qx true
-          then
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+          [[ "${release_id}" =~ ^[0-9]+$ ]]
+          asset_list="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[].name')"
+          if grep -Fxq DESKTOP-SHA256SUMS <<<"${asset_list}"; then
             gh release delete-asset "${RELEASE_TAG}" DESKTOP-SHA256SUMS \
               --repo "${GITHUB_REPOSITORY}" \
               --yes

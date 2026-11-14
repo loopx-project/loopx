@@ -15,9 +15,9 @@ WORKFLOW = (
 )
 
 
-def backup_script():
+def workflow_script(name):
     lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
-    step = next(i for i, line in enumerate(lines) if line.strip() == "- name: Back up existing desktop release assets")
+    step = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {name}")
     run = next(i for i in range(step + 1, len(lines)) if lines[i].strip() == "run: |")
     indent = len(lines[run + 1]) - len(lines[run + 1].lstrip())
     body = []
@@ -55,7 +55,7 @@ class DesktopReleaseBackupTests(unittest.TestCase):
                     "RELEASE_TAG": "v1.2.4",
                 }
                 result = subprocess.run(
-                    [bash, "-c", backup_script()], cwd=root, env=env,
+                    [bash, "-c", workflow_script("Back up existing desktop release assets")], cwd=root, env=env,
                     capture_output=True, text=True, timeout=30, check=False,
                 )
                 self.assertTrue((root / "gh-called").exists())
@@ -94,7 +94,7 @@ class DesktopReleaseBackupTests(unittest.TestCase):
                     "RELEASE_TAG": "v1.2.4",
                 }
                 result = subprocess.run(
-                    [bash, "-c", backup_script()], cwd=root, env=env,
+                    [bash, "-c", workflow_script("Back up existing desktop release assets")], cwd=root, env=env,
                     capture_output=True, text=True, timeout=30, check=False,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -104,6 +104,73 @@ class DesktopReleaseBackupTests(unittest.TestCase):
                     self.assertEqual((backup / name).read_bytes(), b"old desktop asset")
                     digest = hashlib.sha256(b"old desktop asset").hexdigest()
                     self.assertIn(f"{digest}  {name}", (backup / "PREVIOUS-DESKTOP-SHA256SUMS").read_text())
+
+    def test_failed_manifest_lookup_never_starts_replacement(self):
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is required to run the workflow step")
+        for fail_at in ("release", "assets"):
+            with self.subTest(fail_at=fail_at), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                bin_dir = root / "bin"
+                bin_dir.mkdir()
+                gh = bin_dir / "gh"
+                gh.write_text(
+                    '#!/bin/sh\nif [ "$1" = api ]; then\n'
+                    '  if [ "$GH_FAIL_AT" = release ] || [ "$2" = --paginate ]; then exit 23; fi\n'
+                    '  printf "42\\n"; exit 0\nfi\n'
+                    'if [ "$2" = view ]; then exit 23; fi\n'
+                    'printf called > "$GH_UPLOAD"\nexit 0\n',
+                    encoding="utf-8",
+                )
+                gh.chmod(0o755)
+                env = {
+                    **os.environ,
+                    "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+                    "GH_FAIL_AT": fail_at,
+                    "GH_UPLOAD": str(root / "upload-called"),
+                    "GITHUB_REPOSITORY": "loopx-project/loopx",
+                    "RELEASE_TAG": "v1.2.4",
+                }
+                result = subprocess.run(
+                    [bash, "-c", workflow_script("Replace complete desktop binary set")],
+                    cwd=root, env=env, capture_output=True, text=True, timeout=30, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "upload-called").exists())
+
+    def test_existing_manifest_is_removed_before_any_binary_replacement(self):
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is required to run the workflow step")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            gh = bin_dir / "gh"
+            gh.write_text(
+                '#!/bin/sh\nif [ "$1" = api ]; then\n'
+                '  if [ "$2" = --paginate ]; then printf "DESKTOP-SHA256SUMS\\n"; else printf "42\\n"; fi\n'
+                'elif [ "$2" = delete-asset ]; then printf called > "$GH_DELETED"\n'
+                'elif [ "$2" = upload ]; then [ -f "$GH_DELETED" ] || exit 20; printf called > "$GH_UPLOAD"\nfi\n',
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = {
+                **os.environ,
+                "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+                "GH_DELETED": str(root / "manifest-deleted"),
+                "GH_UPLOAD": str(root / "upload-called"),
+                "GITHUB_REPOSITORY": "loopx-project/loopx",
+                "RELEASE_TAG": "v1.2.4",
+            }
+            result = subprocess.run(
+                [bash, "-c", workflow_script("Replace complete desktop binary set")],
+                cwd=root, env=env, capture_output=True, text=True, timeout=30, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((root / "manifest-deleted").exists())
+            self.assertTrue((root / "upload-called").exists())
 
 
 if __name__ == "__main__":
