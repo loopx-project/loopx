@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -98,6 +100,50 @@ def test_real_append_index_ignores_compact_display_order_and_clock_skew(tmp_path
         source_status={"registry": str(registry), "runtime_root": str(tmp_path),
             "run_history": {"runs": [_rows()[0]]}}, stride_strategy="evidence_conditioned_v1")
     assert _assert_followthrough(context)["source_history_complete"] is True
+    assert index.read_bytes() == before
+
+
+def test_same_second_work_references_resolve_through_the_history_cli(tmp_path):
+    _, decision, work = _rows()
+    decision["agent_vision"]["todo_delta"] = ["retain:todo-a"]
+    work["todo_id"] = "todo-a"
+    work["delivery_outcome"] = "outcome_progress"
+    work.pop("progress_observation")
+    rows = [decision]
+    for turn in ("turn-negative-a", "turn-negative-b"):
+        recorded = {**work, "turn_instance_id": turn, "settlement_identity": {
+            **work["settlement_identity"], "todo_id": "todo-a", "turn_instance_id": turn,
+            "effect_id": f"evidence-goal:agent-a:todo-a:{turn}",
+        }}
+        rows.append(recorded)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [{"id": "evidence-goal", "repo": str(tmp_path)}]}))
+    index = tmp_path / "goals/evidence-goal/runs/index.jsonl"
+    index.parent.mkdir(parents=True)
+    for position, row in enumerate(rows):
+        artifact = index.parent / f"run-{position}.json"
+        row["json_path"] = str(artifact)
+        artifact.write_text(json.dumps(row))
+    index.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    before = index.read_bytes()
+    context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
+        source_status={"registry": str(registry), "runtime_root": str(tmp_path),
+            "run_history": {"runs": []}})
+    evidence = context["decision_followthrough"]["ordinary_work"]
+    refs = {row["evidence_ref"] for row in evidence["evidence"]}
+    assert evidence["recorded_count"] == len(refs) == 2
+    legacy = {key: value for key, value in work.items() if key != "settlement_identity"}
+    old_context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[legacy])
+    refs.add(old_context["evidence"][0]["evidence_ref"])
+    for ref in refs:
+        cli = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+            "--registry", str(registry), "--runtime-root", str(tmp_path), "history",
+            "--goal-id", "evidence-goal", "--agent-id", "agent-a", "--evidence-ref", ref],
+            text=True, capture_output=True, timeout=30)
+        assert cli.returncode == 0, cli.stdout + cli.stderr
+        result = json.loads(cli.stdout)
+        assert result["evidence"]["evidence_ref"] == ref
+        assert result["evidence"]["health_check"] == work["health_check"]
     assert index.read_bytes() == before
 
 

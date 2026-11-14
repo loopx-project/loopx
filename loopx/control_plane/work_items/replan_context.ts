@@ -43,18 +43,24 @@ function sameSourceDigest(left: JsonObject, right: JsonObject, field: string): b
     value === objectOrNull(right._source_facts)?.[field + "_digest"];
 }
 
-/** Identity evidence is eligibility input only, never a new settlement authority. */
-function accountingMatchKey(row: JsonObject): string | null {
+/** Qualify the existing Todo settlement identity before using it as evidence. */
+function todoWorkIdentity(row: JsonObject): string[] | null {
   const source = objectOrNull(row._source_facts);
   const identity = objectOrNull(source?.settlement_identity);
-  if (!source || identity?.schema_version !== "quota_settlement_identity_v0") return null;
+  if (!source || identity?.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION) return null;
   const keys = ["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id"];
   if (keys.some(key => typeof identity[key] !== "string" || !identity[key])) return null;
   if (keys.slice(0, 4).some(key => identity[key] !== source[key]) ||
-      ["goal_id", "agent_id", "todo_id"].some(key => identity[key] !== row[key])) return null;
-  if (typeof source.recommended_action_digest !== "string" ||
-      !BARE_SHA256_PATTERN.test(source.recommended_action_digest) || !row.recommended_action) return null;
-  return JSON.stringify([...keys.map(key => identity[key]), source.recommended_action_digest]);
+      keys.slice(0, 3).some(key => identity[key] !== row[key])) return null;
+  return keys.map(key => String(identity[key]));
+}
+
+function accountingMatchKey(row: JsonObject): string | null {
+  const identity = todoWorkIdentity(row);
+  const actionDigest = objectOrNull(row._source_facts)?.recommended_action_digest;
+  return identity && typeof actionDigest === "string" &&
+    BARE_SHA256_PATTERN.test(actionDigest) && row.recommended_action
+    ? JSON.stringify([...identity, actionDigest]) : null;
 }
 
 function repeatedAccounting(rows: JsonObject[]): Map<JsonObject, JsonObject> {
@@ -86,6 +92,22 @@ function repeatedAccounting(rows: JsonObject[]): Map<JsonObject, JsonObject> {
 function readableEvidenceRow(row: JsonObject): JsonObject {
   const {observed_at: _time, _source_facts: _source, ...readableRow} = row;
   return readableRow;
+}
+
+function historicalEvidenceRef(row: JsonObject): string {
+  return "replan-evidence-" + digest(readableEvidenceRow(row));
+}
+
+/** Bind ordinary evidence to its admitted work without changing the refs for
+ * typed progress or records whose Turn identity cannot be verified. */
+function workEvidenceRef(row: JsonObject): string {
+  const source = objectOrNull(row._source_facts);
+  if (row.progress_observation !== null || source?.quota_spend_commit ||
+      row.classification === "quota_slot_spent") return historicalEvidenceRef(row);
+  const identity = todoWorkIdentity(row);
+  if (!identity) return historicalEvidenceRef(row);
+  const goalRef = objectOrNull(source?.goal_ref);
+  return "replan-evidence-" + digest([readableEvidenceRow(row), identity, goalRef?.goal_instance_id ?? null]);
 }
 
 function evidenceFactsKey(row: JsonObject): string {
@@ -230,6 +252,7 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
   const proposed = new Map<string, {decision: string; results: string[]}>();
   const followed: JsonObject[] = [];
   const seen = new Set<string>();
+  const legacyResultRefs = new Map<string, string>();
   for (const row of [...scoped].reverse()) {
     const source = objectOrNull(row._source_facts)!;
     if (source.quota_spend_commit) continue;
@@ -241,6 +264,7 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
       const review = objectOrNull(objectOrNull(decision.stride_decision)?.previous_review);
       const refs = [...(path.evidence_refs as string[]),
         ...(Array.isArray(review?.evidence_refs) ? review.evidence_refs as string[] : [])]
+        .map(ref => pending.has(ref) ? ref : legacyResultRefs.get(ref) ?? ref)
         .filter(ref => pending.has(ref));
       for (const todo of targets) {
         origin.set(todo, id);
@@ -259,7 +283,11 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
     if (!MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome)) continue;
     const todo = String(observationTodo(row));
     if (!origin.has(todo)) continue;
-    const ref = "replan-evidence-" + digest(readableEvidenceRow(row));
+    const ref = workEvidenceRef(row);
+    // Keep evidence aliases from historical decisions resolvable. When an old
+    // citation matches multiple formerly collapsed rows, use that alias once.
+    const legacyRef = historicalEvidenceRef(row);
+    if (!legacyResultRefs.has(legacyRef)) legacyResultRefs.set(legacyRef, ref);
     if (seen.has(ref)) continue;
     seen.add(ref);
     const adoption = proposed.get(todo);
@@ -301,7 +329,7 @@ function reviewEvidence(rows: JsonObject[], request: JsonObject): JsonObject {
   const source = objectOrNull(previous!._source_facts)!;
   const targets = new Set(plannedTodoIds(source));
   const citations = refs.map(ref => {
-    const matches = scoped.filter(row => "replan-evidence-" + digest(readableEvidenceRow(row)) === ref
+    const matches = scoped.filter(row => workEvidenceRef(row) === ref || historicalEvidenceRef(row) === ref
       || (objectOrNull(row.progress_observation)?.evidence_ids as unknown[] | undefined)?.includes(ref));
     const subsequent = matches.filter(row => {
       const facts = objectOrNull(row._source_facts)!;
@@ -332,7 +360,7 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
     if (Number(facts.history_position) <= Number(source.history_position) || facts.quota_spend_commit) continue;
     if (!row.progress_observation) {
       if (targets.has(String(observationTodo(row)))) {
-        const ref = "replan-evidence-" + digest(readableEvidenceRow(row));
+        const ref = workEvidenceRef(row);
         if (!ordinary.has(ref)) ordinary.set(ref, {evidence_ref: ref,
           generated_at: row.generated_at, todo_id: row.todo_id});
       }
@@ -577,14 +605,16 @@ export function projectReplanContext(value: unknown): JsonObject {
   const unique = new Map<string, JsonObject>();
   for (const row of rows) {
     const readableRow = readableEvidenceRow(row);
-    const ref = "replan-evidence-" + digest(readableRow);
+    const ref = workEvidenceRef(row);
     if (!unique.has(ref)) unique.set(ref, {...readableRow, evidence_ref: ref});
   }
   const evidence = [...unique.values()];
   if (request.operation === "resolve") {
     if (!agent) throw new EffectRuntimeRequestError("evidence resolution requires agent_id");
     const ref = identifier(request.evidence_ref, "evidence_ref");
-    const match = unique.get(ref) ?? rows.map(recordedDecision).find(decision => decision?.evidence_ref === ref);
+    const legacy = rows.find(row => historicalEvidenceRef(row) === ref);
+    const match = unique.get(ref) ?? (legacy && {...readableEvidenceRow(legacy), evidence_ref: ref})
+      ?? rows.map(recordedDecision).find(decision => decision?.evidence_ref === ref);
     if (!match) throw new EffectRuntimeRequestError(
       "evidence reference is unavailable in this Goal and Agent history window; refresh replan_context",
       "replan_evidence_unavailable");
