@@ -2,226 +2,256 @@
 
 - **RFC status:** Accepted (effective upon merge; a discussion proposal before merge)
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal; this document delivers a source audit and design, with no runtime change.
-- **Authors / owners:** LoopX maintainers; AI-assisted audit and proposals, with key choices pending maintainer confirmation.
+- **Delivery maturity:** Proposal; this document delivers a source audit and target architecture, with no runtime change.
+- **Authors / owners:** LoopX maintainers; source facts have code references, while the target architecture and trade-offs are AI-assisted proposals pending maintainer review and confirmation.
 - **Created / last normative revision:** 2026-11-14
-- **Implementation baseline:** `bd2718a485c86fe4f0ad4d1356fe9aeeccfed1ba`; every reference to `main` below means this revision.
+- **Implementation baseline:** `45cfd0c86d8f24d630ab66ad7f76784faa21c3f6`; references to `main` in section 4 mean this revision.
 - **Semantic mirror:** [中文版](mechanism-convergence-and-learning-loop-v0.zh-CN.md)
-- **Related:** [roadmap](loopx-overall-roadmap-v0.md), [small kernel](monorepo-distribution-split-v0.md), [Controller/unified contract](controller-executor-unified-contract-v0.md), [Target/Yardstick/Stride](target-yardstick-stride-decisions-v0.md), [research exploration](research-exploration-control-plane-v0.md), [memory utility](post-outcome-memory-utility-attribution-v0.md).
+- **Related:** [roadmap](loopx-overall-roadmap-v0.md), [small kernel](monorepo-distribution-split-v0.md), [Controller/unified contract](controller-executor-unified-contract-v0.md), [Target/Yardstick/Stride](target-yardstick-stride-decisions-v0.md), [research exploration](research-exploration-control-plane-v0.md), [memory utility](post-outcome-memory-utility-attribution-v0.md), [Goal contract evolution](goal-contract-evolution-v0.md).
 
 ## Document map and maintenance contract
 
-Section 4 records facts at a fixed source revision; 4.3 separates unmerged work. The other sections propose design, trade-offs and acceptance, rather than describing shipped or owner-confirmed product decisions. Section 12 retains unresolved choices. This RFC does not amend existing authority, defaults or promotion gates, and creates no parallel roadmap or execution queue. Implementation evidence stays with the owning RFC/task; historical records belong in its ledger.
+Section 4 describes the pinned implementation; 4.3 separates unmerged work. Sections 5–11 propose the converged structure, calls, migration and composition acceptance, not shipped behavior. This RFC owns cross-mechanism composition; individual schemas, authority, defaults and promotion gates remain in their owning specifications. Amend those specifications together when changing them rather than overriding them here. Implementation evidence stays in existing RFCs/tasks and ledgers, without a parallel roadmap or execution queue. Maintainers must verify and confirm consequential design choices; this document assumes neither a human contribution ratio nor ownership of unconfirmed ideas.
 
 ## 1. Decision summary
 
-Define mechanism refinement as **reducing duplicate production, transport and interpretation of a decision, getting verified feedback into subsequent choices, and qualifying the resulting outcomes**. The small kernel addresses loading, dependencies and runtime boundaries; this work addresses effective choices within those boundaries. They can deliver independently.
+Mechanism refactoring should **make evidence from one investigation change subsequent method choices, carry useful experience into applicable new tasks, and reduce duplicate execution and interpretation costs**. The small kernel addresses loading and runtime boundaries; this design addresses judgment, feedback and reuse within them.
 
-1. **Converge execution paths.** Continue Controller C1/C4/C9 to replace duplicate ordinary quota, Turn and heartbeat contracts and orchestration. Quota retains budget, admission and observation; heartbeat retains wakeup; Turn owns governed work execution. A unified runtime entry remains in flight.
-2. **Compose methods over shared evidence and seams.** Target, Yardstick, Stride, Explore and progress-review retain their distinct questions. Reuse existing replan obligations, context, measurements and result writeback; do not collapse signals into one progress score.
-3. **Reuse the existing feedback chain.** Connect evidence, decisions, subsequent execution, outcomes, experiences and later applications under their original identities. Expose missing links through existing projections first. Parts already exist; composition, adoption and benefit qualification remain incomplete.
-4. **Trigger on actual decisions.** Ordinary Turns without a new decision or evidence add no model call, human confirmation or mandatory record. Review can justify continuing the current route; successful experiences need not all become Skills.
+Propose the following structure:
 
-This RFC authorizes no implementation, experiment execution, capability activation, Skill publication or production-default change.
+1. **One governed work lifecycle.** Quota determines admissible work, Turn owns execution, validation and settlement, and heartbeat/Chat/benchmark retain entry adapters. Ordinary work contracts and recovery converge through C1/C4/C9.
+2. **One current method chooser per admitted work item.** It is the current Agent in a single session, or the Controller in an explicitly selected dual-role profile, using the same decision semantics. Stride specifies work shape and review, Explore supplies evidence and candidates, and Decision Context qualifies scoped facts with its own review lifecycle. They are not three competing commanders.
+3. **Separate fact projection, model choice, deterministic qualification and execution observation.** Local decisions use existing Yardstick/findings; full replans use Stride/Vision. Share sources and subsequent observations without introducing a universal decision record.
+4. **Apply experience to an inspectable decision artifact.** Distinguish context construction, method adoption, actual execution and later utility. Experience may change candidate methods, validation order and investment within scope; it does not change acceptance, authority or total budget.
+
+This RFC starts no experiment, activates no capability, publishes no Skill and changes no production default. New composition and fields below are design proposals.
 
 ## 2. Problem and motivation
 
-Users need better accepted outcomes under comparable resource constraints, with less repeated research and human intervention. Mechanism counts, receipts, read acknowledgements and architectural layers do not establish those outcomes.
+Consider a task whose cheap proxy keeps improving while authoritative evaluation does not. The system must choose whether to continue searching, calibrate the proxy, change method or evaluate authoritatively. It must then inspect whether execution adopted that choice and decide which lesson deserves transfer to a later task.
 
-Three problems bound the refactor:
+Evaluation, review, method records, memory and utility already exist. Their existence does not answer three composition questions:
 
-- **Execution:** the same work entering through heartbeat or Turn still encounters distinct packet, result and recovery paths. Callers can diverge when reinterpreting shared decisions.
-- **Choice:** tests keep passing or a proxy keeps improving while acceptance does not improve. Repeat detection, external assessment, fidelity and Stride cover different failures; similar names do not establish redundancy.
-- **Reuse:** a better method found today may later appear only as a recalled summary, without applicability checks, adoption into actual work or a linked subsequent outcome. Saving a trajectory is a starting point.
+- When the same evidence reaches ordinary work, full replan and capability context, who assembles input, who makes the final method choice, and which duplicate interpretations can retire?
+- How does the original choice connect to actual execution, authoritative results and complete costs, exposing renaming, non-adoption or lack of benefit?
+- After later recall, how is experience shown to influence the next method choice rather than merely appearing in a prompt?
 
-Ask which owner makes a decision and which evidence actually reaches it before choosing what to delete. A new unifying framework adds dependencies, contracts and maintenance, so first demonstrate a gap in existing owners.
+Duplicate execution paths and incomplete feedback adoption are separate problems. Entry convergence reduces divergence but does not itself improve research strategy; feedback design need not wait for every host migration. Sequence them by real dependencies.
 
-### Invariants
+## 3. Scope and invariants
 
-Execution legality, outcome acceptance, method quality and experience utility remain separate judgments. Advice and memory grant no authority. Preserve original Goal/Agent/Todo/Turn/effect identities, claim/lease, Stop and once-only settlement. Separate facts, claims, adoption and causal benefit, retaining negative results and unknowns. Every deletion needs identified consumers and recovery paths; moved lines do not establish completion.
+Cover execution, judgment, evidence and experience for engineering and budgeted research. Non-numerical tasks retain their acceptance and qualitative evidence without invented scores.
 
-## 3. Scope
+Preserve original Goal/Agent/Todo/Turn/effect identities, claim/lease, Stop, once-only settlement and acceptance authority. Execution legality, accepted outcomes, method quality and experience utility remain distinct. Retain unknown, failed, rejected, cancelled and negative outcomes; justified continuation can be valid adoption.
 
-Inventory mechanisms affecting continuation, choice, feedback and experience reuse; identify replacements, combinations, existing owners and the smallest useful qualification slice. Cover engineering and research work without requiring numeric evaluation for every task.
+Add no mechanism manager, workflow DSL, global score, universal episode store or Python decision owner. Full TypeScript migration, dual models and a particular memory provider are not prerequisites. An existing owner may gain a relation with a real consumer; reuse is not a reason to preserve a demonstrably wrong responsibility boundary.
 
-Do not add a mechanism manager, workflow DSL, global score, universal event store or Python decision owner. Full TypeScript migration, two models, cloud teams and a particular memory provider are not prerequisites. Multi-Agent acceptance continues through existing request, receiver-adoption and result-return contracts.
+## 4. Current architecture: responsibilities and real paths
 
-## 4. Current-system contract: mechanism inventory
+### 4.1 Seven responsibility boundaries
 
-Implemented means a code path exists, not that every host, product journey or long-horizon benefit is qualified. Rows describe decisions, not a count of capabilities.
+These are implementation roles, not a new capability catalog or seven services to build. A file may expose several adapters; consolidation depends on duplicate ownership of a fact or rule.
 
-### 4.1 Execution, context and recovery
-
-| Mechanism | Current responsibility / source | Relationship |
+| Responsibility | Current mechanisms and actual ownership | Excluded responsibility |
 | --- | --- | --- |
-| Goal / Vision / acceptance / Todo | Distinct owners for objective, route, work and acceptance; [Goal owner](../../../loopx/control_plane/goals/acceptance_authority.ts), [interaction contract](../../../loopx/control_plane/work_items/interaction_contract.ts). | Compose them; a local research Target cannot replace accepted criteria. |
-| Claim / lease / effect / authority store | Ownership, concurrency fences and idempotent effects; [lease](../../../loopx/control_plane/work_items/task_lease_acquire_decision.ts), [Effect](../../../loopx/control_plane/effect_program.ts). | Execution foundations that controller advice or experience cannot replace. |
-| Quota / should-run | Read sources, prepare work and compose admission/recovery; [should_run.py](../../../loopx/control_plane/quota/should_run.py), [run_decision.ts](../../../loopx/control_plane/quota/run_decision.ts). | Turn already reuses this owner; these are not two independent budget engines. |
-| Heartbeat / scheduler / automatic cadence | Wakeup, trigger conditions, start intervals and observation; [task body](../../../loopx/control_plane/heartbeat/task_body.py), [cadence](../../../loopx/control_plane/quota/automation_cadence.ts). | Converge shared lifecycle; a due clock grants no execution authority. |
-| Public Turn / host adapter / settlement | One bounded execution, independent validation, writeback and settlement; [run-once](../../../loopx/cli_commands/turn_run_once.py), [executor](../../../loopx/control_plane/turn_driver/executor.py), [settlement](../../../loopx/control_plane/turn_driver/settlement.ts). | Ordinary paths overlapping heartbeat are replacement candidates; native differences stay in adapters. |
-| Turn Loop Controller | Derive disposition from a qualified receipt and fresh decision; [loop_controller.ts](../../../loopx/control_plane/turn_driver/loop_controller.ts). | Deterministic continuation, separate from a model Controller session. |
-| Quota packet / TurnEnvelope / work context | Projections, execution obligations and exact context over admission sources; [quota emitter](../../../loopx/cli_commands/quota.py), [envelope](../../../loopx/control_plane/quota/turn_envelope.ts). | Replace duplicate normal producers/interpreters; diagnostic views and historical decoders have separate boundaries. |
-| Capture / Progressive / Delta / history working set | Source preservation, selective delivery, delta transport and recoverable history; [native lifecycle](../../../loopx/control_plane/quota/native_context_lifecycle.ts), [Progressive](../../../loopx/control_plane/quota/progressive_context.ts). | Share a pipeline; selection, encoding and recovery are complementary. |
-| Request / Inbox / peer handoff / return | Steering, revisions, receiver work and original-audience return; [request_control](../../../loopx/control_plane/collaboration/request_control.ts), [return_delivery](../../../loopx/control_plane/collaboration/return_delivery.ts). | Controller reuses the chain; delivery does not establish receiver adoption. |
+| Goals and execution authority | Goal/Vision/acceptance/Todo; [acceptance authority](../../../loopx/control_plane/goals/acceptance_authority.ts), [quota decision](../../../loopx/control_plane/quota/run_decision.ts), [lease](../../../loopx/control_plane/work_items/task_lease_acquire_decision.ts), [effect](../../../loopx/control_plane/effect_program.ts). | Experience, scores and model suggestions grant no execution authority. |
+| Runtime and recovery | Heartbeat/scheduler, [public Turn](../../../loopx/cli_commands/turn_run_once.py), [executor](../../../loopx/control_plane/turn_driver/executor.py), [settlement](../../../loopx/control_plane/turn_driver/settlement.ts), [pure continuation controller](../../../loopx/control_plane/turn_driver/loop_controller.ts); [requests/steering](../../../loopx/control_plane/collaboration/request_control.ts) and [return](../../../loopx/control_plane/collaboration/return_delivery.ts) retain original identities. | Wakeup is not admission, process exit is not acceptance, and continuation control does not select methods for the model. |
+| Context composition and delivery | [Quota emitter](../../../loopx/cli_commands/quota.py), [TurnEnvelope](../../../loopx/control_plane/quota/turn_envelope.ts), Capture/Progressive/Delta/[native lifecycle](../../../loopx/control_plane/quota/native_context_lifecycle.ts); [capability hooks](../../../loopx/control_plane/capability_hooks.py) and [contribution validation](../../../loopx/control_plane/turn_driver/capability_context.ts) bind selected work. | Content selection, encoding and recovery differ; a projection is neither a new fact store nor a method chooser. |
+| Method choice and its specification | The hosted Agent judges; [Stride](../../../loopx/control_plane/work_items/stride_policy.ts) specifies work shape/review, [Yardstick](../../../loopx/control_plane/work_items/yardstick_decision.ts) specifies local target/measurement/next method, and [replan semantics](../../../loopx/control_plane/work_items/replan_semantics.ts) qualifies existing obligations. | A TypeScript codec does no research; structured declarations prove neither execution nor goal gain. |
+| Evidence, triggers and fact qualification | [Explore context](../../../loopx/control_plane/capabilities/explore_turn_context.ts) and [result writeback](../../../loopx/capabilities/explore/result_writeback.py) manage findings/measurements; [repeat/cadence triggers](../../../loopx/control_plane/work_items/replan_history.ts) and [external review policy](../../../loopx/control_plane/work_items/progress_review_policy.py) form scoped signals; [Decision Context](../../../loopx/capabilities/decision_context/README.md) and [Material Lifecycle](../../../loopx/capabilities/material_lifecycle/README.md) manage sources and qualification. | Do not normalize every signal into one score. Enabled assist policy can form an obligation; not all external assessments are ignorable advice. |
+| Experience and procedural reuse | [Turn Recall](../../../loopx/capabilities/agent_turn_recall/core.py), [Reward Memory application](../../../loopx/capabilities/reward_memory/application.py), [procedural experience](../../../loopx/capabilities/reward_memory/experience_quality.py), [utility](../../../loopx/capabilities/reward_memory/memory_utility.py)/[reducer](../../../loopx/capabilities/reward_memory/utility_reducer.py), and [Skill delivery](../../../loopx/capabilities/project_skill_delivery/README.md). | Context construction, method adoption, benefit and procedural publication are different facts; no automatic provider-ranking update. |
+| Independent validation and quality | Original task validators/acceptance, [change-quality](../../../loopx/capabilities/change_quality/README.md), and specialized [Anti-Entropy](../../../loopx/capabilities/anti_entropy/README.md) oracles. | Quality qualification proves neither task success nor useful experience; Anti-Entropy owns no separate delivery-receipt store. |
 
-### 4.2 Judgment, verification and experience
+### 4.2 Five existing paths
 
-| Mechanism | Current responsibility / source | Relationship |
+1. **Admission to execution.** [`build_quota_should_run`](../../../loopx/control_plane/quota/should_run.py) prepares sources, composes routes/guards and builds the payload; [`live_decision.py`](../../../loopx/control_plane/quota/live_decision.py) handles original receipts and re-entry. `turn_run_once.py` consumes that decision and calls `run_loopx_turn_once`. Quota CLI still projects after capture; [`build_loopx_turn_plan`](../../../loopx/control_plane/turn_driver/driver.py) retains current/historical contract branches. Shared admission exists; ordinary output and execution orchestration are not fully converged.
+2. **Replan to subsequent observation.** [`autonomous_replan_obligation_from_runs`](../../../loopx/control_plane/work_items/autonomous_replan_obligation.py) prioritizes typed repetition, then a pinned assist-policy assessment, then the ordinary trigger. Staged reads and ACK belong to that obligation; `replan_semantics.ts` and [`progress_delta.ts`](../../../loopx/control_plane/work_items/progress_delta.ts) qualify Stride and recorded semantic change, not independent outcome quality. [`decisionFollowthrough`](../../../loopx/control_plane/work_items/replan_context.ts) links the original choice, planned Todos and later records while retaining `execution_and_goal_gain: unknown`.
+3. **Local method to execution record.** `normalizeWorkYardstickDecision` already has `next_action.method_id/reason/cost_bound` and `prior_finding_id`; `projectWorkYardstickCue` has `previous_decision_followthrough`, comparing planned and executed methods. Explore's [`execution_observation`](../../../loopx/control_plane/capabilities/explore_execution_observation.ts) carries candidate digest, actual method, deviation reason, costs and result references. These are validated record relations; independent acceptance still belongs to the original evaluator.
+4. **External facts to a scoped decision.** Decision Context's [`runtime`](../../../loopx/capabilities/decision_context/runtime.py) assembles sources/recall; [`review_settlement`](../../../loopx/capabilities/decision_context/review_settlement.py) requires the original user-gate event for a proposal and has a separate lawful `no_change` route without a proposal; [`outcome_feedback`](../../../loopx/capabilities/decision_context/outcome_feedback.py) links later results. Its complete review lifecycle must not become mandatory for ordinary Turns.
+5. **Memory to current context.** `run_agent_turn_recall::apply_guidance` uses `outcome=applied` to insert experience into private context; its `artifact_ref` is the situation fingerprint. Applicability is explicitly left to the Agent. This application concerns a context artifact and alone proves neither host reading, method adoption nor execution. Generic `apply_reward_memory_recall` already supports caller-owned application, but a Boolean assertion cannot replace independent artifact inspection. [`turn_hooks.py`](../../../loopx/capabilities/reward_memory/turn_hooks.py) has recall and post-outcome ingestion; its current automatic result field is an experience reflection, not generic method-adoption proof.
+
+### 4.3 Defaults and in-flight boundaries
+
+[`machine_defaults.py`](../../../loopx/capabilities/todo_replan_cadence/machine_defaults.py) gives Goals without an explicit cadence override review every **6 effective work Turns** and `evidence_conditioned_v1` Stride when machine configuration has not overridden them. Explicit off, machine settings and legacy configuration retain their meanings; the underlying schema's off is not the complete product default. Yardstick independently defaults to false; Explore is off without explicit/machine configuration. Progress-review, Reward Memory, Decision Context and Material Lifecycle retain their activation boundaries.
+
+| In-flight work / inspected head | Reusable direction | Not a fact about this main revision |
 | --- | --- | --- |
-| Progress observation / semantic delta | Record typed progress and qualify acceptable semantic changes; [progress_delta.ts](../../../loopx/control_plane/work_items/progress_delta.ts), [replan_semantics.ts](../../../loopx/control_plane/work_items/replan_semantics.ts). | Writeback qualification, not independent outcome evaluation. |
-| Repeat/stall fuse / periodic review / monitor repeat | Detect repetition, stalls and due review from recorded work; [replan_history.ts](../../../loopx/control_plane/work_items/replan_history.ts). | Triggers already share obligations; retain their evidence and different blind spots. |
-| External progress-review | Consume revision-bound external assessments; shadow observes, assist may form the existing obligation; [policy](../../../loopx/control_plane/work_items/progress_review_policy.py). | Complements typed repetition; default off, not another replanner. |
-| Autonomous replan / staged read / ACK | Compose obligations, deliver staged reads and qualify discharge; [obligation](../../../loopx/control_plane/work_items/autonomous_replan_obligation.py), [semantics](../../../loopx/control_plane/work_items/replan_semantics.ts). | Staged delivery belongs to the same decision flow, not a new strategy owner. |
-| Stride / previous review / followthrough | Choose work scope, method changes and validation breadth; review prior adoption; [stride_policy](../../../loopx/control_plane/work_items/stride_policy.ts), [replan_context](../../../loopx/control_plane/work_items/replan_context.ts). | A local feedback chain already exists; more review is not more useful work. |
-| Target / Yardstick | Bind task target, authoritative/proxy measurements, counterevidence and next method; [yardstick_decision.ts](../../../loopx/control_plane/work_items/yardstick_decision.ts). | Compose with Stride; proxy scores do not establish acceptance. |
-| Explore graph / findings / harness planning | Questions, findings, measurements, coverage and candidate planning; [turn context](../../../loopx/control_plane/capabilities/explore_turn_context.ts), [result writeback](../../../loopx/capabilities/explore/result_writeback.py). | Research evidence and advice; Todo/quota still govern execution. |
-| Decision Context | Revisioned scanning, exact reads, conflict handling and proposal/review/outcome; [runtime](../../../loopx/capabilities/decision_context/runtime.py), [contract](../../../loopx/capabilities/decision_context/README.md). | Share source-reading primitives; not a mandatory global arbiter for all Turns. |
-| Material Lifecycle / authority registry | Material revisions, inventory, ranking, migration and rollback; [material contract](../../../loopx/capabilities/material_lifecycle/README.md). | Supply sources to Decision Context/Explore; material rank is not work choice or experience utility. |
-| Agent Turn Recall | Build situation and query from selected work; [contract](../../../loopx/capabilities/agent_turn_recall/README.md). | An adapter into Reward Memory, sharing corpus/provider rather than creating a store. |
-| Reward Memory / procedural experience | Scoped candidates, activation, recall, current-artifact checks and application; [application.py](../../../loopx/capabilities/reward_memory/application.py). | Conditional guidance; working state, hard policies and soft preferences remain distinct. |
-| Post-outcome utility | Link applications to subsequent outcomes, validate attribution and reduce observations; [memory_utility.py](../../../loopx/capabilities/reward_memory/memory_utility.py), [reducer](../../../loopx/capabilities/reward_memory/utility_reducer.py). | Implemented seams exist; applied and helpful differ, and success alone gives no utility credit. |
-| Skill / project skill delivery | Distribute versioned procedures and supporting files; [delivery contract](../../../loopx/capabilities/project_skill_delivery/README.md). | A reusable-process delivery format; distribution proves no automatic learning, applicability or benefit. |
-| Anti-Entropy / change-quality / task validation | Retirement oracles, final-diff qualification and task outcome validation; [Anti-Entropy](../../../loopx/capabilities/anti_entropy/README.md), [change-quality](../../../loopx/capabilities/change_quality/README.md). | Compose specialized oracles; code removal, quality qualification and task success remain different conclusions. |
+| [C1 #8266](https://github.com/loopx-project/loopx/pull/8266) · `26a7480a3b4b` | Unified work source, capture/reader and recovery. | Complete ordinary writer/consumer cutover. |
+| [Turn #8484](https://github.com/loopx-project/loopx/pull/8484) · `b7e4e01cc423` | Single/dual roles and a unified runtime entry. | Shipped `loopx turn run`, dual-session benefit or default promotion. |
+| [Method operators #8516](https://github.com/loopx-project/loopx/pull/8516) · `5afb98cf8ea8` | Five stages organize six advisory methods over shared measurements/summaries. | Merged operators or Turn execution authority for methodology stages. |
 
-### 4.3 Call paths, defaults and in-flight boundaries
+All three were OPEN when checked. Their reported tests are not this RFC's validation.
 
-The verified path is `build_quota_should_run`: prepare sources, compose route/guards, then construct the payload. `resolveQuotaRunDecision` owns a set of typed admission judgments. `live_decision.py` additionally handles original receipt binding and re-entry. `turn_run_once.py` consumes the quota decision and calls `run_loopx_turn_once`, rather than creating another budget system. The quota CLI still captures before CLI/native projection; Turn planning retains current/historical envelope branches.
+### 4.4 Composition this design adds
 
-Repeat detection, periodic review and external progress-review already converge in `autonomous_replan_obligation.py`, with typed repetition taking precedence. `replan_semantics.ts` already reuses Stride and progress delta. `replan_context.ts::decisionFollowthrough` already connects a prior decision, planned Todos and subsequent records. Reuse those boundaries rather than proposing them again as missing infrastructure.
+Execution convergence already belongs to C1/C4/C9; local decisions, replans and method execution observations also have concrete implementations. This proposal supplies **the input/responsibility contract for one judgment and the link from context application to an actual decision artifact**. Grouping modules in a diagram does not complete the former; the latter has the specific semantic gap above. This does not assert that every caller lacks functionality: inspect each real consumer before implementation.
 
-Trace inherited defaults: [`machine_defaults.py`](../../../loopx/capabilities/todo_replan_cadence/machine_defaults.py) defaults Goals without an explicit cadence override to review every **6 effective work Turns** and `evidence_conditioned_v1` Stride when machine configuration has not overridden them. Machine settings, explicit off and legacy configurations retain their respective meanings. The underlying Stride schema's off value is not the whole product default. Yardstick independently defaults to false; Explore resolves to off without explicit or machine configuration. Progress-review, Reward Memory, Decision Context and Material Lifecycle retain their own optional activation contracts; composition here enables none of them.
+## 5. Converged target design: AI proposal pending maintainer confirmation
 
-These PRs were **OPEN** at audit time. They are not facts about this main revision, and their reported checks are not this RFC's validation:
-
-| In-flight work / inspected head | Useful direction | Not established |
-| --- | --- | --- |
-| [C1 #8266](https://github.com/loopx-project/loopx/pull/8266) · `2a863df8e7af` | One work source, capture/reader and recovery contract. | Complete ordinary writer/consumer cutover. |
-| [Turn roles/entry #8484](https://github.com/loopx-project/loopx/pull/8484) · `b7e4e01cc423` | Single Worker/dual roles share admission and settlement; proposes one runtime entry for heartbeat, products and benchmark. | Shipped `loopx turn run`, general dual-session feedback benefit or default replacement. |
-| [Method operators #8516](https://github.com/loopx-project/loopx/pull/8516) · `5afb98cf8ea8` | Five stages organize six methods with shared measurement/summary primitives. Stages describe a methodology contract; operators remain advisory. | Merged main implementation, or execution authority merely because stage names resemble the Turn lifecycle. |
-
-## 5. Proposed architecture and convergence decisions
-
-### 5.1 One execution lifecycle, several scoped judgments
+### 5.1 Runtime invokes, the model chooses, existing owners qualify
 
 ```mermaid
 flowchart TD
-    INPUT[User input / Inbox / heartbeat] --> ADMIT[Existing Core: goals, authority, work selection, quota]
-    ADMIT --> EXEC[Shared Turn lifecycle: execute, validate, write back, settle once]
-    SOURCES[Source revisions / current facts / conditional experience] --> CHOOSE[Existing Stride / Explore / Decision Context: choose work and method]
-    ADMIT --> CHOOSE
-    CHOOSE --> EXEC
-    EXEC --> OBS[Outcomes, measurements, failures and complete costs]
-    OBS --> REVIEW[Existing replan: review, continue or revise]
-    REVIEW --> CHOOSE
-    OBS --> EXP[Reward Memory: scoped experience candidate]
-    EXP --> APPLY[Later work: exact verification, application and attribution]
-    APPLY --> SOURCES
-    EXP -.Existing owner review and independent qualification when procedural reuse fits.-> SKILL[Versioned Skill]
+    ENTRY[User request / heartbeat / product entry] --> CORE[Core: admission, original work identity, replan obligation]
+    CORE --> CONTEXT[Existing context composition: bind sources and work]
+    SOURCES[Explore / authority sources / conditional experience] --> CONTEXT
+    CONTEXT -->|Method judgment needed| AGENT[Current Agent or selected Controller: make one choice]
+    CONTEXT -->|No new judgment needed| WORK[Execute within original authority]
+    AGENT --> CHECK[Original typed owner: qualify choice, evidence and authority]
+    CHECK -->|Lawful local work| WORK
+    CHECK -->|Full replan writes its plan| SETTLE[Original identity: validate, write back and settle once]
+    WORK --> OBS[Original findings and actual execution / outcome evidence]
+    OBS -->|Next local decision point| CONTEXT
+    OBS --> SETTLE
+    SETTLE -->|New work requires fresh admission| CORE
+    SETTLE -.Enabled and independently qualified evidence.-> MEMORY[Reward Memory: candidate and existing activation]
+    MEMORY -.Later recall within authorized scope.-> SOURCES
 ```
 
-Decision/admission ordering and permissions stay with actual callers and owners. This is not a new runtime graph, parallel-work authorization or stage gate.
+These are target calls, not a claim that the unified entry has shipped. Local feedback inside admitted work creates no second Turn or work-quota charge; model/tool usage still counts against its original budget. Full replan produces a plan and settles its original identity; Core admits subsequent work. The host supplies models/tools; runtime composition does not invoke a research model itself or run every capability in sequence.
 
-### 5.2 Replace, combine or preserve
+Existing session/attempt binding identifies the current method chooser. Enabling Explore, Decision Context or experience does not start another Controller. Dual roles enter only through the original Controller RFC profile; Worker observations return to that Controller. Multi-Agent work retains request, receiver-adoption and result-return contracts without a global method commander.
 
-| Objects | Recommendation | Reason / retirement boundary |
-| --- | --- | --- |
-| Ordinary quota execution packet versus Turn contract; duplicate result/recovery orchestration | **Replacement: converge normal paths through C1/C4/C9.** | The same work should not have two semantic producers. Migrate consumers and original-receipt recovery before deletion. Quota policy, outer wakeup, native transport and historical decoders retain their owners. |
-| Heartbeat / benchmark / Managed / Chat common execution | **Share lifecycle, preserve entry adapters.** | Common admission, validation and settlement; reuse existing session bindings instead of launching another Worker at every entry. Preserve native/plain benchmark controls. |
-| Repeat / periodic / external review / capability-specific signals | **Reuse existing obligation convergence; combine only duplicate context and discharge interpretation.** | Keep provenance, coverage, priorities and distinct discharge conditions. Unknown external assessment cannot cancel a formed obligation. Add no generic review engine. |
-| Target / Yardstick / Stride / Explore methods | **Compose without semantic collapse.** | Target, measurement, work shape and candidate search answer different questions. Following #8516, share digest, comparison scope, bounded views and method stages; numerical oracles stay outside the generic kernel. |
-| Work context / Decision Context / Turn Recall | **Share reading, identity and provenance primitives; preserve semantic adapters.** | Current work facts, external evidence qualification and conditional experience differ. Reuse existing hooks; Decision Context does not take over Core. |
-| Capture / Progressive / Delta | **Independent composition within one delivery pipeline.** | Capture is a recovery source, Progressive selects initial/detail reads, Delta encodes transport. Disabling one must not silently disable the others or drop unread evidence. |
-| Explore finding / working context / procedural experience / Skill | **Connect lifecycles without substituting one for another.** | Task findings, session continuation, transferable lessons and executable procedures have different scope and invalidation. One success does not justify a published Skill. |
-| Progress-review / Yardstick / task validation / memory utility | **Share evidence references, preserve judgments.** | Drift, proxy fidelity, accepted outcomes and helpful experience are different questions. |
-| Anti-Entropy / change-quality | **Compose specialized oracles into existing qualification.** | Anti-Entropy already disclaims its own delivery-receipt store. Preserve the final qualification owner rather than adding a parallel ledger. |
-| Model Controller / pure Turn Loop Controller | **Collaborate with distinct responsibilities.** | One selects content and methods; the other qualifies legal continuation. A stronger model cannot replace deterministic fences. |
+### 5.2 Inputs and outputs of one judgment
 
-### 5.3 Connect existing records into an inspectable evidence chain
+This maps existing records semantically rather than defining a universal packet. Ordinary work without a relevant change need not fill this table.
 
-Do not first define a universal episode schema or another journal. Compose these existing identities in current projections; missing links remain unknown rather than being invented by a summary.
-
-| Question | Reused owner / record |
+| Input / output | Source, consumer and constraint |
 | --- | --- |
-| What facts triggered this judgment? | Source revision, quota capture, replan obligation/context; Explore measurement/finding. |
-| What was chosen, and why continue or change? | Stride decision, Vision/path delta, Explore work-yardstick finding, or an already-needed Decision Context proposal. |
-| Did subsequent work adopt it? | Actual work and acceptance references on the original Todo, `decisionFollowthrough`, subsequent Turn/settlement; bounded views retain full-detail navigation. |
-| What outcome and cost followed? | Authoritative task acceptance, original measurement scope, failures, provider/host usage and human intervention; missing coverage stays unknown. |
-| What can transfer? | Reward Memory procedural-experience candidate, applicability, source revision, counterexamples and existing activation policy. |
-| Was it used and helpful later? | Recall/application receipt and current-artifact verification, followed by verified outcome and utility observation. Success plus applied is not automatically helpful. |
+| Admitted work and hard constraints | Original work source/capture, Goal acceptance, Todo, lease, scope and budget. Context composition reads them; capabilities cannot override them. Effectful operations still recheck current authority. |
+| Decision trigger | Original replan obligation, or a relevant new finding, scope/source change, probe boundary or Agent reconsideration. Due review enters its original flow; a local choice cannot discharge a full obligation. |
+| Decision evidence | Explore measurements/candidates with matching scope, prior decisions and execution observations; exact external reads when needed; enabled experience as conditional advice. Preserve each revision, missing coverage and detail entry. |
+| Local choice output | When Yardstick is enabled, existing `work_yardstick_decision` records target, authoritative/proxy profiles, counterevidence, `next_action` and prior finding. Otherwise use original task/path records; composition does not enable Yardstick or invent numerical evaluation. |
+| Full replan output | Existing Stride/Vision: action, work shape, `next_probe`, `previous_review` and necessary Todo delta. Do not maintain a competing local plan. |
+| Adoption and outcome output | Current decision reference, actual method/candidate, deviation, independent outcome and costs enter existing findings/work history; experience application references enter existing Reward Memory receipts and Turn results without duplicating work state. |
 
-Experience explains conditions, a method choice, observed success/failure and how to verify it next time; an event summary is insufficient. Only stable, verifiable procedures worth repeating become Skill candidates under existing content/publication authority. Preserve provenance, disable and rollback; publication needs separate authorization. Current project-skill delivery distributes sources and does not supply automatic distillation.
+Composition uses qualified sources. Deduplicate projections by original identity/revision, not by collapsing semantically different scores. Shared reading and scope comparison remain in existing TypeScript owners; Python retains necessary provider IO and adapters.
 
-### 5.4 Placement and deletion candidates
+### 5.3 Trigger, conflict and writeback order
 
-- **Execution:** C1/C4 owners migrate `cli_commands/quota.py::_publish_quota_result`, `quota/cli_projection.py`, `turn_driver/driver.py::build_loopx_turn_plan` and heartbeat rendering. Do not add a third serializer here.
-- **Judgment:** reuse `replan_history.ts`, `replan_context.ts`, `replan_semantics.ts`, `stride_policy.ts` and `capabilities/explore_*`. Adopt reviewed #8516 primitives if merged; do not copy an unmerged implementation.
-- **Reuse:** retain `agent_turn_recall`, `reward_memory/application.py`, `memory_utility.py` and existing post-settlement hooks. Add a missing lineage reference and real consumer at the original owner before considering another queue.
-- **Product readback:** existing Goal workspace, research history, work details and CLI show evidence, choice, actual adoption, outcome, reuse and gaps. Users need not configure five internal stages. Changed interactions still require App/CLI and supported Lark qualification.
+1. **Resolve work and obligations first.** Preserve Core refusal, wait, Stop and recovery. Work whose original identity remains valid continues within its contract. Method advice bypasses no gate; optional provider failure does not stop the entire Goal.
+2. **Assemble decision-relevant evidence.** Explore owns measurement scope and candidate provenance. Decision Context participates only for configured authority-source qualification. Its evidence may inform the current judgment; invoking its formal proposal workflow still requires its own review, without making that gate the ordinary method-choice entry.
+3. **Resolve conflicts by their question.** Original owners define authoritative acceptance; proxies guide search. Recheck old experience against current counterevidence and display incomparable scopes separately. Conflicting authority sources that affect an operation follow its original authority/user-gate path; independent authorized work need not stop. Existing review-signal precedence and discharge rules remain.
+4. **The current model makes one method choice.** Compare applicable continuation, calibration, method change and direct validation with a reason, bounded investment and next decision condition. Without reliable comparison, choose bounded investigation or preserve uncertainty rather than inventing a benefit ranking. Experience influences candidates, reasons or validation, not a competing next action.
+5. **Original typed owners qualify and record.** Check work binding, read-source revisions, evidence and scope; stale input returns to the original reader. Calling something advisory cannot bypass method/schema rejection. Local choices enter original findings; due replan absorbs the same evidence and writes the original Stride/Vision decision once.
+6. **Observe real adoption.** Original execution observations link planned/executed method and artifact; independent acceptance judges outcomes and usage covers complete cost. Declarations, renamed identifiers or context injection alone leave adoption/benefit unknown. Replay repairs missing relations without repeating execution, creating work or settling again.
 
-These are candidate boundaries. Recheck main, open PRs and canonical Todos before implementation. Delete only proven duplicate producers/interpreters with equivalent obligations; historical recovery contracts and native differences do not become redundant through visual similarity.
+Changes to target, dependencies, acceptance or budget beyond scope use original Todo/Vision/authority operations. Do not infer permission from `grow/switch/verify` action words.
+
+### 5.4 How experience changes the next investigation
+
+Retain two feedback timescales: current-task findings and execution observations inform the next local choice/replan; transferable lessons enter later tasks through Reward Memory's existing candidate, activation and scope rules. Long-term memory does not synchronize current work state.
+
+Use existing `procedural_experience_contract_v0` for applicability, observed outcome, attribution limits and `future_behavior.trigger/action/validation/stop_condition`. Experience may propose candidate methods, change validation order, narrow unproductive search or suggest investment within scope. The current Agent checks new task facts and applies, ignores or refutes it. This choice changes the method policy; historical success must not automatically update policy parameters or provider ranking.
+
+**Add application to a decision artifact while preserving context receipts.** Existing `agent_workflow.turn_admission` application continues to describe its context artifact; historical meanings do not change. Within an already authorized recall surface, register an optional capability result field in the original host response, provisionally `reward_memory_application_json`, for the caller's adoption/ignore/refutation judgment. Reuse original activation and budgets without a global switch. The field carries original recall/application references, the current decision artifact reference/revision, selected opaque experience references and the judgment, not private provider bodies or executable commands.
+
+The consumer belongs in `reward_memory/turn_hooks.py` and the existing application owner. Read the exact captured recall binding and qualified reference/digest set, inspect the actual decision artifact and sources, and reuse the application schema to produce **another receipt bound to that decision artifact**. Derive a distinct namespaced `application_id` stably from original recall and decision-artifact revision; `artifact_ref` names the actual decision, not its situation fingerprint. Existing Yardstick/Stride/task records hold the choice and its experience-related reason; the result field links them rather than copying the plan. Shared identity/revision qualification belongs in the existing typed boundary; Python hooks remain IO/caller adapters, without a parallel semantic owner.
+
+This is a proposed caller-adapter extension, not current main behavior. Implementation must define the field version and consumer compatibility in the owning specifications; retain receipts in the Turn journal/result capture without another application queue. Reject references outside the original recall set, wrong work/revision, missing artifacts and a bare `current_artifact_verified=true` without independent verification. Lost original recall evidence stays unknown; a newer provider query cannot reconstruct it. Without relevant judgment, omit an unregistered field or return an empty string when a strict host requires every registered property. The first caller qualifies one actual decision revision per result; earlier/unobserved decisions remain unknown rather than being silently covered by that receipt. Old context-only application remains readable.
+
+Artifact inspection verifies that the recorded choice incorporates or rejects the cited experience. It proves neither the model's internal causal process nor later execution; those must not be inferred from a citation or receipt alone.
+
+Link the decision receipt to subsequent `execution_observation` and verified outcome before existing utility processing. Adoption and successful execution alone do not establish helpfulness; absent attribution remains unknown. Optional evaluators use existing bounded budgets/deduplication after outcome settlement, neither blocking completed outcomes nor reopening execution. Stable procedures may become Skill candidates; publication, installation and activation retain separate authority.
+
+### 5.5 Placement, consolidation and retirement
+
+| Change | Concrete placement | Preserve / retire boundary |
+| --- | --- | --- |
+| Unify ordinary execution contract/lifecycle | `quota.py::_publish_quota_result`, `quota/cli_projection.py`, `turn_driver/driver.py::build_loopx_turn_plan` and heartbeat rendering through C1/C4/C9. | Retire duplicate normal producers/result interpreters; retain quota policy, entry adapters and historical decoders with real consumers. A facade alone is insufficient. |
+| Compose input with one method chooser | `explore/turn_context.py`, `work_items/replan_context.ts`, `yardstick_decision.ts` and existing capability hooks. | Consolidate duplicate reads, scope comparison and detail references; local choice and full replan keep suitable records. Decision Context is not a mandatory global entry. |
+| Trace choice to actual method | `explore/result_writeback.py`, `explore_execution_observation.ts`, `projectWorkYardstickCue` and `decisionFollowthrough`. | Reuse existing fields and repair demonstrated missing consumers; later summaries cannot fabricate historical execution. |
+| Trace contextual experience to decision adoption | Preserve original receipts in `agent_turn_recall/core.py`; register optional results in `reward_memory/turn_hooks.py`, create artifact receipts in `application.py`, and consume qualified lineage in `memory_utility.py`. | Caller verifies artifacts; typed boundaries qualify identity/structure. Generic Core does not become a memory chooser, and context-applied does not mean method-adopted. |
+| Product readback | Existing Goal workspace, work details, research history and CLI. | Explain evidence, choice, actual work, outcome and experience adoption together; show unknowns and link original detail. Changed journeys require App/CLI and supported Lark qualification. |
+
+Do not copy the unmerged #8516 implementation; reuse reviewed primitives once merged. Extract only demonstrated duplicate consumers, not a speculative mechanism-composer directory. Migrate consumers and retire old normal branches together, qualifying recovery compatibility separately.
+
+### 5.6 Complete walkthrough: improving proxy, flat authoritative result
+
+This is a design example, not an executed experiment or a claim that current tasks generally suffer this failure.
+
+| Stage | Converged behavior and original record |
+| --- | --- |
+| Detect disagreement | Retain current admitted task acceptance/budget. Explore records proxy and authoritative measurements for matching candidate, workload and revision; missing or incomparable results cannot manufacture disagreement. |
+| Choose | The current Agent reads disagreement and prior method, comparing continued search, proxy calibration/replacement and direct authoritative evaluation. The example chooses bounded verification of the misleading scope, recording method/reason/cost in `next_action`; if full review is due, fold it into that Stride/Vision decision. |
+| Execute | Run the chosen validation within original lawful scope; record actual method, candidate, input, duration, stop reason and independent result. Preserve deviations; a receipt is not the artifact. |
+| Feed back within the task | The next judgment reads the prior decision and execution. Supported counterevidence narrows proxy applicability or changes validation; disproven counterevidence may justify continuing. A flat authoritative outcome can supply useful negative evidence without proving benefit. |
+| Form experience | Under enabled ingestion/candidate qualification, record the task conditions where the proxy misled, the validation to use and the limits. The validator must inspect the exact reflection and evidence. A single success publishes no Skill. |
+| Adopt in later work | Recall within the authorized corpus/scope and check the new task. If applicable, move the relevant validation before search; cite experience in the decision artifact, produce the distinct decision application, then inspect actual execution. Otherwise ignore/refute while preserving lawful work. |
+| Assess utility | Original acceptance observes the new task's outcome and complete cost; independent matched comparison determines support for utility. Report delivery, adoption and single successes separately without inventing positive attribution. |
+
+The structural changes are evidence entering the existing chooser, a choice linked to actual execution, and experience linked to the next decision artifact. No scheduler or automatic policy write is added.
 
 ## 6. Alternatives, external references and principal costs
 
-| Option | Trade-off |
+| Option | Trade-off and selection |
 | --- | --- |
-| Only unify turn/quota entrypoints | Necessary to reduce divergence and maintenance, but alone proves no better method choice or cross-task reuse. |
-| Universal mechanism engine/global score | Reject: another owner, protocol and migration burden, conflating legality and quality. |
-| Only shorten prompts | A bounded optimization; lost obligations or extra detail reads can increase total cost, and this does not establish semantic convergence. |
-| Existing-owner convergence plus feedback-adoption qualification | Recommended; locally reversible, but field/source/consumer mapping and subsequent outcome qualification require substantial initial audit. |
+| Unify quota/Turn only; methods assemble context separately | Reduces execution divergence but leaves duplicate method inputs and context-only experience. Retain as an independently deliverable execution migration. |
+| Compose evidence and choose in the current session; form experience after outcomes | **Recommended.** Reuses existing response/binding; extra cost is source reading, artifact qualification and bounded memory IO. Composition and reference validation need maintenance. |
+| Add an independent Controller/evaluator session to every judgment | May provide independent judgment but adds model calls, context synchronization and recovery. Qualify only under the original optional dual-role profile; not a convergence prerequisite. |
+| Summarize offline and recall next time only | Low intrusion into current execution but omits current-task correction and decision-adoption evidence. Useful for candidates, insufficient for this design alone. |
+| Universal engine, score or event store | Adds a second owner and collapses acceptance, quality and utility. No necessary current consumer; reject. |
 
-External references inform boundaries, not LoopX benefit claims. [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) separates thread checkpoints from cross-thread stores, informing the separation of recovery state and durable experience. [Voyager](https://voyager.minedojo.org/) separates curriculum, composable code Skills and environment feedback, informing qualification before procedural reuse. Its Minecraft results do not predict LoopX research gains. These mappings are this proposal's inference.
+Initial scale is one Agent doing engineering or budgeted research, followed by receiver-adoption qualification under the existing peer contract. Without a new relevant judgment, add no model call, mandatory record or remote assessment **relative to existing configuration**; enabled original recall retains its policy. Real judgments use the existing response. Qualification and exact reads still cost resources and must be measured even in one session.
 
-Initial scenarios are existing single-Agent engineering and budgeted research, then peer receiver adoption. Costs include judgment/verification model tokens, exact source reads, real evaluation, failed exploration, capture/history retention, language/RPC crossings, recovery and human review. Multiple sessions add context and coordination cost. Cloud scaling additionally needs tenant isolation, shared-resource metering and operations under existing authority/quota contracts; this RFC does not claim to solve them.
+Account separately for admission/delivery, judgment, execution/validation and post-outcome memory: latency, bytes/tokens, provider/tool calls, retained storage and human intervention. Report p50/p95 and complete charge coverage; unknowns are not zero. Reuse source revisions, bounded views and deduplication; add neither per-field RPCs, full-history scans every Turn nor eager loading of all optional capabilities. Preserve existing call/output/replay budgets; excess uses original bounded-read or unavailable semantics. No new performance or benefit measurement is reported here.
 
-Record complete cost and coverage for each arm; unknown charges are not zero. Default added remote calls for an unchanged ordinary Turn are zero. Optional evaluation and distillation use explicit bounded policies. Compare actual-workload p50/p95 latency, delivery/detail bytes and tokens, model/tool calls, accepted outcomes and interventions. No new performance or benefit measurement is reported here, and no savings percentage is assumed.
+External references inform responsibility choices, not LoopX benefit: [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) separates thread checkpoints from cross-thread stores, supporting recovery-state/experience separation; [Voyager](https://voyager.minedojo.org/) separates curriculum, code Skills and environment feedback, informing qualified procedural reuse. These mappings are proposal inferences, not imported architecture or experimental outcomes. Cloud isolation, metering and operations remain under existing authority/quota contracts rather than being declared solved here.
 
 ## 7. Safety, privacy and compatibility
 
-Public projections contain only necessary typed facts, opaque references and scope, excluding chat bodies, raw trajectories, credentials and private paths. Do not automatically merge experiences/results across Goal, Agent, corpus or revision. Stale experience can be rejected, revoked or superseded without widening authority.
+Public projections retain necessary facts, opaque references and scope. Raw chat, trajectories, credentials, provider bodies and private paths stay within original boundaries. No automatic merge across Goal/Agent/corpus/revision; revoked, expired and counterexample-bearing experience remains inspectable.
 
-Preserve published meanings for public contracts, explicit off, legacy inheritance, original receipts and pending transactions. Optional observer/memory failure retains its existing fail-open behavior; original hard gates and prerequisites remain enforced. A common failure handler must not turn every failure into continuation.
+Existing context application receipts retain their artifact meaning. New decision receipts neither backfill nor reinterpret old records. Register the new field only for qualified opt-in callers; absence proves neither non-adoption nor failure. Older hosts without the field cannot claim method-adoption evidence. Existing effectful operations, strict schemas and independently deployed consumers retain their compatibility requirements.
+
+Optional advice failures retain original fail-open behavior without swallowing authority, hard gates, acceptance or original replan obligations. Missing evidence for an authority-dependent operation follows its original owner rather than being bypassed as provider unavailability.
 
 ## 8. Migration and rollback
 
-Pin concrete base/head, callers and clause mappings first, reusing completed evidence under matching conditions. Each slice migrates a real producer/consumer/recovery combination and names deletions and retained readers. Retire duplicate normal writers after qualification; necessary historical readers need separate exit conditions.
+Pin base/head, real callers, old obligations and evidence; reuse still-applicable matching-condition results. C1/C4/C9 migrate execution producers, consumers and recovery together before retiring old normal paths. Method composition first uses existing local/replan records; decision application starts with one authorized caller before other adapters.
 
-On interruption or rollback, settle pending work under its original identity before routing new work to the qualified old path. Disabling an optional method/observer must not re-admit, redo an outcome or spend twice. Preserve sources, negative results and prior readback. Unavailable or ambiguous recovery remains failed/unknown rather than inventing session success.
+Each slice preserves disabled paths and historical reads. Disabling the new application consumer stops new adoption relations without reversing accepted outcomes, redoing work or spending again. Reconcile unresolved original receipts under their original identity; a new session cannot hide unknown recovery. Revoked sources reject related new applications without rewriting history. Rollback retains negative results and unknowns.
 
-## 9. Validation and acceptance
+## 9. Composition validation and acceptance
 
-| Scenario | Required observation |
+These qualify cross-owner seams; individual rules remain in owning specifications without parallel gates.
+
+| Scenario | Required composition evidence |
 | --- | --- |
-| Same work through quota/Turn/heartbeat | Equal obligations for ordinary work, wait, replan, Stop, interruption and replay; original Todo/Turn/effect binding, once-only settlement and no duplicate host execution. |
-| Concurrent review signals | Original sources, coverage, precedence and discharge conditions remain; unknowns do not cancel formed obligations, and justified continuation remains legal. |
-| Improving proxy, flat authoritative outcome | Scoped measurements inform the decision; subsequent actual work adopts calibration/method choice and receives independent outcome observation. A fidelity record alone is not adoption. |
-| Claimed progress consisting only of renaming | Keep typed claims and external assessment separate; handle the qualified original obligation, then perform work serving original acceptance. |
-| Cross-task experience reuse | Inspect evidence, candidate/activation, later exact read, current-artifact check, actual method and outcome; reject revoked, expired and wrong-scope experience. |
-| Skill candidate | Independently qualified procedure, applicability/counterconditions and rollback; distinguish generation, publication, installation and capability activation. |
-| Unchanged/off/provider unavailable | Preserve original obligations, results and defaults; no mandatory evaluation/distillation or invented benefit. |
+| Same work across entries | Ordinary, wait, replan, Stop, interruption and replay preserve obligations, original identity, once-only settlement and no duplicate host work; retain native/plain controls. |
+| Concurrent signals/methods | Existing trigger precedence; one choice by the current chooser; full review absorbs local evidence. Optional capabilities introduce neither another Controller nor an ordinary user gate. |
+| Stale, conflicting or incomparable evidence | Binding/scope validation rejects wrong relations; rereading is not execution; only operations depending on missing authority facts are held. |
+| Context-applied without method adoption | Old receipt remains readable with adoption/utility unknown; it cannot satisfy decision-artifact application acceptance. |
+| Decision adoption and execution | Original recall set, decision revision, method/candidate and independent result correspond. Other tasks, tampered artifacts, self-asserted verification and renaming alone cannot qualify. |
+| Cross-task experience | Trace original evidence, candidate/activation, later applicability, decision, execution and outcome. Reject expired/revoked/wrong-scope input and retain negative outcomes. |
+| Unchanged/off/provider failure/older host | No extra mandatory judgment, record or remote assessment; original work and obligations remain. Missing new evidence stays unknown; replay does not double-write or double-spend. |
+| Utility and Skill | Adoption/success does not automatically produce helpfulness; attribution follows the utility contract. Skill qualification, generation, publication, installation and activation have separate readback. |
 
-First qualify semantics, failures and product readback on isolated File/SQLite production entrypoints. A separate experiment protocol then compares original/candidate paths from matched starting state, task, model, budget and observation window. Isolate topology, context delivery and learning policy; retain native/plain. Freeze sample size, noise handling and analysis before outcomes. One case, fewer tokens, PR counts or receipts do not establish benefit. This RFC runs no such experiments.
+First qualify implementation on isolated File/SQLite production entrypoints. Changes affecting other authority backends retain their original required qualification. Product readback uses current work, prior choices, negative and unknown outcomes through App/CLI and affected Lark paths. Semantic tests do not establish learning benefit.
+
+A separate effect protocol freezes task/model/budget/starting state/window, arms, sample size and analysis. Change execution topology, context delivery or experience policy separately; include failures and complete costs. Single-case improvement, fewer tokens, receipts and PR counts do not qualify benefit. This RFC runs no such experiments.
 
 ## 10. Success criteria
 
-Structurally, each real caller has one owning semantic producer and duplicate interpretation is retired, while distinct questions retain owners. Behaviorally, subsequent work adopts feedback and independent acceptance succeeds; experience has attributable value in applicable new work. Economically, improve accepted outcomes under comparable constraints or achieve equivalent outcomes at lower complete cost. Report these dimensions independently; none offsets failure in another.
+Structurally, common execution has one owning semantic producer, method choice has a current responsible actor, and duplicate normal interpreters retire. Behaviorally, evidence reaches choices, choices reach real work and experience reaches applicable new choices, with refusal and recovery at each stage. For outcomes, improve authoritative results within comparable complete budgets or reduce complete cost for equivalent results. Report these separately; sound structure and complete records do not establish benefit.
 
-## 11. Smallest useful delivery and existing work
+## 11. Smallest complete delivery and existing work
 
-| Slice | Concrete delivery / existing owner | Exit evidence |
+| Slice | Concrete delivery / existing ownership | Exit evidence |
 | --- | --- | --- |
-| This RFC | Audit, replacement/composition mapping and unresolved choices; no runtime code. | Checkable sources and distinct facts/proposals/in-flight work; maintainer review. |
-| First local loop | Within existing Target/Stride/Explore work, select a task with actual counterevidence; use findings, prior decision and followthrough to expose gaps. Add only a demonstrated missing consumer/link. | Subsequent legal work actually adopts or justifiably rejects feedback, with authoritative outcome and complete cost; records alone do not qualify. |
-| Execution convergence | Continue C1/C4/C9 and #8266/#8484 to replace real entry/recovery paths under accepted contracts. | Single-session semantics, outcomes/cost against ordinary quota, off and recovery qualification; dual-session qualification separately. Order relative to the local loop only by real dependency. |
-| Cross-task reuse | Carry the lesson to a similar new task through existing authorized Reward Memory scope, retaining counterexamples. | Separate application, subsequent execution and utility evidence; optional Skill is a content change only when stable repeated procedure warrants it. |
+| This RFC | Correct role inventory; specify the chooser, composition order, decision application and complete example. | Distinct source/proposal/in-flight facts; inspectable inputs/outputs, costs, recovery and authority. |
+| One complete within-task method loop | Target/Stride/Explore owners connect scoped counterevidence, one choice, actual method, independent result and next judgment for a named task. | Reuse complete existing paths without rewriting for code volume; repair a real gap with its producer, consumer and failure readback together. A finding alone is insufficient. |
+| One cross-task experience adoption | Reward Memory and that caller add decision-artifact application, from qualified prior experience to a new applicable task's choice, execution and result. | Context and decision receipts remain distinct; wrong scope, expiry, artifact mismatch, off and replay qualify. Utility stays unknown without attribution evidence. |
+| Execution-contract convergence | C1/C4/C9 and #8266/#8484 continue entry/recovery migration. | Original-quota single-session semantics, outcomes/cost and recovery; qualify dual sessions separately. Order relative to feedback only by real dependency. |
 
-Assign through original tasks/owners without a fixed PR count. Discussion/design starts no experiment, spends no other lane's quota and copies no unmerged operator implementation into main.
+The first implementation task needs actual counterevidence or reuse demand. Selecting it prepares execution rather than substituting for the target design above. When a supposed gap is unsupported, record that existing capability suffices and reuse it. Full benefit experiments and Skill content changes keep their own scope; prescribe no PR count or other lane's quota.
 
-## 12. Open choices: AI proposals pending maintainer confirmation
+## 12. Choices requiring maintainer confirmation
+
+Recommend current-session composition, one current method chooser and original-owner qualification. Keep this document for cross-mechanism seams and reference owning specifications for detail. AI proposals are not prior approvals:
 
 | Choice | Recommendation and reason | Decision point |
 | --- | --- | --- |
-| RFC boundary | Keep cross-mechanism relationships and composition acceptance here; concrete rules remain with Controller, Target/Stride/Explore and Reward Memory. If maintainers prefer no separate RFC, absorb relevant sections into those owners to avoid durable duplication. | Before accepting this proposal. |
-| First task | Prefer an existing, evidenced proxy/authoritative disagreement or prior decision not adopted. Without evidence, begin with bounded diagnosis rather than inventing a failure. | Task owner selects before implementation. |
-| Record shape | Compose existing records/UI first. Extend the original versioned schema only for a demonstrated linkage gap; no universal episode yet. | After field/consumer mapping. |
-| Controller / learned Meta Model | First qualify existing single-session judgment and actual feedback adoption. Independent Controller follows its RFC; a learned policy needs matched data and counterfactual evaluation before a separate experiment. | Before execution-profile or policy changes. |
-| Skill creation | Candidate only when a stable, verifiable repeated process justifies maintenance; preserve existing review/publication authority and avoid mandatory distillation after each success. | When a named candidate exists. |
+| Decision application extension | Reuse the application schema for a receipt on the actual decision artifact; carry it through opt-in capability results and the original Turn journal, retaining old context receipts. This follows the real consumer more closely than a new episode or memory queue. | On design acceptance and corresponding Reward Memory/host-result specification updates, confirm field version and independent-verification contract. |
+| First caller/task | Choose an evidenced proxy/authoritative disagreement or a real need to reuse an existing lesson in engineering/research; confirm scope through the original task owner. | Before implementation; do not invent a failure to fit the example. |
+| Stronger policy/topology | Qualify current-session evidence adoption first; dual roles follow the Controller RFC, and learned policy/ranking changes require matched data and counterfactual evaluation. | Before changing profiles, policy implementation or provider ranking. |

@@ -2,226 +2,256 @@
 
 - **RFC 状态：** Accepted（合并后生效；合并前是讨论提案）
 - **替代 / 关闭：** 无
-- **交付成熟度：** Proposal；本文只交付源码盘点与设计，不改变运行行为。
-- **作者 / 归属：** LoopX maintainers；AI 辅助盘点和方案，关键选择待维护者确认。
+- **交付成熟度：** Proposal；本文交付源码盘点与目标架构，不改变运行行为。
+- **作者 / 归属：** LoopX maintainers；源码事实由路径支持，目标架构和取舍为 AI 辅助提案，待维护者审阅确认。
 - **创建日期 / 最近规范修订：** 2026-11-14
-- **实现基线：** `bd2718a485c86fe4f0ad4d1356fe9aeeccfed1ba`（下文 `main` 均指此版本）。
+- **实现基线：** `45cfd0c86d8f24d630ab66ad7f76784faa21c3f6`（第 4 节的 `main` 均指此版本）。
 - **语义镜像：** [English](mechanism-convergence-and-learning-loop-v0.md)
-- **关联：** [总体路线](loopx-overall-roadmap-v0.zh-CN.md)、[小内核](monorepo-distribution-split-v0.zh-CN.md)、[Controller/统一契约](controller-executor-unified-contract-v0.zh-CN.md)、[Target/Yardstick/Stride](target-yardstick-stride-decisions-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[记忆效用](post-outcome-memory-utility-attribution-v0.zh-CN.md)。
+- **关联：** [总体路线](loopx-overall-roadmap-v0.zh-CN.md)、[小内核](monorepo-distribution-split-v0.zh-CN.md)、[Controller/统一契约](controller-executor-unified-contract-v0.zh-CN.md)、[Target/Yardstick/Stride](target-yardstick-stride-decisions-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[记忆效用](post-outcome-memory-utility-attribution-v0.zh-CN.md)、[Goal 契约演化](goal-contract-evolution-v0.zh-CN.md)。
 
 ## 文档地图与维护契约
 
-第 4 节是固定源码版本上的事实，4.3 单列尚未合入的工作。其余正文是本提案的设计、取舍和验收，不能当作已实现或已确认的产品决定。第 12 节保留待决选择。本文不修改关联 RFC 的既有权限、默认值或晋升条件，不建立第二份路线图或执行队列。后续实现证据沿用所属 RFC/任务，历史记录进入 ledger。
+第 4 节记录固定版本的实现，4.3 单列未合入工作。第 5–11 节定义拟议的收敛后结构、调用关系、迁移和组合验收；它们不是当前已交付行为。本文持有跨机制的组合设计，单个能力的 schema、权限、默认值和晋升门仍归原规范；涉及改变时须同步修订所属规范，不能用本文覆盖。实施证据沿原 RFC/任务及 ledger 记录，不另建路线图或执行队列。维护者须核实并确认关键设计选择；本文不推定人工贡献比例或未确认观点的归属。
 
 ## 1. 决策摘要
 
-建议把“机制打磨”定义为：**减少同一决策的重复生产、传输和解释，使已验证反馈能进入后续选择，并证明采用后的结果。** 小内核解决加载、依赖和运行边界；这项工作解决在这些边界内如何作出更有效的选择。两者可以分别交付。
+机制重构的目标是：**让一次研究的证据改变后续方法选择，并让有效经验在适用的新任务中发挥作用，同时减少重复执行和解释成本。** 小内核解决加载与运行边界；本设计解决边界内的判断、反馈与复用。
 
-1. **执行路径收敛。** 沿现有 Controller C1/C4/C9 合并普通 quota、Turn 和 heartbeat 的重复契约及执行编排。quota 保留预算、准入和观察；heartbeat 保留唤醒；Turn 承担受治理工作生命周期。统一入口仍是在途设计。
-2. **方法组合共用证据和接缝。** Target、Yardstick、Stride、Explore 和 progress-review 保留各自回答的问题；复用现有 replan obligation、上下文、测量及结果写回。不同信号不压成一个“进展分”。
-3. **复用现有反馈链。** 把本次证据、决策、后续执行、结果、经验及下次应用按原身份连接，先用现有投影暴露断点。现有链路已经有部分实现；缺少的是组合采用与收益资格，不能声称要从零建闭环。
-4. **按真实决策触发。** 没有新决策或新证据的普通 Turn 不增加模型调用、人工确认或必填记录。复盘可以有依据地继续原方向；成功经历也不必都变成 Skill。
+建议采用以下结构：
 
-本 RFC 不批准实现、运行实验、启用能力、发布 Skill 或改变生产默认值。
+1. **一个受治理工作生命周期。** quota 决定可做什么，Turn 承接执行、验证和结算，heartbeat/Chat/benchmark 保留入口适配。普通工作契约及恢复沿 C1/C4/C9 收敛。
+2. **每个已准入工作只有一个当前方法选择者。** 单会话时是当前 Agent，已选择的双角色 profile 中是 Controller；二者共用决策语义。Stride 是工作尺度与复盘规格，Explore 提供证据和候选，Decision Context 提供有范围的事实核验及其独立审阅流程，它们不是三个并列指挥者。
+3. **事实投影、模型选择、确定性校验、执行观察分别负责。** 局部选择使用现有 Yardstick/finding，完整复盘使用 Stride/Vision；二者共享输入来源和后续观察，不合成一个万能决策记录。
+4. **经验作用于可审查的决策产物。** 区分上下文构造、方法采用、真实执行和后续效用。经验可以改变候选方法、验证顺序和范围内的投入选择；它不改变验收、权限或预算总额。
+
+本 RFC 不启动实验、启用能力、发布 Skill 或改变生产默认值。本文中的新增组合和字段均为设计提案。
 
 ## 2. 问题与动机
 
-用户需要的是在相同资源约束下更好的可验收成果，以及更少的重复研究和人工介入。机制数量、回执数量、记录已读和架构层次都不能代替这些结果。
+考虑一个任务：便宜的代理评测持续改善，权威评测却没有改善。系统需要决定继续搜索、校准代理、换方法还是直接做权威验证；随后应检查实际执行是否采用该决定，再决定什么经验值得带到下一任务。
 
-三个具体问题决定重构范围：
+当前已有评测、复盘、方法记录、记忆和效用组件，但“组件存在”不能回答三个组合问题：
 
-- **执行问题：** 相同工作从 heartbeat 或 Turn 进入，仍需处理不同 packet、结果和恢复入口；公共决策被调用方重新解释时容易分叉。
-- **选择问题：** 测试持续通过、代理指标持续变好，实际验收却没有改善。重复检测、外部评估、fidelity 和 Stride 分别发现不同问题，不能仅凭名字相似删除。
-- **复用问题：** 本次已经找到更好的方法，但下次可能只召回一段总结，没有核对适用条件、采用到实际工作或关联后续结果。保存轨迹只是起点。
+- 同一证据经过普通工作、完整复盘和能力上下文时，谁组织输入、谁作最终方法选择，哪些解释可以删除？
+- 方法选择后，怎样把原决定与实际执行、权威结果和完整成本连接，识别只改名、未采用或没有收益？
+- 下一任务召回经验后，怎样证明它进入了方法选择，而不只证明提示词里出现过？
 
-因此先问“哪个决定由谁负责，哪些证据真的进入了它”，再决定删除什么。新增一个统一框架会增加依赖、协议和维护成本，必须先证明现有 owner 不够用。
+执行入口重复与反馈采用不足是两类问题。统一入口降低分叉，却不会自行产生更好的研究策略；反馈设计也不应等待所有宿主完成迁移。二者按真实依赖实施。
 
-### 不变量
+## 3. 范围与不变量
 
-合法执行、成果验收、方法质量和经验效用分别判断；建议和记忆不能授予权限。原 Goal/Agent/Todo/Turn/effect 身份、claim/lease、Stop 和一次结算保持。事实、声明、采用和因果收益分别呈现；负结果及未知值保留。每项删除须找到实际消费者和恢复路径，不能以迁移代码行数宣称完成。
+覆盖工程与预算受限研究的执行、判断、证据和经验闭环；非数值任务继续使用原验收及定性证据，不强制发明分数。
 
-## 3. 范围
+原 Goal/Agent/Todo/Turn/effect、claim/lease、Stop、一次结算和验收权限保持。合法执行、成果验收、方法质量和经验效用分别判断。未知、失败、拒绝、取消和负结果保留；有证据支持原路线时，继续也可以是有效采用。
 
-盘点影响持续执行、选择、反馈和经验复用的机制，给出替代/合并关系、现有 owner 和最小验证切片。包括工程和研究工作；数值评测不是所有任务的前提。
+不新增机制管理器、workflow DSL、全局评分、通用 episode 库或 Python 决策 owner。不以完整 TS 迁移、双模型或特定记忆 provider 为前置。允许在原 owner 增加有实际消费者的关联；复用原模块不是禁止调整错误职责的理由。
 
-不新建机制管理器、workflow DSL、全局分数、事件总库或 Python 决策 owner；不把完整 TS 迁移、双模型、云端团队或特定记忆 provider 设为前置条件。多 Agent 沿原请求、接收方采用与结果返回契约验证。
+## 4. 当前架构盘点：按责任与真实路径划分
 
-## 4. 当前系统契约：有哪些机制
+### 4.1 七个责任边界
 
-“已有”表示代码路径存在，不表示所有宿主、产品旅程或长程收益已资格确认。下表按决定划分，不能按行数计算 capability 数量。
+下表是实现角色，不是新 capability 清单或七个待建服务。一个文件可以提供多个适配入口；是否合并取决于是否重复维护同一事实或规则。
 
-### 4.1 执行、上下文和恢复
-
-| 机制 | 当前负责什么 / 源码 | 关系判断 |
+| 责任 | 当前机制及实际归属 | 不承担什么 |
 | --- | --- | --- |
-| Goal / Vision / acceptance / Todo | 目标、路径、待办和验收分别有 owner；[Goal owner](../../../loopx/control_plane/goals/acceptance_authority.ts)、[interaction contract](../../../loopx/control_plane/work_items/interaction_contract.ts) | 关联使用；研究的局部 Target 不能替代原验收。 |
-| Claim / lease / effect / authority store | 所有权、并发围栏和幂等副作用；[lease](../../../loopx/control_plane/work_items/task_lease_acquire_decision.ts)、[Effect](../../../loopx/control_plane/effect_program.ts) | 是执行基础，不能被 controller 建议或经验替代。 |
-| Quota / should-run | 读取状态、准备工作、组合准入与恢复；[should_run.py](../../../loopx/control_plane/quota/should_run.py)、[run_decision.ts](../../../loopx/control_plane/quota/run_decision.ts) | Turn 已复用它；并非两套独立预算引擎。 |
-| Heartbeat / scheduler / automatic cadence | 唤醒、触发条件、启动间隔及观察；[task body](../../../loopx/control_plane/heartbeat/task_body.py)、[cadence](../../../loopx/control_plane/quota/automation_cadence.ts) | 可收敛公共生命周期；时间到期不等于有执行权限。 |
-| Public Turn / host adapter / settlement | 一次有界执行、独立验证、写回和结算；[run-once](../../../loopx/cli_commands/turn_run_once.py)、[executor](../../../loopx/control_plane/turn_driver/executor.py)、[settlement](../../../loopx/control_plane/turn_driver/settlement.ts) | 与 heartbeat 存在待替换的普通路径；原生会话差异保留在 adapter。 |
-| Turn Loop Controller | 从合格回执和新鲜决定产生 disposition；[loop_controller.ts](../../../loopx/control_plane/turn_driver/loop_controller.ts) | 确定性接续判断，不是模型 Controller 会话。 |
-| Quota packet / TurnEnvelope / work context | 相同准入源的不同投影、执行义务和精确上下文；[quota emitter](../../../loopx/cli_commands/quota.py)、[envelope](../../../loopx/control_plane/quota/turn_envelope.ts) | 重复正常 producer/解释分支是替代候选；诊断视图和历史 decoder 另论。 |
-| Capture / Progressive / Delta / history working set | 保存来源、按需交付、差分传输和历史可恢复性；[native lifecycle](../../../loopx/control_plane/quota/native_context_lifecycle.ts)、[Progressive](../../../loopx/control_plane/quota/progressive_context.ts) | 共用管线，语义不同：选什么、如何编码、如何恢复不相互替代。 |
-| Request / Inbox / peer handoff / return | 纠偏、请求修订、接收方工作和原受众返回；[request_control](../../../loopx/control_plane/collaboration/request_control.ts)、[return_delivery](../../../loopx/control_plane/collaboration/return_delivery.ts) | Controller 复用既有链；送达不等于接收方采用。 |
+| 目标与执行权威 | Goal/Vision/验收/Todo；[acceptance authority](../../../loopx/control_plane/goals/acceptance_authority.ts)、[quota decision](../../../loopx/control_plane/quota/run_decision.ts)、[lease](../../../loopx/control_plane/work_items/task_lease_acquire_decision.ts)、[effect](../../../loopx/control_plane/effect_program.ts) | 不由经验、评测分数或模型建议授予执行权。 |
+| 运行与恢复 | heartbeat/scheduler、[公开 Turn](../../../loopx/cli_commands/turn_run_once.py)、[executor](../../../loopx/control_plane/turn_driver/executor.py)、[settlement](../../../loopx/control_plane/turn_driver/settlement.ts)、[纯 continuation controller](../../../loopx/control_plane/turn_driver/loop_controller.ts)；[请求/纠偏](../../../loopx/control_plane/collaboration/request_control.ts)及[返回](../../../loopx/control_plane/collaboration/return_delivery.ts)沿原身份接入 | 唤醒不是准入；进程退出不是验收；接续控制器不替模型选择方法。 |
+| 上下文编排与交付 | [quota emitter](../../../loopx/cli_commands/quota.py)、[TurnEnvelope](../../../loopx/control_plane/quota/turn_envelope.ts)、Capture/Progressive/Delta/[native lifecycle](../../../loopx/control_plane/quota/native_context_lifecycle.ts)；[capability hooks](../../../loopx/control_plane/capability_hooks.py)及[贡献校验](../../../loopx/control_plane/turn_driver/capability_context.ts)绑定已选工作 | 选择内容、编码和恢复职责不同；投影不是新的事实库或方法决策者。 |
+| 方法选择及其规格 | 宿主中的 Agent 作判断；[Stride](../../../loopx/control_plane/work_items/stride_policy.ts)规范尺度/复盘，[Yardstick](../../../loopx/control_plane/work_items/yardstick_decision.ts)规范局部目标/尺子/下一方法，[replan semantics](../../../loopx/control_plane/work_items/replan_semantics.ts)校验既有义务 | TS codec 不会自行研究；结构化声明不证明方法执行或目标收益。 |
+| 证据、触发与事实核验 | [Explore context](../../../loopx/control_plane/capabilities/explore_turn_context.ts)及[result writeback](../../../loopx/capabilities/explore/result_writeback.py)管理 findings/measurement；[重复/周期触发](../../../loopx/control_plane/work_items/replan_history.ts)、[外部 review policy](../../../loopx/control_plane/work_items/progress_review_policy.py)形成有范围信号；[Decision Context](../../../loopx/capabilities/decision_context/README.md)、[Material Lifecycle](../../../loopx/capabilities/material_lifecycle/README.md)管理来源及核验 | 不把所有证据归一为一个分数。外部 assist 可按已启用策略形成义务，不能一概当作可忽略提示。 |
+| 经验及过程复用 | [Turn Recall](../../../loopx/capabilities/agent_turn_recall/core.py)、[Reward Memory application](../../../loopx/capabilities/reward_memory/application.py)、[procedural experience](../../../loopx/capabilities/reward_memory/experience_quality.py)、[utility](../../../loopx/capabilities/reward_memory/memory_utility.py)及[reducer](../../../loopx/capabilities/reward_memory/utility_reducer.py)、[Skill delivery](../../../loopx/capabilities/project_skill_delivery/README.md) | 构造上下文、采用方法、带来收益和发布过程是不同事实；不自动改 provider 排名。 |
+| 独立验证与质量 | 原任务 validator/验收、[change-quality](../../../loopx/capabilities/change_quality/README.md)、[Anti-Entropy](../../../loopx/capabilities/anti_entropy/README.md)专项 oracle | 质量通过不证明任务成功或经验有效；Anti-Entropy 不另持有 delivery receipt store。 |
 
-### 4.2 判断、验证与经验
+### 4.2 五条已经存在的链路
 
-| 机制 | 当前负责什么 / 源码 | 关系判断 |
+1. **准入到执行。** [`build_quota_should_run`](../../../loopx/control_plane/quota/should_run.py)准备来源、组合 route/guard、构造 payload；[`live_decision.py`](../../../loopx/control_plane/quota/live_decision.py)处理原回执和重入。`turn_run_once.py`消费该决定并调用`run_loopx_turn_once`。quota CLI 仍在 capture 后分投影；[`build_loopx_turn_plan`](../../../loopx/control_plane/turn_driver/driver.py)保留当前/历史契约分支。共享准入已经存在，正常输出与执行编排尚不能统称完成收敛。
+2. **复盘到后续观察。** [`autonomous_replan_obligation_from_runs`](../../../loopx/control_plane/work_items/autonomous_replan_obligation.py)让 typed repeat 优先，再按 pinned assist policy 处理外部评价，最后采用普通触发。分阶段读取及 ACK 属于该义务；`replan_semantics.ts`与[`progress_delta.ts`](../../../loopx/control_plane/work_items/progress_delta.ts)校验 Stride 及记录的语义变化，不是独立成果评测。[`decisionFollowthrough`](../../../loopx/control_plane/work_items/replan_context.ts)关联原决定、计划 Todo 和后续记录，仍明确保留`execution_and_goal_gain: unknown`。
+3. **局部方法到执行记录。** `normalizeWorkYardstickDecision`已有`next_action.method_id/reason/cost_bound`和`prior_finding_id`；`projectWorkYardstickCue`已有`previous_decision_followthrough`，比较计划与执行方法。Explore 的[`execution_observation`](../../../loopx/control_plane/capabilities/explore_execution_observation.ts)已有候选摘要、实际方法、变更原因、成本及结果引用。它们是可校验的记录关联，独立验收仍需原 evaluator。
+4. **外部事实到有范围的决定。** Decision Context 的[`runtime`](../../../loopx/capabilities/decision_context/runtime.py)组织来源与召回；[`review_settlement`](../../../loopx/capabilities/decision_context/review_settlement.py)对提案要求原 user-gate 事件，无提案的合法`no_change`有独立路径；[`outcome_feedback`](../../../loopx/capabilities/decision_context/outcome_feedback.py)连接后续结果。不能把这个完整审阅生命周期强加给每个普通 Turn。
+5. **记忆到当前上下文。** `run_agent_turn_recall::apply_guidance`以`outcome=applied`把经验放入当前私有 context，`artifact_ref`是 situation fingerprint；代码明确把适用性判断留给 Agent。因此这里的 application 证明作用于上下文产物，单凭它不能证明宿主阅读、方法采用或真实执行。通用`apply_reward_memory_recall`已支持 caller-owned application，但其布尔声明也不能代替独立产物检查。[`turn_hooks.py`](../../../loopx/capabilities/reward_memory/turn_hooks.py)已有 recall 与结果后 ingest；当前自动结果字段是经验 reflection，不是通用的方法采用证明。
+
+### 4.3 默认值与在途边界
+
+[`machine_defaults.py`](../../../loopx/capabilities/todo_replan_cadence/machine_defaults.py)在 Goal 无显式 cadence override、机器配置也未覆盖时，继承每 **6 个有效工作 Turn** 复盘及`evidence_conditioned_v1` Stride。显式 off、机器设置和旧配置各保留原意；底层 schema 的 off 不是产品整体默认。Yardstick 独立默认 false；Explore 无显式/机器配置时为 off。progress-review、Reward Memory、Decision Context、Material Lifecycle 保留各自启用边界。
+
+| 在途工作 / 核对 head | 可复用方向 | 不属于上述 main 事实 |
 | --- | --- | --- |
-| Progress observation / semantic delta | 记录有类型的进展，验证可接受的语义变化；[progress_delta.ts](../../../loopx/control_plane/work_items/progress_delta.ts)、[replan_semantics.ts](../../../loopx/control_plane/work_items/replan_semantics.ts) | 合法写回判断，不是独立成果评测。 |
-| Repeat/stall fuse / periodic review / monitor repeat | 从已记录工作发现重复、停滞和复盘到期；[replan_history.ts](../../../loopx/control_plane/work_items/replan_history.ts) | 多个触发器已共用 obligation；保留触发依据和不同盲点。 |
-| External progress-review | 消费绑定版本的外部评估回执；shadow 只观察，assist 可形成既有 obligation；[policy](../../../loopx/control_plane/work_items/progress_review_policy.py) | 与 typed repeat 互补，默认 off；不是第二套重规划器。 |
-| Autonomous replan / staged read / ACK | 组合义务、分阶段读取并验证解除；[obligation](../../../loopx/control_plane/work_items/autonomous_replan_obligation.py)、[semantics](../../../loopx/control_plane/work_items/replan_semantics.ts) | “分阶段交付”属于同一决策流程，不另建策略 owner。 |
-| Stride / previous review / followthrough | 选择工作规模、方法变化、验证范围，审视前次采用；[stride_policy](../../../loopx/control_plane/work_items/stride_policy.ts)、[replan_context](../../../loopx/control_plane/work_items/replan_context.ts) | 已有局部反馈链；不能把增加复盘次数当作扩大有效工作。 |
-| Target / Yardstick | 绑定任务目标、权威/代理测量、反证和下一方法；[yardstick_decision.ts](../../../loopx/control_plane/work_items/yardstick_decision.ts) | 与 Stride 组合，不能把代理分数当验收。 |
-| Explore graph / findings / harness planning | 管理问题、发现、测量、覆盖和候选规划；[turn context](../../../loopx/control_plane/capabilities/explore_turn_context.ts)、[result writeback](../../../loopx/capabilities/explore/result_writeback.py) | 提供研究证据及建议；Todo/quota 仍负责实际执行。 |
-| Decision Context | 按来源 revision 扫描、精确阅读、冲突处理和 proposal/review/outcome；[runtime](../../../loopx/capabilities/decision_context/runtime.py)、[contract](../../../loopx/capabilities/decision_context/README.md) | 共用事实读取原语；不是所有 Turn 都必须经过的全局裁决器。 |
-| Material Lifecycle / authority registry | 材料版本、清单、排名、迁移与回滚；[material contract](../../../loopx/capabilities/material_lifecycle/README.md) | 可向 Decision Context/Explore 供源；材料排名不能替代工作选择或经验效用。 |
-| Agent Turn Recall | 用已选择工作构造情境和查询；[contract](../../../loopx/capabilities/agent_turn_recall/README.md) | Reward Memory 的入口适配器，共用 corpus/provider，不另建记忆库。 |
-| Reward Memory / procedural experience | 有范围的候选、激活、召回、当前产物核对和应用；[application.py](../../../loopx/capabilities/reward_memory/application.py) | 经验是条件性指导；工作状态、硬规则和软偏好不能混成一种记忆。 |
-| Post-outcome utility | 把应用回执与后续结果关联，验证归因并归约；[memory_utility.py](../../../loopx/capabilities/reward_memory/memory_utility.py)、[reducer](../../../loopx/capabilities/reward_memory/utility_reducer.py) | 已有实现接缝；applied 与 helpful 分开，不能从成功自动推断效用。 |
-| Skill / project skill delivery | 分发版本化流程及其支持文件；[delivery contract](../../../loopx/capabilities/project_skill_delivery/README.md) | 是可复用过程的交付形式；分发机制不证明自动学习、适用性或收益。 |
-| Anti-Entropy / change-quality / task validation | 退役验证、最终 diff 质量资格与任务成果验证；[Anti-Entropy](../../../loopx/capabilities/anti_entropy/README.md)、[change-quality](../../../loopx/capabilities/change_quality/README.md) | 专项 oracle 可组合；删了代码、质量通过、任务成功仍是不同结论。 |
+| [C1 #8266](https://github.com/loopx-project/loopx/pull/8266) · `26a7480a3b4b` | 统一 work source、capture/reader、恢复。 | 全部普通 writer/consumer 已切换。 |
+| [Turn #8484](https://github.com/loopx-project/loopx/pull/8484) · `b7e4e01cc423` | 单/双角色及统一 runtime entry。 | `loopx turn run`已发布、双会话收益或默认晋升已成立。 |
+| [方法算子 #8516](https://github.com/loopx-project/loopx/pull/8516) · `5afb98cf8ea8` | 五阶段组织六类 advisory 方法，复用测量与摘要。 | 算子已合入，或方法阶段可取得 Turn 执行权。 |
 
-### 4.3 调用链、默认值和在途边界
+三个 PR 在核对时均为 OPEN。本文不借用其测试声明作为本次验证。
 
-已核对的真实路径是：`build_quota_should_run` 先准备来源、组合 route/guard，再构造 payload；`resolveQuotaRunDecision` 负责一组类型化准入判断。`live_decision.py` 还处理原回执绑定及重入。`turn_run_once.py` 使用 quota 决定并进入 `run_loopx_turn_once`，不是新建预算系统；quota CLI 仍先 capture、再做 CLI/native 投影，Turn plan 保留 current/历史 envelope 分支。
+### 4.4 本次设计要补的组合边界
 
-重复检测、周期复盘与外部 progress-review 已在 `autonomous_replan_obligation.py` 合流；typed repeat 优先。`replan_semantics.ts` 已复用 Stride 和 progress delta。`replan_context.ts::decisionFollowthrough` 已连接前次决策、计划 Todo 与后续记录。这些共享边界应复用，不能重新计作待建基础设施。
+执行契约统一已有 C1/C4/C9 归属；局部选择、复盘和方法执行观察也已有具体实现。本提案补的是：**同一次判断的输入与责任如何组合，以及上下文 application 如何继续关联到真实决策产物。** 前者不能靠把多个模块画在一个框里完成；后者存在上文可定位的语义缺口。本文不据此宣称所有调用方都缺功能，实施时逐个核对真实消费者。
 
-默认值要沿继承链核对：[`machine_defaults.py`](../../../loopx/capabilities/todo_replan_cadence/machine_defaults.py) 在机器配置也未覆盖时，为无显式 cadence override 的 Goal 默认继承每 **6 个有效工作 Turn** 复盘、`evidence_conditioned_v1` Stride；机器配置、显式 off 和旧配置保持各自含义。底层 Stride schema 的 `off` 不是完整产品默认。Yardstick 独立默认 false；Explore 缺少显式/机器配置时为 off。progress-review、Reward Memory、Decision Context 和 Material Lifecycle 的可选行为各有原启用边界，不能因本文组合而自动激活。
+## 5. 收敛后的目标设计（AI 提案，待维护者确认）
 
-以下工作在审计时仍 **OPEN**，不属于本节 main 事实，也不引用其测试声明作为本文验证：
-
-| 在途工作 / 核对 head | 可借鉴之处 | 不能提前宣称 |
-| --- | --- | --- |
-| [C1 #8266](https://github.com/loopx-project/loopx/pull/8266) · `2a863df8e7af` | 一个 work source、capture/reader 和恢复契约。 | 全部普通 writer/consumer 已切换。 |
-| [Turn 角色/入口 #8484](https://github.com/loopx-project/loopx/pull/8484) · `b7e4e01cc423` | 单 Worker/双角色复用准入和结算；提议 heartbeat、产品、benchmark 共用运行入口。 | `loopx turn run` 已发布、双会话反馈普遍有效或可替换默认。 |
-| [方法算子 #8516](https://github.com/loopx-project/loopx/pull/8516) · `5afb98cf8ea8` | 五阶段组织六类方法，共用测量/摘要原语。五阶段是方法合同，六算子仍 advisory。 | 已合入 main，或与 Turn 生命周期同名即可共用执行权。 |
-
-## 5. 提议架构与合并决策
-
-### 5.1 一个执行生命周期，多种有范围的判断
+### 5.1 运行负责调用，模型负责选择，原 owner 负责校验
 
 ```mermaid
 flowchart TD
-    INPUT[用户输入 / Inbox / heartbeat] --> ADMIT[既有 Core：目标、权限、工作选择、quota]
-    ADMIT --> EXEC[共享 Turn 生命周期：执行、验证、写回、一次结算]
-    SOURCES[来源 revision / 当前事实 / 条件性经验] --> CHOOSE[既有 Stride / Explore / Decision Context：选择工作与方法]
-    ADMIT --> CHOOSE
-    CHOOSE --> EXEC
-    EXEC --> OBS[成果、测量、失败与完整成本]
-    OBS --> REVIEW[既有 replan：复盘、继续或修订]
-    REVIEW --> CHOOSE
-    OBS --> EXP[Reward Memory：有范围的经验候选]
-    EXP --> APPLY[下次工作：精确核对、应用及结果归因]
-    APPLY --> SOURCES
-    EXP -.经原 owner 审阅、独立验证且适合程序化.-> SKILL[版本化 Skill]
+    ENTRY[用户请求 / heartbeat / 产品入口] --> CORE[Core：准入、原工作身份、复盘义务]
+    CORE --> CONTEXT[既有上下文编排：绑定来源与工作]
+    SOURCES[Explore / 权威来源 / 条件性经验] --> CONTEXT
+    CONTEXT -->|需要方法判断| AGENT[当前 Agent 或已选 Controller：作一次选择]
+    CONTEXT -->|无新判断需求| WORK[原授权范围内执行]
+    AGENT --> CHECK[原 typed owner：校验选择、证据、权限]
+    CHECK -->|合法的局部工作| WORK
+    CHECK -->|完整复盘的计划写回| SETTLE[原身份验证、写回与一次结算]
+    WORK --> OBS[原 finding 与实际执行 / 结果证据]
+    OBS -->|下一局部判断点| CONTEXT
+    OBS --> SETTLE
+    SETTLE -->|后续新工作重新准入| CORE
+    SETTLE -.已启用且独立证据合格.-> MEMORY[Reward Memory：经验候选与原激活流程]
+    MEMORY -.后续获准 scope 的召回.-> SOURCES
 ```
 
-图中的决策与准入仍遵守实际调用顺序和各自权限；它不是新运行图、并行任务授权或新增阶段门。
+这是目标调用关系，不声称统一入口已交付。当前工作内的局部反馈不新建 Turn 或重复扣工作配额，模型/工具耗费仍计入原预算；完整 replan 形成计划并按原身份结算，新任务再由 Core 准入。宿主提供模型和工具；运行编排不自行调用“研究模型”，也不把所有 capability 依次跑一遍。
 
-### 5.2 哪些替代、哪些合并、哪些保留
+当前方法选择者由已有 session/attempt 绑定决定，不能因为启用 Explore、Decision Context 或经验就多启动一个 Controller。双角色只沿原 Controller RFC 的 profile 进入，Worker 观察返回原 Controller；多 Agent 仍沿原请求、接收方采用和结果返回契约，不产生全局方法指挥者。
 
-| 对象 | 建议 | 为什么 / 退役边界 |
-| --- | --- | --- |
-| 普通 quota 执行 packet 与 Turn 契约、重复结果/恢复编排 | **替代关系：沿 C1/C4/C9 收敛正常路径。** | 相同工作不应有两个语义 producer；先迁消费者及原回执恢复，再删分支。quota policy、外层唤醒、原生 transport 和历史 decoder 各守原 owner。 |
-| Heartbeat / benchmark / Managed / Chat 的公共执行 | **合并公共生命周期，保留入口适配。** | 共享准入、验证、结算；复用已绑定会话，不能从每个入口再启动一个 Worker。Native/plain benchmark 对照保留独立。 |
-| Repeat / periodic / external review / capability-specific signal | **已有 obligation 合流；只合并重复上下文和解除解释。** | 保留信号 provenance、覆盖、优先级和各自解除条件。一个未知的外部评价不能抵消已形成的义务；不增设“通用复盘引擎”。 |
-| Target / Yardstick / Stride / Explore 方法 | **组合，不折叠语义。** | 目标、尺子、工作尺度与候选搜索是正交判断。沿 #8516 可共用 digest、可比 scope、bounded view 和方法阶段；数值 oracle 不进入 generic kernel。 |
-| Work context / Decision Context / Turn Recall | **合并共享读取/身份/来源处理，保留语义 adapter。** | 当前工作事实、外部证据核验和条件性经验不同；本就存在的共享 hook 不再复制。Decision Context 不接管 Core。 |
-| Capture / Progressive / Delta | **一个交付管线内独立组合。** | Capture 是恢复源，Progressive 选择首读/详情，Delta 是编码。关闭一项不应隐式关闭其他项，也不能丢失未读证据。 |
-| Explore finding / working context / procedural experience / Skill | **生命周期可衔接，不相互替代。** | 本次发现、会话接续、可迁移教训和可执行过程的适用范围及失效条件不同；成功一次不意味着值得发布 Skill。 |
-| Progress-review / Yardstick / task validation / memory utility | **共享证据引用，保留不同评价。** | 是否空转、代理是否可信、成果是否达标、经验是否有帮助不是同一个评分问题。 |
-| Anti-Entropy 与 change-quality | **专项验证器进入现有质量流程。** | Anti-Entropy 已声明不另存 delivery receipt。保持单一最终资格 owner，不能再建平行质量账本。 |
-| 模型 Controller 与纯 Turn Loop Controller | **协作，保留双重职责。** | 前者选择内容和方法；后者验证合法接续。更强模型不能代替确定性围栏。 |
+### 5.2 同一次判断的输入与输出
 
-### 5.3 用现有记录接成可检查的证据链
+以下是现有记录的语义映射，不是新增万能 packet；普通工作无相关变化时不要求填写整张表。
 
-不先定义万能 episode schema 或新 journal。以当前投影连接以下已有身份；缺链显示未知，不能用摘要补造事实。
-
-| 要回答的问题 | 复用的 owner / 记录 |
+| 输入 / 输出 | 来源、消费者和约束 |
 | --- | --- |
-| 什么事实触发这次判断？ | 来源 revision、quota capture、replan obligation/context；Explore measurement/finding。 |
-| 选择了什么，为什么继续或改变？ | Stride decision、Vision/path delta、Explore 的 work-yardstick finding，或本来就需要的 Decision Context proposal。 |
-| 后续是否真的采用？ | 原 Todo 的实际工作与验收引用、`decisionFollowthrough`、后续 Turn/settlement；有界视图保留完整详情入口。 |
-| 结果和成本是什么？ | 任务权威验收、原 measurement scope、失败、provider/host usage 及人工介入；缺项保持未知。 |
-| 哪些内容可迁移？ | Reward Memory 的 procedural-experience 候选、适用条件、来源版本、反例及原激活策略。 |
-| 下次是否使用且有帮助？ | Recall/application receipt 加当前产物核对，再关联 verified outcome 与 utility observation。成功且 applied 仍不自动等于 helpful。 |
+| 已准入工作及硬约束 | 原 work source/capture、Goal 验收、Todo、lease、范围和预算。上下文编排读取；任何能力都不能覆盖。每次有副作用的操作仍核对当前权限。 |
+| 判断触发 | 原 replan obligation，或新相关 finding、scope/来源变化、probe 到边界、Agent 主动重估。到期复盘优先进入其原流程；局部选择不解除完整义务。 |
+| 判断依据 | Explore 的同 scope 测量/候选、前次决定与执行观察；需要时精读外部来源；已启用的经验只提供条件性建议。每组保留 revision、缺失项和详情入口。 |
+| 局部选择输出 | Yardstick 已启用时，沿`work_yardstick_decision`记录 target、权威/代理 profile、反证、`next_action`和前序 finding；其他情况沿原任务/路径记录。组合不自动启用 Yardstick，也不发明数值评测。 |
+| 完整复盘输出 | 沿 Stride/Vision 记录 action、工作尺度、`next_probe`、`previous_review`及必要 Todo delta；不要同时维护一份独立局部计划。 |
+| 采用与结果输出 | 当前决定引用、实际方法/候选、偏离原因、独立结果与成本进入原 finding/工作历史；经验应用引用进入原 Reward Memory 回执与 Turn 结果，不复制工作状态。 |
 
-经验需说明“在什么条件下，选择什么方法，为何有效或失败，下次如何验证”，不能只有事件摘要。仅当过程稳定、可验证、值得重复执行时，经现有内容/发布权限生成 Skill 候选。保留经验到 Skill 的来源关系、禁用和回滚；发布另行授权。当前 project-skill delivery 只负责分发，不补造自动蒸馏能力。
+编排只组合有资格的来源；投影去重以原身份/revision 为依据，不能把不同语义的“评分”合成一个值。共享读取与范围比较留在既有 TS owner，Python 保留必要 provider IO 和适配。
 
-### 5.4 现有代码放置与删除候选
+### 5.3 触发、冲突与写回顺序
 
-- **执行收敛：** `cli_commands/quota.py::_publish_quota_result`、`quota/cli_projection.py`、`turn_driver/driver.py::build_loopx_turn_plan` 和 heartbeat renderer 由 C1/C4 owner 迁移；本文不另写第三个 serializer。
-- **判断组合：** 复用 `replan_history.ts`、`replan_context.ts`、`replan_semantics.ts`、`stride_policy.ts` 及 `capabilities/explore_*`。若 #8516 合入，直接采用其已审阅原语；未合入时不复制一份。
-- **经验复用：** 复用 `agent_turn_recall`、`reward_memory/application.py`、`memory_utility.py` 与既有 post-settlement hook。缺少某段 lineage 时先在原 owner 补最小引用及消费者，不新建队列。
-- **产品回读：** 现有 Goal 工作区、研究历史、工作详情和 CLI 显示“依据→选择→实际采用→结果→复用”及缺口；不要求用户配置内部五阶段。改变操作体验时仍验收 App/CLI 及受支持 Lark 路径。
+1. **先确定工作与义务。** Core 的拒绝、等待、Stop 和恢复决定保持；原身份仍有效的范围内工作按原合同继续。方法建议不能跳过 gate，也不能把可选 provider 故障升级成整个 Goal 的停止。
+2. **再组织决策相关证据。** Explore 负责测量 scope 与候选来源；Decision Context 仅在已配置的权威来源核验需求上参与。其证据可以供当前判断读取；若调用其正式提案流程，仍完成它原有的审阅，不能把该 gate 偷换成普通方法选择的统一入口。
+3. **按问题处理冲突。** 权威验收由原 owner 定义，代理只引导搜索；旧经验遇到当前反证须重新核对。不可比 scope 分开呈现。权威来源互相矛盾且会影响拟执行操作时，沿原 authority/user-gate 路径解决该操作；不阻塞无依赖的已授权工作。多个复盘信号仍沿现有优先级和解除语义。
+4. **当前模型形成一个方法选择。** 比较继续、校准、换方法、直接验证等适用候选，给出理由、有限投入和下次判断条件。没有可靠比较依据时选择有界验证或保留未知，不编造收益排序。经验只改变候选、理由或验证安排，不另产一份竞争的 next action。
+5. **原 typed owner 校验并记录。** 校验工作绑定、已读来源版本、证据引用和范围；过时输入回到原 reader 重读。方法/schema 拒绝不能被“建议态”措辞绕过。局部选择进入原 finding；到期复盘吸收同一证据，只写原 Stride/Vision 决定。
+6. **观察真实采用。** 原执行观察关联 planned/executed method 和产物；独立验收判断结果，usage 记录完整成本。只有声明、名称变化或上下文注入时，采用/收益仍未知。回放只补缺失关联，不重新执行、创建工作或结算。
 
-以上是候选边界，实施前重查 main、开放 PR 和 canonical Todo。只有真实重复且义务等价的 producer/解释器可删；历史恢复协议和宿主差异不能因外观相似被清除。
+跨范围改目标、依赖、验收或预算时，沿原 Todo/Vision/authority 流程取得相应合法变化；不以`grow/switch/verify`动作词推断权限。
+
+### 5.4 经验怎样改变下一次研究
+
+保留两个反馈时间尺度：本任务的 findings 和执行观察进入下一次局部选择/复盘；跨任务教训通过 Reward Memory 的原候选、激活和 scope 规则进入后续任务。当前工作状态不通过长期记忆同步。
+
+可复用经验沿现有`procedural_experience_contract_v0`表达适用条件、观察结果、归因限制，以及`future_behavior.trigger/action/validation/stop_condition`。它在下一任务可以提出候选方法、调整验证顺序、缩小无效搜索或建议范围内的投入；当前 Agent 对照新任务事实选择采用、忽略或反驳。方法策略变化由这次选择产生，不能从“历史成功”直接自动改策略参数或 provider 排名。
+
+**补充决策产物上的 application，保留原上下文回执。** `agent_workflow.turn_admission`现有 application 继续描述 context 产物，历史含义不改。在已获授权的 recall surface 内，为 caller 的采用/忽略/反驳判断注册可选的 capability result 字段，拟名`reward_memory_application_json`，随原宿主回复返回；复用原启用条件与预算，不增全局开关。它只携带原 recall/application 引用、当前决策产物引用/版本、所选经验的 opaque 引用及判断，不携带 provider 私有正文或新的执行命令。
+
+该字段的消费者放在`reward_memory/turn_hooks.py`及原 application owner：读取原 capture 的精确 recall 绑定和合格引用/摘要集合，检查实际决策产物和来源，复用现有 application schema 生成**另一条绑定决策产物的回执**。`application_id`按原 recall 与决策产物版本在不同命名空间稳定产生；`artifact_ref`指向真实决定，不能继续使用 situation fingerprint 充当决定。选择及其与经验相关的理由由既有 Yardstick/Stride/任务记录承载，结果字段只关联它，不复制计划。共享身份/版本校验落在既有 typed 边界，Python hooks 保持 IO/caller 适配，不另持有一份语义规则。
+
+这是拟议的 caller adapter 扩展，不是主干已有行为。实现须在原规范中明确字段版本及消费者兼容；复用 Turn journal/结果捕获保存回执，不新建 application 队列。消费时拒绝不属于原召回集的引用、错误工作/revision、缺失产物，以及仅自报`current_artifact_verified=true`而无独立核验依据的输入。原 recall 证据丢失时保留未知，不能重新查询 provider 后冒充原召回。无相关判断时，未注册字段不出现；严格宿主要求所有已注册属性时返回空字符串。首个 caller 的每次结果只核验一个实际决定版本；更早或未观察到的决定仍未知，不能被该回执一并覆盖。旧 context-only 结果仍可读取。
+
+产物检查核实的是记录中的选择是否落实或拒绝了所引经验；它不能证明模型内部的因果过程或后续执行，引用及回执本身都不足以作这些推断。
+
+后续将决策回执与`execution_observation`及已验证 outcome 关联，再由已有 utility owner 处理。方法被采用、执行成功都不足以推出 helpful；没有归因证据就保留 unknown。可选 evaluator 使用原有有界预算与去重，后置于成果结算；它不阻塞已完成成果，也不反向重开执行。稳定过程才形成 Skill 候选，发布、安装和激活分别走原权限。
+
+### 5.5 代码归属、合并与退役
+
+| 变化 | 具体落点 | 保留 / 删除的边界 |
+| --- | --- | --- |
+| 统一普通执行契约与生命周期 | `quota.py::_publish_quota_result`、`quota/cli_projection.py`、`turn_driver/driver.py::build_loopx_turn_plan`、heartbeat renderer；沿 C1/C4/C9 实施 | 退役重复正常 producer/结果解释器；保留 quota policy、入口适配和有真实消费者的历史 decoder，不能只增加门面。 |
+| 组合输入，保留单一方法选择者 | `explore/turn_context.py`、`work_items/replan_context.ts`、`yardstick_decision.ts`及现有 capability hooks | 合并重复读取、scope 比较和详情引用；普通选择与完整 replan 仍用各自合适的记录。Decision Context 不成为强制总入口。 |
+| 从选择追到实际方法 | `explore/result_writeback.py`、`explore_execution_observation.ts`、`projectWorkYardstickCue`和`decisionFollowthrough` | 已有字段先复用；修复真实缺失消费者。旧历史不能从后来的摘要补造执行证据。 |
+| 从上下文经验追到决策采用 | `agent_turn_recall/core.py`保留原回执；`reward_memory/turn_hooks.py`注册可选结果，`application.py`生成决策产物回执，`memory_utility.py`消费合格 lineage | 原 caller 负责产物核验，typed 边界负责身份/结构；不把通用 Core 改成记忆决策器，不把 context-applied 当方法采用。 |
+| 产品回读 | 既有 Goal 工作区、工作详情、研究历史和 CLI | 同屏说明“基于什么、选了什么、实际做了什么、结果怎样、经验是否采用”；缺项显示未知，详情沿原记录读取。改变交互时验收 App/CLI 和受支持 Lark。 |
+
+不复制 #8516 的在途实现；其合入后直接采用已审阅的共用原语。任何抽取须有真实重复消费者；不先创建“机制组合器”目录。每次迁移同步改消费者并退役旧正常分支，恢复兼容单独验证。
+
+### 5.6 完整场景走读：代理改善而权威结果不变
+
+以下是设计示例，未执行实验，也不宣称当前任务普遍存在此问题。
+
+| 阶段 | 收敛后的行为与原记录 |
+| --- | --- |
+| 发现分歧 | 当前已准入任务保留验收与预算。Explore 保存同候选、同 workload/revision 的代理和权威测量；缺失或不可比的结果不能制造分歧。 |
+| 作出选择 | 当前 Agent 读取分歧和原方法，比较继续搜索、校准/替换代理、直接权威验证。示例选择先验证代理误导的范围，在`next_action`写方法、理由和成本界限；若完整复盘已到期，合入该次 Stride/Vision。 |
+| 真实执行 | 在原合法范围内运行选定验证；记录实际方法、候选、输入、耗时、终止原因及独立结果。执行改用了其他方法时保留原因；回执不能替代产物。 |
+| 本任务反馈 | 下次判断读取前次决定与执行结果。若反证成立，缩小代理适用范围或改验证方式；反证不成立则有依据地保留原方法。未改善权威成果可以形成有用负证据，但不宣称收益。 |
+| 形成经验 | 经已启用的原 ingest/候选资格，把“何种任务条件下代理误导、应怎样验证、何时停止适用”写入经验；validator 必须核验该 reflection 及证据。一次成功不自动发布 Skill。 |
+| 后续任务采用 | 相似新任务在原获准 corpus/scope 召回，核对当前条件。适用时把前述验证提前到搜索前；决策产物引用经验，生成独立的决策 application，随后核对实际执行。条件不同则忽略/反驳，仍保留原合法工作。 |
+| 判断是否有用 | 原验收观察新任务结果及完整成本；独立匹配对照决定是否支持经验效用。只有投递、采用或单次成功时分别报告，效用不补成正值。 |
+
+此场景的结构变化是证据进入原方法选择、决定关联到实际执行、经验关联到下次决策产物；没有新增调度器或自动政策写入。
 
 ## 6. 备选方案、外部参照与主要代价
 
-| 方案 | 取舍 |
+| 方案 | 取舍与选择 |
 | --- | --- |
-| 只做 turn/quota 入口统一 | 必须做，能降低分叉和维护成本；单独不能证明方法选择或跨任务复用改善。 |
-| 新建万能机制引擎/全局评分 | 不采用：引入第二 owner、协议和迁移成本，还会混淆合法性与质量。 |
-| 仅把提示词改短 | 可作有界优化；若丢义务或后续增加补读，净成本可能更高，不能代替语义收敛。 |
-| 本提案：现有 owner 收敛＋反馈采用资格 | 推荐；局部可回退，但必须核对每个字段、来源、消费者和后续成果，前期审计成本较高。 |
+| 只统一 quota/Turn，其他方法各自组织上下文 | 降低执行分叉，不能解决方法输入重复和经验只到上下文的问题；保留为执行迁移的独立切片。 |
+| 当前会话组合证据并选择，结果后独立沉淀经验 | **本提案推荐。** 复用原回复与绑定，额外成本主要是来源读取、结果核验及有界记忆 IO；组合契约和引用校验需要维护。 |
+| 每次判断都增加独立 Controller/评估会话 | 可增加独立判断，但增加模型调用、上下文同步和故障恢复；只按原可选双角色 profile 验证，不作为机制收敛前置。 |
+| 仅离线总结并在下次召回 | 对当前执行侵入小，但缺少本任务纠偏和决策采用证据；可用于经验候选，不能单独完成本设计。 |
+| 通用引擎、统一分数或事件总库 | 引入第二 owner 并抹平验收、质量和效用差异；无当前必要消费者，不采用。 |
 
-外部参照只支持边界选择，不作为 LoopX 效果证据：[LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) 区分 thread checkpoint 和跨 thread store；由此借鉴恢复状态与长期经验的分工。[Voyager](https://voyager.minedojo.org/) 分开探索课程、可组合代码 Skill 与环境反馈；由此借鉴“验证后形成可复用过程”，不能把其 Minecraft 结果外推为 LoopX 研究收益。以上映射是本提案的判断。
+初始规模是单 Agent 的工程或预算受限研究，再按原 peer 合同验证接收方采用。无新相关判断时，**相对原配置不增加**模型调用、强制记录或远程评估；已启用的原 recall 行为仍按原策略执行。真实判断在既有回复中完成；核验与精读有成本，必须计量，不能因同会话就算免费。
 
-初始适用场景是已有单 Agent 的工程工作及预算受限研究，再验证 peer 接收采用。新增成本包括判断/核验的模型 token、来源精确读取、真实评测、失败探索、capture 和历史保留、跨语言/RPC、恢复及人工审阅。多会话会增加上下文和协调成本；云端扩大规模还涉及租户隔离、共享资源计量及运维，沿原 authority/quota 合同处理，本文不宣称已解决。
+分开计量准入/交付、判断、执行/验证、结果后记忆四段的延迟、bytes/token、provider/工具调用、保留空间与人工介入。记录 p50/p95 及完整费用覆盖；未知不记零。先复用来源 revision、bounded view 和原去重；不增加每字段 RPC、不每轮全历史扫描、不为普通静默工作加载所有可选能力。原调用、输出及回放预算保留，超限时按原受限读取或不可用语义处理。本文没有新增性能或收益实测。
 
-所有组记录完整成本与覆盖，未知费用不是零。普通无变化 Turn 的默认新增远程调用为零；可选评估和蒸馏使用显式有界策略。按真实 workload 比较 p50/p95 延迟、传输及补读 bytes/token、模型和工具调用、验收成果和人工介入。本文无新增性能或收益实测，不给出虚构的节省比例。
+外部参照支持职责选择，不证明 LoopX 收益：[LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)的 thread checkpoint/跨 thread store 分工支持恢复状态与经验分离；[Voyager](https://voyager.minedojo.org/)的课程、代码 Skill 和环境反馈分工支持验证后的过程复用。映射是本提案推论；没有照搬其架构或实验结果。云端规模的隔离、计量与运维沿原 authority/quota 合同处理，不在此宣称已解决。
 
 ## 7. 安全、隐私与兼容
 
-公开投影只保留必要的类型化事实、opaque 引用和范围，不进入聊天正文、原始轨迹、凭证或私有路径。跨 Goal/Agent/corpus/revision 的经验与结果不自动合并。失效经验应能被拒绝、撤销或替代，不能扩张权限。
+公开投影只保留必要事实、opaque 引用和 scope；原始聊天、轨迹、凭据、provider 正文及私有路径留在原边界。跨 Goal/Agent/corpus/revision 不自动合并，经验的撤销、过期和反例必须可读。
 
-公共契约、显式 off、旧配置继承、原回执及未完成事务都须保留已发布含义。可选 observer/memory 失效保留其原 fail-open 行为；原硬门和执行前提仍由原 owner 强制，不能把所有失败统一吞成“继续”。
+既有 context application 回执保持其产物含义；新决策回执不得回填或重解释旧记录。新字段只在合格 opt-in caller 注册，缺失不等于未采用或失败；不支持该字段的旧宿主不宣称具备方法采用证据。现有有副作用的 operation、严格 schema 校验及独立部署消费者仍各守原兼容要求。
+
+可选建议失效保留原 fail-open 行为；不能吞掉权限、硬门、验收或原复盘义务。需要 authority 核验的操作缺证据时按原 owner 处理，不以 provider 不可用绕过它。
 
 ## 8. 迁移与回退
 
-先冻结具体 base/head、调用方和条款映射，复用已完成同条件证据。每个切片迁移一个真实 producer/consumer/恢复组合，并明确删除项及兼容 reader。重复正常 writer 应在资格成立后退役；必要历史 reader 有单独退出条件。
+先固定 base/head、真实 caller、旧义务和证据；复用仍适用的同条件结果。执行收敛沿 C1/C4/C9 同时迁移 producer、consumer 和恢复，再删除旧正常路径。方法组合先采用既有局部/replan 记录；决策 application 先限于一个已授权 caller，再增加其他适配。
 
-发生中断或能力回退时，先按原身份结算在途工作，再为新工作恢复合格旧路径。关闭可选方法/observer 不触发重新准入、重做成果或第二次扣额。保留来源、负结果和迁移前 readback；不可用或歧义的恢复显示失败/未知，不能新造 session 成功。
+每个切片保留关闭路径和旧历史读取。禁用新 application 消费者只停止新增采用关联，不撤销已完成成果、重做工作或重复扣额。原回执尚未解决时按原身份恢复；不能启动新 session 掩盖未知结果。来源被撤销时拒绝相关新应用，历史事实不改写；回退保留负结果及未知项。
 
-## 9. 验证与验收
+## 9. 组合验证与验收
 
-| 场景 | 必须观察到什么 |
+这里验证跨 owner 接缝；单模块细则沿所属规范，不另设平行门禁。
+
+| 场景 | 组合必须证明的结果 |
 | --- | --- |
-| 相同工作跨 quota/Turn/heartbeat | 普通、wait、replan、Stop、中断和重放下义务相等，原 Todo/Turn/effect 绑定、一次结算和无重复宿主执行成立。 |
-| 多个复盘信号同时到达 | 保留各自来源、覆盖、既有优先级和解除条件；未知不抵消已形成义务，复盘可有依据地继续原方法。 |
-| 代理上升、权威结果不升 | 同 scope 的测量进入决策；后续真实工作采用校准/方法选择，并独立观察新结果。只产生 fidelity 记录不算采用。 |
-| 声明进展、实际只改名 | typed 声明与外部评估分开；合格的原 obligation 被处理，随后工作服务原验收。 |
-| 经验跨任务复用 | 本次证据→候选/激活→下次精确读取→当前产物核对→实际方法→结果的链可读；撤销、过期和错误 scope 均拒绝。 |
-| Skill 候选 | 过程独立验证、适用/不适用条件和回退齐全；生成、发布、安装和能力激活分别回读。 |
-| 无变化/off/provider 不可用 | 保留原义务、返回及缺省行为；不增加强制模型评估或蒸馏，也不伪造未知收益。 |
+| 相同工作跨入口 | 普通、wait、replan、Stop、中断与重放保持同义务、原身份、一次结算和无重复宿主执行；保留 native/plain 对照。 |
+| 多种信号/方法同时适用 | 原触发优先级保留；当前选择者作一个决定，完整复盘吸收局部证据；可选能力不会新增 Controller 或普通 user gate。 |
+| 过时、矛盾或不可比证据 | 绑定和 scope 校验拒绝错误关联；重新读取不冒充执行；只阻塞依赖缺失权威事实的操作。 |
+| context-applied 但没有方法采用 | 旧回执可回读，采用与效用仍未知；它不能满足决策产物 application 的验收。 |
+| 决策采用及实际执行 | 原 recall 集、决定产物版本、方法/候选及独立结果相互对应；别的任务、篡改产物、仅自报核验和只改名均不能充当证据。 |
+| 跨任务经验 | 第一次证据、候选/激活、下一任务适用性、决策、执行和结果均可追踪；过期/撤销/错 scope 拒绝，负结果不丢。 |
+| 无变化/off/provider 故障/旧宿主 | 不新增强制判断、record 或远程评估，原工作与义务保持；缺少新证据报告未知，回放不双写/双扣。 |
+| 经验效用与 Skill | 采用和成功不自动产生 helpful；归因按原 utility 合同。Skill 的验证、生成、发布、安装和激活各有真实读回。 |
 
-先用隔离 File/SQLite 的真实生产入口验证语义、故障和产品回读，再由独立实验协议比较同起点、同 task/model/预算/观察窗的原路径和候选路径。拓扑、上下文交付与学习策略分开对照；保留 native/plain。样本量、噪声和统计方案在看结果前确定，不以单题、token 下降、合并 PR 数或回执数量宣称收益。本文未运行这些实验。
+实现资格先在隔离 File/SQLite 的真实生产入口验证；涉及其他 authority backend 时执行其原必需资格。产品验证使用当前工作、前次决定、负结果和未知结果的真实回读，覆盖 App/CLI 及受影响 Lark。语义测试不证明学习收益。
+
+效果对照另行冻结 task/model/预算/起点/观察窗、分组、样本量及分析方案；分别改变执行拓扑、上下文交付或经验策略，包含失败及完整成本。单题改善、token 下降、回执数和 PR 数都不完成收益验收。本 RFC 未运行这些实验。
 
 ## 10. 成功标准
 
-结构上，真实调用方只有一个所属语义 producer，重复解释已退役；不同问题仍有独立 owner。行为上，反馈被后续工作采用，独立验收成立；经验能在适用的新任务发挥可归因价值。成本上，在可比约束内提高验收成果，或以更低完整成本交付同等成果。三者分别报告，不能互相抵消。
+结构上，公共执行只有一个所属语义 producer，方法选择有明确当前责任人，重复正常解释器退役。行为上，证据进入决定、决定进入真实工作、经验进入适用的新决定，且每个阶段可拒绝和恢复。结果上，在可比完整预算下改善权威成果，或降低同等成果的完整成本。三者分别报告；结构正确和记录完整不能代替收益。
 
-## 11. 最小有用交付与现有工作的关系
+## 11. 最小完整交付与现有工作的关系
 
-| 切片 | 具体交付及现有归属 | 退出证据 |
+| 切片 | 具体交付 / 原归属 | 退出证据 |
 | --- | --- | --- |
-| 本 RFC | 审计、替代/合并映射和待决选择；无运行代码。 | 来源路径可查，事实/提案/在途工作分开；维护者审阅。 |
-| 首个局部闭环 | 在既有 Target/Stride/Explore 工作中，选一个有真实反证的任务，复用 finding、前次决策和 followthrough 回读断点；仅补已证实缺失的消费者或关联。 | 下一次合法工作实际采用或有依据地拒绝反馈，并观察权威结果与完整成本；不是只添加记录。 |
-| 执行收敛 | 继续 C1/C4/C9 与 #8266/#8484，按已接受合同替换真实入口和恢复。 | 单会话相对原 quota 语义、成果/成本、off 和恢复资格；双会话独立验收。与首个局部闭环只按真实依赖排序。 |
-| 跨任务复用 | 在既有 Reward Memory 生命周期和已授权 scope 内，把上述教训带到相似新任务，保留反例。 | application、后续执行和 utility 的证据分别成立；可选 Skill 仅在确有稳定重复过程时另立内容变更。 |
+| 本 RFC | 修正角色盘点，给出选择者、组合顺序、决策 application 及完整示例。 | 源码/提案/在途分开，维护者能审查输入输出、代价、恢复和所有权。 |
+| 一次任务内的完整方法反馈 | Target/Stride/Explore owner 在一个具名任务上贯通同 scope 反证、一次选择、实际方法、独立结果及下一判断。 | 已有链完整时复用，不为新增代码而改写；有缺口则一次补完对应 producer、consumer 和失败读回。仅添加 finding 不算交付。 |
+| 一次跨任务经验采用 | Reward Memory 与上述 caller 增加决策产物 application；从合格旧任务经验到一个适用的新任务的选择、执行和结果。 | 上下文回执与决定回执分开，错 scope/过期/产物不符/off/重放均成立；没有归因证据时效用保持未知。 |
+| 执行契约收敛 | C1/C4/C9、#8266/#8484 继续迁移真实入口与恢复。 | 原 quota 单会话的语义、成果/成本和恢复资格；双会话独立验收。与反馈切片仅按真实依赖排序。 |
 
-不预设负责人或固定 PR 数；认领沿原任务及 owner。仅讨论/设计不启动实验、不消费其他 lane 配额，也不把尚未合入的算子实现复制到主线。
+第一个实施任务须确有相关反证或复用需求。选择任务是执行准备，不再代替上面的目标设计；没有证据支持某个缺口时，记录现有能力已满足并复用它。完整收益实验和 Skill 内容变更仍需各自范围，不预设 PR 数或占用其他 lane 配额。
 
-## 12. 待决选择（AI 建议，尚待维护者确认）
+## 12. 需维护者确认的选择
 
-| 选择 | 建议及理由 | 何时需要决定 |
+本文建议以现有会话内组合、单一当前方法选择者和原 owner 校验作为目标；保留独立文档维护跨机制接缝，细则引用原规范。以下选择不以 AI 提案冒充既有批准：
+
+| 选择 | 推荐及理由 | 决策点 |
 | --- | --- | --- |
-| RFC 边界 | 本文保留跨机制关系和组合验收；具体规范继续归 Controller、Target/Stride/Explore、Reward Memory。若维护者认为无需独立 RFC，可将对应章节吸收到原文，避免长期重复规范。 | 接受本提案前。 |
-| 第一个任务 | 优先选已经存在明确“代理/权威分歧”或“前次决定未采用”的真实任务；没有证据时先做有界诊断，不发明问题。 | 实现前，由任务 owner 选择。 |
-| 记录形态 | 先组合已有记录和 UI；只有无法稳定关联的具体缺项才在原 schema 版本内扩展，暂不新建通用 episode。 | 字段与消费者映射完成后。 |
-| Controller/学习型 Meta Model | 先验证已有单会话判断及真实反馈采用；独立 Controller 沿原 RFC 验收，学习型策略须有匹配数据和反事实评价后再立实验。 | 更改执行 profile 或策略前。 |
-| 何时生成 Skill | 稳定、可验证且重复使用收益值得维护的过程才成为候选；保留原内容审阅/发布权限，不对每次成功强制蒸馏。 | 出现具名候选时。 |
+| 决策 application 扩展 | 复用原 application schema，为真实决策产物另建回执；通过 opt-in capability result 和原 Turn journal 传递，保留旧 context 回执。比新 episode/记忆队列更接近实际消费者。 | 接受本设计并同步原 Reward Memory/宿主结果规范时，确认字段版本及独立核验合同。 |
+| 第一个 caller / 任务 | 先选已有明确代理/权威分歧或需要复用既有教训的工程/研究任务，沿原任务 owner 确认范围。 | 实施前；不为示例虚构运行失败。 |
+| 更强的策略与拓扑 | 当前会话先完成证据采用资格；双角色沿 Controller RFC，学习型策略/排名变更在匹配数据与反事实评价成立后另作决定。 | 改 profile、策略实现或 provider 排名前。 |
