@@ -1085,6 +1085,10 @@ fn runtime_alignment_requires_exact_identity_and_keeps_recovery_codes() {
     payload["runtime_identity"] = serde_json::json!({"release_id":"old"});
     assert!(managed_runtime_alignment_result(output(payload.clone(), 0), Some(&identity)).is_err());
     for reason in [
+        "native_account_work_pending",
+        "native_observer_provider_binding_required",
+        "native_observer_provider_upgrade_required",
+        "native_observer_requires_target_runtime",
         "chat_work_pending",
         "chat_state_unverified",
         "service_runtime_route_unverified",
@@ -1107,4 +1111,63 @@ fn runtime_alignment_requires_exact_identity_and_keeps_recovery_codes() {
             .to_string(),
         "service_runtime_alignment_unavailable"
     );
+}
+
+#[test]
+fn connected_runtime_requires_both_healthy_exact_identity_listeners() {
+    let identity = serde_json::json!({"schema_version":"loopx_runtime_identity_v1",
+        "release_id":"qualified", "source_revision":"a".repeat(40), "package_version":"2.3.0"});
+    let runtime = SelectedRuntime {
+        executable: "unused-discovery-candidate".into(),
+        identity: Some(identity.clone()),
+    };
+    for (chat_identity, status_ready, expected) in [
+        (identity.clone(), true, true),
+        (serde_json::json!({"release_id":"other"}), true, false),
+        (identity.clone(), false, false),
+    ] {
+        let endpoints = ServiceEndpoints::allocate(true).unwrap();
+        let servers: Vec<_> = SERVICE_KINDS.into_iter().map(|kind| {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", endpoints.port(kind))).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let payload = match kind {
+                ServiceKind::Status => serde_json::json!({"source":"serve-status", "runtime_identity":identity,
+                    "readiness":{"schema_version":"loopx_status_readiness_v0",
+                        "state":if status_ready { "ready" } else { "failed" },
+                        "reason":if status_ready { "registry_readable" } else { "registry_invalid" }}}),
+                ServiceKind::Chat => serde_json::json!({"ok":true,"schema_version":"loopx_chat_readiness_v1",
+                    "state":"ready","runtime_identity":chat_identity}),
+            };
+            thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    if let Ok((mut stream, _)) = listener.accept() {
+                        stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+                        let mut request = [0; 1024];
+                        let _ = stream.read(&mut request);
+                        let _ = write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{payload}");
+                        return;
+                    }
+                    if Instant::now() >= deadline { return; }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            })
+        }).collect();
+        assert_eq!(runtime_ready(&runtime, &endpoints), expected);
+        for server in servers {
+            server.join().unwrap();
+        }
+    }
+    let endpoints = ServiceEndpoints::allocate(true).unwrap();
+    assert!(
+        !runtime_ready(&runtime, &endpoints),
+        "a qualified install alone is not readiness"
+    );
+    assert!(!runtime_ready(
+        &SelectedRuntime {
+            executable: "unused".into(),
+            identity: None
+        },
+        &endpoints
+    ));
 }

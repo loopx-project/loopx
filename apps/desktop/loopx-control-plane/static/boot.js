@@ -8,6 +8,10 @@ let timingObservedAt = pageStarted;
 let bootState = null;
 let observedEnvironment = null;
 const runtimeRecoveryTitles = {
+  native_account_work_pending: "账号服务正在处理请求",
+  native_observer_provider_binding_required: "需要兼容的账号服务组件",
+  native_observer_provider_upgrade_required: "需要更新账号服务组件",
+  native_observer_requires_target_runtime: "需要兼容的账号服务运行时",
   service_runtime_alignment_unavailable: "正在等待可用的运行时",
   service_runtime_route_unverified: "正在核验系统服务",
   service_runtime_alignment_failed: "正在恢复本地服务",
@@ -52,7 +56,9 @@ function updateStartupElapsed() {
   if (serviceRecoveryPending(bootState)) {
     const remaining = Math.max(0, (bootState.details.retry_after_ms ?? 0) - (performance.now() - timingObservedAt));
     bootElapsed.textContent = remaining > 0 ? `${Math.ceil(remaining / 1000)} 秒后自动重试` : "正在重新连接";
-    bootDetail.textContent = "恢复后会自动打开工作区，无需手动操作。";
+    bootDetail.textContent = ["native_observer_provider_binding_required", "native_observer_provider_upgrade_required", "native_observer_requires_target_runtime"].includes(bootState.details.code)
+      ? "现有服务保持运行。请展开「恢复与更新」查看所需组件；重复重启不会补齐组件。"
+      : "恢复后会自动打开工作区，无需手动操作。";
     return;
   }
   if (["error", "runtime_required"].includes(bootState?.phase)) {
@@ -118,6 +124,10 @@ const labels = {
   error: "更新未完成。请重试检查，或修复当前版本。Goal 数据不会被删除。",
 };
 const errors = {
+  native_account_work_pending: "账号服务仍有已接受的请求，完成后会自动重试。现有服务保持运行，请勿强退或重复发送。",
+  native_observer_provider_binding_required: "所选运行时未绑定当前账号服务组件，尚未切换服务。请通过原安装方式修复运行时与账号组件的绑定；现有服务保持运行。",
+  native_observer_provider_upgrade_required: "所选运行时的账号服务组件版本不兼容，尚未切换服务。请通过原安装方式更新账号组件；现有服务保持运行。",
+  native_observer_requires_target_runtime: "账号服务无法使用所选运行时，尚未切换服务。请通过原安装方式修复匹配的运行时；现有服务保持运行。",
   service_runtime_alignment_unavailable: "当前运行时尚不支持服务版本对齐。App 会自动重新检测可用运行时；现有服务保持运行。",
   service_runtime_route_unverified: "系统服务来源暂时无法验证。App 会自动复查，来源确认后继续连接；自定义配置保持不变。",
   service_runtime_alignment_failed: "服务版本切换未完成，已尝试恢复原配置。App 会自动重试。",
