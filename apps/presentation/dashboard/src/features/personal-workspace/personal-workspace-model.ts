@@ -115,7 +115,7 @@ export type WorkspaceConversationDirectory = {
   onSelect: (projectRef: string | null) => void;
   onOpenOriginal?: (target: BoundConversationTarget) => void;
   /** Local manager entry discovery blocks sending, never Goal navigation. */
-  entryGate?: {unavailable: boolean; retry: () => void};
+  entryGate?: {unavailable: boolean; ownerLoginUnavailable?: boolean; retry: () => void};
   bound?: { target: BoundConversationTarget; session?: ChatSessionSummary; source?: BoundConversationSource;
     error?: string; retry: () => void };
   managed?: {target: import("../../data/chat").ManagedConversationTarget; session?: import("../../data/chat").ChatSessionSummary; error?: string; retry: () => void};

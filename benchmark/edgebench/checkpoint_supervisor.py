@@ -15,7 +15,9 @@ from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
 from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE, _PHASE_DEADLINE
 
 from .checkpoint_controller import _controller
-from .checkpoint_worker import _archive, _guest_path, _validate_request, capture_worker, qualify_export_storage
+from .checkpoint_worker import (
+    _archive, _guest_path, _validate_request, capture_failure_fields, capture_worker, qualify_export_storage,
+)
 
 
 class CheckpointSupervisor:
@@ -93,6 +95,24 @@ class CheckpointSupervisor:
             self.close()
         else:
             self.preservation.finish(execution)
+
+    def finish_grading(self, status):
+        if self.preservation is not None:
+            self.preservation.finish_grading(status)
+
+    def finish_grading_from_receipt(self, trial, *, run_id, task_id):
+        """Recover the drain observation when the native runner raises."""
+        if self.preservation is None or self.preservation.receipt is None:
+            return
+        from .managed_run import native_grading_drained
+
+        try:
+            drained = native_grading_drained(
+                trial, history_file="run_history.json", run_id=run_id, task_id=task_id)
+        except (OSError, ValueError):
+            return  # Bad optional evidence must not mask the original exception.
+        if drained:
+            self.finish_grading("complete")
 
     def close(self):
         self.stop.set()
@@ -202,7 +222,7 @@ class CheckpointSupervisor:
                     except Exception as error:
                         # Optional capture failure resumes the original source;
                         # credentials and raw provider errors never enter it.
-                        response["error_kind"] = type(error).__name__
+                        response.update(capture_failure_fields(error))
                         if isinstance(error, EffectRuntimeRemoteError):
                             response["runtime_failure"] = {
                                 "error_kind": error.error_kind,

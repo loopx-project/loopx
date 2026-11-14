@@ -12,6 +12,7 @@ const evidenceContent = (input: TrajectoryInput) => ({scope: {...input.scope, re
   objective: input.objective, selection: input.selection,
   sources: ordered(input.sources).map(sourceContent), episodes: ordered(input.episodes).map(episodeContent),
   ...(input.native_outcomes_source_id ? {native_outcomes_source_id: input.native_outcomes_source_id} : {}),
+  ...(input.human_attention_source_id ? {human_attention_source_id: input.human_attention_source_id} : {}),
   ...(input.display_snapshot ? {display_snapshot: input.display_snapshot} : {})});
 function differences<T extends {id: string}>(before: T[], after: T[], content: (item: T) => unknown) {
   const old = new Map(before.map(item => [item.id, item]));

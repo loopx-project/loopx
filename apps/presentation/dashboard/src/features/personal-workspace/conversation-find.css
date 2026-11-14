@@ -1,0 +1,9 @@
+.personal-conversation-find {position:sticky;top:0;z-index:2;background:var(--pw-bg);padding:8px 0;border-bottom:1px solid var(--pw-line);}
+.personal-conversation-find button {display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:6px 8px;border:1px solid var(--pw-line);border-radius:6px;color:var(--pw-text);background:var(--pw-bg);font:inherit;cursor:pointer;}
+.personal-conversation-find button:disabled {opacity:.45;cursor:default;}
+.personal-conversation-find form {display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.personal-conversation-find input {flex:1;min-width:120px;max-width:420px;padding:8px;border:1px solid var(--pw-line);border-radius:6px;color:var(--pw-text);background:var(--pw-bg);font:inherit;}
+.personal-conversation-find [role=status] {font-size:12px;}
+.personal-conversation-find small {flex-basis:100%;}
+.personal-message.is-find-match {outline:2px solid var(--pw-text);outline-offset:4px;border-radius:6px;scroll-margin-top:140px;}
+@media(max-width:640px) {.personal-conversation-find input {flex-basis:100%;max-width:none;}.personal-conversation-find button {min-height:40px;}.personal-message.is-find-match {scroll-margin-top:190px;}}
