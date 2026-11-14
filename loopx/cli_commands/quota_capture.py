@@ -20,6 +20,8 @@ from ..control_plane.quota.error_codes import QuotaCommandValidationError, Quota
 from ..control_plane.turn_driver.decision_capture import (
     ContextCaptureDigestMismatch,
     context_index_fields as _context_index_fields,
+    context_selection_binding,
+    initial_context_selection_bytes,
     write_initial_context_read_reference,
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
@@ -348,6 +350,8 @@ def _saved_context_transport_failure(
     if isinstance(limit, int) and limit > 0:
         output_bytes = min(output_bytes, limit)
         page_bytes = min(page_bytes, output_bytes)
+    path, digest = Path(recovery["path"]), recovery["sha256"]
+    runtime_unavailable = source_unverified and isinstance(error, EffectRuntimeStartupError)
     if source_unverified:
         instruction = (
             "The saved source could not be verified. Use recovery.command for diagnostic receipt readback. "
@@ -362,23 +366,44 @@ def _saved_context_transport_failure(
             "next_command only for that selection and verify contiguous offsets, total_bytes and sha256. "
             "Authority and freshness are unchanged. " + CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
         )
+    if runtime_unavailable:
+        # The source and this fixed field were already read for the original
+        # Turn identity check. A pinned diagnostic selection can replay them
+        # while the semantic runtime is still unavailable.
+        key = "heartbeat_receipt"
+        pointer = "/" + key
+        body, _ = initial_context_selection_bytes({key: receipt}, [{"path": [key], "pointer": pointer}])
+        command = _compact_context_restart(path, digest, limit=output_bytes, page_bytes=max(256, page_bytes),
+            reader_argv=reader_argv, pinned={"selection": context_selection_binding(
+                [pointer], list_fields=False, list_depth=None, sha256=hashlib.sha256(body).hexdigest()),
+                "selection_paths": [[key]]})
+        if command is None:
+            instruction = ("The saved receipt is diagnostic only. Restore the runtime, then retry context-project "
+                "with the original Goal, Agent, Turn and digest. Do not rerun admission.")
+    else:
+        command = context_capture_read_command(path, digest, page_bytes=page_bytes,
+            max_page_output_bytes=output_bytes, list_fields=not source_unverified,
+            select=["/heartbeat_receipt"] if source_unverified else None, reader_argv=reader_argv)
+    readback = {**recovery, "command": command} if command is not None else {"path": str(path), "sha256": digest}
     failure = {"ok": False, "error_code": QuotaDecisionTransportError.error_code,
         "reason": " ".join(str(error).split())[:500],
         "heartbeat_receipt": receipt, "capture_sha256": args.capture_sha256,
-        "recovery": {**recovery, "command": context_capture_read_command(
-            Path(recovery["path"]), recovery["sha256"], page_bytes=page_bytes,
-            max_page_output_bytes=output_bytes, list_fields=not source_unverified,
-            select=["/heartbeat_receipt"] if source_unverified else None, reader_argv=reader_argv)},
-        "instruction": instruction}
+        "recovery": readback, "instruction": instruction}
+    if runtime_unavailable:
+        failure["diagnostic_code"] = error.diagnostic_code
     attached = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
-    if (attached and args.format == "json" and type(limit) is int and limit > 0
-            and len(_native_output_bytes(failure)) + len(os.linesep) - 1 > limit):
+    if attached and args.format == "json" and type(limit) is int and limit > 0 and _json_output_size(failure) > limit:
+        if runtime_unavailable:
+            # Keep the same receipt reader if its short response fits. Do
+            # not replace it with a read that needs the failed runtime.
+            short = {**failure, **({"recovery_command": command} if command else {})}
+            return _bounded_context_read_failure(short, limit)
         # A short refusal must lead to a usable read. At tight budgets the
         # normal recovery command may itself have no room for a first page.
         selectors = ["/heartbeat_receipt"] if source_unverified else getattr(args, "select", None)
         initial = not source_unverified and getattr(args, "initial_read", False)
         return _bounded_context_read_failure(failure, limit, restart_fits=False,
-            restart=lambda: _compact_context_restart(Path(recovery["path"]), recovery["sha256"],
+            restart=lambda: _compact_context_restart(path, digest,
                 limit=output_bytes, page_bytes=max(256, page_bytes), reader_argv=reader_argv,
                 select=selectors, initial_read=initial, list_fields=not (selectors or initial)))
     return failure

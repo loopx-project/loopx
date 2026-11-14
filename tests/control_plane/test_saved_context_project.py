@@ -191,6 +191,93 @@ def test_saved_complete_quota_projection_rejects_invalid_source_without_legacy_f
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Requires a POSIX launcher with an isolated PATH")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("limit", [1700, 12000], ids=["tight", "ordinary"])
+def test_saved_projection_can_read_original_receipt_while_runtime_is_unavailable(
+        tmp_path, monkeypatch, provider, limit):
+    import subprocess
+
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _spend_run_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID]
+    directory = tmp_path / ("capture-" + "x" * 115)
+    code, result = _run_cli(registry, runtime, "quota", "should-run", *binding, "--todo-id", TODO_ID,
+        "--complete-turn", "--context-delivery", "off", "--decision-output-dir", str(directory), cwd=project)
+    assert code == 0 and result["heartbeat_receipt"]["status"] == "committed", result
+    source = directory / "decision.json"
+    raw = source.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    receipt = json.loads(raw)["heartbeat_receipt"]
+    launcher = tmp_path / ("launcher-" + "x" * 120)
+    core_python = os.environ.get("LOOPX_CORE_TEST_PYTHON")
+    program = [core_python, "-I", "-m", "loopx.entrypoint"] if core_python else [sys.executable, "-m", "loopx.entrypoint"]
+    launcher.write_text("#!/bin/sh\nexec " + shlex.join(program) + ' "$@"\n')
+    launcher.chmod(0o700)
+    # The admission fixture's already running Effect process must not mask
+    # the recovery host's inability to start its own.
+    missing = tmp_path / "no-runtime"
+    missing.mkdir()
+    env = {**os.environ, "PATH": str(missing), "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        **{name: str(missing) for name in ("TMPDIR", "TEMP", "TMP")}}
+
+    def call(argv):
+        return subprocess.run(argv, cwd=project, env=env, capture_output=True, check=False, timeout=30)
+
+    command = [str(launcher), "--cli-bin", str(launcher), "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json", "quota", "context-project", *binding,
+        "--capture-file", str(source), "--capture-sha256", digest, "--context-delivery", "auto",
+        "--initial-read", "--max-page-output-bytes", str(limit)]
+    output = call(command)
+    assert output.returncode == 1 and 0 < len(output.stdout) <= limit, output
+    failure = json.loads(output.stdout)
+    assert failure["ok"] is False and failure["error_code"] == "quota_decision_transport_failed"
+    assert failure.get("diagnostic_code") == "node_unavailable"
+    assert "content" not in failure and "first_read_command" not in failure
+    reader = failure.get("recovery_command") or failure["recovery"]["command"]
+    body = b""
+    for _ in range(10):
+        args = shlex.split(reader)
+        assert args[:3] == [str(launcher), "--cli-bin", str(launcher)]
+        page_run = call(args)
+        assert page_run.returncode == 0 and 0 < len(page_run.stdout) <= limit, page_run.stdout
+        page = json.loads(page_run.stdout)
+        assert page["ok"] and page["offset"] == len(body)
+        body += page["content"].encode()
+        assert len(body) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+        if page["eof"]:
+            break
+        reader = page["next_command"]
+    else:
+        pytest.fail("Diagnostic receipt reader did not reach EOF")
+    assert json.loads(body)["selections"] == [{"pointer": "/heartbeat_receipt", "value": receipt}]
+    if limit == 1700:
+        # If the host cannot fit a usable cursor at all, keep the refusal
+        # bounded and typed without sending it to an unreadable command.
+        tiny = call([*command[:-1], "128"])
+        tiny_failure = json.loads(tiny.stdout)
+        assert tiny.returncode == 1 and len(tiny.stdout) <= 128
+        assert tiny_failure == {"ok": False, "error_code": "quota_decision_transport_failed",
+            "diagnostic_code": "node_unavailable"}
+        source.write_bytes(raw + b" ")
+        try:
+            refused = call(shlex.split(reader))
+            damaged = json.loads(refused.stdout)
+            assert refused.returncode == 1 and "capture digest mismatch" in damaged["reason"]
+            assert "content" not in damaged
+        finally:
+            source.write_bytes(raw)
+    assert source.read_bytes() == raw
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("root_kind", ["unsafe", "symlink", "missing_parent"])
 @pytest.mark.parametrize(("opening_args", "recovery_limit"), [
     ([], 64000), (["--initial-read"], 64000),
