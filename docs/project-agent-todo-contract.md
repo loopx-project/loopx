@@ -314,6 +314,10 @@ the link. The target must already exist as an Agent Todo in the same provider
 snapshot and Goal, with `claimed_by` matching the gate's `bound_agent` /
 `blocks_agent`. It must be active, open or blocked, not done or superseded;
 completed/cancelled, archived and deferred work cannot receive this first link.
+The link must also describe one decision: a gate with a `decision_scope` only
+accepts a target whose `required_decision_scopes` include a scope it covers, and
+a gate without one only accepts a target that requires no scoped decision (a
+plain dependency link). A missing match is never read as a dependency.
 Preview and write reject missing, inactive or out-of-scope targets without
 writing or consuming the first-link opportunity or operation ID; the same gate
 and operation ID can then be used for a valid target. Existing links, gate scope,

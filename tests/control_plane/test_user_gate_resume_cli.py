@@ -21,6 +21,7 @@ def tmp_path(tmp_path_factory):
 @pytest.mark.parametrize("invalid_target", [
     "missing", "user", "other_goal", "other_lane", "unclaimed",
     "completed", "cancelled", "archived", "superseded", "deferred",
+    "other_scope", "no_scope",
 ])
 def test_gate_first_link_rejects_invalid_target_without_consuming_link(
     tmp_path, monkeypatch, provider, dry_run, invalid_target,
@@ -54,6 +55,11 @@ def test_gate_first_link_rejects_invalid_target_without_consuming_link(
         claim = ("--claimed-by", "agent-b") if invalid_target == "other_lane" else ()
         invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
             *claim, "--text", "Work outside the gate's lane")["todo_id"]
+    elif invalid_target in {"other_scope", "no_scope"}:
+        # Same lane and active, but not waiting for this gate's decision.
+        other = ("--required-decision-scope", "resource:action:inventory_file") if invalid_target == "other_scope" else ()
+        invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
+            "--claimed-by", "agent-a", *other, "--text", "Same-lane work outside this decision")["todo_id"]
     elif invalid_target in {"completed", "cancelled", "archived", "superseded", "deferred"}:
         invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
             "--claimed-by", "agent-a", "--text", "Previous work outside this decision")["todo_id"]

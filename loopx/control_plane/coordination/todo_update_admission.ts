@@ -5,6 +5,7 @@ import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handof
 import {leaseRepositoryRejection, ownerAdministrativeRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {isExploreReferenceAppend} from "../todos/field_update.ts";
 import {isInactiveUserCompletionTarget} from "../todos/user_completion.ts";
+import {decisionScopeRelation} from "../todos/decision_scope.ts";
 import {acceptanceRestoration} from "./todo_acceptance_restoration.ts";
 import {monitorMutationRejection} from "./todo_monitor_cycle.ts";
 import type {JsonObject} from "../effect_program.ts";
@@ -243,6 +244,15 @@ export function todoUpdateAdmissionRejection(
             target.archive_state !== "active" || isInactiveUserCompletionTarget(target)) {
           return reject("user_gate_link_target_invalid",
             "Initial gate link requires an active, open or blocked Agent Todo in this Goal claimed by the gate's bound/blocked agent");
+        }
+        // The link must describe one decision: a scoped gate takes only a target
+        // awaiting that scope; an unscoped dependency gate takes only a target
+        // awaiting no scoped decision. Absence of a match is not a dependency.
+        const relation = decisionScopeRelation(todo, target);
+        const awaitsScopedDecision = Array.isArray(target.required_decision_scopes) && target.required_decision_scopes.length > 0;
+        if (relation === null ? awaitsScopedDecision : relation.state !== "gate_covers_action") {
+          return reject("user_gate_link_target_invalid",
+            "Initial gate link requires a target whose required decision scopes are covered by this gate's decision scope, or neither side to declare one");
         }
       }
     } catch (error) {
