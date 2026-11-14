@@ -5,10 +5,10 @@ from __future__ import annotations
 from contextlib import nullcontext
 from pathlib import Path
 import re
-import shlex
 
 from ...command_invocation import current_loopx_cli_argv, loopx_cli_argv
 from ...file_lock import exclusive_file_lock
+from ...install_contract import render_host_cli_command
 from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.source_grant_observation import (
     POLICY_SCHEMA as POLICY_SCHEMA,
@@ -282,7 +282,7 @@ def turn_start_hook(
 
     # Only the producing CLI is known to support the progressive Inbox view.
     cli_argv = current_loopx_cli_argv() if model_read else loopx_cli_argv()
-    command = shlex.join(
+    command = render_host_cli_command(
         [
             *cli_argv,
             "--registry",
