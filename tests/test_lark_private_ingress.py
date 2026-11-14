@@ -192,37 +192,708 @@ def test_stale_or_unreadable_health_is_not_verified(source_monitor):
     assert f.monitor.health(f.binding["binding_id"])["status"] == "unavailable"
 
 
-def test_default_scanner_reconnects_only_its_owned_live_worker(tmp_path, monkeypatch):
-    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+class _ListenerProcess:
+    """Yield fixture events and let the real service end the stream."""
 
+    def __init__(self, events, *, hold_seconds=8):
+        self.hold_seconds = hold_seconds
+        self.exited = threading.Event()
+        self.waited = threading.Event()
+        self.stdout = self.lines(events)
+
+    def lines(self, events):
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        for event in events:
+            yield json.dumps(event)
+        assert self.exited.wait(self.hold_seconds)
+        yield "[event] exited (reason: signal)\n"
+
+    def poll(self):
+        return 0 if self.exited.is_set() else None
+
+    def terminate(self):
+        self.exited.set()
+
+    def wait(self, timeout=None):
+        assert self.exited.wait(timeout or 8)
+        self.waited.set()
+        return 0
+
+
+@pytest.mark.parametrize("transition", ["reconnect", "shutdown", "revoke", "rebind_during_reconnect"])
+def test_live_private_ingress_across_listener_transition(ordinary, tmp_path, monkeypatch, transition):  # noqa: F811
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark import goal_topic_runtime_service as lifecycle
+    from loopx.extensions.lark.conversation_identity import identity_ref
+    from test_lark_private_conversations import connect
+
+    store, controller, provider, transport = connect(ordinary)
+    profile = "notes-app"
+    binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == profile)
+    config = transport.profiles()[profile]
+    active = True
+    first, second, third = [provider.event(profile, key, f"Live request {key}")
+                           for key in ("first", "second", "third")]
+    in_admission, release, waiting, received_third = (threading.Event() for _ in range(4))
     clock = [0.0]
-    monkeypatch.setattr("loopx.extensions.lark.goal_topic_runtime_service.time.monotonic", lambda: clock[0])
-    observed = []
-    source = SimpleNamespace(observe=lambda **_kwargs: observed.append(True) or ["owner-app"])
+    admitted = []
+    consumers = []
 
-    def pending():
-        clock[0] = 61
-        return []
+    def admit(profile_name, event, **kwargs):
+        if event["message_id"] == first["message_id"]:
+            in_admission.set()
+            assert release.wait(8)
+        result = transport.admit(profile_name, event, **kwargs)
+        admitted.append((event["message_id"], result["status"]))
+        if event["message_id"] == third["message_id"]:
+            received_third.set()
+        return result
 
-    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
-        runtime_controller=object(), private_conversations=SimpleNamespace(pending_delivery_paths=pending, ingress=source))
-    own, other = threading.Event(), threading.Event()
-    service._workers = {"owner-app": (own, threading.current_thread(), ("", "", ())),
-                        "other-app": (other, threading.current_thread(), ("", "", ()))}
-    waited = threading.Event()
-    waits = 0
+    owner = SimpleNamespace(admit=admit, pending_delivery_paths=lambda: [],
+                            ingress=SimpleNamespace(observe=lambda **_: [profile, "unowned-app"]))
+    service = lifecycle.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {"private_profiles": {profile: config}} if active else {},
+        runtime_root=store.root.parent, runtime_controller=controller, private_conversations=owner)
+    monkeypatch.setattr(lifecycle, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    def wait(_seconds):
-        nonlocal waits
-        waits += 1
-        if own.is_set() or waits >= 100:
-            service._closed.set()
+    def first_connection():
+        yield first
+        assert in_admission.wait(8)
+        yield second
+        waiting.set()  # The reader advanced past submission of the second line.
+
+    def replacement_connection():
+        if transition == "reconnect":
+            yield {**second, "event_id": "synthetic_provider_redelivery"}
+        yield third
+
+    def spawn(args):
+        assert args[3:6] == ["event", "consume", "im.message.receive_v1"]
+        if consumers:
+            assert len(consumers) == 1 and consumers[0].waited.is_set()
+        consumer = _ListenerProcess(replacement_connection() if consumers else first_connection())
+        consumers.append(consumer)
+        return consumer
+
+    stream = runtime.stream_lark_goal_topic_profile
+
+    def isolated_stream(**kwargs):
+        kwargs.setdefault("process_factory", spawn)
+        return stream(**kwargs)
+
+    monkeypatch.setattr(runtime, "_default_process_factory", spawn)
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", isolated_stream)
+    service.start()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            assert waiting.wait(8)
+            if transition in ("reconnect", "rebind_during_reconnect"):
+                clock[0] = 61
+                service._delivery_wakeup.set()
+            elif transition == "shutdown":
+                pool.submit(service.close)
+            else:
+                active = False
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+                service.refresh()
+            assert consumers[0].exited.wait(8)
+            assert len(consumers) == 1
+            if transition == "rebind_during_reconnect":
+                projects = transport.bindings.projects
+                other = tmp_path / "other-workspace"
+                other.mkdir()
+                projects.roots.append((other, other))
+                target = next(x for x in projects.available() if x["workspace_path"] == str(other))
+                replacement = transport.bindings.configure(transport_ref=profile, project_ref=target["project_ref"],
+                                                           executor_endpoint_id="codex")
+                assert replacement["binding_id"] != binding["binding_id"]
+                config = transport.profiles()[profile]
+            release.set()
+            if transition in ("reconnect", "rebind_during_reconnect"):
+                assert received_third.wait(8)
+            else:
+                assert consumers[0].waited.wait(8)
+        finally:
+            release.set()
+            service.close()
+            controller.close()
+
+    second_ref = identity_ref(binding["provider_ref"], second["message_id"])
+    if transition == "reconnect":
+        assert [event_id for event_id, _ in admitted[:2]] == [first["message_id"], second["message_id"]]
+        assert consumers[0].waited.is_set() and len(consumers) == 2
+        assert [event_id for event_id, _ in admitted].count(second["message_id"]) == 2
+        original = transport.core.read_request(second_ref)
+        assert original["source"]["source_ref"] == transport.core.read_request(
+            identity_ref(binding["provider_ref"], first["message_id"]))["source"]["source_ref"]
+        messages = store.messages(original["session_id"])
+        assert sum(m.get("text") == second["content"] for m in messages) == 1
+    elif transition == "rebind_during_reconnect":
+        assert admitted[:2] == [(first["message_id"], "audience_rejected"),
+                               (second["message_id"], "audience_rejected")]
+        assert not (transport.core.root / f"{second_ref}.json").exists()
+        assert not (transport.root / f"{second_ref}.json").exists()
+        third_ref = identity_ref(binding["provider_ref"], third["message_id"])
+        assert transport.core.read_request(third_ref)["binding_id"] == replacement["binding_id"]
+        assert consumers[0].waited.is_set() and len(consumers) == 2
+    else:
+        assert not any(event_id == second["message_id"] for event_id, _ in admitted)
+        assert len(consumers) == 1
+
+
+@pytest.mark.parametrize(("stored_app", "binding_change"), [
+    (True, "replace"), (True, "add"), (True, "remove"),
+    (False, "replace"), (False, "add"), (False, "remove"),
+    (False, "add_after_retarget"), (False, "remove_after_retarget"),
+    (False, "add_cli_alias"), (False, "remove_cli_alias"),
+    (False, "add_different_cli"), (False, "remove_different_cli"),
+    (False, "profile_read_fails"), (False, "profile_read_fails_then_retargets"),
+    (False, "stale_inventory"), (False, "stale_inventory_after_error"),
+    (False, "stale_inventory_during_queue_recovery"),
+    (False, "removed_inventory"), (False, "closed_during_inventory"),
+])
+def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
+    ordinary,  # noqa: F811
+    tmp_path, monkeypatch, stored_app, binding_change,
+):
+    import http.client
+    import os
+    import sys
+    from pathlib import Path
+
+    from extensions.test_lark_goal_topic_runtime import _reply_runner, _seed_legacy_topic
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark.cli_resolution import LarkCliResolution
+    from loopx.extensions.lark.conversation_identity import identity_ref
+    from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox, load_lark_event_inbox_config
+    from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
+    from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
+    from test_lark_private_conversations import connect
+
+    store, controller, provider, transport = connect(ordinary)
+    profile = "notes-app"
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "group-binding.json"
+    _seed_legacy_topic(target_path, binding_path)
+    targets = read_goal_channel_targets(target_path)
+    identity = targets["targets"]["fixture"]["identity"]
+    original_app = provider.profile_apps[profile]
+    identity.update(sender_profile=profile, bot_open_id="ou_notes_app_bot")
+    if stored_app:
+        identity["bot_app_id"] = original_app
+    else:
+        identity.pop("bot_app_id")
+    if binding_change.endswith(("_cli_alias", "_different_cli")):
+        transport.cli_bin = sys.executable
+        if binding_change.endswith("_cli_alias"):
+            # Legacy targets may save a PATH command while Chat resolves the
+            # same executable to a full path for its private transport.
+            executable = Path(sys.executable)
+            monkeypatch.setenv("PATH", str(executable.parent) + os.pathsep + os.environ.get("PATH", ""))
+            identity["cli_bin"] = executable.name
+    bindings = {"goal-alpha": read_goal_channel_binding(binding_path)}
+    before = transport.profiles()[profile]["binding_id"]
+    adding = binding_change.startswith("add")
+    removing = binding_change.startswith("remove")
+    retargeted = binding_change.endswith("_retarget")
+    different_transport = retargeted or binding_change.endswith("_different_cli")
+    stale_inventory = binding_change.startswith("stale_inventory")
+    inventory_during_queue_recovery = binding_change == "stale_inventory_during_queue_recovery"
+    removed_inventory = binding_change == "removed_inventory"
+    closing = binding_change == "closed_during_inventory"
+    delayed_inventory = stale_inventory or removed_inventory or closing
+    unreadable = binding_change.startswith("profile_read_fails") or delayed_inventory
+    retarget_on_retry = binding_change == "profile_read_fails_then_retargets"
+    if adding:
+        transport.bindings.disconnect(before, expected_revision=transport.bindings.read()["revision"])
+    if unreadable:
+        for row in transport.bindings.read()["bindings"]:
+            transport.bindings.disconnect(row["binding_id"], expected_revision=transport.bindings.read()["revision"])
+
+    group_config = {"target_payload": targets, "binding_payloads": bindings}
+
+    def snapshot():
+        private = transport.profiles().get(profile)
+        return {**group_config, "private_profiles": {profile: private} if private is not None else {}}
+
+    group_events = [
+        dict(provider.topic(name, f"@linkmacbot group {name}", root="om_topic_alpha",
+                            chat="oc_public_fixture"), mentioned=True)
+        for name in ("first", "second", "third")
+    ]
+    new_private = provider.event(profile, "after_rebind", "/status")
+    in_group_answer, release, queued, next_stream_ready = (threading.Event() for _ in range(4))
+    second_replied, inventory_retried = threading.Event(), threading.Event()
+    inventory_captured, return_inventory = threading.Event(), threading.Event()
+    timer_reads = []
+    answered, consumer_processes = [], []
+    replies = {}
+
+    def answer(*, route, **_kwargs):
+        message_id = route["message_id"]
+        if message_id == group_events[0]["message_id"]:
+            in_group_answer.set()
+            assert release.wait(8)
+        answered.append(message_id)
+        return "Group answer"
+
+    original_admit = transport.admit
+
+    def admit(profile_name, event, **kwargs):
+        result = original_admit(profile_name, event, **kwargs)
+        if event["message_id"] == new_private["message_id"]:
+            assert result["status"] == "command_recorded"
+            next_stream_ready.set()
+        return result
+
+    def first_connection():
+        yield group_events[0]
+        assert in_group_answer.wait(8)
+        yield group_events[1]
+        queued.set()
+
+    def replacement_connection():
+        if not removed_inventory and not closing:
+            yield group_events[2] if removing or unreadable else new_private
+
+    def spawn(args):
+        assert args[3:6] == ["event", "consume", "im.message.receive_v1"]
+        if consumer_processes:
+            assert len(consumer_processes) == 1 and consumer_processes[0].waited.is_set()
+        consumer = _ListenerProcess(
+            replacement_connection() if consumer_processes else first_connection(),
+            hold_seconds=22 if delayed_inventory else 8,
+        )
+        consumer_processes.append(consumer)
+        return consumer
+
+    stream = runtime.stream_lark_goal_topic_profile
+
+    def isolated_stream(**kwargs):
+        kwargs.setdefault("process_factory", spawn)
+        health_sink = kwargs["health_sink"]
+
+        def observe_health(update):
+            health_sink(update)
+            if update.get("replied_count") == 1:
+                if (removing or unreadable) and len(consumer_processes) == 2:
+                    next_stream_ready.set()
+                if answered == [event["message_id"] for event in group_events[:2]]:
+                    second_replied.set()
+
+        return stream(**{**kwargs, "health_sink": observe_health}, reply_runner=_reply_runner(replies))
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(runtime, "_default_process_factory", spawn)
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", isolated_stream)
+    monkeypatch.setattr(runtime, "answer_lark_goal_topic", answer)
+    monkeypatch.setattr(transport, "admit", admit)
+    monkeypatch.setattr("loopx.chat_lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: group_config)
+    monkeypatch.setattr(ChatRequestHandler, "_lark_runner", lambda _: provider)
+    service = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=snapshot, runtime_root=store.root.parent,
+        runtime_controller=controller, private_conversations=transport,
+    )
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, controller
+    server.registry_path, server.runtime_root_override = controller.registry_path, store.root.parent
+    server.verbose = False
+    server.lark_cli_resolution = LarkCliResolution(
+        command=transport.cli_bin, available=True, source="explicit", version="fixture", error_code=None,
+    )
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = service
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    def change_private_binding(method, body):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request(method, "/api/chat/lark/private-conversations", json.dumps(body),
+                               headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            data = json.loads(response.read())
+            assert response.status == 200, data
+        finally:
+            connection.close()
+
+    try:
+        service.refresh()
+        assert queued.wait(8), service.health_snapshot()
+        if retargeted or retarget_on_retry:
+            provider.profile_apps[profile] = "cli_retargeted_app"
+        if unreadable:
+            original_runner = transport.runner
+            inventory_failed = threading.Event()
+            unreadable_inventory = {"returncode": 1, "stdout": "", "stderr": "temporary profile read failure"}
+
+            def read_profile(args, cwd=None, timeout=None):
+                if args[1:] == ["profile", "list"]:
+                    if not inventory_failed.is_set():
+                        inventory_failed.set()
+                        return unreadable_inventory
+                    inventory_retried.set()
+                    if delayed_inventory and threading.current_thread() is service._refresh_retry:
+                        timer_reads.append(threading.current_thread())
+                        if not inventory_captured.is_set():
+                            if removed_inventory:
+                                provider.profile_apps.pop(profile)
+                            response = original_runner(args, cwd, timeout)
+                            if stale_inventory:
+                                rows = json.loads(response["stdout"])
+                                response["stdout"] = json.dumps([row for row in rows if row["name"] != profile])
+                            inventory_captured.set()
+                            assert return_inventory.wait(8)
+                            return response
+                    if binding_change == "stale_inventory_after_error" and not return_inventory.is_set():
+                        return unreadable_inventory
+                return original_runner(args, cwd, timeout)
+
+            monkeypatch.setattr(transport, "runner", read_profile)
+            original_worker = service._workers[profile]
+            service.refresh()
+            assert inventory_failed.is_set()
+            assert service._workers[profile] == original_worker
+            assert not original_worker[0].is_set()
+            assert not consumer_processes[0].exited.is_set()
+        elif removing:
+            change_private_binding("DELETE", {"binding_id": before, "revision": transport.bindings.read()["revision"]})
         else:
-            waited.wait(0.01)
+            projects = transport.bindings.projects
+            other = tmp_path / "other-workspace"
+            other.mkdir()
+            projects.roots.append((other, other))
+            project = next(row for row in projects.available() if row["workspace_path"] == str(other))
+            change_private_binding("POST", {"app_ref": profile, "project_ref": project["project_ref"],
+                                            "executor_endpoint_id": "codex"})
+            replacement = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == profile)
+            assert transport.profiles()[profile]["binding_id"] == replacement["binding_id"] != before
+            assert replacement["provider_ref"] == identity_ref(provider.profile_apps[profile])
+        if delayed_inventory:
+            retry = service._refresh_retry
+            assert retry is not None and inventory_captured.wait(8)
+            if inventory_during_queue_recovery:
+                resume_session_queues = service._resume_session_queues
 
-    monkeypatch.setattr(service._delivery_wakeup, "wait", wait)
-    service._reconcile_private()
-    assert observed == [True] and own.is_set() and not other.is_set()
+                def resume_after_retry(snapshot):
+                    # The foreground has the current inventory but has yet
+                    # to update the listener. Finish the older read here.
+                    return_inventory.set()
+                    retry.join(8)
+                    assert not retry.is_alive()
+                    assert not original_worker[0].is_set()
+                    resume_session_queues(snapshot)
+
+                monkeypatch.setattr(service, "_resume_session_queues", resume_after_retry)
+            if stale_inventory:
+                service.refresh()
+                if not inventory_during_queue_recovery:
+                    assert service._refresh_retry is retry
+                assert service._workers[profile] == original_worker
+            if closing:
+                release.set()
+                assert second_replied.wait(8), service.health_snapshot()
+                service.close()
+            return_inventory.set()
+            retry.join(8)
+            assert not retry.is_alive()
+            if removed_inventory:
+                assert original_worker[0].is_set()
+                assert consumer_processes[0].exited.wait(8)
+                release.set()
+                original_worker[1].join(8)
+                assert not original_worker[1].is_alive()
+                expected = group_events[:1]
+            else:
+                if stale_inventory:
+                    assert not original_worker[0].is_set()
+                    release.set()
+                    assert second_replied.wait(8), service.health_snapshot()
+                    with service._lock:
+                        recheck = service._refresh_retry
+                    assert recheck is not None and recheck is not retry
+                    recheck.join(8)
+                    assert not recheck.is_alive()
+                    assert timer_reads == [retry, recheck]
+                    assert service._workers[profile] == original_worker
+                else:
+                    assert original_worker[0].is_set()
+                    assert service.active_profiles() == []
+                    assert timer_reads == [retry]
+                assert service._refresh_retry is None
+                assert len(consumer_processes) == 1
+                expected = group_events[:2]
+        elif unreadable and not retarget_on_retry:
+            release.set()
+            assert second_replied.wait(8), service.health_snapshot()
+            assert inventory_retried.wait(8)
+            assert service._workers[profile] == original_worker
+            assert len(consumer_processes) == 1
+            expected = group_events[:2]
+        else:
+            assert consumer_processes[0].exited.wait(8)
+            assert len(consumer_processes) == 1
+            release.set()
+            assert next_stream_ready.wait(8), service.health_snapshot()
+            expected = group_events[:1] if different_transport or retarget_on_retry else group_events[:2]
+            if removing or unreadable:
+                expected += group_events[2:]
+            if unreadable:
+                assert inventory_retried.is_set()
+        assert answered == [event["message_id"] for event in expected]
+        reply_targets = [call[call.index("--message-id") + 1] for call in replies["calls"]
+                         if "+messages-reply" in call and "--dry-run" not in call]
+        assert reply_targets == answered
+        config_path, = (store.root.parent / ".loopx/config/lark-goal-topics").glob("*.json")
+        inbox = inspect_lark_event_inbox(project=store.root.parent, config_path=config_path)
+        config = load_lark_event_inbox_config(project=store.root.parent, config_path=config_path)
+        acked = json.loads((config["inbox_path"] / "processed.json").read_text())
+        assert set(acked["message_ids"]) == set(reply_targets)
+        assert inbox["processed_count"] == len(expected)
+        assert inbox["pending_count"] == 0
+        if not stored_app and (adding or removing):
+            assert [identity["cli_bin"], "profile", "list"] in provider.calls
+    finally:
+        return_inventory.set()
+        release.set()
+        service.close()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(3)
+        controller.close()
+
+
+@pytest.mark.parametrize("app_identity", ["legacy_alias", "stored_app", "different_apps"])
+def test_shared_app_routes_messages_to_each_legacy_group(
+    ordinary, tmp_path, monkeypatch, app_identity,  # noqa: F811
+):
+    from pathlib import Path
+
+    from extensions.test_lark_goal_topic_runtime import _reply_runner, _seed_legacy_topic
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding, save_goal_connection
+    from loopx.extensions.lark.goal_channel_targets import add_lark_goal_channel_target, read_goal_channel_targets
+    from test_lark_private_conversations import connect
+
+    store, controller, provider, transport = connect(ordinary)
+    for row in transport.bindings.read()["bindings"]:
+        transport.bindings.disconnect(row["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    target_path = tmp_path / "targets.json"
+    binding_path = tmp_path / "first-binding.json"
+    _seed_legacy_topic(target_path, binding_path)
+    first_profile = "notes-app"
+    second_profile = "steward-app"
+    app_id = provider.profile_apps[first_profile]
+    if app_identity != "different_apps":
+        provider.profile_apps[second_profile] = app_id
+    add_lark_goal_channel_target(
+        target_path=target_path, target_name="second", chat_id="oc_second_fixture",
+        chat_name="Second group", identity_mode="local_user", sender_profile=second_profile,
+        bot_app_id=provider.profile_apps[second_profile], bot_display_name="linkmacbot", execute=True,
+    )
+    other_path = tmp_path / "second-binding.json"
+    save_goal_connection(
+        binding_path=other_path, payload=read_goal_channel_binding(other_path), goal_id="goal-beta",
+        binding={"enabled": True, "provider": "lark", "target_ref": "second",
+                 "topic": {"root_message_id": "om_topic_beta"},
+                 "routing": {"ingress_mode": "direct_session", "incoming_mode": "mentions", "reply_mode": "topic_reply"}},
+    )
+    targets = read_goal_channel_targets(target_path)
+    first = targets["targets"]["fixture"]["identity"]
+    second = targets["targets"]["second"]["identity"]
+    first.update(sender_profile=first_profile, bot_app_id=app_id, bot_open_id="ou_notes_app_bot")
+    second["bot_open_id"] = "ou_notes_app_bot" if app_identity != "different_apps" else "ou_steward_app_bot"
+    if app_identity != "stored_app":
+        first.pop("bot_app_id")
+        second.pop("bot_app_id")
+    bindings = {"goal-alpha": read_goal_channel_binding(binding_path)}
+    other = read_goal_channel_binding(other_path)
+
+    def snapshot():
+        return {"target_payload": targets, "binding_payloads": dict(bindings), "private_profiles": {}}
+
+    first_message = provider.topic("first_group", "@linkmacbot first", root="om_topic_alpha",
+                                   chat="oc_public_fixture")
+    second_message = provider.topic("second_group", "@linkmacbot second", root="om_topic_beta",
+                                    chat="oc_second_fixture")
+    messages = [first_message, second_message]
+    processed = {row["message_id"]: threading.Event() for row in messages}
+    release = threading.Event()
+    processes, answers, results = {}, [], {}
+    replies = {}
+    reply = _reply_runner(replies)
+
+    def read_group(chat_id):
+        def runner(args):
+            if args[3:6] == ["im", "chats", "get"]:
+                return {"returncode": 0, "stdout": json.dumps({"data": {"chat_id": chat_id}})}
+            return reply(args)
+        return runner
+
+    def answer(*, route, **_kwargs):
+        answers.append((route["app_ref"], route["message_id"], route["topic_root_message_id"]))
+        return "Group answer"
+
+    def spawn(args):
+        assert args[3:6] == ["event", "consume", "im.message.receive_v1"]
+        profile = args[2]
+        assert profile not in processes
+
+        def events():
+            if profile == first_profile:
+                yield first_message
+            assert release.wait(12)
+            if profile == second_profile or app_identity != "different_apps":
+                yield second_message
+
+        processes[profile] = _ListenerProcess(events(), hold_seconds=14)
+        return processes[profile]
+
+    stream = runtime.stream_lark_goal_topic_profile
+    source_chat = {first_message["message_id"]: first_message["chat_id"],
+                   second_message["message_id"]: second_message["chat_id"]}
+    def observed_stream(**kwargs):
+        profile = kwargs["profile"]
+        previous = kwargs["health_sink"]
+
+        def health(update):
+            previous(update)
+            if update.get("event_count"):
+                # One input is released at a time, even when both groups share the pipe.
+                message = second_message if release.is_set() else first_message
+                message_id = message["message_id"]
+                results[message_id] = (profile, update.get("last_event_status"))
+                processed[message_id].set()
+
+        def reply_for_topic(args):
+            if "+messages-reply" in args:
+                message_id = args[args.index("--message-id") + 1]
+                return read_group(source_chat[message_id])(args)
+            if args[3:6] == ["im", "chats", "get"]:
+                return read_group(second_message["chat_id"] if release.is_set() else first_message["chat_id"])(args)
+            return reply(args)
+
+        return stream(**{**kwargs, "health_sink": health}, reply_runner=reply_for_topic)
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(runtime, "_default_process_factory", spawn)
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", observed_stream)
+    monkeypatch.setattr(runtime, "answer_lark_goal_topic", answer)
+    service = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=snapshot, runtime_root=store.root.parent,
+        runtime_controller=controller, private_conversations=transport,
+    )
+    try:
+        service.refresh()
+        assert processed[first_message["message_id"]].wait(10), service.health_snapshot()
+        assert results[first_message["message_id"]] == (first_profile, "replied_and_acknowledged")
+        bindings["goal-beta"] = other
+        service.refresh()
+        if app_identity != "different_apps":
+            for _ in range(100):
+                if service.health_snapshot().get(second_profile, {}).get("status") == "standby":
+                    break
+                threading.Event().wait(0.02)
+            assert service.health_snapshot()[second_profile]["status"] == "standby"
+        release.set()
+        assert processed[second_message["message_id"]].wait(10), service.health_snapshot()
+        assert results[second_message["message_id"]] == (
+            second_profile if app_identity == "different_apps" else first_profile, "replied_and_acknowledged"
+        )
+        assert set(processes) == ({first_profile, second_profile} if app_identity == "different_apps" else {first_profile})
+        assert answers == [(first_profile, "om_first_group", "om_topic_alpha"),
+                           (second_profile, "om_second_group", "om_topic_beta")]
+        reply_targets = [(call[2], call[call.index("--message-id") + 1]) for call in replies["calls"]
+                         if "+messages-reply" in call and "--dry-run" not in call]
+        assert reply_targets == [(profile, message) for profile, message, _ in answers]
+        inboxes = list(store.root.parent.glob(".loopx/inbox/lark-goal-topics/*/processed.json"))
+        assert len(inboxes) == 2
+        assert {tuple(json.loads(path.read_text())["message_ids"]) for path in inboxes} == {
+            ("om_first_group",), ("om_second_group",),
+        }
+    finally:
+        release.set()
+        service.close()
+        controller.close()
+
+
+def test_foreground_inventory_failure_rearms_a_finishing_profile_retry(tmp_path, monkeypatch):
+    from extensions.test_lark_goal_topic_runtime import _seed_legacy_topic
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
+    from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "binding.json"
+    _seed_legacy_topic(target_path, binding_path)
+    targets = read_goal_channel_targets(target_path)
+    identity = targets["targets"]["fixture"]["identity"]
+    profile = identity["sender_profile"]
+    app_id = identity.pop("bot_app_id", None) or "cli_public_fixture"
+    snapshot = {
+        "target_payload": targets,
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
+    }
+    available = threading.Event()
+    available.set()
+    observed, finish = threading.Event(), threading.Event()
+    timer_reads = []
+
+    def inventory(*, cli_bin):
+        if threading.current_thread() is service._refresh_retry:
+            timer_reads.append(threading.current_thread())
+        if not available.is_set():
+            raise OSError("profile inventory unavailable")
+        return {profile: app_id}
+
+    service = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path,
+        runtime_controller=object(),
+        private_conversations=SimpleNamespace(configured_profile_apps=inventory),
+        profile_poller=lambda _profile, stop: stop.wait(20),
+    )
+    original_refresh = service._refresh_profile_workers
+
+    def pause_after_observation(*, resume_queues=True):
+        retry_needed = original_refresh(resume_queues=resume_queues)
+        if not resume_queues and not observed.is_set():
+            assert not retry_needed
+            observed.set()
+            assert finish.wait(8)
+        return retry_needed
+
+    monkeypatch.setattr(service, "_refresh_profile_workers", pause_after_observation)
+    try:
+        service.refresh()
+        worker = service._workers[profile]
+        available.clear()
+        service.refresh()
+        retry = service._refresh_retry
+        assert retry is not None
+        available.set()
+        assert observed.wait(8)
+        available.clear()
+        service.refresh()
+        assert service._refresh_retry is retry
+        assert service._workers[profile] == worker
+        available.set()
+        finish.set()
+        retry.join(8)
+        assert not retry.is_alive()
+        recheck = service._refresh_retry
+        assert recheck is not None and recheck is not retry
+        recheck.join(8)
+        assert not recheck.is_alive()
+        assert service._refresh_retry is None
+        assert service._workers[profile] == worker
+        assert timer_reads == [retry, recheck]
+    finally:
+        finish.set()
+        service.close()
 
 
 def test_unknown_failed_capture_is_not_replayed(source_monitor):
