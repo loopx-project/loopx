@@ -1,7 +1,8 @@
 """Read-only source and scheduling checks for private-message delivery."""
 from __future__ import annotations
 
-from collections.abc import Iterator
+import json
+from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -9,10 +10,44 @@ from typing import TYPE_CHECKING, Any, cast
 from ...chat_store import RESUMABLE_SESSION_STATES, ChatSessionStore, _read_json
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, external_source_route_path, file_change_fingerprint
 from ...file_lock import try_exclusive_file_lock
+from .presentation.markdown_post import lark_markdown_readback_matches
+from .private_ingress import private_source_text
 from .private_progress import legacy_recovery_repairs
 
 if TYPE_CHECKING:
     from ...capabilities.native_chat.external_conversations import ChatExternalConversations
+
+
+def historical_image_source_matches(message: Mapping | None, event: Mapping) -> bool:
+    if message is None or message.get("deleted") is True or message.get("chat_id") != event["chat_id"]:
+        return False
+    sender = message.get("sender")
+    return (isinstance(sender, Mapping) and sender.get("sender_type") == "user"
+            and bool(event["sender_id"]) and sender.get("id") == event["sender_id"]
+            and message.get("msg_type", message.get("message_type")) == "text"
+            and private_source_text(message) == event["content"])
+
+
+def historical_image_reply_matches(message: Mapping | None, chat_id: str, observation: Mapping,
+                                   text: str, keys: tuple[str, ...] = ()) -> bool:
+    if message is None or message.get("deleted") is True or message.get("chat_id") != chat_id:
+        return False
+    sender = message.get("sender")
+    if (not isinstance(sender, Mapping) or sender.get("sender_type") != "app"
+            or not sender.get("id") or sender["id"] not in (observation["bot_app_id"], observation["bot_open_id"])):
+        return False
+    raw_body = message.get("body")
+    if isinstance(raw_body, Mapping) and isinstance(raw_body.get("content"), str):
+        try:
+            body = json.loads(raw_body["content"])
+        except ValueError:
+            return False
+        # Raw mget keeps authored Markdown in content_v2 and a rendered preview
+        # in content. Match the authored body through the existing wire verifier.
+        if isinstance(body, Mapping) and "content_v2" in body:
+            locale = {"title": body.get("title", ""), "content": body["content_v2"]}
+            message = {**message, "body": {"content": {"zh_cn": locale}}}
+    return lark_markdown_readback_matches(text=text, message=message, image_keys=keys)
 
 
 def resumable_answer_image_session(

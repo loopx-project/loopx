@@ -1291,9 +1291,9 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         runtime.close()
 
 
-@pytest.mark.parametrize("fault", ["readback", "edited_source", "edited_original_reply", "edit_on_image_get",
+@pytest.mark.parametrize("fault", ["readback", "raw_paired_post", "edited_source", "edited_original_reply", "edit_on_image_get",
     "edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_preview", "edit_on_send_source_read",
-    "edit_reply_after_upload_intent",
+    "edit_reply_after_upload_intent", "edit_source_on_final_pair_read",
     "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied", "upload_scope_then_granted",
     "upload_scope_with_conflicting_stdout", "closed_on_source_controls_read",
     "unlisted_redirect", "unlisted_cached_redirect"])
@@ -1315,6 +1315,8 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
     fake.write_text(script.replace(marker, f'"message": {answer!r},', 1))
     io = ImageIO(provider)
     edited_body = None
+    source_edited_during_pair = False
+    committed_resource_path = None
     upload_previews = 0
     send_preview_seen = False
     denied_uploads = 0
@@ -1326,8 +1328,11 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         provider.messages[prior_id]["body"] = edited_body
 
     def provider_io(args, cwd=None, timeout=None):
-        nonlocal upload_previews, send_preview_seen, denied_uploads
+        nonlocal upload_previews, send_preview_seen, denied_uploads, source_edited_during_pair
         image_upload = "images" in args and "create" in args and "--dry-run" not in args
+        pair_read = "/open-apis/im/v1/messages/mget" in args and "--params" in args
+        source_read = (("+messages-mget" in args and event["message_id"] in args)
+                       or (pair_read and event["message_id"] in json.loads(args[args.index("--params") + 1])["message_ids"]))
         if fault == "upload_denied" and image_upload:
             provider.calls.append(list(args))
             return {"returncode": 3, "stderr": '{"ok":false,"error":{"type":"authorization","code":99991672}}'}
@@ -1340,17 +1345,33 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
                         "type": "authorization", "subtype": "app_scope_not_applied", "code": 99991672,
                         "identity": "bot"}}),
                     "stdout": "invalid provider acknowledgement" if fault == "upload_scope_with_conflicting_stdout" else ""}
-        result = io(args, cwd, timeout)
-        if "images" in args and "create" in args and "--dry-run" in args:
-            upload_previews += 1
+        if (fault == "edit_source_on_final_pair_read" and committed_resource_path is not None
+                and not source_edited_during_pair
+                and (("+messages-mget" in args and prior_id in args)
+                     or pair_read)):
+            assert json.loads(committed_resource_path.read_text())["upload_started"] is True
+            provider.messages[event["message_id"]]["content"] = "The source changed during the final reply read."
+            source_edited_during_pair = True
         uploads_before_edit = {"edit_on_upload_source_read": 0, "edit_on_next_upload_source_read": 1}
         if (fault in uploads_before_edit and upload_previews == uploads_before_edit[fault] + 1 and edited_body is None
                 and io.uploads == uploads_before_edit[fault]
-                and "+messages-mget" in args and args[args.index("--message-ids") + 1] == event["message_id"]):
+                and source_read):
             edit_original_reply()
         if (fault == "edit_on_send_source_read" and send_preview_seen and edited_body is None
-                and "+messages-mget" in args and args[args.index("--message-ids") + 1] == event["message_id"]):
+                and source_read):
             edit_original_reply()
+        result = io(args, cwd, timeout)
+        if pair_read and fault == "raw_paired_post":
+            body = json.loads(result["stdout"])
+            historical = next(row for row in body["data"]["items"] if row["message_id"] == prior_id)
+            original_rows = json.loads(historical["body"]["content"])["zh_cn"]["content"]
+            historical["body"] = {"content": json.dumps({
+                "title": "", "content_v2": original_rows,
+                "content": [[{"tag": "text", "text": "A rendered preview only."}]],
+            })}
+            result = {**result, "stdout": json.dumps(body)}
+        if "images" in args and "create" in args and "--dry-run" in args:
+            upload_previews += 1
         if "+messages-send" in args and "--dry-run" in args and "--content" in args:
             if "原图（按原文顺序）" in args[args.index("--content") + 1]:
                 send_preview_seen = True
@@ -1443,19 +1464,29 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             io.corrupt_download = True
         elif fault == "unknown_send":
             provider.lose_next_reply = True
-        elif fault == "edit_reply_after_upload_intent":
+        elif fault in {"edit_reply_after_upload_intent", "edit_source_on_final_pair_read"}:
             from loopx.extensions.lark import return_files
 
             write_receipt = return_files._write
 
             def edit_after_upload_intent(path, value):
+                nonlocal committed_resource_path
                 write_receipt(path, value)
-                if value.get("upload_started") and edited_body is None:
-                    assert json.loads(path.read_text())["upload_started"] is True
-                    edit_original_reply()
+                if value.get("upload_started") and committed_resource_path is None:
+                    committed_resource_path = path
+                    if fault == "edit_reply_after_upload_intent":
+                        assert json.loads(path.read_text())["upload_started"] is True
+                        edit_original_reply()
 
             monkeypatch.setattr(return_files, "_write", edit_after_upload_intent)
 
+        if fault == "raw_paired_post":
+            assert worker.reconcile_request(path) == 1
+            assert io.uploads == 4 and len(provider.writes) == writes + 1
+            assert json.loads(path.read_text())["deliveries"]["answer_images.historical"]["images_verified"] is True
+            assert worker.reconcile_request(path) == 0 and io.uploads == 4
+            assert core == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
+            return
         assert worker.reconcile_request(path) == 0
         if fault == "closed_on_source_controls_read":
             assert upload_previews == 1 and store.load_session(sid)["status"] == "closed"
@@ -1501,6 +1532,9 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
 
                 assert edited_body is not None
                 assert list((_root(worker.runtime_root) / "lark-chat-images").glob("*.json")) == []
+            if fault == "edit_source_on_final_pair_read":
+                assert source_edited_during_pair and not committed_resource_path.exists()
+                assert "answer_images.historical" not in json.loads(path.read_text())["deliveries"]
             if fault in {"edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_source_read",
                          "edit_reply_after_upload_intent"}:
                 assert edited_body is not None
