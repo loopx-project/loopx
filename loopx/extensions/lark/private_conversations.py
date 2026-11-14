@@ -46,7 +46,7 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
 from .outbound import normalize_lark_outbound_text, present_lark_conversation_text as _presentation_text
 from .presentation.markdown_post import lark_markdown_readback_matches
 from .private_images import private_message_caption, private_message_images
-from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits
+from .private_delivery_discovery import PrivateDeliveryDiscovery, answer_image_source_continues, prepared_steward_binding_waits
 from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from . import private_steward_triage as triage
@@ -1427,8 +1427,8 @@ class LarkPrivateConversations:
 
         def authorized() -> bool:
             native = self.core.read_request(record["request_ref"])
-            return native.get("status") == "accepted" and all(native.get(key) == record[key] for key in (
-                "binding_id", "source", "session_id", "turn_id"))
+            same_request = all(native.get(key) == record[key] for key in ("binding_id", "source", "session_id", "turn_id"))
+            return native.get("status") == "accepted" and same_request and answer_image_source_continues(self.core, native)
 
         state = record.setdefault("answer_images", {})
         # Hold the source and the exact completed body fixed across retries.
@@ -1440,8 +1440,7 @@ class LarkPrivateConversations:
             _atomic_write_json(path, record)
             self._deliver(path, record, "terminal", body + "\n\n原图会另发；有链接的图名可打开原始来源。",
                           inbox=inbox, finalize_source=False)
-            # Release the existing body worker as soon as the explanation is
-            # sent. The same pool discovers the pending image work separately.
+            # Release the body worker before the pending image work.
             return False
         if state.get("status") == "delivered" and record["deliveries"].get(media_phase, {}).get("images_verified") is True:
             return True
@@ -1480,7 +1479,7 @@ class LarkPrivateConversations:
         _atomic_write_json(path, record)
         self._deliver(path, record, "answer_image_notice." + phase,
                       "正文已送达，图片尚未核验送达。有链接的图名可打开原始来源。",
-                      inbox=inbox, finalize_source=False)
+                      inbox=inbox, authorization_check=authorized, finalize_source=False)
         return False
 
     def _historical_image_source(self, record: Mapping[str, Any], plan: Mapping[str, Any]) -> dict:

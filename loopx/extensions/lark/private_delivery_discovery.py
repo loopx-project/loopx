@@ -1,13 +1,30 @@
-"""Read-only scheduling hints for the existing private-message reply worker."""
+"""Read-only source and scheduling checks for private-message delivery."""
 from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from ...chat_store import RESUMABLE_SESSION_STATES, ChatSessionStore, _read_json
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from .private_progress import legacy_recovery_repairs
+
+if TYPE_CHECKING:
+    from ...capabilities.native_chat.external_conversations import ChatExternalConversations
+
+
+def answer_image_source_continues(core: ChatExternalConversations, request: dict[str, Any]) -> bool:
+    """Apply the original Core session and source controls to delayed media."""
+    store = core.controller.store
+    session_id, turn_id = request["session_id"], request["turn_id"]
+    session = store.load_session(session_id)
+    if session is None or session.get("status") not in RESUMABLE_SESSION_STATES:
+        return False
+    turn = store.load_turn(session_id, turn_id)
+    return (
+        turn is not None and turn.get("status") == "completed"
+        and not core._source_stop_observed(request, turn, store.events_after(session_id, turn_id, None))
+    )
 
 
 def prepared_steward_binding_waits(

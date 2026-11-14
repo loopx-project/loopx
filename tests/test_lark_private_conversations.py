@@ -1069,7 +1069,8 @@ def source_https(monkeypatch):
 
 @pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request",
     "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
-    "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect"])
+    "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect", "stopped", "stopped_after_fetch",
+    "closed_on_upload_preview"])
 def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, source_https, fault):  # noqa: F811
     from test_chat_image_attachments import PNG_BYTES
     from test_lark_app_image_projection import ImageIO
@@ -1084,6 +1085,7 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     fake.write_text(script.replace(default,
         f'"message": {authored!r} if turn_count == 1 else "Next original reply.",', 1))
     article_url = "https://source.example/article"
+    stopped = fault in ("stopped", "stopped_after_fetch")
     redirect_targets = {
         "listed_redirect": "/canonical.png",
         "same_host_redirect": "/unlisted.png",
@@ -1105,6 +1107,8 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
             return redirect_targets[fault], None, b""
         if target == "https://unrelated.example/foreign.png" and fault == "foreign_round_trip":
             return "https://source.example/unlisted.png", None, b""
+        if target == url and fault == "stopped_after_fetch":
+            transport.admit("notes-app", provider.event("notes-app", "stop-during-image-fetch", "/stop"))
         return None, "image/png", PNG_BYTES
 
     fetched, resolutions = source_https(respond)
@@ -1112,6 +1116,8 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     io = ImageIO(provider)
     io.corrupt_download = fault in ("corrupt_readback", "legacy_cached_readback")
     def media(args, cwd=None, timeout=None):
+        if fault == "closed_on_upload_preview" and "images" in args and "create" in args and "--dry-run" in args:
+            runtime.close_session(sid)
         if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
             return {"returncode": 3, "stderr": '{"ok":false,"error":{"code":99991672}}'}
         return io(args, cwd, timeout)
@@ -1135,6 +1141,8 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         assert fetched == [] and io.uploads == 0
         assert path not in transport.pending_body_paths()
         assert path in transport.pending_delivery_paths() and transport.is_recovery_path(path)
+        if fault == "stopped":
+            transport.admit("notes-app", provider.event("notes-app", "stop-before-image-work", "/stop"))
         assert transport.reconcile_request(path) == int(images_delivered)
         saved = json.loads(path.read_text())
         assert saved["answer_images"]["status"] == ("delivered" if images_delivered else "unverified")
@@ -1143,19 +1151,26 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         assert all(row["chat_id"] == source["chat_id"] for _, row, _ in out)
         assert any("[Source chart](" in nodes[0][0]["text"] for _, _, nodes in out)
         assert all(not any("![Source chart]" in node.get("text", "") for line in nodes for node in line) for _, _, nodes in out)
+        if stopped or fault == "closed_on_upload_preview":
+            assert io.uploads == 0 and transport.core.read_request(ref).get("delivery_verified", False) is False
+            assert not any(name.startswith(("answer_images.", "answer_image_notice.")) for name in saved["deliveries"])
+            if stopped:
+                assert any(control.get("command") == "stop" for control in transport.core.source_controls())
+            else:
+                assert store.load_session(sid)["status"] == "closed"
         assert transport.core.read_request(ref).get("delivery_verified", False) is images_delivered
         native_images = [node["image_key"] for _, _, nodes in out for line in nodes for node in line if node["tag"] == "img"]
         assert native_images == list(io.resources)
         assert all(io.resources[k] == PNG_BYTES for k in native_images)
         expected_requests = {
-            "foreign_source": [], "changed_request": [], "unlisted_image": [article_url],
+            "foreign_source": [], "changed_request": [], "stopped": [], "unlisted_image": [article_url],
             "article_redirect": [article_url], "listed_redirect": [article_url, url, "https://source.example/canonical.png"],
         }.get(fault, [article_url, url])
         assert fetched == expected_requests
         assert resolutions == ["source.example"] * len(expected_requests)
         if fault in {"same_host_redirect", "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect"}:
             assert io.uploads == 0 and native_images == []
-        assert ("图片尚未核验送达" in str(out)) is not images_delivered
+        assert ("图片尚未核验送达" in str(out)) == (not images_delivered and not stopped and fault != "closed_on_upload_preview")
         if fault in ("corrupt_readback", "legacy_cached_readback"):
             io.corrupt_download = False
             from loopx.chat_store import _atomic_write_json
