@@ -186,43 +186,68 @@ def test_progress_cli_reads_policy_with_context_delivery(
         restart_effect_runtime(wait_for_exit=True)
 
 
-@pytest.mark.skipif(os.name != "posix" or shutil.which("pwsh") is None,
-                    reason="The private capture reader needs a POSIX host with PowerShell 7")
-@pytest.mark.parametrize(("provider", "complete"), [("file", False), ("sqlite", True)])
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="Requires PowerShell 7")
+@pytest.mark.parametrize(("provider", "complete", "python_route"), [
+    pytest.param("file", False, False, id="launcher-file"),
+    pytest.param("sqlite", True, False, id="launcher-sqlite"),
+    pytest.param("sqlite", True, True, id="windows-python-sqlite",
+                 marks=pytest.mark.skipif(os.name != "nt", reason="Native Windows Python route")),
+])
 def test_replan_stage_commands_run_verbatim_in_powershell(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, complete: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, complete: bool, python_route: bool,
 ) -> None:
     tmp_path = tmp_path.resolve()
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     workspace = tmp_path / "reader's O’Neil workspace"
     workspace.mkdir()
     fixture = make_progress_cli_fixture(workspace, provider, "advanced")
-    launcher = workspace / "loopx.ps1"
-    checkout = Path(__file__).resolve().parents[2]
-    shutil.copyfile(checkout / "scripts/loopx.ps1", launcher)
-    launcher.with_name("loopx-current-release.json").write_text(json.dumps({
-        "release_root": str(checkout), "python": sys.executable,
-    }), encoding="utf-8")
-    monkeypatch.delenv("LOOPX_CURRENT_RELEASE_FILE", raising=False)
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     powershell = shutil.which("pwsh")
     assert powershell is not None
 
     def run(*args: str) -> dict:
         result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", *args],
-            cwd=fixture["project"], capture_output=True, text=True, timeout=60)
+            cwd=fixture["project"], capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert result.returncode == 0, (result.stdout, result.stderr)
         return json.loads(result.stdout)
 
     try:
-        opening = run("-File", str(launcher), "--cli-bin", str(launcher), "--format", "json",
+        opening_args = ["--format", "json",
             "--registry", str(fixture["registry"]), "--runtime-root", str(fixture["runtime"]),
             "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
             "--context-delivery", "on", "--delta-delivery", "off",
-            *(["--complete-turn"] if complete else []))
-        page = run("-Command", opening["first_read_command"])
-        assert page["eof"]
-        command = selected_context_values(page["content"])["/replan_action_packet/review"]
+            *(["--complete-turn"] if complete else [])]
+        if python_route:
+            result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", *opening_args],
+                cwd=fixture["project"], capture_output=True, encoding="utf-8", timeout=60)
+            assert result.returncode == 0, (result.stdout, result.stderr)
+            opening = json.loads(result.stdout)
+        else:
+            launcher = workspace / "loopx.ps1"
+            checkout = Path(__file__).resolve().parents[2]
+            shutil.copyfile(checkout / "scripts/loopx.ps1", launcher)
+            launcher.with_name("loopx-current-release.json").write_text(json.dumps({
+                "release_root": str(checkout), "python": sys.executable,
+            }), encoding="utf-8")
+            monkeypatch.delenv("LOOPX_CURRENT_RELEASE_FILE", raising=False)
+            opening = run("-File", str(launcher), "--cli-bin", str(launcher), *opening_args)
+        if os.name == "nt":
+            from tests.control_plane.windows_private_acl import assert_private_acl
+
+            reference = Path(opening["recovery"]["reference_file"])
+            capture = Path(json.loads(reference.read_text(encoding="utf-8"))["path"])
+            for leaf in (reference, capture, capture.parent, capture.parent.parent):
+                assert_private_acl(leaf)
+        command = opening["first_read_command"]
+        body = bytearray()
+        while command:
+            page = run("-Command", command)
+            assert page["ok"] and page["offset"] == len(body)
+            body.extend(page["content"].encode("utf-8"))
+            command = page.get("next_command")
+            assert page["next_offset"] == (len(body) if command else None)
+        assert page["eof"] and page["total_bytes"] == len(body)
+        command = selected_context_values(body.decode("utf-8"))["/replan_action_packet/review"]
         review = run("-Command", command)
         writeback = run("-Command", review["next"]["writeback"])
         assert review["stage"] == "review" and writeback["stage"] == "writeback"
@@ -432,7 +457,7 @@ def test_progressive_replan_uses_the_saved_decision(tmp_path, monkeypatch, provi
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("envelope", [(), ("--complete-turn",)], ids=["quota", "complete"])
 def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, capsys, provider, envelope):
-    from loopx.control_plane.runtime import private_permissions
+    from loopx.control_plane.turn_driver import decision_capture
     from loopx.entrypoint import main
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -541,31 +566,31 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         assert denied["ok"] is False and "command" not in denied
         assert set(recovery_root.glob("recovery-*")) == published_recoveries
 
-        if os.name == "posix":
-            protect = private_permissions.protect_private_path
-            failed_captures = []
+        write_capture = decision_capture.write_decision_capture
+        failed_captures = []
 
-            def fail_capture_protection(leaf, *, directory=False):
-                if not directory and leaf.name == "required-context.json" and leaf.parent.parent == recovery_root:
-                    assert leaf.is_file() and leaf.stat().st_size > 0
-                    failed_captures.append(leaf)
-                    raise PermissionError("could not set recovery capture permissions")
-                protect(leaf, directory=directory)
+        def fail_after_capture(destination, payload):
+            digest = write_capture(destination, payload)
+            if destination.name == "required-context.json" and destination.parent.parent == recovery_root:
+                assert hashlib.sha256(destination.read_bytes()).hexdigest() == digest
+                failed_captures.append(destination)
+                raise OSError("could not finish publishing the private capture")
+            return digest
 
-            with monkeypatch.context() as fault:
-                fault.setattr(private_permissions, "protect_private_path", fail_capture_protection)
-                fault.chdir(fixture["project"])
-                for _ in range(2):
-                    assert main([*cli_args, "--max-page-output-bytes", str(output_limit)]) == 1
-                    stdout = capsys.readouterr().out
-                    assert len(stdout.encode()) <= output_limit
-                    rejected = json.loads(stdout)
-                    assert rejected["ok"] is False and "command" not in rejected
-                    assert "repair private capture storage" in rejected["reason"].lower()
-            assert len(failed_captures) == 2
-            assert set(recovery_root.glob("recovery-*")) == published_recoveries
-            assert path.read_bytes() == raw
-            assert _authority(fixture) == authority
+        with monkeypatch.context() as fault:
+            fault.setattr(decision_capture, "write_decision_capture", fail_after_capture)
+            fault.chdir(fixture["project"])
+            for _ in range(2):
+                assert main([*cli_args, "--max-page-output-bytes", str(output_limit)]) == 1
+                stdout = capsys.readouterr().out
+                assert len(stdout.encode()) <= output_limit
+                rejected = json.loads(stdout)
+                assert rejected["ok"] is False and "command" not in rejected
+                assert "repair private capture storage" in rejected["reason"].lower()
+        assert len(failed_captures) == 2
+        assert set(recovery_root.glob("recovery-*")) == published_recoveries
+        assert path.read_bytes() == raw
+        assert _authority(fixture) == authority
 
         page_command = bounded["command"]
         body = bytearray()

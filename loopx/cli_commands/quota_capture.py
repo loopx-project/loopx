@@ -314,17 +314,17 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     A plain read-only should-run remains read-only. Private transport files do
     not admit work, mint a Turn or stand in for observed model consumption.
     """
-    from .context_machine import _private_transport_root
     from .quota_request import quota_detail_sections_from_args
-    from ..control_plane.turn_driver.decision_capture import capture_progressive_context
+    from ..control_plane.turn_driver.decision_capture import (
+        capture_progressive_context, private_capture_root, private_capture_subdirectory,
+    )
 
     # Only a fresh stateless source can supply this route. Saved and explicitly
     # captured decisions keep the reader chosen by their existing callers.
     stage_from_projection = (directory is None and captured_decision_path is None
         and "vision" not in quota_detail_sections_from_args(args))
     if directory is None:
-        root = Path(_private_transport_root(runtime_root))
-        directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
+        directory = private_capture_subdirectory(private_capture_root(runtime_root), "context-")
     transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
     required, reference, review = capture_progressive_context(
         payload, directory=directory, surface=quota_context_surface(payload, args),
@@ -469,9 +469,14 @@ def project_saved_context_capture(
     saved_source = None
     if complete and activation["progressive_enabled"]:
         from ..control_plane.runtime.private_permissions import require_private_path
+        from ..control_plane.turn_driver.decision_capture import require_private_capture_directory
 
         try:
             require_private_path(path)
+            if os.name == "nt":
+                # An explicit digest can restore a historical capture, but a
+                # private reader also requires an owned physical directory.
+                require_private_capture_directory(Path(args.capture_file).expanduser().absolute().parent)
         except OSError:
             # A manually restored capture may still use the existing checked
             # presentation path without becoming a private reader source.
@@ -685,7 +690,14 @@ def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> P
 
 
 def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
-    enabled = native_context_activation(args)["enabled"]
+    from ..control_plane.runtime.private_permissions import protect_private_path
+    from ..control_plane.turn_driver.decision_capture import (
+        private_capture_subdirectory, require_private_capture_directory,
+    )
+
+    activation = native_context_activation(args)
+    enabled = activation["enabled"]
+    private_windows = os.name == "nt" and activation["progressive_enabled"]
     if enabled and not (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
                         or getattr(args, "decision_handoff_socket", None)):
         raise QuotaCommandValidationError("context-delivery on requires a native context location or explicit host handoff")
@@ -723,16 +735,23 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
             parent = Path(root).expanduser().absolute()
             if parent.is_symlink() or not parent.is_dir():
                 raise OSError("capture root must be an existing directory, not a symlink")
+            if private_windows:
+                require_private_capture_directory(parent)
+                return private_capture_subdirectory(parent, "decision-")
             return Path(tempfile.mkdtemp(prefix="decision-", dir=parent))
         assert requested is not None  # root is absent; exactly one destination was checked above.
         directory = Path(requested).expanduser().absolute()
-        if getattr(args, "prepared_capture_reference", False):
+        if private_windows:
+            require_private_capture_directory(directory.parent)
+        elif getattr(args, "prepared_capture_reference", False):
             # Bind the physical parent before admission: the saved selection
             # uses it as an output root, which must not be a symlink.
             directory = Path(os.path.realpath(directory.parent, strict=True)) / directory.name
         # A new directory per invocation prevents overwriting a prior observation,
         # including a prior invocation in the same Turn. Existing symlinks fail too.
         directory.mkdir(mode=0o700)
+        if private_windows:
+            protect_private_path(directory, directory=True)
     except OSError as exc:
         raise QuotaCommandValidationError(
             "decision capture needs a new directory or an existing writable root; "
@@ -806,23 +825,17 @@ def budgeted_settlement_result(
     Unbudgeted callers retain their existing full result.
     """
     from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-    from ..control_plane.turn_driver.decision_capture import write_decision_capture
+    from ..control_plane.turn_driver.decision_capture import (
+        private_capture_root, private_capture_subdirectory, write_decision_capture,
+    )
 
     def fits(value: dict[str, object]) -> bool:
-        # Match the JSON CLI serializer, including print's newline.
-        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= output_bytes
+        return _json_output_size(value) <= output_bytes
 
     if supporting_fields is None and fits(payload):
         return payload
     try:
-        uid = private_capture_uid()
-        root = runtime_root.expanduser().resolve() / "context-delivery"
-        root.mkdir(mode=0o700, exist_ok=True)
-        metadata = root.lstat()
-        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid
-                or metadata.st_mode & 0o077):
-            raise ValueError("result capture requires a private physical directory owned by this user")
-        directory = Path(tempfile.mkdtemp(prefix="settlement-", dir=root))
+        directory = private_capture_subdirectory(private_capture_root(runtime_root), "settlement-")
         saved = directory / "result.json"
         digest = write_decision_capture(saved, payload)
         if saved.stat().st_size > MAX_REQUEST_BYTES:
