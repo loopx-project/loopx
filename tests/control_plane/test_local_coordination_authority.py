@@ -1470,10 +1470,14 @@ Continue provider-first delivery.
     assert completed["validation_receipt"]["command_label"] == (
         "provider terminal integration"
     )
-    # The extra bounded crossing admits/replays before resolving private argv.
-    assert terminal_phases == ["resolve_validation", "execute_validation", "applied"]
+    # Admission precedes private argv resolution. Recheck the execute plan
+    # once under the per-Todo execution lock before starting the validator.
+    assert terminal_phases == [
+        "resolve_validation", "execute_validation", "execute_validation", "applied",
+    ]
     assert runtime_calls == [
         "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",

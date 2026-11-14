@@ -915,6 +915,32 @@ fails closed with a typed `validation_blocked_completion` receipt instead of
 committing `done`. Todos without a declared command keep the unchanged fast
 path.
 
+Completion requests sharing a runtime root serialize validation for the same
+Todo, including requests from different completion entry points. If validation
+is still running, retry the original request once the first attempt finishes.
+If the terminal response is lost, use the reported `todo receipt` command or
+retry the same reviewed Chat proposal to recover the original operation. A
+committed completion replays its receipt without rerunning the validator. A
+missing receipt alone cannot determine whether the original writer has stopped.
+
+On POSIX, if the completion caller exits while its validator is running, the
+supervisor retains the same execution lock until it stops the validator's
+process group. The retry can then check the original completion receipt. This
+covers the caller's exit and descendants in the same process group. Windows
+continues to serialize while the caller is alive. Keep validation commands safe
+to retry. A command that already ran before a missing terminal commit may need
+to run again.
+
+共享运行时目录的完成请求按 Todo 串行执行校验，跨完成入口也使用同一把锁。校验进行
+中，可在首个请求结束后重试原操作。终态提交响应丢失时，使用返回的 `todo receipt`
+命令查询原操作，或重试同一已审核的 Chat 提案。已提交的操作直接重放回执，无需再次
+执行校验。未查到回执时，原写入仍可能在进行。
+
+在 POSIX 上，调用方退出时若校验器仍在运行，监督进程会保留同一把执行锁，直到
+原校验进程组停止。之后可重试原操作并检查完成回执。该机制覆盖调用方退出和同一
+进程组内的子进程。Windows 在调用方存活期间继续串行校验。校验命令应可安全
+重试。若命令已运行但终态尚未提交，重试时可能再次执行。
+
 ### Bind the first completion validator / 首次绑定完成验证
 
 An active, open canonical Todo imported without a completion validator can use

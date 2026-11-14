@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -71,8 +75,264 @@ def test_public_user_update_done_uses_canonical_transaction(tmp_path: Path, prov
 
 
 def validation_command(source: str) -> str:
-    import shlex
     return shlex.join([sys.executable, "-c", source])
+
+
+def blocking_validator(root: Path) -> str:
+    script = root / "check_completion.py"
+    script.write_text(
+        "import os, time\n"
+        "from pathlib import Path\n"
+        "root = Path(__file__).parent\n"
+        "(root / f'validation-{os.getpid()}').touch()\n"
+        "deadline = time.monotonic() + 15\n"
+        "while not (root / 'release').exists():\n"
+        "    if time.monotonic() >= deadline: raise SystemExit(2)\n"
+        "    time.sleep(0.02)\n",
+        encoding="utf-8",
+    )
+    return validation_command(f"import runpy; runpy.run_path({str(script)!r})")
+
+
+def wait_for_validation(root: Path) -> None:
+    deadline = time.monotonic() + 10
+    while not list(root.glob("validation-*")):
+        assert time.monotonic() < deadline, "completion did not start the validator"
+        time.sleep(0.02)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(("first", "second"), [
+    ("complete", "complete"), ("update", "update"),
+    ("complete", "update"), ("update", "complete"),
+])
+def test_concurrent_completion_does_not_repeat_the_validator(
+    tmp_path: Path, provider: str, first: str, second: str,
+) -> None:
+    registry, _state, todo_id = fixture(tmp_path, provider, validation=blocking_validator(tmp_path))
+    before = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    target = ["--goal-id", "goal-a", "--todo-id", todo_id, "--agent-id", "agent-a"]
+    cli = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry), "todo"]
+    commands = {
+        "complete": [*cli, "complete", *target, "--evidence", "evidence:checked"],
+        "update": [*cli, "update", *target, "--status", "done",
+                   "--update-operation-id", "concurrent-completion"],
+    }
+    with subprocess.Popen(commands[first], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as original:
+        try:
+            wait_for_validation(tmp_path)
+            duplicate = subprocess.run(commands[second], capture_output=True, text=True, timeout=10)
+            busy = json.loads(duplicate.stdout)
+            assert duplicate.returncode == 1 and busy["error_code"] == "completion_validation_in_progress", busy
+            assert list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"] == before
+            assert len(list(tmp_path.glob("validation-*"))) == 1
+        finally:
+            (tmp_path / "release").touch()
+        stdout, stderr = original.communicate(timeout=20)
+    completed = json.loads(stdout)
+    assert original.returncode == 0 and completed["changed"] is True, (completed, stderr)
+    replay = json.loads(subprocess.check_output(commands[first], text=True, timeout=20))
+    assert (replay.get("provider_status") or replay["status"]) == "replayed", replay
+    assert len(list(tmp_path.glob("validation-*"))) == 1
+    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    assert next(row for row in todos if row["todo_id"] == todo_id)["status"] == "done"
+    assert next(row for row in todos if row["role"] == "agent")["status"] == "open"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX supervisor and process-group ownership")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("entrypoint", ["complete", "update"])
+def test_killed_completion_owner_keeps_validation_fenced(
+    tmp_path: Path, provider: str, entrypoint: str,
+) -> None:
+    from loopx.control_plane.todos.completion_validation_store import completion_validation_declaration_path
+    from loopx.file_lock import lock_holder_path
+
+    registry, _state, todo_id = fixture(tmp_path, provider, validation=blocking_validator(tmp_path))
+    execution = completion_validation_declaration_path(
+        runtime_root=tmp_path / "runtime", goal_id="goal-a", todo_id=todo_id,
+    ).with_suffix(".execution")
+    target = ["--goal-id", "goal-a", "--todo-id", todo_id, "--agent-id", "agent-a"]
+    options = (["--evidence", "evidence:checked"] if entrypoint == "complete" else
+               ["--status", "done", "--update-operation-id", "killed-owner-completion"])
+    command = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+               "todo", entrypoint, *target, *options]
+    # Pause cleanup after it observes owner EOF and before it kills the
+    # validator. Inject only into the test CLI's private supervisor child.
+    cleanup_barrier = """
+import os
+import sys
+import time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from loopx.extensions import process_runtime
+cleanup = process_runtime.terminate_process_tree
+root = Path(os.environ["VALIDATION_TEST_ROOT"])
+
+def pause(process, grace_seconds):
+    (root / "cleaning").touch()
+    deadline = time.monotonic() + 12
+    while not (root / "allow-cleanup").exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    cleanup(process, grace_seconds)
+    (root / "cleaned").touch()
+
+process_runtime.terminate_process_tree = pause
+"""
+    instrumented = (
+        "from loopx.cli import main; "
+        "from loopx.control_plane.runtime import validation_command; "
+        f"validation_command._SUPERVISOR_ENTRY = {cleanup_barrier!r} "
+        "+ validation_command._SUPERVISOR_ENTRY; "
+        "raise SystemExit(main())"
+    )
+    original = subprocess.Popen(
+        [sys.executable, "-c", instrumented, *command[3:]],
+        env={**os.environ, "VALIDATION_TEST_ROOT": str(tmp_path)},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        wait_for_validation(tmp_path)
+        first = next(tmp_path.glob("validation-*"))
+        pid = int(first.name.removeprefix("validation-"))
+        original.kill()
+        assert original.wait(timeout=5) == -signal.SIGKILL
+        assert not json.loads(lock_holder_path(execution).read_text()).get("released_at")
+
+        deadline = time.monotonic() + 5
+        while not (tmp_path / "cleaning").exists():
+            assert time.monotonic() < deadline, "supervisor did not observe its caller's exit"
+            time.sleep(0.02)
+        os.kill(pid, 0)
+        busy = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        assert busy.returncode == 1, busy.stdout + busy.stderr
+        assert json.loads(busy.stdout)["error_code"] == "completion_validation_in_progress"
+        assert list(tmp_path.glob("validation-*")) == [first]
+
+        (tmp_path / "allow-cleanup").touch()
+        deadline = time.monotonic() + 5
+        while not (tmp_path / "cleaned").exists():
+            assert time.monotonic() < deadline, "validator cleanup did not finish"
+            time.sleep(0.02)
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+        (tmp_path / "release").touch()
+        deadline = time.monotonic() + 10
+        while True:
+            retry = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            completed = json.loads(retry.stdout)
+            if completed.get("error_code") != "completion_validation_in_progress":
+                break
+            assert time.monotonic() < deadline, "supervisor did not retire its execution fence"
+            time.sleep(0.02)
+        assert retry.returncode == 0 and completed["changed"] is True, completed
+        replay = json.loads(subprocess.check_output(command, text=True, timeout=20))
+        assert (replay.get("provider_status") or replay["status"]) == "replayed"
+        assert len(list(tmp_path.glob("validation-*"))) == 2
+    finally:
+        (tmp_path / "allow-cleanup").touch()
+        (tmp_path / "release").touch()
+        if original.poll() is None:
+            original.kill()
+        original.wait(timeout=5)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_packaged_chat_reports_concurrent_completion_without_failing_original(
+    tmp_path: Path, provider: str,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from http.client import HTTPConnection
+    from threading import Thread
+    from loopx.chat_action_store import ChatActionStore
+    from loopx.chat_actions import ChatActionService
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
+
+    registry, _state, todo_id = fixture(tmp_path, provider, validation=blocking_validator(tmp_path))
+    store = ChatActionStore(tmp_path / "actions")
+    service = ChatActionService(store=store, registry_path=registry)
+    proposal = service.preview({"action_kind": "todo.update", "summary": "Complete the action",
+        "idempotency_key": "concurrent-chat-completion", "context": {}, "normalized_parameters": {
+            "goal_id": "goal-a", "todo_id": todo_id, "agent_id": "agent-a", "operation": "complete",
+            "note": "Observed result",
+        }})
+    proposal_id = proposal["proposal_id"]
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.verbose = False
+    server.assets_dir = default_chat_assets_dir()
+    server.action_store = store
+    server.action_service = service
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def apply() -> tuple[int, dict]:
+        connection = HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+        try:
+            connection.request("POST", f"/api/actions/{proposal_id}/apply", body="{}",
+                               headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            original = pool.submit(apply)
+            try:
+                wait_for_validation(tmp_path)
+                status, busy = apply()
+                assert status == 409 and busy["error_code"] == "action_conflict", busy
+                assert "already running" in busy["error"]
+                assert store.load(proposal_id)["status"] == "applying"
+                assert len(list(tmp_path.glob("validation-*"))) == 1
+            finally:
+                (tmp_path / "release").touch()
+            status, result = original.result(timeout=15)
+            assert status == 200 and result["proposal"]["status"] == "applied", json.dumps(result)
+        assert result["proposal"]["receipt"]["outcome"] == "todo_completed"
+        status, replay = apply()
+        assert status == 200 and replay["proposal"]["receipt"] == result["proposal"]["receipt"]
+        assert len(list(tmp_path.glob("validation-*"))) == 1
+        rows = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+        assert next(row for row in rows if row["todo_id"] == todo_id)["status"] == "done"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("command", ["complete", "update"])
+def test_unlaunchable_validator_returns_typed_failure(
+    tmp_path: Path, provider: str, command: str,
+) -> None:
+    validator = tmp_path / "private validator.exe"
+    validator.write_bytes(b"invalid executable format\n")
+    validator.chmod(0o700)
+    registry, state, todo_id = fixture(
+        tmp_path, provider, validation=shlex.join([str(validator)]),
+    )
+    before = list_goal_todos(registry_path=registry, goal_id="goal-a")
+    state_before = state.read_bytes()
+    args = ["todo", command, "--goal-id", "goal-a", "--todo-id", todo_id, "--agent-id", "agent-a"]
+    if command == "update":
+        args.extend(["--status", "done"])
+    process = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry), *args],
+        capture_output=True, text=True, timeout=45,
+    )
+    assert process.returncode == 1, process.stdout + process.stderr
+    assert validator.name not in process.stdout + process.stderr
+    result = json.loads(process.stdout)
+    assert result["validation_blocked_completion"] is True
+    receipt = result["validation_failure"]["validation_receipt"]
+    assert receipt["status"] == "command_not_run"
+    assert receipt["exit_code"] is None and receipt["passed"] is False
+    assert receipt["local_path_captured"] is False
+    after = list_goal_todos(registry_path=registry, goal_id="goal-a")
+    assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"]
+    assert after["todos"] == before["todos"]
+    assert state.read_bytes() == state_before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

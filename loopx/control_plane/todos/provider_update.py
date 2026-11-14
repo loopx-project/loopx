@@ -16,6 +16,7 @@ from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES,
     LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
+    ambiguous_todo_write,
     claim_worktree_candidate,
     raise_canonical_write_failure,
     read_canonical_todos_if_promoted,
@@ -31,6 +32,7 @@ from .text import normalize_new_todo
 from .mutation_authority import todo_lifecycle_facts
 from ..coordination.authority_source_capture import authority_registry_source
 from .completion_validation import (
+    completion_validation_execution,
     completion_validation_failure,
     execute_completion_validation_effects,
     resolve_private_completion_validation_declaration,
@@ -58,23 +60,10 @@ def _dispatch_canonical_todo_update(
             timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
         )
     except EffectRuntimeResponseAmbiguous as error:
-        # The request owns the identity even when no response can be verified.
-        # Expose only a read: a missing receipt cannot establish writer liveness
-        # or authorize another operation, and a found receipt is not a lease.
-        raise LocalCoordinationAuthorityUnavailable(
-            f"{error}. A missing receipt does not prove the original writer has stopped",
-            code=error.diagnostic_code,
-            payload={
-                "goal_id": request["goal_id"], "todo_id": request["todo_id"],
-                "operation_id": request["operation_id"],
-                "recovery_command": [
-                    "loopx", "--format", "json", "--registry",
-                    str(registry_path.expanduser().resolve()),
-                    "--runtime-root", request["runtime_root"],
-                    "todo", "receipt", "--goal-id", request["goal_id"],
-                    "--operation-id", request["operation_id"],
-                ],
-            },
+        raise ambiguous_todo_write(
+            error, registry_path=registry_path, runtime_root=request["runtime_root"],
+            goal_id=request["goal_id"], todo_id=request["todo_id"],
+            operation_id=request["operation_id"],
         ) from error
 
 
@@ -360,11 +349,15 @@ def update_canonical_todo_if_promoted(
         if completion is None:
             raise RuntimeError("Ordinary Todo update cannot issue completion validation")
         completion["source_provider_revision"] = result["provider_revision"]
-        completion.update(execute_completion_validation_effects(
-            result, registry_path=registry_path, goal_id=goal_id))
-        completion_validation_executed = True
-        request["observed_at"] = now_local()
-        result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
+        with completion_validation_execution(runtime_root=runtime_root, goal_id=goal_id, todo_id=todo_id):
+            request["observed_at"] = now_local()
+            result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
+            if isinstance(result, dict) and result.get("status") == "execute_validation":
+                completion.update(execute_completion_validation_effects(
+                    result, registry_path=registry_path, goal_id=goal_id))
+                completion_validation_executed = True
+                request["observed_at"] = now_local()
+                result = _dispatch_canonical_todo_update(request, registry_path=registry_path)
     if isinstance(result, dict):
         # Preserve native recovery decisions and arguments, adding only the
         # caller's exact transport route. A default-registry command could read
