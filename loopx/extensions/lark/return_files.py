@@ -143,7 +143,7 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
                 preview = _call([*args, "--dry-run"], cwd, runner=runner, private_transport=private_transport)
                 if preview.get("returncode") != 0:
                     raise ValueError("result file upload preflight unavailable")
-                if dispatch_guard is None and not before_upload():
+                if not before_upload():
                     raise ValueError("result file return authority revoked")
                 if fence_upload:
                     _write(cache, {"identity": identity, "upload_started": True})

@@ -1267,7 +1267,9 @@ class LarkPrivateConversations:
             args = lark_args(cli_bin=self.cli_bin, profile=record["profile"],
                 tail=["api", "GET", f"/open-apis/im/v1/messages/{ref}", "--as", "bot"])
             reply = call(self._read_answer_image_source, args)
-            return reply.get("returncode") == 0 and answer_image_source_matches(_message(json_payload(reply), ref), source)
+            payload = json_payload(reply)
+            return (reply.get("returncode") == 0 and payload.get("code", 0) == 0 and payload.get("ok") is not False
+                    and answer_image_source_matches(_message(payload, ref), source))
 
         def verified_source() -> bool:
             if historical_source_check is not None:
