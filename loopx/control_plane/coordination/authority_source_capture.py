@@ -172,7 +172,10 @@ def _source_lease_paths(runtime_root: Path, goal_id: str) -> list[Path]:
             return []
         if not stat.S_ISDIR(info.st_mode):
             raise ShadowManagementError("source_lease_inventory_invalid")
-    paths = sorted(path for path in directory.iterdir() if path.name.endswith(".json"))
+    # Path ordering folds case on Windows; the lease inventory feeds a
+    # byte-stable witness and must order identically on every platform.
+    paths = sorted((path for path in directory.iterdir() if path.name.endswith(".json")),
+        key=lambda path: path.name)
     for path in paths:
         if re.fullmatch(r"[A-Za-z0-9_.-]+\.json", path.name) is None:
             raise ShadowManagementError("source_lease_inventory_invalid")
