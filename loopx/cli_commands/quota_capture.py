@@ -649,6 +649,29 @@ def capture_decision(directory: Path | None, payload: dict[str, object], *,
         ) from exc
 
 
+def settlement_capture_failure_view(
+    payload: dict[str, object], *, output_bytes: int, error: QuotaDecisionTransportError,
+) -> dict[str, object]:
+    """Keep the evaluated result controls available when capture fails."""
+    omitted = [key for key in ("before", "after") if key in payload]
+    view = {key: value for key, value in payload.items() if key not in omitted}
+    view["result_delivery_error"] = {
+        "error_code": error.error_code,
+        "reason": str(error),
+        "recommended_action": "Preserve the original result controls and Turn identity. "
+            "Repair capture privacy or remove --max-page-output-bytes and read back the "
+            "same operation; do not repeat admission or assume it did not commit.",
+        "omitted_diagnostics": omitted,
+    }
+    if (view.get("ok") is True and (view.get("appended") or view.get("idempotent_replay"))
+            and view.get("json_path") and "quota_event" in view
+            and len(_native_output_bytes(view)) + len(os.linesep) - 1 > output_bytes):
+        # The durable spend record already contains the event and its snapshots.
+        view.pop("quota_event")
+        omitted.append("quota_event")
+    return view
+
+
 def budgeted_settlement_result(
     payload: dict[str, object], *, runtime_root: Path, output_bytes: int,
     reader_argv: list[str] | None = None,

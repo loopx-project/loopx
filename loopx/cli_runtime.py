@@ -296,6 +296,14 @@ def _top_level_command(argv: list[str]) -> str | None:
 	return None
 
 
+def parse_cli_args(parser: LoopXArgumentParser, argv: list[str]) -> argparse.Namespace:
+	if _top_level_command(argv) == "quota":
+		from .cli_commands.quota_registration import normalize_context_list_args
+
+		argv = normalize_context_list_args(argv)
+	return parser.parse_args(argv)
+
+
 @contextmanager
 def cli_invocation_route(argv: list[str]):
 	"""Read the global route only; the canonical parser still validates argv."""
@@ -315,7 +323,11 @@ def cli_invocation_route(argv: list[str]):
 		if option == "--cli-bin":
 			program = argument
 		index += 1
-	with loopx_cli_route(program):
+	# A standalone core may be invoked without activating its environment. Its
+	# returned commands must stay on this artifact, even when PATH/PYTHONPATH
+	# names another LoopX installation. Explicit routes remain caller-owned.
+	default_argv = [sys.executable, "-I", "-m", "loopx.entrypoint"] if _standalone_core() else None
+	with loopx_cli_route(program, default_argv=default_argv):
 		yield
 
 
@@ -983,7 +995,7 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 		return _run_full_cli(raw_argv)
 	if command in _SELECTED_COMMANDS:
 		try:
-			args = _build_selected_parser(command).parse_args(raw_argv)
+			args = parse_cli_args(_build_selected_parser(command), raw_argv)
 		except _SelectedParseRejected:
 			return _run_full_cli(raw_argv)
 		if command == "history" and args.history_action is not None and not _standalone_core():

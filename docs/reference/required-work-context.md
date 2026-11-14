@@ -214,13 +214,16 @@ revision and advisory authority. This captured pre-work view does not replace th
 preference owner's fresh exact-scope read before a later preference-dependent
 external action, and neither delivery nor a preference grants authority.
 The initial read includes the bounded `unfinished_delegations` projection and
-`read_complete` flag. For an admitted normal work Turn with a large
-agenda, a complete scan and a matching required Manager Inbox read, the initial
-view keeps the incoming and outgoing request counts, scan status and required
-command. A complete scan can still hit the summary's display limit. The initial
-view then also keeps the exact omitted count and reconciliation guidance. The
-required read and its existing cursor deliver the scoped request rows. The
-captured summary remains available at its original address. An incomplete scan, unavailable scan records or an unmatched read keeps the whole summary inline.
+`read_complete` flag. For normal work with a large agenda, a complete scan
+and a matching required Manager Inbox read, the initial view keeps the incoming
+and outgoing request counts, scan status and required command. This also
+applies during explicit Todo selection when work and quota spending are
+still disabled. A complete scan can still hit the summary's display limit.
+The initial view then also keeps the exact omitted count and reconciliation
+guidance. The required read and its existing cursor deliver the scoped request
+rows. The captured summary remains available at its original address. An
+incomplete scan, unavailable scan records or an unmatched read keeps the whole
+summary inline.
 Adoption and queued returns are intermediate states. Read the full current request before
 assessing, executing or returning it. Use the existing scoped request and
 consumption routes for those actions.

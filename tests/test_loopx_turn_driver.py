@@ -1126,6 +1126,306 @@ def test_default_agent_session_reuses_planning_across_completed_todos(tmp_path, 
     }
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_run_once_claims_zero_lease_before_codex_host(
+    tmp_path, monkeypatch, provider,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        guard_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "should-run", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--context-delivery", "off",
+        ])
+    before = read_cli_policy_payload(output.getvalue(), returncode=guard_code)
+    assert guard_code == 0, before
+    preparation = before["execution_preparation"]
+    assert preparation["state"] == "claim_required", before
+    assert preparation["reason_code"] == "task_lease_missing", before
+    assert preparation["claim"]["host_execution_allowed"] is True, before
+    assert before["normal_delivery_allowed"] is False, before
+    assert not log.exists()
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    result = json.loads(output.getvalue())
+    assert exit_code == 0, result
+    assert result["status"] == "committed", result
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 1, calls
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_run_once_conflicting_turn_identity_does_not_claim_another_todo(
+    tmp_path, monkeypatch, provider,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path,
+        provider=provider,
+        handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Complete the conflicting successor fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+            "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture "
+            "priority=P1 -->",
+        ),
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        guard_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "should-run", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--todo-id", "todo_fixture0001",
+            "--turn-instance-id", "bound-preparation-turn", "--context-delivery", "off",
+        ])
+    bound = read_cli_policy_payload(output.getvalue(), returncode=guard_code)
+    assert guard_code == 0, bound
+    assert bound["heartbeat_receipt"]["turn_instance_id"] == "bound-preparation-turn"
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == "todo_fixture0001"
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--todo-id", "todo_fixture0002",
+            "--turn-instance-id", "bound-preparation-turn",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    refused = json.loads(output.getvalue())
+    assert exit_code == 1, refused
+    assert "belongs to another settlement identity" in refused["error"]
+    assert not log.exists()
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        lease_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "task-lease", "inspect", "--goal-id", "loopx-turn-fixture",
+            "--todo-id", "todo_fixture0002",
+        ])
+    lease = read_cli_policy_payload(output.getvalue(), returncode=lease_code)
+    assert lease_code == 0, lease
+    assert lease["active"] is False, lease
+    assert lease["lease"] is None, lease
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    ("requested_turn", "expected_error"),
+    [
+        (" bound-preparation-turn ", "belongs to another settlement identity"),
+        ("bound preparation turn", "turn_instance_id must be"),
+    ],
+    ids=["padded-valid", "explicit-invalid"],
+)
+def test_run_once_validates_the_turn_identity_before_claiming(
+    tmp_path, monkeypatch, provider, requested_turn, expected_error,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path,
+        provider=provider,
+        handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Complete the conflicting successor fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+            "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture "
+            "priority=P1 -->",
+        ),
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        guard_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "should-run", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--todo-id", "todo_fixture0001",
+            "--turn-instance-id", "bound-preparation-turn", "--context-delivery", "off",
+        ])
+    bound = read_cli_policy_payload(output.getvalue(), returncode=guard_code)
+    assert guard_code == 0, bound
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == "todo_fixture0001"
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--todo-id", "todo_fixture0002",
+            "--turn-instance-id", requested_turn,
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    refused = json.loads(output.getvalue())
+    assert exit_code == 1, refused
+    assert expected_error in refused["error"]
+    assert not log.exists()
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        lease_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "task-lease", "inspect", "--goal-id", "loopx-turn-fixture",
+            "--todo-id", "todo_fixture0002",
+        ])
+    lease = read_cli_policy_payload(output.getvalue(), returncode=lease_code)
+    assert lease_code == 0, lease
+    assert lease["active"] is False, lease
+    assert lease["lease"] is None, lease
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_run_once_reserves_turn_before_claim_under_competing_guard(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path,
+        provider=provider,
+        handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Compete for the same Turn fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+            "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture "
+            "priority=P1 -->",
+        ),
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    original_runner = codex_execution_preparation._default_runner
+    competing_guard: dict[str, object] = {}
+
+    def interleaving_runner(command, *, cwd, timeout):
+        # This runs after the Turn reservation and immediately before the
+        # ordinary claim subprocess, the exact window that previously let a
+        # competing guard bind the same Turn to a different Todo first.
+        if "claim" in command and "todo" in command:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                guard_code = cli_main([
+                    "--registry", str(registry), "--runtime-root", str(runtime),
+                    "--format", "json", "quota", "should-run",
+                    "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+                    "--todo-id", "todo_fixture0001",
+                    "--turn-instance-id", "reserved-preparation-turn",
+                    "--context-delivery", "off",
+                ])
+            competing_guard["code"] = guard_code
+            competing_guard["payload"] = json.loads(output.getvalue())
+        return original_runner(command, cwd=cwd, timeout=timeout)
+
+    monkeypatch.setattr(codex_execution_preparation, "_default_runner", interleaving_runner)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime),
+            "--format", "json", "turn", "run-once",
+            "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--todo-id", "todo_fixture0002",
+            "--turn-instance-id", "reserved-preparation-turn",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    result = json.loads(output.getvalue())
+    assert exit_code == 0, result
+    assert result["status"] == "committed", result
+    assert competing_guard["code"] == 1, competing_guard
+    assert (
+        competing_guard["payload"]["error_code"]
+        == "heartbeat_receipt_identity_conflict"
+    ), competing_guard
+    assert (
+        "settlement identity conflicts with the current selected Todo"
+        in competing_guard["payload"]["reason"]
+    ), competing_guard
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 1, calls
+
+    for todo_id, expected_active in (
+        ("todo_fixture0001", False),
+        ("todo_fixture0002", True),
+    ):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            lease_code = cli_main([
+                "--registry", str(registry), "--runtime-root", str(runtime),
+                "--format", "json", "task-lease", "inspect",
+                "--goal-id", "loopx-turn-fixture", "--todo-id", todo_id,
+            ])
+        lease = read_cli_policy_payload(output.getvalue(), returncode=lease_code)
+        assert lease_code == 0, lease
+        assert lease["active"] is expected_active, lease
+        if not expected_active:
+            assert lease["lease"] is None, lease
+
+
 def test_turn_plan_transaction_key_is_stable_and_todo_scoped() -> None:
     first = build_loopx_turn_plan(
         _envelope(),
@@ -1494,6 +1794,7 @@ def _write_live_fixture(
     todo_metadata_extra: str = "",
     extra_agent_todo_lines: tuple[str, ...] = (),
     provider: str = "file",
+    handoff_mode: str = "soft_claim",
 ) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
@@ -1574,7 +1875,7 @@ def _write_live_fixture(
     )
     projection = build_todo_runtime_shadow_projection(
         goal_id="loopx-turn-fixture",
-        handoff_mode="soft_claim",
+        handoff_mode=handoff_mode,
         todos=parsed["agent_todos"]["items"],
     )
     initialize_canonical_authority(
@@ -4334,3 +4635,317 @@ def test_turn_run_once_cli_resumes_session_from_recoverable_failed_turn(
     # selected Todo has already completed and disappeared from the live route.
     assert session_binding_calls == 2
     assert session_sources[0] == session_sources[1]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("refusal", ["invalid_json", "invalid_argv", "interval_wait"])
+def test_builtin_claim_preflight_refusal_preserves_lease_receipts_and_journal(
+    tmp_path, monkeypatch, provider, refusal,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+    from loopx.rollout_event_log import rollout_event_log_path
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Advance the next independent fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+            "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture priority=P1 -->",
+        ),
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+    route = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+
+    def invoke(arguments):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cli_main([*route, *arguments])
+        return code, json.loads(output.getvalue())
+
+    command = ["turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+               "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+               "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+               "--codex-sandbox", "read-only", "--no-global-sync", "--execute"]
+    validator = json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"])
+    if refusal == "interval_wait":
+        code, policy = invoke(["automation-cadence", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--min-interval-minutes", "1440", "--expected-revision", "0",
+            "--owner-reference", "fixture-owner", "--execute"])
+        assert code == 0, policy
+        code, first = invoke([*command, "--todo-id", "todo_fixture0001", "--turn-instance-id", "first-start",
+                              "--validation-command-json", validator])
+        assert code == 0 and first["status"] == "committed", first
+        rejected_validator = validator
+    else:
+        rejected_validator = "{" if refusal == "invalid_json" else json.dumps([1])
+    lease_command = ["task-lease", "inspect", "--goal-id", "loopx-turn-fixture", "--todo-id", "todo_fixture0002"]
+    _, before_lease = invoke(lease_command)
+    assert before_lease["lease"] is None and before_lease["active"] is False
+    event_path = rollout_event_log_path(runtime, "loopx-turn-fixture")
+    before_events = event_path.read_bytes() if event_path.exists() else b""
+    before_host = log.read_bytes() if log.exists() else b""
+    journal_root = runtime / "goals" / "loopx-turn-fixture" / "turns"
+    before_journals = {p.name: p.read_bytes() for p in journal_root.glob("*.json")}
+    code, result = invoke([*command, "--todo-id", "todo_fixture0002", "--turn-instance-id", "refused-start",
+                          "--validation-command-json", rejected_validator])
+    assert code == 1, result
+    if refusal == "interval_wait":
+        assert result["status"] == "interval_wait", result
+        assert result["admission"]["next_eligible_at_ms"] > 0
+    assert all(value is False for value in result["effects"].values()), result
+    _, after_lease = invoke(lease_command)
+    assert after_lease["lease"] is None and after_lease["active"] is False
+    assert (event_path.read_bytes() if event_path.exists() else b"") == before_events
+    assert (log.read_bytes() if log.exists() else b"") == before_host
+    assert {p.name: p.read_bytes() for p in journal_root.glob("*.json")} == before_journals
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_claim_ack_loss_before_journal_resumes_the_original_cadence_reservation(
+    tmp_path, monkeypatch, provider,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+    from loopx.rollout_event_log import rollout_event_log_path
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease")
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+    route = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+
+    def invoke(arguments):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cli_main([*route, *arguments])
+        return code, json.loads(output.getvalue())
+
+    code, policy = invoke(["automation-cadence", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--min-interval-minutes", "1440", "--expected-revision", "0", "--owner-reference", "fixture-owner", "--execute"])
+    assert code == 0, policy
+    command = ["turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+        "--codex-model", "fixture-model", "--codex-reasoning-effort", "high", "--codex-sandbox", "read-only",
+        "--no-global-sync", "--execute", "--turn-instance-id", "interrupted-preparation",
+        "--validation-command-json", json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"])]
+    claim = codex_execution_preparation._run_json
+    claims = 0
+
+    def lose_claim_ack(*args, **kwargs):
+        nonlocal claims
+        claim(*args, **kwargs)
+        claims += 1
+        raise RuntimeError("injected lost acknowledgement after the ordinary claim")
+
+    monkeypatch.setattr(codex_execution_preparation, "_run_json", lose_claim_ack)
+    code, interrupted = invoke(command)
+    assert code == 1 and interrupted["error_code"] == "turn_execution_preparation_claim_failed", interrupted
+    assert interrupted["effects"] == {
+        "host_invoked": False, "state_written": None, "quota_spent": False, "scheduler_acknowledged": False,
+    }
+    assert not log.exists()
+    assert not list((runtime / "goals/loopx-turn-fixture/turns").glob("*.json"))
+    lease_command = ["task-lease", "inspect", "--goal-id", "loopx-turn-fixture", "--todo-id", "todo_fixture0001"]
+    _, lease = invoke(lease_command)
+    assert lease["active"] is True
+    monkeypatch.setattr(codex_execution_preparation, "_run_json", claim)
+    code, recovered = invoke(command)
+    assert code == 0 and recovered["status"] == "committed", recovered
+    assert claims == 1 and len(log.read_text().splitlines()) == 1
+    _, recovered_lease = invoke(lease_command)
+    assert recovered_lease["lease"] == lease["lease"]
+    rows = [json.loads(line) for line in rollout_event_log_path(runtime, "loopx-turn-fixture").read_text().splitlines()]
+    assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
+    # Fresh planning is not journal recovery. It may refuse the settled Turn,
+    # but cannot repeat its confirmed Host; resume uses the recorded key.
+    invoke(command)
+    assert len(log.read_text().splitlines()) == 1
+    resume_command = [item for index, item in enumerate(command)
+                      if item != "--turn-instance-id" and (index == 0 or command[index - 1] != "--turn-instance-id")]
+    code, replay = invoke([*resume_command, "--resume-turn-key", recovered["resume_turn_key"]])
+    assert code == 0 and replay["replayed"] is True, replay
+    assert all(value is False for value in replay["effects"].values()), replay
+    assert len(log.read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("guard_entry", ["loopx.entrypoint", "loopx.cli"])
+def test_concurrent_guard_cannot_reserve_the_other_todos_start(
+    tmp_path, monkeypatch, provider, guard_entry,
+):
+    import subprocess
+    import time
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+    from loopx.cli_commands import turn_cadence
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Complete the concurrent second fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open task_class=advancement_task "
+            "action_kind=fixture claimed_by=codex-fixture priority=P1 -->",
+        ))
+    binary, log = _fake_codex(tmp_path)
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+
+    def invoke(arguments):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cli_main([*prefix, *arguments])
+        return code, json.loads(output.getvalue())
+
+    code, policy = invoke(["automation-cadence", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--min-interval-minutes", "1440", "--expected-revision", "0", "--owner-reference", "fixture-owner", "--execute"])
+    assert code == 0, policy
+    make = turn_cadence.managed_cadence_start
+    guard = None
+    guard_reply = None
+    ready = tmp_path / "guard-ready"
+
+    def with_competing_guard(**kwargs):
+        cadence = make(**kwargs)
+
+        def admit(identity):
+            nonlocal guard, guard_reply
+            admission = cadence.admit(identity)
+            if guard is None and admission.get("admitted") is True:
+                arguments = [*prefix, "quota", "should-run", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+                    "--todo-id", "todo_fixture0001", "--turn-instance-id", "competing-start", "--context-delivery", "off"]
+                script = (f"import json,sys;from pathlib import Path;from {guard_entry} import main;"
+                          "Path(sys.argv[1]).write_text('ready');raise SystemExit(main(json.loads(sys.argv[2])))")
+                guard = subprocess.Popen([sys.executable, "-c", script, str(ready), json.dumps(arguments)],
+                    cwd=project, env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                deadline = time.monotonic() + 10
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                assert ready.exists(), "the competing CLI did not reach its entrypoint"
+                try:
+                    # The old unlocked ordering lets A commit here. The binding
+                    # lock holds A until B has reserved its matching identity.
+                    guard_reply = guard.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+            return admission
+
+        return turn_cadence.ManagedCadenceStart(admit, cadence.confirm)
+
+    monkeypatch.setattr(turn_cadence, "managed_cadence_start", with_competing_guard)
+    command = ["turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture", "--host", "codex-cli",
+        "--project", str(project), "--codex-bin", str(binary), "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+        "--codex-sandbox", "read-only", "--no-global-sync", "--execute", "--turn-instance-id", "competing-start",
+        "--validation-command-json", json.dumps([sys.executable, "-c", "import sys;sys.stdin.read()"])]
+    try:
+        code_b, result_b = invoke([*command, "--todo-id", "todo_fixture0002"])
+        assert guard is not None
+        if guard_reply is None:
+            guard_reply = guard.communicate(timeout=20)
+        if code_b == 0:
+            assert result_b["status"] == "committed", result_b
+            # Guard readback is not execution authority. A conflicting start
+            # must still refuse, including a guard's existing-receipt replay.
+            code_a, result_a = invoke([*command, "--todo-id", "todo_fixture0001"])
+            assert code_a == 1, result_a
+            unclaimed_todo = "todo_fixture0001"
+        else:
+            assert guard.returncode == 0, guard_reply
+            code_a, result_a = invoke([*command, "--todo-id", "todo_fixture0001"])
+            assert code_a == 0 and result_a["status"] == "committed", {
+                "loser": result_b, "winner_status": result_a.get("status"), "winner_admission": result_a.get("admission")}
+            unclaimed_todo = "todo_fixture0002"
+        _, unclaimed = invoke(["task-lease", "inspect", "--goal-id", "loopx-turn-fixture", "--todo-id", unclaimed_todo])
+        assert unclaimed["active"] is False and unclaimed["lease"] is None
+        assert len(log.read_text().splitlines()) == 1
+    finally:
+        if guard is not None and guard.poll() is None:
+            guard.kill()
+            guard.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_settled_turn_does_not_reclaim_a_released_todo(tmp_path, monkeypatch, provider):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease")
+    binary, log = _fake_codex(tmp_path)
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+
+    def invoke(arguments):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cli_main([*prefix, *arguments])
+        return code, json.loads(output.getvalue())
+
+    command = ["turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture", "--host", "codex-cli",
+        "--project", str(project), "--codex-bin", str(binary), "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+        "--codex-sandbox", "read-only", "--no-global-sync", "--execute", "--turn-instance-id", "settled-preparation",
+        "--validation-command-json", json.dumps([sys.executable, "-c", "import sys;sys.stdin.read()"])]
+    code, first = invoke(command)
+    assert code == 0 and first["status"] == "committed", first
+    inspection = ["task-lease", "inspect", "--goal-id", "loopx-turn-fixture", "--todo-id", "todo_fixture0001"]
+    _, lease = invoke(inspection)
+    code, released = invoke(["task-lease", "release", "--goal-id", "loopx-turn-fixture", "--todo-id", "todo_fixture0001",
+        "--owner", "codex-fixture", "--idempotency-key", lease["lease"]["idempotency_key"],
+        "--expected-version", str(lease["lease"]["version"])])
+    assert code == 0, released
+    _, before = invoke(inspection)
+    code, refused = invoke(command)
+    assert code == 1 and "--resume-turn-instance-id" in refused["error"], refused
+    _, after = invoke(inspection)
+    assert after["active"] is False and after["lease"] == before["lease"]
+    assert len(log.read_text().splitlines()) == 1
+    resume = [item for index, item in enumerate(command)
+              if item != "--turn-instance-id" and (index == 0 or command[index - 1] != "--turn-instance-id")]
+    code, replay = invoke([*resume, "--resume-turn-key", first["resume_turn_key"]])
+    assert code == 0 and replay["replayed"] is True, replay
+    assert all(value is False for value in replay["effects"].values())
+    assert len(log.read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_claim_effect_remains_visible_when_codex_is_unavailable(tmp_path, monkeypatch, provider):
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease")
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = cli_main([*prefix, "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(tmp_path / "missing-codex"),
+            "--codex-model", "fixture-model", "--no-global-sync", "--execute", "--turn-instance-id", "missing-host",
+            "--validation-command-json", json.dumps([sys.executable, "-c", "import sys;sys.stdin.read()"])])
+    result = json.loads(output.getvalue())
+    assert code == 1 and result["effects"]["state_written"] is True, result
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = cli_main([*prefix, "task-lease", "inspect", "--goal-id", "loopx-turn-fixture", "--todo-id", "todo_fixture0001"])
+    assert code == 0 and json.loads(output.getvalue())["active"] is True
+    assert result["effects"]["quota_spent"] is False

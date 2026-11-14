@@ -161,6 +161,7 @@ def agent_page(
         "source_id": "local", "source_host": "local",
         "stopped_goals_excluded": stopped,
         "note": "Search covers this source's permitted registrations, independently of delivery grants. "
+                "It does not search Goal requirements or Todo text; a zero match does not resolve project shorthand. "
                 "Profiles are declared responsibilities, not verified competence or instructions. "
                 "Registered host-binding summaries cover only that row's Goal; no host addresses are exposed. "
                 "No presence, model availability or execution was checked. Binding metadata is context, not recipient selection or permission. "

@@ -342,7 +342,8 @@ def _checked_prompt_context(
     # call. Keep the standalone version gate only for historical requests.
     try:
         checked = complete_turn_host_source(request, operation="host_dispatch_context",
-                                        include_session_lineage=include_session_lineage)
+                                        include_session_lineage=include_session_lineage,
+                                        include_model_context=True)
     except RuntimeError:
         # Preserve the historical diagnostic precedence for doubly malformed
         # input without imposing a second bridge call on valid requests.
@@ -368,10 +369,10 @@ def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, 
 
 def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | None) -> str:
     from ..quota.turn_envelope import assert_turn_envelope_consumer_version
-    from ..quota.turn_envelope import captured_turn_host_input
+    from ..quota.turn_envelope import projected_host_model_input
 
     envelope = _mapping(request.get("turn_envelope"))
-    complete_input = captured_turn_host_input(request) if checked is not None else None
+    complete_input = projected_host_model_input(request, checked) if checked is not None else None
     complete = complete_input is not None
     if not complete:
         assert_turn_envelope_consumer_version(envelope)
@@ -391,13 +392,13 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
     )
     instructions = [
         "Execute exactly one bounded LoopX Turn in the current workspace.",
-        ("Use work_contract as the complete source of truth. Its interaction_contract.agent_channel carries work_context, required_reads and primary_action; its cli_channel describes Core effects owned by the outer adapter. " if complete else ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. "))
+        ("Use task_context for the admitted work. Its interaction_contract.agent_channel carries work_context, required_reads and primary_action; the outer adapter retains the complete original source and Core effect instructions. " if complete else ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. "))
         + "Read work_context and remaining required_reads before primary_action; do not repeat fulfilled reads; perform work only when its contract allows it. The selected Todo summary is not its full requirements, and completing that work does not prove Goal completion.",
         "Do not write LoopX state, spend quota, or apply scheduler changes; the adapter owns those effects.",
         "Return only the schema-constrained result. For validated_progress, repair_required, or replan_required, fill every material field with public-safe evidence.",
         "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate non-empty arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. For legacy requests without execution_profile, use null when evidence is not supplied. For stop results, set both evidence fields to null.",
-        "For those material results, set path_delta_mode=material_replan only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
-        "For routine continuation, retry, successor creation, or no-change replanning, set path_delta_mode=unchanged, leave agent_vision_json empty, and provide vision_unchanged_reason.",
+        "For those material results, set path_delta_mode=material_replan and result_kind=replan_required only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
+        "For routine continuation, retry, successor creation, or no-change replanning, explicitly set path_delta_mode=unchanged. Reuse the current checkpoint with vision_unchanged_reason and empty agent_vision_json, or record new progress/completion evidence in a fresh agent_vision_json packet with path_delta.outcome continue or no_change and empty vision_unchanged_reason.",
         "When replan_action_packet requires a semantic delta, return progress_observation_json as a JSON-encoded typed_progress_observation_v0 with result_class, the observed surface_id/hypothesis_id/probe_kind or blocker/coverage fields, and opaque evidence_ids. Report only independently checked evidence; a plan summary or a vision change alone cannot substitute for the required observation. Otherwise leave this field empty.",
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
@@ -406,8 +407,8 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
 
         instructions.insert(2,
-            "Read the original captured decision inline in work_contract before dependent work. "
-            "The host has validated this complete observation and its source binding. "
+            "Read the supplied task_context before dependent work. "
+            "The host has validated the complete original observation and derived this task view. "
             "detail_ref.captured_decision preserves its Goal/Agent/Turn and source hash provenance; "
             "it is not a prerequisite filesystem read when that observation is present here. "
             "The private capture may be unreadable from sandboxed tools. Use detail_ref.full_decision "
@@ -416,7 +417,7 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
             "Missing or invalid original evidence still holds dependent work and closure; "
             "inline delivery grants no new permissions.")
         instructions.insert(2, TURN_EXECUTION_BOUNDARY_RULE)
-        acceptance = goal_acceptance_prompt_instruction(_mapping(model_request.get("work_contract")))
+        acceptance = goal_acceptance_prompt_instruction(_mapping(request.get("work_contract")))
         if acceptance:
             instructions.insert(2, acceptance)
     if staged and not complete:

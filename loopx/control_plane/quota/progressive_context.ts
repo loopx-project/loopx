@@ -8,7 +8,7 @@ import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, selectedWorkTodoId}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, hasUnboundActionSelection, selectedWorkTodoId}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -867,8 +867,7 @@ export function scopedReplanYardstickReversal(decision: JsonObject) {
   return {cue, fields, path: [...REPLAN_CONTEXT_PATH, "explore_basis", "work_yardsticks", index]};
 }
 
-/** A pending Manager Inbox read already delivers these scoped request rows. */
-function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+function requiredManagerAgenda(value: unknown, requiredReads: unknown[]): JsonObject | undefined {
   const {content, ...read} = jsonObject(value) ?? {};
   const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
   if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
@@ -879,12 +878,20 @@ function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): s
       || agenda.scan_complete !== true || agenda.unavailable_count !== 0
       || !Array.isArray(agenda.items)
       || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
-        "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
+        "return_attention", "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
       || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
+  return agenda;
+}
+
+/** A pending Manager Inbox read already delivers these scoped request rows. */
+function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+  const agenda = requiredManagerAgenda(value, requiredReads);
+  if (!agenda) return undefined;
   const {incoming_count: incoming, outgoing_count: outgoing, omitted_count: omitted, items} = agenda;
   if (typeof incoming !== "number" || !Number.isSafeInteger(incoming) || incoming < 0
       || typeof outgoing !== "number" || !Number.isSafeInteger(outgoing) || outgoing < 0
       || typeof omitted !== "number" || !Number.isSafeInteger(omitted) || omitted < 0
+      || !Array.isArray(items)
       || !Number.isSafeInteger(incoming + outgoing) || incoming + outgoing !== items.length + omitted
       || Buffer.byteLength(JSON.stringify(items), "utf8") < 2048) return undefined;
   const fields = ["incoming_count", "outgoing_count", "scan_complete"];
@@ -895,6 +902,26 @@ function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): s
     return [...fields, "omitted_count", "instruction"];
   }
   return undefined;
+}
+
+/** Keep only returned-result identities in the first page; full Inbox text stays on its owner read. */
+function managerReturnAttention(value: unknown, requiredReads: unknown[]): JsonObject | undefined {
+  const agenda = requiredManagerAgenda(value, requiredReads);
+  const attention = jsonObject(agenda?.return_attention);
+  if (!attention || !known(attention, ["count", "items", "omitted_count"])
+      || typeof attention.count !== "number" || !Number.isSafeInteger(attention.count) || attention.count <= 0
+      || typeof attention.omitted_count !== "number" || !Number.isSafeInteger(attention.omitted_count)
+      || attention.omitted_count < 0 || !Array.isArray(attention.items) || attention.items.length > 4
+      || attention.count !== attention.items.length + attention.omitted_count) return undefined;
+  for (const value of attention.items) {
+    const item = jsonObject(value);
+    if (!item || item.step !== "consume_peer_result" || typeof item.request_id !== "string"
+        || typeof item.unconsumed_return_count !== "number" || item.unconsumed_return_count <= 0
+        || !Array.isArray(item.returns) || !item.returns.some(value => jsonObject(value)?.consumed !== true)) {
+      return undefined;
+    }
+  }
+  return attention;
 }
 
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
@@ -969,25 +996,41 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   if (turnBindingRequired)
     for (const field of ["turn_binding_required", ...admissionFields])
       include("interaction_contract", "cli_channel", field);
-  include("interaction_contract", "agent_channel", "required_reads");
+  const channel = object(interaction.agent_channel);
+  // The matching inbox read is already required during explicit Todo selection.
+  const selectingBeforeWork = context.ok === true && context.should_run === true &&
+    channel?.delivery_allowed === false && cli?.spend_allowed_now === false &&
+    cli.spend_after_validation === false && hasUnboundActionSelection(cli);
+  const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && channel?.must_attempt === true && (channel.delivery_allowed === true || selectingBeforeWork)
+    && Array.isArray(channel.required_reads)
+    ? channel.required_reads : [];
+  const sources = object(channel?.work_context)?.sources;
+  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  const attentionSources = sourceRows.filter(({source}) => managerReturnAttention(source, requiredInboxReads));
+  const requiredReadsPath = ["interaction_contract", "agent_channel", "required_reads"];
+  if (!attentionSources.length) include(...requiredReadsPath);
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
   if (deferredReentry) {
     // Surface the owner's reopen and same-Turn guard before the long read.
     for (const field of admissionFields) include("interaction_contract", "cli_channel", field);
   }
-  const channel = object(interaction.agent_channel);
-  const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && channel?.delivery_allowed === true && channel.must_attempt === true && Array.isArray(channel.required_reads)
-    ? channel.required_reads : [];
-  const sources = object(channel?.work_context)?.sources;
-  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  // A long Manager Inbox agenda stays behind its required read. Surface only
+  // the bounded returned-result identities before work so paging or context
+  // recovery cannot hide that the requester has a result to consume.
+  const cueStart = pointers.length;
+  if (attentionSources.length) {
+    include(...requiredReadsPath);
+    for (const {index} of attentionSources) {
+      include(...work, "sources", index, "content", "unfinished_delegations", "return_attention");
+    }
+  }
   const selectedTodo = object(context.selected_todo);
   const identityAgent = object(context.agent_identity)?.agent_id;
   const agentId = context.agent_id ?? identityAgent;
   // Deliver the opted-in decision cue before work, while the candidate or
   // test can still change. The template and evidence stay on their owner read.
-  const cueStart = pointers.length;
   if (replanReversal) {
     for (const field of replanReversal.fields) include(...replanReversal.path, field);
   }

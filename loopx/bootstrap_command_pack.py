@@ -1299,8 +1299,8 @@ def _build_multi_goal_start_selection_packet(
             fine_grained=fine_grained,
         ),
         "commands": {
-            "doctor": f"{shell_arg_for_host(cli_bin)} doctor",
-            "status": _project_command(resolved_project, f"{shell_arg_for_host(cli_bin)} status"),
+            "doctor": f"{render_cli_command_prefix(cli_bin=cli_bin)} doctor",
+            "status": _project_command(resolved_project, f"{render_cli_command_prefix(cli_bin=cli_bin)} status"),
             "goal_selection_choices": choices,
         },
         "safety_contract": {
@@ -1483,6 +1483,7 @@ def build_start_goal_guided_packet(
     )
     commands = command_pack.get("commands")
     commands = commands if isinstance(commands, dict) else {}
+    plan_prompt = commands.get("goal_start_plan_prompt")
     activation = command_pack.get("host_loop_activation")
     activation = activation if isinstance(activation, dict) else {}
     identity_selection_gate = activation.get("identity_selection_gate")
@@ -1610,7 +1611,7 @@ def build_start_goal_guided_packet(
         *fine_mode_steps,
         *todo_authoring_steps(
             existing_runnable_frontier=guided_frontier,
-            plan_prompt=commands.get("goal_start_plan_prompt"),
+            plan_prompt=plan_prompt,
             fine_grained=fine_grained,
             cli_bin=cli_bin,
             runtime_root=command_pack.get("command_runtime_root"),
@@ -1771,6 +1772,14 @@ def build_start_goal_guided_packet(
     if isinstance(orphaned_gate, dict):
         guided_transaction.update(guided_fence(orphaned_gate))
         guided_transaction.pop("identity_selection_gate", None)
+    recommendation = command_pack.get("recommended_next_step")
+    if (not include_command_pack_detail and isinstance(recommendation, dict)
+            and isinstance(plan_prompt, str) and plan_prompt
+            and recommendation.get("plan_prompt") == plan_prompt):
+        # The same packet already carries the complete prompt in its commands.
+        recommendation = dict(recommendation)
+        del recommendation["plan_prompt"]
+        recommendation["plan_prompt_ref"] = "#/command_pack/commands/goal_start_plan_prompt"
     payload = {
         "ok": True,
         "schema_version": GUIDED_START_SCHEMA_VERSION,
@@ -1782,7 +1791,7 @@ def build_start_goal_guided_packet(
         "host_surface": command_pack.get("host_surface"),
         "goal_text": command_pack.get("goal_text"),
         "project_connection": command_pack.get("project_connection"),
-        "recommended_next_step": command_pack.get("recommended_next_step"),
+        "recommended_next_step": recommendation,
         "guided_transaction": guided_transaction,
         "command_pack": selected_command_pack,
         "command_pack_detail_included": include_command_pack_detail,

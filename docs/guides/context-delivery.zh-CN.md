@@ -131,8 +131,10 @@ Full 表示完整保存视图可用，不要求判断任何问题前先遍历所
 `context_details` 则可指向包含延后证据的原始 capture。不能交换两份文件的 hash。
 
 - 已知 JSON Pointer 直接选择，相关字段用重复 `--select` 批量读取。
-- 未知 pointer 先对最近的已知父节点 `--list`；必要时用 `--list-depth 2` 减少发现往返。
-  列出根节点时省略 `--select`，不要写表示空名称属性的 `/`。
+- 未知 pointer 先对最近的已知父节点执行 `--list /interaction_contract --list-depth 2`，
+  等价于 `--list --select /interaction_contract --list-depth 2`。重复的 `--list POINTER`
+  与 `--select POINTER` 会合并到同一个索引。列出根节点用不带 selector 的 `--list`
+  或 `--list ''`；`/` 仍表示空名称属性。
 - 未完成的选择沿返回的字节 cursor 继续。EOF 只覆盖该选择，不代表读了其他字段。
 - 同时控制 reader 页与宿主工具的合计输出预算。合法 JSON、落盘日志和 EOF 都不能
   补上被宿主截掉的字节；缩小批次，从同一 capture 补缺失范围。

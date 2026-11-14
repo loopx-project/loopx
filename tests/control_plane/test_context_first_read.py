@@ -1018,7 +1018,8 @@ def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(t
 
 @pytest.mark.parametrize("route", [
     "matching", "bounded", "different", "missing", "incomplete", "omitted", "unknown",
-    "bad_counts", "small", "held", "missing_instruction",
+    "bad_counts", "small", "held", "missing_instruction", "selection",
+    "selection_unavailable_route", "selection_spend_allowed", "selection_different_read",
 ])
 def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp_path, decision, route):
     command = "loopx manager-inbox read --goal-id fixture --agent-id author"
@@ -1039,12 +1040,24 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
         del agenda["instruction"]
     decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
     channel = decision["interaction_contract"]["agent_channel"]
-    channel.update(delivery_allowed=route != "held", must_attempt=True)
+    selecting = route.startswith("selection")
+    channel.update(delivery_allowed=not selecting and route != "held", must_attempt=True)
+    if selecting:
+        decision["interaction_contract"]["cli_channel"] = {
+            "selection_required": True, "next_cli_actions": [],
+            "spend_allowed_now": route == "selection_spend_allowed", "spend_after_validation": False,
+            **({"selection_command": {"schema_version": "action_selection_cli_command_v1",
+                "route_prefix": "loopx --format json",
+                "command_args_template": "quota should-run --todo-id '{todo_id}' --turn-instance-id fixture-turn",
+                "candidate_discovery_args": "todo list --goal-id fixture --status open"}}
+                if route != "selection_unavailable_route" else {}),
+        }
     channel["work_context"]["sources"].append({**read, "content": {
         "ok": True, "read_complete": False, "unfinished_delegations": agenda,
     }})
     if route != "missing":
-        required = {**read, "command": command + " --agent-id other"} if route == "different" else read
+        required = ({**read, "command": command + " --agent-id other"}
+                    if route in {"different", "selection_different_read"} else read)
         channel["required_reads"].append(required)
 
     view = native_context_capture_view(decision, tmp_path)
@@ -1052,7 +1065,7 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
     prefix = "/interaction_contract/agent_channel/work_context/sources/3/content"
     assert values[prefix + "/read_complete"] is False
     agenda_path = prefix + "/unfinished_delegations"
-    if route in {"matching", "bounded"}:
+    if route in {"matching", "bounded", "selection"}:
         assert agenda_path not in values and agenda_path + "/items" not in values
         for field in ("incoming_count", "outgoing_count", "scan_complete"):
             assert values[f"{agenda_path}/{field}"] == agenda[field]
@@ -1069,6 +1082,42 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
         offset=0, page_bytes=64000, max_page_output_bytes=64000))
     assert detail["ok"] and detail["eof"]
     assert json.loads(detail["content"])["selections"][0]["value"] == agenda
+
+
+def test_initial_read_surfaces_bounded_peer_return_attention_before_long_sources(tmp_path, decision):
+    command = "loopx manager-inbox read --goal-id fixture --agent-id author"
+    read = {"source": "turn_start_capability_hook", "kind": "operator_inbox",
+        "capability_id": "manager-context", "hook_id": "manager.context_inbox",
+        "ordering": "before_work", "command": command}
+    attention = {"count": 1, "omitted_count": 0, "items": [{
+        "request_id": "a" * 64, "request_revision": 1, "step": "consume_peer_result",
+        "unconsumed_return_count": 1,
+        "returns": [{"result_key": "conclusion", "request_revision": 1,
+            "status": "delivered", "consumed": False}],
+    }]}
+    items = [{"request_id": f"{index:064x}", "direction": "incoming" if index < 10 else "outgoing",
+        "step": "review_request_work", "purpose": "Keep the original evidence. " * 16}
+        for index in range(20)]
+    agenda = {"count_unit": "request", "incoming_count": 10, "outgoing_count": 11,
+        "items": items, "omitted_count": 1, "return_attention": attention,
+        "scan_complete": True, "unavailable_count": 0, "read_command": command,
+        "instruction": "Read the full current request before acting."}
+    decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    channel = decision["interaction_contract"]["agent_channel"]
+    channel.update(delivery_allowed=True, must_attempt=True)
+    channel["required_reads"].append(read)
+    sources = channel["work_context"]["sources"]
+    sources.append({**read, "content": {"ok": True, "read_complete": False,
+        "unfinished_delegations": agenda}})
+
+    view = native_context_capture_view(decision, tmp_path)
+    _, values = read_selection(view["first_read_command"])
+    prefix = f"/interaction_contract/agent_channel/work_context/sources/{len(sources) - 1}/content/unfinished_delegations"
+    attention_path = prefix + "/return_attention"
+    assert values[attention_path] == attention
+    assert prefix not in values and prefix + "/items" not in values
+    goal_text = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    assert list(values).index(attention_path) < list(values).index(goal_text)
 
 
 def test_unknown_settlement_plan_is_not_compacted(tmp_path, decision):

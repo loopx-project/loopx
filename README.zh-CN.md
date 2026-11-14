@@ -321,10 +321,10 @@ loopx doctor
 · [公开逐题分数](benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json)
 
 Benchmark 之外，LoopX 也有可检查的长程项目证据。
-OpenViking 的公开贡献序列与脱敏的 owner-run Auto ML showcase 各自跨越
+OpenViking 的公开贡献序列跨越
 **200+ 小时自然时长**，保留多轮 Todo、决策和证据更新。这里衡量的是项目经过的
 wall-clock 时间，不是连续模型执行时长或无人值守的生产自治。点击原图查看
-公开安全的任务图、证据分支和跨轮决策；各案例分别说明来源与可复现边界。
+公开安全的任务图、证据分支和跨轮决策；案例说明了来源与可复现边界。
 
 ### 开源 Issue Fix
 
@@ -346,18 +346,6 @@ repository context、带 revision 的修复知识和 reviewer-facing preference
 分开管理；所链接 PR 与当前 checkout 的源码、测试始终具有最高权威。
 
 </details>
-
-### Auto ML Experiment
-
-**经过脱敏的 owner-run showcase：超过 200 小时的实验轨迹把假设、matched
-evidence、无效谱系、运行中复现和 promote / stop gate 留在同一张图中。**
-
-<a href="docs/assets/long-running-loop-ml-experiment-trajectory.png">
-  <img src="docs/assets/long-running-loop-ml-experiment-trajectory.png" alt="Auto ML Experiment 轨迹：实验谱系、证据门和晋级决策" width="760">
-</a>
-
-这张 public-safe graph 保留了该 200+ 小时自然时间窗口中的决策谱系。它是
-owner-run showcase，不代表连续算力执行、独立复现或生产结果。
 
 ### 真实项目中的使用
 

@@ -41,6 +41,16 @@ loopx turn run-once \
   --execute
 ```
 
+For an eligible task that requires preparation, this command now performs the
+ordinary managed claim automatically, rechecks the same task, then starts Codex.
+Previously the caller had to claim it separately. Invalid validator arguments
+and scheduled waits do not claim the task or write its Turn receipt. A rejected
+claim may have committed before its acknowledgement was lost: inspect the task
+lease and retry the original Turn identity before starting new work. Confirmed
+results recover through their recorded `--resume-turn-key`. A settled Turn
+refuses a fresh claim even if its task lease was later released; use
+`--resume-turn-instance-id` for the original recorded execution.
+
 The built-in Codex adapter means there is no adapter program to write for this
 path. A different Agent CLI uses the same Turn contract through a thin
 `generic-cli` adapter that reads one JSON request from stdin and writes one JSON
