@@ -58,8 +58,8 @@ def test_app_steward_discovery_only_projects_the_bound_session(tmp_path, monkeyp
             start = len(provider.calls)
             assert bindings.app_steward_target() == {"binding_id": binding["binding_id"], "session_id": original_id}
             assert sum("auth" in args and "--verify" in args for args in provider.calls[start:]) == 1
-        assert metadata == {original_id: 2, other["session_id"]: 1}
-        assert transcripts == [original_id]
+        assert metadata == {original_id: 3, other["session_id"]: 1}
+        assert transcripts == []
         assert before == (capture.read_bytes(), bindings.path.read_bytes(), store.messages(original_id))
 
         # The alias's own context is unrelated, but its declared ID still
@@ -1238,6 +1238,48 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         assert json.loads(path.read_text())["deliveries"]["terminal"] == terminal
         assert core == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
         assert sum(json.loads(line).get("method") == "turn/start" for line in ordinary[4].read_text().splitlines()) == 1
+    finally:
+        runtime.close()
+
+
+def test_private_delivery_keeps_retired_steward_cards_out_of_image_recovery(
+    ordinary,  # noqa: F811
+):
+    from loopx.chat_store import _atomic_write_json
+
+    store, runtime, provider, transport = connect(ordinary)
+    bindings = transport.bindings
+    workspace = runtime.project_contexts.available()[0]["project_ref"]
+    binding = bindings.configure(transport_ref="steward-app", project_ref=workspace,
+                                 executor_endpoint_id="codex", context_kind="steward")
+    try:
+        event = provider.event("steward-app", "retired-card-before-image-repair", "/triage")
+        assert transport.admit("steward-app", event)["status"] == "triage_queued"
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        card = transport.root / f"{ref}.json"
+        assert card in transport.pending_body_paths()
+        assert card in transport.pending_delivery_paths()
+        assert transport.health()[binding["binding_id"]]["pending_count"] == 1
+
+        provider.messages[event["message_id"]]["content"] = "/status"
+        assert transport.reconcile_request(card) == 0
+        retired = json.loads(card.read_text())
+        assert retired["triage"]["retired"] == "original_source_changed"
+
+        # Even an orphaned descriptor with this filename cannot turn an
+        # upstream transport-only record into image or model recovery work.
+        _atomic_write_json(transport.root / "historical-answer-images" / card.name, {})
+        worker = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                          runner=provider, cli_bin="lark-cli")
+        assert card not in worker.pending_body_paths()
+        assert card not in worker.pending_delivery_paths()
+        assert worker.health()[binding["binding_id"]]["pending_count"] == 0
+        assert not (worker.core.root / card.name).exists()
+
+        assert worker.reconcile_request(card) == 0
+        assert json.loads(card.read_text()) == retired
+        assert not store.list_sessions()
+        assert not provider.writes
     finally:
         runtime.close()
 
@@ -4999,7 +5041,8 @@ def test_group_identity_requires_verified_bot_and_private_identity_requires_veri
     provider.owner_ready = False
     group = observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
     assert group["operator_ref"] != identity_ref(group["provider_ref"], "ou_notes_app")
-    with pytest.raises(ValueError, match="owner independently"):
+    from loopx.extensions.lark.conversation_identity import LarkOwnerIdentityUnavailable
+    with pytest.raises(LarkOwnerIdentityUnavailable):
         observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli")
     provider.bot_ready = False
     with pytest.raises(ValueError, match="App identity"):

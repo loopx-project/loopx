@@ -49,6 +49,7 @@ from .private_images import private_message_caption, private_message_images
 from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits
 from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
+from . import private_steward_triage as triage
 from .return_files import uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
                                presentation_phase, presentation_stream, project_progress)
@@ -327,6 +328,7 @@ class LarkPrivateConversations:
         self.bindings = self.core.bindings
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
         self.reaction_feedback = reaction_feedback
+        self.steward_callback_readiness: dict[tuple[str, str], Callable[[], bool]] = {}
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._historical_image_probe_at: dict[Path, float] = {}
@@ -354,7 +356,20 @@ class LarkPrivateConversations:
         bindings = self.bindings.read()["bindings"]
         if not bindings:
             return {}
-        result = call(self.runner, [self.cli_bin, "profile", "list"])
+        apps = self.configured_profile_apps()
+        profiles = {}
+        for row in bindings:
+            app_id = apps.get(row["transport_ref"], "")
+            if row.get("enabled") is not True or not app_id or identity_ref(app_id) != row["provider_ref"]:
+                continue
+            profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
+                "bot_app_id": app_id, "audience": row.get("audience", "owner"), "context_kind": row["context_kind"],
+                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
+        return profiles
+
+    def configured_profile_apps(self, *, cli_bin: str | None = None) -> dict[str, str]:
+        """Read local App identities for listener leases, without granting access."""
+        result = call(self.runner, [cli_bin or self.cli_bin, "profile", "list"])
         try:
             configured = json.loads(str(result.get("stdout") or ""))
         except json.JSONDecodeError as exc:
@@ -371,16 +386,7 @@ class LarkPrivateConversations:
         # profile names take precedence over the App-ID fallback.
         for app_id in list(apps.values()):
             apps.setdefault(app_id, app_id)
-        profiles = {}
-        for row in bindings:
-            app_id = apps.get(row["transport_ref"], "")
-            if (row.get("enabled") is not True or not APP_ID_PATTERN.fullmatch(app_id)
-                    or identity_ref(app_id) != row["provider_ref"]):
-                continue
-            profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
-                "bot_app_id": app_id, "audience": row.get("audience", "owner"),
-                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
-        return profiles
+        return {profile: app_id for profile, app_id in apps.items() if APP_ID_PATTERN.fullmatch(app_id)}
 
     @effect_runtime_request_scope()
     def health(self) -> dict[str, dict[str, int]]:
@@ -405,7 +411,10 @@ class LarkPrivateConversations:
             for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
                 row = _read_json(path)
                 health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
-                if row["status"] != "delivered" or (row.get("historical_answer_images") or {}).get("status") == "pending":
+                if row["status"] != "delivered":
+                    if triage.pending(row):
+                        count(row)
+                elif (row.get("historical_answer_images") or {}).get("status") == "pending":
                     count(row)
                 elif path.parent == self.root and row.get("session_id") and row.get("turn_id"):
                     yield row
@@ -929,10 +938,13 @@ class LarkPrivateConversations:
 
     @effect_runtime_request_scope()
     def admit(self, profile: str, event: dict[str, Any], *,
-              defer_background_stop: bool = False, history_review: bool = False) -> dict[str, Any]:
+              defer_background_stop: bool = False, history_review: bool = False,
+              expected_binding_id: str | None = None) -> dict[str, Any]:
         record_event_timing(profile, str(event.get("message_id") or ""), "admission_started")
         try:
             binding = self._binding(profile)
+            if expected_binding_id is not None and binding["binding_id"] != expected_binding_id:
+                return {"status": "audience_rejected"}
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
             if history_review and (binding.get("context_kind") != "steward"
                     or binding.get("audience", "owner") != "owner" or event.get("chat_type") != "p2p"):
@@ -988,11 +1000,9 @@ class LarkPrivateConversations:
                     **({"capture_origin": "provider_history"} if history_review else {})}
                 if binding.get("audience") != "group":
                     _atomic_write_json(path, record)
-            # A transport-only rejection never owned a Core request. Its
-            # verified notice stays terminal on provider redelivery too.
-            if (record["status"] == "delivered"
-                    and "session_id" not in record and "turn_id" not in record):
-                return {"status": "command_rejected"}
+            # Verified transport-only replies have no Core Turn to recover.
+            if record["status"] == "delivered" and not {"session_id", "turn_id"}.intersection(record):
+                return {"status": "triage_delivered" if "triage" in record else "command_rejected"}
             if control_root:
                 result = self._admit_group_control(path, record, binding, control_root,
                                                   defer_background_stop=defer_background_stop)
@@ -1023,10 +1033,11 @@ class LarkPrivateConversations:
                 if canonical_type != "text":
                     return {"status": "source_conflict"}
                 text = private_source_text(source_message)
-                if text is None:
-                    return {"status": "invalid_text"}
-                if not text.strip():
-                    return {"status": "empty_text"}
+                if not text or not text.strip():
+                    return {"status": "invalid_text" if text is None else "empty_text"}
+                captured = triage.capture_message(self, path, record, selected, text, history_review=history_review)
+                if captured is not None:
+                    return captured
             elif message_type in {"image", "post"}:
                 if source_message.get("msg_type", source_message.get("message_type")) != message_type:
                     return {"status": "source_conflict"}
@@ -1787,13 +1798,9 @@ class LarkPrivateConversations:
                 return  # Unknown authority or provider effects stay pending.
 
     def pending_body_paths(self) -> list[Path]:
-        """Find unsent bodies without waiting for historical recovery probes.
-
-        The existing pool reads the complete discovery separately. Keep this
-        metadata cache local to the scanner; it grants no admission or send.
-        """
+        """Find unsent bodies without waiting for historical recovery probes."""
         paths = [path for path, row, _ in self._body_discovery.rows()
-                 if row["status"] != "delivered" and not _is_answer_image_followup(row)]
+                 if row["status"] != "delivered" and triage.pending(row) and not _is_answer_image_followup(row)]
         return [*paths, *self._pending_web_projection_paths()]
 
     @effect_runtime_request_scope()
@@ -1805,7 +1812,7 @@ class LarkPrivateConversations:
         planned_repairs = {item.name for item in (self.root / "historical-answer-images").glob("*.json")}
         for path, row, repairs in self._delivery_discovery.rows():
             if row["status"] != "delivered":
-                if not _answer_image_retry_waits(row, now):
+                if triage.pending(row) and not _answer_image_retry_waits(row, now):
                     paths.append(path)
             elif row.get("historical_images_due_at") is not None and row["historical_images_due_at"] <= now:
                 paths.append(path)
@@ -2265,6 +2272,8 @@ class LarkPrivateConversations:
         # Repair only this persisted source. Core still owns admission, recovery
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
+        if "triage" in row:
+            return triage.reconcile(self, path)
         historical_images = row.get("historical_answer_images")
         if (row.get("status") == "delivered" and (
                 (historical_images or {}).get("status") == "pending"
