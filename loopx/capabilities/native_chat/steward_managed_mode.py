@@ -180,7 +180,7 @@ class StewardManagedMode:
 
 
 class ManagedTaskValidationUnavailable(ValueError):
-    """A native selection has no usable caller-declared independent validator."""
+    """A native selection has no usable owner-declared independent validator."""
 
 
 def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, workspace: Path,
@@ -434,19 +434,40 @@ class ManagedSessionTurn:
             return accepted.turn, accepted.created
 
     def _validation_source(self, request: dict[str, Any], todo_id: str) -> dict[str, Any]:
-        from ...control_plane.todos.list_readback import list_goal_todos
-        readback = list_goal_todos(registry_path=self.controller.registry_path, goal_id=request["actor"]["goal_id"],
-            todo_id=todo_id, role="agent", runtime_root_arg=str(self.controller.coordination_runtime_root))
-        rows = [readback["todo"]] if readback.get("todo") else []
-        if len(rows) != 1 or rows[0].get("completion_validation_required") is not True:
+        from ...control_plane.effect_runtime import effect_runtime_result
+        from ...control_plane.goals.acceptance import inspect_goal_acceptance, validation_effect_files_current
+        from ...control_plane.todos.completion_validation import resolve_private_completion_validation_declaration
+        from ...materials import goal_state_path
+        actor = request["actor"]
+        workspace = Path(actor["workspace_path"])
+        basis = inspect_goal_acceptance(registry_path=self.controller.registry_path,
+            runtime_root=str(self.controller.coordination_runtime_root), goal_id=actor["goal_id"],
+            agent_id=actor["agent_id"], todo_id=todo_id, validation_workspace_path=workspace)
+        todo = basis.get("todo")
+        goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
+        if not isinstance(todo, dict) or goal is None:
+            raise ManagedTaskValidationUnavailable("the selected task's canonical validation source is unavailable")
+        declaration = resolve_private_completion_validation_declaration(canonical_todo=todo,
+            state_file=goal_state_path(goal), runtime_root=self.controller.coordination_runtime_root,
+            registry_path=self.controller.registry_path, goal_id=actor["goal_id"], todo_id=todo_id,
+            role=todo.get("role"), persist_if_resolved=False)
+        # Only the existing owner can resolve acceptance to explicit null.
+        # Applicable unbound/stale checks and failed reads must never fall back.
+        plan = effect_runtime_result("goal.task.validation_plan", {
+            "todo_id": todo_id, "basis": basis, "declaration": declaration})
+        if plan["state"] != "ready":
             raise ManagedTaskValidationUnavailable("the selected task needs its existing independent argv validation declaration")
-        return rows[0]
+        if not validation_effect_files_current(effects=plan["effects"],
+                registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                validation_workspace_path=workspace):
+            raise ManagedTaskValidationUnavailable("the selected task's declared verifier files changed or are unavailable")
+        return {**todo, "plan": plan}
 
     def prepare_validation(self, request: dict[str, Any], native_request: dict[str, Any], *,
                            _checked_work_identity: dict[str, str] | None = None) -> None:
         from ...control_plane.turn_driver.driver import selected_turn_todo, turn_host_lineage
         from ...control_plane.turn_driver.command_validation import build_loopx_turn_command_validator
-        from ...control_plane.todos.completion_validation_store import read_completion_validation_declaration
+        from ...control_plane.goals.acceptance import run_goal_acceptance_validation_effect
         # Dispatch can reuse its just-checked identity within this invocation;
         # direct callers still check the complete source through the same owner.
         if "work_contract" in native_request:
@@ -460,20 +481,47 @@ class ManagedSessionTurn:
         self.validation_basis = self._validation_source(request, selected["todo_id"])
         if re.fullmatch(r"cadence_[a-f0-9]{64}", self.validation_basis.get("target_key") or "") and request.get("work_kind") != "scheduled_task":
             raise ValueError("the original calendar Task must execute through its scheduled Session admission")
-        declaration = read_completion_validation_declaration(runtime_root=self.controller.coordination_runtime_root,
-            goal_id=request["actor"]["goal_id"], todo_id=selected["todo_id"],
-            expected_digest=self.validation_basis["completion_validation_sha256"])
-        if not declaration or not declaration.get("validation_command_argv"):
-            raise ManagedTaskValidationUnavailable("the selected task requires its existing argv validation declaration")
-        self.task_validator = build_loopx_turn_command_validator(declaration["validation_command_argv"],
-            project=Path(request["actor"]["workspace_path"]), timeout_seconds=declaration.get("validation_timeout_seconds") or 20)
+        actor = request["actor"]
+        workspace = Path(actor["workspace_path"])
+        validators = []
+        for effect in self.validation_basis["plan"]["effects"]:
+            if "criterion_id" not in effect:
+                if not effect.get("validation_argv"):
+                    raise ManagedTaskValidationUnavailable("the selected task requires its existing argv validation declaration")
+                # Preserve raw typed model-result JSON on the command's stdin,
+                # plus its existing receipt and optional reflection attestation.
+                validators.append(build_loopx_turn_command_validator(effect["validation_argv"],
+                    project=workspace, timeout_seconds=effect["validation_timeout_seconds"] or 20))
+            else:
+                def goal_check(_plan, _result, effect=effect):
+                    receipt = run_goal_acceptance_validation_effect(effect=effect,
+                        registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                        validation_workspace_path=workspace)
+                    return {"status": "passed" if receipt["passed"] else "failed",
+                        "validator_kind": "command", "summary": receipt.get("summary") or
+                            ("independent Goal acceptance check passed" if receipt["passed"] else
+                             "independent Goal acceptance check failed"),
+                        "exit_code": receipt["exit_code"],
+                        **({"recovery_kind": "repair_required"} if not receipt["passed"] else {})}
+                validators.append(goal_check)
+
+        def validate_checks(plan, result):
+            receipts = [check(plan, result) for check in validators]
+            if len(receipts) == 1:
+                return receipts[0]
+            failed = next((row for row in receipts if row["status"] != "passed"), None)
+            # Keep the existing receipt contract and the caller's optional
+            # reflection attestation. Every required check has executed.
+            return failed or {**receipts[-1], "summary": f"{len(receipts)} independent task checks passed"}
+
+        self.task_validator = validate_checks
 
     def validator(self, request: dict[str, Any], *, turn_id: str):
-        """Resolve only the native selection's immutable, caller-declared argv.
+        """Execute the current owner-resolved Goal and required Todo checks.
 
         No browser or model argument may install a host validation command.
-        The captured canonical digest and fresh source must agree before and
-        after the existing command validator reads the task's real artifact.
+        Definition, work, claim and lifecycle must agree before and after the
+        existing validators read the task's real artifact.
         """
         from ...control_plane.turn_driver.driver import (
             COMPLETE_TURN_PLAN_SCHEMA_VERSION, selected_turn_todo, turn_host_lineage,
@@ -486,15 +534,15 @@ class ManagedSessionTurn:
             selected = (turn_host_lineage(plan) if "work_contract" in plan or plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
                         else selected_turn_todo(plan.get("turn_envelope") or {}))
             basis = self.validation_basis
-            if not basis or not self.task_validator or basis["todo_id"] != selected["todo_id"]:
+            if not basis or not self.task_validator or basis["plan"]["todo_id"] != selected["todo_id"]:
                 raise ValueError("the original task validation source was not captured before model work")
 
             def current():
                 self.admit(request, turn=self.store.load_turn(actor["session_id"], turn_id))
                 fresh = self._validation_source(request, selected["todo_id"])
-                if any(fresh.get(key) != basis.get(key) for key in
-                       ("completion_validation_sha256", "completion_validation_revision")):
-                    raise ValueError("the selected task's validation declaration changed")
+                if (fresh["plan"]["task_basis_sha256"] != basis["plan"]["task_basis_sha256"]
+                        or fresh["plan"]["observation"]["basis_sha256"] != basis["plan"]["observation"]["basis_sha256"]):
+                    raise ValueError("the selected task's validation source or work changed")
 
             current()
             receipt = self.task_validator(plan, result)
