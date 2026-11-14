@@ -467,9 +467,11 @@ jobs:
         run: node scripts/check-css-custom-properties.mjs dashboard
 
       # The coverage merger consumes the unit report from shard 1 only.
-      - name: Measure Dashboard unit coverage once
+      - name: Check Dashboard startup ownership and measure unit coverage once
         if: matrix.shard == 1
-        run: npm run test:dashboard:coverage
+        run: |
+          node --test examples/personal-workspace-browser/server-startup.test.mjs
+          npm run test:dashboard:coverage
 
       - name: Measure Dashboard browser interactions
         env:

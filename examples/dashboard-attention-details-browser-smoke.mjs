@@ -17,7 +17,7 @@ const packaged = process.env.LOOPX_ATTENTION_DETAILS_PACKAGED === "1";
 const output = resolve(root, "output/playwright/attention-details");
 const server = packaged
   ? spawn(resolveTestPython(), ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" })
-  : startViteDashboardServer({ dashboardDir, port });
+  : await startViteDashboardServer({ dashboardDir, port });
 const url = `http://127.0.0.1:${port}/${packaged ? "chat/" : ""}?statusUrl=/status.json`;
 const requestBody = "Review **version 2.0** for the stable channel.\n\n- Publish after independent acceptance.\n- Keep the preview channel available.\n\nPublish version 2.0 to stable only after acceptance.";
 const reason = "Recommend **waiting for acceptance**. Publishing now would omit the independent check; waiting keeps the preview usable.";
