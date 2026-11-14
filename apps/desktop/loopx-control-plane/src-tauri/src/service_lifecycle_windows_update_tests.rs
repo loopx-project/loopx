@@ -35,7 +35,7 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -149,6 +149,7 @@ fn feed_body(artifact_url: &str, signature: &str) -> Vec<u8> {
 struct FeedServer {
     origin: String,
     stop: Arc<AtomicBool>,
+    accepted: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -167,14 +168,21 @@ impl FeedServer {
             .map(|(path, content_type, body)| (path.to_string(), (content_type, body)))
             .collect();
         let stop = Arc::new(AtomicBool::new(false));
+        let accepted = Arc::new(AtomicBool::new(false));
         let thread = std::thread::spawn({
             let stop = Arc::clone(&stop);
+            let accepted = Arc::clone(&accepted);
             move || {
                 while !stop.load(Ordering::Acquire) {
                     let Ok((mut stream, _)) = listener.accept() else {
                         std::thread::sleep(Duration::from_millis(10));
                         continue;
                     };
+                    // Accepted Windows sockets inherit the listener's non-blocking mode.
+                    stream
+                        .set_nonblocking(false)
+                        .expect("blocking feed connection");
+                    accepted.store(true, Ordering::Release);
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 512];
@@ -213,6 +221,7 @@ impl FeedServer {
         Self {
             origin,
             stop,
+            accepted,
             thread: Some(thread),
         }
     }
@@ -225,6 +234,73 @@ impl Drop for FeedServer {
             let _ = thread.join();
         }
     }
+}
+
+#[test]
+fn loopback_feed_waits_for_complete_request_headers() {
+    let server = FeedServer::start(|_| vec![("/feed", "text/plain", b"ok".to_vec())]);
+    let address = server.origin.strip_prefix("http://").expect("feed origin");
+    let mut client = TcpStream::connect(address).expect("connect to feed");
+    client
+        .set_nonblocking(true)
+        .expect("non-blocking observation");
+    wait_until(
+        || server.accepted.load(Ordering::Acquire),
+        "feed connection acceptance",
+    );
+    // A non-blocking peek keeps the Windows connection usable while checking for an early reply.
+    let assert_pending = |stream: &TcpStream| {
+        let until = std::time::Instant::now() + Duration::from_millis(500);
+        loop {
+            match stream.peek(&mut [0u8; 1]) {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                other => panic!("feed replied or disconnected before complete headers: {other:?}"),
+            }
+            if std::time::Instant::now() >= until {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    assert_pending(&client);
+    client
+        .set_nonblocking(false)
+        .expect("blocking client writes");
+    client
+        .write_all(b"GET /feed HTTP/1.1\r\nHost: localhost\r\n")
+        .expect("send partial headers");
+    client
+        .set_nonblocking(true)
+        .expect("non-blocking observation");
+    assert_pending(&client);
+    client
+        .set_nonblocking(false)
+        .expect("blocking client writes");
+    client.write_all(b"\r\n").expect("finish request headers");
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("client response timeout");
+    let mut response = String::new();
+    client
+        .read_to_string(&mut response)
+        .expect("read feed response");
+    assert_eq!(response, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+
+    let mut missing = TcpStream::connect(address).expect("connect for missing route");
+    missing
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("missing route timeout");
+    missing
+        .write_all(b"GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .expect("request missing route");
+    response.clear();
+    missing
+        .read_to_string(&mut response)
+        .expect("read missing route response");
+    assert_eq!(
+        response,
+        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
 }
 
 /// The updater the production window builds, with the pre-exit hook injected
