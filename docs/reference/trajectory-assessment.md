@@ -780,10 +780,13 @@ delivery/authority bindings match, and their evidence is labelled
 `legacy_lark_authenticated_card_callback_v0`.
 
 The generated capture is always partial: card delivery to confirmation supplies
-response waiting, while active attention remains unknown. Dashboard/private-chat
-actions without an authenticated callback, pending or expired requests, and
-runtime-native DSH/Codex approvals are excluded. The bridge does not infer human
-action from a user role, text, pending state or automatic gate outcome.
+response waiting, while active attention and necessity remain unknown. Because
+the format is single-human, the bridge rejects a selected window containing
+decisions from more than one principal without publishing those principals.
+Dashboard/private-chat actions without an authenticated callback, pending or
+expired requests, and runtime-native DSH/Codex approvals are excluded. The
+bridge does not infer human action from a user role, text, pending state or
+automatic gate outcome.
 
 既有 LoopX 回执可在注册时同时传入 UTC `Z` 格式的
 `--loopx-human-attention-start` 与 `--loopx-human-attention-end`。该桥接仅投影
@@ -791,9 +794,10 @@ action from a user role, text, pending state or automatic gate outcome.
 `--source-root` 中生成不可变的摘要命名证据；目标 pack 与显式时间窗负责绑定
 case/run/revision，原输入和旧 pack 不会被改写。新回执必须显式声明人工 actor；旧回执
 仅在历史认证卡片字段、投递和权限绑定完整匹配时保守回填，并标注 legacy。生成记录
-始终是部分覆盖：只观测等待时间，主动投入保持未知；未认证动作、pending/expired 请求
-以及 DSH/Codex runtime-native approval 均不纳入，也不会从 user role、文本或 gate 状态
-推断人工介入。
+始终是部分覆盖：只观测等待时间，主动投入和必要性保持未知；该格式只记录单一人员，
+窗口中出现多个 principal 时桥接拒绝生成 capture，且不会公开 principal。未认证动作、
+pending/expired 请求以及 DSH/Codex runtime-native approval 均不纳入，也不会从 user
+role、文本或 gate 状态推断人工介入。
 
 ```json
 {

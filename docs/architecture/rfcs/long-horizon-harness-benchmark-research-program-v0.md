@@ -682,7 +682,8 @@ Synthetic packaged-reader checks qualify this reading path. The live producer
 boundary is now qualified only for authenticated LoopX Lark `operation.execute`
 and `team.plan` card decisions, explicitly bound to a Goal pack and UTC window.
 It preserves partial coverage, treats delivery-to-confirmation as waiting, leaves
-active attention unknown, and labels conservative pre-marker backfill as legacy.
+active attention and necessity unknown, rejects multi-principal windows to retain
+the single-human contract, and labels conservative pre-marker backfill as legacy.
 Unauthenticated, pending/expired and runtime-native approval capture, calibrated
 necessity and lower attention for equal accepted quality remain unqualified.
 

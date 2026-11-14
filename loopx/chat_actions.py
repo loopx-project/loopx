@@ -1297,6 +1297,11 @@ class ChatActionService(
             evidence = ["The existing typed acceptance owner validated this plan without changing configuration or executing commands."]
             permission = "local_command_execution"
         elif action_kind == "operation.execute":
+            if (
+                context.get("kind") != "goal"
+                or context.get("goal_id") != normalized["goal_id"]
+            ):
+                raise ValueError("operation proposal context must match its Goal")
             fingerprint = _digest(normalized)
             evidence = [
                 "The provider-neutral operation envelope and immutable digests validated.",
