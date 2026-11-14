@@ -24,6 +24,41 @@ from loopx.control_plane.testing.cli_output_semantics import (
 )
 
 
+def test_pinned_reader_follows_a_powershell_command_with_literal_paths(tmp_path, monkeypatch):
+    import hashlib
+    import os
+    from pathlib import Path
+
+    from loopx import install_contract
+    from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
+    executable = Path(sys.executable)
+    if os.name != "nt":
+        # A path requiring PowerShell's call operator reproduces the native
+        # command shape even when the reader itself runs on POSIX.
+        launcher = tmp_path / "test Python"
+        launcher.symlink_to(executable)
+        executable = launcher
+    repository = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("PYTHONPATH", str(repository))
+    monkeypatch.setattr(install_contract, "_is_windows_host", lambda: True)
+    source = tmp_path / "owner's ‘saved capture’.json"
+    payload = {"requirements": "保留原要求和停止条件。🙂" * 40, "turn": "original"}
+    raw = json.dumps(payload, ensure_ascii=False).encode()
+    source.write_bytes(raw)
+    command = install_contract.render_host_cli_command([
+        str(executable), "-m", "loopx.entrypoint", "--format", "json",
+        "quota", "context-read", "--capture-file", str(source),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(),
+        "--page-bytes", "256", "--max-page-output-bytes", "4000",
+    ])
+    assert command.startswith("& ")
+
+    body, calls, reader_bytes = read_pinned_cli_body(command)
+    assert body.encode() == source.read_bytes() == raw
+    assert calls > 1 and reader_bytes > len(raw)
+
+
 def test_probe_process_failure_preserves_utf8_diagnostics(tmp_path):
     import runpy
     from pathlib import Path

@@ -7,10 +7,34 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+
+
+_POWERSHELL_READER_WORDS = re.compile(r"'(?:''|[^'])*'|[^'\s]+")
+_POWERSHELL_DOUBLED_QUOTE = re.compile(r"(['\u2018\u2019\u201a\u201b])\1")
+
+
+def _reader_argv(command: str) -> list[str]:
+    """Decode the literal-only form of the generated read command into argv."""
+    if not command.startswith("& ") and not (
+        os.name == "nt" and re.match(r"^[A-Za-z0-9_./-]+ '", command)
+    ):
+        return shlex.split(command)
+    # The current Windows renderer uses '& ' for a quoted executable and
+    # doubles single quotes inside PowerShell literals. POSIX shlex drops
+    # those doubled quotes. Older POSIX-form reader commands remain readable.
+    literal_command = command.removeprefix("& ")
+    words = _POWERSHELL_READER_WORDS.findall(literal_command)
+    assert " ".join(words) == literal_command, "unexpected syntax in the generated reader command"
+    return [
+        _POWERSHELL_DOUBLED_QUOTE.sub(r"\1", word[1:-1])
+        if word.startswith("'") and word.endswith("'") else word
+        for word in words
+    ]
 
 
 def budget_fixture_path(root: Path) -> Path:
@@ -69,7 +93,7 @@ def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
     reader_bytes = calls = 0
     identity = total = digest = None
     while True:
-        words = shlex.split(command)
+        words = _reader_argv(command)
         quota = words.index("quota")
         if words[quota + 1] != "context-read":
             raise AssertionError("context recovery must be a read, never another guard")
@@ -83,6 +107,10 @@ def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
         if identity is None:
             identity = scope
         assert scope == identity, ("context continuation changed its source or reader route", scope, identity)
+        if words[0].lower().endswith(".ps1"):
+            from loopx.command_invocation import command_argv
+
+            words = command_argv(Path(words[0]), words[1:])
         result = subprocess.run(words, capture_output=True, text=True, encoding="utf-8",
             errors="strict", check=False, timeout=30)
         assert result.returncode == 0, result.stdout + result.stderr
