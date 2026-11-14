@@ -186,6 +186,132 @@ def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinar
         runtime.close()
 
 
+@pytest.mark.parametrize("lost_receipt", [False, True], ids=["accepted", "lost-outer-receipt"])
+def test_original_retry_yields_to_a_newer_equivalent_lark_request(ordinary, monkeypatch, lost_receipt):  # noqa: F811
+    from datetime import datetime, timedelta, timezone
+
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from test_lark_private_conversations import connect
+
+    store, runtime, provider, transport = connect(ordinary)
+    capture, fake = ordinary[4:6]
+    fake.write_text(fake.read_text().replace(
+        'if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+        'if turn_count == 1 and "typed terminal failure" in json.dumps(request.get("params") or {}):',
+    ).replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "usageLimitExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+
+    def admit(profile, name, text):
+        event = provider.event(profile, name, text)
+        transport.admit(profile, event)
+        provider_ref = transport._binding(profile)["provider_ref"]
+        return transport.core.read_request(identity_ref(provider_ref, event["message_id"]))
+
+    text = "typed terminal failure"
+    try:
+        original = admit("notes-app", "quota-original", text)
+        sid, tid = original["session_id"], original["turn_id"]
+        failed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert failed["error_code"] == "usage_limit_exceeded" and failed["delta_count"] == 0
+        transport.reconcile()
+        original = transport.core.read_request(original["request_ref"])
+        original_path = transport.root / f"{original['request_ref']}.json"
+        failure_notice = json.loads(original_path.read_text())["deliveries"]["terminal"]
+        failed_bytes = store._turn_path(sid, tid).read_bytes()
+        lark_failure_writes = list(provider.writes)
+        assert original["delivery_verified"] and lark_failure_writes
+
+        # Leave new source inputs in the real FIFO before they become native Turns.
+        resume = runtime.resume_session_queue
+        queue_route = {}
+
+        def hold_queue(**route):
+            queue_route[route["session_id"]] = route
+
+        monkeypatch.setattr(runtime, "resume_session_queue", hold_queue)
+        unrelated = admit("steward-app", "other-source", text)
+        distinct = admit("notes-app", "different-text", "Another request")
+        assert unrelated["session_id"] != sid and distinct["session_id"] == sid
+
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(timezone.utc) + timedelta(seconds=61)
+
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **_: {
+            "thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+            "only_original_user_item": True, "codex_error_info": "usageLimitExceeded",
+            "quota_available": True, "quota_observed_at": AfterBackoff.now().timestamp() - 1}))
+        assert transport.core.context_recovery_candidate(original["request_ref"])
+
+        resend = provider.event("notes-app", "same-source-resend", text)
+        resend_ref = identity_ref(transport._binding("notes-app")["provider_ref"], resend["message_id"])
+        resend_client = f"external-{resend_ref}"
+        if lost_receipt:
+            def fail_before_queue(**_):
+                raise OSError("Core queue unavailable")
+
+            with monkeypatch.context() as fault:
+                fault.setattr(runtime, "enqueue_turn", fail_before_queue)
+                with pytest.raises(OSError, match="Core queue unavailable"):
+                    transport.admit("notes-app", resend)
+            assert transport.core.read_request(resend_ref)["session_id"] == sid
+            assert store.turn_for_client(sid, resend_client) is None
+            assert transport.core.context_recovery_candidate(original["request_ref"])
+
+            write = external_conversations._atomic_write_json
+
+            def lose_outer_receipt(path, row, **kwargs):
+                if path.stem == resend_ref and row.get("status") == "accepted":
+                    raise OSError("outer receipt unavailable")
+                write(path, row, **kwargs)
+
+            with monkeypatch.context() as fault:
+                fault.setattr(external_conversations, "_atomic_write_json", lose_outer_receipt)
+                with pytest.raises(OSError, match="outer receipt unavailable"):
+                    transport.admit("notes-app", resend)
+            prepared = transport.core.read_request(resend_ref)
+            assert prepared["status"] == "prepared" and prepared["turn_id"] is None
+        else:
+            transport.admit("notes-app", resend)
+            assert transport.core.read_request(resend_ref)["status"] == "accepted"
+
+        resent = store.turn_for_client(sid, resend_client)
+        assert resent["session_id"] == sid and resent["status"] == "queued"
+        assert any(item["kind"] == "turn.queued" for item in store.events_after(sid, resent["turn_id"], None))
+        expected_queue = {distinct["turn_id"], resent["turn_id"]}
+        assert {row["turn_id"] for row in store.queued_turns(sid)} == expected_queue
+        transport.reconcile_request(original_path)
+        assert transport.core.read_request(original["request_ref"]) == original
+        assert not transport.core.context_recovery_candidate(original["request_ref"])
+        assert {row["turn_id"] for row in store.queued_turns(sid)} == expected_queue
+        assert store._turn_path(sid, tid).read_bytes() == failed_bytes
+        assert provider.writes == lark_failure_writes
+        transport.admit("notes-app", resend)
+        assert transport.core.read_request(resend_ref)["turn_id"] == resent["turn_id"]
+        assert {row["turn_id"] for row in store.queued_turns(sid)} == expected_queue
+
+        resume(**queue_route[sid])
+        for request in (distinct, resent):
+            finished = runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)
+            assert finished["status"] == "completed"
+        resend_path = transport.root / f"{resend_ref}.json"
+        assert transport.reconcile_request(resend_path) == 1
+        reply = json.loads(resend_path.read_text())["deliveries"]["terminal"]
+        actual = provider.messages[reply["attempt"]["message_ref"]]
+        assert reply["verified"] and actual["chat_id"] == resend["chat_id"]
+        assert json.loads(actual["body"]["content"])["zh_cn"]["content"][0][0]["text"] == reply["text"]
+        assert sum(call["method"] == "turn/start" for call in map(json.loads, capture.read_text().splitlines())) == 3
+        assert transport.reconcile_request(resend_path) == 0
+        assert json.loads(original_path.read_text())["deliveries"]["terminal"] == failure_notice
+        assert store._turn_path(sid, tid).read_bytes() == failed_bytes
+    finally:
+        runtime.close()
+
+
 @pytest.fixture
 def recorded_return_continuation(private_return, monkeypatch):  # noqa: F811
     """Use the real admission/recovery owners; only model/provider IO is fake."""

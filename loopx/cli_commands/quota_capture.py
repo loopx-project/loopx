@@ -22,7 +22,7 @@ from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
-    write_context_read_reference, private_capture_uid, read_turn_observation_text,
+    write_context_read_reference, private_capture_uid, open_regular_capture, read_turn_observation_text,
 )
 from ..control_plane.turn_driver.native_context_profile import (
     NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
@@ -634,25 +634,34 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
 
 
 def capture_decision(directory: Path | None, payload: dict[str, object], *,
-                     args: argparse.Namespace | None = None, native_context: bool = False) -> str | None:
+                     args: argparse.Namespace | None = None, native_context: bool = False,
+                     record_capture: Callable[[dict[str, object], str], None] | None = None) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
         digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
-        if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
-            from ..control_plane.turn_driver.codex_context import record_native_claim_source
-
-            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
-                context_root=getattr(args, "codex_context_root", None))
-        return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
             "already exist. Do not treat this as missing admission or blindly rerun "
             f"the guard. Inspect the existing Turn receipt. Capture directory: {directory}"
         ) from exc
+    if record_capture is not None:
+        record_capture(payload, digest)
+    if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
+        from ..control_plane.turn_driver.codex_context import record_native_claim_source
+
+        try:
+            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
+                context_root=getattr(args, "codex_context_root", None))
+        except (OSError, ValueError) as exc:
+            raise QuotaDecisionTransportError(
+                "The decision was saved, but the native Host could not register it. "
+                "Read the original decision and receipt before recovering this Turn."
+            ) from exc
+    return digest
 
 
 def settlement_capture_failure_view(
@@ -755,7 +764,8 @@ def budgeted_settlement_result(
 
 
 def handoff_decision(directory: Path | None, socket_path: str | None,
-                     context_delivery_enabled: bool = False) -> tuple[dict[str, Any], str] | None:
+                     context_delivery_enabled: bool = False, *,
+                     capture_sha256: str | None) -> tuple[dict[str, Any], str] | None:
     """Withhold the original output until the Host releases these exact bytes.
 
     No second guard, admission, settlement or retry is performed here. A lost
@@ -764,24 +774,27 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
     """
     if socket_path is None:
         return None
-    if directory is None:
-        raise ValueError("decision handoff requires a captured decision")
+    if directory is None or capture_sha256 is None:
+        raise ValueError("decision handoff requires a captured decision and its published digest")
     path = directory / "decision.json"
-    raw = path.read_bytes()
-    digest = hashlib.sha256(raw).hexdigest()
     try:
+        with os.fdopen(open_regular_capture(path), "rb") as source:
+            raw = source.read()
+        if hashlib.sha256(raw).hexdigest() != capture_sha256:
+            raise ValueError("captured decision changed before handoff")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
             channel.settimeout(120)
             channel.connect(str(validate_handoff_socket(socket_path)))
-            channel.sendall(json.dumps({"path": str(path), "sha256": digest}).encode() + b"\n")
+            channel.sendall(json.dumps({"path": str(path), "sha256": capture_sha256}).encode() + b"\n")
             with channel.makefile("rb") as stream:
                 line = stream.readline(1025)
             response = json.loads(line)
-            ordinary_release = {"released": True, "sha256": digest}
+            ordinary_release = {"released": True, "sha256": capture_sha256}
             if response not in (ordinary_release, {**ordinary_release, "context_delivery": True}):
                 raise ValueError("Host did not release the original decision digest")
-        if path.read_bytes() != raw:
-            raise ValueError("captured decision changed during handoff")
+        with os.fdopen(open_regular_capture(path), "rb") as source:
+            if source.read(len(raw) + 1) != raw:
+                raise ValueError("captured decision changed during handoff")
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision handoff failed after guard evaluation; inspect the original "
@@ -801,14 +814,14 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
             metadata = os.fstat(source.fileno())
             if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077 or
                     metadata.st_size > MAX_REQUEST_BYTES or metadata.st_uid != os.getuid()):
-                return {}, digest
+                return {}, capture_sha256
             raw = source.read(MAX_REQUEST_BYTES + 1)
         if len(raw) > MAX_REQUEST_BYTES:
-            return {}, digest
+            return {}, capture_sha256
         request = json.loads(raw)
-        return (request if isinstance(request, dict) else {}), digest
+        return (request if isinstance(request, dict) else {}), capture_sha256
     except (OSError, ValueError, RecursionError):
-        return {}, digest
+        return {}, capture_sha256
 
 
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],

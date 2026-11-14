@@ -13,7 +13,8 @@ from ..control_plane.scheduler.execution_context import SchedulerExecutionContex
 def _compose_explicit_turn_context(payload: dict[str, object], args: argparse.Namespace, *,
                                    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
                                    capture_directory: Path | None,
-                                   native_context: bool) -> dict[str, object]:
+                                   native_context: bool,
+                                   record_capture: Callable[[dict[str, object], str], None] | None = None) -> dict[str, object]:
     """Select the existing complete source before capture, preserving a failed guard."""
     if not getattr(args, "complete_turn", False) or not isinstance(payload.get("interaction_contract"), Mapping):
         return payload
@@ -29,7 +30,9 @@ def _compose_explicit_turn_context(payload: dict[str, object], args: argparse.Na
 
         # Admission already happened. Keep its source/receipt; never emit a
         # false v1, discard the receipt or rerun the guard to recover context.
-        capture_decision(capture_directory, payload, args=args, native_context=native_context)
+        capture_decision(
+            capture_directory, payload, args=args, native_context=native_context, record_capture=record_capture,
+        )
         raise QuotaDecisionTransportError(
             "Complete Turn context could not be composed. Read the saved original decision and receipt; do not rerun admission."
         ) from exc
