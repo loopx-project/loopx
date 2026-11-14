@@ -23,7 +23,7 @@ from test_quota_settlement_cli import (
 )
 
 
-def _fixture(tmp_path, monkeypatch, provider, *, replan=True):
+def _fixture(tmp_path, monkeypatch, provider, *, replan=True, capture_dir=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     if replan:
@@ -49,6 +49,7 @@ def _fixture(tmp_path, monkeypatch, provider, *, replan=True):
     turn = "empty-frontier-planning-turn"
     code, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        *(["--decision-output-dir", str(capture_dir)] if capture_dir is not None else []),
         cwd=project)
     assert code == 0 and guard["decision"] == ("autonomous_replan_required" if replan else "run"), guard
     assert guard.get("selected_todo") is None
@@ -181,9 +182,18 @@ def test_bound_todoless_planning_executes_and_settles_once(tmp_path, monkeypatch
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("captured", [False, True])
 def test_no_todo_requires_the_original_signed_scoped_binding(tmp_path, monkeypatch, provider, captured):
-    _project, runtime, _registry, turn, guard, _original = _fixture(tmp_path, monkeypatch, provider)
-    if captured:
-        guard["replan_read_path"] = str(tmp_path / "original-decision.json")
+    capture_dir = tmp_path / "original-decision" if captured else None
+    _project, runtime, _registry, turn, guard, _original = _fixture(
+        tmp_path, monkeypatch, provider, capture_dir=capture_dir,
+    )
+    if capture_dir is not None:
+        capture = capture_dir / "decision.json"
+        original_bytes = capture.read_bytes()
+        # The guard chooses the reader path before signing. Treat the retained
+        # capture as immutable even in synthetic planning-only tests.
+        guard = json.loads(original_bytes)
+        assert guard["replan_read_path"] == str(capture)
+        assert guard["heartbeat_receipt"]["turn_instance_id"] == turn
     envelope = build_turn_envelope(guard)
     binding = (lambda value: value["writeback"]["settlement_identity"]) if captured else (
         lambda value: value["writeback"]["settlement_plan"]["identity"])
@@ -222,6 +232,8 @@ def test_no_todo_requires_the_original_signed_scoped_binding(tmp_path, monkeypat
         execution_mode="isolated-headless", turn_instance_id=turn)
     assert refused["route"]["would_invoke_host"] is False
     assert _classification_count(runtime, "quota_slot_spent") == 0
+    if capture_dir is not None:
+        assert capture.read_bytes() == original_bytes
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
