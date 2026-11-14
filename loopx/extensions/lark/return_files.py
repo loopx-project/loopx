@@ -93,9 +93,13 @@ def uploaded_chat_images(*, root, profile, provider_ref, attachments, private_tr
 
 
 @contextmanager
-def _authorize_upload_dispatch(guard, cache, saved):
+def _authorize_upload_dispatch(guard, before_upload, cache, saved):
     with ExitStack() as authority:
         try:
+            # Re-read provider source and reply after committing the intent.
+            # Acquire the local Stop/Close fences only after provider IO.
+            if not before_upload():
+                raise ValueError("original upload source changed")
             authority.enter_context(guard())
         except (KeyError, OSError, ValueError) as exc:
             # The CLI has yet to start. Only preserve receipts for an earlier
@@ -141,11 +145,12 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
                 preview = _call([*args, "--dry-run"], cwd, runner=runner, private_transport=private_transport)
                 if preview.get("returncode") != 0:
                     raise ValueError("result file upload preflight unavailable")
-                if not before_upload():
+                if dispatch_guard is None and not before_upload():
                     raise ValueError("result file return authority revoked")
                 if fence_upload:
                     _write(cache, {"identity": identity, "upload_started": True})
-                guard = partial(_authorize_upload_dispatch, dispatch_guard, cache, saved) if dispatch_guard else None
+                guard = (partial(_authorize_upload_dispatch, dispatch_guard, before_upload, cache, saved)
+                         if dispatch_guard is not None else None)
                 uploaded = _call(args, cwd, runner=runner, private_transport=private_transport,
                                  dispatch_guard=guard)
                 if fence_upload and _image_upload_scope_rejected(uploaded):

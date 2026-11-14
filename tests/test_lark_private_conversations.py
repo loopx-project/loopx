@@ -1071,7 +1071,8 @@ def source_https(monkeypatch):
     "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
     "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect", "stopped", "stopped_after_fetch",
     "closed_on_upload_preview", "stopped_on_upload_source_read", "closed_on_upload_source_read",
-    "closed_on_source_controls_read", "stopped_before_upload_intent", "closed_before_upload_intent"])
+    "closed_on_source_controls_read", "stopped_before_upload_intent", "closed_before_upload_intent",
+    "edited_after_upload_intent"])
 def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, source_https, monkeypatch, fault):  # noqa: F811
     from test_chat_image_attachments import PNG_BYTES
     from test_lark_app_image_projection import ImageIO
@@ -1120,6 +1121,22 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     io.corrupt_download = fault in ("corrupt_readback", "legacy_cached_readback")
     upload_previewed = False
     control_committed = False
+    source_edited_after_intent = False
+    if fault == "edited_after_upload_intent":
+        from loopx.extensions.lark import return_files
+
+        write_receipt = return_files._write
+
+        def edit_after_upload_intent(path, value):
+            nonlocal source_edited_after_intent
+            write_receipt(path, value)
+            if value.get("upload_started") and not source_edited_after_intent:
+                assert json.loads(path.read_text())["upload_started"] is True
+                provider.messages[source["message_id"]]["content"] = "The source changed after upload intent."
+                source_edited_after_intent = True
+
+        monkeypatch.setattr(return_files, "_write", edit_after_upload_intent)
+
     if fault in ("stopped_before_upload_intent", "closed_before_upload_intent"):
         from loopx.extensions.lark import return_files
         write_receipt = return_files._write
@@ -1206,6 +1223,12 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         if fault in ("stopped_before_upload_intent", "closed_before_upload_intent"):
             from loopx.extensions.lark.return_files import _root
             assert list((_root(transport.runtime_root) / "lark-chat-images").glob("*.json")) == []
+        if fault == "edited_after_upload_intent":
+            from loopx.extensions.lark.return_files import _root
+
+            assert source_edited_after_intent and io.uploads == 0
+            assert list((_root(transport.runtime_root) / "lark-chat-images").glob("*.json")) == []
+            assert "answer_images.terminal" not in saved["deliveries"]
         if stopped or closed:
             assert io.uploads == 0 and transport.core.read_request(ref).get("delivery_verified", False) is False
             assert not any(name.startswith(("answer_images.", "answer_image_notice.")) for name in saved["deliveries"])
@@ -1270,6 +1293,7 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
 
 @pytest.mark.parametrize("fault", ["readback", "edited_source", "edited_original_reply", "edit_on_image_get",
     "edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_preview", "edit_on_send_source_read",
+    "edit_reply_after_upload_intent",
     "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied", "upload_scope_then_granted",
     "upload_scope_with_conflicting_stdout", "closed_on_source_controls_read",
     "unlisted_redirect", "unlisted_cached_redirect"])
@@ -1419,6 +1443,18 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             io.corrupt_download = True
         elif fault == "unknown_send":
             provider.lose_next_reply = True
+        elif fault == "edit_reply_after_upload_intent":
+            from loopx.extensions.lark import return_files
+
+            write_receipt = return_files._write
+
+            def edit_after_upload_intent(path, value):
+                write_receipt(path, value)
+                if value.get("upload_started") and edited_body is None:
+                    assert json.loads(path.read_text())["upload_started"] is True
+                    edit_original_reply()
+
+            monkeypatch.setattr(return_files, "_write", edit_after_upload_intent)
 
         assert worker.reconcile_request(path) == 0
         if fault == "closed_on_source_controls_read":
@@ -1460,7 +1496,13 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             expected_uploads = {"edit_on_send_preview": 4, "edit_on_send_source_read": 4,
                                 "edit_on_next_upload_source_read": 1}
             assert io.uploads == expected_uploads.get(fault, 0) and len(provider.writes) == writes
-            if fault in {"edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_source_read"}:
+            if fault == "edit_reply_after_upload_intent":
+                from loopx.extensions.lark.return_files import _root
+
+                assert edited_body is not None
+                assert list((_root(worker.runtime_root) / "lark-chat-images").glob("*.json")) == []
+            if fault in {"edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_source_read",
+                         "edit_reply_after_upload_intent"}:
                 assert edited_body is not None
                 pending = json.loads(path.read_text())
                 pending["historical_answer_images"]["next_check_at"] = 0
