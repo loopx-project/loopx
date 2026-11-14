@@ -132,6 +132,52 @@ export async function validateBilingualBlog(blogDir) {
         "utf8",
       );
       assertIncludes(multitaskSvg, "100.0%", `Eight-task byte audit chart must anchor at 100% Full: ${langSuffix}`);
+      const twoArm = audit.stride_context_on_off_comparison;
+      deepStrictEqual(
+        [
+          twoArm?.summary?.total_tasks,
+          twoArm?.summary?.context_on_ahead_or_edge,
+          twoArm?.summary?.context_off_ahead,
+          twoArm?.tasks?.length,
+        ],
+        [10, 7, 3, 10],
+        "Controlled two-arm comparison summary must match the 10-task tally (7 ahead/edge, 3 OFF ahead)",
+      );
+      assertIncludes(
+        article,
+        '<h3 id="context-on-vs-off-scores">',
+        `Both published editions must expose the controlled Context ON vs OFF score section: ${locale}`,
+      );
+      assertIncludes(
+        article,
+        `stride-context-on-vs-off-${langSuffix}.svg`,
+        `Both published editions must embed the controlled Context ON vs OFF chart: ${langSuffix}`,
+      );
+      const twoArmSvg = await readFile(
+        resolve(blogDir, `images/context-delivery/stride-context-on-vs-off-${langSuffix}.svg`),
+        "utf8",
+      );
+      const twoArmSection = article.split('<h3 id="context-on-vs-off-scores">')[1]?.split('<h3 id="ablation-evidence">')[0] ?? "";
+      const twoArmTable = twoArmSection.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1];
+      const twoArmRows = [...(twoArmTable ?? "").matchAll(/<tr>([\s\S]*?)<\/tr>/g)];
+      deepStrictEqual(
+        twoArmRows.length,
+        twoArm.tasks.length,
+        `Controlled two-arm score table must retain all 10 task rows including counterexamples: ${locale}`,
+      );
+      for (const requiredToken of ["7,159", "3,746", "2,197", "2,311", "27.1801", "13.62", "39.44", "68.89", "70.79"]) {
+        assertIncludes(twoArmSection, requiredToken, `Controlled score section must preserve ${requiredToken} (${locale})`);
+      }
+      for (const isolatedText of [twoArmSection, twoArmSvg, JSON.stringify(twoArm)]) {
+        if (/four-arm|four arm|四臂/i.test(isolatedText)) {
+          throw new Error(`Controlled two-arm section must remain isolated without four-arm framing (${locale})`);
+        }
+      }
+      for (const publicText of [article, twoArmSvg, JSON.stringify(audit)]) {
+        if (/sforge/i.test(publicText)) {
+          throw new Error(`Internal benchmark name leaked into public context-delivery blog artifact (${locale})`);
+        }
+      }
       if (/7,479,469|33\.4%|69\.9 KB|57\.1ms/.test(article))
         throw new Error("Unreconciled totals or unsupported C1 attribution reappeared");
     }

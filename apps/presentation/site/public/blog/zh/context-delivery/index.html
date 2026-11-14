@@ -6,8 +6,8 @@
 <meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="Agent 读上下文，也需要一套“查书”的方法"><meta property="og:description" content="沿一个语音任务，讲清选读、完整首读、按阶段补读、精确复用与恢复。"><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../../blog.css">
 </head><body><a class="skip-link" href="#main">跳至正文</a>
 <header class="site-header"><a class="brand" href="../../../?lang=zh"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="主导航"><a href="../">Blog</a><a href="../../../docs/book/">文档</a></nav><div class="header-actions"><a class="language" href="../../context-delivery/" lang="en" hreflang="en">EN</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
-<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">先读必要事实，在有效 compaction 周期内复用已验证的结构；连续性丢失时恢复完整基线。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 12 日更新</span></div></div>
-<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#four-stage-cascade">四种机制与测量基线</a><a href="#multitask-context-byte-ratios">八题单层载荷与叠加首读</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#stage-scopes">范围在影响决定之前读到</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#first-read-budget">首条响应要能完整送达</a><a href="#transport-cost">往返几次，正文搬了几遍</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
+<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">先读必要事实，在有效 compaction 周期内复用已验证的结构；连续性丢失时恢复完整基线。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 14 日更新</span></div></div>
+<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#four-stage-cascade">四种机制与测量基线</a><a href="#multitask-context-byte-ratios">八题单层载荷与叠加首读</a><a href="#context-on-vs-off-scores">十题同构跑分：Context ON vs OFF</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#stage-scopes">范围在影响决定之前读到</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#first-read-budget">首条响应要能完整送达</a><a href="#transport-cost">往返几次，正文搬了几遍</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
 <p>按 JSON Pointer 渐进选读本身并不复杂，主要用来折叠当前决定暂不需要的历史长尾；LoopX 上下文交付真正的机制重心，是<strong>受 compaction 周期约束的结构化差分上下文（compaction-cycle structured delta）</strong>：完整来源先落盘存证，在同一个已核验的 <code>context_epoch</code> 内精确复用未变化的结构子树、只编码本轮结构增删改；一旦宿主发生上下文压缩或基线摘要失配，立即原子切换回新的完整基线，绝不悬空叠加旧差分。</p>
 <h2 id="results">先看数据：独立上下文对照、周期内结构化差分与任务消融</h2>
 <h3 id="four-stage-cascade">四种机制，分别核对测量基线</h3>
@@ -111,6 +111,101 @@
 </details>
 
 <p class="muted">口径与来源：上表逐题数据复算自已公开的八题表，Progressive 合计为 7,285,951 B / 22,408,690 B = 32.5%，覆盖全部 213 次唤醒。Delta 与首屏的 35.8%、3.0% / 5.0% 仅对应 112 次周期内唤醒；其 Full 分母原文仅报告约 12.53 MB，不能与 213 次总量混用。这里没有新增实验，也未独立核对逐 wake 原始记录。<a href="../../data/long-horizon-audit.json">公开聚合数据与来源</a>。</p><p>实现状态：<a href="https://github.com/loopx-project/loopx/pull/8266">#8266</a> 仍是开放的 C1 提案；<a href="https://github.com/loopx-project/loopx/pull/8304">#8304</a> 的最终合入范围是保留精度的排序与摘要复用。上述字节数据不归因为统一 Controller/Worker 已上线的收益。</p>
+<h3 id="context-on-vs-off-scores">十题同构两臂效果对比：固定 Explore + Stride 下的 Context ON 与 Context OFF</h3>
+<p>在压降上下文传输载荷的同时，我们进一步检验这套交付机制在长程求解中的实际得分表现：从 <strong>EdgeBench 十题实测（2026-11-12 22:40 CST 快照）</strong>中取出<strong>固定同一 <code>Explore + Stride</code> 框架</strong>的两臂对照：<code>Explore + context-on</code>（开启 Progressive 按需读取与周期内结构化 Delta）对比 <code>Explore + context-off</code>（两项均关闭），专门检验 Context Delivery 单一开关在同构底盘下的组内表现。</p>
+<ul>
+<li><strong>十题整体盘面（7 题领先或微弱占先 vs 3 题 OFF 领先）：</strong>固定 <code>Explore + Stride</code> 开启 Context Delivery 后，10 题中有 <strong>7 题</strong>取得更高或微弱占先的成绩（包括 <strong>Borden 80 vs 45 [+77.8%]</strong>、<strong>ANN 7,159 vs 3,746 QPS [+91.1%]</strong>、<strong>Grid 2,197 vs 2,311 [−114 代价]</strong>）；同时完整保留 3 项 Context OFF 领先的反例，不做选择性截取。</li>
+<li><strong>严格等时长约 18h 配对（4 题，15 分钟容差内）：</strong>3 胜 1 负——<code>Borden</code> 从 45 升至 <strong>80（+35 分 / +77.8%）</strong>；<code>Grid</code> 代价（越低越好）从 2,311 降至 <strong>2,197（−114 / −4.9%，+2.35 百分分）</strong>；<code>Rust</code>（均 17h57m）维持在 <strong>27.1801 vs 27.1757</strong> 的微弱占先；等时长反例则是 <code>Portfolio</code>（均为 18h00m，<code>13.62 vs 39.44</code>，OFF 领先）。</li>
+<li><strong>历史同构与非等时长对照（6 题，逐题标明实际运行时间）：</strong><code>ANN</code> 取历史七臂中同开 Stride 的两臂配置，<code>context-on</code> 达 <strong>7,159 QPS</strong> 对 <code>context-off</code> <strong>3,746 QPS（+91.1%，+33.51 百分分）</strong>；<code>FFmpeg</code> <code>2.7086 vs 1.9929</code>（+35.9%，OFF 早停待重跑）；<code>VLIW</code> 周期数（越低越好）<code>1,042 vs 1,097</code>（−55 周期 / −5.0%，OFF 沿用 14h45m 历史轮）；<code>Ad</code> <code>49.67B vs 49.63B</code>（ON 满 18h00m，OFF 因宿主启动空挂仅累计 8h47m）。另外两项反例为 <code>Codec</code>（ON 满 18h00m 得 68.89，不敌模型服务拦截下仅跑 12h38m 的 OFF 70.79）与 <code>OpenTTD</code>（两臂均未满 18h，ON 30,266,729 vs OFF 33,090,430）。</li>
+</ul>
+<p class="muted">与下方消融表两处口径衔接说明：（1）本节 <code>ANN</code> 对照 <strong>3,746 vs 7,159 QPS</strong> 来自历史七臂里同开 Stride 的两臂（<code>Explore + Stride + context-off / on</code>）；下文 <a href="#ablation-evidence">#ablation-evidence</a> 另行列出该研究中<strong>未开 Stride</strong> 的 Explore 基线（<code>Explore · Context off 5,766</code> 与 <code>Explore · Context on 6,020</code>），二者对照条件不同，互不冲突。（2）本节 <code>Grid</code>（<code>2,197 vs 2,311</code>）反映 15 分钟容差内均跑满 ~18h 的最新完成对比（其中 <code>context-on</code> 沿同一会话续跑）；下文仍保留更早一轮未匹配时长与资源的「Historical Grid」反例（Off 2054 &lt; On+Stride 2088）作历史记录。</p>
+<figure class="diagram"><p class="diagram-label">EdgeBench 十题同构两臂效果对照（固定 Explore + Stride：Context ON vs OFF）</p><a href="../../images/context-delivery/stride-context-on-vs-off-zh.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的十题同构 Context ON vs OFF 分数对照图"><img src="../../images/context-delivery/stride-context-on-vs-off-zh.svg" alt="EdgeBench 十题同构 Explore + Stride 下 Context ON vs OFF 分数对照：7 题领先或占先（ANN +91.1%、Borden +77.8%、Grid −114），完整保留 Portfolio、Codec、OpenTTD 三项反例" width="1460" height="780" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>A：9 道有 EdgeBench 百分制归一分的题目按 <code>ON − OFF</code> 分差排序（已方向归一化为越高越优），标出各自时长状态。B：无百分制标度的第 10 题 <code>Borden</code>（等时长 ~18h，80 vs 45）、关键原生分增幅，以及 3 项负向反例口径。</figcaption></figure>
+<details><summary>展开十题同构两臂逐题分数与运行时长明细</summary>
+<div class="table-scroll" role="region" tabindex="0" aria-label="EdgeBench 十题同构 Explore + context-on 与 context-off 完整对照表"><table style="min-width:860px">
+<thead>
+<tr>
+<th>题目（指标与方向）</th>
+<th>时长配对状态</th>
+<th style="text-align:right">Explore + context-on<br><span class="muted" style="font-weight:400">原生（/100 · 时长 · 有效次）</span></th>
+<th style="text-align:right">Explore + context-off<br><span class="muted" style="font-weight:400">原生（/100 · 时长 · 有效次）</span></th>
+<th style="text-align:right">ON vs OFF 差值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Borden</strong>（原生分 ↑）</td>
+<td>等时长 ~18h</td>
+<td style="text-align:right"><strong>80</strong>（— · 18h02m · 17 次）</td>
+<td style="text-align:right">45（— · 17h59m · 17 次）</td>
+<td style="text-align:right"><strong>+35（+77.8%）</strong></td>
+</tr>
+<tr>
+<td><strong>Grid</strong>（原生总分 ↓）</td>
+<td>等时长 ~18h</td>
+<td style="text-align:right"><strong>2,197</strong>（67.20 · 17h57m · 17 次）</td>
+<td style="text-align:right">2,311（64.85 · 17h59m · 13 次）</td>
+<td style="text-align:right"><strong>−114（−4.9%, +2.35 分）</strong></td>
+</tr>
+<tr>
+<td><strong>Rust</strong>（原生分 ↑）</td>
+<td>等时长 ~18h</td>
+<td style="text-align:right"><strong>27.1801</strong>（27.18 · 17h57m · 10 次）</td>
+<td style="text-align:right">27.1757（27.18 · 17h57m · 10 次）</td>
+<td style="text-align:right"><strong>+0.0044（微先 / 持平）</strong></td>
+</tr>
+<tr>
+<td><strong>Portfolio</strong>（原生分 / 100 ↑）</td>
+<td>等时长 18h <strong>反例</strong></td>
+<td style="text-align:right">13.62（13.62 · 18h00m · 17 次）</td>
+<td style="text-align:right"><strong>39.44</strong>（39.44 · 18h00m · 17 次）</td>
+<td style="text-align:right">−25.82 分（OFF 胜）</td>
+</tr>
+<tr>
+<td><strong>ANN</strong>（QPS ↑）</td>
+<td>历史七臂 Stride</td>
+<td style="text-align:right"><strong>7,159</strong>（43.17 · 6 次）</td>
+<td style="text-align:right">3,746（9.66 · 4 次）</td>
+<td style="text-align:right"><strong>+3,413（+91.1%, +33.51 分）</strong></td>
+</tr>
+<tr>
+<td><strong>FFmpeg</strong>（原生分 ↑）</td>
+<td>OFF 早停待重跑</td>
+<td style="text-align:right"><strong>2.7086</strong>（16.17 · 18h01m · 16 次）</td>
+<td style="text-align:right">1.9929（11.19 · 早停 · 6 次）</td>
+<td style="text-align:right"><strong>+0.7157（+35.9%, +4.98 分）</strong></td>
+</tr>
+<tr>
+<td><strong>VLIW</strong>（周期数 ↓）</td>
+<td>OFF 14h45m 历史</td>
+<td style="text-align:right"><strong>1,042</strong>（97.25 · 17h57m · 14 次）</td>
+<td style="text-align:right">1,097（93.82 · 14h45m · 12 次）</td>
+<td style="text-align:right"><strong>−55 周期（−5.0%, +3.43 分）</strong></td>
+</tr>
+<tr>
+<td><strong>Ad</strong>（原生总分 ↑）</td>
+<td>OFF 8h47m 空挂</td>
+<td style="text-align:right"><strong>49,673,040,827</strong>（79.30 · 18h00m · 16 次）</td>
+<td style="text-align:right">49,631,904,944（78.33 · 8h47m · 7 次）</td>
+<td style="text-align:right"><strong>+41.14M（+0.97 分）</strong></td>
+</tr>
+<tr>
+<td><strong>Codec</strong>（原生分 ↑）</td>
+<td>OFF 12h38m <strong>反例</strong></td>
+<td style="text-align:right">68.89（68.89 · 18h00m · 13 次）</td>
+<td style="text-align:right"><strong>70.79</strong>（70.79 · 12h38m · 11 次）</td>
+<td style="text-align:right">−1.90 分（OFF 胜）</td>
+</tr>
+<tr>
+<td><strong>OpenTTD</strong>（原生分 ↑）</td>
+<td>两臂均未满 <strong>反例</strong></td>
+<td style="text-align:right">30,266,729（62.02 · 10h47m · 10 次）</td>
+<td style="text-align:right"><strong>33,090,430</strong>（62.99 · 早停 · 7 次）</td>
+<td style="text-align:right">−2.82M（−0.97 分, OFF 胜）</td>
+</tr>
+</tbody>
+</table></div>
+</details>
+<p class="muted">实验口径与边界说明：以上属于 C1 多轮探索观测（有效运行时间按求解进程扣除停机后累计）。本节固定 <code>Explore + Stride</code> 框架，仅隔离检验开启上下文交付（<code>Context ON</code> vs <code>Context OFF</code>）在组内的方向性表现；因存在续跑会话与部分未补满时长差异，不单独构成剥离全部交互项后的纯 C2 因果证明。控制面整体相对零协议税外部基线的等预算帕累托对比属另一层独立议题，详见 <a href="../edgebench-feedback-and-memory/">《EdgeBench 反馈与记忆》</a>中的第二层目标讨论。原始聚合结构化数据见 <a href="../../data/long-horizon-audit.json">公开聚合数据</a>。</p>
 <h3 id="ablation-evidence">真实模型与多题消融实证：收益链路与边界反例</h3>
 <p>在 <strong>EdgeBench ANN 向量检索优化（<code>gpt-6.1-sol / xhigh</code>，18h，约束 <code>Recall@10 ≥ 0.95</code>）</strong>与跨题消融中，我们将 <code>Context Delivery</code>（渐进读取与周期差分）与 <code>Stride</code>（基于证据差分的步长控制）拆开对照，同时统计控制包选中字节、主会话模型输入 Token 与局部/早窗反例（基于 <code>@shangzh0</code> 归档轨迹与控制面回执复算）：</p>
 <figure class="diagram"><p class="diagram-label">多题消融与分层计量审计</p><a href="../../images/context-delivery/context-delivery-ablation-zh.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的 Context Delivery 与 Stride 消融图"><img src="../../images/context-delivery/context-delivery-ablation-zh.svg" alt="Context 渐进式交付与 Stride 步幅控制消融：ANN 18h 峰值吞吐 QPS 对比与分层 Token/字节节省及边界反例" width="1180" height="860" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>上图（A）：ANN 18h 六臂峰值有效吞吐 QPS（<code>Recall@10 ≥ 0.95</code>）。下图（B）：相对 <code>Context off</code> 的分层字节与主会话输入 Token 节省（左，负值）及诚实披露的局部/早窗开销与跨题反例（右，正值）。点击查看原图。</figcaption></figure>

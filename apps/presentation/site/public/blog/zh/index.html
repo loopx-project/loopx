@@ -35,8 +35,8 @@
   <div class="index-heading"><p class="eyebrow">LoopX · 博客</p><h1>长程工作的工程实践。</h1><p class="lead">关于长程 Agent 的设计、工程与实践。</p></div>
   <nav class="reading-routes" aria-labelledby="reading-routes"><h2 id="reading-routes">按问题阅读</h2><ul><li><b>先了解 LoopX</b><span>长程工作需要保留哪些判断与责任？</span><p><a href="from-one-shot-agents-to-long-horizon-control/">核心架构</a> <span aria-hidden="true">→</span> <a href="application-scenarios/">应用场景</a></p></li><li><b>控制规则怎样修</b><span>从重试、事务、执行权与恢复的反例读起。</span><p><a href="typescript-control-plane-refactor/">TypeScript 语义重构</a></p></li><li><b>下一步读什么</b><span>用一个任务理解渐进式读取与周期差分。</span><p><a href="context-delivery/">Context delivery</a></p></li><li><b>机制是否有用</b><span>把起点、后程增量、成果保留和完整成本分开。</span><p><a href="edgebench-feedback-and-memory/">EdgeBench 研究</a> <span aria-hidden="true">→</span> <a href="five-freshness-incidents/">事故复盘</a></p></li></ul></nav>
   <article class="post-listing">
-    <div><p class="eyebrow">Context delivery · 机制与实例</p><p class="listing-date"><time datetime="2026-11-01">2026 年 11 月 1 日</time> · <span>11 月 12 日更新</span></p></div>
-    <div><h2><a href="context-delivery/">Agent 读上下文，也需要一套“查书”的方法</a></h2><p>分别核对渐进视图与周期内差分的测量基线：213 次唤醒保留 32.5%，ANN 周期内增量轮再减 74.25%，八题首读入口约 3.0% / 5.0%。这些队列独立比较，压缩或失配即恢复完整基线。</p><a class="read-post" href="context-delivery/">阅读全文 <span aria-hidden="true">↗</span></a></div>
+    <div><p class="eyebrow">Context delivery · 机制与实例</p><p class="listing-date"><time datetime="2026-11-01">2026 年 11 月 1 日</time> · <span>11 月 14 日更新</span></p></div>
+    <div><h2><a href="context-delivery/">Agent 读上下文，也需要一套“查书”的方法</a></h2><p>拆解十题同构两臂（固定 Explore + Stride）下的 Context ON vs OFF 跑分对比（7/10 题占先、Borden 80 vs 45、ANN 7,159 vs 3,746，并保留 Portfolio/Codec/OpenTTD 反例），同时核对渐进视图 32.5%、ANN 周期内增量轮 −74.25% 与首读 3.0% / 5.0% 的载荷基线。</p><a class="read-post" href="context-delivery/">阅读全文 <span aria-hidden="true">↗</span></a></div>
   </article>
   <article class="post-listing">
     <div><p class="eyebrow">研究札记 · EdgeBench 与 LHTB</p><p class="listing-date"><time datetime="2026-10-16">2026 年 10 月 16 日</time></p></div>
