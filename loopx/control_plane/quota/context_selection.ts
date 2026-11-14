@@ -78,13 +78,6 @@ function resolveSelection(request: JsonObject, initialPointers: string[]): JsonO
     throw new EffectRuntimeRequestError("initial-read must be boolean");
   if (request.initial_read === true && (request.select !== undefined || request.list_fields === true || request.list_depth !== undefined))
     throw new EffectRuntimeRequestError("initial-read cannot be combined with select or list");
-  // A navigator can pin the ordinary initial selection now and skip the root
-  // index when the capture has an initial view. Unknown schemas keep discovery.
-  if (request.include_initial_read_plan === true && request.initial_read === undefined &&
-      request.list_fields === true && request.list_depth === undefined &&
-      Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "" &&
-      initialPointers.length)
-    return {initial_read_plan: resolveSelection({context, initial_read: true}, initialPointers)};
   const initial = request.initial_read === true ? coalescedInitialPointers(context, initialPointers) : [];
   const selectors = request.initial_read === true ? initial : request.select;
   if (request.initial_read === true && !(selectors as string[]).length)

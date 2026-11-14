@@ -1710,6 +1710,113 @@ def test_stateless_saved_initial_read_bounds_the_default_cli_output(tmp_path):
     assert source.read_bytes() == raw and not registry.exists() and not (runtime / "goals").exists()
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("cold_host", [False, True], ids=["stateless", "codex"])
+def test_saved_complete_turn_reads_execution_preparation_on_first_page(tmp_path, monkeypatch, provider, cold_host):
+    import subprocess
+
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _configure_read_only_todo, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _spend_run_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    narrative = "Preserve every part of the original acceptance. 按原要求验收。\n" * 430
+    state.write_text(state.read_text().replace("## Next Action", narrative + "\n## Next Action", 1))
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID]
+    code, claim = _run_cli(registry, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--claimed-by", AGENT_ID, cwd=project)
+    assert code == 0 and claim["ok"], claim
+    directory = tmp_path / "captured"
+    code, result = _run_cli(registry, runtime, "quota", "should-run", *binding, "--todo-id", TODO_ID,
+        "--codex-app", "--complete-turn", "--context-delivery", "on", "--defer-context-presentation",
+        "--prepared-capture-reference", "--decision-output-dir", str(directory), cwd=project)
+    assert code == 0 and result["ok"], result
+    capture = directory / "decision.json"
+    raw = capture.read_bytes()
+    original = json.loads(raw)
+    agent = original["interaction_contract"]["agent_channel"]
+    preparation = original["interaction_contract"]["cli_channel"]["execution_preparation"]
+    assert preparation["state"] == "ready" and agent["delivery_allowed"] is True
+    receipt = original["heartbeat_receipt"]
+    assert receipt["status"] == "committed"
+    goal_index = next(index for index, source in enumerate(agent["work_context"]["sources"])
+        if source["source"] == "goal_state")
+    original_goal_source = agent["work_context"]["sources"][goal_index]
+    assert narrative.splitlines()[0] in original_goal_source["content"]["text"]
+
+    isolated = tmp_path / ("saved recovery capture " + "a" * 98) / ("private reader directory " + "b" * 98)
+    isolated.mkdir(parents=True, mode=0o700)
+    saved = isolated / "decision.json"
+    saved.write_bytes(raw)
+    saved.chmod(0o600)
+    absent_registry, absent_runtime = isolated / "registry.json", isolated / "runtime"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2]), "LOOPX_USAGE_PING": "0"}
+    executable = [sys.executable, "-m", "loopx.entrypoint"]
+    project_command = [*executable, "--registry", str(absent_registry), "--runtime-root", str(absent_runtime),
+        "--format", "json", "quota", "context-project", *binding, "--capture-file", str(saved),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--context-delivery", "auto",
+        "--max-page-output-bytes", "12000", "--initial-read"]
+    project_command += (["--codex-app", "--delta-delivery", "auto", "--codex-context-dir", str(isolated / "journal")]
+        if cold_host else ["--delta-delivery", "off"])
+
+    def call(argv, expected=0):
+        process = subprocess.run(argv, cwd=isolated, env=env, capture_output=True, timeout=30)
+        assert process.returncode == expected, process.stdout + process.stderr
+        doc = json.loads(process.stdout)
+        return doc, len(process.stdout)
+
+    first, size = call(project_command)
+    assert size <= 12000 and first["offset"] == 0
+
+    def value_in_first_page(pointer):
+        # A page may end inside a later row. Require the complete JSON value
+        # here, independent of how the reader splits or encodes its remainder.
+        marker = '{"pointer":' + json.dumps(pointer) + ',"value":'
+        text = first["content"]
+        assert marker in text, pointer
+        return json.JSONDecoder().raw_decode(text[text.index(marker) + len(marker):])[0]
+
+    assert value_in_first_page("/heartbeat_receipt") == receipt
+    assert value_in_first_page("/normal_delivery_allowed") is True
+    assert value_in_first_page("/interaction_contract/cli_channel/execution_preparation") == preparation
+    assert value_in_first_page("/interaction_contract/agent_channel/required_reads") == agent["required_reads"]
+
+    def read_selection(page):
+        content = bytearray()
+        while True:
+            assert page["offset"] == len(content)
+            content.extend(page["content"].encode())
+            if page["eof"]:
+                assert page["total_bytes"] == len(content)
+                return {row["pointer"]: row["value"] for row in json.loads(content)["selections"]}
+            assert page["next_offset"] == len(content)
+            page, wire = call(shlex.split(page["next_command"]))
+            assert wire <= 12000
+
+    current = read_selection(first)
+    if remaining := first["navigation"].get("remaining_read_command"):
+        current.update(read_selection(call(shlex.split(remaining))[0]))
+    goal_pointer = f"/interaction_contract/agent_channel/work_context/sources/{goal_index}"
+    observed = current[goal_pointer] if goal_pointer in current else None
+    body = observed["content"]["text"] if observed else current[goal_pointer + "/content/text"]
+    assert body == original_goal_source["content"]["text"]
+    assert current["/heartbeat_receipt"] == receipt
+    if "/goal_boundary" in current:
+        assert current["/goal_boundary"] == original["goal_boundary"]
+    else:
+        assert {key: current[f"/goal_boundary/{key}"] for key in original["goal_boundary"]} == original["goal_boundary"]
+    wrong_turn = [part if part != TURN_ID else "unrelated-turn" for part in project_command]
+    failed, _ = call(wrong_turn, expected=1)
+    assert not failed["ok"] and "content" not in failed
+    assert saved.read_bytes() == raw and not absent_registry.exists() and not (absent_runtime / "goals").exists()
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
 def test_attached_selected_page_uses_the_same_window_as_its_reader(tmp_path, monkeypatch):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 

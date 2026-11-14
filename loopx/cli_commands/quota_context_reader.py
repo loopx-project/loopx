@@ -983,7 +983,7 @@ def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
         path, _, document = _read_capture(plan["capture"]["path"], plan["capture"]["sha256"])
         digest = plan["capture"]["sha256"]
         if ordinary_page and _contains_ordinary_opening(ordinary_page["content"], document, plan):
-            return None
+            return ordinary_page
         opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"])
         if len(content) > page_bytes or len(content) >= output_bytes:
             return None
@@ -1021,7 +1021,8 @@ def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
 
 def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any], *,
                              initial_reference: str | None, initial_read_plan: dict[str, Any] | None,
-                             output_limit: int | None, reader_argv: list[str]) -> dict[str, Any]:
+                             output_limit: int | None, reader_argv: list[str],
+                             prioritize_opening: bool = False) -> dict[str, Any]:
     """Use the ordinary verified reader; the first page and navigation share its output budget."""
     recovery = navigation["recovery"]
     pinned = initial_reference if args.initial_read else None
@@ -1033,15 +1034,37 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
         "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
     page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
     if page.get("ok") is True:
-        if (pinned and initial_read_plan and output_limit is not None and not page["eof"]
-                and "previously_delivered_fields" not in page
-                and (opening := _bounded_initial_read(navigation, initial_read_plan,
-                    page_bytes=args.page_bytes if args.page_bytes is not None else output_limit,
-                    output_bytes=output_limit, reader_argv=reader_argv, ordinary_page=page)) is not None):
-            return opening
         # Keep the already-budgeted page and cursor ahead of recovery metadata.
         page["navigation"] = page.pop("navigation")
-    elif "recovery_command" not in page:
+        if (pinned and initial_read_plan and output_limit is not None and not page["eof"]
+                and "previously_delivered_fields" not in page
+                and (bounded := _bounded_initial_read(navigation, initial_read_plan,
+                    page_bytes=args.page_bytes if args.page_bytes is not None else output_limit,
+                    output_bytes=output_limit, reader_argv=reader_argv, ordinary_page=page)) is not None):
+            return bounded
+    if (prioritize_opening and pinned and "first_read_command" in navigation
+            and "replan_review_command" not in navigation and not page.get("eof")
+            and "previously_delivered_fields" not in page):
+        # Reserve more room for the pinned controls and retain both read
+        # routes. Replan keeps its separate review command and instructions.
+        opening_navigation = {
+            **{key: navigation[key] for key in ("ok", "schema_version", "mode",
+                "context_delivery", "first_read_command") if key in navigation},
+            "recovery": recovery,
+            "instruction": (
+                "Follow next_command through EOF for this selection. Read applicable acceptance, stop conditions and required "
+                "sources before dependent work, and the operation and settlement plan before effects. Use recovery.command "
+                "with --select or --list for missing facts, including complete Vision guidance and attachments before use. "
+                "After compaction read only missing facts from this capture. Keep the original Turn and receipt. "
+                "Recover without rerunning admission or repeating effects."
+            ),
+        }
+        opening = read_context_capture(read_args, presentation={"navigation": opening_navigation},
+            reader_argv=reader_argv)
+        if opening.get("ok"):
+            page = opening
+            page["navigation"] = page.pop("navigation")
+    if not page.get("ok") and "recovery_command" not in page:
         # Preserve the verified navigation when it fits. The attached read
         # may have been refused precisely because its opening was too large.
         fallback = {"ok": False, **page, "recovery_command": recovery["command"]}

@@ -359,6 +359,11 @@ immutable capture.
 original digest-bound capture in the wake prompt. Recovery reuses the saved
 decision and its original receipt.
 
+New saved-decision openings use the live reader's priority. When the capture
+has execution preparation, the recorded admission or claim requirement and
+required reads precede detailed work context. Resume an already-issued cursor
+with its original reference and selection digest.
+
 When native quota navigation requires explicit Todo selection, the opening
 keeps the discovery and same-Turn selection commands with the read obligations
 and execution controls. If the recommended candidate makes these controls too
@@ -397,6 +402,9 @@ presentation changes neither admission nor the explicit off view.
 这条命令。工作前沿这条命令及其游标读完余下的首读内容。两个选区绑定同一份不可变捕获。
 `navigation.first_read_command` 可重读首屏，其他字段沿
 `navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
+
+新发起的保存决策首读沿用实时读取的优先顺序。捕获含执行准备信息时，先交付记录中的
+准入结果或申领要求，以及必读项，再交付工作明细。已经发出的游标沿用原引用和选区摘要续读。
 
 原生额度导航要求显式选择 Todo 时，首读把候选发现、同一轮次的选择命令、必读项和执行
 约束放在一起。推荐候选的明细导致这些信息超出单页预算时，同一捕获的续读保留完整

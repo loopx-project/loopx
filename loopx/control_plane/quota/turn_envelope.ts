@@ -1,6 +1,7 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
-import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
+import {contextReadSectionDigests, initialContextReadGroups, initialContextReadPlan, initialContextReadPointers,
+  prepareProgressiveContext, prepareProgressiveContextDelivery,
   progressiveContextPlan, scopedReplanYardstickReversal, stagedReplanContextPlan, successorReplanReadSelection,
   type PreparationScopeDetail, type ReusableExactBody} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
@@ -2431,12 +2432,19 @@ function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" |
 
 /** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {
-  const initial = request.initial_read === true || request.list_fields === true
+  const rootList = request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
-  if (!initial) return capturedContextSelection(request, []);
+  if (request.initial_read !== true && !rootList) return capturedContextSelection(request, []);
   const context = requireJsonObject(request.context, "captured context");
-  const pointers = initialContextReadPointers(context, INITIAL_CONTEXT_DECISION_FIELDS,
-    jsonObject(context.goal_boundary)?.handoff_mode);
+  const handoffMode = jsonObject(context.goal_boundary)?.handoff_mode;
+  const groups = initialContextReadGroups(context, INITIAL_CONTEXT_DECISION_FIELDS, handoffMode);
+  if (rootList && request.include_initial_read_plan === true
+      && request.initial_read === undefined && request.list_depth === undefined) {
+    // Only a new pinned read uses the live opening order. A historical
+    // initial-read command still resolves its original ordered selection.
+    return initialContextReadPlan(context, groups, readyWriteScope(context)?.path);
+  }
+  const pointers = [...groups.opening, ...groups.remaining];
   const result = capturedContextSelection(request, pointers);
   const review = request.include_replan_review === true ? successorReplanReadSelection(context, pointers) : undefined;
   return review ? {...result, replan_review: review} : result;

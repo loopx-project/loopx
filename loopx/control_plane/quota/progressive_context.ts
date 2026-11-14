@@ -446,7 +446,7 @@ function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelec
  * bodies again. A coalesced parent can span both parts; keep only the coverage
  * shared by the verified reduced selection and the ordinary remainder. */
 function withLinkedObservedRemainder(observed: JsonObject | undefined,
-    initial: ReturnType<typeof nativeContextReadPlan> | undefined): JsonObject | undefined {
+    initial: ReturnType<typeof initialContextReadPlan> | undefined): JsonObject | undefined {
   if (!observed || !initial?.linked_opening_detail || !initial.remaining
       || Object.hasOwn(observed.reused as JsonObject, initial.linked_opening_detail)) return observed;
   const ordinary = initial.plan.selections as ReadSelection[];
@@ -780,11 +780,9 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
   const groups = observe || request.include_initial_read_plan === true
     ? initialContextReadGroups(required.context, decisionFields, handoffMode) : undefined;
-  const openingSplit = request.include_initial_read_plan === true && groups
-    ? prepareInitialOpening(required.context, groups, exactBody?.path) : undefined;
-  const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const initial = request.include_initial_read_plan === true && groups
-    ? nativeContextReadPlan(required.context, pointers, groups, openingSplit) : undefined;
+    ? initialContextReadPlan(required.context, groups, exactBody?.path) : undefined;
+  const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const observed = observe && pointers.length
     ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody, handoffMode), initial) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
@@ -826,10 +824,6 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
   const body = jsonObject(at(context, parent)), boundary = pointer(parent);
   if (!groups.opening.includes(boundary) || !body
       || !Array.isArray(body[detail]) || !body[detail].length) return undefined;
-  // Current readiness belongs with the decision. Reorder only the new pinned
-  // reader, so an explicit historical initial-read cursor still replays.
-  const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
-  if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
   const controls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
   const checkpointPath = [...parent, "checkpointed_boundary_authority"];
   const checkpoint = jsonObject(at(context, checkpointPath));
@@ -848,12 +842,26 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
-function nativeContextReadPlan(context: JsonObject, pointers: string[],
-    groups: ReturnType<typeof initialContextReadGroups>, openingSplit?: ReturnType<typeof prepareInitialOpening>): {
+export function initialContextReadPlan(context: JsonObject,
+    groups: ReturnType<typeof initialContextReadGroups>, scope?: Path): {
       initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
       replan_review?: JsonObject;
       ordinary_opening_rows?: number;
     } {
+  const openingSplit = prepareInitialOpening(context, groups, scope);
+  const preparation = "/interaction_contract/cli_channel/execution_preparation";
+  const readiness = groups.remaining.indexOf(preparation);
+  if (readiness >= 0) {
+    // Keep the original admission or refusal and read routes ahead of the
+    // work lane description. New pinned reads use this order; issued cursors
+    // and explicit historical initial reads keep their original selections.
+    groups.remaining.splice(readiness, 1);
+    const boundary = groups.opening.indexOf("/goal_boundary");
+    groups.opening.splice(boundary < 0 ? groups.opening.length : boundary, 0, preparation);
+    const lane = groups.opening.indexOf("/work_lane_contract");
+    if (lane >= 0) groups.remaining.unshift(...groups.opening.splice(lane, 1));
+  }
+  const pointers = [...groups.opening, ...groups.remaining];
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
@@ -872,13 +880,14 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
     opening = opening.flatMap(field => field === openingSplit.boundary ? openingSplit.controls : [field]);
     remaining = [openingSplit.detail, ...(openingSplit.checkpointEntries ? [openingSplit.checkpointEntries] : []), ...remaining];
   }
-  const ordinaryRows = openingSplit ? (ordinary.selections as ReadSelection[]).reduce((end, row, index) =>
+  const ordinaryRows = openingSplit || readiness >= 0 ? (ordinary.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
       ? index + 1 : end, 0) : undefined;
   // Keep the ordinary fallback in the same order as the observed selection.
   return {initial: true, plan: ordinary, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(openingSplit ? {linked_opening_detail: openingSplit.detail, ordinary_opening_rows: ordinaryRows} : {}),
+    ...(ordinaryRows ? {ordinary_opening_rows: ordinaryRows} : {}),
+    ...(openingSplit ? {linked_opening_detail: openingSplit.detail} : {}),
     ...(relativeReview ? {replan_review: relativeReview} : {})};
 }
 
@@ -1031,7 +1040,7 @@ function managerReturnAttention(value: unknown, requiredReads: unknown[]): JsonO
   return attention;
 }
 
-function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[], handoffMode: unknown): {
+export function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[], handoffMode: unknown): {
   opening: string[]; remaining: string[];
 } {
   const object = (value: unknown): JsonObject | undefined =>
