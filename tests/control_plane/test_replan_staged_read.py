@@ -479,12 +479,13 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         malformed["schema_version"] = "unsupported-future-version"
         bad_path = tmp_path / "unsupported.json"
         bad_path.write_text(json.dumps(malformed))
-        # Use the independent historical JS-number oracle so the outer hash
-        # passes and this fixture reaches the unsupported-version boundary.
-        digest = _canonical_digest(malformed)
+        bad_path.chmod(0o600)
+        # Satisfy both outer checks to reach the unsupported-version boundary.
         command = shlex.split(packet["review"])
         command[command.index("--decision-file") + 1] = str(bad_path)
-        command[command.index("--source-hash") + 1] = digest
+        command[command.index("--source-hash") + 1] = _canonical_digest(malformed)
+        if "--capture-sha256" in command:
+            command[command.index("--capture-sha256") + 1] = hashlib.sha256(bad_path.read_bytes()).hexdigest()
         refused = run(command, cwd=fixture["project"], env=env, capture_output=True, text=True, timeout=60)
         assert refused.returncode != 0
         assert "unsupported complete Turn decision version" in refused.stdout + refused.stderr
