@@ -1730,6 +1730,14 @@ def test_authenticated_loopx_card_decisions_capture_through_registration_cli(
     incomplete_legacy["proposal_id"] = "proposal-incomplete-legacy"
     incomplete_legacy["review_card"]["confirmation"].pop("event_id")
     stored_actions["proposals"][incomplete_legacy["proposal_id"]] = incomplete_legacy
+
+    cross_goal = json.loads(
+        json.dumps(stored_actions["proposals"][operation["proposal_id"]])
+    )
+    cross_goal["proposal_id"] = "proposal-cross-goal"
+    cross_goal["normalized_parameters"]["goal_id"] = "other-goal"
+    cross_goal["operation"]["confirmation"]["event_id"] = "evt_cross_goal"
+    stored_actions["proposals"][cross_goal["proposal_id"]] = cross_goal
     store.path.write_text(
         json.dumps(stored_actions, ensure_ascii=False), encoding="utf-8"
     )
@@ -1770,7 +1778,8 @@ def test_authenticated_loopx_card_decisions_capture_through_registration_cli(
     assert projection["total"] == 2
     assert projection["counts"]["approval"] == 1
     assert projection["counts"]["review"] == 1
-    assert projection["required"] == 2
+    assert projection["required"] == 0
+    assert projection["unknown"] == 2
     assert projection["active_ms"] is None
     assert projection["wait_ms"] == 6 * 60 * 1000
     assert projection["optimization_points"] == []
@@ -1804,6 +1813,29 @@ def test_authenticated_loopx_card_decisions_capture_through_registration_cli(
         in legacy_observed["text"]
     )
     assert "ou_attention_fixture" not in legacy_observed["text"]
+    receipt_artifact = next(sources.glob("loopx-human-attention-receipts-*.jsonl"))
+    assert "evt_cross_goal" not in receipt_artifact.read_text(encoding="utf-8")
     assert len(list(sources.glob("loopx-human-attention-*.json*"))) == 2
     replay = subprocess.run(command, capture_output=True, text=True, check=True)
     assert json.loads(replay.stdout)["pack_id"] == registered["pack_id"]
+
+    other_principal = json.loads(
+        json.dumps(stored_actions["proposals"][operation["proposal_id"]])
+    )
+    other_principal["proposal_id"] = "proposal-other-principal"
+    other_principal["normalized_parameters"]["authorized_principals"] = [
+        "lark:ou_other_fixture"
+    ]
+    other_principal["operation"]["confirmation"].update(
+        event_id="evt_other_principal", principal="lark:ou_other_fixture"
+    )
+    stored_actions["proposals"][other_principal["proposal_id"]] = other_principal
+    store.path.write_text(
+        json.dumps(stored_actions, ensure_ascii=False), encoding="utf-8"
+    )
+    mixed = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert mixed.returncode == 1
+    assert json.loads(mixed.stdout)["error"] == (
+        "LoopX attention capture requires one human principal"
+    )
+    assert len(list(sources.glob("loopx-human-attention-*.json*"))) == 2

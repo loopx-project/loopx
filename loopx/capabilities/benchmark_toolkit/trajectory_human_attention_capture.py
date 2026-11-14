@@ -102,6 +102,19 @@ def _matches_delivery(
     return all(confirmation.get(field) == delivery.get(field) for field in fields)
 
 
+def _proposal_goal_id(proposal: Mapping[str, Any]) -> str | None:
+    """Return one unambiguous Goal binding, never a precedence guess."""
+
+    parameters = _object(proposal.get("normalized_parameters")) or {}
+    context = _object(proposal.get("context")) or {}
+    goal_ids = {
+        token
+        for value in (parameters.get("goal_id"), context.get("goal_id"))
+        if (token := str(value or "").strip())
+    }
+    return next(iter(goal_ids)) if len(goal_ids) == 1 else None
+
+
 def _verified_confirmation(
     value: object, *, legacy_fields: frozenset[str]
 ) -> tuple[Mapping[str, Any], str] | None:
@@ -126,10 +139,13 @@ def _verified_confirmation(
     return None
 
 
-def _operation_decision(proposal: Mapping[str, Any]) -> dict[str, Any] | None:
+def _operation_decision(
+    proposal: Mapping[str, Any],
+) -> tuple[dict[str, Any], str] | None:
     operation = _object(proposal.get("operation"))
     parameters = _object(proposal.get("normalized_parameters"))
-    if operation is None or parameters is None:
+    goal_id = _proposal_goal_id(proposal)
+    if operation is None or parameters is None or goal_id is None:
         return None
     verified = _verified_confirmation(
         operation.get("confirmation"),
@@ -163,12 +179,16 @@ def _operation_decision(proposal: Mapping[str, Any]) -> dict[str, Any] | None:
         source_channel=_CHANNELS[0],
         kind="approval",
         verification_kind=verification_kind,
+        goal_id=goal_id,
     )
 
 
-def _review_decision(proposal: Mapping[str, Any]) -> dict[str, Any] | None:
+def _review_decision(
+    proposal: Mapping[str, Any],
+) -> tuple[dict[str, Any], str] | None:
     review = _object(proposal.get("review_card"))
-    if review is None:
+    goal_id = _proposal_goal_id(proposal)
+    if review is None or goal_id is None:
         return None
     verified = _verified_confirmation(
         review.get("confirmation"), legacy_fields=_LEGACY_REVIEW_CONFIRMATION_FIELDS
@@ -195,6 +215,7 @@ def _review_decision(proposal: Mapping[str, Any]) -> dict[str, Any] | None:
         source_channel=_CHANNELS[1],
         kind="review",
         verification_kind=verification_kind,
+        goal_id=goal_id,
     )
 
 
@@ -206,7 +227,8 @@ def _decision(
     source_channel: str,
     kind: str,
     verification_kind: str,
-) -> dict[str, Any]:
+    goal_id: str,
+) -> tuple[dict[str, Any], str]:
     identity = json.dumps(
         [proposal.get("proposal_id"), confirmation.get("event_id")],
         ensure_ascii=False,
@@ -218,11 +240,7 @@ def _decision(
         "schema_version": "loopx_human_attention_receipt_v1",
         "receipt_id": receipt_id,
         "proposal_id": str(proposal.get("proposal_id") or ""),
-        "goal_id": str(
-            (_object(proposal.get("normalized_parameters")) or {}).get("goal_id")
-            or (_object(proposal.get("context")) or {}).get("goal_id")
-            or ""
-        ),
+        "goal_id": goal_id,
         "action_kind": str(proposal.get("action_kind") or ""),
         "source_channel": source_channel,
         "actor_class": HUMAN_ACTOR_CLASS,
@@ -238,7 +256,7 @@ def _decision(
             )
         ),
         "attention_kind": kind,
-    }
+    }, str(confirmation["principal"])
 
 
 def _publish(path: Path, text: str) -> None:
@@ -283,7 +301,7 @@ def capture_verified_loopx_human_attention(
     if not (action_root / "actions.json").is_file():
         raise ValueError("LoopX Chat action receipts are unavailable")
 
-    projected: list[dict[str, Any]] = []
+    projected_with_principals: list[tuple[dict[str, Any], str]] = []
     store = ChatActionStore(action_root)
     for proposal in store.list(goal_id=goal_id):
         decision = (
@@ -293,14 +311,19 @@ def capture_verified_loopx_human_attention(
             if proposal.get("action_kind") == "team.plan"
             else None
         )
-        if decision is None:
+        if decision is None or decision[0]["goal_id"] != goal_id:
             continue
         confirmed_at = _instant(
-            decision["confirmed_at"], field="confirmation.confirmed_at"
+            decision[0]["confirmed_at"], field="confirmation.confirmed_at"
         )
         if start_at <= confirmed_at <= end_at:
-            projected.append(decision)
-    projected.sort(key=lambda row: (row["confirmed_at"], row["receipt_id"]))
+            projected_with_principals.append(decision)
+    projected_with_principals.sort(
+        key=lambda item: (item[0]["confirmed_at"], item[0]["receipt_id"])
+    )
+    if len({principal for _, principal in projected_with_principals}) > 1:
+        raise ValueError("LoopX attention capture requires one human principal")
+    projected = [decision for decision, _principal in projected_with_principals]
     if len(projected) > 10_000:
         raise ValueError("LoopX attention capture exceeds 10000 decisions")
 
@@ -335,7 +358,7 @@ def capture_verified_loopx_human_attention(
                 "event_id": row["receipt_id"],
                 "episode_id": None,
                 "kind": row["attention_kind"],
-                "necessity": "required",
+                "necessity": "unknown",
                 "occurred_at": row["confirmed_at"],
                 "active": None,
                 "request": request,
