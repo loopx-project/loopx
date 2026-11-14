@@ -130,6 +130,13 @@ fn workspace_navigation(
 pub fn run() {
     #[cfg(target_os = "macos")]
     service_lifetime::run_if_requested();
+    let context = tauri::generate_context!();
+
+    #[cfg(target_os = "macos")]
+    if std::env::args().any(|arg| arg == "--loopx-upgrade-prepare") {
+        maintenance::prepare_terminal_upgrade(context);
+        return;
+    }
 
     // Release builds load the versioned LoopX Chat workspace that ships inside
     // the installed `loopx` release, so `loopx update` refreshes the frontend
@@ -365,7 +372,7 @@ pub fn run() {
     let builder = builder.on_web_content_process_terminate(workspace_handoff::content_lost);
 
     let app = builder
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build LoopX desktop shell");
     app.run(move |app, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {

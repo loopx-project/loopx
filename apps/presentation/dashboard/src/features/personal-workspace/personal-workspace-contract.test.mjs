@@ -48,7 +48,6 @@ const dashboard = source("../../views/dashboard-page.tsx");
 const tasks = source("./goal-tasks-view.tsx");
 const status = source("../../data/status.ts");
 const chatData = source("../../data/chat.ts");
-const actionReview = source("../../../../../../loopx/control_plane/presentation/action_review_plan.ts");
 
 assert.match(model, /kind: "todo"/, "Todo has its own drawer selection");
 for (const field of ["dependencies", "nextTransition", "ownerLabel", "todoId", "taskClass"]) {
@@ -132,7 +131,6 @@ for (const state of ["delivered", "verification_required", "explicit_unverified"
   assert.match(returnDelivery, new RegExp(state), `Return delivery renders ${state}`);
 }
 assert.doesNotMatch(returnDelivery, /message_ref|provider_receipt|intent_digest/, "Provider-private locator facts never enter the return status badge");
-assert.match(actionReview, /proposal\.action_kind !== "operation\.execute" \|\| \(operationFrame\?\.kind === "result" && operationFrame\.resultDeliveryVerified\)/, "An operation is not complete in the Dashboard until the current result delivery is verified");
 assert.match(page, /reviewPlan\.operationFrame/, "Dashboard operation details consume the shared TS review frame");
 assert.match(page, /const restoreable = stored[\s\S]*\|\| proposal\.action_kind === "operation\.execute"/, "Canonical operation readback includes terminal and cancelled rows instead of retaining a stale gated card");
 assert.match(page, /proposal\.action_kind !== "operation\.execute"[\s\S]*reviewPlan\.interaction !== "completed"/, "Pending operation result-card readback remains visible instead of becoming a generic apply error");

@@ -307,6 +307,7 @@ def _record_native_child(
     _host_observed: bool = False,
     _host_child_refs: Sequence[str] | None = None,
     _host_wait_ref: str | None = None,
+    _host_result_text: str | None = None,
 ) -> dict[str, Any]:
     """Preview or append a typed report; never launch a child or spend quota."""
     goal_id = _id(goal_id, field="goal_id")
@@ -335,6 +336,8 @@ def _record_native_child(
         if not _host_observed or stage != "result":
             raise ValueError("wait correlation requires a host-observed result")
         fields["host_wait_ref"] = _id(_host_wait_ref, field="host_wait_ref")
+    if _host_result_text is not None and (not _host_observed or stage != "result" or not execute):
+        raise ValueError("result text requires an executed host-observed result")
     log_path = rollout_event_log_path(runtime_root, goal_id)
     events = load_rollout_events(log_path)
     prior = _events_for_turn(
@@ -442,6 +445,22 @@ def _record_native_child(
             if fields["outcome"] == "accepted" and _details(result).get("outcome") != "completed":
                 raise ValueError("accepted parent review requires a completed native child result")
 
+    def stage_private_result(receipt: Mapping[str, Any]) -> None:
+        if _host_result_text is None:
+            return
+        from .native_child_result_inbox import ingest_native_child_result
+
+        ingest_native_child_result(
+            runtime_root=runtime_root, goal_id=goal_id, agent_id=agent_id,
+            turn_instance_id=turn_instance_id, operation_id=operation_id,
+            outcome=outcome, text=_host_result_text, goal_ref=goal_ref,
+            terminal_event_id=str(receipt["event_id"]),
+        )
+
+    def validate_and_stage() -> None:
+        validate_transition(load_rollout_events(log_path))
+        stage_private_result(event)
+
     if not execute:
         if existing is None:
             validate_transition(prior)
@@ -466,7 +485,7 @@ def _record_native_child(
                 *(("goal_ref",) if goal_ref is not None else ()),
                 *(("details",) if _host_wait_ref is not None else ()),
             ),
-            precondition=lambda: validate_transition(load_rollout_events(log_path)),
+            precondition=validate_and_stage,
         )
         if _details(stored) != fields:
             raise ValueError("operation identity already has a conflicting native child report")
@@ -474,6 +493,7 @@ def _record_native_child(
             # Append-once skips its precondition for an exact duplicate. Verify
             # the original identity without re-authorizing work or appending.
             report_admission()
+            stage_private_result(stored)
         events = load_rollout_events(log_path)
     else:
         stored = existing or event
@@ -501,6 +521,7 @@ def record_native_child(
     _host_observed: bool = False,
     _host_child_refs: Sequence[str] | None = None,
     _host_wait_ref: str | None = None,
+    _host_result_text: str | None = None,
 ) -> dict[str, Any]:
     """Preview or append one report under its exact quota owner."""
 
@@ -533,4 +554,5 @@ def record_native_child(
             _host_observed=_host_observed,
             _host_child_refs=_host_child_refs,
             _host_wait_ref=_host_wait_ref,
+            _host_result_text=_host_result_text,
         )

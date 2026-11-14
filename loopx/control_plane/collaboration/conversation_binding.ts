@@ -948,9 +948,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted recovery Turn"),
       session_id: current.session_id, native_thread_ids: []};
   }
-  // A later source stop vetoes new execution. Correlation repair for an
-  // already admitted Turn above remains read-only and keeps its exact identity.
-  if (recovery.stop_observed === true) return no;
+  // A source stop or a newer admitted equivalent vetoes new execution.
+  // Correlation repair above remains read-only and keeps its exact identity.
+  if (recovery.stop_observed === true || recovery.later_equivalent_input_present === true) return no;
   const routing = planRoutingRecovery(recovery, row, current, failed, previous, version);
   if (routing !== null) return routing;
   if (!steward) return no;
@@ -1498,7 +1498,10 @@ function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, curre
       admitted_turn_id: sessionIdentity(admitted.turn_id, "answer review"), native_thread_ids: []};
   }
   const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(failed.completed_at));
+  // Let a newer admitted resend answer the question. The branch above still
+  // repairs the receipt of a review already accepted under its own identity.
   if (current.status !== "ready" || current.active_turn_id != null || recovery.queued_input_present !== false
+      || recovery.later_equivalent_input_present === true
       || !Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
   if (recovery.native_observation == null) return candidate;
   const proof = requireJsonObject(recovery.native_observation, "exhausted original request inventory");
