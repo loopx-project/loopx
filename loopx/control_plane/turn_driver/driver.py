@@ -25,7 +25,7 @@ from ..quota.turn_envelope import (
     read_turn_plan_work as read_turn_plan_work,
     turn_host_lineage as turn_host_lineage,
     LOOPX_TURN_PLAN_SCHEMA_VERSION as LOOPX_TURN_PLAN_SCHEMA_VERSION,
-    captured_turn_host_input, turn_plan_host_source,
+    turn_plan_host_source,
     assert_turn_envelope_consumer_version,
     _turn_envelope_result,
     turn_envelope_scoped_settlement_identity,
@@ -445,15 +445,9 @@ def build_loopx_turn_plan(
     iteration_context_policy: str = "resume",
     session_scope: str | None = None,
     goal_ref: Mapping[str, object] | None = None,
-    work_contract: object = _ABSENT_WORK_CONTRACT,
     inspect_plan: bool = False,
 ) -> dict[str, Any]:
-    """Plan from one complete source; retain the recorded v0 input codec.
-
-    The positional argument also accepts a historical envelope. An explicitly
-    paired source/adapter is checked before producing the current single-source
-    plan; normal producers pass the complete source directly.
-    """
+    """Plan directly from the complete source, or decode an explicit v0 envelope."""
 
     if host not in SUPPORTED_HOSTS:
         raise ValueError(f"unsupported LoopX Turn host: {host}")
@@ -477,12 +471,7 @@ def build_loopx_turn_plan(
     supplied = dict(turn_envelope)
     # Preserve an explicitly supplied complete carrier even when its version
     # is unsupported. The typed reader must reject it, not try a legacy route.
-    source_only_input = supplied.get("schema_version") == "loopx_turn_envelope_v1" or "contract_binding" in supplied
-    if source_only_input and work_contract is not _ABSENT_WORK_CONTRACT:
-        raise ValueError("complete planning input must supply its source once")
-    if source_only_input:
-        work_contract = supplied
-    current = work_contract is not _ABSENT_WORK_CONTRACT
+    current = supplied.get("schema_version") == "loopx_turn_envelope_v1" or "contract_binding" in supplied
     envelope = supplied
     contract_error = None
     if not current:
@@ -496,10 +485,8 @@ def build_loopx_turn_plan(
     # Check the complete source before route/session/transaction planning. Reuse
     # the action-hash boundary rather than adding a separate identity call.
     if current:
-        projection = _turn_envelope_result("planning_facts", payload=work_contract,
-            turn_instance_id=turn_instance_id,
-            **({"inspect_plan": True} if inspect_plan else {}),
-            **({} if source_only_input else {"envelope": supplied}))
+        projection = _turn_envelope_result("planning_facts", payload=supplied,
+            turn_instance_id=turn_instance_id, **({"inspect_plan": True} if inspect_plan else {}))
         envelope = _mapping(projection["work"])
     else:
         projection = _turn_envelope_result("driver_lineage", envelope=envelope,
@@ -531,15 +518,14 @@ def build_loopx_turn_plan(
                 # Historical inputs without a work binding safely waited.
                 # Preserve that decoder without weakening complete ordinary
                 # work: its missing binding still fails session validation.
-                if (route is LoopXTurnRoute.REPLAN_REQUIRED
-                        or work_contract is _ABSENT_WORK_CONTRACT):
+                if route is LoopXTurnRoute.REPLAN_REQUIRED or not current:
                     route = LoopXTurnRoute.BLOCKED
             elif (session_scope != "agent" and not (
                 settlement_identity.request_subject is not None and iteration_context_policy == "fresh"
             )):
                 route = LoopXTurnRoute.BLOCKED
-    lineage = _turn_lineage(envelope, work_contract=work_contract, projection=projection,
-        settlement_identity=settlement_identity)
+    lineage = _turn_lineage(envelope, work_contract=supplied if current else _ABSENT_WORK_CONTRACT,
+        projection=projection, settlement_identity=settlement_identity)
     session, session_error = _session_plan(
         route=route,
         lineage=lineage,
@@ -625,16 +611,10 @@ def build_loopx_turn_plan(
         ),
     }
     if current:
-        payload["work_contract"] = work_contract
+        payload["work_contract"] = supplied
         payload["source_decision_hash"] = projection["source_decision_hash"]
         if "inspection_paths" in projection:
             payload["_inspection_paths"] = projection["inspection_paths"]
-        if not source_only_input:
-            # Older callers may already carry an original quota capture. Keep
-            # its exact header without retaining that caller's second source.
-            header = captured_turn_host_input({"turn_envelope": supplied})
-            if "detail_ref" in header:
-                payload["detail_ref"] = header["detail_ref"]
     else:
         payload["turn_envelope"] = envelope
     if child_operations:

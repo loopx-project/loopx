@@ -273,8 +273,13 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     assert first["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     assert basis["tasks"][0]["state"] == "ready"
     assert basis["goal_acceptance_contract"]["outcome_requirements"] == original
-    request = build_loopx_turn_host_request(build_loopx_turn_plan(first_envelope, work_contract=first,
-        host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-delivery"))
+    from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decision_capture
+
+    plan = build_loopx_turn_plan(first, host="codex-cli", execution_mode="isolated-headless",
+        turn_instance_id="original-delivery")
+    journal = prepare_turn_decision_capture(plan, journal_path=tmp_path / "original-delivery.json",
+        decision=full, existing_journal=False)
+    request = build_loopx_turn_host_request(journal)
     result = subprocess.run(_recording_host(project), input=json.dumps(request),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr

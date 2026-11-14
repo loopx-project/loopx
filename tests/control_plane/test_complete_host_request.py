@@ -19,9 +19,8 @@ from tests.control_plane.test_turn_host_decision_capture import (
 )
 
 
-def _captured_request(original, tmp_path):
-    request, source = original
-    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=source,
+def _captured_request(source, tmp_path):
+    plan = build_loopx_turn_plan(source,
         host="generic-cli", execution_mode="isolated-headless", turn_instance_id="complete-wire")
     plan = prepare_turn_decision_capture(plan, journal_path=tmp_path / "wire" / "journal.json",
         decision=source, existing_journal=False)
@@ -69,7 +68,7 @@ def test_optional_context_preserves_the_complete_host_source(
 def test_complete_wire_roundtrip_has_one_source_and_original_readers(complete_host_request, tmp_path):
     from loopx.control_plane.turn_driver.codex_cli import _prompt
 
-    internal = _captured_request(complete_host_request, tmp_path)
+    internal = _captured_request(complete_host_request[1], tmp_path)
     legacy, _ = complete_host_request
     before = deepcopy(internal)
     wire = complete_host_input(internal)
@@ -149,7 +148,7 @@ def test_complete_host_keeps_notification_and_execution_boundaries(
     from loopx.control_plane.turn_driver.codex_cli import _prompt
     from loopx.control_plane.turn_driver.host_candidate import render_prompt
 
-    request = _captured_request(complete_host_request, tmp_path)
+    request = _captured_request(complete_host_request[1], tmp_path)
     wire = complete_host_input(request)
     prompt = (_prompt(request) if host == "codex"
               else render_prompt(extract_turn_authority(request), allow_completion=False))
@@ -168,7 +167,7 @@ def test_complete_host_keeps_notification_and_execution_boundaries(
 
 def test_private_plan_lineage_is_not_a_host_wire(complete_host_request):
     request, source = complete_host_request
-    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=source,
+    plan = build_loopx_turn_plan(source,
         host="generic-cli", execution_mode="isolated-headless", turn_instance_id="private-plan")
     assert turn_host_lineage(plan) == turn_host_lineage(request)
     with pytest.raises(ValueError, match="host request schema"):
@@ -408,7 +407,7 @@ def test_recorded_complete_result_recovers_previous_optional_schema(complete_hos
 
 
 def test_complete_wire_rejects_downgrade_mixed_carriers_and_capture_drift(complete_host_request, tmp_path):
-    original = _captured_request(complete_host_request, tmp_path)
+    original = _captured_request(complete_host_request[1], tmp_path)
     wire = complete_host_input(original)
     assert wire["schema_version"] == "loopx_turn_host_request_v1"
     malformed = []
@@ -454,14 +453,14 @@ def test_historical_v0_wire_keeps_its_original_decoder(complete_host_request):
 
 
 def test_complete_wire_keeps_original_numbers_through_capture_and_readback(complete_host_request, tmp_path):
-    from loopx.control_plane.quota.turn_envelope import compose_turn_decision, build_turn_envelope
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
 
     _, original = complete_host_request
     source = deepcopy({key: value for key, value in original.items()
                        if key not in {"schema_version", "contract_binding"}})
     source["observations"] = [1.0, -0.0, 1e-7, 2**60 + 1]
     contract = compose_turn_decision(source)
-    request = _captured_request(({"turn_envelope": build_turn_envelope(contract)}, contract), tmp_path)
+    request = _captured_request(contract, tmp_path)
     wire = complete_host_input(request)
     assert wire["schema_version"] == "loopx_turn_host_request_v1"
     restored = extract_turn_authority(wire)

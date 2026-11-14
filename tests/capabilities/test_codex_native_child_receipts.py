@@ -123,7 +123,7 @@ def test_complete_host_observes_children_without_reading_legacy_context(tmp_path
     import copy
     from hashlib import sha256
     import sys
-    from loopx.control_plane.quota.turn_envelope import compose_turn_decision, build_turn_envelope
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
     from loopx.control_plane.turn_driver import codex_cli
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
     from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
@@ -149,7 +149,7 @@ def test_complete_host_observes_children_without_reading_legacy_context(tmp_path
         source["interaction_contract"]["agent_context"] = {"contributions": [
             {"capability_id": "multi_subagent", "facts": {"max_children": 3}}]}
     contract = compose_turn_decision(source)
-    plan = build_loopx_turn_plan(build_turn_envelope(contract), work_contract=contract,
+    plan = build_loopx_turn_plan(contract,
         host="codex-cli", execution_mode="isolated-headless", turn_instance_id=TURN)
     request = build_loopx_turn_host_request(plan)
 

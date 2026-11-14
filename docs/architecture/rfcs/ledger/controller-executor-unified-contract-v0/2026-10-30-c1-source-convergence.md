@@ -254,7 +254,7 @@ settlement owners; Python retains the persisted action-hash number codec.
 
 | Production chain | Replacement / retained compatibility |
 | --- | --- |
-| Turn CLI and current launch decision → plan | Pass the complete source directly; remove the private-plan `build_turn_envelope` calls. |
+| Turn CLI and current launch decision → plan | Pass the complete source directly. The private planner no longer accepts a complete source paired with a v0 executor adapter. |
 | Default CLI plan inspection | Retain the one complete source, including portfolio and writeback; keep inspection non-executable even when transport metadata is restored. |
 | Immutable capture → Host | Bind the original source/header without regenerating an adapter; retain capture refusal, original read commands and Host v1. |
 | Journal write, inspection, settlement query and CLI resume | Validate v1 through the shared source reader; preserve GoalRef, Agent, Turn, scoped identity, native Session and once-only effects. |

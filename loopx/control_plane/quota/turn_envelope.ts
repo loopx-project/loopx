@@ -1993,11 +1993,11 @@ function admittedDriverLineage(work: JsonObject, decision: JsonObject | null,
 }
 
 export function completePlanningFacts(request: JsonObject): JsonObject {
-  // An explicitly supplied old carrier retains its consistency proof. New
-  // producers start from the complete source and never construct that view.
-  const checked = Object.hasOwn(request, "envelope") ? completeHostSource(request) : null;
-  const decision = checked?.decision ?? requireCompleteTurnDecision(request.payload, request.source_number_tokens);
-  const work = {goal_id: decision.goal_id ?? null, ...(checked?.projection ?? turnActionProjection(decision))};
+  if (Object.hasOwn(request, "envelope")) {
+    throw new EffectRuntimeRequestError("complete Turn planning requires one source without an executor adapter");
+  }
+  const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+  const work = {goal_id: decision.goal_id ?? null, ...turnActionProjection(decision)};
   const lineage = admittedDriverLineage(work, decision, true);
   let scopedIdentity: JsonObject | null = null, identityError: string | null = null;
   if (lineage.route === "replan_required" || lineage.route === "ready_for_host" && !lineage.todo_id) {

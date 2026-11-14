@@ -22,7 +22,7 @@ from tests.control_plane.test_turn_host_decision_capture import (
 
 
 def _plan(contract, *, scope="todo", turn="complete-request-cutover"):
-    return build_loopx_turn_plan(build_turn_envelope(contract), work_contract=contract,
+    return build_loopx_turn_plan(contract,
         host="codex-cli" if scope == "agent" else "generic-cli",
         execution_mode="isolated-headless", session_scope=scope,
         turn_instance_id=turn)
@@ -331,7 +331,7 @@ def test_complete_planning_retains_the_original_turn_key_codec(complete_host_req
     assert "turn_envelope" not in current_plan
 
 
-def test_original_source_capture_keeps_its_read_reference_without_a_fabricated_journal_key(
+def test_transitional_plan_keeps_original_quota_read_reference_without_a_fabricated_journal_key(
     complete_host_request, tmp_path,
 ):
     from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
@@ -342,9 +342,11 @@ def test_original_source_capture_keeps_its_read_reference_without_a_fabricated_j
     write_decision_capture(path, contract)
     original = path.read_bytes()
     envelope = build_turn_envelope(contract, captured_decision_path=str(path))
-    plan = build_loopx_turn_plan(envelope, work_contract=contract, host="generic-cli",
+    historical = build_loopx_turn_plan(envelope, host="generic-cli",
         execution_mode="isolated-headless", session_scope="todo", turn_instance_id="source-reader")
-    request = build_loopx_turn_host_request(plan)
+    # Read the recorded transitional shape, where the quota capture
+    # predates the Host journal and carries no transaction key.
+    request = build_loopx_turn_host_request({**historical, "work_contract": contract})
     wire = complete_host_input(request)
     capture = wire["detail_ref"]["captured_decision"]
     assert "turn_key" not in capture

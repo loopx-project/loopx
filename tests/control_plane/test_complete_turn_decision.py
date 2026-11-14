@@ -309,35 +309,23 @@ def test_complete_readers_refuse_invalid_diagnostic_references_with_valid_hashes
             read()
 
 
-@pytest.mark.parametrize("case", ["historical", "complete", "future_adapter",
-    "tampered_source", "forged_adapter", "null_contract"])
+@pytest.mark.parametrize("case", ["historical", "complete", "future_complete", "tampered_source"])
 def test_plan_uses_one_complete_source_check_without_weakening_refusal(monkeypatch, case):
     from loopx.control_plane.quota import turn_envelope as transport
-    from loopx.control_plane.quota.turn_envelope import (
-        build_turn_envelope, turn_envelope_action_signature_document,
-    )
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
     from tests.test_turn_envelope import _full_decision
 
     source = _full_decision()
-    contract = compose_turn_decision(source)
-    envelope = build_turn_envelope(source if case == "historical" else contract)
+    supplied = build_turn_envelope(source) if case == "historical" else compose_turn_decision(source)
     error = None
-    if case == "future_adapter":
-        envelope["schema_version"] = "future_envelope"
-        error = "unsupported TurnEnvelope schema_version"
-    elif case == "tampered_source":
-        contract["reason"] = "different original facts"
-        error = "integrity mismatch"
-    elif case == "forged_adapter":
-        envelope["action"]["primary_action"] = "Substitute a different action."
-        digest = _canonical_digest(turn_envelope_action_signature_document(envelope))
-        envelope["action_signature"].update(source_hash=digest, envelope_hash=digest, matches=True)
-        error = "executor projection differs"
-    elif case == "null_contract":
-        contract = None
+    if case == "future_complete":
+        supplied["schema_version"] = "future_envelope"
         error = "complete Turn decision"
-    original = copy.deepcopy((envelope, contract))
+    elif case == "tampered_source":
+        supplied["reason"] = "different original facts"
+        error = "integrity mismatch"
+    original = copy.deepcopy(supplied)
     calls = []
     invoke = transport.effect_runtime_projection_result
 
@@ -349,9 +337,8 @@ def test_plan_uses_one_complete_source_check_without_weakening_refusal(monkeypat
     monkeypatch.setattr(transport, "effect_runtime_projection_result", observed)
 
     def plan():
-        return build_loopx_turn_plan(envelope, host="dsh", execution_mode="isolated-headless",
-            turn_instance_id="original-turn",
-            **({} if case == "historical" else {"work_contract": contract}))
+        return build_loopx_turn_plan(supplied, host="dsh", execution_mode="isolated-headless",
+            turn_instance_id="original-turn")
 
     if error:
         with pytest.raises(RuntimeError, match=error):
@@ -362,7 +349,7 @@ def test_plan_uses_one_complete_source_check_without_weakening_refusal(monkeypat
         assert result["transaction"]["turn_instance_id"] == "original-turn"
     assert calls == (["consumer_version", "driver_lineage"] if case == "historical"
                      else ["planning_facts"])
-    assert (envelope, contract) == original
+    assert supplied == original
 
 
 @pytest.mark.parametrize("transfer", ["host_request", "published_capture"])
@@ -391,9 +378,8 @@ def test_host_transports_preserve_complete_contract_presence(tmp_path, transfer,
     contract = compose_turn_decision(source)
     historical = case == "historical"
     observation = source if historical else contract
-    plan = build_loopx_turn_plan(build_turn_envelope(observation), host="codex-cli",
-        execution_mode="isolated-headless", turn_instance_id="original-turn",
-        **({} if historical else {"work_contract": contract}))
+    plan = build_loopx_turn_plan(build_turn_envelope(observation) if historical else observation,
+        host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-turn")
     malformed = {"null": None, "false": False, "zero": 0, "list": [],
         "text": "unreadable-contract", "empty_object": {},
         "invalid_hash": {**contract, "reason": "different original facts"}}
@@ -452,10 +438,10 @@ def test_pending_goal_capture_remains_readable_but_cannot_dispatch_business_work
         {"source": "goal_state", "command": "cat -- original-goal.md", "ordering": "before_work"}]
     contract = compose_turn_decision(source)
     before = copy.deepcopy(contract)
-    plan = build_loopx_turn_plan(
-        build_turn_envelope(contract) if historical_adapter else contract,
-        **({"work_contract": contract} if historical_adapter else {}),
+    plan = build_loopx_turn_plan(build_turn_envelope(contract) if historical_adapter else contract,
         host="dsh", execution_mode="isolated-headless", turn_instance_id="original-turn")
+    if historical_adapter:
+        plan = {**plan, "work_contract": contract}
     request = build_loopx_turn_host_request(plan)
     assert isinstance(execution_profile_present(request), bool)
     with pytest.raises(RuntimeError, match="Goal source"):

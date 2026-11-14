@@ -183,7 +183,7 @@ header。完整 planner 不再生成 v0 executor adapter。`planning_facts`、Ho
 
 | 生产链路 | 替换／保留的兼容路径 |
 | --- | --- |
-| Turn CLI 与当前 launch decision → plan | 直接传完整源，删除私有 plan 的 `build_turn_envelope` 调用。 |
+| Turn CLI 与当前 launch decision → plan | 直接传完整源。私有 planner 不再接收完整源与 v0 executor adapter 的组合。 |
 | 默认 CLI plan inspection | 保留一份完整源及 portfolio、writeback；即使恢复 transport 元数据，inspection 也不可执行。 |
 | 不可变 capture → Host | 绑定原来源与 header，不重建 adapter；保留 capture 拒绝、原读取命令和 Host v1。 |
 | Journal 写入、检查、结算查询与 CLI resume | v1 经共享来源 reader 校验；保留 GoalRef、Agent、Turn、scoped identity、原生 Session 及一次性 effect。 |

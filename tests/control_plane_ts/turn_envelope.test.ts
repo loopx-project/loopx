@@ -362,6 +362,13 @@ test("complete planning and historical readers share all admitted route facts", 
   }
 });
 
+test("complete planning refuses the retired dual input even when the adapter agrees", () => {
+  const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: payload(), scheduler_execution_args: ""});
+  const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
+  assert.throws(() => evaluateTurnEnvelope({operation: "planning_facts", payload: complete, envelope}),
+    /requires one source without an executor adapter/);
+});
+
 test("complete recovery keeps request and replan identity qualification with the historical owner", () => {
   for (const requestScope of [false, true]) {
     const scope = {goal_id: "goal-turn-envelope", agent_id: "agent-ts", turn_instance_id: "original-scope"};

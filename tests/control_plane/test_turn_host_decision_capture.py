@@ -157,13 +157,9 @@ def test_generic_dispatch_checks_complete_goal_before_host(
     from loopx.control_plane.turn_driver.executor import run_loopx_turn_once
 
     request, original = complete_host_request
-    if mode == "pending_goal":
-        contract, envelope = _pending_goal_contract(original)
-    else:
-        contract, envelope = original, request["turn_envelope"]
-    plan = build_loopx_turn_plan(envelope, host="generic-cli", execution_mode="isolated-headless",
-        turn_instance_id="generic-goal-interlock",
-        **({} if mode == "historical" else {"work_contract": contract}))
+    contract = _pending_goal_contract(original)[0] if mode == "pending_goal" else original
+    plan = build_loopx_turn_plan(request["turn_envelope"] if mode == "historical" else contract,
+        host="generic-cli", execution_mode="isolated-headless", turn_instance_id="generic-goal-interlock")
     assert plan["route"]["would_invoke_host"] is True
     runtime = tmp_path / "generic-runtime"
     scope = {"runtime_root": str(runtime), "goal_id": original["goal_id"],
@@ -1385,7 +1381,7 @@ def test_complete_planning_and_failed_recovery_share_lineage(complete_host_reque
         envelope = build_turn_envelope(contract)
         kwargs = dict(host="codex-cli", execution_mode="isolated-headless", turn_instance_id="planning-parity")
         historical = build_loopx_turn_plan(envelope, **kwargs)
-        complete = build_loopx_turn_plan(envelope, work_contract=contract, **kwargs)
+        complete = build_loopx_turn_plan(contract, **kwargs)
         expected = {**historical, "schema_version": "loopx_turn_plan_v1", "work_contract": contract,
                     "source_decision_hash": envelope["action_signature"]["source_decision_hash"],
                     "boundary": {k: v for k, v in historical["boundary"].items() if k != "preserves_turn_envelope"}}
@@ -1412,15 +1408,16 @@ def test_complete_planning_and_failed_recovery_share_lineage(complete_host_reque
         assert reconcile_failed_turn_session_request(recovered, session_binding=binding) == recovered
         for bad in (None, {**contract, "reason": "changed source"},
                     {**contract, "schema_version": "unsupported_fixture_version"}):
-            with pytest.raises(RuntimeError):
-                build_loopx_turn_plan(envelope, work_contract=bad, **kwargs)
+            if bad is not None:
+                with pytest.raises(RuntimeError):
+                    build_loopx_turn_plan(bad, **kwargs)
             for previous in (recovery, recovered):
                 with pytest.raises(FailedTurnSessionRecoveryError, match="complete Turn"):
                     reconcile_failed_turn_session_request({**previous, "work_contract": bad}, session_binding=binding)
         altered = deepcopy(envelope)
         altered["agent_id"] = "wrong-agent"
-        with pytest.raises(RuntimeError):
-            build_loopx_turn_plan(altered, work_contract=contract, **kwargs)
+        with pytest.raises(FailedTurnSessionRecoveryError, match="complete Turn"):
+            reconcile_failed_turn_session_request({**recovery, "turn_envelope": altered}, session_binding=binding)
         assert envelope["agent_id"] == original["agent_identity"]["agent_id"]
 
 
@@ -1451,7 +1448,7 @@ def test_complete_planning_keeps_receipt_bound_todoless_replan(complete_host_req
     kwargs = dict(host="codex-cli", execution_mode="isolated-headless", session_scope="agent",
                   turn_instance_id="fixture.replan")
     historical = build_loopx_turn_plan(envelope, **kwargs)
-    plan = build_loopx_turn_plan(envelope, work_contract=contract, **kwargs)
+    plan = build_loopx_turn_plan(contract, **kwargs)
     expected = {**historical, "schema_version": "loopx_turn_plan_v1", "work_contract": contract,
                 "source_decision_hash": envelope["action_signature"]["source_decision_hash"],
                 "boundary": {k: v for k, v in historical["boundary"].items() if k != "preserves_turn_envelope"}}
@@ -1462,12 +1459,12 @@ def test_complete_planning_keeps_receipt_bound_todoless_replan(complete_host_req
     binding = {"schema_version": "loopx_turn_session_binding_v0", "goal_id": goal, "agent_id": agent,
                "host_session_id": "fixture-session"}
     assert reconcile_failed_turn_session_request(plan, session_binding=binding)["session"]["action"] == "resume"
-    wrong_turn = build_loopx_turn_plan(envelope, work_contract=contract, **{**kwargs, "turn_instance_id": "other"})
+    wrong_turn = build_loopx_turn_plan(contract, **{**kwargs, "turn_instance_id": "other"})
     assert wrong_turn["route"]["would_invoke_host"] is False
     assert not any(wrong_turn["effects"].values())
 
 
-def test_complete_plan_rejects_rehashed_adapter_decision_drift(complete_host_request, tmp_path):
+def test_transitional_plan_rejects_rehashed_adapter_decision_drift(complete_host_request, tmp_path):
     from copy import deepcopy
     from hashlib import sha256
     from loopx.control_plane.quota.turn_envelope import turn_envelope_action_signature_document
@@ -1502,8 +1499,6 @@ def test_complete_plan_rejects_rehashed_adapter_decision_drift(complete_host_req
         digest = 'sha256:' + sha256(json.dumps(turn_envelope_action_signature_document(changed),
             sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
         changed['action_signature'].update(source_hash=digest, envelope_hash=digest, matches=True)
-        with pytest.raises(RuntimeError, match='projection differs'):
-            build_loopx_turn_plan(changed, work_contract=contract, **options)
         malformed = {**plan, 'turn_envelope': changed}
         with pytest.raises(RuntimeError, match='projection differs'):
             run_loopx_turn_once(malformed, project=tmp_path, runtime_root=tmp_path / 'rejected',
