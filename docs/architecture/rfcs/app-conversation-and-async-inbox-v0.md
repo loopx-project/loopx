@@ -352,6 +352,15 @@ invalidate any affected prefix, and a changed notice refreshes the App's
 transcript even when no Turn runs. The notice carries no resource bytes or
 credentials, creates no Turn, and does not resend the original reply.
 
+For same-origin, bound steward history, the App can request image addresses in
+place of inline base64. The history proof includes the address derived from the
+exact original image. The image read checks the Session, message, slot and
+content digest before returning the original bytes. The App loads images near
+the viewport. A failed read can retry in the original message. Refresh adopts a
+new image address only from verified history for the same Session, message and
+slot; an old content digest stays unavailable. Legacy clients, documents, and
+Turn input keep their existing formats.
+
 The implementation decision follows primary-source comparisons, not a claim
 that shared context already guarantees two-way delivery:
 

@@ -1808,7 +1808,8 @@ function PersonalGoalHome({
     const sessionLabels = new Map(conversationHistory.history.sessions.map(session => [session.session_id,
       runtimeAgents.find(agent => agent.agent_id === session.agent_id)?.display_name ?? session.agent_id]));
     return reconcileConversationHistory(previous, messages,
-      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label));
+      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label),
+      boundConversation?.sessionId);
   };
   useEffect(() => {
     if (!conversationHistory.history) return;

@@ -543,7 +543,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-return-delivery.is-verification_required { color: var(--pw-blue-ink); }
 .personal-return-delivery.is-explicit_unverified { color: var(--pw-amber); }
 .personal-message-images { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
-.personal-message-images img { width: min(220px, 100%); max-height: 180px; object-fit: cover; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; }
+.personal-message-images img { width: min(220px, 100%); max-height: 180px; aspect-ratio: auto 4 / 3; object-fit: cover; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; }
 
 /* Agent prose: card bubble + rendered Markdown */
 .personal-message:not(.is-user) > div {

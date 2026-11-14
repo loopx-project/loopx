@@ -247,6 +247,12 @@ App 身份替换；安装态 provider 读回另行验收。
 历史分页，迟到记录会使受影响的旧游标失效；即使没有新 Turn，提示变化也会触发
 App 刷新。提示不携带资源字节或凭据，不创建 Turn，也不重发原回复。
 
+同源 App 读取已绑定的管家历史时，可请求图片地址，不必在历史分页内传输 base64。
+历史校验包含由原图内容导出的地址。读取图片时核对原 Session、消息、附件位置和
+内容摘要，再返回原字节。App 在图片接近可见区域时加载，读取失败后可在原消息中
+重试。刷新时只接受已核验的同一 Session、消息和附件位置的图片地址，旧内容摘要
+保持不可用。旧客户端、文档和 Turn 输入继续使用原有格式。
+
 实现判断来自一手源码比较，不把共享上下文视为双向送达已经成立：
 
 - [OpenClaw 历史增量](https://github.com/openclaw/openclaw/blob/b3ba4d622638ac23f64c0cec415bf5bfe81f5cf5/src/gateway/server-methods/chat-history-delta.ts)
