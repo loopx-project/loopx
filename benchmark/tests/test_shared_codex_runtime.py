@@ -49,6 +49,8 @@ def settings(tmp_path, **changes):
         {"mode": "turn", "validation_command": "true"},
         {"mode": "turn", "validation_command": {"command": "true"}},
         {"sandbox": "unrecognised"},
+        {"mode": "plain", "official_stop_hook": "true"},
+        {"mode": "native-goal", "official_stop_hook": True},
     ],
 )
 def test_invalid_execution_rejected_before_host(kwargs):
@@ -662,6 +664,63 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert env["LOOPX_PROJECT"] == "/workspace"
         assert env["MODEL_NAME"] == "fixture"
         assert agent.replan_after_turns == (6 if agent.execution.uses_loopx else None)
+
+
+def test_harbor_owns_official_stop_hook_opt_in(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    from benchmark.runtime.scheduler import phase_work_reserve
+
+    monkeypatch.setenv("LOOPX_OFFICIAL_STOP_HOOK", "1")
+    for enabled in (False, True):
+        agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
+                               execution_mode="plain", **({"official_stop_hook": True} if enabled else {}))
+        assert agent._worker_env(cwd="/workspace")["LOOPX_OFFICIAL_STOP_HOOK"] == str(int(enabled))
+        reserve = phase_work_reserve(agent.execution.mode, official_stop_hook=agent.execution.official_stop_hook)
+        assert (reserve == 0) is enabled
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
+                    reason="Explicit native Codex binary required; inference uses loopback only")
+@pytest.mark.parametrize("enabled", [False, True])
+def test_official_stop_hook_continues_one_real_native_session_until_timeout(tmp_path, enabled):
+    from benchmark.runtime.native_hooks import OFFICIAL_STOP_HOOK_REASON
+    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+
+    task = tmp_path / "task.md"
+    task.write_text("Synthetic task. Propose an implementation.\n")
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    env = {key: value for key, value in os.environ.items()
+           if key in {"PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "SYSTEMROOT"}}
+    env.update(HOME=str(tmp_path), TMPDIR=str(temporary),
+               LOOPX_PROJECT=str(tmp_path), LOOPX_TASK_DOC=str(task),
+               LOOPX_CODEX_HOME=str(tmp_path / "codex-home"),
+               LOOPX_WAKE_LOG_DIR=str(tmp_path / "logs" / "wakes"),
+               LOOPX_EXECUTION_MODE="plain", LOOPX_OFFICIAL_STOP_HOOK=str(int(enabled)),
+               LOOPX_CODEX_TURN_TIMEOUT_SEC="10",
+               CODEX_BIN=os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"],
+               MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_API_KEY="synthetic-local")
+
+    def respond(request, number, message):
+        if number >= 2:
+            # Leave one continued provider request in flight at the runner deadline.
+            time.sleep(11)
+        return message
+
+    with local_inference_provider(response_builder=respond) as (url, calls, requests):
+        receipt = run_once(env | {"OPENAI_BASE_URL": url})
+        assert len(list((tmp_path / "logs" / "sessions").rglob("*.jsonl"))) == 1
+        assert receipt["timed_out"] is enabled
+        assert receipt["ok"] is not enabled
+        assert (tmp_path / "codex-home" / "hooks.json").exists() is enabled
+        if enabled:
+            assert receipt["official_stop_hook_verified"] is True
+            assert len(calls) == 2
+            assert OFFICIAL_STOP_HOOK_REASON in json.dumps(requests[1]["input"])
+        else:
+            assert len(calls) == 1
+            assert "official_stop_hook" not in receipt
 
 
 @pytest.mark.parametrize("option,mode,provider_env", [

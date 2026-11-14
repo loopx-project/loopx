@@ -18,9 +18,9 @@ BUDGET_EXHAUSTED_EXIT_CODE = 75
 PHASE_WORK_RESERVE_SECONDS = 160
 
 
-def phase_work_reserve(mode: str) -> int:
-    """Heartbeat cleanup must not consume the remaining solver allowance."""
-    return 0 if mode == "heartbeat" else PHASE_WORK_RESERVE_SECONDS
+def phase_work_reserve(mode: str, *, official_stop_hook: bool = False) -> int:
+    """Give deadline-driven workers the full phase; bound cleanup separately."""
+    return 0 if mode == "heartbeat" or official_stop_hook else PHASE_WORK_RESERVE_SECONDS
 
 
 def read_phase_deadline(raw: bytes) -> int | float:

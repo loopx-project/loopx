@@ -32,6 +32,7 @@ class Execution:
     context_delivery: str | None = None
     native_child_limit: int | None = None
     complete_turn: bool = False
+    official_stop_hook: bool = False
 
     def __post_init__(self) -> None:
         if self.native_child_limit is not None and (
@@ -48,6 +49,8 @@ class Execution:
             raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
         if type(self.complete_turn) is not bool or (self.complete_turn and (self.mode != "heartbeat" or self.turn_envelope)):
             raise ValueError("complete_turn requires heartbeat execution without legacy turn_envelope")
+        if type(self.official_stop_hook) is not bool or (self.official_stop_hook and self.mode != "plain"):
+            raise ValueError("official_stop_hook requires plain execution and a boolean opt-in")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:
@@ -208,6 +211,7 @@ def codex_settings(
             "[features]",
             f"goals = {str(execution.native_goal).lower()}",
             "unified_exec = true",
+            *(["hooks = true"] if execution.official_stop_hook else []),
             *(["[agents]", f"max_concurrent_threads_per_session = {execution.native_child_limit}"]
               if execution.native_child_limit is not None else []),
             "[memories]",
