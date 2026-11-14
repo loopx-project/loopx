@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import base64
+import errno
+import hashlib
 import json
 import re
 import subprocess
@@ -94,20 +95,32 @@ def uploaded_chat_images(*, root, profile, provider_ref, attachments, private_tr
         fence_upload=True, dispatch_guard=dispatch_guard, dispatch_source_check=dispatch_source_check)
 
 
+def _restore_unstarted_upload(cache, saved):
+    if saved is None:
+        cache.unlink()
+    else:
+        _write(cache, saved)
+
+
 @contextmanager
-def _authorize_upload_dispatch(guard, source_check, cache, saved):
+def _authorize_upload_dispatch(guard, source_check, cache, saved, *, guards_spawn):
     with ExitStack() as authority:
         try:
             authority.enter_context(guard(source_check))
         except (KeyError, OSError, ValueError) as exc:
-            # The CLI has yet to start. Only preserve receipts for an earlier
-            # attempt, including a known scope denial.
-            if saved is None:
-                cache.unlink()
-            else:
-                _write(cache, saved)
+            _restore_unstarted_upload(cache, saved)
             raise ValueError("original upload authority unavailable") from exc
-        yield
+        try:
+            yield
+        except OSError as exc:
+            # The native runner keeps the guard around Popen and waits for
+            # the CLI response outside it. A synchronous runner can raise
+            # the same error after issuing a provider write.
+            if guards_spawn and exc.errno in (
+                errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.EPERM, errno.ENOEXEC,
+            ):
+                _restore_unstarted_upload(cache, saved)
+            raise
 
 
 def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, resource,
@@ -147,8 +160,12 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
                     raise ValueError("result file return authority revoked")
                 if fence_upload:
                     _write(cache, {"identity": identity, "upload_started": True})
-                guard = (partial(_authorize_upload_dispatch, dispatch_guard, dispatch_source_check, cache, saved)
-                         if dispatch_guard is not None else None)
+                guard = None
+                if dispatch_guard is not None:
+                    guard = partial(
+                        _authorize_upload_dispatch, dispatch_guard, dispatch_source_check, cache, saved,
+                        guards_spawn=getattr(private_transport.runner, "dispatch_guard", False) is True,
+                    )
                 uploaded = _call(args, cwd, runner=runner, private_transport=private_transport,
                                  dispatch_guard=guard)
                 if fence_upload and _image_upload_scope_rejected(uploaded):

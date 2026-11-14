@@ -1296,7 +1296,8 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     "edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_preview", "edit_on_send_source_read",
     "edit_reply_after_upload_intent", "edit_source_on_final_pair_read", "edit_source_on_dispatch_lock",
     "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied", "upload_scope_then_granted",
-    "upload_scope_with_conflicting_stdout", "closed_on_source_controls_read",
+    "upload_scope_with_conflicting_stdout", "upload_cli_missing", "upload_ack_missing",
+    "closed_on_source_controls_read",
     "unlisted_redirect", "unlisted_cached_redirect"])
 def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, source_https, fault):  # noqa: F811
     from hashlib import sha256
@@ -1322,6 +1323,7 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
     send_preview_seen = False
     denied_uploads = 0
     scope_granted = False
+    executable_restored = False
 
     def edit_original_reply():
         nonlocal edited_body
@@ -1380,7 +1382,27 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
                     edit_original_reply()
         return result
 
-    transport.runner = provider_io
+    runner = provider_io
+    upload_faults = {"upload_cli_missing", "upload_ack_missing"}
+    if fault in upload_faults:
+        from loopx.extensions.lark.cli_resolution import LarkCliResolution, build_lark_command_runner
+
+        native_runner = build_lark_command_runner(LarkCliResolution(sys.executable, True, "fixture", None, None))
+        missing_executable = str(fake.with_name("missing-lark-cli"))
+
+        def guarded_provider(args, cwd=None, timeout=None, *, dispatch_guard=None):
+            if dispatch_guard is not None:
+                # Use the real subprocess boundary with a synthetic provider:
+                # an unavailable executable cannot reach resource creation.
+                command = ([missing_executable] if fault == "upload_cli_missing" and not executable_restored
+                           else [sys.executable, "-c", "pass"])
+                assert native_runner(command, cwd, timeout, dispatch_guard=dispatch_guard)["returncode"] == 0
+            return provider_io(args, cwd, timeout)
+
+        guarded_provider.dispatch_guard = True
+        runner = guarded_provider
+
+    transport.runner = runner
 
     unlisted = "https://source.example/unlisted.png"
 
@@ -1397,7 +1419,7 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
 
     def restart():
         return LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
-                                       runner=provider_io, cli_bin="lark-cli")
+                                        runner=runner, cli_bin="lark-cli")
 
     try:
         event = provider.event("notes-app", "historical-image-answer", f"Read {origin}")
@@ -1465,6 +1487,8 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             io.corrupt_download = True
         elif fault == "unknown_send":
             provider.lose_next_reply = True
+        elif fault == "upload_ack_missing":
+            io.unknown_upload = True
         elif fault in {"edit_reply_after_upload_intent", "edit_source_on_final_pair_read", "edit_source_on_dispatch_lock"}:
             from loopx.extensions.lark import return_files
 
@@ -1505,7 +1529,33 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         assert worker.reconcile_request(path) == 0
         if fault == "closed_on_source_controls_read":
             assert upload_previews == 1 and store.load_session(sid)["status"] == "closed"
-        if fault in {"readback", "unknown_send", "upload_scope_then_granted", "upload_scope_with_conflicting_stdout"}:
+        if fault in upload_faults:
+            # Only the attempt that could not start is safe to retry.
+            assert io.uploads == int(fault == "upload_ack_missing")
+            assert len(provider.writes) == writes
+            pending = json.loads(path.read_text())
+            assert pending["historical_answer_images"]["status"] == "pending"
+            assert "answer_images.historical" not in pending["deliveries"]
+            pending["historical_answer_images"]["next_check_at"] = 0
+            _atomic_write_json(path, pending)
+            executable_restored = True
+            io.unknown_upload = False
+            worker = restart()
+            recovered = fault == "upload_cli_missing"
+            assert worker.reconcile_request(path) == int(recovered)
+            post_state = json.loads(path.read_text())
+            assert post_state["historical_answer_images"]["status"] == ("delivered" if recovered else "pending")
+            if recovered:
+                media = post_state["deliveries"]["answer_images.historical"]
+                post = provider.messages[media["attempt"]["message_ref"]]
+                assert post["chat_id"] == event["chat_id"]
+                assert post["sender"]["id"] == provider.profile_apps["notes-app"]
+                assert media["images_verified"] and io.downloads == 4
+                assert [io.resources[key] for key in media["image_keys"]] == list(figures.values())
+            assert worker.reconcile_request(path) == 0
+            assert io.uploads == (4 if recovered else 1)
+            assert len(provider.writes) == writes + int(recovered)
+        elif fault in {"readback", "unknown_send", "upload_scope_then_granted", "upload_scope_with_conflicting_stdout"}:
             pending = json.loads(path.read_text())
             assert pending["historical_answer_images"]["status"] == "pending"
             if fault.startswith("upload_scope_"):
