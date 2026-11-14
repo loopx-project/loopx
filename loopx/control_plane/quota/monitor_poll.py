@@ -10,6 +10,7 @@ from typing import Any
 
 from ...agent_registry import registered_agent_ids_from_registry
 from ...turn_identity import normalize_turn_instance_id
+from ..agents.capability_gate import runtime_capabilities_for_cli_projection
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..runtime.time import now_local_iso
 from ..scheduler.monitor_poll_writeback import (
@@ -21,6 +22,7 @@ from ..todos.contract import (
     TODO_TASK_CLASS_MONITOR,
     normalize_todo_claimed_by,
     normalize_todo_id,
+    normalize_todo_resume_when,
 )
 from ..todos.external_wait_contract import (
     build_monitor_advancement_authoring_contract,
@@ -63,10 +65,12 @@ def _monitor_candidate(value: Any) -> dict[str, Any] | None:
     target_key = str(value.get("target_key") or "").strip() or None
     if not todo_id and not target_key:
         return None
+    resume_when = normalize_todo_resume_when(value.get("resume_when"))
     return {
         "todo_id": todo_id,
         "target_key": target_key,
         "task_class": TODO_TASK_CLASS_MONITOR,
+        **({"resume_when": resume_when} if resume_when else {}),
     }
 
 
@@ -131,6 +135,31 @@ def resolve_due_monitor_candidate(
         )
     except ValueError:
         return {}
+    resume_when = normalize_todo_resume_when(item.get("resume_when"))
+    if resume_when and item.get("resume_ready") is None:
+        from ..todos.list_readback import list_goal_todos
+
+        # Target selection returns the stored Todo, where readiness may not be
+        # materialized. Read the canonical evaluation for that same target.
+        selected_id = normalize_todo_id(item.get("todo_id"))
+        if selected_id is None:
+            return {}
+        evaluated = list_goal_todos(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            role="agent",
+            todo_id=selected_id,
+            runtime_root_arg=str(runtime_root) if runtime_root else None,
+        ).get("todo")
+        if (
+            not evaluated
+            or evaluated.get("todo_id") != selected_id
+            or evaluated.get("target_key") != item.get("target_key")
+            or evaluated.get("archive_state") == "archive"
+            or normalize_todo_resume_when(evaluated.get("resume_when")) != resume_when
+        ):
+            return {}
+        item = evaluated
     if not monitor_todo_is_due(item):
         return {}
     return {
@@ -178,6 +207,11 @@ def resolve_monitor_poll_target(
     if _monitor_poll_receipt_path(runtime_root, goal_id, effect_id).exists():
         return todo_id, effect_id
     return None, None
+
+
+def _runtime_capabilities(before: dict[str, Any]) -> list[str] | None:
+    values = _mapping(before.get("agent_identity")).get("runtime_available_capabilities")
+    return runtime_capabilities_for_cli_projection(values) if isinstance(values, list) else None
 
 
 def _decision_packet(
@@ -716,6 +750,7 @@ def _provider_writeback(
     *,
     registry_path: Path,
     runtime_root: Path,
+    available_capabilities: list[str] | None = None,
 ) -> dict[str, Any]:
     result = write_monitor_poll_todo_state(
         registry_path=registry_path,
@@ -749,6 +784,8 @@ def _provider_writeback(
         task_lease_idempotency_key=(plan.get("lease_proof") or {}).get("idempotency_key"),
         task_lease_expected_version=(plan.get("lease_proof") or {}).get("expected_version"),
         gate_scope_guard=plan.get("gate_scope_guard") is True,
+        available_capabilities=available_capabilities,
+        admitted_resume_when=plan.get("admitted_resume_when"),
         legacy_batch_version=plan.get("legacy_batch_version"),
     )
     if not isinstance(result, dict):
@@ -978,6 +1015,7 @@ def record_quota_monitor_poll_for_decision(
                 plan,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
+                available_capabilities=_runtime_capabilities(before),
             )
         except LocalCoordinationAuthorityUnavailable as exc:
             # Transport the owner's typed negative evidence. TypeScript alone

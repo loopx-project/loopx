@@ -55,6 +55,24 @@ test("monitor and independent successor commit together, preview is inert, recei
   "coordination_operation_identity_mismatch");
 });
 
+test("canonical poll requires current runtime capacity and the admitted wait before a fresh write", async () => {
+  const wait = "capacity_available:benchmark_runner";
+  const {store, request} = await seeded({resume_when: wait});
+  const before = await store.loadAuthority();
+  const admitted = {...request, admitted_resume_when: wait};
+  const missing = await executeCoordinationMonitorPoll(store, admitted);
+  assert.equal(missing.reason_code, "monitor_poll_rejected");
+  assert.ok(missing.no_effect);
+  const available = {available_capabilities: ["benchmark_runner"]};
+  const changed = await executeCoordinationMonitorPoll(store, {...admitted, ...available,
+    admitted_resume_when: "resume_at:1999-01-01T00:00:00Z"});
+  assert.equal(changed.reason_code, "monitor_poll_rejected");
+  assert.ok(changed.no_effect);
+  assert.deepEqual(await store.loadAuthority(), before);
+  assert.equal((await executeCoordinationMonitorPoll(store, {...admitted, ...available})).status, "applied");
+  assert.equal((await executeCoordinationMonitorPoll(store, request)).status, "replayed");
+});
+
 test("canonical monitor poll retains scoped generations across unrelated transitions", async () => {
   const {store, request} = await seeded();
   const first = await executeCoordinationMonitorPoll(store, {
