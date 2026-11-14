@@ -7437,7 +7437,20 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = [pool.submit(settle), pool.submit(settle)]
-        assert sorted(result.result()["appended"] for result in results) == [False, True]
+        attempts = [result.result() for result in results]
+    assert sorted(attempt["appended"] for attempt in attempts) == [False, True]
+    assert all(
+        attempt["settlement_result"]["ok"]
+        and [receipt["step_kind"] for receipt in attempt["settlement_result"]["receipts"]]
+        == ["validation", "durable_writeback", "quota_spend"]
+        for attempt in attempts
+    )
+    rollout_log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    events = [json.loads(line) for line in rollout_log.read_text(encoding="utf-8").splitlines()]
+    assert sum(
+        event["event_kind"] == "quota_spend" and event.get("run_id") == turn_instance_id
+        for event in events
+    ) == 1
     assert _spend_run_count(runtime) == 1
     assert _classification_count(runtime, "validated_progress") == 1
     rc, admitted = _run_cli(registry_path, runtime, *next_args, "--todo-id", SELECTED_REPLAN_TODO_ID)

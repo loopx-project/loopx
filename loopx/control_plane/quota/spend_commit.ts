@@ -361,6 +361,43 @@ function requestDigest(request: QuotaSpendCommitRequest): string {
   }));
 }
 
+function matchesRetainedSettlementSpend(
+  request: QuotaSpendCommitRequest,
+  proposedRecord: JsonObject,
+  retainedRecord: JsonObject,
+): boolean {
+  const identity = jsonObject(proposedRecord.settlement_identity);
+  const turnId = optionalString(identity?.turn_instance_id, "settlement_identity.turn_instance_id");
+  const effectId = optionalString(identity?.effect_id, "settlement_identity.effect_id");
+  if (!turnId || !effectId ||
+      (request.source !== "heartbeat" && request.source !== "visible-goal") ||
+      request.preview.effect_ref != null || request.preview.delivery_completion_spend !== true ||
+      request.effect_id !== `${effectId}#quota_spend` ||
+      identity?.goal_id !== request.goal_id || identity?.agent_id !== request.resolved_agent_id ||
+      identity?.turn_instance_id !== proposedRecord.turn_instance_id ||
+      (identity?.todo_id || null) !== (proposedRecord.todo_id ?? null) ||
+      (identity?.replan_obligation_id ?? null) !== (proposedRecord.replan_obligation_id ?? null)) {
+    return false;
+  }
+  const proposed = requiredObject(proposedRecord.quota_event, "proposed spend event");
+  const retained = requiredObject(retainedRecord.quota_event, "retained spend event");
+  // The live quota projection can change between two attempts to settle one
+  // validated writeback. The original identity and accounting facts cannot.
+  return retainedRecord.classification === QUOTA_SLOT_SPENT_CLASSIFICATION &&
+    retainedRecord.goal_id === request.goal_id &&
+    retainedRecord.agent_id === request.resolved_agent_id &&
+    canonicalJson(retainedRecord.settlement_identity) === canonicalJson(identity) &&
+    retained.source === proposed.source && retained.slots === proposed.slots &&
+    typeof proposed.delivery_run_generated_at === "string" &&
+    typeof proposed.delivery_run_classification === "string" &&
+    proposed.delivery_run_agent_id === identity.agent_id &&
+    retained.delivery_run_generated_at === proposed.delivery_run_generated_at &&
+    retained.delivery_run_classification === proposed.delivery_run_classification &&
+    retained.delivery_run_agent_id === proposed.delivery_run_agent_id &&
+    canonicalJson(retained.delivery_workspace) === canonicalJson(proposed.delivery_workspace) &&
+    retained.delivery_workspace_validated === proposed.delivery_workspace_validated;
+}
+
 function positiveSlots(preview: JsonObject): number {
   const value = preview.slots;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
@@ -851,6 +888,7 @@ export async function evaluateQuotaSpendCommit(
       expectedIndexDigest: request.expected_index_digest,
       ...(goalRef === null ? {} : { goalRef }),
       indexLockHeld,
+      matchesRetainedRequest: (retained) => matchesRetainedSettlementSpend(request, record, retained),
       prepare: ({ jsonPath, markdownPath, indexPath: lockedIndexPath }) => {
         const payload = payloadFor(
           request,
@@ -915,6 +953,7 @@ export async function evaluateQuotaSpendCommit(
     appended: repaired,
     idempotent_replay: !repaired,
     transaction_repaired: repaired,
+    ...(outcome.receipt.record.settlement_identity ? {receipt_repair_required: true} : {}),
     reason: repaired
       ? "quota spend commit repaired its prepared durable transaction"
       : "quota spend commit replayed for the same effect identity",

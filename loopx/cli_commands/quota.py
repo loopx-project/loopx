@@ -731,6 +731,13 @@ def _record_non_guard_quota_event(
         ),
         details=rollout_details,
         allow_failed=args.quota_command == "should-run",
+        idempotency_fields=(
+            ["goal_id", "event_kind", "agent_id", "run_id"]
+            + (["todo_id"] if rollout_todo_id else [])
+            + (["goal_ref"] if goal_ref is not None else [])
+            if args.quota_command == "spend-slot" and spend_turn_instance_id
+            else None
+        ),
     )
     if args.quota_command == "spend-slot" and spend_turn_instance_id:
         assert context is not None  # A settlement requires a prepared authority context.

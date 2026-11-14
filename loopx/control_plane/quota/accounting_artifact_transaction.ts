@@ -109,6 +109,7 @@ export interface QuotaAccountingArtifactCommitRequest {
   expectedIndexDigest: string | null;
   goalRef?: JsonObject;
   indexLockHeld?: boolean;
+  matchesRetainedRequest?: (record: JsonObject) => boolean;
   prepare: (
     context: QuotaAccountingArtifactPrepareContext,
   ) =>
@@ -920,7 +921,8 @@ export async function commitQuotaAccountingArtifactTransaction(
       }
       if (
         existingReceipt.effect_id !== request.effectId ||
-        existingReceipt.request_digest !== request.requestDigest
+        (existingReceipt.request_digest !== request.requestDigest &&
+          request.matchesRetainedRequest?.(existingReceipt.record) !== true)
       ) {
         return {
           status: "conflict",
