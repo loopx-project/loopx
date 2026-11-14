@@ -254,6 +254,12 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
         status, recovered = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
         assert status == 202, recovered
         ids = recovered["proposal"]["receipt"]["resource_ids"]
+        original_session = chat.load_session(ids["session_id"])
+        assert original_session["managed_agent_id"] == "codex"
+        assert original_session["channel_id"] == "agent.codex"
+        assert ids["managed_agent_id"] == original_session["managed_agent_id"]
+        assert ids["channel_id"] == original_session["channel_id"]
+        assert ids["goal_instance_id"] == original_session.get("goal_instance_id")
         if confirmed is not None:
             assert ids["session_id"] == sid and ids["turn_id"] == confirmed["turn_id"]
             assert admission_calls == [], "confirmed first work is readback, not a new admission"
