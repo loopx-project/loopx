@@ -160,15 +160,27 @@ interface AppliedDriverRuntime {
   emitSessionEvent(session: Agent['session'], event: SessionEvent): void
   announceAgent(event: 'agent/created' | 'agent/session-start'): void
   dispose(): Promise<void>
+  /** Replay the cordis fiber-disposal sequence for one unload cause. */
+  unloadFiber(mode: 'evict' | 'direct' | 'restart'): Promise<void>
 }
 
 function appliedDriverRuntime(
   liveAgent: Agent,
   initiallyObserved: boolean,
+  options: { readonly withFiber?: boolean } = {},
 ): AppliedDriverRuntime {
   type Handler = (...args: unknown[]) => unknown
   const handlers = new Map<string, Handler[]>()
   let disposeEffect: (() => unknown) | undefined
+  // Simulates the cordis plugin fiber owning this applied Driver. `evict`
+  // mirrors dsh-hmr module replacement: the runtime leaves the registry
+  // before the fiber disposal; `direct` mirrors fiber.dispose() from user
+  // disable/uninstall or a host cascade, where the runtime is still
+  // registered when cordis emits internal/plugin for the cleared uid.
+  let runtimeRegistered = true
+  const fiber = options.withFiber
+    ? { uid: 7 as number | null, runtime: { callback: function dshLoopxPlugin() {} } }
+    : undefined
   const ctx = {
     agents: {
       get: (id: string) => String(liveAgent.id) === String(id) ? liveAgent : undefined,
@@ -176,6 +188,10 @@ function appliedDriverRuntime(
       withoutInitiator: (operation: () => Promise<unknown>) => operation(),
     },
     logger: { warn() {} },
+    ...(fiber === undefined ? {} : {
+      fiber,
+      registry: { has: (_plugin: unknown) => runtimeRegistered },
+    }),
     on(event: string, handler: Handler) {
       const registered = handlers.get(event) ?? []
       registered.push(handler)
@@ -200,6 +216,18 @@ function appliedDriverRuntime(
       }
     },
     async dispose() {
+      await disposeEffect?.()
+    },
+    async unloadFiber(mode) {
+      if (fiber === undefined) throw new Error('appliedDriverRuntime was built without a fiber')
+      if (mode === 'evict') runtimeRegistered = false
+      if (mode !== 'restart') {
+        // A disposal clears the fiber uid before the unload; a restart keeps
+        // the uid and never emits internal/plugin.
+        fiber.uid = null
+        for (const handler of handlers.get('internal/plugin') ?? []) handler(fiber)
+      }
+      if (mode === 'direct') runtimeRegistered = false
       await disposeEffect?.()
     },
   }
@@ -1476,6 +1504,95 @@ describe('same-session LoopX driver', () => {
     expect(host.cancelCalls).toBe(1)
   })
 
+  it('cancels a claimed automatic step when the Driver is disposed for removal', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+
+    await driver.dispose('removal')
+
+    expect(host.cancelCalls).toBe(1)
+  })
+
+  it('keeps a claimed automatic step running across replacement disposal', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+
+    await driver.dispose('replacement')
+
+    expect(host.cancelCalls).toBe(0)
+  })
+
+  it('retires queued future work but no running turn on replacement disposal', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const callsAtReplacement = fixture.calls.length
+
+    await driver.dispose('replacement')
+
+    expect(host.nextTurn).toHaveLength(0)
+    expect(host.cancelCalls).toBe(0)
+    host.setStatus('idle')
+    driver.onAgentStatus(host.agent, 'idle')
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(fixture.calls).toHaveLength(callsAtReplacement)
+  })
+
+  it('drains an admitted turn across replacement and admits freshly only after it settles', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const first = makeDriver(fixture)
+    observeActivated(first, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const admitted = host.nextTurn.shift() as UserMessage
+    expect((admitted.source as { turnInstanceId?: string }).turnInstanceId)
+      .toBe('turn-stable')
+    host.setStatus('running')
+    first.onInboxClaimed(host.agent, admitted)
+    publishEvent(first, host, sessionEvent('user/message', admitted))
+    const callsBeforeReplacement = fixture.calls.length
+
+    await first.dispose('replacement')
+    expect(host.cancelCalls).toBe(0)
+
+    const second = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-fresh',
+      retryDelaysMs: [0, 0],
+    })
+    second.observeAgent(host.agent)
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+    // The replacement Driver admits nothing while the drained Turn runs.
+    expect(host.nextTurn).toHaveLength(0)
+    expect(fixture.calls).toHaveLength(callsBeforeReplacement)
+
+    publishEvent(second, host, turnEndEvent(1))
+    host.setStatus('idle')
+    second.onAgentStatus(host.agent, 'idle')
+    await waitFor(() => host.nextTurn.length === 1)
+    const followup = host.nextTurn.shift() as UserMessage
+    expect((followup.source as { turnInstanceId?: string }).turnInstanceId)
+      .toBe('turn-fresh')
+    await second.dispose()
+    expect(host.cancelCalls).toBe(0)
+  })
+
   it('retries an untyped CLI exit twice with one stable idempotency key', async () => {
     const fixture = runnerFixture({ quotaExitFailures: 2 })
     const host = fakeAgent()
@@ -2525,5 +2642,42 @@ describe('GoalBar exact-Session Driver bridge', () => {
     expect(fixture.quotaCalls).toHaveLength(1)
     await driver.dispose()
     expect(host.cancelCalls).toBe(0)
+  })
+})
+
+describe('plugin unload cause classification', () => {
+  it.each([
+    ['dsh-hmr module eviction', 'evict'],
+    ['fiber restart', 'restart'],
+  ] as const)('disposes the applied Driver for replacement on %s', async (_label, mode) => {
+    const host = fakeAgent()
+    const dispose = vi.spyOn(LoopXContinuationDriver.prototype, 'dispose')
+    const runtime = appliedDriverRuntime(host.agent, false, { withFiber: true })
+    try {
+      await runtime.unloadFiber(mode)
+      expect(dispose).toHaveBeenCalledExactlyOnceWith('replacement')
+    } finally {
+      dispose.mockRestore()
+    }
+  })
+
+  it.each([
+    ['direct fiber disposal', 'direct'],
+    ['untyped legacy unload', 'plain'],
+  ] as const)('disposes the applied Driver for removal on %s', async (_label, mode) => {
+    const host = fakeAgent()
+    const dispose = vi.spyOn(LoopXContinuationDriver.prototype, 'dispose')
+    const runtime = appliedDriverRuntime(
+      host.agent,
+      false,
+      mode === 'direct' ? { withFiber: true } : {},
+    )
+    try {
+      if (mode === 'direct') await runtime.unloadFiber('direct')
+      else await runtime.dispose()
+      expect(dispose).toHaveBeenCalledExactlyOnceWith('removal')
+    } finally {
+      dispose.mockRestore()
+    }
   })
 })

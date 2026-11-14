@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, isAbsolute } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Agent, AgentStatus, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-llm'
@@ -626,6 +626,17 @@ function renderThrown(value: unknown): string {
   return value instanceof Error ? value.message : String(value)
 }
 
+/**
+ * Typed unload cause for {@link LoopXContinuationDriver.dispose}.
+ *
+ * - `removal` — user disable/uninstall, entry removal, or host cascade
+ *   disposal: claimed/admitted running automatic work is cancelled.
+ * - `replacement` — plugin-tree recomposition within a live host (module
+ *   eviction and re-import, or a fiber restart): claimed/admitted running
+ *   automatic work drains and settles under its original receipt.
+ */
+export type DriverDisposeCause = 'removal' | 'replacement'
+
 /** Exact-session driver with typed activation and no binding mirror or failure counter. */
 export class LoopXContinuationDriver {
   private readonly states = new Map<Agent, DriverState>()
@@ -891,7 +902,20 @@ export class LoopXContinuationDriver {
     return decision
   }
 
-  async dispose(): Promise<void> {
+  /**
+   * Tear the Driver down under a typed unload cause.
+   *
+   * `removal` (default) keeps the historical semantics: an already claimed or
+   * admitted automatic Turn that is still running is cancelled with
+   * `{ kind: 'parent' }` and the dispose awaits idle. `replacement` covers
+   * plugin-tree recomposition (module eviction and re-import, fiber restart):
+   * future scheduling still retires (timers, evaluations, queued-but-unclaimed
+   * reservations), but a running admitted Turn keeps its Session-owned
+   * execution and its single settlement identity and simply drains — the
+   * successor Driver re-attaches to the live Agent, admits nothing while it
+   * runs, and evaluates freshly once the Turn settles and the Agent is idle.
+   */
+  async dispose(cause: DriverDisposeCause = 'removal'): Promise<void> {
     if (this.disposed) return
     this.disposed = true
     const waits: Promise<void>[] = []
@@ -900,11 +924,13 @@ export class LoopXContinuationDriver {
         || state.reservation?.phase === 'admitted'
       this.stopState(state)
       if (activeAutomaticStep && state.agent.status === 'running') {
-        try {
-          state.agent.cancel({ kind: 'parent' })
-          waits.push(state.agent.whenIdle())
-        } catch (error: unknown) {
-          this.warn(`dsh-loopx-driver: could not cancel active work: ${renderThrown(error)}`)
+        if (cause === 'removal') {
+          try {
+            state.agent.cancel({ kind: 'parent' })
+            waits.push(state.agent.whenIdle())
+          } catch (error: unknown) {
+            this.warn(`dsh-loopx-driver: could not cancel active work: ${renderThrown(error)}`)
+          }
         }
       }
       if (state.run !== undefined) waits.push(state.run)
@@ -1420,6 +1446,37 @@ export class LoopXContinuationDriver {
   }
 }
 
+/**
+ * Watch the host's plugin lifecycle so the Driver's unload can distinguish
+ * plugin-tree recomposition (a replacement Driver is loaded into the same live
+ * host) from user-initiated disposal. Cordis exposes no typed unload reason,
+ * so this reads the two mechanics that separate them in the supported hosts:
+ *
+ * - A restart-driven unload (`Fiber.update`/`Fiber.restart`, e.g. a config or
+ *   dependency refresh) keeps the fiber uid; the same fiber re-runs `apply`
+ *   after the unload completes.
+ * - A module replacement (dsh-hmr evicts the changed module and its
+ *   importers) deletes the plugin runtime from the registry *before*
+ *   disposing its fibers. Cordis then emits `internal/plugin` for the cleared
+ *   uid while the runtime is already absent. User disable/uninstall, entry
+ *   removal, and host cascade disposal instead call `fiber.dispose()`
+ *   directly, so the runtime is still registered at that same instant (the
+ *   fiber disposer removes it immediately afterwards).
+ *
+ * Anything unobservable stays `removal`, preserving the pre-existing
+ * cancellation semantics for unknown or older hosts.
+ */
+function watchReplacementUnload(ctx: Context): () => boolean {
+  const fiber: Fiber | undefined = ctx.fiber
+  const callback = fiber?.runtime?.callback
+  let moduleReplacement = false
+  ctx.on('internal/plugin', (disposed: Fiber) => {
+    if (disposed !== fiber || fiber.uid !== null || callback === undefined) return
+    moduleReplacement = !ctx.registry.has(callback)
+  })
+  return () => moduleReplacement || (fiber !== undefined && fiber.uid !== null)
+}
+
 export function apply(ctx: Context): void {
   const driver = new LoopXContinuationDriver({
     isLiveAgent: agent => ctx.agents.get(agent.id) === agent,
@@ -1427,6 +1484,7 @@ export function apply(ctx: Context): void {
     runDetached: operation => ctx.agents.withoutInitiator(operation),
     warn: message => { ctx.logger.warn(message) },
   })
+  const replacementUnload = watchReplacementUnload(ctx)
 
   ctx.effect(function* () {
     const unregisterDriverBridge = goalBarCoordinator.registerDriverBridge(driver)
@@ -1469,7 +1527,7 @@ export function apply(ctx: Context): void {
     for (const agent of ctx.agents.list()) driver.observeAgent(agent)
     yield async () => {
       unregisterDriverBridge()
-      await driver.dispose()
+      await driver.dispose(replacementUnload() ? 'replacement' : 'removal')
     }
   }, 'dsh-loopx-driver lifecycle')
 }
