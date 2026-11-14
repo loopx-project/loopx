@@ -94,6 +94,51 @@ def test_history_append_starts_a_new_record_after_an_unterminated_tail(
     assert [row["goal_id"] for row in snapshot.records] == expected_goal_ids
 
 
+def test_a_row_torn_inside_a_multibyte_character_is_skipped_only_when_asked(
+    tmp_path: Path,
+) -> None:
+    """A write torn mid-character is not text; only an opted-in reader skips it.
+
+    The writer keeps non-ASCII text verbatim (`ensure_ascii=False`), so an
+    interrupted append can end in a partial UTF-8 sequence. The torn row could
+    be a spend, a Vision or a replan ack, so a reader that gates a write must
+    keep failing on it. A reader that reports the damage itself opts in and
+    reads the count.
+    """
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    index_path = runs_dir / "index.jsonl"
+    complete = {"goal_id": GOAL_ID, "generated_at": "2026-09-15T00:00:00Z"}
+    torn = json.dumps(
+        {"goal_id": GOAL_ID, "generated_at": GENERATED_AT, "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    index_path.write_bytes(
+        (json.dumps(complete) + "\n").encode("utf-8")
+        + torn[: torn.index("进".encode("utf-8")) + 1]
+    )
+
+    with pytest.raises(UnicodeDecodeError):
+        history.load_index_snapshot(index_path)
+    with pytest.raises(UnicodeDecodeError):
+        history.load_index(index_path)
+
+    snapshot = history.load_index_snapshot(index_path, tolerate_undecodable=True)
+    assert [row["generated_at"] for row in snapshot.records] == [
+        complete["generated_at"]
+    ]
+    assert (snapshot.raw_count, snapshot.invalid_count, snapshot.undecodable_count) == (
+        2,
+        1,
+        1,
+    )
+    # The digest still covers the original bytes, so a rewrite is detectable.
+    assert snapshot.digest == history.load_index_snapshot(
+        index_path, tolerate_undecodable=True
+    ).digest
+
+
 @pytest.mark.parametrize(
     "text",
     [

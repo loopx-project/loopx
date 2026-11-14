@@ -783,3 +783,48 @@ def test_stopped_goals_are_opt_in_but_stale_active_remains_visible(tmp_path):
     assert history['matched'] == 3
     explicit = tool.read(TOOL_NAME, {'view': 'portfolio', 'goal_id': 'old'})
     assert explicit['rows'][0]['activation_state'] == 'stopped'
+
+
+def _torn_delivery_index(root, goal_id="alpha"):
+    path = root / "goals" / goal_id / "runs" / "index.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    intact = json.dumps(
+        {"generated_at": "2026-01-02T00:30:00+00:00", "delivery_outcome": "outcome_progress",
+         "goal_id": goal_id, "todo_id": "todo_intact", "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    path.write_bytes(intact + b"\n")
+    return path, intact
+
+
+@pytest.mark.parametrize("window", [{}, _FIXED_WINDOW], ids=["rolling", "fixed"])
+def test_delivery_reads_stay_unavailable_when_a_row_cannot_be_decoded(tmp_path, window):
+    path, intact = _torn_delivery_index(tmp_path)
+    now = datetime(2026, 1, 2, 3, tzinfo=timezone.utc)
+    def read():
+        return read_manager_delivery_history(tmp_path, "alpha", now=now, **window)
+
+    assert read()["status"] == "read" and read()["coverage"]["matched"] == 1
+
+    # The only recent delivery is torn inside a multibyte character. It must not
+    # read as "no deliveries": the whole answer is unavailable, as it was before
+    # the shared index reader learned to skip such rows.
+    path.write_bytes(intact[: intact.index("进".encode("utf-8")) + 1])
+    damaged = read()
+    assert damaged["status"] == "unavailable"
+    assert damaged["coverage"]["matched"] is None and damaged["deliveries"] == []
+
+    path.write_bytes(intact + b"\n")
+    assert read()["coverage"]["matched"] == 1
+
+
+def test_rolling_delivery_view_reports_unknown_for_an_undecodable_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(details, "list_goal_todos", _todo_read_fixture([]))
+    path, intact = _torn_delivery_index(tmp_path)
+    tool, _ = inspector(tmp_path)
+    request = {"view": "deliveries", "goal_id": "alpha"}
+    assert tool.read(TOOL_NAME, request)["unknown"] is False
+
+    path.write_bytes(intact[: intact.index("进".encode("utf-8")) + 1])
+    result = tool.read(TOOL_NAME, request)
+    assert result["unknown"] is True and result["matched"] is None
