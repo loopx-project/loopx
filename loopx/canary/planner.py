@@ -272,7 +272,7 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "reason": "samples project-local uninstall safety with isolated fixture registries",
             },
             {
-                "command": "python3 examples/worker-bridge-install-contract-smoke.py",
+                "command": "python3 examples/cli-worker-bridge-command-modularization-smoke.py",
                 "tier": "deep",
                 "reason": "checks generic worker bridge install contracts without exposing private runtime material",
             },
@@ -1010,9 +1010,9 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "reason": "checks the Claude Code goal-mode loop lifecycle without production actions",
             },
             {
-                "command": "python3 examples/worker-bridge-install-contract-smoke.py",
+                "command": "python3 examples/cli-worker-bridge-command-modularization-smoke.py",
                 "tier": "default",
-                "reason": "checks generic worker bridge install/status contracts without private runtime material",
+                "reason": "checks the worker bridge install and active-user observation contracts without private runtime material",
             },
             {
                 "command": "python3 examples/computer-use-runtime-contract-smoke.py",

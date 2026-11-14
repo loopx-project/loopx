@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "loopx" / "cli.py"
 MODULE = ROOT / "loopx" / "cli_commands" / "worker_bridge.py"
 INIT = ROOT / "loopx" / "cli_commands" / "__init__.py"
+sys.path.insert(0, str(ROOT))
+
+from loopx.worker_bridge import build_worker_bridge_install_contract  # noqa: E402
 
 
 def run_cli(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -78,6 +81,64 @@ def main() -> None:
         == "loopx_worker_bridge_install_contract_v0",
         "contract schema changed",
     )
+    require(
+        contract_payload["bridge_surface"] == "loopx_worker_bridge_source_mount_v0",
+        "bridge surface changed",
+    )
+    require(contract_payload["install_mode"] == "source_mount_read_only_pythonpath", "install mode changed")
+    require(
+        contract_payload["runtime_policy"] == "ensure_python3_before_worker_cli_bridge",
+        "runtime policy changed",
+    )
+    require("apt-get install -y python3" in contract_payload["runtime_preflight_command"], "Python preflight missing")
+    require("importlib.import_module" in contract_payload["runtime_preflight_command"], "module preflight missing")
+    require(
+        contract_payload["mounts"] == [
+            {
+                "read_only": True, "source": "<loopx-project-root>",
+                "target": "<loopx-project-root>", "type": "bind",
+            },
+            {
+                "read_only": True, "source": "<loopx-runtime-root>",
+                "target": "<loopx-runtime-root>", "type": "bind",
+            },
+        ],
+        "default mounts must be read-only",
+    )
+    require(contract_payload["boundary"]["no_upload"] is True, "contract must not upload")
+    require(
+        contract_payload["boundary"]["credential_values_recorded"] is False,
+        "contract must not record credentials",
+    )
+    agent_kwargs = contract_payload["agent_kwargs"]
+    require(
+        agent_kwargs["loopx_command_prefix"] == "PYTHONPATH='<loopx-project-root>' python3 -m loopx.cli",
+        "worker CLI prefix changed",
+    )
+    require(agent_kwargs["loopx_registry_arg"] == "<loopx-runtime-root>/registry.global.json", "registry path changed")
+    require(contract_payload["trace"]["raw_trace_public"] is False, "raw trace must stay private")
+
+    writable_contract = build_worker_bridge_install_contract(active_user_host_dir="<active-user-host-dir>")
+    require(
+        writable_contract["mounts"][-1]
+        == {
+            "read_only": False, "source": "<active-user-host-dir>",
+            "target": "/loopx-active-user", "type": "bind",
+        },
+        "active-user feed mount changed",
+    )
+    require(
+        writable_contract["active_user_external_update_mount"]["raw_host_path_recorded"] is False,
+        "host path must not be recorded",
+    )
+    require(
+        writable_contract["agent_kwargs"]["loopx_active_user_feed_jsonl"]
+        == "/loopx-active-user/loopx-active-user-interventions.jsonl",
+        "active-user feed path changed",
+    )
+    channel_boundary = writable_contract["active_user_intervention_channel_contract"]["claim_boundary"]
+    require(channel_boundary["direct_codex_chat_injection"] is False, "direct chat injection must be disabled")
+    require(channel_boundary["worker_pull_required"] is True, "worker pull must be required")
 
     with tempfile.TemporaryDirectory(prefix="loopx-worker-bridge-cli-") as tmp:
         root = Path(tmp)

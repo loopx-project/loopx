@@ -28,7 +28,6 @@ import {
 import {
   leaseInteger,
   leaseIsActive,
-  normalizeAgent,
   normalizeIdempotencyKey,
   normalizeTtl,
 } from "../work_items/task_lease_acquire.ts";

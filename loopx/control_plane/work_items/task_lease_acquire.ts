@@ -19,9 +19,6 @@ import {
   EffectRuntimeRequestError,
 } from "../effect_runtime_errors.ts";
 import {
-  taskLeaseLockPath,
-} from "../coordination/legacy_writer_lock_paths.ts";
-import {
   settlementIdentity,
   type JsonObject,
 } from "../effect_program.ts";

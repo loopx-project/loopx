@@ -4,7 +4,6 @@ import {taskLeaseStableValue as stableValue, taskLeaseDigest as digest,
   taskLeaseOperationRequestDigest as operationRequestDigest} from "./task_lease_operation_identity.ts";
 import { ShadowManagementError } from "../coordination/shadow_management.ts";
 import { LegacyCoordinationWriteError, requireLegacyCoordinationPrimaryWriteAllowed } from "../coordination/legacy_writer_fence.ts";
-import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -34,10 +33,8 @@ import {
 import { requireJsonObject } from "../runtime_decode.ts";
 import {
   leaseEpoch,
-  leaseInteger,
   leaseIsActive,
   leaseVersion,
-  normalizeAgent,
   normalizeGoalId,
   normalizeIdempotencyKey,
   normalizeOwner,
@@ -47,7 +44,6 @@ import {
   taskLeaseDirectory,
   taskLeaseLockPath,
   taskLeasePath,
-  type AuthorityFacts,
   type LeaseRecord,
 } from "./task_lease_acquire.ts";
 import {

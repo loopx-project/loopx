@@ -1328,9 +1328,14 @@ reward signals, oracle information, or unbounded human hints.
 
 **Validation**
 
-- `examples/worker-bridge-active-user-after-start-observation-smoke.py`
-- `examples/worker-bridge-install-contract-smoke.py`
+- [`examples/worker-bridge-active-user-after-start-observation-smoke.py`](https://github.com/loopx-project/loopx/blob/0cd999ca0dd6290c9b48b84bc23c5f6b40630516/examples/worker-bridge-active-user-after-start-observation-smoke.py)
+- [`examples/worker-bridge-install-contract-smoke.py`](https://github.com/loopx-project/loopx/blob/0cd999ca0dd6290c9b48b84bc23c5f6b40630516/examples/worker-bridge-install-contract-smoke.py)
 - benchmark active-user protocol docs.
+
+The linked scripts are historical versions. They were removed from the current
+checkout in [#3267](https://github.com/loopx-project/loopx/pull/3267). Current
+checks include `examples/worker-bridge-active-user-feed-smoke.py` and
+`examples/cli-worker-bridge-command-modularization-smoke.py`.
 
 #### IP-033 Recorded Rejection Is Not Absent Authority
 

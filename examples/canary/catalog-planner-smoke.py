@@ -712,7 +712,7 @@ def assert_pr_release_and_refactor_profiles_select() -> None:
         in runtime_connector_commands
     )
     assert "python3 examples/claude-goalmode-lifecycle-smoke.py" in runtime_connector_commands
-    assert "python3 examples/worker-bridge-install-contract-smoke.py" in runtime_connector_commands
+    assert "python3 examples/cli-worker-bridge-command-modularization-smoke.py" in runtime_connector_commands
     assert all(check["tier"] == "default" for check in runtime_connector_profile["checks"])
     assert runtime_connector_profile["deep_checks_available"] is True, runtime_connector_profile
     assert runtime_connector_profile["deep_checks_included"] is False, runtime_connector_profile
