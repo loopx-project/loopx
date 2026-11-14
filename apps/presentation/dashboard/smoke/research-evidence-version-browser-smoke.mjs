@@ -120,6 +120,23 @@ try {
   const atChapter = () => page.waitForFunction(id => document.activeElement?.id === id, address.hash.slice(1));
   await page.goto(address.href);
   await atChapter();
+  const views = page.getByRole("group", {name: "研究视图", exact: true});
+  const historyView = views.getByRole("button", {name: "研究历程", exact: true});
+  const caseView = views.getByRole("button", {name: "案例解读", exact: true});
+  assert.equal(await caseView.getAttribute("aria-pressed"), "true");
+  await historyView.press("Enter");
+  await page.locator(".research-history-heading").waitFor();
+  assert.equal(await historyView.getAttribute("aria-pressed"), "true");
+  assert.equal(await historyView.evaluate(element => document.activeElement === element), true);
+  assert.equal(new URL(page.url()).searchParams.get("research_reading"), "history");
+  await page.goBack();
+  await atChapter();
+  await page.goForward();
+  await page.locator(".research-history-heading").waitFor();
+  await caseView.press("Enter");
+  await atChapter();
+  assert.equal(new URL(page.url()).searchParams.get("research_pack"), studyPack.pack_id);
+
   const sourceRequests = [];
   const quoteRoute = url => url.origin === new URL(study).origin && url.pathname.endsWith("/citation");
   let failNextQuote = false;
@@ -202,6 +219,8 @@ try {
       "The parent's address belongs to its own research");
   }
   assertParentAddress();
+  await page.locator(".research-history-heading").waitFor();
+  assert.equal(await views.count(), 0, "A Goal without a saved study keeps its ordinary history");
   await page.goBack();
   await atChapter();
   assert.equal(new URL(page.url()).searchParams.get("research_pack"), studyPack.pack_id);
@@ -210,7 +229,7 @@ try {
   await page.goForward();
   await page.waitForURL(url => url.searchParams.get("goalId") === parent.goal_id);
   assertParentAddress();
-  console.log("research evidence version: saved excerpts, exact source links and chapter navigation restored");
+  console.log("research evidence version: study and history navigation, saved excerpts and chapter position restored");
 } finally {
   releaseOriginal?.();
   await browser?.close();

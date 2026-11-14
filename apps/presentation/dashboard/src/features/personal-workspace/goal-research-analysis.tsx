@@ -418,7 +418,7 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
 }
 
-export function ResearchCaseReading({analysis: a, active, onHistory}: {analysis: Controller; active: boolean; onHistory: () => void}) {
+export function ResearchCaseReading({analysis: a, active}: {analysis: Controller; active: boolean}) {
   const packs = (a.snapshot?.catalog.packs ?? []).filter(p => p.case_study_summary);
   const p = a.pack;
   const firstStudy = packs[0]?.pack_id;
@@ -427,12 +427,12 @@ export function ResearchCaseReading({analysis: a, active, onHistory}: {analysis:
     if (!a.loading && !a.readError && p && !p.case_study && firstStudy
         && !(hash.startsWith(caseChapterHashPrefix) && hash.includes("~"))) a.select(firstStudy);
   }, [a.loading, a.readError, p?.pack_id, Boolean(p?.case_study), firstStudy]);
-  return <section className="research-case-reader" aria-label={a.zh ? "Case 深度解读" : "Case studies"}>
-    <header className="case-reader-toolbar">{(packs.length > 1 || (packs.length === 1 && !p?.case_study)) ? <label>{a.zh ? "解读版本" : "Study version"}
+  return <section className="research-case-reader" aria-label={a.zh ? "案例解读" : "Case study"}>
+    {packs.length > 1 || (packs.length === 1 && !p?.case_study) ? <header className="case-reader-toolbar"><label>{a.zh ? "解读版本" : "Study version"}
       <select aria-label={a.zh ? "选择解读版本" : "Select study version"} value={p?.case_study ? p.pack_id : ""} onChange={e => a.select(e.target.value)}>
         {!p?.case_study ? <option value="">{a.zh ? "选择已保存的解读" : "Choose a saved study"}</option> : null}
         {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
-      </select></label> : null}<button type="button" onClick={() => {a.closeCitation(); onHistory();}}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
+      </select></label></header> : null}
     <AnalysisReadState analysis={a}/>
     {p?.case_study ? <ResearchCaseStudy key={`${p.pack_id}:${p.analysis_key}`} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"} active={active}
       scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation}
