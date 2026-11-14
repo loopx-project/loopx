@@ -108,6 +108,7 @@ interface ReadbackRequest {
   infer_turn_instance_id: boolean;
   allow_unbound_binding: boolean;
   resolve_original_binding: boolean;
+  pending_closeout: boolean;
   borrow_source_admission: boolean;
   include_record_bodies: boolean;
   tolerate_malformed_history: boolean;
@@ -236,6 +237,13 @@ function decodeRequest(
   if (request.resolve_original_binding === true && request.infer_turn_instance_id) {
     throw new EffectRuntimeRequestError("original binding requires an explicit Turn identity");
   }
+  if (request.pending_closeout !== undefined && typeof request.pending_closeout !== "boolean") {
+    throw new EffectRuntimeRequestError("pending_closeout must be a boolean");
+  }
+  if (request.pending_closeout === true && (request.infer_turn_instance_id || request.allow_unbound_binding
+      || request.refresh_retry != null || request.heartbeat_reentry_guard != null || request.spend_precheck === true)) {
+    throw new EffectRuntimeRequestError("pending closeout is a read-only receipt recovery, not inference or settlement admission");
+  }
   if (
     request.borrow_source_admission !== undefined
     && typeof request.borrow_source_admission !== "boolean"
@@ -290,6 +298,7 @@ function decodeRequest(
     infer_turn_instance_id: request.infer_turn_instance_id,
     allow_unbound_binding: request.allow_unbound_binding,
     resolve_original_binding: request.resolve_original_binding === true,
+    pending_closeout: request.pending_closeout === true,
     borrow_source_admission: request.borrow_source_admission === true,
     include_record_bodies: request.include_record_bodies !== false,
     tolerate_malformed_history: request.tolerate_malformed_history === true,
@@ -1119,7 +1128,8 @@ function owedPriorTurnFromSnapshot(
   request: ReadbackRequest,
   snapshot: QuotaSettlementReadbackSnapshot,
   agentId: string,
-  turnInstanceId: string,
+  turnInstanceId: string | null,
+  options?: { includeAdmittedReplans: boolean },
 ): OwedPriorTurn | null {
   const receipts = heartbeatReceiptsFromEvents(snapshot.events, request.goal_id, agentId)
     .filter((event) => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
@@ -1128,6 +1138,7 @@ function owedPriorTurnFromSnapshot(
     request.goal_id,
     agentId,
     turnInstanceId,
+    options,
   );
   for (const selected of candidates) {
     // A committed monitor poll is its own exact no-spend closeout. This is the
@@ -1151,6 +1162,7 @@ function owedPriorTurnFromSnapshot(
           infer_turn_instance_id: false,
           allow_unbound_binding: false,
           resolve_original_binding: false,
+          pending_closeout: false,
           refresh_retry: null,
           heartbeat_reentry_guard: null,
         },
@@ -1163,6 +1175,48 @@ function owedPriorTurnFromSnapshot(
     }
   }
   return null;
+}
+
+/** Resolve pending recovery without another provider read or a latest-Run heuristic. */
+function readPendingCloseoutFromRequest(
+  request: ReadbackRequest,
+  snapshot: QuotaSettlementReadbackSnapshot,
+): JsonObject {
+  const explicitAgentId = normalizeAgentId(request.agent_id);
+  if (explicitAgentId === null) {
+    throw new EffectRuntimeRequestError("pending closeout requires an explicit Agent");
+  }
+  const notFound = {schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA, found: false};
+  const turn = request.turn_instance_id ?? owedPriorTurnFromSnapshot(
+    request, snapshot, explicitAgentId, null, { includeAdmittedReplans: true },
+  )?.prior_turn_instance_id;
+  if (!turn) return notFound;
+  // Selection, original binding validation and receipt progress share this
+  // immutable snapshot and admitted owner. Maintenance Run classifications
+  // cannot conceal the guard's debt or select another Agent's work.
+  const result = readQuotaSettlementFromRequest({...request, turn_instance_id: turn,
+    pending_closeout: false, resolve_original_binding: true}, snapshot, false);
+  const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
+  const admission = jsonObject(result.native_child_admission);
+  const originalReceipt = jsonObject(result.heartbeat_receipt);
+  const workAdmitted = originalReceipt !== null &&
+    heartbeatReceiptFactFromEvent(originalReceipt).settlement_effect_id !== null &&
+    (admission?.report_permission === "new_operation" ||
+    admission?.report_permission === "existing_operation_only") &&
+    (!identity?.replan_obligation_id ||
+      jsonObject(result.semantic_replan_guard)?.selected_obligation_id === identity.replan_obligation_id);
+  const partialSettlement = [result.writeback, result.spend].some(step =>
+    jsonObject(jsonObject(step)?.payload)?.ok === true);
+  // Binding a candidate is not work admission. Reuse the receipt owner's
+  // qualified work facts, while retaining verified partial commits even if
+  // the original guard did not admit new work. Identity failures stay visible.
+  if (identity !== null && !workAdmitted && !partialSettlement) return notFound;
+  if (jsonObject(jsonObject(result.settlement)?.payload)?.ok === true ||
+      (identity?.todo_id && committedMonitorPollFromSnapshot(snapshot, {
+        goal_id: request.goal_id, agent_id: explicitAgentId, turn_instance_id: turn,
+        todo_id: String(identity.todo_id),
+      }, request.owner) !== null)) return notFound;
+  return result;
 }
 
 function readQuotaSettlementFromRequest(
@@ -1180,6 +1234,7 @@ function readQuotaSettlementFromRequest(
     );
   }
   const explicitAgentId = normalizeAgentId(request.agent_id);
+  if (request.pending_closeout) return readPendingCloseoutFromRequest(request, snapshot);
   // Only latest-Turn inference needs the full run history. Explicit readback
   // must use the existing Turn indexes before applying the Goal owner fence;
   // otherwise a batch over N Turns repeatedly scans all N receipts.

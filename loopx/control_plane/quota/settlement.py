@@ -233,13 +233,22 @@ def attach_settlement_progress(
     }
     # PowerShell quoting applies to every argument, even with an unquoted launcher.
     # Keep the argv for the composed CLI so it does not have to parse shell text.
-    if os.name == "nt":
+    if os.name == "nt" or route[0].lower().endswith(".ps1"):
         argv = shlex.split(command)
         owed.update(command=render_owed_host_command(argv), command_argv=argv)
     payload["settlement_owed"] = owed
 
 
 def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
+    recovery = payload.get("settlement_recovery")
+    if isinstance(recovery, dict):
+        identity = recovery["settlement_identity"]
+        lines = [f"- Pending settlement: `{identity['turn_instance_id']}`", recovery["instruction"]]
+        for command in recovery["next_cli_actions"]:
+            lines.extend(["", "```sh", command, "```"])
+        return lines
+    if payload.get("settlement_recovery_error"):
+        return [f"- Settlement recovery could not be read: {payload['settlement_recovery_error']}"]
     progress = payload.get("settlement_progress")
     if not isinstance(progress, dict):
         return []
@@ -457,6 +466,7 @@ def read_heartbeat_settlement(
     infer_turn_instance_id: bool = False,
     allow_unbound_binding: bool = False,
     resolve_original_binding: bool = False,
+    pending_closeout: bool = False,
     refresh_retry: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
@@ -489,6 +499,7 @@ def read_heartbeat_settlement(
                 else {}
             ),
             **({"resolve_original_binding": True} if resolve_original_binding else {}),
+            **({"pending_closeout": True} if pending_closeout else {}),
             **({"refresh_retry": refresh_retry} if refresh_retry is not None else {}),
             **({"borrow_source_admission": True} if borrow_source_admission else {}),
             **(
