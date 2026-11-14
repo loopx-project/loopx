@@ -114,7 +114,7 @@ def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_
     assert (copied / "child").stat().st_mode & 0o7777 == 0o700
 
 
-@pytest.mark.parametrize("fault", [None, "source_moved", "expired", "read_race", "late_native",
+@pytest.mark.parametrize("fault", [None, "source_moved", "source_missing", "source_missing_image", "expired", "read_race", "late_native",
     "retention", "retention_default", "retention_off", "retention_pin", "retention_failure", "continued_clock"])
 def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writer, tmp_path, monkeypatch, fault):
     from loopx.control_plane.effect_runtime import effect_runtime_result
@@ -135,16 +135,21 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         assert container.exec_run(["python", "-c", "from pathlib import Path; "
             f"Path({continued_clock!r}).write_bytes(Path('/phase').read_bytes()); "
             "Path('/opt/loopx-benchmark/control/phase-deadline').write_text('1')"]).exit_code == 0
-    prepared = _archive(container, "/candidate", tmp_path / "prepared")
+    source = "/no such image" if fault == "source_missing_image" else "/candidate"
+    if fault == "source_missing_image":
+        assert container.exec_run(["mv", "/candidate", source]).exit_code == 0
+    prepared = _archive(container, source, tmp_path / "prepared")
     probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe",
         "components": [{"id": "code", "source_path": str(prepared)}]})
     nonce = "e" * 32
-    request = {"capture_id": nonce, "components": [{"id": "code", "source_path": "/candidate"}],
+    request = {"capture_id": nonce, "components": [{"id": "code", "source_path": source}],
         "point_metadata": {"synthetic_boundary": True}, "source_sha256": probe["source_sha256"],
         "source_witness": probe["source_witness"],
         "deadline_epoch": time.time() + (-1 if fault == "expired" else 8 if fault == "late_native" else 30)}
     if fault == "source_moved":
         assert container.exec_run(["python", "-c", "from pathlib import Path; Path('/candidate').write_text('later')"]).exit_code == 0
+    if fault in {"source_missing", "source_missing_image"}:
+        assert container.exec_run(["rm", source]).exit_code == 0
     assert container.exec_run(["python", "-c", "from pathlib import Path; "
         "Path('/logs/agent/checkpoint-controller/ready.json').write_text(" + repr(json.dumps(request)) + ")"]).exit_code == 0
     if fault == "read_race":
@@ -232,6 +237,13 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
             assert (tmp_path / "points/retention-error.json").exists()
     else:
         assert not unit.exists()
+        if fault in {"source_missing", "source_missing_image"}:
+            reply = container.exec_run(["cat", "/logs/agent/checkpoint-controller/" + nonce + ".json"])
+            assert reply.exit_code == 0
+            assert json.loads(reply.output) == response
+            assert response["error_kind"] == ("ImageNotFound" if fault == "source_missing_image" else "NotFound")
+            assert response["missing_component_id"] == "code"
+            assert source.encode() not in reply.output
         if fault != "late_native":
             assert not (Path(json.loads(files[0].read_bytes())["bank_root"]) / nonce).exists()
     container.reload()

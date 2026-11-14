@@ -124,11 +124,16 @@ def test_completed_attempt_survives_artifact_index_permission_recovery(tmp_path,
     assert not list(index.iterdir()) and witness.read_bytes() == original
 
 
-@pytest.mark.parametrize("response", ["captured", "failed", "foreign", "timeout"])
+@pytest.mark.parametrize("response", ["captured", "failed", "missing_component",
+                                      "foreign_component", "missing_image", "foreign_image",
+                                      "forged_diagnostic", "foreign", "timeout"])
 def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response):
     mailbox = tmp_path / "checkpoint-controller"
     ready = mailbox / "ready.json"
     observed = []
+    error_kinds = {"missing_component": "NotFound", "foreign_component": "NotFound",
+                   "missing_image": "ImageNotFound", "foreign_image": "ImageNotFound",
+                   "forged_diagnostic": "SyntheticFailure"}
     def controller():
         until = time.time() + 2
         while not ready.exists() and time.time() < until:
@@ -141,6 +146,9 @@ def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response
         result = {"request_sha256": hashlib.sha256(raw).hexdigest(),
                   "ok": response == "captured", "error_kind": "SyntheticFailure",
                   "capture": {"research_point_qualified": False, "sha256": "retained"}}
+        if response in error_kinds:
+            result["error_kind"] = error_kinds[response]
+            result["missing_component_id"] = "other" if response.startswith("foreign_") else "code"
         if response == "foreign":
             result["request_sha256"] = "another-point"
         pending = mailbox / "reply.tmp"
@@ -154,8 +162,13 @@ def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response
         if response == "captured":
             assert await_controller_capture(*args)["sha256"] == "retained"
         else:
-            with pytest.raises(TimeoutError if response == "timeout" else ValueError):
+            with pytest.raises(TimeoutError if response == "timeout" else ValueError) as error:
                 await_controller_capture(*args, phase_deadline=args[-1])
+            if response in error_kinds:
+                expected = f"controller checkpoint failed: {error_kinds[response]}"
+                if response in {"missing_component", "missing_image"}:
+                    expected += " (missing component code)"
+                assert str(error.value) == expected
     finally:
         thread.join(3)
     assert not thread.is_alive() and not ready.exists() and len(observed) == 1
