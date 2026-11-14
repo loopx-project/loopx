@@ -234,6 +234,24 @@ describe('automatic DSH bootstrap', () => {
 })
 
 describe('/loopx-init implementation', () => {
+  it.each(['version', 'inspect'] as const)(
+    'does not replace a runtime whose %s probe could not be cleaned up safely',
+    async stage => {
+      const calls: string[][] = []
+      const runner: FileRunner = async (_file, args) => {
+        calls.push([...args])
+        if (stage === 'inspect' && args.includes('--version')) {
+          return { exitCode: 0, stdout: 'loopx 2.3.0\n', stderr: '' }
+        }
+        throw new LoopXCliError('transport', 'CLI cleanup not confirmed', false)
+      }
+      await expect(initializeLoopX({ runner, skillsDir: '/fixture/skills' }))
+        .rejects.toMatchObject({ kind: 'transport', retryable: false })
+      expect(calls).toHaveLength(stage === 'version' ? 1 : 2)
+      expect(calls.flat()).not.toContain('--install')
+    },
+  )
+
   it('keeps a compatible CLI and installs plus verifies the DSH skills', async () => {
     const calls: string[][] = []
     let inspectCount = 0

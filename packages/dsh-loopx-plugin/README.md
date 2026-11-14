@@ -549,9 +549,21 @@ pre-step revalidation order remains authoritative.
 DSH's LLM retry plugin owns provider-request retries. For CLI calls, this Driver
 retries only safe fixed-argv LoopX reads and an idempotent `quota should-run`
 receipt, at most twice beyond the first attempt. Every retry uses the same
-`--turn-instance-id`. Typed authority denials, incompatible schemas,
-cancellation, and human input are never retried. There is no cumulative
-eight-failure breaker or plugin-owned durable activation state. The small
+`--turn-instance-id`. If a saved quota page loses its CLI response, retry
+only that page with the same reference, selection and offset. This also
+applies during pre-step revalidation. Typed authority denials, incompatible schemas,
+cancellation, and human input are never retried.
+
+On macOS and Linux, the plugin cancels commands in the process group it started
+and waits for that group and its output pipes before retrying a timed-out read.
+If cleanup cannot be confirmed, it stops the attempt. This does not guarantee
+cleanup of a process that starts its own session, or of descendants on Windows.
+
+GoalBar never retries a lifecycle write. If no result can be verified, refresh
+to read the Goal's current state before trying the action again.
+
+There is no cumulative eight-failure breaker or plugin-owned durable activation
+state. The small
 process-local activation projection is bound to one exact Session and is
 reconstructed only from its typed event history. Exhausting the three attempts
 stops that evaluation; it does not create a periodic error-retry loop. Only a
@@ -635,7 +647,6 @@ cd packages/dsh-loopx-plugin
 DSH_BIN="$(command -v dsh)" ./install.sh
 dsh --profile web --dump-config
 ```
-
 The installer rejects an incompatible host before changing its profile. A
 successful profile contains `loopx-goalbar`, `loopx-init-command`, `loopx-driver`,
 and the passive `loopx-shadow-observer` in that order. The installer also reads

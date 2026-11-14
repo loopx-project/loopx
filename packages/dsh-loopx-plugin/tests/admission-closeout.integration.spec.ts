@@ -8,7 +8,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { describe, expect, it, onTestFinished } from 'vitest'
 
-import { runFile } from '../src/cli.ts'
+import { LoopXCliError, runFile } from '../src/cli.ts'
 import type { FileRunner } from '../src/cli.ts'
 import { LoopXContinuationDriver } from '../src/driver.ts'
 import { pluginPythonCandidates } from '../src/managed-runtime.ts'
@@ -303,8 +303,10 @@ describe('DSH admission-to-closeout integration', () => {
       readOnlyFromGuard: 1 },
     { route: 'read-only paged revalidation', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4,
       readOnlyFromGuard: 3, readOnlyPageBytes: '256' },
+    { route: 'lost response on a later page', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4,
+      readOnlyFromGuard: 3, readOnlyPageBytes: '256', loseReaderResponse: true },
   ])('settles the queued exact receipt once through $route admission', async ({
-    route, version, setting, readerCalls, readOnlyFromGuard, readOnlyPageBytes,
+    route, version, setting, readerCalls, readOnlyFromGuard, readOnlyPageBytes, loseReaderResponse,
   }) => {
     const testFixture = await fixture()
     const warnings: string[] = []
@@ -312,6 +314,8 @@ describe('DSH admission-to-closeout integration', () => {
     let reads = 0
     let inlinePages = 0
     let inlineContinuations = 0
+    let lostPage: { argv: readonly string[]; stdout: string } | undefined
+    let recoveredPage = false
     const runner: FileRunner = async (file, args, options) => {
       if (args.includes('context-read')) reads += 1
       if (args.includes('should-run')) {
@@ -332,6 +336,17 @@ describe('DSH admission-to-closeout integration', () => {
         if (page.offset !== 0) {
           inlineContinuations += 1
           expect(readerArgs).toContain('--selection-sha256')
+          if (loseReaderResponse && lostPage === undefined) {
+            lostPage = { argv: readerArgs, stdout: response.stdout }
+            // The original Core read succeeded, but its output was lost
+            // before the Driver could observe it.
+            throw new LoopXCliError('transport', 'synthetic reader response loss', true)
+          }
+          if (lostPage !== undefined && !recoveredPage) {
+            expect(readerArgs).toEqual(lostPage.argv)
+            expect(response.stdout).toEqual(lostPage.stdout)
+            recoveredPage = true
+          }
         }
         return response
       }
@@ -379,6 +394,11 @@ describe('DSH admission-to-closeout integration', () => {
       async () => ({ kind: 'enter', messages: [queued] }),
     )
     expect(admission.kind).toBe('enter')
+    if (loseReaderResponse) {
+      expect(recoveredPage).toBe(true)
+      expect(warnings).toEqual([])
+      expect(testFixture.queued).toHaveLength(0)
+    }
     // The Driver intentionally revalidates before and after the next pre-step hook.
     expect(guardCalls).toBe(3)
     if (readOnlyPageBytes) {
@@ -565,7 +585,7 @@ describe('DSH admission-to-closeout integration', () => {
     }
   }, 45_000)
 
-  it.each(['held', 'digest mismatch', 'inline digest mismatch', 'paged'] as const)(
+  it.each(['held', 'digest mismatch', 'inline digest mismatch', 'paged', 'transport exhausted'] as const)(
     'keeps one guard when the progressive capture is %s',
     async scenario => {
       const testFixture = await fixture()
@@ -575,6 +595,7 @@ describe('DSH admission-to-closeout integration', () => {
       const warnings: string[] = []
       let guards = 0
       let reads = 0
+      const lostReads: string[][] = []
       const runner: FileRunner = async (file, args, options) => {
         const child = { ...options, env: { ...options.env, LOOPX_CONTEXT_DELIVERY: 'on' } }
         if (args.includes('context-read')) {
@@ -591,7 +612,13 @@ describe('DSH admission-to-closeout integration', () => {
             expect(page.schema_version).toBe('context_capture_page_v1')
             return { ...response, stdout: JSON.stringify({ ...page, selection_sha256: '0'.repeat(64) }) }
           }
-          return realLoopXRunner(file, readerArgs, child)
+          const response = await realLoopXRunner(file, readerArgs, child)
+          if (scenario === 'transport exhausted') {
+            expect(record(JSON.parse(response.stdout)).ok).toBe(true)
+            lostReads.push(readerArgs)
+            throw new LoopXCliError('transport', 'synthetic reader response loss', true)
+          }
+          return response
         }
         if (!args.includes('should-run')) return realLoopXRunner(file, args, child)
         guards += 1
@@ -625,7 +652,13 @@ describe('DSH admission-to-closeout integration', () => {
         driver.observeAgent(testFixture.agent)
         await evaluated
         expect(guards).toBe(1)
-        if (scenario === 'digest mismatch' || scenario === 'inline digest mismatch') {
+        if (scenario === 'transport exhausted') {
+          expect(reads).toBe(3)
+          expect(lostReads).toEqual([lostReads[0], lostReads[0], lostReads[0]])
+          expect(testFixture.queued).toHaveLength(0)
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain('admission_failed stage=quota kind=transport')
+        } else if (scenario === 'digest mismatch' || scenario === 'inline digest mismatch') {
           expect(reads).toBe(1)
           expect(testFixture.queued).toHaveLength(0)
           expect(warnings).toHaveLength(1)
