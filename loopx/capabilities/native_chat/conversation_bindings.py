@@ -289,13 +289,15 @@ class ChatConversationBindings:
         if not sessions:
             raise ValueError("the original steward Session is unavailable")
         session = max(sessions, key=lambda item: (item.get("last_activity_at") or "", item["session_id"]))
+        self._recheck_local_bindings(current)
+        # Close may commit while we verify the grant. Read the original Session
+        # afterwards so an already committed Close cannot return a stale target.
         fresh = self.controller.store.load_session(session["session_id"])
         if fresh is None or fresh.get("status") == "closed":
             raise ValueError("the original steward Session is unavailable")
         expected = {**self._session_observation(session), "status": fresh.get("status")}
         if self._session_observation(fresh) != expected:
             raise ValueError("the original steward Session is unavailable")
-        self._recheck_local_bindings(current)
         return fresh
 
     def _revoke_delivery_sources(self, binding_id: str) -> None:
