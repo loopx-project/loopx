@@ -270,7 +270,13 @@ class ChatConversationBindings:
                 raise OSError("steward executor binding publication did not verify")
 
     def app_steward_target(self) -> dict[str, Any]:
-        """Discover within the selected source; opening creates no execution."""
+        session = self.app_steward_session()
+        if session is None:
+            return {"binding_id": None, "session_id": None}
+        return {"binding_id": session["steward_context"]["binding_id"], "session_id": session["session_id"]}
+
+    def app_steward_session(self) -> dict[str, Any] | None:
+        """Read the Session within the selected source without starting work."""
         current = self.read()
         selected = current.get("app_steward_binding_id")
         if selected is None:
@@ -278,14 +284,19 @@ class ChatConversationBindings:
             # unreadable grant must not masquerade as an unselected entry.
             self._core("collaboration.conversation.binding", {"current": current,
                 "expected_revision": current.get("revision"), "operation": "select_app_steward", "binding_id": None})
-            return {"binding_id": None, "session_id": None}
-        sessions = self.local_sessions(selected, app_steward_entry=True)
+            return None
+        current, sessions, _ = self._observe_local_sessions(selected, app_steward_entry=True)
         if not sessions:
             raise ValueError("the original steward Session is unavailable")
         session = max(sessions, key=lambda item: (item.get("last_activity_at") or "", item["session_id"]))
-        if self.read().get("app_steward_binding_id") != selected:
-            raise ValueError("App steward selection changed during discovery")
-        return {"binding_id": selected, "session_id": session["session_id"]}
+        fresh = self.controller.store.load_session(session["session_id"])
+        if fresh is None or fresh.get("status") == "closed":
+            raise ValueError("the original steward Session is unavailable")
+        expected = {**self._session_observation(session), "status": fresh.get("status")}
+        if self._session_observation(fresh) != expected:
+            raise ValueError("the original steward Session is unavailable")
+        self._recheck_local_bindings(current)
+        return fresh
 
     def _revoke_delivery_sources(self, binding_id: str) -> None:
         if self.controller is not None:
@@ -410,6 +421,19 @@ class ChatConversationBindings:
         return self.local_session_snapshot(binding_id, app_steward_entry=app_steward_entry)["sessions"]
 
     def local_session_snapshot(self, binding_id: str, *, app_steward_entry: bool = False) -> dict[str, Any]:
+        current, sessions, source = self._observe_local_sessions(binding_id, app_steward_entry=app_steward_entry)
+        payload = {"sessions": [self.controller.store.public_session(session) for session in sessions],
+                   "conversation_source": source}
+        self._recheck_local_bindings(current)
+        return payload
+
+    def _recheck_local_bindings(self, observed: dict[str, Any]) -> None:
+        if self.read() != observed:
+            raise ValueError("conversation binding changed during discovery")
+
+    def _observe_local_sessions(
+        self, binding_id: str, *, app_steward_entry: bool,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         """Read original targets; metadata hints never replace Core's grant.
 
         This read-only snapshot does not wait for a mutation fence. Core checks
@@ -453,16 +477,13 @@ class ChatConversationBindings:
         # an IO dictionary must not silently turn ambiguity into one target.
         by_id = {session["session_id"]: session for session in sessions}
         project = next(project for project in projects if project["project_ref"] == row["project_ref"])
-        payload = {"sessions": [store.public_session(by_id[sid]) for sid in result["session_ids"]],
-                   "conversation_source": {"binding_id": binding_id, "app_ref": row["transport_ref"],
-                       "context_kind": row["context_kind"], "audience": row.get("audience", "owner"),
-                       "project_title": Path(project["workspace_path"]).name, "context_available": True,
-                       "executor_endpoint_id": row["executor_endpoint_id"]}}
+        source = {"binding_id": binding_id, "app_ref": row["transport_ref"],
+                  "context_kind": row["context_kind"], "audience": row.get("audience", "owner"),
+                  "project_title": Path(project["workspace_path"]).name, "context_available": True,
+                  "executor_endpoint_id": row["executor_endpoint_id"]}
         # Bind the projection to the exact atomic configuration Core checked.
         # This is not an execution grant or a cached provider observation.
-        if self.read() != current:
-            raise ValueError("conversation binding changed during discovery")
-        return payload
+        return current, [by_id[sid] for sid in result["session_ids"]], source
 
     def goal_scope_ids(self, binding: dict[str, Any]) -> list[str]:
         if binding.get("goal_scope") != "all_registered":
