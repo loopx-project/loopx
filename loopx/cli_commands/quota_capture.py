@@ -37,6 +37,7 @@ from .quota_context_reader import (
     _saved_context_read_page,
     _context_page_output_enabled,
     _capture_read_reference,
+    _json_output_size,
     _native_context_read_bytes,
     _native_context_reference,
     _native_output_bytes,
@@ -738,7 +739,7 @@ def settlement_capture_failure_view(
     }
     if (view.get("ok") is True and (view.get("appended") or view.get("idempotent_replay"))
             and view.get("json_path") and "quota_event" in view
-            and len(_native_output_bytes(view)) + len(os.linesep) - 1 > output_bytes):
+            and _json_output_size(view) > output_bytes):
         # The durable spend record already contains the event and its snapshots.
         view.pop("quota_event")
         omitted.append("quota_event")
@@ -1184,14 +1185,14 @@ def _bounded_replan_writeback(args: argparse.Namespace, view: dict[str, Any]) ->
             return view
         limit = NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
     raw = _native_output_bytes(view)
-    if len(raw) <= limit:
+    if _json_output_size(raw) <= limit:
         return view
     budget_error = "Retry the original read with a larger output budget."
     # Even an empty reader command cannot fit at this limit. Avoid creating a
     # recovery file the caller will have no way to locate.
     opening = {"ok": True, "stage": "writeback", "source_hash": view["source_hash"], "command": "",
         "instruction": "Read all writeback fields through EOF before using commands. This read does not settle the Turn."}
-    if len(_native_output_bytes(opening)) > limit:
+    if _json_output_size(opening) > limit:
         raise ValueError(budget_error)
     if len(raw) > MAX_REQUEST_BYTES:
         raise ValueError("The verified writeback exceeds the context reader size limit.")
@@ -1209,7 +1210,7 @@ def _bounded_replan_writeback(args: argparse.Namespace, view: dict[str, Any]) ->
         page_bytes=max(256, min(NATIVE_CONTEXT_PAGE_BYTES, limit)), output_limit=limit, reader_argv=reader_argv)
     opening["command"] = context_capture_read_command(path, digest, reference_file=reader, page_bytes=page_bytes,
         max_page_output_bytes=limit, reader_argv=reader_argv)
-    if needed > limit or len(_native_output_bytes(opening)) > limit:
+    if needed > limit or _json_output_size(opening) > limit:
         raise ValueError(budget_error)
     return opening
 
@@ -1227,17 +1228,17 @@ def handle_replan_view(
     except (OSError, ValueError, EffectRuntimeRejected) as exc:
         view = {"ok": False, "reason": str(exc)}
         limit = getattr(args, "max_page_output_bytes", None)
-        if limit is not None and len(_native_output_bytes(view)) > limit:
+        if limit is not None and _json_output_size(view) > limit:
             digest_mismatch = isinstance(exc, ContextCaptureDigestMismatch)
             reason = ("Bad digest. Restore capture. Do not rerun admission."
                       if digest_mismatch else "See stderr for the original read failure.")
             view = {"ok": False, "reason": reason}
-            fits = len(_native_output_bytes(view)) <= limit
+            fits = _json_output_size(view) <= limit
             if not digest_mismatch or not fits:
                 print(str(exc), file=sys.stderr)
             if not fits:
                 view = {"ok": False}
-                if len(_native_output_bytes(view)) > limit:
+                if _json_output_size(view) > limit:
                     return 1
     print_payload(view, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
     return 0 if view["ok"] else 1

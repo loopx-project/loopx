@@ -209,9 +209,7 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
         return result
 
     def fits(result: dict[str, Any]) -> bool:
-        # Match cli_runtime.print_payload exactly, including print's newline.
-        return output_limit is None or len(json.dumps(result, ensure_ascii=False,
-            separators=(",", ":")).encode("utf-8")) + len(os.linesep) <= output_limit
+        return output_limit is None or _json_output_size(result) <= output_limit
 
     result = page(content)
     if fits(result):
@@ -245,8 +243,8 @@ def _inline_context_read_floor(path: Path, content_bytes: int, digest: str, *, p
         reader_argv=reader_argv)
     cursor = context_capture_read_command(path, digest, offset=offset + 1,
         page_bytes=page_bytes, max_page_output_bytes=output_limit, reader_argv=reader_argv)
-    return len(_native_output_bytes({**opening, "offset": offset, "next_offset": offset + 1,
-        "total_bytes": content_bytes, "next_command": cursor}))
+    return _json_output_size({**opening, "offset": offset, "next_offset": offset + 1,
+        "total_bytes": content_bytes, "next_command": cursor})
 
 
 def inline_context_read_fits(path: Path, raw: bytes, digest: str, *, page_bytes: int,
@@ -291,7 +289,7 @@ def pinned_context_read_window(reference_file: Path, content: bytes, *, page_byt
             output_limit=None, instruction=False, next_page_bytes=size,
             next_page_output_bytes=budget, select=[], reference_file=reference_file,
             reader_argv=reader_argv)
-        return len(_native_output_bytes(page))
+        return _json_output_size(page)
 
     if continuation_bytes(page_bytes, output_limit) <= output_limit:
         return page_bytes, output_limit
@@ -302,7 +300,7 @@ def pinned_context_read_window(reference_file: Path, content: bytes, *, page_byt
         whole = _capture_page(reference_file, content, "", offset=0, size=page_bytes,
             output_limit=None, instruction=False, select=[], reference_file=reference_file,
             reader_argv=reader_argv)
-        return page_bytes, max(output_limit, len(_native_output_bytes(whole)))
+        return page_bytes, max(output_limit, _json_output_size(whole))
     while (needed := continuation_bytes(page_bytes, output_limit)) > output_limit:
         output_limit = needed
     return page_bytes, output_limit
@@ -694,8 +692,16 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
 
 
 def _native_output_bytes(value: dict[str, Any]) -> bytes:
-    """Match immutable capture publication and compact CLI JSON, including LF."""
+    """Serialize a compact transport document with the capture file's LF."""
     return (json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+
+
+def _json_output_size(value: dict[str, Any] | bytes) -> int:
+    """Count compact JSON with the host's line ending, reusing serialized capture bytes."""
+    if isinstance(value, bytes):
+        return len(value) + len(os.linesep) - 1
+    return len(json.dumps(value, ensure_ascii=False,
+        separators=(",", ":")).encode("utf-8")) + len(os.linesep)
 
 
 def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,

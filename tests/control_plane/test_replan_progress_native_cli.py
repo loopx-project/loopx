@@ -443,12 +443,30 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
             assert "budget" in reason and "retry" in reason and "read" in reason
         # Below the compact reason, preserve the process error and diagnostic
         # without emitting a partial JSON response.
-        for limit in (12, 13):
+        minimal_failure = b'{"ok":false}' + os.linesep.encode()
+        for limit in (len(minimal_failure) - 1, len(minimal_failure)):
             args = shlex.split(f"{writer_command} --max-page-output-bytes {limit}")
             denied = subprocess.run(args, cwd=fixture["project"], capture_output=True, timeout=30)
             assert denied.returncode == 1 and len(denied.stdout) <= limit
             assert b"output budget" in denied.stderr
-            assert denied.stdout == (b'{"ok":false}\n' if limit == 13 else b"")
+            assert denied.stdout == (minimal_failure if limit == len(minimal_failure) else b"")
+
+        # Exercise the production printer with CRLF even on a POSIX test host.
+        writer_argv = shlex.split(writer_command)
+        cli_args = writer_argv[writer_argv.index("--format"):]
+        crlf_cli = (
+            "import os, sys; from loopx.entrypoint import main; "
+            "os.linesep = '\\r\\n'; sys.stdout.reconfigure(newline=os.linesep); raise SystemExit(main())"
+        )
+        for limit in (13, 14, 77):
+            denied = subprocess.run([sys.executable, "-c", crlf_cli, *cli_args, "--max-page-output-bytes", str(limit)],
+                cwd=fixture["project"], capture_output=True, timeout=30)
+            assert denied.returncode == 1 and len(denied.stdout) <= limit
+            assert b"output budget" in denied.stderr
+            if limit == 13:
+                assert denied.stdout == b""
+            else:
+                assert denied.stdout.endswith(b"\r\n") and json.loads(denied.stdout)["ok"] is False
         assert set(recovery_root.glob("recovery-*")) == prior_recoveries
 
         moved = path.with_name("unavailable-source.json")
