@@ -467,6 +467,11 @@ can be established, or invalidation also fails, the CLI reports
 `quota_decision_transport_failed` with the saved decision and receipt. Do not
 rerun admission to recover a presentation failure.
 
+If the compact recovery reference cannot be written, a bounded failure reply can
+carry only the saved capture path and SHA-256. Use `quota context-read` with that
+identity in a larger output channel. When `decision.json` could not be saved,
+the fallback capture contains the original committed receipt and diagnostics.
+
 When the caller also selects `--record-host-poll`, the existing liveness owner
 records that observation once before the original capture. The saved decision,
 ordinary/envelope output and native recovery view retain the same

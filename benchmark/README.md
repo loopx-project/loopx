@@ -330,6 +330,8 @@ private physical directory owned by the same user (Unix only). After writing the
 complete original decision, the CLI sends one newline-delimited JSON object
 `{"path": ".../decision.json", "sha256": "..."}` and withholds successful output
 until it receives exactly `{"released": true, "sha256": "..."}` for those bytes.
+The digest is fixed when the CLI publishes the capture. A file replaced before
+handoff is rejected before the Host can act on it.
 The existing selection command preserves both transport options. Ordinary CLI
 output and admission remain unchanged when the option is absent; this option
 does not enable TurnEnvelope.
