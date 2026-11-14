@@ -1016,6 +1016,78 @@ def connect(fixture):
                                                              runner=provider, cli_bin="lark-cli")
 
 
+@pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request", "corrupt_readback", "upload_denied"])
+def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, monkeypatch, fault):  # noqa: F811
+    from loopx.extensions import public_source_reader
+    from test_chat_image_attachments import PNG_BYTES
+    from test_lark_app_image_projection import ImageIO
+
+    store, runtime, provider, transport = connect(ordinary)
+    capture, fake = ordinary[4:6]
+    url = ("https://unrelated.example" if fault == "foreign_source" else "https://source.example") + "/chart.png"
+    authored = f'Original explanation.\n\n![Source chart](<{url}> "Figure 6")'
+    script = fake.read_text()
+    assert '"message": "Runtime response.",' in script
+    fake.write_text(script.replace('"message": "Runtime response.",', '"message": ' + repr(authored) + ",", 1))
+    fetched = []
+
+    def fetch(target, *, deadline):
+        if target == "https://source.example/article":
+            basename = "different-chart.png" if fault == "unlisted_image" else "chart.png"
+            return target, "text/html", f'<img src="/{basename}">'.encode()
+        fetched.append(target)
+        return target, "image/png", PNG_BYTES
+
+    monkeypatch.setattr(public_source_reader, "fetch", fetch)
+    io = ImageIO(provider)
+    io.corrupt_download = fault == "corrupt_readback"
+    def media(args, cwd=None, timeout=None):
+        if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
+            return {"returncode": 3, "stderr": '{"ok":false,"error":{"code":99991672}}'}
+        return io(args, cwd, timeout)
+
+    transport.runner = media
+    try:
+        source = provider.event("notes-app", "answer-with-original-image", "Read https://source.example/article")
+        transport.admit("notes-app", source)
+        original = transport.core.pending()[0]
+        sid, tid, ref = (original[key] for key in ("session_id", "turn_id", "request_ref"))
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed"
+        if fault == "changed_request":
+            provider.messages[source["message_id"]]["content"] = "Source URL removed."
+        path = transport.root / f"{ref}.json"
+        transport.reconcile_request(path)
+        saved = json.loads(path.read_text())
+        assert saved["answer_images"]["status"] == ("delivered" if fault == "none" else "unverified")
+        out = [(mid, row, json.loads(row["body"]["content"])["zh_cn"]["content"])
+               for mid, row in provider.messages.items() if mid.startswith("om_out_") and row["msg_type"] == "post"]
+        assert all(row["chat_id"] == source["chat_id"] for _, row, _ in out)
+        assert any("[Source chart](" in nodes[0][0]["text"] for _, _, nodes in out)
+        assert all(not any("![Source chart]" in node.get("text", "") for line in nodes for node in line) for _, _, nodes in out)
+        assert transport.core.read_request(ref).get("delivery_verified", False) is (fault == "none")
+        native_images = [node["image_key"] for _, _, nodes in out for line in nodes for node in line if node["tag"] == "img"]
+        assert native_images == list(io.resources)
+        assert all(io.resources[k] == PNG_BYTES for k in native_images)
+        assert len(fetched) == (0 if fault in {"foreign_source", "unlisted_image", "changed_request"} else 1)
+        assert ("图片尚未核验送达" in str(out)) == (fault != "none")
+        if fault == "corrupt_readback":
+            io.corrupt_download = False
+            from loopx.chat_store import _atomic_write_json
+            saved["answer_images"]["next_check_at"] = 0
+            _atomic_write_json(path, saved)
+            restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                                  runner=media, cli_bin="lark-cli")
+            writes = list(provider.writes)
+            restarted.reconcile_request(path)
+            assert transport.core.read_request(ref)["delivery_verified"] is True
+            assert provider.writes == writes and io.uploads == 1 and fetched == [url]
+        assert sum(json.loads(line).get("method") == "turn/start" for line in capture.read_text().splitlines()) == 1
+        assert any(row["text"].endswith(authored) for row in store.messages(sid) if row["role"] == "agent")
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished", "source-changed", "closed", "lost-ack", "message-crash",
     "historical", "historical-source-changed", "historical-stop"])
 def test_original_worker_recovers_native_result_without_replay(tmp_path, language_server, monkeypatch, case):  # noqa: F811

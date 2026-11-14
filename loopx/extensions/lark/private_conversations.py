@@ -5,7 +5,9 @@ Core owns audience grants, canonical Sessions, durable Turns and stop/recovery.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import http.client
 import json
 import re
 import subprocess
@@ -25,6 +27,7 @@ from ...capabilities.native_chat.external_conversations import (
 )
 from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
+from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, normalize_chat_image_attachments
 from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope
@@ -54,6 +57,84 @@ from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC
 PROGRESS_EDIT_BUDGET = 12
 CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}
 _UNSUPPORTED_MEDIA_LABELS = {"audio": "音频", "file": "文件", "media": "视频"}
+_MARKDOWN_CODE_SPAN = re.compile(r"((?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\2(?!\x60))")
+_ANSWER_IMAGE = re.compile(r"""(?<!\\)!\[([^\]\n]*)\]\(\s*(?:<([^<>\n]+)>|([^\s<>()]+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)""")
+_SOURCE_URL = re.compile(r"https://[^\s<>()\[\]\"，。；！？]+")
+
+
+def _private_answer_images(text: str) -> tuple[str, list[str]]:
+    """Remove image previews from provider prose, leaving the canonical answer alone."""
+    lines, targets = [], []
+    fence = None
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(\x60{3,}|~{3,})(.*)$", line)
+        if marker and fence is None:
+            fence = marker[1]
+        elif marker and fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+            fence = None
+        elif not fence and not line.startswith(("    ", "\t")):
+            def link(match: re.Match[str]) -> str:
+                url = match[2] or match[3]
+                if url not in targets:
+                    targets.append(url)
+                caption = match[1] or f"图片 {targets.index(url) + 1}"
+                return f"[{caption}](<{url}>)" if url.startswith("https://") and " " in url else (
+                    f"[{caption}]({url})" if url.startswith("https://") else caption)
+
+            start, chunks = 0, []
+            for span in _MARKDOWN_CODE_SPAN.finditer(line):
+                chunks.extend((_ANSWER_IMAGE.sub(link, line[start:span.start()]), span[0]))
+                start = span.end()
+            line = "".join((*chunks, _ANSWER_IMAGE.sub(link, line[start:])))
+        lines.append(line)
+    return "".join(lines), targets
+
+
+def _private_answer_image(url: str, *, deadline: float, index: int) -> dict[str, Any]:
+    # Reuse anonymous HTTPS address pinning, redirect checks and byte limits.
+    # No local file, signed-in browser or model tool authority is involved.
+    from urllib.parse import urlsplit
+
+    from ..public_source_reader import fetch
+
+    observed, mime, data = fetch(url, deadline=deadline)
+    if urlsplit(observed).hostname != urlsplit(url).hostname or urlsplit(observed).query:
+        raise ValueError("original image source changed")
+    signatures = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff", "image/gif": b"GIF8"}
+    if not ((mime in signatures and data.startswith(signatures[mime]))
+            or (mime == "image/webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
+        raise ValueError("unsupported original image")
+    return {"id": f"reply-image-{index}", "name": f"original-{index}.{mime.split('/')[1]}",
+            "mime_type": mime, "size": len(data), "data_url": f"data:{mime};base64," + base64.b64encode(data).decode()}
+
+
+def _answer_image_sources(source: str, targets: list[str], *, deadline: float) -> bool:
+    """Require an exact owner URL or an image referenced by its same-host article."""
+    from urllib.parse import urlsplit
+
+    from ..public_source_reader import article, public_url
+
+    def candidate(url: str) -> str | None:
+        try:
+            return public_url(url) if not urlsplit(url).query else None
+        except ValueError:
+            return None
+
+    owner_links = {url for link in _SOURCE_URL.findall(source) if (url := candidate(link))}
+    wanted = {candidate(target) for target in targets}
+    if None in wanted or not owner_links:
+        return False
+    if wanted <= owner_links:
+        return True
+    if len(owner_links) != 1:
+        return False
+    [original] = owner_links
+    host = urlsplit(original).hostname
+    if any(urlsplit(url).hostname != host for url in wanted - owner_links):
+        return False
+    observed = article(original, deadline=deadline)
+    return (observed.get("ok") is True and urlsplit(observed["observed_url"]).hostname == host
+            and wanted <= owner_links | {candidate(item["url"]) for item in observed["images"]})
 
 
 def _unsupported_media_label(row: Mapping[str, Any]) -> str | None:
@@ -562,18 +643,23 @@ class LarkPrivateConversations:
             pass
         return None
 
-    def _source_verified(self, record: dict[str, Any], *, sender_identity: dict[str, str] | None = None) -> bool:
-        return self._source_message(record, render_content=False, sender_identity=sender_identity) is not None
+    def _source_verified(self, record: dict[str, Any], *, sender_identity: dict[str, str] | None = None,
+                         expected_text: str | None = None) -> bool:
+        message = self._source_message(record, render_content=False, sender_identity=sender_identity)
+        return message is not None and (expected_text is None or (
+            message.get("deleted") is not True and message.get("msg_type", message.get("message_type")) == "text"
+            and private_source_text(message) == expected_text))
 
     def _source_authority(self, record: dict[str, Any], profile: str, chat_id: str,
-                          message_id: str) -> tuple[str | None, bool]:
+                          message_id: str, *, expected_text: str | None = None) -> tuple[str | None, bool]:
         """Verify one exact outbound operation; retain no identity or grant."""
         if (profile != record["profile"] or chat_id != record["event"]["chat_id"]
                 or message_id != record["event"]["message_id"]):
             return None, False
         identity: dict[str, str] = {}
         record_event_timing(profile, message_id, "outbound_source_check_started")
-        verified = self._source_verified(record, sender_identity=identity)
+        verified = self._source_verified(record, sender_identity=identity,
+            **({"expected_text": expected_text} if expected_text is not None else {}))
         record_event_timing(profile, message_id, "outbound_source_check_returned")
         return identity.get("bot_display_name"), verified
 
@@ -1126,6 +1212,7 @@ class LarkPrivateConversations:
             return False
         kind = phase.split(".", 1)[0]
         phase = presentation_phase(record, phase)
+        expected_text = record["event"]["content"] if kind == "answer_images" else None
         phase_state = record["deliveries"].get(phase, {})
         if phase_state.get("verified"):
             return True
@@ -1136,8 +1223,11 @@ class LarkPrivateConversations:
             text = _presentation_text(text)
         if phase_state.get("text") not in (None, text):
             raise ValueError("delivery content changed after an attempt")
-        if image_attachments and (kind != "web" or reply_placement != "chat_root" or edit_only):
-            raise ValueError("App image projection requires its original private outbox")
+        if image_attachments and (authorization_check is None or edit_only
+                or not ((kind == "web" and reply_placement == "chat_root")
+                        or (kind == "answer_images" and record["event"].get("chat_type") == "p2p"
+                            and record["source"].get("private_human_message") is True))):
+            raise ValueError("Image projection requires its original private outbox")
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_started")
         config = inbox()
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_inbox_ready")
@@ -1145,17 +1235,21 @@ class LarkPrivateConversations:
             if authorization_check is None or not authorization_check():
                 return False
             name, verified = self._source_authority(record, record["profile"],
-                record["event"]["chat_id"], record["event"]["message_id"])
+                record["event"]["chat_id"], record["event"]["message_id"], expected_text=expected_text)
             return bool(name) and verified
 
         image_keys = ()
         if image_attachments:
+            resource_scope = (f"{record['binding_id']}:{record['request_ref']}:{phase}"
+                              if kind == "answer_images" else record["binding_id"])
             image_keys = uploaded_chat_images(root=self.runtime_root, profile=record["profile"],
-                provider_ref=record["binding_id"], attachments=image_attachments, private_transport=self,
+                provider_ref=resource_scope, attachments=image_attachments, private_transport=self,
                 before_upload=image_authorized, verify_only=bool(phase_state.get("started") or phase_state.get("attempt")))
             if phase_state.get("image_keys", list(image_keys)) != list(image_keys):
                 raise ValueError("App image delivery resources changed after an attempt")
             phase_state["image_keys"] = list(image_keys)
+            record["deliveries"][phase] = phase_state
+            _atomic_write_json(path, record)
         kwargs = dict(project=self.runtime_root, config_path=config,
             message_id=record["event"]["message_id"], text=text, runner=self._reply_runner,
             **({"image_keys": image_keys} if image_keys else {}),
@@ -1163,7 +1257,7 @@ class LarkPrivateConversations:
             **({"delivery_id": delivery_id} if delivery_id is not None else {}),
             finalize_reactions=finalize_source and not edit_only and kind not in {"admission", "progress", "periodic_report"} and not (kind == "terminal" and record.get("commission_resources")),
             source_authority_verifier=lambda profile, chat, message: (
-                self._source_authority(record, profile, chat, message)
+                self._source_authority(record, profile, chat, message, expected_text=expected_text)
                 if authorization_check is None or authorization_check() else (None, False)))
         progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
         stream = presentation_stream(record)
@@ -1185,7 +1279,7 @@ class LarkPrivateConversations:
             if authorization_check is not None and not authorization_check():
                 return {"continue_delivery": False}
             name, verified = self._source_authority(record, record["profile"],
-                record["event"]["chat_id"], record["event"]["message_id"])
+                record["event"]["chat_id"], record["event"]["message_id"], expected_text=expected_text)
             if not name or not verified or (authorization_check is not None and not authorization_check()):
                 return {"continue_delivery": False}
             phase_state.update(text=text, started=True)
@@ -1215,7 +1309,7 @@ class LarkPrivateConversations:
                     phase_state.pop(key, None)
                 record["deliveries"][phase] = phase_state
                 _atomic_write_json(path, record)
-                return self._deliver(path, record, phase, text, inbox=inbox)
+                return self._deliver(path, record, phase, text, inbox=inbox, finalize_source=finalize_source)
             if not edit_only and result.get("blocker") in {"provider_update_too_large", "provider_update_format_unsupported"}:
                 # Do not truncate long/mention-bearing final answers to fit a
                 # draft. Close it, then use the established full final sender.
@@ -1224,7 +1318,7 @@ class LarkPrivateConversations:
                 phase_state.pop("edit_from", None)
                 record["deliveries"][phase] = phase_state
                 _atomic_write_json(path, record)
-                return self._deliver(path, record, phase, text, inbox=inbox)
+                return self._deliver(path, record, phase, text, inbox=inbox, finalize_source=finalize_source)
         elif phase_state.get("attempt"):
             result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"], resume_parts=True,
                                             before_send=before_send)
@@ -1266,8 +1360,80 @@ class LarkPrivateConversations:
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_returned")
         return bool(phase_state["verified"])
 
+    def _deliver_completed_answer(self, path: Path, record: dict[str, Any], text: str, *,
+                                  inbox: Callable[[], Path]) -> bool:
+        phase = presentation_phase(record, "terminal")
+        media_phase = "answer_images." + phase
+        old = record["deliveries"].get(phase) or {}
+        if old.get("started") and not record.get("answer_images"):
+            return self._deliver(path, record, "terminal", text, inbox=inbox)
+        if record["event"].get("chat_type") != "p2p" or record["source"].get("private_human_message") is not True:
+            return self._deliver(path, record, "terminal", text, inbox=inbox)
+        body, targets = _private_answer_images(text)
+        if not targets:
+            return self._deliver(path, record, "terminal", text, inbox=inbox)
+
+        def authorized() -> bool:
+            native = self.core.read_request(record["request_ref"])
+            return native.get("status") == "accepted" and all(native.get(key) == record[key] for key in (
+                "binding_id", "source", "session_id", "turn_id"))
+
+        state = record.setdefault("answer_images", {})
+        # Hold the source and the exact completed body fixed across retries.
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if state.setdefault("answer_sha256", digest) != digest:
+            return False
+        now = datetime.now(timezone.utc).timestamp()
+        if old.get("verified") is True:
+            if state.get("status") == "delivered" and record["deliveries"].get(media_phase, {}).get("images_verified") is True:
+                return True
+            if now < state.get("next_check_at", 0):
+                return False
+        state.setdefault("status", "pending")
+        _atomic_write_json(path, record)
+        if not self._deliver(path, record, "terminal", body + "\n\n原图会另发；有链接的图名可打开原始来源。",
+                             inbox=inbox, finalize_source=False):
+            return False
+        state.update(status="pending", next_check_at=now + 300)
+        _atomic_write_json(path, record)
+        try:
+            event = record["event"]
+            origin = event.get("content")
+            if (len(targets) > CHAT_IMAGE_MAX_COUNT or event.get("message_type") != "text"
+                    or not isinstance(origin, str) or not authorized() or not self._source_authority(
+                        record, record["profile"], event["chat_id"], event["message_id"], expected_text=origin)[1]):
+                raise ValueError("answer image source unavailable or not authorized")
+            images = state.get("attachments")
+            if images is None:
+                deadline = time.monotonic() + 15
+                if not _answer_image_sources(origin, targets, deadline=deadline):
+                    raise ValueError("image was not referenced by the original source")
+                images = state["attachments"] = normalize_chat_image_attachments([
+                    _private_answer_image(url, deadline=deadline, index=index)
+                    for index, url in enumerate(targets, 1)])
+                _atomic_write_json(path, record)
+            if self._deliver(path, record, media_phase, "原图（按正文顺序）", inbox=inbox,
+                             authorization_check=authorized, finalize_source=False,
+                             image_attachments=images):
+                if self.reaction_feedback and not _reconcile_outbound_input_reactions(
+                        project=self.runtime_root, config_path=inbox(), message_id=record["event"]["message_id"],
+                        processing=False, complete=True, before_write=authorized, runner=self._reply_runner).get("ok"):
+                    return False
+                state.update(status="delivered")
+                state.pop("attachments", None)
+                _atomic_write_json(path, record)
+                return True
+        except (KeyError, ValueError, OSError, http.client.HTTPException):
+            pass
+        state["status"] = "unverified"
+        _atomic_write_json(path, record)
+        self._deliver(path, record, "answer_image_notice." + phase,
+                      "正文已送达，图片尚未核验送达。有链接的图名可打开原始来源。",
+                      inbox=inbox, finalize_source=False)
+        return False
+
     def _edit_progress(self, path: Path, record: dict[str, Any], text: str, *, inbox: Callable[[], Path], finalizing: bool = False) -> bool:
-        text = _presentation_text(text)
+        text = _presentation_text(_private_answer_images(text)[0] if record["event"].get("chat_type") == "p2p" else text)
         progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
         if not progress.get("verified"):
             return self._deliver(path, record, "progress", text, inbox=inbox)
@@ -2006,6 +2172,7 @@ class LarkPrivateConversations:
             config: Path | None = None
             selected: dict[str, Any] | None = None
             control_receipt_first = False
+            completed_answer = False
 
             def inbox() -> Path:
                 nonlocal config
@@ -2089,6 +2256,7 @@ class LarkPrivateConversations:
                             "本次执行超时，原会话已保留；请发送 /status 查看状态后再决定是否重试。" if turn["status"] == "timed_out" else
                             "本次未能完成，原会话已保留。")
                         if turn["status"] == "completed":
+                            completed_answer = True
                             response = self.core.todo_confirmation_reply(record["request_ref"], turn.get("response") or {})
                 else:
                     if record["status"] != "rejected" and not control_receipt_first:
@@ -2097,7 +2265,8 @@ class LarkPrivateConversations:
                         or _command_text(str(record.get("response_code") or "")) or str(record.get("response") or ""))
                     if record.get("status_snapshot"):
                         response = _status_text(record["status_snapshot"], help_requested=native.get("command") == "help")
-                if self._deliver(path, record, "terminal", response, inbox=inbox):
+                if (self._deliver_completed_answer(path, record, response, inbox=inbox) if completed_answer else
+                        self._deliver(path, record, "terminal", response, inbox=inbox)):
                     if control_receipt_first:
                         # The verified result is the useful control receipt.
                         # Preserve the usual idempotent reaction, after it.
