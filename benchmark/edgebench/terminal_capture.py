@@ -53,7 +53,7 @@ def _scheduler_components_at_barrier(container, components, stage, *, deadline):
     import re
     import docker
     from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE
-    from benchmark.runtime.scheduler import phase_state_name
+    from benchmark.runtime.scheduler import phase_state_name, read_phase_deadline
     from .checkpoint_worker import _archive
 
     root = PurePosixPath(_CONTROL, "scheduler-state.json")
@@ -63,7 +63,7 @@ def _scheduler_components_at_barrier(container, components, stage, *, deadline):
         clock = _archive(container, _ACTIVE_PHASE_DEADLINE, stage / "active-clock", deadline=deadline)
     except docker.errors.NotFound:
         return components  # A fresh worker has no admitted continuation.
-    current = root.with_name(phase_state_name(root, float(clock.read_bytes())))
+    current = root.with_name(phase_state_name(root, read_phase_deadline(clock.read_bytes())))
     chain = []
     while current != root:
         if (current in chain or current.parent != root.parent

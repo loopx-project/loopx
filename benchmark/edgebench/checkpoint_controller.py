@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
+from benchmark.runtime.scheduler import read_phase_deadline
 from benchmark.runtime.worker import PHASE_WORK_RESERVE_SECONDS
 
 
@@ -108,15 +109,14 @@ def _bound_bank(folder: Path, reference: dict) -> dict:
 
 
 def _phase_budget(raw: bytes, native: dict) -> dict:
-    """Read the physical Host clock at the native capture time."""
-    if len(raw) > 64 or not re.fullmatch(rb"[0-9]+(?:\.[0-9]+)?\n?", raw):
-        raise ValueError("Host phase deadline must contain epoch seconds")
-    # Fresh SForge phases write integer seconds. The continuation scheduler
-    # publishes its existing floating-point deadline, including fractions.
-    epoch = float(raw) if b"." in raw else int(raw)
+    """Preserve the admitted Host phase clock without granting new authority.
+
+    Native capture owns this time. The declared physical Host file owns its
+    deadline. Neither fact qualifies complete Host/research-state capture.
+    """
+    epoch = read_phase_deadline(raw)
     captured = native.get("captured_at_epoch")
-    if (not 0 < epoch < 2 ** 53 or type(captured) not in (int, float) or
-            not math.isfinite(captured) or captured <= 0):
+    if type(captured) not in (int, float) or not math.isfinite(captured) or captured <= 0:
         raise ValueError("Host/native phase clocks cannot be represented exactly")
     return {"component_id": "host_phase_deadline", "source_deadline_epoch": epoch,
             "captured_at_epoch": captured, "remaining_seconds": max(0, epoch - captured)}
