@@ -3199,3 +3199,24 @@ R1/M3、C1 切换和原目标回归仍未完成资格验证。
 - **剩余：**内置 capability 打包与完整 D2/D5 闭包、真实模型/Host 上下文采用、
   渐进控制、可比完整成本、完整 V1–V5/V10、R1/M3 和 C1 默认切换仍未完成
   资格验证。进程 Host 与 native context 事件属于 synthetic fixture。
+
+### 2026-11-14 — 当前模型任务结果通过 Core 恢复
+
+- **来源：**`main@83809355f84a` 与 C1 #8266 的 `6a31d83497a6`，
+  各自使用独立安装的 Core 环境。实际执行的 entrypoint、Turn driver/executor、
+  完整来源 owner 和召回入口字节与声明的源码一致。
+- **实际成果：**当前交互模型读取两次实际 generic Host 请求，用工具从隔离的
+  synthetic 输入生成 JSON 与可阅读的 Markdown 库存报告。独立 oracle 从输入
+  以 Decimal 重算，检查重复行合并、零库存、超额预留、非 ASCII SKU、排序、
+  每组结果和总计。
+- **恢复：**模型结果进入 durable `typed_result` 阶段后，对拥有该 Turn 的 CLI
+  进程注入 SIGKILL。两个原 Turn 都在不再次调用 Host 的情况下恢复，完成独立
+  校验与 Todo 读回，重放后仍只扣一次。在 C1 上，损坏报告被拒绝，Todo 保持
+  开放且零扣额；恢复已校验的报告后，同一个 Turn 完成。
+- **Owner 边界：**私有 rendezvous adapter 只传输当前模型的请求和结果。
+  C1 与既有 Turn driver 继续拥有组合、身份、准入、校验、捕获、恢复和结算。
+  没有新增执行管线、schema、产品默认行为或 capability 激活。
+- **剩余：**本次增强任务结果恢复证据，不构成已安装的原生模型/App adapter、
+  自然语言启动、原生 compaction 后的模型保留、渐进产品控制、完整 D2/D5 闭包、
+  可比完整成本、V1–V5/V10、R1/M3 或 C1 默认切换的资格验证。模型在两次检查
+  间复用了报告生成器；这些不是独立推理试验，也不是成果或成本对照实验。
