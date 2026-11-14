@@ -61,7 +61,14 @@ def test_staged_packet_budget_and_lossless_authority(stride):
     params = {"payload": source, "source_hash": envelope["action_signature"]["source_decision_hash"]}
     review = _turn_envelope_result("replan_view", **params, stage="review")
     writer = _turn_envelope_result("replan_view", **params, stage="writeback")
-    assert writer["writeback"] == legacy["writeback"]
+    writeback = writer["writeback"]
+    assert {key: value for key, value in writeback.items() if key != "next_cli_actions"} == {
+        key: value for key, value in legacy["writeback"].items() if key != "next_cli_actions"
+    }
+    if "settlement_plan" in legacy["writeback"]:
+        assert writeback["next_cli_actions"] == legacy["writeback"]["next_cli_actions"]
+    else:
+        assert writeback["next_cli_actions"] == source["interaction_contract"]["cli_channel"]["next_cli_actions"]
     assert "context_read" not in writer  # No unused instruction to repeat review.
     context = source["autonomous_replan_obligation"]["replan_context"]
     assert review["core_goal"] == context["core_goal"]
