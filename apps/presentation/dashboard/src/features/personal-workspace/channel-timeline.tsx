@@ -248,13 +248,15 @@ export function ChannelTimeline({
       const appliedTeamPlan = item.proposal.actionKind === "team.plan" && item.proposal.status === "applied";
       const taskReceipt = item.proposal.reviewPlan?.taskExecution;
       const pendingOperation = item.proposal.reviewPlan?.operationFrame?.kind === "pending";
+      const pendingDisplay = item.proposal.reviewPlan?.reason === "canonical_create_projection_pending";
       return (
         <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} data-action-kind={item.proposal.actionKind} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
-          <span><small>{pendingOperation || item.proposal.reviewPlan?.reason === "todo_creation_retry" ? t(`proposal.kind.${item.proposal.actionKind}`)
+          <span><small>{pendingDisplay ? t("goalWork.displayPending")
+            : pendingOperation || item.proposal.reviewPlan?.reason === "todo_creation_retry" ? t(`proposal.kind.${item.proposal.actionKind}`)
             : taskReceipt ? t("drawer.taskLaunchReceipt")
             : appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
-            : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
+            : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact && !pendingDisplay ? <p>{item.proposal.impact}</p> : null}</span>
           <b>{taskReceipt ? t("feedback.taskStartRequested")
             : item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review")
             : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>

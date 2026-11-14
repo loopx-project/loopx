@@ -39,7 +39,7 @@ async function verifyPendingDisplay({page, post, origin, width, provider, snapsh
   for (let i = 0; i < titles.length; i++) {
     const [created, preview] = await post("/api/actions/preview", {
       action_kind: "todo.create", context: {kind: "goal", goal_id: "goal-a"},
-      normalized_parameters: {goal_id: "goal-a", text: titles[i]}, summary: titles[i],
+      normalized_parameters: {goal_id: "goal-a", text: titles[i]}, summary: "Create task",
       idempotency_key: "display-confirmation-" + width + "-" + i,
     });
     assert.equal(created, 201, JSON.stringify(preview));
@@ -74,28 +74,38 @@ async function verifyPendingDisplay({page, post, origin, width, provider, snapsh
   await card(later.title).click();
   const retry = page.getByRole("dialog").getByRole("button", {name: /^(Retry original operation|重试原操作)$/});
   await retry.waitFor();
-  await post(fixture, {hold: false, drop_reply: later.id, hold_list: true});
+  await post(fixture, {hold: false, drop_reply: later.id, hold_list: true, hold_detail: width === 1200});
   const interrupted = page.waitForEvent("requestfailed", {
     predicate: request => request.method() === "POST" && request.url().endsWith(later.path + "/apply"),
   });
   await retry.click();
   await interrupted;
-  await retry.waitFor();
-  assert.equal(await page.getByRole("dialog").getByRole("button", {name: /regenerate|重新生成/i}).count(), 0);
-  await post(fixture, {hold_list: false});
+  function checkReceipt(proposal, operation) {
+    assert.equal(proposal.proposal_id, operation.id);
+    assert.equal(proposal.receipt.receipt_id, operation.receipt);
+    assert.equal(proposal.receipt.resource_ids.todo_id, operation.todo);
+    assert.equal(proposal.receipt.projection_verified, true);
+  }
   async function recover(operation) {
     const outcome = page.waitForResponse(response => response.url().endsWith(operation.path + "/apply"));
     await retry.click();
     const response = await outcome;
     assert.equal(response.status(), 200);
-    const {proposal} = await response.json();
-    assert.equal(proposal.proposal_id, operation.id);
-    assert.equal(proposal.receipt.receipt_id, operation.receipt);
-    assert.equal(proposal.receipt.resource_ids.todo_id, operation.todo);
-    assert.equal(proposal.receipt.projection_verified, true);
+    checkReceipt((await response.json()).proposal, operation);
     await page.keyboard.press("Escape");
   }
-  await recover(later);
+  if (width === 1200) {
+    await retry.waitFor();
+    assert.equal(await page.getByRole("dialog").getByRole("button", {name: /regenerate|重新生成/i}).count(), 0);
+    await post(fixture, {hold_list: false, hold_detail: false});
+    await recover(later);
+  } else {
+    await page.getByRole("dialog").getByRole("button", {name: /^(View updated Goal|查看更新后的 Goal)$/}).waitFor();
+    const exact = await fetch(origin + later.path);
+    checkReceipt((await exact.json()).proposal, later);
+    await post(fixture, {hold_list: false});
+    await page.keyboard.press("Escape");
+  }
   await goalTab(page, /^(Overview|概览)$/);
   await overview.getByRole("button", {name: earlier.title, exact: true}).click();
   await recover(earlier);

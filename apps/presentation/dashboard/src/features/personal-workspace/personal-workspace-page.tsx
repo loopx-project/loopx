@@ -688,7 +688,10 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
   const operationFrame = reviewPlan.operationFrame;
   const decision = reviewPlan.decisionFrame?.decision;
   const operationTitle = operationFrame?.content.title ?? proposal.summary;
-  const localizedSummary = proposal.action_kind === "operation.execute"
+  const taskText = proposal.normalized_parameters.text;
+  const localizedSummary = reviewPlan.reason === "canonical_create_projection_pending"
+    && proposal.action_kind === "todo.create" && typeof taskText === "string" ? taskText
+    : proposal.action_kind === "operation.execute"
     ? operationTitle
     : proposal.action_kind === "team.plan"
     ? proposal.status === "applied"
@@ -2202,6 +2205,12 @@ export function PersonalWorkspacePage({
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
       const scopedReadback = isTodoCreation || ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind);
+      if (!stored && isTodoCreation && !readbackMismatch && !stale) {
+        try {
+          // The Goal list can fail independently of a single confirmation.
+          stored = await loadTypedAction(proposal.previewId, AbortSignal.timeout(8000));
+        } catch { /* The Goal list may still be readable. */ }
+      }
       if (!stored && scopedReadback && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
@@ -2224,7 +2233,10 @@ export function PersonalWorkspacePage({
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
         return reconciled;
       }
-      if (!stored && !stale && !readbackMismatch && !(error instanceof ChatApiError)
+      const interruptedResponse = error instanceof ChatApiError && error.payload.error_code === "chat_api_unavailable"
+        && (error.payload.http_status === undefined
+          || (typeof error.payload.http_status === "number" && error.payload.http_status < 400));
+      if (!stored && !stale && !readbackMismatch && interruptedResponse
           && isTodoCreation && proposal.reviewPlan?.reason === "canonical_create_projection_pending") {
         // A transport failure cannot erase an already observed commitment or
         // authorize another proposal. The original apply rechecks authority.

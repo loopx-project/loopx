@@ -26,7 +26,7 @@ def main(provider):
         isolate_sqlite_runtime(scratch, patch)
         registry, runtime, _ = promoted_create_fixture(scratch, provider=provider)
         lost = {}
-        display = {"hold": False, "drop_reply": None, "hold_list": False}
+        display = {"hold": False, "drop_reply": None, "hold_list": False, "hold_detail": False}
         write_state = provider_projection.atomic_write_state_text
         checkpoint = ChatActionStore.save_checkpoint
         for content in ("Review release checklist", "Verify documentation links", "Check failure handling"):
@@ -52,14 +52,19 @@ def main(provider):
                     self._send_json({"ok": True})
                     return
                 if self.path != "/__confirmation_fixture/advance":
-                    return super().do_POST()
+                    try:
+                        return super().do_POST()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
                 self._read_json()
                 add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent", text="Independent authority update")
                 self._send_json({"ok": True})
 
             def do_GET(self):
                 if self.path != "/__confirmation_fixture":
-                    if display["hold_list"] and self.path.split("?", 1)[0] == "/api/actions":
+                    route = self.path.split("?", 1)[0]
+                    if ((display["hold_list"] and route == "/api/actions")
+                            or (display["hold_detail"] and route.startswith("/api/actions/"))):
                         self._send_json({"error": "test: list unavailable"}, status=503)
                         return
                     try:
