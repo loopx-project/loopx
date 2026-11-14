@@ -1288,10 +1288,12 @@ def _status_botmux_runtime(
             echoed_trigger_id = str(exc.payload.get("triggerId") or "").strip()
             if echoed_trigger_id:
                 result["triggerId"] = echoed_trigger_id
-            # A bare "this session is gone" names no turn, so it cannot be
-            # attributed to another one; a missing result that does name a turn
-            # is checked like any other response.
-            session_level_missing = not echoed_trigger_id
+            # Only an explicit "this session is gone" that names no turn cannot
+            # be attributed to another one. A generic 404, or one that names a
+            # turn, is checked like any other response.
+            session_level_missing = (
+                exc.payload.get("error") == "unknown_session" and not echoed_trigger_id
+            )
         else:
             return _operation_packet(
                 ok=False,

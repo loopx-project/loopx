@@ -1563,3 +1563,44 @@ def test_a_not_found_for_this_turn_is_accepted_without_output(
     assert status["status"] == "not_found"
     assert status["details"]["output_available"] is False
     assert _persisted_active_receipt(binding_path)["state"] == "not_found"
+
+
+def test_a_generic_404_not_found_cannot_seal_an_accepted_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def generic_404(**kwargs: Any) -> dict[str, Any]:
+        # Not-found state, but neither a named turn nor an explicit unknown_session.
+        raise BotmuxApiError(404, {"state": "not_found"})
+
+    for execute in (False, True):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID, binding_path=binding_path, execute=execute, requester=generic_404
+        )
+        assert status["status"] == "unknown" and status["ok"] is False
+    assert _persisted_active_receipt(binding_path)["state"] == "unknown"
+
+    def own_completion(**kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "state": "completed", "triggerId": "trigger-two",
+                "output": {"content": "mine"}}
+
+    done = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=own_completion
+    )
+    assert done["status"] == "completed" and done["readback_verified"] is True
+
+
+def test_a_404_naming_another_turn_is_not_a_session_level_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def other_turn_404(**kwargs: Any) -> dict[str, Any]:
+        raise BotmuxApiError(404, {"error": "unknown_session", "triggerId": "trigger-three"})
+
+    status = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=other_turn_404
+    )
+    assert status["status"] == "unknown"
+    assert _persisted_active_receipt(binding_path)["state"] == "unknown"
