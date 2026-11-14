@@ -3093,3 +3093,23 @@ PR #8707（`d695b40f633742fb0a5e1cb6b970a56c46dba5e9`，合入提交
 compaction／线程保留、渐进控制、可比完整成本、Standard/workspace 交付和
 原 Goal 回归仍开放。协议 fixture 不表示默认激活、Host 升级、发行或冻结预算
 发生变化。
+
+### 2026-11-14 — Coordination 在选定终结路径加载证据适配器
+
+local-authority runtime 将 `ResearchTerminalEvidenceHost` 延后到合法的
+terminal lifecycle 请求选中它时加载。普通 coordination 不再加载该适配器
+及其研究实现依赖。完成操作仍由现有 typed terminal owner、registry witness、
+研究资格检查、writer lock 和资源清理负责；没有新增竞争的工作 schema 或
+执行流水线。
+
+新进程故障注入使 terminal 适配器不可用：普通 claim 仍落盘并重放原回执，
+非法 claim 保持状态不变，选中的 terminal 请求则明确失败，不产生新回执或
+状态变更。保留的基线在同一普通 claim 探针上失败。源码 authority/terminal
+整组 93 项通过。同一补丁应用到 C1 的精确候选 #8266（`b15c443ee64d`）和
+#8484（`b7e4e01cc423`）后，authority、context 与 recovery 分别有 188 和
+193 项通过；后者还覆盖真实 SQLite admission。
+
+这只是对齐 C1 现有 owner 的加载和故障隔离前提。合法 terminal 请求仍会加载
+适配器，包括 ordinary Todo 的 guard 随后提前返回的情况。完整工作流隔离、
+成对完整成本、真实 Host 采用、R1/M3 以及 C1 writer/consumer 切换仍开放。
+这些测试不授权 C1 默认推广，也不证明模型收益。
