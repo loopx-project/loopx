@@ -1,6 +1,7 @@
 """Private context consumption; never creates or reprioritizes Todos."""
 
 import json
+import os
 from pathlib import Path
 from ..agent_registry import registered_agent_ids_for_goal
 from ..capabilities.manager_context import (
@@ -14,7 +15,7 @@ from ..control_plane.collaboration.peers import InboxReadResponseAmbiguous
 from ..presentation.answer_instruction import collaboration_answer_instruction
 
 
-def _read_markdown(result: dict) -> str:
+def _share_item_guidance(result: dict) -> dict:
     items = result.get("items")
     shared = {}
     if isinstance(items, list) and len(items) > 1 and all(isinstance(item, dict) for item in items):
@@ -23,16 +24,64 @@ def _read_markdown(result: dict) -> str:
             if isinstance(text, str) and text and all(item.get(key) == text for item in items[1:]):
                 shared[key] = text
 
-    lines = ["# Manager Inbox"]
     if shared and "shared_item_guidance" not in result:
-        lines.append("Apply the exact fields in `shared_item_guidance` to every item on this page.")
-        result = {
+        return {
             "shared_item_guidance": shared,
             **result,
             "items": [{key: value for key, value in item.items() if key not in shared} for item in items],
         }
+    return result
+
+
+def _render_read_markdown(result: dict) -> str:
+    lines = ["# Manager Inbox"]
+    if result.get("shared_item_guidance"):
+        lines.append("Apply the exact fields in `shared_item_guidance` to every item on this page.")
     body = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     return "\n\n".join(lines) + "\n\n```json\n" + body + "\n```"
+
+
+def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
+    """Deliver the already-recorded scoped read without repeating its effects."""
+    from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+
+    limit = NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+    view = _share_item_guidance(result)
+    body = _render_read_markdown(view)
+    size = len((body + os.linesep).encode("utf-8"))
+    if size <= limit:
+        return body, True
+
+    from ..command_invocation import current_loopx_cli_argv
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+    from ..control_plane.turn_driver.decision_capture import (
+        CONTEXT_CAPTURE_CODE_MODE_GUIDANCE, context_capture_read_command,
+    )
+    from .context_machine import capture_context_recovery
+
+    if size <= MAX_REQUEST_BYTES:
+        reference = capture_context_recovery(view, runtime_root=runtime_root, index_and_select=False)
+        if reference.get("available") is not False:
+            command = context_capture_read_command(Path(reference["path"]), reference["sha256"],
+                page_bytes=limit, max_page_output_bytes=limit, reader_argv=current_loopx_cli_argv())
+            opening = _render_read_markdown({"ok": True, "read_complete": False, "command": command,
+                "instruction": "Run command to read this exact Inbox page; do not call manager-inbox read again for it. "
+                    "Follow next_command through eof in UTF-8 byte-offset order. Verify the capture SHA-256, each "
+                    "page's content length against its offsets, and complete coverage through total_bytes. "
+                    "If output is missing or truncated, reread that range of the same capture with a smaller page. "
+                    + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE
+                    + "Apply any shared_item_guidance to the items on this page. After the page is complete, "
+                      "follow its next_cursor or operation_handoff_next_cursor with the original Inbox command. "
+                      "A captured page is not request adoption, result consumption or completion."})
+            if len((opening + os.linesep).encode("utf-8")) <= limit:
+                return opening, True
+
+    return _render_read_markdown({"ok": False, "read_complete": False,
+        "error": "The Inbox page could not be published within the reader limits.",
+        "instruction": "This read may already have recorded request or result delivery receipts. Keep the same "
+            "scope and cursor; this is not an empty Inbox. Inspect existing receipts before retrying this read "
+            "after repairing private capture storage. Use the JSON view only in a tool that can retain its full "
+            "output. Do not rerun the Turn guard or skip to another cursor."}), False
 
 
 def register_manager_inbox(subparsers, add_format):
@@ -374,7 +423,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
         result = {"ok": False, "error": str(exc)}
     fmt = getattr(args, "subcommand_format", None) or getattr(args, "format", None)
     if args.manager_inbox_action == "read" and fmt == "markdown" and result["ok"]:
-        print(_read_markdown(result))
-    else:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        body, ok = _read_markdown(result, runtime_root=runtime_root)
+        print(body)
+        return 0 if ok else 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 1
