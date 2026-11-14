@@ -8,6 +8,7 @@ import { projectHostTodoSettlementGuard } from "../turn_driver/host_todo_settlem
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
+import {isDeepStrictEqual} from "node:util";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import { inflateSync } from "node:zlib";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
@@ -20,11 +21,13 @@ import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRe
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
 import {stagedStrideVisionAuthoring} from "../goals/vision_checkpoint.ts";
+import {REPLAN_SETTLEMENT_CONTRACT_SCHEMA} from "../work_items/replan_settlement.ts";
 
 import {
   interpretQuotaShouldRunPacket,
   assertSupportedQuotaPacket,
   settlementIdentityFromPlan,
+  SETTLEMENT_PLAN_SCHEMA_VERSION,
   settlementIdentityPayload,
   type JsonObject,
 } from "../effect_program.ts";
@@ -988,15 +991,45 @@ function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash:
     }
     const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
     const refresh = steps.find(step => step.kind === "durable_writeback");
+    const spend = steps.find(step => step.kind === "quota_spend");
+    const receipt = object(payload.heartbeat_receipt), identity = object(plan.identity);
+    const cli = object(object(payload.interaction_contract).cli_channel);
+    const settlement = object(cli.replan_settlement_contract), binding = object(settlement.settlement_binding);
+    const semantic = object(settlement.semantic_obligation), actions = cli.next_cli_actions;
+    // Use the captured semantic writer, which already carries the owner's
+    // authoring arguments. The generic plan template omits those arguments.
+    // Leave the signed plan and separate recovery actions untouched.
+    const directWriter = payload.schema_version === COMPLETE_TURN_DECISION_VERSION
+      && payload.should_run === true && payload.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+      && plan.schema_version === SETTLEMENT_PLAN_SCHEMA_VERSION && identity.binding_kind === "autonomous_replan"
+      && typeof identity.turn_instance_id === "string" && receipt.turn_instance_id === identity.turn_instance_id
+      && identity.replan_obligation_id === packet.obligation_id
+      && ["committed", "upgraded", "replayed"].includes(String(receipt.status))
+      && receipt.settlement_binding_owed !== true && isDeepStrictEqual(receipt.settlement_identity, identity)
+      && settlement.schema_version === REPLAN_SETTLEMENT_CONTRACT_SCHEMA && settlement.single_binding_required === true
+      && binding.kind === "autonomous_replan" && binding.id === packet.obligation_id
+      && binding.cli_argument === "--replan-obligation-id" && semantic.kind === "autonomous_replan"
+      && semantic.settlement_bound === true && semantic.id === packet.obligation_id
+      && semantic.discharge === "direct_settlement" && cli.spend_after_validation === true
+      && cli.spend_allowed_now === false && cli.selection_required !== true
+      && typeof boundContract.successor_command !== "string"
+      && refresh?.owner === "agent" && spend?.owner === "agent" && typeof spend.command_template === "string"
+      && Array.isArray(actions) && actions.length === 2 && actions[1] === spend.command_template
+      && typeof actions[0] === "string" && actions[0].length > 0
+      && isDeepStrictEqual(writeback.next_cli_actions, [actions[0]])
+      ? actions[0] : undefined;
+    const settlementCommand = directWriter !== undefined
+      ? directWriter + " --settle-turn --settlement-receipt"
+      : typeof refresh?.command_template === "string" ? refresh.command_template + " --settle-turn" : undefined;
     return retain({...common, ...sourceRead, writeback_contract: retain(boundContract, originalContract),
       required_outcome: packet.required_outcome, allowed_terminal: packet.allowed_terminal,
       ...(packet.stride_control ? {stride_control: stride} : {}),
       writeback,
-      ...(typeof refresh?.command_template === "string" ? {
-        settlement_command: `${refresh.command_template} --settle-turn`,
+      ...(settlementCommand === undefined ? {} : {
+        settlement_command: settlementCommand,
         settlement_usage: "After validation, fill this refresh command from the actual result. It follows only the verified owed quota step on this same binding. " +
           "Do not also execute a quota step after settled readback; retain the original plan for completion, blocked/no-spend closeout and failure recovery.",
-      } : {})}, packet, ["required_outcome", "allowed_terminal"]);
+      })}, packet, ["required_outcome", "allowed_terminal"]);
   }
   if (request.stage !== "review") throw new EffectRuntimeRequestError("unsupported replan read stage");
   const {core, horizon, acceptanceIndex} = replanGoalContext(payload, reads, undefined, precision);
