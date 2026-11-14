@@ -93,16 +93,16 @@ def _private_answer_images(text: str) -> tuple[str, list[str]]:
     return "".join(lines), targets
 
 
-def _private_answer_image(url: str, *, deadline: float, index: int) -> dict[str, Any]:
+def _private_answer_image(url: str, *, allowed_urls: set[str], deadline: float, index: int) -> dict[str, Any]:
     # Reuse anonymous HTTPS address pinning, redirect checks and byte limits.
     # No local file, signed-in browser or model tool authority is involved.
     from urllib.parse import urlsplit
 
     from ..public_source_reader import fetch
 
-    observed, mime, data = fetch(url, deadline=deadline)
-    if urlsplit(observed).hostname != urlsplit(url).hostname or urlsplit(observed).query:
-        raise ValueError("original image source changed")
+    host = urlsplit(url).hostname
+    same_host_urls = {candidate for candidate in allowed_urls if urlsplit(candidate).hostname == host}
+    _, mime, data = fetch(url, deadline=deadline, allowed_urls=same_host_urls)
     signatures = {"image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff", "image/gif": b"GIF8"}
     if not ((mime in signatures and data.startswith(signatures[mime]))
             or (mime == "image/webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
@@ -111,8 +111,8 @@ def _private_answer_image(url: str, *, deadline: float, index: int) -> dict[str,
             "mime_type": mime, "size": len(data), "data_url": f"data:{mime};base64," + base64.b64encode(data).decode()}
 
 
-def _answer_image_sources(source: str, targets: list[str], *, deadline: float) -> bool:
-    """Require an exact owner URL or an image referenced by its same-host article."""
+def _allowed_answer_image_urls(source: str, targets: list[str], *, deadline: float) -> set[str]:
+    """Authorize exact owner URLs and images listed by the original same-host article."""
     from urllib.parse import urlsplit
 
     from ..public_source_reader import article, public_url
@@ -126,18 +126,40 @@ def _answer_image_sources(source: str, targets: list[str], *, deadline: float) -
     owner_links = {url for link in _SOURCE_URL.findall(source) if (url := candidate(link))}
     wanted = {candidate(target) for target in targets}
     if None in wanted or not owner_links:
-        return False
+        return set()
     if wanted <= owner_links:
-        return True
+        return owner_links
     if len(owner_links) != 1:
-        return False
+        return set()
     [original] = owner_links
     host = urlsplit(original).hostname
     if any(urlsplit(url).hostname != host for url in wanted - owner_links):
-        return False
-    observed = article(original, deadline=deadline)
-    return (observed.get("ok") is True and urlsplit(observed["observed_url"]).hostname == host
-            and wanted <= owner_links | {candidate(item["url"]) for item in observed["images"]})
+        return set()
+    observed = article(original, deadline=deadline, allowed_urls={original})
+    if observed.get("ok") is not True:
+        return set()
+    listed = {url for item in observed["images"]
+              if (url := candidate(item["url"])) and urlsplit(url).hostname == host}
+    allowed_urls = owner_links | listed
+    return allowed_urls if wanted <= allowed_urls else set()
+
+
+def _read_answer_images(source: str, targets: list[str], cached: list | None,
+                        delivery: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if (delivery.get("started") and not delivery.get("attempt")) or (delivery.get("attempt") and cached is None):
+        raise ValueError("image delivery acknowledgement or frozen bytes are unavailable")
+    deadline = time.monotonic() + 15
+    allowed_urls = _allowed_answer_image_urls(source, targets, deadline=deadline)
+    if not allowed_urls:
+        raise ValueError("image was not referenced by the original source")
+    images = normalize_chat_image_attachments([
+        _private_answer_image(url, allowed_urls=allowed_urls, deadline=deadline, index=index)
+        for index, url in enumerate(targets, 1)])
+    # Older queued bytes were fetched before redirect authorization. Keep
+    # any recorded provider intent tied to the same bytes.
+    if cached is not None and cached != images:
+        raise ValueError("unverified cached image bytes changed")
+    return images
 
 
 def _is_answer_image_followup(record: Mapping[str, Any]) -> bool:
@@ -1435,13 +1457,10 @@ class LarkPrivateConversations:
                         record, record["profile"], event["chat_id"], event["message_id"], expected_text=origin)[1]):
                 raise ValueError("answer image source unavailable or not authorized")
             images = state.get("attachments")
-            if images is None:
-                deadline = time.monotonic() + 15
-                if not _answer_image_sources(origin, targets, deadline=deadline):
-                    raise ValueError("image was not referenced by the original source")
-                images = state["attachments"] = normalize_chat_image_attachments([
-                    _private_answer_image(url, deadline=deadline, index=index)
-                    for index, url in enumerate(targets, 1)])
+            if images is None or state.get("source_urls_verified") is not True:
+                images = state["attachments"] = _read_answer_images(origin, targets, images,
+                                                                    record["deliveries"].get(media_phase, {}))
+                state["source_urls_verified"] = True
                 _atomic_write_json(path, record)
             if self._deliver(path, record, media_phase, "原图（按正文顺序）", inbox=inbox,
                              authorization_check=authorized, finalize_source=False,
@@ -1584,21 +1603,18 @@ class LarkPrivateConversations:
                 if not original_reply_matches():
                     return 0
 
+                phase = "answer_images.historical"
                 attachments = state.get("attachments")
-                if attachments is None:
-                    targets = plan["images"]
-                    deadline = time.monotonic() + 15
-                    if not _answer_image_sources(event["content"], [item["url"] for item in targets], deadline=deadline):
-                        return 0
-                    attachments = normalize_chat_image_attachments([
-                        _private_answer_image(item["url"], deadline=deadline, index=index)
-                        for index, item in enumerate(targets, 1)])
+                recheck_sources = attachments is None or state.get("source_urls_verified") is not True
+                if recheck_sources:
+                    attachments = _read_answer_images(event["content"], [item["url"] for item in plan["images"]],
+                                                      attachments, record["deliveries"].get(phase, {}))
                 digests = [hashlib.sha256(base64.b64decode(
                     picture["data_url"].split(",", 1)[1], validate=True)).hexdigest() for picture in attachments]
                 if digests != [item["sha256"] for item in plan["images"]]:
                     return 0
-                if "attachments" not in state:
-                    state["attachments"] = attachments
+                if recheck_sources:
+                    state.update(attachments=attachments, source_urls_verified=True)
                     _atomic_write_json(path, record)
 
                 def authorized() -> bool:
@@ -1607,7 +1623,6 @@ class LarkPrivateConversations:
                     except (KeyError, OSError, ValueError):
                         return False
 
-                phase = "answer_images.historical"
                 if not self._deliver(path, record, phase, "原图（按原文顺序）",
                                      inbox=lambda: self._inbox(record, observation=observation),
                                      authorization_check=authorized, finalize_source=False,

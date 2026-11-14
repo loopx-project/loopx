@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Collection
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -101,11 +102,15 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
             raise
 
 
-def fetch(value: str, *, deadline: float) -> tuple[str, str, bytes]:
+def fetch(value: str, *, deadline: float,
+          allowed_urls: Collection[str] | None = None) -> tuple[str, str, bytes]:
+    """Fetch anonymously, checking any caller's exact public URLs before DNS."""
     url = public_url(value)
     for _ in range(6):
         if time.monotonic() >= deadline:
             raise TimeoutError("source timeout")
+        if allowed_urls is not None and url not in allowed_urls:
+            raise ValueError("public source URL not authorized")
         u = urlsplit(url)
         addresses = public_addresses(u.hostname or "")
         for index, address in enumerate(addresses):
@@ -236,9 +241,10 @@ def _text_page_parameters(offset: int, expected_sha256: str | None) -> None:
 
 
 def article(url: str, *, deadline: float, offset: int = 0,
-            expected_sha256: str | None = None) -> dict[str, object]:
+            expected_sha256: str | None = None,
+            allowed_urls: Collection[str] | None = None) -> dict[str, object]:
     _text_page_parameters(offset, expected_sha256)
-    observed, mime, body = fetch(url, deadline=deadline)
+    observed, mime, body = fetch(url, deadline=deadline, allowed_urls=allowed_urls)
     digest = hashlib.sha256(body).hexdigest()
     if expected_sha256 is not None and digest != expected_sha256:
         return {"ok": False, "error": "public_source_changed"}

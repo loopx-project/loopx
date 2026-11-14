@@ -7,6 +7,7 @@ import http.client
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
@@ -1016,9 +1017,60 @@ def connect(fixture):
                                                              runner=provider, cli_bin="lark-cli")
 
 
-@pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request", "corrupt_readback", "upload_denied"])
-def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, monkeypatch, fault):  # noqa: F811
+@pytest.fixture
+def source_https(monkeypatch):
     from loopx.extensions import public_source_reader
+
+    requests, resolutions = [], []
+
+    def resolve(host):
+        resolutions.append(host)
+        return ["8.8.8.8"]
+
+    def serve(response_for):
+        class Socket:
+            def settimeout(self, value):
+                pass
+
+            def makefile(self, *args):
+                return BytesIO(self.wire_response)
+
+        class Connection:
+            def __init__(self, host, address, timeout):
+                self.host = host
+                self.sock = Socket()
+
+            def request(self, method, path, *, headers):
+                assert method == "GET"
+                assert set(headers) == {"Accept-Encoding", "User-Agent"}
+                url = f"https://{self.host}{path}"
+                requests.append(url)
+                redirect, mime, body = response_for(url)
+                if redirect:
+                    self.sock.wire_response = f"HTTP/1.1 302 Found\r\nLocation: {redirect}\r\nContent-Length: 0\r\n\r\n".encode()
+                else:
+                    headers = f"HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {len(body)}\r\n\r\n"
+                    self.sock.wire_response = headers.encode() + body
+
+            def getresponse(self):
+                response = http.client.HTTPResponse(self.sock)
+                response.begin()
+                return response
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(public_source_reader, "public_addresses", resolve)
+        monkeypatch.setattr(public_source_reader, "_PinnedHTTPS", Connection)
+        return requests, resolutions
+
+    return serve
+
+
+@pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request",
+    "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
+    "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect"])
+def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, source_https, fault):  # noqa: F811
     from test_chat_image_attachments import PNG_BYTES
     from test_lark_app_image_projection import ImageIO
 
@@ -1031,18 +1083,34 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     assert default in script
     fake.write_text(script.replace(default,
         f'"message": {authored!r} if turn_count == 1 else "Next original reply.",', 1))
-    fetched = []
+    article_url = "https://source.example/article"
+    redirect_targets = {
+        "listed_redirect": "/canonical.png",
+        "same_host_redirect": "/unlisted.png",
+        "foreign_redirect": "https://unrelated.example/foreign.png",
+        "foreign_round_trip": "https://unrelated.example/foreign.png",
+        "query_redirect": "/chart.png?private=fixture",
+    }
 
-    def fetch(target, *, deadline):
-        if target == "https://source.example/article":
+    def respond(target):
+        if target == article_url and fault == "article_redirect":
+            return "/other-article", None, b""
+        if target in (article_url, "https://source.example/other-article"):
             basename = "different-chart.png" if fault == "unlisted_image" else "chart.png"
-            return target, "text/html", f'<img src="/{basename}">'.encode()
-        fetched.append(target)
-        return target, "image/png", PNG_BYTES
+            listings = f'<img src="/{basename}">'
+            if fault == "listed_redirect":
+                listings += '<img src="/canonical.png">'
+            return None, "text/html", listings.encode()
+        if target == url and fault in redirect_targets:
+            return redirect_targets[fault], None, b""
+        if target == "https://unrelated.example/foreign.png" and fault == "foreign_round_trip":
+            return "https://source.example/unlisted.png", None, b""
+        return None, "image/png", PNG_BYTES
 
-    monkeypatch.setattr(public_source_reader, "fetch", fetch)
+    fetched, resolutions = source_https(respond)
+    images_delivered = fault in ("none", "listed_redirect")
     io = ImageIO(provider)
-    io.corrupt_download = fault == "corrupt_readback"
+    io.corrupt_download = fault in ("corrupt_readback", "legacy_cached_readback")
     def media(args, cwd=None, timeout=None):
         if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
             return {"returncode": 3, "stderr": '{"ok":false,"error":{"code":99991672}}'}
@@ -1067,21 +1135,28 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         assert fetched == [] and io.uploads == 0
         assert path not in transport.pending_body_paths()
         assert path in transport.pending_delivery_paths() and transport.is_recovery_path(path)
-        assert transport.reconcile_request(path) == (1 if fault == "none" else 0)
+        assert transport.reconcile_request(path) == int(images_delivered)
         saved = json.loads(path.read_text())
-        assert saved["answer_images"]["status"] == ("delivered" if fault == "none" else "unverified")
+        assert saved["answer_images"]["status"] == ("delivered" if images_delivered else "unverified")
         out = [(mid, row, json.loads(row["body"]["content"])["zh_cn"]["content"])
                for mid, row in provider.messages.items() if mid.startswith("om_out_") and row["msg_type"] == "post"]
         assert all(row["chat_id"] == source["chat_id"] for _, row, _ in out)
         assert any("[Source chart](" in nodes[0][0]["text"] for _, _, nodes in out)
         assert all(not any("![Source chart]" in node.get("text", "") for line in nodes for node in line) for _, _, nodes in out)
-        assert transport.core.read_request(ref).get("delivery_verified", False) is (fault == "none")
+        assert transport.core.read_request(ref).get("delivery_verified", False) is images_delivered
         native_images = [node["image_key"] for _, _, nodes in out for line in nodes for node in line if node["tag"] == "img"]
         assert native_images == list(io.resources)
         assert all(io.resources[k] == PNG_BYTES for k in native_images)
-        assert len(fetched) == (0 if fault in {"foreign_source", "unlisted_image", "changed_request"} else 1)
-        assert ("图片尚未核验送达" in str(out)) == (fault != "none")
-        if fault == "corrupt_readback":
+        expected_requests = {
+            "foreign_source": [], "changed_request": [], "unlisted_image": [article_url],
+            "article_redirect": [article_url], "listed_redirect": [article_url, url, "https://source.example/canonical.png"],
+        }.get(fault, [article_url, url])
+        assert fetched == expected_requests
+        assert resolutions == ["source.example"] * len(expected_requests)
+        if fault in {"same_host_redirect", "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect"}:
+            assert io.uploads == 0 and native_images == []
+        assert ("图片尚未核验送达" in str(out)) is not images_delivered
+        if fault in ("corrupt_readback", "legacy_cached_readback"):
             io.corrupt_download = False
             from loopx.chat_store import _atomic_write_json
             restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
@@ -1090,13 +1165,16 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
             assert path not in restarted.pending_body_paths()
             assert path not in restarted.pending_delivery_paths()
             assert restarted.reconcile_request(path) == 0
-            assert provider.writes == writes and io.uploads == 1 and fetched == [url]
+            assert provider.writes == writes and io.uploads == 1 and fetched == [article_url, url]
             saved["answer_images"]["next_check_at"] = 0
+            if fault == "legacy_cached_readback":
+                saved["answer_images"].pop("source_urls_verified")
             _atomic_write_json(path, saved)
             assert path in restarted.pending_delivery_paths()
             assert restarted.reconcile_request(path) == 1
             assert transport.core.read_request(ref)["delivery_verified"] is True
-            assert provider.writes == writes and io.uploads == 1 and fetched == [url]
+            assert provider.writes == writes and io.uploads == 1
+            assert fetched == [article_url, url] * (2 if fault == "legacy_cached_readback" else 1)
         expected_turns = 1
         if fault == "upload_denied":
             followup = provider.event("notes-app", "text-after-image-denial", "Answer the next question")
@@ -1121,11 +1199,11 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
 
 
 @pytest.mark.parametrize("fault", ["readback", "edited_source", "edited_original_reply", "edit_on_image_get",
-    "edit_on_send_preview", "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied"])
-def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, fault):  # noqa: F811
+    "edit_on_send_preview", "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied",
+    "unlisted_redirect", "unlisted_cached_redirect"])
+def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, source_https, fault):  # noqa: F811
     from hashlib import sha256
     from loopx.chat_store import _atomic_write_json
-    from loopx.extensions import public_source_reader
     from test_chat_image_attachments import PNG_BYTES
     from test_lark_app_image_projection import ImageIO
 
@@ -1159,14 +1237,18 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
 
     transport.runner = provider_io
 
-    def fetch(url, *, deadline):
+    unlisted = "https://source.example/unlisted.png"
+
+    def respond(url):
         if url == origin:
-            return url, "text/html", "".join(f'<img src="{url}">' for url in urls).encode()
+            return None, "text/html", "".join(f'<img src="{url}">' for url in urls).encode()
         if fault == "edit_on_image_get":
             edit_original_reply()
-        return url, "image/png", figures[url]
+        if fault in ("unlisted_redirect", "unlisted_cached_redirect") and url == urls[-1]:
+            return "/unlisted.png", None, b""
+        return None, "image/png", figures[urls[-1] if url == unlisted else url]
 
-    monkeypatch.setattr(public_source_reader, "fetch", fetch)
+    fetched, resolutions = source_https(respond)
 
     def restart():
         return LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
@@ -1200,6 +1282,16 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
                 "images": [{"url": url, "sha256": sha256(figures[url]).hexdigest()} for url in urls]}
         manifest = worker.root / "historical-answer-images" / path.name
         _atomic_write_json(manifest, plan)
+        if fault == "unlisted_cached_redirect":
+            import base64
+            from loopx.chat_attachments import normalize_chat_image_attachments
+
+            legacy_attachments = normalize_chat_image_attachments([
+                {"id": f"reply-image-{index}", "name": f"original-{index}.png", "mime_type": "image/png",
+                 "data_url": "data:image/png;base64," + base64.b64encode(data).decode(), "size": len(data)}
+                for index, data in enumerate(figures.values(), 1)])
+            saved["historical_answer_images"] = {"plan": plan, "status": "pending", "attachments": legacy_attachments}
+            _atomic_write_json(path, saved)
         assert path not in worker.pending_body_paths()
         assert path in worker.pending_delivery_paths() and worker.is_recovery_path(path)
         if fault == "edited_source":
@@ -1245,6 +1337,9 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             assert worker.reconcile_request(path) == 0
         else:
             assert io.uploads == (4 if fault == "edit_on_send_preview" else 0) and len(provider.writes) == writes
+            if fault in ("unlisted_redirect", "unlisted_cached_redirect"):
+                assert fetched == [origin, *urls] and resolutions == ["source.example"] * len(fetched)
+                assert unlisted not in fetched
             if fault == "upload_denied":
                 pending = json.loads(path.read_text())
                 assert pending["historical_answer_images"]["status"] == "pending"
