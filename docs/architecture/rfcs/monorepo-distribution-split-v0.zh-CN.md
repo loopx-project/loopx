@@ -3288,3 +3288,21 @@ R1/M3、C1 切换和原目标回归仍未完成资格验证。
   原 Task、选定 D2/D5 闭包、原生 App/模型与 compaction 保留、渐进控制、
   可比完整成本、完整 V1–V5/V10、R1/M3 和 C1 切换仍未通过资格验证。原要求
   与此前负面证据保留；完成目标前仍需完整原目标回归。
+
+### 2026-11-15 — Native Task 消费既有 owner Goal 检查
+
+- **缺口：**managed Native Task 即使有 owner 配置的 Goal 验收，也会拒绝执行，
+  要求重复声明 Task argv 校验器。
+- **增量：**既有 canonical Task 验证计划由 Native 和 Delegation 共用。Native
+  从既有 owner 读取当前 Goal 范围和私有 Task 声明，累加执行 Goal 与必需 Task
+  检查；验证前后复核定义、工作、认领、生命周期和检查器资产。必需声明缺失、
+  适用但未绑定或过期的检查，以及来源变化，都不能降级为更弱的检查。Task argv
+  保留 typed-result stdin 和既有 Turn receipt；旧非 argv 声明继续拒绝。
+- **证据：**原 Native 消费路径已复现 Goal-only 拒绝；共享 TypeScript 在 54 组
+  兼容向量上与不可变基线一致。真实隔离 Chat/Core/canonical 测试覆盖 Goal-only
+  与组合执行、HTTP 读回与重放、独立检查失败、声明损坏、检查前后来源变更和
+  无关进展观察。
+- **边界：**本次消除 V2/V4/R1 中既有 Goal 检查的重复配置，不为新的自然语言
+  Goal 安装可信检查器，不授权模型或 browser 命令，也不完成首个 Task 自动采用。
+  完整 V1–V5/V10、原生模型与 context 保留、D2/D5 闭包、渐进控制、可比完整成本、
+  R1/M3 和 C1 切换仍未通过资格验证；原验收与完整目标回归门继续保留。

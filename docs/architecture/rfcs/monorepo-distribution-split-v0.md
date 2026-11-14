@@ -4234,3 +4234,26 @@ File/SQLite negative cases guard this boundary without changing valid activation
   progressive controls, comparable complete costs, full V1–V5/V10, R1/M3 and
   C1 cutover remain unqualified. Preserve original requirements and earlier
   negative evidence; run full original-goal regression before completion.
+
+### 2026-11-15 — Native Tasks consume existing owner Goal checks
+
+- **Gap:** a managed Native Task refused to execute with owner-configured Goal
+  acceptance alone, requiring a duplicate Task argv declaration.
+- **Delta:** the existing canonical Task validation plan now serves Native and
+  Delegation. Native reads current Goal scope and private Task declarations from
+  their existing owners, runs cumulative Goal and required Task checks, and
+  rechecks definition, work, claim, lifecycle and checker assets before and after
+  validation. Required declarations, applicable unbound/stale checks and changed
+  sources cannot fall back to a weaker check. Task argv keeps typed-result stdin
+  and the existing Turn receipt; legacy non-argv declarations retain refusal.
+- **Evidence:** the Goal-only refusal is reproduced on the prior Native consumer.
+  Shared TypeScript behavior matches the immutable baseline in 54 compatibility
+  vectors. Real isolated Chat/Core/canonical tests cover Goal-only and combined
+  execution, HTTP readback/replay, independent failures, corrupt declarations,
+  source changes before and after checks, and unrelated progress observations.
+- **Boundary:** this removes duplicate validation setup for already configured
+  Goal checks on V2/V4/R1. It does not install a trusted checker for a new natural
+  language Goal, authorize model/browser commands, or complete automatic first
+  Task adoption. Full V1–V5/V10, native-model/context retention, D2/D5 closure,
+  progressive controls, comparable complete costs, R1/M3 and C1 cutover remain
+  unqualified; preserve original acceptance and full-goal regression gates.

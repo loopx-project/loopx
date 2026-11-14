@@ -1,5 +1,6 @@
 """Original Chat + native kernel + File/SQLite; only the model/provider are synthetic."""
 import contextlib
+import hashlib
 import io
 import json
 import sys
@@ -22,7 +23,8 @@ STOPPED_ACTIVATION = {"schema_version": "loopx_goal_activation_v1", "state": "st
 steward = steward_fixture
 
 
-def managed_fixture(steward, tmp_path, monkeypatch, provider="file", *, validator=True):
+def managed_fixture(steward, tmp_path, monkeypatch, provider="file", *, validator=True,
+                    validation_argv=None, legacy_command=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     sid, managed = original(steward)
     storage(steward[1], provider)
@@ -43,11 +45,12 @@ def managed_fixture(steward, tmp_path, monkeypatch, provider="file", *, validato
     assert finish(runtime, turn)["status"] == "completed"
     observation = workspace / "managed-source.txt"
     observation.write_text("ready")
-    declaration = [sys.executable, "-c", "from pathlib import Path; assert Path('managed-source.txt').read_text() == 'ready'"]
+    declaration = validation_argv or [sys.executable, "-c", "from pathlib import Path; assert Path('managed-source.txt').read_text() == 'ready'"]
     added = cli(runtime, "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
         "--text", "Validate the readiness source before completing this task.", "--claimed-by", actor["agent_id"],
         "--action-kind", "validate", "--continuation-policy", "same_agent_non_delivery",
-        *(["--validation-command-json", json.dumps(declaration)] if validator else []), "--execute")
+        *(["--validation-command", legacy_command] if legacy_command else
+          ["--validation-command-json", json.dumps(declaration)] if validator else []), "--execute")
     fake = Path(runtime.codex_bin)
     candidate = {"result_kind": "validated_completion", "classification": "implementation",
         "summary": "The synthetic readiness source is ready.", "next_action": "Continue the original authorized work.",
@@ -59,6 +62,249 @@ def managed_fixture(steward, tmp_path, monkeypatch, provider="file", *, validato
     fake.write_text(source)
     runtime.adapters.pop(session["session_id"]).close_session()
     return ManagedSessionTurn(runtime), session, actor, added["todo_id"], observation, capture
+
+
+def configure_native_goal_check(runtime, actor, todo_id, observation, *, bindings=True, reject=False):
+    """Use the local owner in the isolated fixture, before any output check."""
+    from loopx.control_plane.goals.acceptance import (
+        configure_goal_acceptance, inspect_goal_acceptance,
+    )
+    checker = observation.parent / "goal-check.py"
+    checker.write_text(
+        "from pathlib import Path\n"
+        "assert Path('managed-source.txt').read_text() == 'ready'\n"
+        + ("raise SystemExit(1)\n" if reject else "")
+    )
+    document = {"scope": {"kind": "selected_work", "todo_ids": [todo_id]},
+        "objective": "Check the original readiness source", "non_goals": [],
+        "criteria": [{"id": "readiness", "description": "The source is ready",
+            "validation_argv": [sys.executable, "goal-check.py"],
+            "validation_timeout_seconds": 5,
+            "validation_files": [{"path": "goal-check.py",
+                "sha256": hashlib.sha256(checker.read_bytes()).hexdigest()}]}],
+        "bindings": [{"todo_id": todo_id, "criterion_ids": ["readiness"]}] if bindings else []}
+    basis = inspect_goal_acceptance(registry_path=runtime.registry_path,
+        runtime_root=str(runtime.coordination_runtime_root), goal_id=actor["goal_id"])
+    configured = configure_goal_acceptance(registry_path=runtime.registry_path,
+        runtime_root=str(runtime.coordination_runtime_root), goal_id=actor["goal_id"],
+        expected_provider_revision=basis["provider_revision"], document=document, execute=True)
+    assert configured["status"] == "applied", configured
+    return checker, document
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("todo_check", [False, True], ids=["goal-only", "combined"])
+def test_native_task_consumes_owner_goal_checks(steward, tmp_path, monkeypatch, provider, todo_check):
+    service, session, actor, todo_id, observation, capture = managed_fixture(
+        steward, tmp_path, monkeypatch, provider, validator=todo_check)
+    store, runtime, *_ = steward
+    configure_native_goal_check(runtime, actor, todo_id, observation)
+    before = capture.read_bytes()
+    accepted, created = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="owner-goal-check", todo_id=todo_id)
+    assert created
+    completed = finish(runtime, accepted)
+    result = completed["response"]["native_loopx"]
+    assert result["status"] == "committed", json.dumps(result)
+    assert result["effects"]["host_invoked"] and result["effects"]["quota_spent"]
+    assert result["validation"]["status"] == "passed"
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert len([row for row in calls if row["method"] == "turn/start"]) == 1
+    assert store.load_session(session["session_id"])["upstream_thread_id"] == session["upstream_thread_id"]
+    current = capture.read_bytes()
+    assert not service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="owner-goal-check", todo_id=todo_id)[1]
+    assert capture.read_bytes() == current
+
+
+@pytest.mark.parametrize("fault", ["unbound", "changed-checker", "corrupt-required"])
+def test_native_goal_checks_cannot_bypass_unavailable_sources(steward, tmp_path, monkeypatch, fault):
+    service, session, actor, todo_id, observation, capture = managed_fixture(steward, tmp_path, monkeypatch)
+    runtime = steward[1]
+    checker, _ = configure_native_goal_check(runtime, actor, todo_id, observation, bindings=fault != "unbound")
+    if fault == "changed-checker":
+        checker.write_text("raise SystemExit(0)\n")
+    elif fault == "corrupt-required":
+        from loopx.control_plane.todos.completion_validation_store import completion_validation_declaration_path
+        todo = cli(runtime, "todo", "list", "--goal-id", actor["goal_id"], "--todo-id", todo_id)["todo"]
+        sidecar = completion_validation_declaration_path(runtime_root=runtime.coordination_runtime_root,
+            goal_id=actor["goal_id"], todo_id=todo_id)
+        blob = sidecar.parent / "blobs" / (todo["completion_validation_sha256"] + ".json")
+        # The selected immutable source is corrupt. A valid projected/sidecar
+        # declaration cannot make that selected source trustworthy again.
+        blob.write_text("{}")
+    before = capture.read_bytes()
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="unavailable-owner-check", todo_id=todo_id)
+    completed = finish(runtime, accepted)
+    native = (completed.get("response") or {}).get("native_loopx")
+    if native is None:
+        assert fault == "unbound" and completed["status"] == "failed", json.dumps(completed)
+        assert completed["error_code"] == "runtime_error", completed
+    else:
+        assert native["status"] in {"failed", "stopped"}, native
+        assert not native["effects"]["state_written"] and not native["effects"]["quota_spent"]
+    current = cli(runtime, "todo", "list", "--goal-id", actor["goal_id"], "--todo-id", todo_id)["todo"]
+    assert current["status"] == "open" and not current["done"]
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert not [row for row in calls if row["method"] == "turn/start"]
+
+
+@pytest.mark.parametrize("goal_checks", [False, True], ids=["todo-only", "combined"])
+def test_native_legacy_command_keeps_argv_unavailable_boundary(steward, tmp_path, monkeypatch, goal_checks):
+    service, session, actor, todo_id, observation, capture = managed_fixture(
+        steward, tmp_path, monkeypatch, legacy_command="legacy-checker")
+    runtime = steward[1]
+    if goal_checks:
+        configure_native_goal_check(runtime, actor, todo_id, observation)
+    before = capture.read_bytes()
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="legacy-argv-boundary", todo_id=todo_id)
+    native = finish(runtime, accepted)["response"]["native_loopx"]
+    assert native["status"] == "stopped", native
+    assert not native["effects"]["state_written"] and not native["effects"]["quota_spent"]
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert not [row for row in calls if row["method"] == "turn/start"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["goal-failed", "definition", "checker-after", "todo-work", "goal-work", "progress"])
+def test_native_check_reentry_rejects_changes_but_accepts_progress(steward, tmp_path, monkeypatch, provider, fault):
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.control_plane.goals import acceptance
+    service, session, actor, todo_id, observation, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    runtime = steward[1]
+    if fault != "todo-work":
+        checker, document = configure_native_goal_check(runtime, actor, todo_id, observation, reject=fault == "goal-failed")
+    create = ManagedSessionTurn.validator
+
+    def interrupted(self, *args, **kwargs):
+        validate = create(self, *args, **kwargs)
+
+        def after_model(plan, result):
+            if fault == "definition":
+                document["objective"] = "Owner changed the acceptance definition"
+                basis = acceptance.inspect_goal_acceptance(registry_path=runtime.registry_path,
+                    runtime_root=str(runtime.coordination_runtime_root), goal_id=actor["goal_id"])
+                changed = acceptance.configure_goal_acceptance(registry_path=runtime.registry_path,
+                    runtime_root=str(runtime.coordination_runtime_root), goal_id=actor["goal_id"],
+                    expected_provider_revision=basis["provider_revision"], document=document, execute=True)
+                assert changed["status"] == "applied", changed
+            elif fault == "checker-after":
+                checker.write_text("raise SystemExit(0)\n")
+            elif fault in {"todo-work", "goal-work", "progress"}:
+                cli(runtime, "todo", "update", "--goal-id", actor["goal_id"], "--todo-id", todo_id,
+                    "--agent-id", actor["agent_id"], "--update-operation-id", "post-model-source",
+                    "--note" if fault == "progress" else "--text",
+                    "Independent progress observation" if fault == "progress" else "The owner changed the work")
+                fresh = cli(runtime, "todo", "list", "--goal-id", actor["goal_id"], "--todo-id", todo_id)["todo"]
+                assert fresh["note" if fault == "progress" else "text"] == (
+                    "Independent progress observation" if fault == "progress" else "The owner changed the work")
+            return validate(plan, result)
+
+        return after_model
+
+    monkeypatch.setattr(ManagedSessionTurn, "validator", interrupted)
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="owner-reentry", todo_id=todo_id)
+    native = finish(runtime, accepted)["response"]["native_loopx"]
+    if fault == "progress":
+        assert native["status"] == "committed" and native["effects"]["quota_spent"], native
+    else:
+        assert native["status"] == "failed", native
+        assert not native["effects"]["state_written"] and not native["effects"]["quota_spent"]
+        if fault == "goal-failed":
+            assert native["validation"]["status"] == "failed", native
+
+
+@pytest.mark.parametrize("fault", ["checker", "todo-work"])
+def test_native_postcheck_source_fence_rejects_a_successful_old_check(steward, tmp_path, monkeypatch, fault):
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    service, session, actor, todo_id, observation, _ = managed_fixture(steward, tmp_path, monkeypatch)
+    runtime = steward[1]
+    if fault == "checker":
+        checker, _ = configure_native_goal_check(runtime, actor, todo_id, observation)
+    create = ManagedSessionTurn.validator
+    observed = []
+
+    def interrupted(self, *args, **kwargs):
+        validate = create(self, *args, **kwargs)
+
+        def after_model(plan, result):
+            checks = self.task_validator
+
+            def changed_after_checks(plan, result):
+                receipt = checks(plan, result)
+                assert receipt["status"] == "passed", receipt
+                if fault == "checker":
+                    checker.write_text("raise SystemExit(0)\n")
+                else:
+                    cli(runtime, "todo", "update", "--goal-id", actor["goal_id"], "--todo-id", todo_id,
+                        "--agent-id", actor["agent_id"], "--update-operation-id", "after-check-work",
+                        "--text", "A different task after successful validation")
+                observed.append(receipt["status"])
+                return receipt
+
+            self.task_validator = changed_after_checks
+            return validate(plan, result)
+
+        return after_model
+
+    monkeypatch.setattr(ManagedSessionTurn, "validator", interrupted)
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="post-check-fence", todo_id=todo_id)
+    native = finish(runtime, accepted)["response"]["native_loopx"]
+    assert observed == ["passed"]
+    assert native["status"] == "failed", native
+    assert not native["effects"]["state_written"] and not native["effects"]["quota_spent"]
+
+
+def test_native_combined_checks_keep_raw_result_stdin_and_required_todo_failure(steward, tmp_path, monkeypatch):
+    argv = [sys.executable, "-c", "import json,sys; from pathlib import Path; "
+        "v=json.load(sys.stdin); assert v['classification'] == 'implementation'; "
+        "Path('stdin-checked').write_text('checked'); raise SystemExit(1)"]
+    service, session, actor, todo_id, observation, _ = managed_fixture(
+        steward, tmp_path, monkeypatch, validation_argv=argv)
+    runtime = steward[1]
+    configure_native_goal_check(runtime, actor, todo_id, observation)
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="required-stdin", todo_id=todo_id)
+    native = finish(runtime, accepted)["response"]["native_loopx"]
+    assert (observation.parent / "stdin-checked").read_text() == "checked"
+    assert native["status"] == "failed" and native["validation"]["status"] == "failed", native
+    assert not native["effects"]["state_written"] and not native["effects"]["quota_spent"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_selected_goal_scope_keeps_future_work_independent_and_recovers(steward, tmp_path, monkeypatch, provider):
+    service, session, actor, todo_id, observation, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    runtime = steward[1]
+    configure_native_goal_check(runtime, actor, todo_id, observation, reject=True)
+    blocked, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="covered-failure", todo_id=todo_id)
+    rejected = finish(runtime, blocked)["response"]["native_loopx"]
+    assert rejected["validation"]["status"] == "failed"
+    assert not rejected["effects"]["quota_spent"] and not rejected["effects"]["state_written"]
+    argv = [sys.executable, "-c", "from pathlib import Path; assert Path('managed-source.txt').read_text() == 'ready'"]
+    # This new Task is in the same Goal after check activation, but outside the
+    # owner's selected-work scope. It must keep its own required check and work.
+    later = cli(runtime, "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+        "--text", "An independent later task", "--claimed-by", actor["agent_id"],
+        "--action-kind", "validate", "--continuation-policy", "same_agent_non_delivery",
+        "--validation-command-json", json.dumps(argv), "--execute")["todo_id"]
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="outside-selected-scope", todo_id=later)
+    independent = finish(runtime, accepted)["response"]["native_loopx"]
+    assert independent["status"] == "committed" and independent["effects"]["quota_spent"], independent
+    configure_native_goal_check(runtime, actor, todo_id, observation)
+    recovered, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="owner-repaired-check", todo_id=todo_id)
+    resumed = finish(runtime, recovered)["response"]["native_loopx"]
+    assert resumed["status"] == "committed" and resumed["effects"]["quota_spent"], resumed
+    current = capture.read_bytes()
+    assert not service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="owner-repaired-check", todo_id=todo_id)[1]
+    assert capture.read_bytes() == current
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -396,13 +642,17 @@ def test_managed_postcondition_checks_complete_source_before_argv(steward, tmp_p
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_managed_turn_http_correlates_readback_without_accepting_commands(steward, tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("goal_only", [False, True], ids=["todo", "owner-goal"])
+def test_managed_turn_http_correlates_readback_without_accepting_commands(steward, tmp_path, monkeypatch, provider, goal_only):
     import http.client
     import threading
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 
-    service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    service, session, actor, todo_id, observation, capture = managed_fixture(
+        steward, tmp_path, monkeypatch, provider, validator=not goal_only)
     store, runtime, *_ = steward
+    if goal_only:
+        configure_native_goal_check(runtime, actor, todo_id, observation)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.runtime_controller, server.chat_store, server.verbose = runtime, store, False
     server.registry_path, server.selected_goal_id = runtime.registry_path, actor["goal_id"]
