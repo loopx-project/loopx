@@ -4,7 +4,7 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {prepareCoordinationProjectionCommit, type CoordinationProjectionMutation} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "../../loopx/control_plane/coordination/task_lease_lifecycle.ts";
 import type {RemoteAuthorityRequest} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
-import {postgresRemoteFixture, claimRequest} from "./remote_authority_fixture.ts";
+import {postgresRemoteFixture, claimRequest, serviceIdentity} from "./remote_authority_fixture.ts";
 
 function lifecycle(todo: string, operation: "renew" | "release", version = 0): RemoteAuthorityRequest {
   const {request_id: _, ...scope} = claimRequest("a", todo) as Extract<RemoteAuthorityRequest, {operation: "claim"}>;
@@ -88,5 +88,107 @@ export function registerRemoteAuthorityLifecycleConformance(connectionString: st
     assert.equal(recovered.code, 0); assert.equal(recovered.value.historical_only, true);
     assert.equal((recovered.value.result as JsonObject).missing, true);
     assert.deepEqual(await fixture.store.loadAuthority(), committed, "replay and recovery retain the original no-op receipt");
+  });
+
+  test("remote authority full lifecycle: snapshot, todo_add, complete, block, and defer", {skip: !connectionString}, async t => {
+    const fixture = await postgresRemoteFixture(t, connectionString!);
+    const running = await fixture.start();
+    await fixture.seed(["todo_for_complete", "todo_for_block", "todo_for_defer"]);
+
+    const baseScope = {
+      schema_version: "loopx_remote_authority_request_v0" as const,
+      tenant_id: "tenant-one",
+      goal_id: "goal-one",
+      actor_id: "actor-a",
+      store_identity: serviceIdentity,
+    };
+
+    // 1. Snapshot
+    const snap = await fixture.client(running.endpoint, "a", {
+      ...baseScope,
+      operation: "snapshot",
+    });
+    assert.equal(snap.code, 0);
+    assert.equal(snap.value.status, "snapshot");
+    assert(Array.isArray(snap.value.todos));
+    assert(Array.isArray(snap.value.leases));
+    assert.equal(typeof snap.value.receipt_sha256, "string");
+
+    // 2. Todo add
+    const added = await fixture.client(running.endpoint, "a", {
+      ...baseScope,
+      todo_id: "todo_created_remotely",
+      operation: "todo_add",
+      request_id: "req-add-remotely",
+      text: "[P1] remotely created task",
+      priority: "P1",
+      role: "agent",
+    });
+    assert.equal(added.code, 0);
+    assert.equal((added.value.result as JsonObject).status, "applied");
+    assert.equal((added.value.result as JsonObject).todo_id, "todo_created_remotely");
+
+    // 3. Claim -> Complete
+    const claimComp = await fixture.client(running.endpoint, "a", {
+      ...baseScope,
+      todo_id: "todo_for_complete",
+      operation: "claim",
+      request_id: "claim-for-comp",
+    });
+    assert.equal(claimComp.code, 0);
+    assert.equal((claimComp.value.result as JsonObject).status, "applied");
+
+    const comp = await fixture.client(running.endpoint, "a", {
+      ...baseScope,
+      todo_id: "todo_for_complete",
+      operation: "complete",
+      request_id: "complete-req-1",
+      claim_request_id: "claim-for-comp",
+      evidence: "sha256:1111 delivery validated",
+    });
+    assert.equal(comp.code, 0);
+    assert.equal((comp.value.result as JsonObject).status, "applied");
+    assert.equal((comp.value.result as JsonObject).completed, true);
+
+    // 4. Claim -> Block
+    const claimBlock = await fixture.client(running.endpoint, "a", {
+      ...baseScope,
+      todo_id: "todo_for_block",
+      operation: "claim",
+      request_id: "claim-for-block",
+    });
+    assert.equal(claimBlock.code, 0);
+
+    const block = await fixture.client(running.endpoint, "a", {
+      ...baseScope,
+      todo_id: "todo_for_block",
+      operation: "block",
+      request_id: "block-req-1",
+      claim_request_id: "claim-for-block",
+      reason: "external dependency blocked",
+    });
+    assert.equal(block.code, 0);
+    assert.equal((block.value.result as JsonObject).status, "applied");
+
+    // 5. Claim -> Defer
+    const claimDefer = await fixture.client(running.endpoint, "a", {
+      ...baseScope,
+      todo_id: "todo_for_defer",
+      operation: "claim",
+      request_id: "claim-for-defer",
+    });
+    assert.equal(claimDefer.code, 0);
+
+    const defer = await fixture.client(running.endpoint, "a", {
+      ...baseScope,
+      todo_id: "todo_for_defer",
+      operation: "defer",
+      request_id: "defer-req-1",
+      claim_request_id: "claim-for-defer",
+      reason: "deferred until milestone",
+      resume_when: "resume_at:2026-12-01T00:00:00Z",
+    });
+    assert.equal(defer.code, 0);
+    assert.equal((defer.value.result as JsonObject).status, "applied");
   });
 }

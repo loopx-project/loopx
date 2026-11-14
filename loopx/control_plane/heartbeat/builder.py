@@ -660,6 +660,25 @@ def build_heartbeat_prompt(
     if fine_grained:
         payload["turn_granularity"] = TURN_GRANULARITY_FINE
         payload["turn_mode"] = "fine_grained"
+    from ..coordination.remote_authority_gateway import (
+        is_remote_authority_goal,
+        get_remote_authority_projection,
+    )
+    registry_goals = None
+    if registry_path:
+        try:
+            from ...history import load_registry
+            registry_goals = {
+                str(g.get("id") or ""): g
+                for g in (load_registry(Path(registry_path)).get("goals") or [])
+                if isinstance(g, dict) and g.get("id")
+            }
+        except Exception:
+            registry_goals = None
+    if is_remote_authority_goal(goal_id, registry_goals):
+        remote_proj = get_remote_authority_projection(goal_id, registry_goals)
+        if remote_proj:
+            payload["remote_authority"] = remote_proj
     payload["agent_model"] = AgentRuntimeModel.PEER_V1.value
     return _prune_prompt_metadata(payload, thin=thin, brief=brief)
 
