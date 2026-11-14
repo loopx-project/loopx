@@ -1,6 +1,6 @@
 import {planTodoCreationPriority} from "../todos/priority.ts";
 import {planMonitorSchedule} from "../todos/monitor_metadata.ts";
-import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
+import {AUTHORITY_SOURCE_CHANGED, requireReviewedRegistrySha256, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import type { JsonObject } from "../effect_program.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
 import type { AuthorityStore } from "./authority_store.ts";
@@ -35,6 +35,7 @@ export interface CoordinationTodoCreateInput {
   readonly operation_id: string;
   readonly dry_run: boolean;
   readonly expected_provider_revision?: string;
+  readonly expected_registry_sha256?: string;
   readonly now: Date;
 }
 
@@ -84,6 +85,9 @@ function normalizeCreateInput(rawInput: CoordinationTodoCreateInput,
   }
   if (input.expected_provider_revision !== undefined) {
     requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision");
+  }
+  if (input.expected_registry_sha256 !== undefined) {
+    requireReviewedRegistrySha256(input.expected_registry_sha256);
   }
   if (todo.status === "done" || todo.archive_state !== "active") {
     throw new AuthorityStoreProtocolError(
@@ -251,6 +255,8 @@ export async function executeCoordinationTodoCreate(
     dry_run: input.dry_run,
     ...(input.expected_provider_revision === undefined ? {} :
       {expected_provider_revision: input.expected_provider_revision}),
+    ...(input.expected_registry_sha256 === undefined ? {} :
+      {expected_registry_sha256: input.expected_registry_sha256}),
   });
   const receipt = createReceipt(input, requestSha);
   const existing = await receipt.read(store);

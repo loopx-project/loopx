@@ -15,6 +15,13 @@ export const AUTHORITY_SOURCE_CHANGED = {
   reason: "Todo authority registration changed; review the current state before continuing",
 } as const;
 
+export function requireReviewedRegistrySha256(value: unknown): string {
+  if (typeof value !== "string" || !BARE_SHA256_PATTERN.test(value)) {
+    throw new TypeError("expected_registry_sha256 must be a SHA-256 digest");
+  }
+  return value;
+}
+
 export function registryAuthoritySourceCheck(
   input: JsonObject, witnessed: boolean, expectedDigest: unknown = null,
 ): AuthoritySourceCheck {

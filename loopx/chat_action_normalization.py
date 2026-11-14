@@ -40,6 +40,7 @@ class ChatActionNormalizationMixin:
             _opaque,
             _text,
         )
+        from .chat.todo_source import resolve_chat_todo_source
 
         if action_kind == "goal.acceptance.check":
             values = self._allowed_parameters(parameters, allowed={"goal_id", "document", "prepared_by"})
@@ -360,7 +361,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             result = {
                 "goal_id": goal_id,
                 "text": _text(values.get("text"), field="text", limit=400),
@@ -370,10 +371,10 @@ class ChatActionNormalizationMixin:
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values.get("endpoint_id"), field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             elif values.get("agent_id"):
                 agent_id = _opaque(values.get("agent_id"), field="agent_id")
-                if agent_id not in registered_agent_ids_for_goal(self._goal(goal_id)):
+                if agent_id not in registered_agent_ids_for_goal(goal):
                     raise ProtectedActionGate(
                         "agent.bind",
                         gate={
@@ -415,7 +416,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             result: dict[str, Any] = {
                 "goal_id": goal_id,
                 "todo_id": _opaque(values.get("todo_id"), field="todo_id"),
@@ -436,10 +437,13 @@ class ChatActionNormalizationMixin:
             if "review_basis" in values:
                 basis = values["review_basis"]
                 if (operation != "edit" or not values.get("text") or not isinstance(basis, dict)
-                        or set(basis) != {"schema_version", "provider_revision", "source_authority", "registry_sha256"}
+                        or set(basis) - {"source_identity"} != {
+                            "schema_version", "provider_revision", "source_authority", "registry_sha256",
+                        }
                         or basis.get("schema_version") != "loopx_chat_canonical_update_basis_v0"
                         or any(not isinstance(x, str) or not x for x in basis.values())
-                        or not BARE_SHA256_PATTERN.fullmatch(basis["registry_sha256"])):
+                        or not BARE_SHA256_PATTERN.fullmatch(basis["registry_sha256"])
+                        or ("source_identity" in basis and not BARE_SHA256_PATTERN.fullmatch(basis["source_identity"]))):
                     raise ValueError("Task edit requires its complete current source basis")
                 result["review_basis"] = dict(basis)
             if values.get("text"):
@@ -460,7 +464,7 @@ class ChatActionNormalizationMixin:
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values["endpoint_id"], field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             elif values.get("agent_id"):
                 result["agent_id"] = _opaque(values["agent_id"], field="agent_id")
             if values.get("resume_when"):
@@ -795,7 +799,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
-            self._goal(goal_id)
+            goal = resolve_chat_todo_source(self, goal_id).goal
             operation = str(values.get("operation") or "").strip().lower()
             if operation not in {"pause", "resume", "stop", "run_now", "edit"}:
                 raise ValueError(
@@ -810,7 +814,7 @@ class ChatActionNormalizationMixin:
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values["endpoint_id"], field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id, goal=goal)
             if values.get("target"):
                 result["target"] = _text(values["target"], field="target", limit=400)
             if values.get("target_key"):

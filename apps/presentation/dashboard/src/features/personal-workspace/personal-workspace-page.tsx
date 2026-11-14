@@ -2059,6 +2059,7 @@ export function PersonalWorkspacePage({
     if (proposal.reviewPlan && !proposal.reviewPlan.canApply) return proposal;
     if (proposal.actionKind === "team.plan" && proposal.status === "error"
       && !proposal.reviewPlan?.retryOriginal) return proposal;
+    const isTodoCreation = proposal.actionKind === "todo.create" || proposal.actionKind === "monitor.create";
     const matchesTodoTarget = (observed: TypedActionProposal) => proposal.actionKind !== "todo.update" || (
       observed.normalized_parameters.goal_id === proposal.goalId
       && (!proposal.sourceRequest || observed.normalized_parameters.todo_id === proposal.sourceRequest.normalizedParameters.todo_id)
@@ -2116,6 +2117,7 @@ export function PersonalWorkspacePage({
       if (result.proposal.proposal_id !== proposal.previewId
         || result.proposal.action_kind !== proposal.actionKind
         || !matchesTodoTarget(result.proposal)
+        || (isTodoCreation && result.proposal.normalized_parameters.goal_id !== proposal.goalId)
         || (proposal.actionKind === "goal.lifecycle" && (
           result.proposal.normalized_parameters.goal_id !== proposal.goalId
           || lifecycleOperationFor(result.proposal) !== proposal.lifecycleOperation
@@ -2143,7 +2145,7 @@ export function PersonalWorkspacePage({
       setActionFeedback(completedActionFeedback(applied, t));
       // Keep the success receipt visible for reviewed actions. Direct actions
       // surface the same result through the persistent feedback receipt.
-      if (applied.actionKind === "todo.create" || applied.actionKind === "goal.create") {
+      if (isTodoCreation || applied.actionKind === "goal.create") {
         await callbacks.onRefresh?.();
       }
       if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "delete" || (applied.lifecycleOperation === "stop" && !options.keepGoalSelected))) {
@@ -2197,7 +2199,7 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      const scopedReadback = ["team.plan", "goal.create", "todo.update", "todo.create"].includes(proposal.actionKind);
+      const scopedReadback = isTodoCreation || ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind);
       if (!stored && scopedReadback && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
@@ -2215,12 +2217,14 @@ export function PersonalWorkspacePage({
         if (observed.reviewPlan?.creationProgress?.goalId) void callbacks.onRefresh?.();
         setActionFeedback(stored.status === "stale" ? t("feedback.stale")
           : observed.reviewPlan?.interaction === "completed" ? completedActionFeedback(observed, t)
+          : observed.reviewPlan?.retryOriginal ? t(`actionReview.${observed.reviewPlan.reason}`)
+          : isTodoCreation ? t("actionReview.readback_unverified")
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
         return reconciled;
       }
       const failed = {
         ...proposal,
-        reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: stale ? "refresh" as const : "repair" as const, reason: readbackMismatch ? "readback_unverified" as const : stale ? "stale_proposal" as const : "apply_failed" as const, canApply: false as const } : undefined,
+        reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: stale ? "refresh" as const : "repair" as const, reason: readbackMismatch || (isTodoCreation && !stale) ? "readback_unverified" as const : stale ? "stale_proposal" as const : "apply_failed" as const, canApply: false as const } : undefined,
         impact: proposal.reviewPlan?.retryOriginal ? "" : proposal.impact,
         primaryLabel: proposal.reviewPlan?.retryOriginal ? undefined : proposal.primaryLabel,
         errorMessage: error instanceof Error ? error.message : String(error),
@@ -2228,7 +2232,7 @@ export function PersonalWorkspacePage({
       };
       setProposals((current) => ({ ...current, [proposal.previewId]: failed }));
       if (options.presentation !== "inline") selectReceipt(failed);
-      setActionFeedback(t("feedback.executionFailed", { error: failed.errorMessage }));
+      setActionFeedback(isTodoCreation && !stale ? t("actionReview.readback_unverified") : t("feedback.executionFailed", { error: failed.errorMessage }));
       return failed;
     }
   }

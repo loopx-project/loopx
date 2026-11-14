@@ -251,7 +251,7 @@ export function ChannelTimeline({
       return (
         <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} data-action-kind={item.proposal.actionKind} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
-          <span><small>{pendingOperation ? t(`proposal.kind.${item.proposal.actionKind}`)
+          <span><small>{pendingOperation || item.proposal.reviewPlan?.reason === "todo_creation_retry" ? t(`proposal.kind.${item.proposal.actionKind}`)
             : taskReceipt ? t("drawer.taskLaunchReceipt")
             : appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
             : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>

@@ -90,6 +90,22 @@ class ActionConflictError(RuntimeError):
     """Raised when a typed action transition conflicts with durable state."""
 
 
+def action_checkpoint_steps(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    checkpoint = proposal.get("checkpoint")
+    steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else None
+    return steps if isinstance(steps, dict) else {}
+
+
+def is_todo_create_recovery(proposal: Mapping[str, Any]) -> bool:
+    return (
+        proposal.get("action_kind") in ("todo.create", "monitor.create")
+        and (bool(action_checkpoint_steps(proposal).keys() & {"todo_create_prepared", "todo_created"})
+             or (proposal.get("status") == "failed"
+                 and (proposal.get("failure") or {}).get("error_code") == "canonical_action_failed")
+             or proposal.get("status") == "applying")
+    )
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -1320,6 +1336,8 @@ class ChatActionStore:
                 raise ActionConflictError(
                     f"proposal in {proposal.get('status')} state cannot be cancelled"
                 )
+            if is_todo_create_recovery(proposal):
+                raise ActionConflictError("Creation is already confirmed; recover the original operation.")
             now = _utc_now()
             proposal["status"] = "cancelled"
             proposal["cancelled_at"] = now
@@ -1398,6 +1416,7 @@ class ChatActionStore:
         *,
         step: str,
         receipt: Mapping[str, Any],
+        once: bool = False,
     ) -> dict[str, Any]:
         safe_step = _opaque_id(step, field="step")
         safe_receipt = _safe_json_value(dict(receipt), path="checkpoint.receipt")
@@ -1413,6 +1432,8 @@ class ChatActionStore:
             proposal = payload["proposals"].get(token)
             if not isinstance(proposal, dict):
                 raise KeyError("typed Chat action proposal was not found")
+            if once and proposal.get("status") == "applied":
+                return proposal
             if proposal.get("status") not in {"applying", "gated", "failed"}:
                 raise ActionConflictError(
                     f"proposal in {proposal.get('status')} state cannot save a checkpoint"
@@ -1423,6 +1444,8 @@ class ChatActionStore:
             )
             steps = checkpoint.get("steps")
             steps = dict(steps) if isinstance(steps, dict) else {}
+            if once and safe_step in steps:
+                return proposal
             steps[safe_step] = safe_receipt
             checkpoint["steps"] = steps
             checkpoint["last_completed_step"] = safe_step
@@ -1499,6 +1522,8 @@ class ChatActionStore:
                 raise ActionConflictError(
                     f"proposal in {status} state cannot become {to_state}"
                 )
+            if to_state in {"deferred", "rejected"} and is_todo_create_recovery(proposal):
+                raise ActionConflictError("Creation is already confirmed; recover the original operation.")
             proposal["status"] = to_state
             proposal.update(_safe_json_value(dict(updates), path="transition"))
             proposal["updated_at"] = _utc_now()
