@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import {isDeepStrictEqual} from "node:util";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import { inflateSync } from "node:zlib";
-import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
@@ -692,7 +692,8 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
 
 /** These reads stay on one captured observation; they never re-enter the guard. */
 function replanReadCommands(payload: JsonObject, path = payload.replan_read_path,
-  argv = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string): JsonObject | null {
+  argv: unknown = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string,
+  captureSha256?: unknown): JsonObject | null {
   const packet = object(payload.replan_action_packet);
   if (typeof path !== "string" || !path.trim() || path.includes("\0") || payload.ok !== true ||
       payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT ||
@@ -703,8 +704,13 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
   if (!Array.isArray(argv) || !argv.length || argv.some(arg => typeof arg !== "string" || !arg || /[\x00-\x1f]/.test(arg))) {
     throw new EffectRuntimeRequestError("captured replan CLI route is malformed");
   }
+  if (captureSha256 !== undefined &&
+      (typeof captureSha256 !== "string" || !BARE_SHA256_PATTERN.test(captureSha256))) {
+    throw new EffectRuntimeRequestError("captured replan byte digest is malformed");
+  }
   const command = `${argv.map(arg => shellQuote(arg as string)).join(" ")} --format json quota replan-view --decision-file ${shellQuote(path)}` +
-    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}`;
+    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}` +
+    (captureSha256 === undefined ? "" : ` --capture-sha256 ${captureSha256}`);
   return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
 }
@@ -906,8 +912,12 @@ function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash:
   // A native journal binds its path after planning. The CLI supplies that same
   // physical source route without modifying the captured observation or hash.
   const path = request.captured_decision_path ?? payload.replan_read_path;
-  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"], sourceHash);
-  const sourceRead = reads ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
+  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"],
+    sourceHash, request.capture_sha256);
+  // The stateless entry already exposes its digest-checked complete context.
+  // Its writer should not offer a second, unchecked whole-file route.
+  const sourceRead = reads && request.capture_sha256 === undefined
+    ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
   if (request.stage === "acceptance") {
     const {outcomes, ambiguous} = replanGoalContext(payload, reads, undefined, precision);
     const ref = String(request.outcome_ref);
@@ -1449,8 +1459,8 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
   } else {
     // Original-Turn identities often follow an absolute runtime path. Cutting
     // a closeout command into display text can erase its binding or execute flag.
-    writeback.next_cli_actions = hasSettlementPlan
-      ? nextCliActions.map(command => scalarString(command, "settlement command"))
+    writeback.next_cli_actions = hasSettlementPlan || !deferSettlement
+      ? nextCliActions.map(command => scalarString(command, "writeback command"))
       : preserveBoundReplanCommands || receiptBoundSettlementOnly
       ? nextCliActions.slice(0, 5).map(command => scalarString(command, "bound replan closeout command"))
       : textList(nextCliActions, 5, 420);
@@ -2452,21 +2462,31 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
 }
 
 function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
-  const path = object(request.native_projection).captured_decision_path;
+  const projection = object(request.native_projection);
+  const stateless = projection.captured_decision_path === undefined && projection.replan_reader_argv !== undefined;
+  const path = stateless ? projection.source_path : projection.captured_decision_path;
   if (typeof path !== "string") return undefined;
   const source = requireJsonObject(request.context, "captured replan source");
+  if (stateless) {
+    if (projection.sha256 === undefined || request.surface !== "complete_turn" &&
+        (request.surface !== "quota_packet" || Object.hasOwn(source, "schema_version") ||
+          Object.hasOwn(source, "contract_binding"))) return undefined;
+    // Preserve a bound reversal in the opening, before candidate choice.
+    if (scopedReplanYardstickReversal(source)) return undefined;
+  }
   const packet = object(source.replan_action_packet);
   const review = object(object(source.autonomous_replan_obligation).replan_context);
   // Existing staged files are presentation inputs. Do not derive a new source
   // hash from them or replace their already pinned reader commands.
-  if (typeof source.replan_read_path !== "string" || packet.schema_version !== "replan_action_packet_v0"
+  if ((!stateless && typeof source.replan_read_path !== "string") || packet.schema_version !== "replan_action_packet_v0"
       || typeof packet.obligation_id !== "string"
       || packet.obligation_id !== review.obligation_id || packet.review !== undefined
       || packet.writeback !== undefined) return undefined;
   const precision = replanReadPrecision(request, request.source_number_tokens);
   const identity = precision?.identity ?? contextSourceIdentity(request);
   const view = replanCliView(source, (value, field) => identity(value, ["context", ...field]),
-    replanReadCommands(source, path), precision);
+    replanReadCommands(source, path, stateless ? projection.replan_reader_argv : undefined,
+      undefined, stateless ? projection.sha256 : undefined), precision);
   return view === source ? undefined : {staged_context: view, deferred: [], instructions: []};
 }
 
