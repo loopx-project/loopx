@@ -483,9 +483,12 @@ test("another Agent receipt cannot supersede ACK or host-failure writeback", asy
   assert.equal(failed.failure_count, 1);
 });
 
-test("a successful identity-less quota guard supersedes an older host receipt", async (t) => {
+test("a successful identity-less quota guard cannot supersede a host receipt", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   await appendReceipt(runtimeRoot, "turn-followup-1");
+  // A historical-shaped audit row carries no Turn identity. It cannot retire
+  // the originating receipt, because the same bytes are indistinguishable
+  // from an audit row copied out of older history.
   await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
     schema_version: "loopx_rollout_event_v0",
     event_kind: "quota_should_run",
@@ -495,6 +498,14 @@ test("a successful identity-less quota guard supersedes an older host receipt", 
     details: { ok: true, should_run: true },
   })}\n`, { flag: "a" });
 
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(acknowledged.ok, true);
+  const commit = acknowledged.scheduler_commit as Record<string, unknown>;
+  assert.equal(commit.status, "written");
+  assert.equal(commit.written, true);
+
+  // A real newer Turn in the same Goal instance remains authoritative.
+  await appendReceipt(runtimeRoot, "turn-followup-2");
   const stale = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
   assert.equal(stale.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE");
   assert.equal(stale.scheduler_state_mutated, false);

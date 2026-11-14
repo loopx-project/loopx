@@ -289,6 +289,7 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
     request: {
       schema_version: SCHEDULER_HEARTBEAT_FOLLOWUP_REQUEST_SCHEMA,
       runtime_root: parsed.runtime_root,
+      goal_ref: hint.goal_ref ?? null,
       turn_instance_id: parsed.turn_instance_id,
       require_heartbeat_receipt: true,
       before: hint.before ?? {},

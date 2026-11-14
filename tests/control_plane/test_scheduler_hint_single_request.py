@@ -1,3 +1,6 @@
+import base64
+import json
+import zlib
 from copy import deepcopy
 
 import pytest
@@ -69,6 +72,46 @@ def test_complete_hint_crosses_runtime_once(
         assert (
             ack["args"]["state_key"] == "scheduler_hint.app_automation.stateful_backoff"
         )
+
+
+def _native_followup_payload(cli_args: list[str]) -> dict[str, object]:
+    encoded = "".join(
+        cli_args[index + 1]
+        for index, value in enumerate(cli_args)
+        if value == "--scheduler-host-facts-chunk"
+    )
+    padding = "=" * (-len(encoded) % 4)
+    return json.loads(
+        zlib.decompress(base64.urlsafe_b64decode(encoded + padding))
+    )
+
+
+def test_complete_hint_carries_the_exact_goal_instance_scope() -> None:
+    goal_ref = {
+        "goal_id": "hint-fixture",
+        "goal_instance_id": "ginst_" + "e" * 32,
+    }
+    payload = {
+        "goal_id": "hint-fixture",
+        "goal_ref": goal_ref,
+        "agent_identity": {"agent_id": "agent-fixture"},
+        "heartbeat_recommendation": {"recommended_mode": "normal_run"},
+        "recommended_action": "Perform the bounded work.",
+        "effective_action": "normal_run",
+        "interaction_contract": {"mode": "normal_run"},
+    }
+    hint = scheduler_hint.build_scheduler_hint(
+        payload,
+        arbitration=SchedulerArbitration(
+            SchedulerDisposition("active_work"), "active_work", "normal_run"
+        ),
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            "codex_app_heartbeat"
+        ),
+    )
+
+    ack = hint["app_automation"]["ack_hint"]
+    assert _native_followup_payload(ack["cli_args"])["goal_ref"] == goal_ref
 
 
 def test_equal_monitor_windows_use_unicode_codepoint_identity_order(monkeypatch):
