@@ -16,9 +16,62 @@ from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos,
 )
 from tests.control_plane.test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _configure_read_only_todo,
+    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _configure_read_only_todo, _configure_selectable_alternative,
     _heartbeat_receipt_count, _run_cli, _spend_run_count, _write_fixture,
 )
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_policy_observer_reads_original_signed_capture_after_todo_references(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, compose_turn_decision
+    from loopx.control_plane.turn_driver.decision_capture import capture_progressive_context, write_decision_capture
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+    from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    initialize_canonical_source_fixture(runtime, GOAL_ID,
+        state_path=project / f'.codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md', provider=provider)
+    capture = tmp_path / 'signed-capture'
+    code, view = _run_cli(registry, runtime, 'quota', 'should-run', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--begin-turn',
+        '--codex-app', '--complete-turn', '--context-delivery', 'auto', '--delta-delivery', 'off',
+        '--decision-output-dir', str(capture))
+    assert code == 0, view
+    saved = capture / 'decision.json'
+    original_bytes = saved.read_bytes()
+    original = json.loads(original_bytes)
+    # Exercise the same typed projection used by C1's inline CLI presentation.
+    (tmp_path / 'view').mkdir(mode=0o700)
+    view = capture_progressive_context(original, directory=tmp_path / 'view', surface='complete_turn')[0]
+    assert 'context_reference_instruction' in view and view != original
+    source = tmp_path / 'view' / 'projection.json'
+    observed = read_cli_policy_payload(json.dumps(view), returncode=code)
+    assert observed == original
+    assert_complete_turn_decision(observed)
+    assert _spend_run_count(runtime) == 0 and saved.read_bytes() == original_bytes
+    replacement = compose_turn_decision({
+        **{key: value for key, value in original.items() if key not in {'schema_version', 'contract_binding'}},
+        'reason': 'a separate valid captured observation',
+    })
+    assert_complete_turn_decision(replacement)
+    replacement_path = source.with_name('replacement.json')
+    replacement_digest = write_decision_capture(replacement_path, replacement)
+    replaced_view = copy.deepcopy(view)
+    argv = shlex.split(replaced_view['context_details']['command_template'])
+    argv[argv.index('--capture-file') + 1] = str(replacement_path)
+    argv[argv.index('--capture-sha256') + 1] = replacement_digest
+    replaced_view['context_details']['command_template'] = shlex.join(argv)
+    with pytest.raises(ValueError, match='original capture binding mismatch'):
+        read_cli_policy_payload(json.dumps(replaced_view), returncode=code)
+    # A copied presentation must not mask corruption of its declared source.
+    source.write_text(json.dumps({**original, 'reason': 'changed after capture'}))
+    with pytest.raises(ValueError, match='capture digest mismatch'):
+        read_cli_policy_payload(json.dumps(view), returncode=code)
+    source.unlink()
+    with pytest.raises(FileNotFoundError):
+        read_cli_policy_payload(json.dumps(view), returncode=code)
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])

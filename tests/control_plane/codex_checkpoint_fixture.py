@@ -181,7 +181,25 @@ def read_cli_policy_payload(stdout, *, returncode):
         recovery = payload["recovery"]
         if "reference_file" in recovery:
             recovery = read_context_read_reference(recovery["reference_file"])[1]
-        return read_context_capture_file(recovery["path"], recovery["sha256"], private=True)[2]
+        payload = read_context_capture_file(recovery["path"], recovery["sha256"], private=True)[2]
+    if returncode == 0 and payload.get("schema_version") == "loopx_turn_envelope_v1":
+        details = payload.get("context_details", {})
+        command = details.get("command_template") if isinstance(details, dict) else None
+        if isinstance(command, str):
+            # A required view can reuse Todo rows while retaining the original
+            # binding. Inspect its declared immutable source for policy tests;
+            # the display itself is not the signed decision or model retention.
+            argv = shlex.split(command)
+            for flag in ("--capture-file", "--capture-sha256"):
+                if argv.count(flag) != 1:
+                    raise ValueError("policy view requires one original capture and digest")
+            original = read_context_capture_file(
+                argv[argv.index("--capture-file") + 1],
+                argv[argv.index("--capture-sha256") + 1], private=True,
+            )[2]
+            if original.get("contract_binding") != payload.get("contract_binding"):
+                raise ValueError("policy view original capture binding mismatch")
+            payload = original
     return payload
 
 

@@ -4062,3 +4062,29 @@ coercion but produced an inactive policy, silently skipping research evidence.
 The existing configuration owner now refuses this malformed shape before IO;
 documented scalar modes, defaults and errors retain their semantics. Real
 File/SQLite negative cases guard this boundary without changing valid activation.
+
+
+### 2026-11-14 — Policy observers recover the original signed source
+
+- **Baseline:** `main@8d7d234c6f55`; C1 #8266 at `c3cb8b2fe7bf`.
+- **Gap:** three current C1 guided-start and visible-Goal selection cases
+  rejected a required presentation as if it were the original signed decision.
+  The original capture passes both its physical digest and complete-contract
+  validation. Same-view Todo references and their read guidance change the
+  presentation body while retaining the original binding.
+- **Delta:** the existing test policy observer follows the presentation's
+  declared immutable capture and digest before comparing decision facts. It
+  reuses the physical capture reader; inline/off outputs without such a
+  reference retain their current behavior. No producer, decision, hash codec,
+  admission, settlement owner or default changes.
+- **Evidence:** the existing real guided-start/visible-Goal CLI cases pass on
+  the pinned C1 combination. The durable File/SQLite regression exercises the
+  shared typed projection and verifies original-source equality, its complete
+  binding, zero spend and rejection of changed or missing captured bytes, including a valid
+  replacement whose original binding differs. A
+  private matched observer comparison distinguishes the old and corrected
+  readers. Earlier failed and incomplete runs remain failed or incomplete.
+- **Remaining:** this repairs a consumer-qualification prerequisite. Complete
+  V1–V5/V10, R1/M3, current D2/D5 closure, actual Host/model context adoption,
+  progressive product control, comparable complete costs, C1 default cutover
+  and original-Goal regression remain open.
