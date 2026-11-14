@@ -855,7 +855,7 @@ def test_guided_turn_captures_the_minted_identity(tmp_path):
     assert payload["heartbeat_receipt"]["turn_instance_id"] == minted
 
 
-def _replan_selection_hop(tmp_path, host):
+def _replan_selection_hop(tmp_path, host, *, short_view):
     """Commit a replan guard, then select a Todo on that Turn through a Host.
 
     The real CLI, quota owner and TS checkpoint selector run unchanged; only
@@ -875,7 +875,7 @@ def _replan_selection_hop(tmp_path, host):
     initialize_canonical_source_fixture(runtime, GOAL_ID,
         state_path=project / f'.codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md')
     common = ('--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--runtime-profile', 'generic_cli',
-              '--turn-instance-id', TURN_ID, '--available-capability', 'shell',
+              '--turn-instance-id', TURN_ID, '--context-delivery', 'off', '--available-capability', 'shell',
               '--available-capability', 'filesystem_write')
     code, guard = _run_cli(registry, runtime, 'quota', 'should-run', *common, cwd=project)
     assert code == 0 and guard['effective_action'] == 'autonomous_replan_required', guard
@@ -904,7 +904,8 @@ def _replan_selection_hop(tmp_path, host):
             thread.start()
             code, selected = _run_cli(
                 registry, runtime, 'quota', 'should-run', *common,
-                '--todo-id', SELECTED_REPLAN_TODO_ID, '--turn-envelope',
+                '--todo-id', SELECTED_REPLAN_TODO_ID,
+                '--turn-envelope' if short_view else '--complete-turn',
                 '--decision-output-root', str(capture_root),
                 '--decision-handoff-socket', str(endpoint), cwd=project)
             thread.join(10)
@@ -912,7 +913,8 @@ def _replan_selection_hop(tmp_path, host):
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
-def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_path):
+@pytest.mark.parametrize('short_view', [False, True], ids=['complete', 'short'])
+def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_path, short_view):
     from loopx.hosts.research_checkpoint import select_checkpoint_replan
 
     def typed_host(observed):
@@ -921,7 +923,7 @@ def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_pat
             goal_id=GOAL_ID, agent_id=AGENT_ID, turn_instance_id=TURN_ID)
         return True
 
-    code, selected, observed, saved, _ = _replan_selection_hop(tmp_path, typed_host)
+    code, selected, observed, saved, _ = _replan_selection_hop(tmp_path, typed_host, short_view=short_view)
     assert observed['decision']['ok'] is True
     assert observed['decision']['heartbeat_receipt']['status'] == 'upgraded'
     # Binding a Todo does not discharge the original semantic replan. This
@@ -940,16 +942,24 @@ def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_pat
         'execution_authority_granted': False,
     }
     assert code == 0 and selected['ok'] is True, selected
-    assert selected['schema_version'] == 'loopx_turn_envelope_v1'
-    assert selected == observed['decision']
+    if short_view:
+        assert selected['schema_version'] == 'loopx_turn_envelope_v0'
+        assert selected['detail_ref']['captured_decision']['path'] == str(saved[0])
+        assert selected['action_signature']['matches'] is True
+        assert selected['action_signature']['source_decision_hash'] == decision['contract_binding']['content_hash']
+    else:
+        assert selected['schema_version'] == 'loopx_turn_envelope_v1'
+        assert selected == observed['decision']
     assert len(saved) == 1 and json.loads(saved[0].read_text()) == observed['decision']
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
-def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_path):
+@pytest.mark.parametrize('short_view', [False, True], ids=['complete', 'short'])
+def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_path, short_view):
     from hashlib import sha256
 
-    code, selected, observed, saved, runtime = _replan_selection_hop(tmp_path, lambda _: False)
+    code, selected, observed, saved, runtime = _replan_selection_hop(
+        tmp_path, lambda _: False, short_view=short_view)
     assert code == 1 and selected['ok'] is False
     # Never a generic collection failure that replaces the original capture.
     assert selected['error_code'] == 'quota_decision_transport_failed', selected
@@ -961,6 +971,8 @@ def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_
     assert selected['captured_decision']['sha256'] == sha256(saved[0].read_bytes()).hexdigest()
     assert json.loads(saved[0].read_text()) == observed['decision']
     assert observed['decision']['ok'] is True
+    assert observed['decision']['schema_version'] == 'loopx_turn_envelope_v1'
+    assert selected['heartbeat_receipt'] == observed['decision']['heartbeat_receipt']
     assert _heartbeat_receipt_count(runtime, TURN_ID) >= 1
 
 
