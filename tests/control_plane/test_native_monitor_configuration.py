@@ -1,12 +1,14 @@
 """Monitor configuration uses the public writer and actual local providers."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from canonical_authority_fixture import isolate_sqlite_runtime
 from test_native_monitor_poll import _canonical
 from test_monitor_followthrough_contract import GOAL_ID, AGENT_ID
+from loopx.cli import main
 from loopx.control_plane.scheduler.monitor_poll_writeback import write_monitor_poll_todo_state
 from loopx.control_plane.testing.canary_harness import run_json_cli
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
@@ -35,6 +37,44 @@ def _observe(registry, runtime, monitor, result_hash="observed-before-configurat
         result_hash=result_hash, material_change=True)
     assert receipt is not None
     return receipt
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("explicit_due", [None, "2030-01-01T02:00:00Z"], ids=["cadence", "explicit"])
+def test_monitor_create_replays_after_the_clock_advances(tmp_path, monkeypatch, capsys, provider, explicit_due):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _state, _monitor = setup(tmp_path, provider)
+    observed_at = OBSERVED_AT
+    monkeypatch.setattr("loopx.state_refresh.now_local_iso", lambda: observed_at)
+    args = [
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "todo", "add", "--goal-id", GOAL_ID, "--role", "agent", "--text", "Observe a second public target",
+        "--task-class", "continuous_monitor", "--target-key", "public-retry", "--cadence", "30m",
+        "--watch-only", "--claimed-by", AGENT_ID,
+        "--operation-id", "create-monitor-once",
+    ]
+    schedule_args = ["--next-due-at", explicit_due] if explicit_due else []
+
+    def create(*flags, expected_exit=0):
+        code = main([*args, *flags])
+        result = json.loads(capsys.readouterr().out)
+        assert code == expected_exit, json.dumps(result)
+        return result
+
+    first = create(*schedule_args)
+    due = explicit_due or "2030-01-01T00:30:00Z"
+    assert first["todo"]["next_due_at"] == due
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+
+    observed_at = "2030-01-01T03:00:00Z"
+    replay = create(*schedule_args)
+    assert replay["status"] == "replayed"
+    assert replay["todo_id"] == first["todo_id"]
+    assert replay["todo"]["next_due_at"] == due
+    changed_due = due if explicit_due is None else "2030-01-01T04:00:00Z"
+    rejected = create("--next-due-at", changed_due, expected_exit=1)
+    assert rejected["error_code"] == "coordination_operation_identity_mismatch"
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

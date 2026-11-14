@@ -105,17 +105,24 @@ def test_scoped_gate_cannot_reopen_an_exact_settled_monitor(tmp_path, monkeypatc
     assert not any(row["classification"] in {"state_refreshed", "quota_slot_spent"} for row in rows)
 
 
-def _primary_monitor_fixture(tmp_path, monkeypatch, provider, route="source"):
+def _primary_monitor_fixture(
+    tmp_path, monkeypatch, provider, route="source", *,
+    resume_when=None, handoff_mode="soft_claim",
+):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    source, runtime, _state = _write_fixture(tmp_path, provider=provider)
+    source, runtime, _state = _write_fixture(
+        tmp_path, provider=provider, handoff_mode=handoff_mode)
     gated = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="agent",
         text="Await a scoped owner decision", task_class="advancement_task",
         status="blocked", claimed_by=AGENT_ID, agent_id=AGENT_ID)
     gate = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="user",
         text="Decide the dependent work", task_class="user_gate", bound_agent=AGENT_ID,
         blocks_agent=AGENT_ID, unblocks_todo_id=gated["todo_id"], agent_id=AGENT_ID)
-    monitor = _add_monitor(source, text="Observe a synthetic public target",
-        target_key="primary-target", next_due_at="2000-01-01T00:00:00Z")
+    monitor = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="agent",
+        text="Observe a synthetic public target", task_class="continuous_monitor",
+        claimed_by=AGENT_ID, resume_when=resume_when,
+        monitor_metadata={"target_key": "primary-target", "cadence": "1h",
+            "next_due_at": "2000-01-01T00:00:00Z", "watch_only": "true"})
     registry = source
     if route == "global":
         registry = runtime / "registry.global.json"
@@ -132,6 +139,76 @@ def _primary_monitor_args(command, turn, monitor):
         "--available-capability", "network", "--available-capability", "external_evidence_poll",
         *(["--todo-id", monitor["todo_id"], "--target-key", "primary-target",
            "--result-hash", "primary-observation", "--execute"] if command == "monitor-poll" else [])]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("route", ["source", "global"])
+@pytest.mark.parametrize("condition", [
+    "resume_at:1999-01-01T00:00:00Z",
+    "resume_at:2099-01-01T00:00:00Z",
+    "todo_done:todo_missing",
+], ids=["elapsed", "pending", "unresolved"])
+def test_primary_monitor_poll_uses_canonical_resume_readiness(
+    tmp_path, monkeypatch, provider, route, condition,
+):
+    elapsed = "resume_at:1999-01-01T00:00:00Z"
+    source, registry, runtime, _gated, gate, monitor = _primary_monitor_fixture(
+        tmp_path, monkeypatch, provider, route, resume_when=elapsed, handoff_mode="hard_lease")
+    turn = "primary-monitor-resume-readiness"
+
+    def call(*args):
+        return run_json_cli_result(*args, registry_path=registry, runtime_root=runtime)
+
+    rc, admitted = call(*_primary_monitor_args("should-run", turn, monitor))
+    binding = admitted["heartbeat_receipt"]["settlement_identity"]
+    assert rc == 0 and binding["todo_id"] == monitor["todo_id"]
+    assert admitted["safe_bypass_kind"] == "scoped_user_gate_fallback"
+    rc, acquired = call("task-lease", "acquire", "--goal-id", GOAL_ID,
+        "--todo-id", monitor["todo_id"], "--owner", AGENT_ID, "--idempotency-key", "monitor-resume-lease")
+    assert rc == 0 and acquired["acquired"], acquired
+    lease = acquired["lease"]
+    before = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=monitor["todo_id"])["todo"]
+    assert before["resume_ready"] is True
+    if condition != before["resume_when"]:
+        update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=monitor["todo_id"],
+            agent_id=AGENT_ID, resume_when=condition,
+            task_lease_idempotency_key=lease["idempotency_key"], task_lease_expected_version=lease["version"])
+    before = list_goal_todos(registry_path=source, goal_id=GOAL_ID)
+    row = next(item for item in before["todos"] if item["todo_id"] == monitor["todo_id"])
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    args = _primary_monitor_args("monitor-poll", turn, monitor)
+    # Cover the exact-id source route and target-key-only global route.
+    if route == "global":
+        pos = args.index("--todo-id")
+        del args[pos:pos + 2]
+    if condition == elapsed:
+        rc, denied = call(*args)
+        assert rc != 0 and "lease proof" in denied["reason"], denied
+        assert_todo_read_unchanged(list_goal_todos(registry_path=source, goal_id=GOAL_ID), before)
+        assert not index.exists()
+    args += ["--task-lease-idempotency-key", lease["idempotency_key"],
+        "--task-lease-expected-version", str(lease["version"])]
+    rc, result = call(*args)
+    if condition != elapsed:
+        assert row["resume_ready"] is False
+        assert rc != 0 and result["appended"] is False, result
+        assert_todo_read_unchanged(list_goal_todos(registry_path=source, goal_id=GOAL_ID), before)
+        assert not index.exists()
+        return
+
+    assert rc == 0 and result["appended"], result
+    assert result["settlement_todo_id"] == binding["todo_id"]
+    assert result["turn_continuation"]["current_turn_settled"] is True
+    committed = list_goal_todos(registry_path=source, goal_id=GOAL_ID)
+    after = {item["todo_id"]: item for item in committed["todos"]}
+    assert after[monitor["todo_id"]]["result_hash"] == "primary-observation"
+    assert after[monitor["todo_id"]]["resume_when"] == condition
+    assert after[gate["todo_id"]]["status"] == "open"
+    ledger = index.read_bytes()
+    rc, replay = call(*args)
+    assert rc == 0 and replay["replayed"] and not replay["appended"], replay
+    assert index.read_bytes() == ledger
+    assert [json.loads(line)["classification"] for line in ledger.splitlines()] == ["quota_monitor_poll"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -205,7 +282,7 @@ def test_primary_monitor_gate_change_after_preflight_prevents_business_write(
 ):
     from loopx.control_plane.quota import monitor_poll
     source, registry, runtime, _gated, gate, monitor = _primary_monitor_fixture(
-        tmp_path, monkeypatch, provider)
+        tmp_path, monkeypatch, provider, resume_when="resume_at:1999-01-01T00:00:00Z")
     invoke = _primary_record_invocation(registry, runtime, monitor, "primary-gate-race")
     original = monitor_poll._provider_writeback
     def interleaved(plan, **kwargs):
@@ -222,6 +299,164 @@ def test_primary_monitor_gate_change_after_preflight_prevents_business_write(
     assert current.get("result_hash") is None
     assert current["next_due_at"] == "2000-01-01T00:00:00Z"
     assert not (runtime / "goals" / GOAL_ID / "runs" / "index.jsonl").exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("merge_repository", [None, "other/monitor", "example/monitor"],
+    ids=["pending", "wrong-repo", "merged"])
+def test_primary_monitor_rechecks_pr_wait_before_commit(
+    tmp_path, monkeypatch, capsys, provider, merge_repository,
+):
+    from loopx.cli import main
+    from loopx.control_plane.quota import monitor_poll
+    from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path
+
+    source, registry, runtime, _gated, gate, monitor = _primary_monitor_fixture(
+        tmp_path, monkeypatch, provider, resume_when="resume_at:1999-01-01T00:00:00Z",
+        handoff_mode="hard_lease")
+    todo_id = monitor["todo_id"]
+    turn = "primary-monitor-pr-wait-race"
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "off")
+    monkeypatch.chdir(tmp_path / "project")
+
+    def call(*args):
+        code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *args])
+        return code, json.loads(capsys.readouterr().out)
+
+    def read():
+        return list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=todo_id)["todo"]
+
+    def record_merge(repository):
+        append_rollout_event(rollout_event_log_path(runtime, GOAL_ID), build_rollout_event(
+            goal_id=GOAL_ID, event_kind="pr_merge", pr_ref=f"{repository}#42",
+            status="merged", recorded_at="2001-01-01T00:00:00Z"))
+
+    rc, admitted = call(*_primary_monitor_args("should-run", turn, monitor))
+    assert rc == 0 and admitted["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
+    assert admitted["safe_bypass_kind"] == "scoped_user_gate_fallback"
+    rc, acquired = call("task-lease", "acquire", "--goal-id", GOAL_ID,
+        "--todo-id", todo_id, "--owner", AGENT_ID, "--idempotency-key", "monitor-pr-wait-lease")
+    assert rc == 0 and acquired["acquired"], acquired
+    lease = acquired["lease"]
+    args = [*_primary_monitor_args("monitor-poll", turn, monitor),
+        "--task-lease-idempotency-key", lease["idempotency_key"],
+        "--task-lease-expected-version", str(lease["version"])]
+
+    def change_wait(wait):
+        updated = update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=todo_id,
+            agent_id=AGENT_ID, resume_when=wait, task_lease_idempotency_key=lease["idempotency_key"],
+            task_lease_expected_version=lease["version"])
+        assert updated["ok"] and updated["changed"], updated
+
+    if merge_repository is not None:
+        record_merge(merge_repository)
+    matching_merge = merge_repository == "example/monitor"
+    original = monitor_poll._provider_writeback
+    commit_snapshot = []
+
+    def interleaved(plan, **kwargs):
+        change_wait("pr_merged:example/monitor#42")
+        commit_snapshot.append(read())
+        assert commit_snapshot[0]["resume_ready"] is matching_merge
+        return original(plan, **kwargs)
+
+    monkeypatch.setattr(monitor_poll, "_provider_writeback", interleaved)
+    rc, result = call(*args)
+    monkeypatch.setattr(monitor_poll, "_provider_writeback", original)
+    assert len(commit_snapshot) == 1
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    if not matching_merge:
+        assert rc == 1 and result["error_code"] == "monitor_poll_rejected" and not result["appended"], result
+        assert read() == commit_snapshot[0] and not index.exists()
+        record_merge("example/monitor")
+        rc, result = call(*args)
+
+    assert rc == 0 and result["appended"], result
+    ledger = index.read_bytes()
+    assert [json.loads(line)["classification"] for line in ledger.splitlines()] == ["quota_monitor_poll"]
+    change_wait("pr_merged:example/monitor#43")
+    committed = read()
+    assert committed["resume_ready"] is False and committed["result_hash"] == "primary-observation"
+    rc, replay = call(*args)
+    assert rc == 0 and replay["replayed"] and not replay["appended"], replay
+    assert read() == committed and index.read_bytes() == ledger
+    assert list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=gate["todo_id"])["todo"]["status"] == "open"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("route", ["source", "global"])
+@pytest.mark.parametrize("has_capacity", [False, True], ids=["missing", "available"])
+def test_primary_monitor_rechecks_capacity_wait_before_commit(
+    tmp_path, monkeypatch, capsys, provider, route, has_capacity,
+):
+    from loopx.cli import main
+    from loopx.control_plane.quota import monitor_poll
+
+    elapsed = "resume_at:1999-01-01T00:00:00Z"
+    source, registry, runtime, _gated, _gate, monitor = _primary_monitor_fixture(
+        tmp_path, monkeypatch, provider, route, resume_when=elapsed, handoff_mode="hard_lease")
+    todo_id = monitor["todo_id"]
+    turn = "primary-monitor-capacity-wait-race"
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "off")
+    monkeypatch.chdir(tmp_path / "project")
+
+    def call(*args):
+        code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *args])
+        return code, json.loads(capsys.readouterr().out)
+
+    def read():
+        return list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=todo_id)["todo"]
+
+    rc, admitted = call(*_primary_monitor_args("should-run", turn, monitor))
+    assert rc == 0 and admitted["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
+    rc, acquired = call("task-lease", "acquire", "--goal-id", GOAL_ID,
+        "--todo-id", todo_id, "--owner", AGENT_ID, "--idempotency-key", "monitor-capacity-wait-lease")
+    assert rc == 0 and acquired["acquired"], acquired
+    lease = acquired["lease"]
+    args = _primary_monitor_args("monitor-poll", turn, monitor)
+    if route == "global":
+        pos = args.index("--todo-id")
+        del args[pos:pos + 2]
+    args += ["--task-lease-idempotency-key", lease["idempotency_key"],
+        "--task-lease-expected-version", str(lease["version"])]
+
+    def change_wait(wait):
+        updated = update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=todo_id,
+            agent_id=AGENT_ID, resume_when=wait, task_lease_idempotency_key=lease["idempotency_key"],
+            task_lease_expected_version=lease["version"])
+        assert updated["ok"] and updated["changed"], updated
+
+    original = monitor_poll._provider_writeback
+    commit_snapshot = []
+    capacity_wait = "capacity_available:benchmark_runner"
+
+    def interleaved(plan, **kwargs):
+        change_wait(capacity_wait)
+        commit_snapshot.append(read())
+        assert commit_snapshot[0]["resume_ready"] is False
+        return original(plan, **kwargs)
+
+    with monkeypatch.context() as interleaving:
+        interleaving.setattr(monitor_poll, "_provider_writeback", interleaved)
+        rc, denied = call(*args, *(["--available-capability", "benchmark_runner"] if has_capacity else []))
+    assert len(commit_snapshot) == 1
+    assert rc == 1 and denied["error_code"] == "monitor_poll_rejected" and not denied["appended"], denied
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    assert read() == commit_snapshot[0] and not index.exists()
+    rc, denied = call(*args)
+    assert rc == 1 and not denied["appended"] and not index.exists(), denied
+
+    change_wait(elapsed)
+    rc, applied = call(*args)
+    assert rc == 0 and applied["appended"], applied
+    ledger = index.read_bytes()
+    assert [json.loads(line)["classification"] for line in ledger.splitlines()] == ["quota_monitor_poll"]
+
+    change_wait("capacity_available:cli_bridge")
+    committed = read()
+    rc, replay = call(*args)
+    assert rc == 0 and replay["replayed"] and not replay["appended"], replay
+    assert read() == committed and index.read_bytes() == ledger
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

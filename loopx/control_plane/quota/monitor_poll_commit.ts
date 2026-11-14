@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { access, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {planTodoCreationPriority, readTodoPriority} from "../todos/priority.ts";
-import { monitorSuccessorIntent, monitorSuccessorRoute, monitorSuccessorPriorities } from "../scheduler/monitor_successor.ts";
+import { MONITOR_TARGET_SCHEMA, monitorSuccessorIntent, monitorSuccessorRoute, monitorSuccessorPriorities } from "../scheduler/monitor_successor.ts";
 import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
 import { normalizeMonitorChangeScope } from "../todos/monitor_scope.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
@@ -54,7 +54,6 @@ export const QUOTA_MONITOR_POLL_COMMIT_RECEIPT_SCHEMA =
 const MONITOR_PENDING_ADMISSION_SCHEMA = "quota_monitor_poll_pending_admission_v1";
 export const QUOTA_MONITOR_POLL_CLASSIFICATION = "quota_monitor_poll";
 
-const MONITOR_TARGET_SCHEMA = "quota_monitor_target_v0";
 const MONITOR_TODO_PROVIDER_PLAN_SCHEMA = "monitor_poll_todo_provider_plan_v0";
 const LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA = "monitor_poll_todo_provider_plan_v1";
 const MONITOR_TODO_WRITEBACK_SCHEMA = "monitor_poll_todo_writeback_v0";
@@ -154,6 +153,7 @@ interface MonitorProviderPlan extends JsonObject {
   schema_version: typeof MONITOR_TODO_PROVIDER_PLAN_SCHEMA | typeof LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA;
   lease_proof?: TaskLeaseProof;
   gate_scope_guard?: boolean;
+  admitted_resume_when?: string;
   monitor_effect_id: string;
   goal_id: string;
   generated_at: string;
@@ -1014,8 +1014,10 @@ function providerPlanFor(request: MonitorRequest, gateGuard = true,
 
 /** Upgrade uncommitted historical Monitor dispatch without rewriting its WAL.
  * Existing business receipts replay the same intended-effect identity first. */
-function providerDispatchPlan(plan: MonitorProviderPlan): MonitorProviderPlan {
-  return {...plan, gate_scope_guard: true};
+function providerDispatchPlan(plan: MonitorProviderPlan, request: MonitorRequest): MonitorProviderPlan {
+  const candidate = request.decision.due_monitor_candidates.find(item => candidateMatches(item, request.observation));
+  return {...plan, gate_scope_guard: true,
+    ...(typeof candidate?.resume_when === "string" ? {admitted_resume_when: candidate.resume_when} : {})};
 }
 
 function providerPlanObject(value: unknown): MonitorProviderPlan {
@@ -2239,7 +2241,7 @@ async function evaluateQuotaMonitorPollRequest(
             join(request.runtime_root, "goals", request.goal_id, "runs", "index.jsonl"),
           )
           : null,
-        providerPlan,
+        providerDispatchPlan(providerPlan, request),
       );
     }
     let effectiveRequest = request;
@@ -2456,7 +2458,7 @@ async function evaluateQuotaMonitorPollRequest(
         { ok: true, dry_run: false, provider_required: true },
         "quota monitor-poll Todo provider is required",
         currentDigest,
-        providerDispatchPlan(plan),
+        providerDispatchPlan(plan, admittedRequest),
       );
     }
 

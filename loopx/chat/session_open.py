@@ -49,6 +49,22 @@ def open_chat_session(
         raise ValueError("a registered managed Agent requires its local Goal conversation")
 
     if context_kind == "manager":
+        # The App's persisted source choice owns the default entry on the
+        # server too. API callers must not fork a local manager when the
+        # selected private conversation is unavailable.
+        bindings = controller.project_contexts.conversation_bindings
+        if bindings is not None:
+            session = bindings.app_steward_session()
+            if session is not None:
+                if mode != "resume_latest":
+                    raise ValueError("Continue the selected original steward conversation; start a new conversation from its original source.")
+                if any(requested and requested != session.get(field) for requested, field in (
+                    (requested_endpoint, "executor_endpoint_id"),
+                    (agent_model_id, "agent_model_id"),
+                    (agent_reasoning_effort, "agent_reasoning_effort"),
+                )):
+                    raise ValueError("Change the selected steward's model in Settings before continuing its original conversation.")
+                return session, True
         return open_manager_session(
             controller=controller,
             goal_id=goal_id,

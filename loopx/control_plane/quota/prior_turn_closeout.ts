@@ -12,6 +12,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject } from "../runtime_decode.ts";
 import {
   heartbeatReceiptBinding,
+  heartbeatReceiptDetails,
   heartbeatReceiptFactFromEvent,
   selectEffectiveHeartbeatReceipt,
   type HeartbeatReceiptBinding,
@@ -45,8 +46,18 @@ function candidate(
   };
 }
 
+function admitsAutonomousReplan(event: JsonObject, fact: HeartbeatReceiptFact): boolean {
+  if (fact.replan_obligation_id === null || fact.settlement_effect_id === null) return false;
+  const guard = heartbeatReceiptDetails(event);
+  return guard.semantic_replan_obligation_id === fact.replan_obligation_id
+    && guard.interaction_mode === "autonomous_replan" && guard.ok === true && guard.should_run === true
+    && guard.must_attempt_work === true && guard.delivery_allowed === false && guard.quiet_noop_allowed === false;
+}
+
 /**
- * Select the prior must-attempt Turns that still require a host closeout.
+ * Select prior Turns eligible for closeout readback. Guard preflight requires
+ * an explicit closeout marker. Refresh recovery can also discover an admitted
+ * replan-only binding without making it a later Turn's admission prerequisite.
  *
  * Every prior Turn is identity-validated, so a conflicting receipt fails the
  * read instead of being hidden behind a newer Turn. Results are newest first
@@ -63,8 +74,9 @@ export function selectCloseoutCandidates(
   goalId: string,
   agentId: string,
   excludeTurnInstanceId: string | null,
+  { includeAdmittedReplans } = { includeAdmittedReplans: false },
 ): { candidates: PriorHostTurnCloseoutCandidate[]; turnsValidated: number } {
-  const perTurn = new Map<string, HeartbeatReceiptFact[]>();
+  const perTurn = new Map<string, { fact: HeartbeatReceiptFact; value: JsonObject }[]>();
   const firstRecorded = new Map<string, number>();
   for (const event of receipts) {
     const fact = heartbeatReceiptFactFromEvent(event);
@@ -74,16 +86,17 @@ export function selectCloseoutCandidates(
       firstRecorded.set(turnInstanceId, firstRecorded.size);
     }
     if (turnInstanceId === excludeTurnInstanceId) continue;
+    const entry = { fact, value: event };
     const existing = perTurn.get(turnInstanceId);
     if (existing) {
-      existing.push(fact);
+      existing.push(entry);
       // Map insertion order is the append-order recency index. Moving an
       // existing Turn to the tail avoids an O(T) indexOf/splice for every
       // receipt while preserving "last receipt wins recency" exactly.
       perTurn.delete(turnInstanceId);
       perTurn.set(turnInstanceId, existing);
     } else {
-      perTurn.set(turnInstanceId, [fact]);
+      perTurn.set(turnInstanceId, [entry]);
     }
   }
 
@@ -92,22 +105,17 @@ export function selectCloseoutCandidates(
     ? undefined : firstRecorded.get(excludeTurnInstanceId);
   let validated = 0;
   for (const turnInstanceId of [...perTurn.keys()].reverse()) {
-    const entries = (perTurn.get(turnInstanceId) ?? []).map((fact) => ({
-      fact,
-      value: fact,
-    }));
-    const effective = selectEffectiveHeartbeatReceipt(goalId, agentId, entries);
+    const effective = selectEffectiveHeartbeatReceipt(goalId, agentId, perTurn.get(turnInstanceId)!);
     validated += 1;
     if (effective === null) continue;
     // Validate identities even outside the causal candidate set: filtering
     // must not conceal a conflicting persisted settlement binding.
     if (currentPosition !== undefined && firstRecorded.get(turnInstanceId)! >= currentPosition) continue;
-    // Closeout is opt-in on the persisted receipt, so older receipts from
-    // before this contract cannot become new recovery obligations.
-    if (!effective.closeout_required) continue;
-    const binding = heartbeatReceiptBinding(goalId, agentId, effective);
+    const fact = heartbeatReceiptFactFromEvent(effective);
+    if (!fact.closeout_required && !(includeAdmittedReplans && admitsAutonomousReplan(effective, fact))) continue;
+    const binding = heartbeatReceiptBinding(goalId, agentId, fact);
     if (binding === null) continue;
-    candidates.push(candidate(binding, turnInstanceId, effective));
+    candidates.push(candidate(binding, turnInstanceId, fact));
   }
   return {candidates, turnsValidated: validated};
 }

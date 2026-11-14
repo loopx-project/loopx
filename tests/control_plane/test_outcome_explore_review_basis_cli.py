@@ -222,3 +222,22 @@ def test_separate_or_legacy_review_does_not_adopt_new_attachment(
     after = inspect()["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
     assert after["revision"] == before["revision"] == 2
     assert all(not row["agent_review"]["basis_current"] for row in after["requirements"])
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_record_review_patch_adopts_only_its_same_batch_result(tmp_path, monkeypatch, provider):
+    _, _, _, call, inspect, _, reviews, batch = _batch_fixture(tmp_path, monkeypatch, provider)
+    update = Path(batch[batch.index("--goal-outcome-update-json") + 1])
+    request = json.loads(update.read_text())
+    request["refinement"] = {"outcome_id": "export", "storage_format": "records", "review_patch": reviews[:1]}
+    update.write_text(json.dumps(request))
+    result = call(*batch)
+    assert result["explore_result_delivery"]["ok"]
+    rows = inspect()["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["requirements"]
+    assert rows[0]["agent_review"]["basis_current"]
+    assert rows[0]["agent_review"]["evidence_refs"] == reviews[0]["evidence_refs"]
+    assert all("agent_review" not in row for row in rows[1:])
+    assert all(row["status"] == "unverified" for row in rows)
+    retained = inspect()
+    assert call(*batch)["goal_outcome_update"]["status"] == "replayed"
+    assert inspect() == retained

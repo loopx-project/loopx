@@ -7,9 +7,10 @@ import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
+import {isDeepStrictEqual} from "node:util";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import { inflateSync } from "node:zlib";
-import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
@@ -18,11 +19,13 @@ import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRe
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
 import {completeCliSettlementChannel} from "./settlement_plan.ts";
+import {REPLAN_SETTLEMENT_CONTRACT_SCHEMA} from "../work_items/replan_settlement.ts";
 
 import {
   interpretQuotaShouldRunPacket,
   assertSupportedQuotaPacket,
   settlementIdentityFromPlan,
+  SETTLEMENT_PLAN_SCHEMA_VERSION,
   settlementIdentityPayload,
   type JsonObject,
 } from "../effect_program.ts";
@@ -689,7 +692,8 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
 
 /** These reads stay on one captured observation; they never re-enter the guard. */
 function replanReadCommands(payload: JsonObject, path = payload.replan_read_path,
-  argv = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string): JsonObject | null {
+  argv: unknown = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string,
+  captureSha256?: unknown): JsonObject | null {
   const packet = object(payload.replan_action_packet);
   if (typeof path !== "string" || !path.trim() || path.includes("\0") || payload.ok !== true ||
       payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT ||
@@ -700,8 +704,13 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
   if (!Array.isArray(argv) || !argv.length || argv.some(arg => typeof arg !== "string" || !arg || /[\x00-\x1f]/.test(arg))) {
     throw new EffectRuntimeRequestError("captured replan CLI route is malformed");
   }
+  if (captureSha256 !== undefined &&
+      (typeof captureSha256 !== "string" || !BARE_SHA256_PATTERN.test(captureSha256))) {
+    throw new EffectRuntimeRequestError("captured replan byte digest is malformed");
+  }
   const command = `${argv.map(arg => shellQuote(arg as string)).join(" ")} --format json quota replan-view --decision-file ${shellQuote(path)}` +
-    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}`;
+    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}` +
+    (captureSha256 === undefined ? "" : ` --capture-sha256 ${captureSha256}`);
   return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
 }
@@ -903,8 +912,12 @@ function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash:
   // A native journal binds its path after planning. The CLI supplies that same
   // physical source route without modifying the captured observation or hash.
   const path = request.captured_decision_path ?? payload.replan_read_path;
-  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"], sourceHash);
-  const sourceRead = reads ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
+  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"],
+    sourceHash, request.capture_sha256);
+  // The stateless entry already exposes its digest-checked complete context.
+  // Its writer should not offer a second, unchecked whole-file route.
+  const sourceRead = reads && request.capture_sha256 === undefined
+    ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
   if (request.stage === "acceptance") {
     const {outcomes, ambiguous} = replanGoalContext(payload, reads, undefined, precision);
     const ref = String(request.outcome_ref);
@@ -942,15 +955,45 @@ function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash:
     }
     const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
     const refresh = steps.find(step => step.kind === "durable_writeback");
+    const spend = steps.find(step => step.kind === "quota_spend");
+    const receipt = object(payload.heartbeat_receipt), identity = object(plan.identity);
+    const cli = object(object(payload.interaction_contract).cli_channel);
+    const settlement = object(cli.replan_settlement_contract), binding = object(settlement.settlement_binding);
+    const semantic = object(settlement.semantic_obligation), actions = cli.next_cli_actions;
+    // Use the captured semantic writer, which already carries the owner's
+    // authoring arguments. The generic plan template omits those arguments.
+    // Leave the signed plan and separate recovery actions untouched.
+    const directWriter = payload.schema_version === COMPLETE_TURN_DECISION_VERSION
+      && payload.should_run === true && payload.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+      && plan.schema_version === SETTLEMENT_PLAN_SCHEMA_VERSION && identity.binding_kind === "autonomous_replan"
+      && typeof identity.turn_instance_id === "string" && receipt.turn_instance_id === identity.turn_instance_id
+      && identity.replan_obligation_id === packet.obligation_id
+      && ["committed", "upgraded", "replayed"].includes(String(receipt.status))
+      && receipt.settlement_binding_owed !== true && isDeepStrictEqual(receipt.settlement_identity, identity)
+      && settlement.schema_version === REPLAN_SETTLEMENT_CONTRACT_SCHEMA && settlement.single_binding_required === true
+      && binding.kind === "autonomous_replan" && binding.id === packet.obligation_id
+      && binding.cli_argument === "--replan-obligation-id" && semantic.kind === "autonomous_replan"
+      && semantic.settlement_bound === true && semantic.id === packet.obligation_id
+      && semantic.discharge === "direct_settlement" && cli.spend_after_validation === true
+      && cli.spend_allowed_now === false && cli.selection_required !== true
+      && typeof boundContract.successor_command !== "string"
+      && refresh?.owner === "agent" && spend?.owner === "agent" && typeof spend.command_template === "string"
+      && Array.isArray(actions) && actions.length === 2 && actions[1] === spend.command_template
+      && typeof actions[0] === "string" && actions[0].length > 0
+      && isDeepStrictEqual(writeback.next_cli_actions, [actions[0]])
+      ? actions[0] : undefined;
+    const settlementCommand = directWriter !== undefined
+      ? directWriter + " --settle-turn --settlement-receipt"
+      : typeof refresh?.command_template === "string" ? refresh.command_template + " --settle-turn" : undefined;
     return retain({...common, ...sourceRead, writeback_contract: retain(boundContract, originalContract),
       required_outcome: packet.required_outcome, allowed_terminal: packet.allowed_terminal,
       ...(packet.stride_control ? {stride_control: stride} : {}),
       writeback,
-      ...(typeof refresh?.command_template === "string" ? {
-        settlement_command: `${refresh.command_template} --settle-turn`,
+      ...(settlementCommand === undefined ? {} : {
+        settlement_command: settlementCommand,
         settlement_usage: "After validation, fill this refresh command from the actual result. It follows only the verified owed quota step on this same binding. " +
           "Do not also execute a quota step after settled readback; retain the original plan for completion, blocked/no-spend closeout and failure recovery.",
-      } : {})}, packet, ["required_outcome", "allowed_terminal"]);
+      })}, packet, ["required_outcome", "allowed_terminal"]);
   }
   if (request.stage !== "review") throw new EffectRuntimeRequestError("unsupported replan read stage");
   const {core, horizon, acceptanceIndex} = replanGoalContext(payload, reads, undefined, precision);
@@ -1416,8 +1459,8 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
   } else {
     // Original-Turn identities often follow an absolute runtime path. Cutting
     // a closeout command into display text can erase its binding or execute flag.
-    writeback.next_cli_actions = hasSettlementPlan
-      ? nextCliActions.map(command => scalarString(command, "settlement command"))
+    writeback.next_cli_actions = hasSettlementPlan || !deferSettlement
+      ? nextCliActions.map(command => scalarString(command, "writeback command"))
       : preserveBoundReplanCommands || receiptBoundSettlementOnly
       ? nextCliActions.slice(0, 5).map(command => scalarString(command, "bound replan closeout command"))
       : textList(nextCliActions, 5, 420);
@@ -2419,21 +2462,31 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
 }
 
 function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
-  const path = object(request.native_projection).captured_decision_path;
+  const projection = object(request.native_projection);
+  const stateless = projection.captured_decision_path === undefined && projection.replan_reader_argv !== undefined;
+  const path = stateless ? projection.source_path : projection.captured_decision_path;
   if (typeof path !== "string") return undefined;
   const source = requireJsonObject(request.context, "captured replan source");
+  if (stateless) {
+    if (projection.sha256 === undefined || request.surface !== "complete_turn" &&
+        (request.surface !== "quota_packet" || Object.hasOwn(source, "schema_version") ||
+          Object.hasOwn(source, "contract_binding"))) return undefined;
+    // Preserve a bound reversal in the opening, before candidate choice.
+    if (scopedReplanYardstickReversal(source)) return undefined;
+  }
   const packet = object(source.replan_action_packet);
   const review = object(object(source.autonomous_replan_obligation).replan_context);
   // Existing staged files are presentation inputs. Do not derive a new source
   // hash from them or replace their already pinned reader commands.
-  if (typeof source.replan_read_path !== "string" || packet.schema_version !== "replan_action_packet_v0"
+  if ((!stateless && typeof source.replan_read_path !== "string") || packet.schema_version !== "replan_action_packet_v0"
       || typeof packet.obligation_id !== "string"
       || packet.obligation_id !== review.obligation_id || packet.review !== undefined
       || packet.writeback !== undefined) return undefined;
   const precision = replanReadPrecision(request, request.source_number_tokens);
   const identity = precision?.identity ?? contextSourceIdentity(request);
   const view = replanCliView(source, (value, field) => identity(value, ["context", ...field]),
-    replanReadCommands(source, path), precision);
+    replanReadCommands(source, path, stateless ? projection.replan_reader_argv : undefined,
+      undefined, stateless ? projection.sha256 : undefined), precision);
   return view === source ? undefined : {staged_context: view, deferred: [], instructions: []};
 }
 

@@ -1,11 +1,20 @@
-"""Native command transport and confirmation readback for the steward.
+"""In-process transport to the existing native command owners.
 
 No stdout redirection or subprocess: original Chat workers can run concurrently.
 Arguments are constructed by the host, never accepted from a model or HTTP body.
 """
 from __future__ import annotations
 
+import argparse
 from typing import Any
+
+from .steward_triage import (
+    StewardFastPathError,
+    build_portfolio_triage_projection,
+    execute_steward_fast_path,
+    parse_steward_fast_path_intent,
+    resolve_all_registered_goal_ids,
+)
 
 
 class NativeStewardCommandError(ValueError):
@@ -16,7 +25,76 @@ class NativeStewardCommandError(ValueError):
             payload.get("error") or payload.get("reason") or payload.get("message") or "inspect the native receipt"))
 
 
+def _triage_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="steward-triage", add_help=False)
+    parser.add_argument("--goal-id", action="append", default=[])
+    parser.add_argument("--all-goals", action="store_true")
+    parser.add_argument("--focus", default="all")
+    parser.add_argument("--max-gates", type=int, default=8)
+    parser.add_argument("--max-todos", type=int, default=8)
+    parser.add_argument("--max-progress", type=int, default=5)
+    return parser
+
+
+def native_fast_path_triage(
+    controller: Any,
+    *,
+    text: str,
+    binding_id: str,
+    source_ref: str,
+    sender_ref: str,
+    bindings: Any = None,
+    private_human_message: bool = True,
+    origin: str | None = None,
+    session_context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Execute a read-only Steward Fast-Path triage query without leases or Turns."""
+
+    active_bindings = bindings if bindings is not None else getattr(controller, "conversation_bindings", None)
+    if active_bindings is None:
+        raise StewardFastPathError(
+            "steward conversation bindings are unavailable",
+            code="steward_bindings_unavailable",
+        )
+    return execute_steward_fast_path(
+        text=text,
+        bindings=active_bindings,
+        binding_id=binding_id,
+        source_ref=source_ref,
+        sender_ref=sender_ref,
+        registry_path=controller.registry_path,
+        runtime_root_arg=str(controller.coordination_runtime_root),
+        private_human_message=private_human_message,
+        origin=origin,
+        session_context=session_context,
+    )
+
+
 def native_command(controller: Any, argv: list[str]) -> dict[str, Any]:
+    if argv and argv[0] == "triage":
+        try:
+            parsed = _triage_parser().parse_args(argv[1:])
+            authorized = (
+                resolve_all_registered_goal_ids(controller.registry_path)
+                if parsed.all_goals
+                else list(parsed.goal_id)
+            )
+            return build_portfolio_triage_projection(
+                registry_path=controller.registry_path,
+                runtime_root_arg=str(controller.coordination_runtime_root),
+                authorized_goal_ids=authorized,
+                requested_goal_ids=list(parsed.goal_id) or None,
+                focus=parsed.focus,
+                max_gates=parsed.max_gates,
+                max_todos=parsed.max_todos,
+                max_progress=parsed.max_progress,
+            )
+        except (StewardFastPathError, SystemExit, ValueError) as exc:
+            error_code = getattr(exc, "code", "invalid_triage_command")
+            raise NativeStewardCommandError(
+                {"ok": False, "error_code": error_code, "error": str(exc)}
+            ) from exc
+
     from ...cli import build_parser
     from ...cli_rollout import append_cli_rollout_event
     from ...cli_commands.quota import handle_quota_command
@@ -25,7 +103,7 @@ def native_command(controller: Any, argv: list[str]) -> dict[str, Any]:
 
     args = build_parser().parse_args(["--format", "json", *argv])
     result: dict[str, Any] = {}
-    kwargs = {"registry_path": controller.registry_path,
+    kwargs: dict[str, Any] = {"registry_path": controller.registry_path,
         "runtime_root_arg": str(controller.coordination_runtime_root),
         "print_payload": lambda payload, *_args: result.update(payload)}
     if args.command == "todo":
@@ -43,17 +121,25 @@ def native_command(controller: Any, argv: list[str]) -> dict[str, Any]:
     return result
 
 
-
 def todo_confirmation_readback(proposal: dict[str, Any], proposal_id: str) -> dict[str, Any]:
     failure = proposal.get("failure") or {}
     if (proposal.get("status") == "failed" and failure.get("error_code") == "canonical_create_projection_pending"
-        and (failure.get("details") or {}).get("canonical_committed") is True):
+            and (failure.get("details") or {}).get("canonical_committed") is True):
         return {"response": ("待办已创建，展示尚未更新。请在原确认有效期内"
-                            f"重试 /confirm {proposal_id} 以完成更新。")}
+                             f"重试 /confirm {proposal_id} 以完成更新。")}
     if proposal.get("status") != "applied":
         raise ValueError("the creation preview became stale; prepare a new preview")
     receipt = proposal["receipt"]
-    resources = receipt["resource_ids"]
     return {"todo_receipt": receipt, "response": (
         f"已记录待办：{proposal['normalized_parameters']['text']}\n"
-        f"目标：{resources['goal_id']}；规范写入回执已读回。本次没有启动执行。")}
+        f"目标：{receipt['resource_ids']['goal_id']}；规范写入回执已读回。本次没有启动执行。")}
+
+
+__all__ = [
+    "NativeStewardCommandError",
+    "execute_steward_fast_path",
+    "native_command",
+    "native_fast_path_triage",
+    "parse_steward_fast_path_intent",
+    "todo_confirmation_readback",
+]

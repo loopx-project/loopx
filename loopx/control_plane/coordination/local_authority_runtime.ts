@@ -3,7 +3,6 @@ import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
 import {registryAuthoritySourceCheck, requireReviewedRegistrySha256} from "./authority_source.ts";
-import {ResearchTerminalEvidenceHost} from "../capabilities/explore_research_terminal.ts";
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
 import type {ClaimWorkspaceObserver} from "./claim_execution.ts";
 import {LeaseWorktreeObservationError, observeLeaseWorktree} from "../work_items/task_lease_workspace.ts";
@@ -21,7 +20,7 @@ import type { JsonObject } from "../effect_program.ts";
 import {decodeCompletionValidationRevision} from "../todos/completion_validation_revision.ts";
 import {executeCoordinationMonitorPoll, COORDINATION_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_MONITOR_RECEIPT_ONLY_REQUEST_SCHEMA,
   COORDINATION_MONITOR_POLL_RESULT_SCHEMA} from "./todo_monitor_poll.ts";
-import { requireJsonObject, requireBoolean } from "../runtime_decode.ts";
+import { requireJsonObject, requireBoolean, requireStringArray, optionalNonEmptyString } from "../runtime_decode.ts";
 import {
   LOCAL_COORDINATION_PROMOTION_RECEIPT_SCHEMA,
   LOCAL_COORDINATION_PROMOTION_REQUEST_SCHEMA,
@@ -108,14 +107,14 @@ export const LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_claim_request_v0";
 export const LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v1";
 export const LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2";
+const REVIEWED_MANAGED_CLAIM_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v3";
 export const LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA = "loopx_local_coordination_todo_update_request_v6";
 export const LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v4";
 export const LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_create_request_v0";
 export const LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v1";
 export const LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v2";
-export const LOCAL_COORDINATION_TODO_CREATE_SOURCE_BOUND_REQUEST_SCHEMA =
-  "loopx_local_coordination_todo_create_request_v3";
+const SOURCE_BOUND_TODO_CREATE_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v3";
 export const LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_terminal_lifecycle_request_v3";
 export const LOCAL_COORDINATION_TODO_ARCHIVE_REQUEST_SCHEMA =
@@ -484,6 +483,10 @@ export async function pollLocalCoordinationMonitor(value: unknown,
       evidence.source_authority = sourceAuthorityFor(store);
       return {...await executeCoordinationMonitorPoll(store, {
         goal_id: goalId, operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
+        runtime_root: root,
+        available_capabilities: input.available_capabilities == null ? undefined :
+          requireStringArray(input.available_capabilities, "available_capabilities"),
+        admitted_resume_when: optionalNonEmptyString(input.admitted_resume_when, "admitted_resume_when") ?? undefined,
         actor_agent_id: input.actor_agent_id == null ? null : claimAgentValue(input.actor_agent_id, "actor_agent_id"),
         registered_agents: registered, dry_run: input.dry_run as boolean,
         receipt_only: receiptOnly,
@@ -1050,20 +1053,27 @@ export async function claimLocalCoordinationTodo(
   let sourceAuthority = "file_v0";
   try {
     const input = requireJsonObject(value, "local coordination Todo claim request");
+    const reviewed = input.schema_version === REVIEWED_MANAGED_CLAIM_REQUEST_SCHEMA;
+    const managed = reviewed || input.schema_version === LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA;
     if (input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA &&
         input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA) {
+        !managed) {
       throw new Error("local coordination Todo claim request schema mismatch");
     }
-    if (Object.hasOwn(input, "manage_execution") && input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA)
+    if (Object.hasOwn(input, "manage_execution") && !managed)
       throw new TypeError("Managed execution requires claim request v2");
+    if (reviewed ? input.manage_execution !== true || typeof input.expected_registry_sha256 !== "string"
+        : Object.hasOwn(input, "expected_provider_revision") || Object.hasOwn(input, "expected_registry_sha256"))
+      throw new TypeError("A Todo claim review basis requires a reviewed managed claim");
+    const expectedRevision = reviewed
+      ? requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision") : undefined;
     const worktree = input.write_worktree;
-    if (worktree !== undefined && (input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA ||
+    if (worktree !== undefined && (!managed ||
         input.manage_execution !== true || typeof worktree !== "string" || !isAbsolute(worktree))) {
       throw new TypeError("Worktree observation requires a managed claim and an absolute caller path");
     }
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
-      input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA);
+      input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA, input.expected_registry_sha256);
     if (typeof input.dry_run !== "boolean") {
       throw new Error("dry_run must be a JSON boolean");
     }
@@ -1110,6 +1120,7 @@ export async function claimLocalCoordinationTodo(
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         lease_request: leaseRequest,
         ...(input.manage_execution === undefined ? {} : {manage_execution: input.manage_execution as boolean}),
+        ...(expectedRevision === undefined ? {} : {expected_provider_revision: expectedRevision}),
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),
       }, authoritySourcesCurrent, claimWorkspaceObserver(worktree));
@@ -1148,10 +1159,11 @@ export async function createLocalCoordinationTodo(
   };
   try {
     const input = requireJsonObject(value, "local coordination Todo create request");
-    const sourceBound = input.schema_version === LOCAL_COORDINATION_TODO_CREATE_SOURCE_BOUND_REQUEST_SCHEMA;
+    const sourceBound = input.schema_version === SOURCE_BOUND_TODO_CREATE_REQUEST_SCHEMA;
     const reviewed = sourceBound || input.schema_version === LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA;
-    if (!reviewed && input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA) {
+    if (input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA &&
+        !reviewed) {
       throw new TypeError("local coordination Todo create request schema mismatch");
     }
     if (!reviewed && Object.hasOwn(input, "expected_provider_revision")) {
@@ -1160,6 +1172,11 @@ export async function createLocalCoordinationTodo(
     if (!sourceBound && Object.hasOwn(input, "expected_registry_sha256")) {
       throw new TypeError("expected_registry_sha256 requires Todo create request v3");
     }
+    if (!sourceBound && Object.hasOwn(input, "expected_store_identity")) {
+      throw new TypeError("expected_store_identity requires Todo create request v3");
+    }
+    const expectedStore = Object.hasOwn(input, "expected_store_identity")
+      ? requireAuthorityStoreId(input.expected_store_identity, "expected store identity") : undefined;
     const expectedRegistry = sourceBound ? requireReviewedRegistrySha256(input.expected_registry_sha256) : undefined;
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
       input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, expectedRegistry);
@@ -1174,6 +1191,16 @@ export async function createLocalCoordinationTodo(
       const store = await openRuntimeStore(root, goalId, dependencies);
       sourceAuthority = sourceAuthorityFor(store);
       providerEvidence.source_authority = sourceAuthority;
+      if (expectedStore !== undefined) {
+        // Check within the same maintenance guard and against the same opened
+        // store used for receipt lookup, planning and commit.
+        const identity = await store.storeIdentity();
+        if (identity.status !== "available" || identity.store_identity !== expectedStore) {
+          return {...providerEvidence, schema_version: COORDINATION_TODO_CREATE_RESULT_SCHEMA,
+            status: "failed", reason_code: "local_authority_provider_identity_mismatch",
+            reason: "The reviewed Todo store is unavailable or changed"};
+        }
+      }
       if (!Array.isArray(input.registered_agents)) {
         throw new TypeError("registered_agents must be a JSON array");
       }
@@ -1370,6 +1397,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
       requireAuthorityStoreId(todoId, "linked successor Todo id"));
     const successorIntents = input.successor_intents.map((intent, index) =>
       requireJsonObject(intent, `successor_intents[${index}]`));
+    const {ResearchTerminalEvidenceHost} = await import("../capabilities/explore_research_terminal.ts");
     return await withCanonicalWriter(root, goalId, input.dry_run === true, async () => {
       const store = await openRuntimeStore(root, goalId, dependencies);
       sourceAuthority = sourceAuthorityFor(store);

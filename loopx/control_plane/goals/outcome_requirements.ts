@@ -5,6 +5,8 @@ import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorit
 import {indexCoordinationProjectionTodos} from "../coordination/coordination_projection.ts";
 import {readGoalAcceptanceLifecycle, sameExactGoalRef, parseWireExactGoalRef, type WireExactGoalRef} from "./acceptance_lifecycle.ts";
 
+import {decodeOutcomeRecords, encodeOutcomeRecords, OUTCOME_RECORDS_SCHEMA} from "./outcome_records.ts";
+
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {goalAcceptanceTodoDigest} from "./acceptance_work_basis.ts";
 import {projectRelations, todoRef} from "../work_items/planning_relations.ts";
@@ -14,7 +16,7 @@ import {appendTodoExploreReferences} from "../todos/work_requirements.ts";
 export const GOAL_OUTCOMES_SCHEMA = "loopx_goal_outcomes_v0";
 export const OUTCOME_CONTEXT_NAVIGATION_SCHEMA = "outcome_context_navigation_v1";
 interface Requirement extends JsonObject {id: string; description: string}
-interface ReviewItem extends JsonObject {id: string; conclusion: "met" | "unmet" | "uncertain"; evidence_refs: string[]; note: string}
+interface ReviewItem extends JsonObject {id: string; conclusion: "met" | "unmet" | "uncertain"; evidence_refs: string[]; note: string; basis_digest?: string}
 interface OutcomeReview extends JsonObject {basis_digest: string; items: ReviewItem[]}
 interface Outcome extends JsonObject {
   id: string; owner_agent_id: string; objective: string; revision: number;
@@ -23,7 +25,7 @@ interface Outcome extends JsonObject {
   review?: OutcomeReview;
 }
 interface OutcomeState extends JsonObject {
-  schema_version: typeof GOAL_OUTCOMES_SCHEMA; goal_id: string;
+  schema_version: typeof GOAL_OUTCOMES_SCHEMA | typeof OUTCOME_RECORDS_SCHEMA; goal_id: string;
   goal_ref: WireExactGoalRef | null; revision: number; outcomes: Outcome[];
 }
 /** Only fixed rule text, validator-owned labels and measured byte counts belong in public detail.
@@ -50,11 +52,11 @@ function list(value: unknown, label: string, max: number): unknown[] {
   return value;
 }
 function unique(values: string[], label: string): void {requireValue(new Set(values).size === values.length, `${label} contains duplicate ids`);}
-function requirements(value: unknown): Requirement[] {
-  const result = list(value, "requirements", 32).map(value => {
+function requirements(value: unknown, max = 32): Requirement[] {
+  const result = list(value, "requirements", max).map(value => {
     const row = canonicalAuthorityObject(value, "requirement"); keys(row, ["id", "description"]);
     // Goal creation accepts 1,000 Unicode code points (up to 2,000 UTF-16
-    // units). Keep that reviewed text intact; aggregate byte limits still hold.
+    // units). Keep that reviewed text intact; operation/page byte limits still hold.
     return {id: id(row.id, "requirement id"), description: text(row.description, "requirement description", 2000)};
   });
   unique(result.map(row => row.id), "requirements"); return result;
@@ -66,13 +68,14 @@ function source(value: unknown): {ref: string; summary: string} {
   const row = canonicalAuthorityObject(value, "outcome source"); keys(row, ["ref", "summary"]);
   return {ref: id(row.ref, "source ref"), summary: text(row.summary, "source summary")};
 }
-function reviewItems(value: unknown): ReviewItem[] {
-  const items = list(value, "review items", 32).map(value => {
-    const row = canonicalAuthorityObject(value, "Agent review"); keys(row, ["id", "conclusion", "evidence_refs", "note"]);
+function reviewItems(value: unknown, max = 32, stored = false): ReviewItem[] {
+  const items = list(value, "review items", max).map(value => {
+    const row = canonicalAuthorityObject(value, "Agent review"); keys(row, ["id", "conclusion", "evidence_refs", "note"], stored ? ["basis_digest"] : []);
+    requireValue(row.basis_digest === undefined || typeof row.basis_digest === "string" && BARE_SHA256_PATTERN.test(row.basis_digest), "review basis digest is invalid");
     requireValue(["met", "unmet", "uncertain"].includes(String(row.conclusion)), "review conclusion must be met, unmet or uncertain");
     const evidence = list(row.evidence_refs, "review evidence", 8).map(ref => text(ref, "evidence reference", 1024));
     requireValue(row.conclusion !== "met" || evidence.length > 0, "a met self-assessment requires evidence references");
-    return {id: id(row.id, "review requirement"), conclusion: row.conclusion as ReviewItem["conclusion"], evidence_refs: evidence, note: text(row.note, "review reasoning")};
+    return {id: id(row.id, "review requirement"), conclusion: row.conclusion as ReviewItem["conclusion"], evidence_refs: evidence, note: text(row.note, "review reasoning"), ...(row.basis_digest === undefined ? {} : {basis_digest: String(row.basis_digest)})};
   });
   unique(items.map(row => row.id), "review items"); return items;
 }
@@ -82,28 +85,31 @@ function reviewBasis(outcome: Outcome, work: ReadonlyMap<string, JsonObject>): s
 }
 function readState(head: JsonObject, goalId: string): OutcomeState | null {
   if (head.goal_outcomes === undefined) return null;
-  const row = canonicalAuthorityObject(head.goal_outcomes, "Goal outcomes");
+  const raw = canonicalAuthorityObject(head.goal_outcomes, "Goal outcomes");
+  const records = raw.schema_version === OUTCOME_RECORDS_SCHEMA;
+  const row = records ? decodeOutcomeRecords(raw) : raw;
+  const capacity = (legacy: number) => records ? Number.MAX_SAFE_INTEGER : legacy;
   keys(row, ["schema_version", "goal_id", "goal_ref", "revision", "outcomes"]);
-  requireValue(row.schema_version === GOAL_OUTCOMES_SCHEMA && row.goal_id === goalId, "outcome source Goal mismatch");
+  requireValue((row.schema_version === GOAL_OUTCOMES_SCHEMA || records) && row.goal_id === goalId, "outcome source Goal mismatch");
   const goalRef = row.goal_ref === null ? null : parseWireExactGoalRef(row.goal_ref, "outcome Goal ref");
   requireValue(goalRef === null || goalRef.goal_id === goalId, "outcome lifetime Goal mismatch");
-  const outcomes = list(row.outcomes, "outcomes", 24).map(value => {
+  const outcomes = list(row.outcomes, "outcomes", capacity(24)).map(value => {
     const o = canonicalAuthorityObject(value, "outcome");
     keys(o, ["id", "owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources"], ["review"]);
     let review: OutcomeReview | undefined;
     if (o.review !== undefined) {
       const row = canonicalAuthorityObject(o.review, "outcome review"); keys(row, ["basis_digest", "items"]);
       requireValue(typeof row.basis_digest === "string" && BARE_SHA256_PATTERN.test(row.basis_digest), "review basis digest is invalid");
-      review = {basis_digest: row.basis_digest, items: reviewItems(row.items)};
+      review = {basis_digest: row.basis_digest, items: reviewItems(row.items, capacity(32), records)};
     }
-    const todoIds = list(o.todo_ids, "outcome work", 64).map(v => id(v, "Todo id")); unique(todoIds, "outcome work");
-    const sources = list(o.sources, "outcome sources", 64).map(source); unique(sources.map(s => s.ref), "sources");
-    const reqs = requirements(o.requirements); requireValue(reqs.length && sources.length, "outcome requirements and source are required");
+    const todoIds = list(o.todo_ids, "outcome work", capacity(64)).map(v => id(v, "Todo id")); unique(todoIds, "outcome work");
+    const sources = list(o.sources, "outcome sources", capacity(64)).map(source); unique(sources.map(s => s.ref), "sources");
+    const reqs = requirements(o.requirements, capacity(32)); requireValue(reqs.length && sources.length, "outcome requirements and source are required");
     return {id: id(o.id, "outcome id"), owner_agent_id: id(o.owner_agent_id, "outcome Agent"), objective: text(o.objective, "outcome objective", 1024),
       revision: revision(o.revision), requirements: reqs, todo_ids: todoIds, sources, ...(review ? {review} : {})};
   });
   unique(outcomes.map(o => o.id), "outcomes");
-  return {schema_version: GOAL_OUTCOMES_SCHEMA, goal_id: goalId, goal_ref: goalRef, revision: revision(row.revision), outcomes};
+  return {schema_version: records ? OUTCOME_RECORDS_SCHEMA : GOAL_OUTCOMES_SCHEMA, goal_id: goalId, goal_ref: goalRef, revision: revision(row.revision), outcomes};
 }
 
 /** The existing lifecycle owner calls this only while binding a legacy source.
@@ -119,7 +125,13 @@ export function bindGoalOutcomesStateOwner(head: JsonObject, goalId: string, goa
   return previous === null ? null : {...previous, goal_ref: exact};
 }
 
-/** Same stored snapshot, two independently bounded envelopes. */
+/** Physical record pages are selected only by an explicit refinement. Reads and
+ * installation never migrate a source. Other writers preserve its selected format. */
+export function serializeGoalOutcomes(state: OutcomeState): JsonObject {
+  return state.schema_version === OUTCOME_RECORDS_SCHEMA ? encodeOutcomeRecords(state) : state;
+}
+
+/** Legacy v0 retains its original independently bounded envelopes. */
 function outcomeBytes(state: OutcomeState): {declaration: number; review: number} {
   const declaration = {...state, outcomes: state.outcomes.map(({review: _review, ...outcome}) => outcome)};
   const declarationBytes = Buffer.byteLength(JSON.stringify(declaration), "utf8");
@@ -144,9 +156,13 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
     }
   }
   const patch = canonicalAuthorityObject(value, "outcome refinement");
-  keys(patch, ["outcome_id"], ["source", "owner_agent_id", "objective", "requirements", "todo_ids", "review"]);
-  requireValue(reviewedWorkUpdate === undefined || patch.review !== undefined,
-    "a reviewed work update requires a newly authored complete review");
+  keys(patch, ["outcome_id"], ["source", "owner_agent_id", "objective", "requirements", "todo_ids", "review", "review_patch", "storage_format"]);
+  requireValue(patch.storage_format === undefined || patch.storage_format === "records", "unsupported outcome storage format");
+  const records = previous?.schema_version === OUTCOME_RECORDS_SCHEMA || patch.storage_format === "records";
+  requireValue(patch.review_patch === undefined || records && patch.review === undefined, "review_patch requires record storage and cannot accompany a complete review");
+  requireValue(!records || Buffer.byteLength(JSON.stringify(patch), "utf8") <= 131072, "outcome refinement capacity exceeded: limit 131072 UTF-8 bytes per operation; split additions or use review_patch for named requirements");
+  requireValue(reviewedWorkUpdate === undefined || patch.review !== undefined || patch.review_patch !== undefined,
+    "a reviewed work update requires a newly authored review");
   const outcomeId = id(patch.outcome_id, "outcome id");
   const old = previous?.outcomes.find(o => o.id === outcomeId);
   const owner = id(patch.owner_agent_id === undefined ? old?.owner_agent_id : patch.owner_agent_id, "outcome Agent");
@@ -174,44 +190,53 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
   requireValue(origin !== null || !declaresRequirements, "new outcomes or requirements require source provenance; review evidence belongs in review.evidence_refs");
   if (origin !== null) {
     requireValue(!sources.has(origin.ref) || sources.get(origin.ref)!.summary === origin.summary, "source reference already identifies another refinement");
-    requireValue(sources.has(origin.ref) || sources.size < 64,
+    requireValue(records || sources.has(origin.ref) || sources.size < 64,
       "outcome source capacity reached; review/work updates may omit source and retain evidence in review.evidence_refs; new declarations still require provenance");
     sources.set(origin.ref, origin);
   }
   const outcome: Outcome = {id: outcomeId, owner_agent_id: owner, objective, revision: (old?.revision ?? 0) + 1,
     requirements: [...reqs.values()], todo_ids: [...new Set([...(old?.todo_ids ?? []), ...links])], sources: [...sources.values()],
     ...(old?.review ? {review: old.review} : {})};
+  let reviewedTodos = todos;
+  if (reviewedWorkUpdate !== undefined) {
+    // The host transports only the explicit same-batch additive effect. Hash
+    // its exact prospective work state, never bless a later arbitrary head.
+    // Until the Todo owner commits that effect this review remains stale.
+    const update = canonicalAuthorityObject(reviewedWorkUpdate, "reviewed work update");
+    keys(update, ["todo_id", "append_explore_result_node_refs"]);
+    const todoId = id(update.todo_id, "reviewed Todo id"), todo = todos.get(todoId);
+    requireValue(actor !== null && todo && todo.role === "agent" && todo.claimed_by === actor,
+      "reviewed work must be the caller's Todo");
+    requireValue(Array.isArray(update.append_explore_result_node_refs) && update.append_explore_result_node_refs.length === 1,
+      "reviewed work must name exactly one additive result link");
+    const prospectiveTodo = {...todo, ...appendTodoExploreReferences(todo, update.append_explore_result_node_refs)};
+    // A batch may review another outcome while delivering this Todo's result.
+    // Validate the complete intent first; only linked work enters this basis.
+    if (outcome.todo_ids.includes(todoId)) reviewedTodos = new Map(todos).set(todoId, prospectiveTodo);
+  }
   if (patch.review !== undefined) {
-    const items = reviewItems(patch.review);
+    const items = reviewItems(patch.review, records ? Number.MAX_SAFE_INTEGER : 32);
     requireValue(items.length === outcome.requirements.length && items.every(row => reqs.has(row.id)), "review must address every retained requirement exactly once");
-    let reviewedTodos = todos;
-    if (reviewedWorkUpdate !== undefined) {
-      // The host transports only the explicit same-batch additive effect. Hash
-      // its exact prospective work state, never bless a later arbitrary head.
-      // Until the Todo owner commits that effect this review remains stale.
-      const update = canonicalAuthorityObject(reviewedWorkUpdate, "reviewed work update");
-      keys(update, ["todo_id", "append_explore_result_node_refs"]);
-      const todoId = id(update.todo_id, "reviewed Todo id"), todo = todos.get(todoId);
-      requireValue(actor !== null && todo && todo.role === "agent" && todo.claimed_by === actor,
-        "reviewed work must be the caller's Todo");
-      requireValue(Array.isArray(update.append_explore_result_node_refs) && update.append_explore_result_node_refs.length === 1,
-        "reviewed work must name exactly one additive result link");
-      const prospectiveTodo = {...todo, ...appendTodoExploreReferences(todo, update.append_explore_result_node_refs)};
-      // A batch may review another outcome while delivering this Todo's result.
-      // Validate the complete intent first; only linked work enters this basis.
-      if (outcome.todo_ids.includes(todoId)) reviewedTodos = new Map(todos).set(todoId, prospectiveTodo);
-    }
     outcome.review = {basis_digest: reviewBasis(outcome, reviewedTodos), items};
+  }
+  if (patch.review_patch !== undefined) {
+    const items = reviewItems(patch.review_patch);
+    requireValue(items.length > 0 && items.every(item => reqs.has(item.id)), "review_patch must name existing requirements");
+    const basis = reviewBasis(outcome, reviewedTodos);
+    const retained = new Map((old?.review?.items ?? []).map(item => [item.id,
+      {...item, basis_digest: item.basis_digest ?? old!.review!.basis_digest}]));
+    for (const item of items) retained.set(item.id, {...item, basis_digest: basis});
+    outcome.review = {basis_digest: basis, items: [...retained.values()]};
   }
   // Refinement changes one outcome, not the positions of unrelated requirements
   // in canonical snapshots and their derived full/delta context.
   const outcomes = previous?.outcomes.map(row => row.id === outcomeId ? outcome : row) ?? [];
   if (!old) outcomes.push(outcome);
-  const state: OutcomeState = {schema_version: GOAL_OUTCOMES_SCHEMA, goal_id: goalId, goal_ref: goalRef, revision: (previous?.revision ?? 0) + 1, outcomes};
+  const state: OutcomeState = {schema_version: records ? OUTCOME_RECORDS_SCHEMA : GOAL_OUTCOMES_SCHEMA, goal_id: goalId, goal_ref: goalRef, revision: (previous?.revision ?? 0) + 1, outcomes};
   // Preserve declaration/review limits; diagnostics count the failing
   // envelope, not the combined snapshot or an individual outcome/source list.
-  const candidate = outcomeBytes(state);
-  if (candidate.declaration > 131072 || candidate.review > 131072) {
+  const candidate = records ? {declaration: 0, review: 0} : outcomeBytes(state);
+  if (!records && (candidate.declaration > 131072 || candidate.review > 131072)) {
     const retained = previous === null ? {declaration: 0, review: 0} : outcomeBytes(previous);
     const budget = candidate.declaration > 131072 ? "declaration" : "review";
     const recovery = budget === "review"
@@ -220,9 +245,9 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
     throw new GoalOutcomeValidationError(
       `outcome ${budget} capacity exceeded: candidate ${candidate[budget]} UTF-8 bytes, retained ${retained[budget]}, limit 131072; ` +
       "this budget covers all outcomes in the Goal, not the source count; declaration and review budgets are independent. " + recovery +
-      "Do not remove requirements/origins or create a replacement outcome to bypass the limit. If no lossless update fits, report the capacity blocker.");
+      "Do not remove requirements/origins or create a replacement outcome to bypass the limit. For lossless record storage, retry a freshly prepared refinement with storage_format: records; recover ambiguous operations unchanged before preparing a different request.");
   }
-  return readState({...head, goal_outcomes: state}, goalId)!;
+  return readState({...head, goal_outcomes: serializeGoalOutcomes(state)}, goalId)!;
 }
 
 /** Resolve check authoring from one current requirement source. Review/source
@@ -246,15 +271,20 @@ export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance
     : lifecycle.state === "active" && state.goal_ref !== null && sameExactGoalRef(lifecycle.goal_ref, state.goal_ref);
   const work = indexCoordinationProjectionTodos(head, goalId).todos;
   return observeOutcomeRequirements({schema_version: GOAL_OUTCOMES_SCHEMA, revision: state.revision, current_lifetime: current,
-    outcomes: state.outcomes.map(o => ({...o, review_basis_current: !!o.review && o.review.basis_digest === reviewBasis(o, work),
+    outcomes: state.outcomes.map(o => {
+      const basis = reviewBasis(o, work);
+      return {...o,
+      ...(o.review ? {review: {...o.review, items: o.review.items.map(item => ({...item,
+        basis_current: (item.basis_digest ?? o.review!.basis_digest) === basis}))}} : {}),
+      review_basis_current: !!o.review && o.review.basis_digest === basis,
       // The source checkpoint includes current declared work and its completed
       // execution identity. Display/source bookkeeping does not create work.
       basis_digest: canonicalAuthoritySha256({goal_id: goalId, goal_ref: state.goal_ref,
-        outcome_id: o.id, owner_agent_id: o.owner_agent_id, work_basis: reviewBasis(o, work),
+        outcome_id: o.id, owner_agent_id: o.owner_agent_id, work_basis: basis,
         completions: o.todo_ids.map(key => ({todo_id: key, ...Object.fromEntries(
           ["completion_turn_key", "completion_receipt_id", "completion_validation_sha256", "completion_result"]
             .filter(field => work.get(key)?.[field] !== undefined).map(field => [field, work.get(key)![field]]))}))}),
-      work: o.todo_ids.map(key => ({todo_id: key, status: work.get(key)?.status ?? "missing"}))})),
+      work: o.todo_ids.map(key => ({todo_id: key, status: work.get(key)?.status ?? "missing"}))}; }),
     execution_authority_granted: false, goal_completion_assessed: false}, acceptance);
 }
 
@@ -399,7 +429,7 @@ export function observeOutcomeRequirements(declaration: JsonObject, acceptance: 
         && receipt.contract_revision === acceptance.revision && receipt.contract_digest === acceptance.digest && ownResult?.passed === true;
       const checked = current && criterion && covered && passed && (!oracle || oracle.state === "current");
       const review = o.review?.items.find(item => item.id === r.id) ?? r.agent_review as (ReviewItem & {basis_current?: boolean}) | undefined;
-      const reviewCurrent = current && (o.review_basis_current ?? review?.basis_current === true);
+      const reviewCurrent = current && ((review as (ReviewItem & {basis_current?: boolean}) | undefined)?.basis_current ?? o.review_basis_current ?? false);
       const configured = criteria.some(c => c.id === r.id);
       return {...r, ...(review ? {agent_review: {...review, basis_current: reviewCurrent, independently_verified: false}} : {}),
         planning_satisfied: !!checked || (!configured && reviewCurrent && review?.conclusion === "met"),

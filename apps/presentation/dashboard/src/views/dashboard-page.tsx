@@ -1808,7 +1808,8 @@ function PersonalGoalHome({
     const sessionLabels = new Map(conversationHistory.history.sessions.map(session => [session.session_id,
       runtimeAgents.find(agent => agent.agent_id === session.agent_id)?.display_name ?? session.agent_id]));
     return reconcileConversationHistory(previous, messages,
-      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label));
+      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label),
+      boundConversation?.sessionId);
   };
   useEffect(() => {
     if (!conversationHistory.history) return;
@@ -3109,7 +3110,7 @@ function PersonalGoalHome({
         observedConversationRunning={observedConversationRunning}
         workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace,
           onOpenOriginal: onOpenOriginalConversation,
-          entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
+          entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, ownerLoginUnavailable: appEntry.ownerLoginUnavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
         agents={(fixedSession ? [selectedAgent] : agentOptions).map((agent) => ({
           adapterKind: agent.adapterKind,
           agentId: agent.agentId,

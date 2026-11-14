@@ -174,6 +174,15 @@ returns. Do not reconstruct static refresh/spend commands from this skill.
 Accountable progress precedes its spend; uncertain effects require readback and
 recovery before retry. State-only refresh cannot replace accountable writeback.
 
+After a rejected refresh or installation maintenance, inspect
+`settlement_recovery` even when the state update reports `ok: true`. Execute its
+`next_cli_actions` with the original Agent/Todo or replan/Turn identity. If the
+rejection also returns `replan_transition.context_recovery`, read that current
+basis and revise the evidence-linked packet before retrying its writeback. Do
+not repeat the upgrade or treat a subsequent `surface_only` success as closing
+the admitted work. A `settlement_recovery_error` leaves settlement unknown;
+preserve the original write result and resolve the reported read failure.
+
 The absence of an adapter run or an unchanged artifact does not waive settlement.
 Only setup metadata work with no admitted delivery may use a state-only refresh
 when needed. After admitted delivery, an optional state-only refresh follows its

@@ -615,6 +615,7 @@ def stream_lark_goal_topic_profile(
     private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
     capture_mention: MentionCapture | None = None,
     review_callback_handler: ReviewCallbackHandler | None = None,
+    callback_availability_sink: Callable[[Callable[[], bool]], None] | None = None,
 ) -> dict[str, Any]:
     """Keep one bounded long-lived CLI consumer attached between messages."""
 
@@ -655,6 +656,7 @@ def stream_lark_goal_topic_profile(
             process_factory=process_factory,
             parent_stop=stop,
             handler=review_callback_handler,
+            availability_sink=callback_availability_sink,
         )
         if review_callback_handler is not None
         else None

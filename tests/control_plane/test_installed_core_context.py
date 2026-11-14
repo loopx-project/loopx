@@ -4,15 +4,58 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
 import time
 
+import pytest
+
 from test_core_distribution import AGENT, GOAL, _command, _environment
 from test_core_distribution import core_python as core_python
 from test_core_distribution import task as task
 from test_core_distribution import _run, _spends
+
+
+@pytest.mark.parametrize("explicit_route", [False, True])
+def test_installed_composed_settlement_uses_core_entrypoint(core_python, tmp_path, monkeypatch, explicit_route):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _initialize_fixture_authority,
+        _spend_run_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
+    cli = Path(core_python).parent / ("loopx.exe" if os.name == "nt" else "loopx")
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    if explicit_route:
+        prefix += ["--cli-bin", str(cli)]
+
+    def command(*args):
+        return json.loads(_run(core_python, [*prefix, *args], project).stdout)
+
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", "installed-composed-settlement"]
+    guard = command("quota", "should-run", "--codex-app", "--context-delivery", "off", *binding)
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert _spend_run_count(runtime) == 0
+    writeback = ["refresh-state", *binding, "--classification", "installed_composed_delivery",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+        "--settle-turn", "--settlement-receipt"]
+    first = command(*writeback)
+    assert first["settlement_identity"] == identity and first["settlement_progress"]["state"] == "settled"
+    assert first["quota_spend"]["appended"] is True and _spend_run_count(runtime) == 1
+    assert "settlement_owed" not in first
+    assert [r["step_kind"] for r in first["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend"]
+    replay = command(*writeback)
+    assert replay["idempotent_replay"] is True and replay["settlement_identity"] == identity
+    assert replay["settlement_result"] == first["settlement_result"] and _spend_run_count(runtime) == 1
 
 
 def test_installed_lifecycle_review_recovers_a_late_dependent_successor(core_python, task):
@@ -33,8 +76,9 @@ def test_installed_lifecycle_review_recovers_a_late_dependent_successor(core_pyt
         "--turn-instance-id", turn]
     guard = command(*admission)
     obligation = guard["autonomous_replan_obligation"]["obligation_id"]
-    # Canonical updates have whole-second timestamps. Use the real clock to
-    # ensure this dependency is authored strictly after the admitted review.
+    # Canonical updates have whole seconds. Same-second review-bound recovery
+    # is pinned by the replan semantics behavior test. This installed path
+    # still qualifies a successor stamped on a later whole second.
     time.sleep(1.05)
     successor = command("todo", "add", "--goal-id", GOAL, "--role", "agent",
         "--claimed-by", AGENT, "--text", "Independently recheck the retained squares report.",

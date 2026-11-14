@@ -13,6 +13,12 @@ from loopx.cli import main
 from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
+
+# Canonical stopped activation; the retired ``status: stopped`` field is now a
+# registry protocol error that only the explicit upgrade decoder may consume.
+STOPPED_ACTIVATION = {"schema_version": "loopx_goal_activation_v1", "state": "stopped",
+                      "updated_at": "2026-01-01T00:00:00Z", "reason": "fixture stop"}
+
 steward = steward_fixture
 
 
@@ -135,7 +141,7 @@ def test_managed_identity_rejections_do_not_create_or_resume_a_host(steward, tmp
         if fault == "revoked":
             goal["coordination"]["registered_agents"] = ["peer"]
         elif fault == "stopped":
-            goal["status"] = "stopped"
+            goal["activation"] = dict(STOPPED_ACTIVATION)
         else:
             goal["goal_instance_id"] = "replaced-lifetime"
         runtime.registry_path.write_text(json.dumps(registry))
@@ -262,7 +268,10 @@ def test_local_managed_session_denials_never_launch_or_accept(steward, tmp_path,
         store.create_queued_turn(sid, client_turn_id="human-first", message="Keep my pending work first", origin="web")
     elif fault in {"stopped_goal", "foreign_goal"}:
         registry = json.loads(runtime.registry_path.read_text())
-        registry["goals"][0]["status" if fault == "stopped_goal" else "goal_instance_id"] = "stopped" if fault == "stopped_goal" else "a-replaced-lifetime"
+        if fault == "stopped_goal":
+            registry["goals"][0]["activation"] = dict(STOPPED_ACTIVATION)
+        else:
+            registry["goals"][0]["goal_instance_id"] = "a-replaced-lifetime"
         runtime.registry_path.write_text(json.dumps(registry))
     elif fault == "attached":
         sid = store.create_session(goal_id=session["goal_id"], agent_id="codex", adapter_kind="codex_app_server",
@@ -292,7 +301,7 @@ def test_managed_work_never_commits_without_current_independent_postcondition(st
         def stopped(adapter, message, sink):
             response = original_start(adapter, message, sink)
             registry = json.loads(runtime.registry_path.read_text())
-            registry["goals"][0]["status"] = "stopped"
+            registry["goals"][0]["activation"] = dict(STOPPED_ACTIVATION)
             runtime.registry_path.write_text(json.dumps(registry))
             return response
 
@@ -709,7 +718,7 @@ def test_native_dispatch_refuses_before_model_or_kernel_when_original_context_is
         provider.owner_ready = False
     elif fault == "stopped_goal":
         data = json.loads(runtime.registry_path.read_text())
-        data["goals"][0]["status"] = "stopped"
+        data["goals"][0]["activation"] = dict(STOPPED_ACTIVATION)
         runtime.registry_path.write_text(json.dumps(data))
     elif fault == "host_closed":
         runtime.close()

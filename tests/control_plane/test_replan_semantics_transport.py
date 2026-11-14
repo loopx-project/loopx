@@ -59,7 +59,8 @@ def test_rejected_large_projection_removes_private_files(isolated_runtime: Path)
     assert effect_runtime.effect_runtime_result("runtime.ping", {})["ready"] is True
 
 
-def test_lifecycle_dependency_reuses_the_canonical_successor_receipt(isolated_runtime: Path):
+@pytest.mark.parametrize("updated_at", ["2026-08-01T00:00:02Z", "2026-08-01T00:00:01Z"])
+def test_lifecycle_dependency_reuses_the_canonical_successor_receipt(isolated_runtime: Path, updated_at: str):
     original = {"todo_id": "todo_completed", "status": "done", "done": True,
         "task_class": "advancement_task", "claimed_by": "fixture-agent",
         "last_actor_agent_id": "fixture-agent", "completed_at": "2026-08-01T00:00:00Z",
@@ -74,7 +75,7 @@ def test_lifecycle_dependency_reuses_the_canonical_successor_receipt(isolated_ru
                       "completed_without_successor_count": 1})
     successor = {"todo_id": "todo_successor", "status": "open", "done": False,
         "task_class": "advancement_task", "claimed_by": "fixture-agent",
-        "last_actor_agent_id": "fixture-agent", "updated_at": "2026-08-01T00:00:02Z",
+        "last_actor_agent_id": "fixture-agent", "updated_at": updated_at,
         "replan_obligation_id": admitted["obligation_id"], "action_kind": "validate",
         "target_key": "snapshot-continuity", "resume_when": "todo_done:todo_completed"}
     condition = evaluate_todo_resume_conditions([successor], source_items=[original, successor])[
@@ -93,3 +94,8 @@ def test_lifecycle_dependency_reuses_the_canonical_successor_receipt(isolated_ru
     assert packet["successor_todo_id"] == successor["todo_id"]
     assert original["completion_turn_key"] == "original-completion"
     assert "no_followup" not in original
+    earlier = receipt_bound_lifecycle_candidate(
+        selected_obligation_id=admitted["obligation_id"],
+        guard_recorded_at="2026-08-01T00:00:01.500Z", agent_id="fixture-agent",
+        items=[original, {**successor, "updated_at": "2026-08-01T00:00:00Z"}], derive=derive)
+    assert earlier is None

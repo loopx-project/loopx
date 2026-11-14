@@ -344,6 +344,39 @@ caller appends the refresh receipt and rereads the chain; it must not offer a
 spend command before that point. Older guards without a persisted spend source
 retain the existing heartbeat default.
 
+A rejected `refresh-state`, or an Agent's state-only maintenance update, also
+returns `settlement_recovery` when a persisted Turn still owes closeout. Its
+identity and progress come from the same typed receipt reader as guard recovery.
+If the caller omits the Turn ID, the refresh can discover an autonomous replan
+whose guard positively admitted work and recorded the original obligation and
+effect. Later Turn admission still follows the guard's explicit closeout marker.
+The TS `pending_closeout` read selects the candidate, validates the original
+binding and evaluates receipts under one admitted owner and immutable snapshot;
+Python only adapts CLI input and renders the returned recovery. This read mode
+cannot be combined with settlement admission or latest-Run inference.
+`ok: true` on a state update describes that update only; it does not settle the
+nested original Turn. Follow `settlement_recovery.next_cli_actions`: before a
+verified writeback this reenters the original bound guard; afterwards it offers
+only the remaining spend. A stale replan basis still requires reading the
+returned `replan_transition.context_recovery` and correcting the evidence-linked
+packet before retry. No recovery read creates a Turn or debits quota. Missing
+or conflicting receipt authority is reported as `settlement_recovery_error`,
+never inferred as successful settlement. Setup with no admitted Turn, other
+Agents' Turns, and already settled work do not produce pending recovery.
+
+`refresh-state` 被拒绝，或 Agent 只更新升级／维护状态时，若已有 Turn 尚欠结算，
+响应会返回 `settlement_recovery`，身份与进度沿用 guard 恢复的 typed receipt reader。
+即使调用者漏传 Turn ID，只要原 guard 已明确准入自主重规划并记录义务和 effect，
+刷新也能找回原轮次。后续 Turn 的准入仍依据 guard 明确记录的 closeout 标记。
+TS `pending_closeout` 在同一准入 owner、同一不可变快照下完成候选选择、原绑定校验
+及收据判断；Python 只适配 CLI 参数和展示，不再分两次读取决定恢复对象。这个只读
+模式不能与结算准入或最新 Run 推断混用。
+状态更新的 `ok: true` 只表示该更新成功，不代表嵌套的原 Turn 已结清。执行其中的
+`next_cli_actions`：写回验证前回到原绑定 guard，验证后只补剩余扣账。重规划依据
+过期仍须读取 `replan_transition.context_recovery`，修正证据关联的 packet 后再试。
+恢复读取不新建 Turn、不扣额；收据不可读或身份冲突会显示 `settlement_recovery_error`，
+不能视为已结算。没有已准入 Turn 的设置工作、其它 Agent 和已结清工作不产生待恢复项。
+
 ## Minimal Contract
 
 The compact status shape can start with a small object:
@@ -1176,6 +1209,19 @@ instead of another quiet skip. Automatic `quota should-run` heartbeat liveness
 receipts have no concrete executed-monitor identity and do not count toward
 this threshold; distinct heartbeat turn ids are idempotency evidence, not
 monitor execution evidence.
+
+A current open Monitor explicitly registered with `watch_only=true` represents
+an intentional continuing watch. Matching unchanged history does not trigger
+`dead_monitor_repeat`. Match the explicit target key and, when recorded, Todo ID
+within the same Agent scope. Current observations without an explicit target
+key match an unkeyed watch by the recorded Todo ID and Agent. The observation's
+target digest identifies its recorded context. An expiring watch must still be
+active at the latest observation.
+The same watch is excluded from current `monitor_no_change_streak` selection.
+Missing or false watch state keeps ordinary finite-monitor detection; another
+Todo, target or peer cannot discharge it. Independent typed-progress,
+blocked-successor and periodic work reviews remain effective. This does not
+change cadence, expiry, observation counters, receipts or spend rules.
 
 The current Todo `consecutive_no_change` detector shares the Monitor lifetime
 rule with scheduling. At one explicit runtime observation, `expires_at` at or

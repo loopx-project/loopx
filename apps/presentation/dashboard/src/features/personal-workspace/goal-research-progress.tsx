@@ -7,12 +7,14 @@ import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
 import {ResearchTurnCosts} from "./research-turn-costs";
 import {ToolContextInventory} from "./goal-tool-context";
+import {ResearchHumanAttention, type ResearchHumanAttentionCapture} from './research-human-attention';
 import {LoopXRequestFootprint, ResearchUsageComparison, type ReadUsageComparison} from "./research-usage-comparison";
 import "./goal-research-progress.css";
 
 // Read models from benchmark-toolkit. This view formats existing counts and
 // assessments; it never scores, reclassifies an episode or combines runs.
 export type ResearchProgressPack = {pack_id: string; title: string; scope: TrajectoryInput["scope"]; selection: TrajectoryInput["selection"];
+  human_attention?: ResearchHumanAttentionCapture;
   episode_count: number; episodes?: TrajectoryEpisode[]; result?: TrajectoryAssessment | null; applicability?: "current" | "historical";
   job?: {status: string; attempt?: number; analysis_wall_seconds?: number | null;
     usage?: {input_tokens?: number; output_tokens?: number} | null; config?: {model: string; effort: string; service_tier: string}} | null;
@@ -305,6 +307,7 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
     {p ? <>
       {p.native_outcomes ? <NativeResults native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
       {p.native_outcomes ? <RetainedImprovement native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
+      {p.human_attention ? <ResearchHumanAttention key={p.pack_id} capture={p.human_attention} episodes={p.episodes} zh={zh} onCitation={onCitation}/> : null}
       {result?.synthesis ? !analysisOpen && <>{includeReport && <ResearchSynthesis synthesis={result.synthesis} zh={zh} onCitation={onCitation}/>}
         <details><summary>{zh ? "六项过程判读" : "Six process judgments"}</summary><ResearchMetrics key={`${p.pack_id}:${result.analysis_key}:${zh}`} pack={{...p, result}} zh={zh} onCitation={onCitation}/></details></>
         : result ? <ResearchMetrics key={`${p.pack_id}:${result.analysis_key}:${zh}`} pack={{...p, result}} zh={zh} onCitation={onCitation}/>
@@ -392,6 +395,7 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
             </dl> : null}
           </div>
         </section>
+        {!p.human_attention ? <ResearchHumanAttention zh={zh} onCitation={onCitation}/> : null}
         <details className="research-source-detail"><summary>{zh ? "分析范围与来源" : "Analysis scope and sources"}</summary><dl className="research-usage-basis">
           <dt>{zh ? "题目 / 运行" : "Case / run"}</dt><dd>{p.scope.case_id}<br/>{p.scope.run_id}</dd>
           <dt>{zh ? "证据窗口" : "Evidence window"}</dt><dd>{p.scope.window}</dd><dt>{zh ? "取样规则" : "Selection rule"}</dt><dd>{p.selection.rule}</dd>

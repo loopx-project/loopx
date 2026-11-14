@@ -90,6 +90,22 @@ class ActionConflictError(RuntimeError):
     """Raised when a typed action transition conflicts with durable state."""
 
 
+def action_checkpoint_steps(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    checkpoint = proposal.get("checkpoint")
+    steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else None
+    return steps if isinstance(steps, dict) else {}
+
+
+def is_todo_create_recovery(proposal: Mapping[str, Any]) -> bool:
+    return (
+        proposal.get("action_kind") in ("todo.create", "monitor.create")
+        and (bool(action_checkpoint_steps(proposal).keys() & {"todo_create_prepared", "todo_created"})
+             or (proposal.get("status") == "failed"
+                 and (proposal.get("failure") or {}).get("error_code") == "canonical_action_failed")
+             or proposal.get("status") == "applying")
+    )
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -1320,6 +1336,8 @@ class ChatActionStore:
                 raise ActionConflictError(
                     f"proposal in {proposal.get('status')} state cannot be cancelled"
                 )
+            if is_todo_create_recovery(proposal):
+                raise ActionConflictError("Creation is already confirmed; recover the original operation.")
             now = _utc_now()
             proposal["status"] = "cancelled"
             proposal["cancelled_at"] = now
@@ -1371,7 +1389,6 @@ class ChatActionStore:
         error_code: str,
         message: str,
         details: Mapping[str, Any] | None = None,
-        keep_applied: bool = False,
     ) -> dict[str, Any]:
         # A failure that happened after part of the work was committed has to
         # carry those identities, or the retry cannot tell what already exists
@@ -1390,7 +1407,7 @@ class ChatActionStore:
             from_states={"applying", "preview_ready", "gated"},
             to_state="failed",
             updates={"failure": failure},
-            idempotent_states={"failed", "applied"} if keep_applied else {"failed"},
+            idempotent_states={"failed"},
         )
 
     def save_checkpoint(
@@ -1505,6 +1522,8 @@ class ChatActionStore:
                 raise ActionConflictError(
                     f"proposal in {status} state cannot become {to_state}"
                 )
+            if to_state in {"deferred", "rejected"} and is_todo_create_recovery(proposal):
+                raise ActionConflictError("Creation is already confirmed; recover the original operation.")
             proposal["status"] = to_state
             proposal.update(_safe_json_value(dict(updates), path="transition"))
             proposal["updated_at"] = _utc_now()
@@ -1517,7 +1536,6 @@ class ChatActionStore:
         *,
         current_state_fingerprint: str,
         receipt: Mapping[str, Any],
-        stale_unless_checkpoint: str | None = None,
     ) -> dict[str, Any]:
         token = _opaque_id(proposal_id, field="proposal_id")
         current_fingerprint = _bounded_text(
@@ -1537,22 +1555,13 @@ class ChatActionStore:
             status = str(proposal.get("status") or "")
             if status == "applied":
                 return proposal
-            recovering_create_projection = (
-                status == "failed" and proposal.get("action_kind") in {"todo.create", "monitor.create"}
-                and (proposal.get("failure") or {}).get("error_code") == "canonical_create_projection_pending"
-            )
-            if status not in {"preview_ready", "applying"} and not recovering_create_projection:
+            if status not in {"preview_ready", "applying"}:
                 raise ActionConflictError(
                     f"proposal in {status} state cannot be applied"
                 )
             expected_fingerprint = str(proposal.get("expected_state_fingerprint") or "")
             now = _utc_now()
             if current_fingerprint != expected_fingerprint:
-                # A concurrent confirmer may already have bound the original
-                # write. Its durable plan must resolve commit vs stale.
-                checkpoint = proposal.get("checkpoint") or {}
-                if stale_unless_checkpoint and stale_unless_checkpoint in (checkpoint.get("steps") or {}):
-                    return proposal
                 proposal["status"] = "stale"
                 proposal["stale"] = {
                     "expected_state_fingerprint": expected_fingerprint,
@@ -1572,8 +1581,6 @@ class ChatActionStore:
                 raise ValueError("receipt.projection_verified must be true")
             proposal["status"] = "applied"
             proposal["receipt"] = safe_receipt
-            if recovering_create_projection:
-                proposal["failure"] = None
             proposal["applied_at"] = now
             proposal["updated_at"] = now
             self._write(payload)

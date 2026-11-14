@@ -39,9 +39,12 @@ export function todoCompletionPreviewFeedback(
 
 /** Call only after the action owner confirms completion of this exact proposal. */
 export function completedActionFeedback(
-  proposal: Pick<WorkspaceActionPreview, "actionKind" | "todoOperation" | "title">,
+  proposal: Pick<WorkspaceActionPreview, "actionKind" | "reviewPlan" | "todoOperation" | "title">,
   t: WorkspaceTranslate,
 ): string {
+  if (proposal.actionKind === "todo.create") {
+    return t(proposal.reviewPlan?.taskExecution ? "feedback.taskStartRequested" : "feedback.taskCreated");
+  }
   return proposal.actionKind === "todo.update" && proposal.todoOperation === "complete"
     ? t("feedback.todoMarkedComplete")
     : t("feedback.completed", { title: proposal.title });

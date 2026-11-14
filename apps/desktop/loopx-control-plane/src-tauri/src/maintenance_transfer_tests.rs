@@ -37,6 +37,10 @@ impl Server {
     }
 
     fn with_archive(bytes: Vec<u8>, signature: String) -> Self {
+        Self::with_version(bytes, signature, "1.1.0")
+    }
+
+    fn with_version(bytes: Vec<u8>, signature: String, version: &'static str) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -88,7 +92,7 @@ impl Server {
                         pause(&done, Duration::from_secs(40));
                         return;
                     }
-                    let feed = json!({"version":"1.1.0", "url":format!("{url}/{mode}"), "signature":signature}).to_string();
+                    let feed = json!({"version":version, "url":format!("{url}/{mode}"), "signature":signature}).to_string();
                     let body = if path.starts_with("/feed/") {
                         feed.as_bytes()
                     } else {
@@ -478,4 +482,174 @@ fn released_archive_survives_slow_native_transport_and_cache_reopen() {
         bytes
     );
     eprintln!("released signed archive: {} bytes, {:.3}s including verified cache reopen; no installation", bytes.len(), start.elapsed().as_secs_f64());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn terminal_preparation_reuses_verified_bytes_and_freezes_an_offline_handoff() {
+    let app = app(KEY);
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let automatic = root.path().join("automatic");
+    let request = crate::upgrade_request::UpgradeRequest::from_args(
+        &[
+            format!("--loopx-upgrade-request={}", "a".repeat(32)),
+            "--loopx-upgrade-channel=stable".into(),
+            "--loopx-upgrade-target=1.1.0".into(),
+        ],
+        root.path().into(),
+        "0.1.0".into(),
+        Value::Null,
+    )
+    .unwrap();
+    tauri::async_runtime::block_on(async {
+        let update = find_update(
+            app.handle(),
+            "stable",
+            server.feed("fast"),
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            prepare_terminal_candidate(
+                update.clone(),
+                "0.1.0",
+                "stable",
+                KEY,
+                &automatic,
+                &request.preparation_directory()
+            )
+            .await
+            .unwrap(),
+            "1.1.0"
+        );
+        assert_eq!(server.requests.load(Ordering::Acquire), 2);
+        assert_eq!(
+            request
+                .prepared_target("0.1.0", KEY)
+                .unwrap()
+                .unwrap()
+                .bytes,
+            BODY
+        );
+        crate::prepared_update::save(&automatic, "stable", "1.1.0", SIGNATURE, BODY).unwrap();
+        prepare_terminal_candidate(
+            update,
+            "0.1.0",
+            "stable",
+            KEY,
+            &automatic,
+            &request.preparation_directory(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            server.requests.load(Ordering::Acquire),
+            2,
+            "verified automatic cache avoids a second archive transfer"
+        );
+    });
+    drop(server); // No network is available at the replacement boundary.
+    assert_eq!(
+        request
+            .prepared_target("0.1.0", KEY)
+            .unwrap()
+            .unwrap()
+            .bytes,
+        BODY
+    );
+    // Another window's background cache cannot replace this request's bytes.
+    crate::prepared_update::clear(&automatic).unwrap();
+    assert!(request.prepared_target("0.1.0", "invalid").is_err());
+    crate::prepared_update::save(
+        &request.preparation_directory(),
+        "stable",
+        "1.2.0",
+        SIGNATURE,
+        BODY,
+    )
+    .unwrap();
+    assert!(request.prepared_target("0.1.0", KEY).is_err());
+    crate::prepared_update::clear(&request.preparation_directory()).unwrap();
+    assert!(request.prepared_target("0.1.0", KEY).is_err());
+    assert!(request.prepared_target("1.1.0", KEY).unwrap().is_none());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn terminal_preparation_rejects_bad_download_before_any_handoff() {
+    let app = app(KEY);
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    tauri::async_runtime::block_on(async {
+        let update = find_update(
+            app.handle(),
+            "stable",
+            server.feed("tampered"),
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
+        let request = root.path().join("request");
+        assert_eq!(
+            prepare_terminal_candidate(
+                update,
+                "0.1.0",
+                "stable",
+                KEY,
+                &root.path().join("automatic"),
+                &request
+            )
+            .await
+            .unwrap_err(),
+            "update_signature_invalid"
+        );
+        assert!(!request.exists());
+        assert_eq!(
+            prepare_terminal_candidate(None, "1.1.0", "stable", KEY, root.path(), &request)
+                .await
+                .unwrap(),
+            "1.1.0"
+        );
+        assert!(!request.exists());
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn rejected_cross_channel_preparation_preserves_original_verified_cache() {
+    let app = app(KEY);
+    let server = Server::with_version(BODY.to_vec(), SIGNATURE.into(), "1.1.0-main.2");
+    let automatic = tempfile::tempdir().unwrap();
+    let request = tempfile::tempdir().unwrap();
+    crate::prepared_update::save(automatic.path(), "stable", "1.1.0", SIGNATURE, BODY).unwrap();
+    let before = std::fs::read(automatic.path().join("prepared.json")).unwrap();
+    let update = tauri::async_runtime::block_on(find_update(
+        app.handle(),
+        "main",
+        server.feed("tampered"),
+        Duration::from_secs(5),
+    ))
+    .unwrap();
+    let result = tauri::async_runtime::block_on(prepare_terminal_candidate(
+        update,
+        "1.0.0",
+        "main",
+        KEY,
+        automatic.path(),
+        request.path(),
+    ));
+    assert_eq!(result.unwrap_err(), "update_signature_invalid");
+    assert!(!request.path().join("prepared.json").exists());
+    assert_eq!(
+        std::fs::read(automatic.path().join("prepared.json")).unwrap(),
+        before
+    );
+    let original = crate::prepared_update::load(automatic.path(), "1.0.0", "stable", KEY)
+        .unwrap()
+        .expect("failed Main preparation must retain the signed Stable cache");
+    assert_eq!(original.bytes, BODY);
+    assert_eq!(original.signature, SIGNATURE);
+    assert_eq!(server.requests.load(Ordering::Acquire), 2);
 }

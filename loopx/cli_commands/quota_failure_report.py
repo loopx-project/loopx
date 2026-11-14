@@ -11,9 +11,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from collections.abc import Mapping
+import os
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
+from ..command_invocation import (
+    current_loopx_cli_argv,
+    loopx_cli_argv,
+    resolve_command_path,
+    same_context_reader_route,
+)
 from ..control_plane.coordination.legacy_writer_fence import (
     LegacyCoordinationWriterFenced,
 )
@@ -322,43 +330,233 @@ def captured_quota_failure_view(
     return result
 
 
+def _compact_quota_failure(
+    command: str | None = None, *, receipt: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    result: dict[str, object] = {"ok": False, "error_code": QuotaDecisionTransportError.error_code,
+        "instruction": "Do not rerun."}
+    if command is not None:
+        result["command"] = command
+    if receipt is not None:
+        result["heartbeat_receipt"] = receipt
+    return result
+
+
+def _failure_output_size(payload: dict[str, object]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()) + len(os.linesep)
+
+
+@dataclass(frozen=True)
+class _QuotaFailureReader:
+    """One private, compact route reserved before a size-limited guard."""
+
+    reference: Path
+    command: str
+    reader_argv: list[str]
+
+
+def _quota_failure_reader_route(cli_bin: str | None) -> list[str]:
+    if cli_bin is None:
+        route = current_loopx_cli_argv()
+        if os.path.isabs(route[0]):
+            return route
+        cli_bin = route[0]
+    executable = resolve_command_path(cli_bin)
+    if executable is None:
+        raise QuotaCommandValidationError("Recovery CLI could not be resolved; no guard was run.")
+    # Keep the executable's invocation path. A wrapper or symlink can use
+    # its own filename to select behavior.
+    return loopx_cli_argv(str(executable.absolute()))
+
+
+def _prepare_quota_failure_reader(limit: int, *, cli_bin: str | None = None) -> _QuotaFailureReader:
+    from tempfile import mkdtemp
+
+    from .quota_context_reader import validate_compact_recovery_budget
+    from ..control_plane.turn_driver.decision_capture import (
+        context_capture_read_command, private_capture_uid,
+    )
+
+    # Use a short same-user POSIX directory because caller-selected capture and
+    # launcher paths can otherwise consume the entire reply.
+    private_capture_uid()
+    route = _quota_failure_reader_route(cli_bin)
+    directory = Path(mkdtemp(prefix="lx-", dir="/tmp"))
+    reference = directory / "r"
+    # Keep the caller's explicit route for wrappers. When the running
+    # release or console script already identifies itself, spell it once.
+    if route[1:2] == ["--cli-bin"]:
+        # A released scripts/loopx can be chosen explicitly by a different
+        # caller. Its own release discovery follows symlinks to this entry.
+        release_launcher = Path(__file__).resolve().parents[2] / "scripts" / "loopx"
+        if (same_context_reader_route(current_loopx_cli_argv(preserve_override=False), route)
+                or same_context_reader_route([str(release_launcher)], route)):
+            route = route[:1]
+    try:
+        validate_compact_recovery_budget(reference, limit, route)
+        command = context_capture_read_command(reference, "", reference_file=reference,
+            reader_argv=route, compact=True, max_page_output_bytes=limit)
+        if _failure_output_size(_compact_quota_failure(command)) > limit:
+            raise ValueError("Output limit cannot fit a recovery command.")
+    except ValueError as exc:
+        directory.rmdir()
+        raise QuotaCommandValidationError("Output limit cannot fit recovery metadata; no guard was run.") from exc
+    return _QuotaFailureReader(reference, command, route)
+
+
+def _quota_budget_failure_payload(reason: str, limit: int) -> dict[str, object]:
+    payload: dict[str, object] = {"ok": False, "error_code": "QUOTA_VALIDATION_FAILED", "reason": reason}
+    if _failure_output_size(payload) <= limit:
+        return payload
+    minimal: dict[str, object] = {"ok": False}
+    if _failure_output_size(minimal) <= limit:
+        return minimal
+    return {}
+
+
+def run_with_quota_failure_reader(
+    args: argparse.Namespace, limit: int, *,
+    print_payload: Callable[..., None], run: Callable[[], int],
+) -> int:
+    """Keep one recovery locator for the guard and any inline selection reentry."""
+    try:
+        reader = _prepare_quota_failure_reader(limit, cli_bin=getattr(args, "control_cli_bin", None))
+    except (OSError, ValueError) as error:
+        reason = (str(error) if isinstance(error, QuotaCommandValidationError)
+            else "Cannot prepare a private recovery reference; no guard was run.")
+        minimum_json_bytes = 2 + len(os.linesep)
+        if limit >= minimum_json_bytes:
+            print_payload(_quota_budget_failure_payload(reason, limit), "json", str)
+        return 1
+    args._quota_failure_reader = reader
+    try:
+        return run()
+    finally:
+        try:
+            reader.reference.parent.rmdir()
+        except OSError:
+            pass  # Keep published diagnostics available for same-Turn reads.
+
+
+def _bounded_quota_transport_failure(
+    failure: dict[str, object], limit: int, reader: _QuotaFailureReader | None,
+    path: Path | None, digest: str | None,
+) -> dict[str, object]:
+    from ..control_plane.turn_driver.decision_capture import write_context_read_reference, write_decision_capture
+
+    if digest is None and _failure_output_size(failure) <= limit:
+        return failure
+    receipt = failure.get("heartbeat_receipt")
+    command = None
+    if reader is not None:
+        try:
+            if path is None or digest is None:
+                # Preserve the committed receipt when decision.json could
+                # not be published. Keep these bytes if the reference fails.
+                path = reader.reference.with_name("failure.json")
+                digest = write_decision_capture(path, failure)
+            write_context_read_reference(
+                path, digest, reference_file=reader.reference, reader_argv=reader.reader_argv,
+            )
+        except (OSError, ValueError):
+            pass
+        else:
+            command = reader.command
+    locator = None
+    if path is not None and digest is not None:
+        capture: dict[str, object] = {"path": str(path), "sha256": digest}
+        if command is not None:
+            capture["command"] = command
+        else:
+            # The direct reader can need more space than the opening reply.
+            # Expose its saved identity without advertising unqualified argv.
+            locator = {
+                **_compact_quota_failure(),
+                "captured_decision": capture,
+                "instruction": "Use a larger output channel to read the saved capture by its path and SHA-256. "
+                "Do not rerun admission.",
+            }
+            failure = {**failure, "instruction": locator["instruction"]}
+        failure = {**failure, "captured_decision": capture}
+    if _failure_output_size(failure) <= limit:
+        return failure
+    if locator is not None and _failure_output_size(locator) <= limit:
+        return locator
+    if command is not None or isinstance(receipt, Mapping):
+        compact = _compact_quota_failure(command, receipt=receipt if command is None else None)
+        guided = {**compact, "instruction": "Read the original Turn receipt before recovering. Do not rerun admission."}
+        if _failure_output_size(guided) <= limit:
+            return guided
+        if _failure_output_size(compact) <= limit:
+            return compact
+    result = _compact_quota_failure()
+    if isinstance(receipt, Mapping):
+        result["heartbeat_receipt"] = {key: receipt[key] for key in ("status", "event_id", "turn_instance_id") if key in receipt}
+    result["reason"] = "Recovery reference could not be published. Inspect the original receipt. Do not rerun admission."
+    if _failure_output_size(result) <= limit:
+        return result
+    result.pop("reason")
+    return result if _failure_output_size(result) <= limit else _compact_quota_failure()
+
+
 def quota_decision_transport_failure_payload(
     args: argparse.Namespace,
     committed: Mapping[str, object],
-    error: QuotaDecisionTransportError,
+    error: Exception,
     *,
     capture_directory: Path | None,
+    capture_sha256: str | None = None,
 ) -> dict[str, object]:
-    """Report a post-guard capture/handoff failure without a second guard.
+    """Report a post-guard failure with the original receipt and capture.
 
-    The committed receipt and saved decision remain the evidence; the caller is
-    told to read them, not to rerun the guard or treat this as missing admission.
+    The saved digest, when available, comes from publication rather than
+    reopening the path to establish a new identity.
     """
-    saved = capture_directory / "decision.json" if capture_directory is not None else None
-    payload: dict[str, object] = {
+    typed_transport = isinstance(error, QuotaDecisionTransportError)
+    reason = (
+        " ".join(str(error).split())[:500] if typed_transport
+        else "The guard committed, but its result could not be presented."
+    )
+    failure: dict[str, object] = {
         "ok": False,
         "mode": args.quota_command,
         "goal_id": args.goal_id,
         "decision": "skip",
         "should_run": False,
-        "error_code": error.error_code,
-        "reason": " ".join(str(error).split())[:500],
+        "error_code": QuotaDecisionTransportError.error_code,
+        "reason": reason,
         "state": "blocked_health",
         "waiting_on": "codex",
         "status": "decision_transport_failed",
         "source": "quota",
         "recommended_action": (
-            "The guard already ran. Read the saved decision and this Turn's receipt "
-            "instead of rerunning the guard. If the handoff endpoint belongs to an "
-            "ended Host wake, use the transport named by the current wake, or none."
+            "Inspect this Turn's receipt before recovering the result. Do not rerun admission."
         ),
     }
-    if saved is not None and saved.is_file():
-        payload["captured_decision"] = {"path": str(saved)}
     for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
         if key in committed:
-            payload[key] = committed[key]
-    return payload
+            failure[key] = committed[key]
+    if not typed_transport:
+        failure["error_class"] = type(error).__name__
+        failure.update(verbose_debug_fields(error, verbose=bool(getattr(args, "verbose", False))))
+    limit = getattr(args, "max_page_output_bytes", None) if args.format == "json" else None
+    reader = getattr(args, "_quota_failure_reader", None)
+    if limit is not None:
+        return _bounded_quota_transport_failure(
+            failure, limit, reader,
+            capture_directory / "decision.json" if capture_directory is not None else None,
+            capture_sha256,
+        )
+    if capture_directory is not None and capture_sha256 is not None:
+        from ..control_plane.turn_driver.decision_capture import context_capture_read_command
+
+        saved = capture_directory / "decision.json"
+        failure["captured_decision"] = {
+            "path": str(saved),
+            "sha256": capture_sha256,
+            "command": context_capture_read_command(saved, capture_sha256, reader_argv=current_loopx_cli_argv()),
+        }
+    return failure
 
 
 def quota_validation_failure_payload(

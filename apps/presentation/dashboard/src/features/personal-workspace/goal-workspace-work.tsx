@@ -20,7 +20,7 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
   onPreview: (request: WorkspaceActionPreviewRequest) => Promise<WorkspaceActionPreview>;
   onSelect: (selection: WorkspaceDrawerSelection) => void;
 }) {
-  const {locale, t} = useWorkspaceI18n();
+  const {locale} = useWorkspaceI18n();
   const zh = locale === "zh-CN";
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -44,7 +44,6 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
   const tooLong = textLength > todoTextLimit;
   return <div className="goal-inline-create">
     <button aria-expanded={open} type="button" onClick={() => setOpen(value => !value)}><Plus size={15} aria-hidden/>{zh ? "添加任务" : "Add task"}</button>
-    {pendingDisplay ? <button type="button" onClick={() => onSelect({kind: "proposal", item: pendingDisplay})}>{t("drawer.recoverEditResult")}</button> : null}
     {open ? <form onSubmit={async event => {
       event.preventDefault();
       if (submitting.current || textLength === 0 || tooLong) return;
@@ -64,6 +63,26 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
       <button disabled={busy || textLength === 0 || tooLong} type="submit">{busy ? (zh ? "正在检查…" : "Reviewing…") : (zh ? "检查任务" : "Review task")}</button>
     </form> : null}
   </div>;
+}
+
+function PendingTaskDisplay({goalId, proposals, onSelect}: {
+  goalId: string; proposals: Record<string, WorkspaceActionPreview>;
+  onSelect: (selection: WorkspaceDrawerSelection) => void;
+}) {
+  const {t} = useWorkspaceI18n();
+  const pending = Object.values(proposals).filter(proposal => proposal.goalId === goalId
+    && proposal.reviewPlan?.reason === "canonical_create_projection_pending"
+    && proposal.reviewPlan.retryOriginal);
+  if (!pending.length) return null;
+  return <section className="goal-task-display-recovery" aria-label={t("goalWork.displayPending")}>
+    <h3>{t("goalWork.displayPending")}</h3>
+    <ul>{pending.map(proposal => <li key={proposal.previewId}>
+      <button type="button" onClick={() => onSelect({kind: "proposal", item: proposal})}>
+        <span>{proposal.fields.find(field => field.key === (proposal.actionKind === "monitor.create" ? "target" : "text"))?.value ?? proposal.title}</span>
+        <ArrowRight size={15} aria-hidden/>
+      </button>
+    </li>)}</ul>
+  </section>;
 }
 
 export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoId, onSelect, board, map, brief, attention: attentionContent,
@@ -225,6 +244,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
           </div> : null}
           {!readOnly ? <AddTask goal={goal} proposals={proposals} onPreview={onPreview} onSelect={select}/> : null}
         </header>
+        {!readOnly ? <PendingTaskDisplay goalId={goal.goalId} proposals={proposals} onSelect={select}/> : null}
         <div className="goal-owner-groups" hidden={lens !== "owner"}>{digest.work.groups.map(group => <section className="goal-owner-group" key={group.ownerId ?? ""} data-owner-id={group.ownerId ?? ""}>
           <header><h3>{ownerName(group.ownerId)}</h3><span>{group.todoIds.length} {zh ? "项任务" : "tasks"} · {group.todoIds.filter(id => rows.get(id)?.displayClass === group.displayClass).length} {goalWorkClassLabel(group.displayClass, zh)}</span>
             {!readOnly && group.ownerId && onOpenAgentConversation ? <button type="button" className="goal-owner-conversation" data-agent-id={group.ownerId} aria-label={zh ? `与 ${ownerName(group.ownerId)} 对话` : `Talk to ${ownerName(group.ownerId)}`} onClick={() => onOpenAgentConversation(group.ownerId!)}>{zh ? "工作记录" : "Work conversation"}</button> : null}

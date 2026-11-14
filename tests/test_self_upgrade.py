@@ -127,6 +127,84 @@ app.run()
                 pass
 
 
+@pytest.mark.parametrize("failure", [None, "signature", "timeout", "invalid"])
+def test_native_preparation_keeps_existing_app_until_verified(monkeypatch, tmp_path, failure):
+    import subprocess
+    import threading
+
+    app = app_fixture(tmp_path)
+    info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+    info.update(LoopXUpgradePreparation=1, CFBundleExecutable="loopx-control-plane")
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+    module = "loopx.cli_commands.support_control_upgrade."
+    directory = tmp_path / "receipts"
+    directory.mkdir()
+    monkeypatch.setattr(module + "_applications", lambda: (app,))
+    monkeypatch.setattr(module + "_receipt_directory", lambda: directory)
+    downloading, finish = threading.Event(), threading.Event()
+    restarted, outcomes = [], []
+
+    def prepare(argv, **_kwargs):
+        assert argv[0] == str(app / "Contents/MacOS/loopx-control-plane")
+        assert "--loopx-upgrade-prepare" in argv
+        downloading.set()
+        assert finish.wait(3)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, 1)
+        body = {"ok": True, "channel": "main", "target": "0.0.0-main.2.1"}
+        if failure == "signature":
+            body = {"ok": False, "code": "update_signature_invalid"}
+        if failure == "invalid":
+            body = []
+        return subprocess.CompletedProcess(argv, int(failure == "signature"), json.dumps(body))
+
+    def restart(_app, request_id, channel, _timeout, *, target):
+        restarted.append(target)
+        (directory / f"{request_id}.json").write_text(json.dumps({
+            "request_id": request_id, "channel": channel, "app_version": target,
+            "bundled_source_revision": "a" * 40, "phase": "ready",
+            "update_checked": True, "pid": os.getpid(),
+            "runtime_identity": {"source_revision": "b" * 40}}))
+
+    def execute():
+        try:
+            outcomes.append(_upgrade_desktop(desktop_upgrade_plan(None), 5))
+        except subprocess.TimeoutExpired:
+            outcomes.append("timeout")
+
+    monkeypatch.setattr(module + "subprocess.run", prepare)
+    monkeypatch.setattr(module + "_restart_app", restart)
+    worker = threading.Thread(target=execute)
+    worker.start()
+    try:
+        assert downloading.wait(3)
+        assert not restarted, "network preparation must not close the usable App"
+    finally:
+        finish.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    if failure:
+        assert not restarted
+        if failure == "timeout":
+            assert outcomes[0] == "timeout"
+        else:
+            assert outcomes[0]["ok"] is False
+    else:
+        assert restarted == ["0.0.0-main.2.1"]
+        assert outcomes[0]["ok"] is True
+    assert not list(directory.iterdir())
+
+
+def test_protected_app_retains_native_authorization_path(monkeypatch, tmp_path):
+    app = app_fixture(tmp_path)
+    info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+    info["LoopXUpgradePreparation"] = 1
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._applications", lambda: (app,))
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade.os.access", lambda *_: False)
+    assert desktop_upgrade_plan("main")["preparation_supported"] is False
+
+
 def test_upgrade_never_restarts_the_app_while_service_activation_is_deferred():
     payload = {"ok": False, "changes_applied": True,
                "execution": {"install_returncode": 0, "doctor_returncode": 0, "activation_pending": True},

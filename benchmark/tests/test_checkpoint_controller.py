@@ -23,6 +23,12 @@ from benchmark.edgebench import checkpoint_controller as transport
 from benchmark.edgebench.source import active_source_receipt
 
 
+@pytest.mark.parametrize("clock", [b"nan\n", b"9007199254740992.0\n", b"2000.25000000000000001\n"])
+def test_phase_budget_rejects_invalid_or_rounded_clock(clock):
+    with pytest.raises(ValueError, match="Host phase deadline"):
+        transport._phase_budget(clock, {"captured_at_epoch": 1000})
+
+
 @contextmanager
 def server(app):
     import uvicorn
@@ -267,7 +273,7 @@ def test_native_controller_transport_retains_nonfinite_released_results(
 
 
 def host_phase_command(tmp_path, monkeypatch):
-    """Real command builder; only installation/inference are outside this oracle."""
+    """Real phase admission shell, isolated from installation and model access."""
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import BenchmarkCodex, SForgeWorker
@@ -275,19 +281,23 @@ def host_phase_command(tmp_path, monkeypatch):
     async def installed(self, environment):
         pass
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
-    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-not-read")
     logs = tmp_path / "phase-worker"
     logs.mkdir()
-    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+    # The model-free prefix must not try to inspect a desktop login. The
+    # custom endpoint uses the same phase shell and is never contacted.
+    config = SForgeConfig(agent_model="fixture", agent_effort="xhigh",
+        agent_api_base_url="http://127.0.0.1:1/v1", agent_api_key="fixture-not-used")
+    backend = Mock()
+    backend.exec_run.return_value = SimpleNamespace(exit_code=0, output=config.agent_api_base_url)
+    worker = SForgeWorker(config,
         profile="heartbeat-resume", cwd="/task", timeout_seconds=43200, task_entry="seeded-todo")
-    worker.install_stop_hook(None, None, logs, None)
+    worker.install_stop_hook(backend, None, logs, None)
     worker.prepared = True
-    # Execute the provider's actual phase shell between subscription readiness
-    # and model dispatch. Both surrounding operations are outside this fixture.
-    _, readiness, phase = worker.format_run_cmd("/task.md").partition("-m benchmark.runtime.codex_readiness; ")
-    assert readiness
-    return "set -eu; " + phase.split(
-        "set +e; timeout --signal=TERM --kill-after=30 ${remaining}s env", 1)[0]
+    # Exercise the custom-endpoint prefix exactly as rendered, up to model dispatch.
+    phase, dispatch, _ = worker.format_run_cmd("/task.md").partition(
+        "set +e; timeout --signal=TERM --kill-after=30 ${remaining}s env")
+    assert dispatch and "benchmark.runtime.codex_readiness" not in phase
+    return phase
 
 
 @pytest.mark.parametrize("fraction", [None, 0.0, 0.625], ids=["fresh", "resumed", "subsecond"])
@@ -298,8 +308,8 @@ def test_host_phase_and_native_opportunities_continue_without_offline_refill(
     token = register(source, first, max_agent_submissions=3, submission_cooldown=2)
     assert submit(first, token, 7).status_code == 200
     before = copy.deepcopy((source.state.judge.tokens, source.state.judge.submissions, source.state.judge.run_history))
-    # An already admitted Host has 2h left from its original 12h configured
-    # trial. Fixture seeding represents that prior elapsed research, not a new run.
+    # An admitted continuation retains about 2h from its original 12h trial.
+    # The scheduler publishes a decimal deadline for this phase.
     source_phase = tmp_path / "source-phase"
     source_epoch = int(time.time()) + 7200
     if fraction is not None:
@@ -341,7 +351,8 @@ def test_host_phase_and_native_opportunities_continue_without_offline_refill(
     result = subprocess.run(["/bin/bash", "-c", shell +
         f"printf '8' > '{candidate}'; printf '%s' \"$remaining\""],
         env={"PATH": str(bin) + ":/usr/bin:/bin"}, capture_output=True, text=True, check=True)
-    assert 7180 < int(result.stdout) <= 7200 and candidate.read_bytes() == b"8"
+    assert int(result.stdout) == int(phase.read_bytes()) - int(clock)
+    assert candidate.read_bytes() == b"8"
     history = requests.get(second + "/api/v1/history", params={"token": fresh, "admin_secret": destination.state.judge.admin_secret}, timeout=5).json()
     assert history["agent_submissions"] == 1 and history["best_score"] == 7
     assert submit(second, fresh, 8).status_code == 429
@@ -626,7 +637,7 @@ def test_recovery_refuses_mismatched_or_unavailable_original_activation(controll
         assert calls == ["/api/v1/checkpoint/restore"]
 
 
-@pytest.mark.parametrize("raw", [b"", b"nan\n", b"1.5.0\n", b"0.0\n", b"9007199254740992\n"])
+@pytest.mark.parametrize("raw", [b"", b"nan\n", b"1.50\n", b"1.5.0\n", b"0.0\n", b"9007199254740992\n"])
 def test_invalid_host_epoch_cannot_create_native_point(controllers, tmp_path, raw):
     source, destination, first, second, files, grades = controllers
     token = register(source, first)
@@ -637,6 +648,24 @@ def test_invalid_host_epoch_cannot_create_native_point(controllers, tmp_path, ra
                           destination=tmp_path / "unit", phase_deadline_file=phase)
     bank = source.state.judge.config.log_dir / "checkpoints"
     assert not (bank / ("f" * 32)).exists() and not (bank / ".loopx-phase-attempts").exists()
+    assert destination.state.judge.tokens == {} and grades == []
+
+
+def test_expired_fractional_epoch_seals_without_work_allowance(controllers, tmp_path):
+    source, destination, first, _, files, grades = controllers
+    token = register(source, first)
+    phase = tmp_path / "source-phase"
+    phase.write_bytes(b"1.5\n")
+    unit = tmp_path / "unit"
+    point = transport.capture(files[0], token=token, capture_id="f" * 32,
+                              destination=unit, phase_deadline_file=phase)
+    manifest = json.loads((unit / "checkpoint.json").read_bytes())
+    budget = manifest["point_metadata"]["host_phase_budget"]
+    assert budget["source_deadline_epoch"] == 1.5 and budget["remaining_seconds"] == 0
+    assert (unit / "components" / "host_phase_deadline").read_bytes() == phase.read_bytes()
+    with pytest.raises(ValueError, match="no work allowance"):
+        transport.restore(files[1], root=unit, expected_sha256=point["sha256"], run_id="expired",
+                          phase_deadline_file=tmp_path / "destination-phase")
     assert destination.state.judge.tokens == {} and grades == []
 
 

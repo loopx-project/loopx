@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (50)
+## Accepted (52)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -38,6 +38,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Frontier Science Research Program v0](frontier-science-research-program-v0.md) | Accepted | none | — |
 | [RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | Accepted | none | — |
 | [RFC: Goal Channel Collaboration v0](goal-channel-collaboration-v0.md) | Accepted | none | — |
+| [RFC: Goal contract evolution and bounded working context (v0)](goal-contract-evolution-v0.md) | Accepted | none | — |
 | [RFC: Goal Direction Baseline (v0)](goal-direction-baseline-v0.md) | Accepted | none | — |
 | [Design follow-up: Goal continuity across restart and replacement](goal-immutability-coherence-defense-v0.md) | Accepted | none | — |
 | [Goal Instance Identity and Orphan Recovery (v0)](goal-instance-identity-and-orphan-recovery-v0.md) | Accepted | none | — |
@@ -57,6 +58,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md) | Accepted | none | — |
 | [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | [4 entries](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0](manager-runtime-profile-v0.md) | Accepted | none | — |
+| [RFC: Mechanism Convergence and the Experience Reuse Loop (v0)](mechanism-convergence-and-learning-loop-v0.md) | Accepted | none | — |
 | [RFC: Monorepo Distribution and Small-Kernel Runtime Composition (v0)](monorepo-distribution-split-v0.md) | Accepted | none | — |
 | [RFC: Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | Accepted | none | — |
 | [RFC: Agent Judgment and Optional Independent Assessment — Jev as a Candidate (v0)](optional-semantic-assistance-jev-v0.md) | Accepted | none | — |

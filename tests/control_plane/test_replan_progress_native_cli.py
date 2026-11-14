@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+from test_quota_settlement_cli import _run_generated_cli
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload, selected_context_values
 from loopx.control_plane.coordination.canonical_snapshot import read_canonical_snapshot
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import effect_runtime_result, restart_effect_runtime
@@ -301,6 +302,92 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("envelope", [(), ("--complete-turn",)], ids=["quota", "complete"])
+def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, provider, envelope):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # An installed CLI can carry a long, quoted registry and runtime path.
+    root = tmp_path / ("source with apostrophe's permission " + "x" * 110)
+    root.mkdir()
+    fixture = make_progress_cli_fixture(root, provider, "advanced")
+    scope = ("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, *envelope)
+
+    def read(command, expected=0):
+        result = subprocess.run(shlex.split(command), cwd=fixture["project"], capture_output=True,
+            text=True, timeout=30)
+        assert result.returncode == expected, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    try:
+        disabled = call_progress_cli(fixture, *scope, "--context-delivery", "off")
+        assert disabled["replan_action_packet"]["planning_guidance"]
+        assert "review" not in disabled["replan_action_packet"]
+        assert not list(fixture["runtime"].glob("context-delivery/context-*/projection.json"))
+
+        opening = call_progress_cli(fixture, *scope, "--context-delivery", "on", "--delta-delivery", "off")
+        authority = _authority(fixture)
+        first = read(opening["first_read_command"])
+        assert first["eof"]
+        selected = selected_context_values(first["content"])
+        entry = read_cli_policy_payload(json.dumps(opening), returncode=0)
+        packet = entry["replan_action_packet"]
+        review_command = selected["/replan_action_packet/review"]
+        assert review_command == packet["review"]
+        route = shlex.split(review_command)
+        path = Path(route[route.index("--decision-file") + 1])
+        digest = route[route.index("--capture-sha256") + 1]
+        assert path.name == "projection.json" and path.is_relative_to(fixture["runtime"].resolve())
+        raw = path.read_bytes()
+        assert digest == hashlib.sha256(raw).hexdigest()
+        source = json.loads(raw)
+        assert "replan_read_path" not in source
+        assert entry["execution_obligation"] == source["execution_obligation"]
+        assert "planning_guidance" not in packet and "writeback_contract" not in packet
+
+        review = read(review_command)
+        context = source["autonomous_replan_obligation"]["replan_context"]
+        assert review["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
+        assert review["uncovered_frontier"] == context["uncovered_frontier"]
+        assert review["context_id"] == context["context_id"]
+        writer_command = review["next"]["writeback"]
+        writer = read(writer_command)
+        assert writer["source_hash"] == review["source_hash"]
+        assert writer["obligation_id"] == review["obligation_id"] == packet["obligation_id"]
+        assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
+        assert writer["allowed_terminal"] == source["replan_action_packet"]["allowed_terminal"]
+        original_actions = source["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        original_writer = next(command for command in original_actions if "refresh-state" in shlex.split(command))
+        delivered_writer = next(command for command in writer["writeback"]["next_cli_actions"]
+                                if "refresh-state" in shlex.split(command))
+        assert len(original_writer) > 420
+        argv = shlex.split(delivered_writer)
+        assert argv == shlex.split(original_writer)
+        assert "--turn-instance-id" not in argv
+        values = {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
+                  "<surface-id>": "surface-existing", "<hypothesis-id>": "hypothesis-existing",
+                  "<probe-kind>": "probe-independent", "<evidence-id>": "evidence-current"}
+        index_before = fixture["index"].read_bytes()
+        dry_run = read(shlex.join([sys.executable, "-m", "loopx.entrypoint",
+            *[values.get(arg, arg) for arg in argv[1:]], "--dry-run", "--no-global-sync",
+            "--suppress-external-sinks"]))
+        assert dry_run["ok"] is True
+        assert fixture["index"].read_bytes() == index_before
+
+        # Even a byte-only change that keeps the decoded object identical
+        # must reject both stages. Restoring the original enables the retry.
+        path.write_bytes(raw + b" ")
+        try:
+            for command in (packet["review"], writer_command):
+                rejected = read(command, expected=1)
+                assert rejected["ok"] is False and "capture digest mismatch" in rejected["reason"]
+        finally:
+            path.write_bytes(raw)
+        assert read(writer_command) == writer
+        assert _authority(fixture) == authority
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("context_args,navigation", [
     ((), False),
     (("--context-delivery", "on"), True),
@@ -341,6 +428,12 @@ def _authority(fixture: dict) -> dict:
     return result
 
 
+def _quota_events(runtime: Path) -> list[dict]:
+    path = runtime / "goals" / GOAL / "rollout-event-log.jsonl"
+    return [event for line in path.read_text(encoding="utf-8").splitlines()
+            if (event := json.loads(line))["event_kind"] in {"quota_should_run", "quota_spend"}]
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("scenario,expected_outcomes,reason_code", [
     ("advanced", ["new_probe_family"], None),
@@ -365,8 +458,10 @@ def test_typed_progress_cli_preserves_replan_authority(
         bound = call_progress_cli(fixture, *guard_args, "--todo-id", TODO)
         obligation = bound["autonomous_replan_obligation"]
         assert [trigger["kind"] for trigger in obligation["triggers"]] == ["typed_progress_repeat"]
-        assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO
+        receipt = bound["heartbeat_receipt"]
+        assert receipt["settlement_identity"]["todo_id"] == TODO
         original = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
+        original_events = _quota_events(fixture["runtime"])
         authority = _authority(fixture)
         result = call_progress_cli(fixture, *fixture["refresh"],
             expected_code=0 if expected_outcomes else 1)
@@ -402,11 +497,27 @@ def test_typed_progress_cli_preserves_replan_authority(
             assert result["ok"] is False and result["appended"] is False
             rejection = result["replan_transition"]
             assert rejection["obligation_id"] == obligation["obligation_id"]
-            assert rejection["host_action"] == "write_typed_semantic_delta"
             assert rejection["reason_code"] == reason_code
-            assert rejection["next_cli_actions"]
+            # A refusal leaves the original Turn admitted. The next action reads
+            # its context before any new writeback can address the refusal.
+            recovery = result["settlement_recovery"]
+            assert rejection["host_action"] == "read_current_replan_context"
+            assert recovery["settlement_identity"] == receipt["settlement_identity"]
+            assert recovery["settlement_progress"]["next_step"] == "durable_writeback"
+            assert "settlement_owed" not in recovery
+            assert rejection["next_cli_actions"] == recovery["next_cli_actions"]
             restart_effect_runtime(wait_for_exit=True)
             assert call_progress_cli(fixture, *fixture["refresh"], expected_code=1) == result
+            [command] = rejection["next_cli_actions"]
+            code, recovered = _run_generated_cli(
+                command, registry_path=fixture["registry"], cwd=fixture["project"])
+            assert code == 0, recovered
+            replay = recovered["heartbeat_receipt"]
+            assert replay["status"] == "replayed"
+            for key in ("event_id", "recorded_at", "settlement_identity"):
+                assert replay[key] == receipt[key]
+            assert recovered["autonomous_replan_obligation"]["obligation_id"] == obligation["obligation_id"]
+            assert _quota_events(fixture["runtime"]) == original_events
             assert {key: fixture[key].read_bytes() for key in original} == original
         assert fixture["registry"].read_bytes() == original["registry"]
         displayed = parse_active_state_todos(fixture["state"].read_text(), item_limit=None)["agent_todos"]["items"]

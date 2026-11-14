@@ -134,6 +134,19 @@ def test_six_distinct_polls_retain_dead_monitor_contract() -> None:
     assert result["dead_monitor_detector"]["run_count"] == 6
 
 
+def test_watch_only_state_reaches_the_history_policy_owner() -> None:
+    rows = [monitor(n, turn=f"poll-{n}") for n in range(6, 0, -1)]
+    for watch_only in (True, "true", False, "false", None):
+        todos = {"monitor_open_items": [{"todo_id": "todo_monitor_fixture",
+                 "target_key": "target-fixture", "claimed_by": AGENT,
+                 "watch_only": watch_only}]}
+        result = autonomous_replan_obligation_from_runs(rows, agent_todos=todos, agent_id=AGENT)
+        if watch_only in (True, "true"):
+            assert result is None
+        else:
+            assert result["triggers"][0]["kind"] == "dead_monitor_repeat"
+
+
 def test_genuinely_unknown_work_still_breaks_progress_streak() -> None:
     rows = [{**run(3), "progress_observation": observation()}, run(2),
             {**run(1), "progress_observation": observation()}]

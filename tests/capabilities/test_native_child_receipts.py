@@ -304,6 +304,56 @@ def test_cli_readback_and_disabled_policy_do_not_mutate(tmp_path: Path):
     assert "enabled multi_subagent" in json.loads(rejected.stdout)["error"]
 
 
+def test_cli_acknowledges_only_a_delivered_native_child_result(tmp_path: Path):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [{
+        "id": GOAL, "repo": str(tmp_path), "status": "active",
+        "registered_agents": [AGENT],
+        "spawn_policy": {"mode": "multi_subagent", "allowed": True, "max_children": 6},
+    }]}))
+    runtime_root = tmp_path / "runtime"
+    _admit(runtime_root)
+    operation_id = "op-result-1"
+    _record(runtime_root, operation_id, stage="decision", operation="spawn",
+            outcome="started", entrypoint_id="codex_native_tools", _host_observed=True)
+    _record(runtime_root, operation_id, stage="result", outcome="completed",
+            _host_observed=True, _host_result_text="Review result.")
+    listed = effect_runtime_result("multi_subagent.native_result_inbox", {
+        "operation": "list", "runtime_root": str(runtime_root),
+        "goal_id": GOAL, "agent_id": AGENT, "goal_ref": None,
+    })
+    created, = listed["items"]
+    effect_runtime_result("multi_subagent.native_result_inbox", {
+        "operation": "mark_delivered", "runtime_root": str(runtime_root),
+        "goal_id": GOAL, "agent_id": AGENT, "goal_ref": None,
+        "result_ids": [created["result_id"]],
+        "observed_at": "2026-11-13T00:00:00.000000+00:00",
+    })
+    command = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+               "--runtime-root", str(runtime_root), "--format", "json",
+               "native-child", "--goal-id", GOAL, "--agent-id", AGENT,
+               "--turn-instance-id", TURN, "acknowledge-result",
+               "--result-id", created["result_id"], "--disposition", "accepted"]
+    preview = subprocess.run(command, text=True, capture_output=True)
+    assert preview.returncode == 0, preview.stderr
+    assert json.loads(preview.stdout)["preview"] is True
+    assert len(effect_runtime_result("multi_subagent.native_result_inbox", {
+        "operation": "list", "runtime_root": str(runtime_root),
+        "goal_id": GOAL, "agent_id": AGENT, "goal_ref": None,
+    })["items"]) == 1
+    disabled = json.loads(registry.read_text())
+    disabled["goals"][0]["spawn_policy"]["allowed"] = False
+    registry.write_text(json.dumps(disabled))
+    applied = subprocess.run([*command, "--execute"], text=True, capture_output=True)
+    assert applied.returncode == 0, applied.stderr
+    assert effect_runtime_result("multi_subagent.native_result_inbox", {
+        "operation": "list", "runtime_root": str(runtime_root),
+        "goal_id": GOAL, "agent_id": AGENT, "goal_ref": None,
+    })["items"] == []
+
+
 def test_goal_status_only_attaches_reported_activity_to_enabled_goal(
     tmp_path: Path, monkeypatch,
 ):

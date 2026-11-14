@@ -61,6 +61,15 @@ def host_command_name(value: str) -> str:
     return shlex.quote(value)
 
 
+def render_host_cli_command(argv: list[str]) -> str:
+    """Render CLI argv for PowerShell launchers or the default host shell."""
+    if _is_windows_host() or argv[0].lower().endswith(".ps1"):
+        # A PowerShell script can receive a bare numeric argument as Int32.
+        # The LoopX launcher expects strings when it scans and forwards argv.
+        return " ".join([_powershell_command(argv[0]), *(powershell_literal(arg) for arg in argv[1:])])
+    return shlex.join(argv)
+
+
 def _is_windows_host() -> bool:
     """Whether printed commands target PowerShell instead of a POSIX shell."""
 

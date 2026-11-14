@@ -1516,3 +1516,40 @@ def test_authored_case_survives_source_change_and_revises_without_model_job(pack
     assert read_citation(**op, **citation)["text"].startswith("The native measurement")
     assert not list(scope["runtime_root"].glob("benchmark/trajectory-assessments/*/jobs/*"))
     assert "case_study" not in inspect_pack(**scope, pack_id=original["pack_id"])
+
+
+def test_human_attention_registration_discovery_and_evidence_need_no_analysis(pack):
+    scope, _, original, input_path, sources, _ = pack
+    data = json.loads(input_path.read_text())
+    citation = {"source_id": "source", "first_line": 2, "last_line": 2}
+    event = {"event_id": "human-input-1", "episode_id": "episode", "kind": "correction",
+             "necessity": "avoidable", "occurred_at": "2026-01-01T00:10:00Z",
+             "active": None, "request": None, "citation": citation}
+    text = json.dumps({"schema_version": "trajectory_human_attention_v1", "scope": data["scope"],
+                       "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T01:00:00Z",
+                       "complete": False, "events": [event, event]})
+    (sources / "attention.json").write_text(text)
+    data["human_attention_source_id"] = "attention"
+    data["sources"].append({"id": "attention", "artifact": "attention.json",
+                            "artifact_sha256": hashlib.sha256(text.encode()).hexdigest(), "first_line": 1, "text": text})
+    input_path.write_text(json.dumps(data))
+    registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Human observations")
+    assert registered["human_attention"]["projection"]["total"] == 1
+    view = inspect_pack(**scope)
+    assert view["job"] is None and view["result"] is None
+    projection = view["human_attention"]["projection"]
+    assert projection["active_ms"] is None and projection["wait_ms"] is None
+    assert projection["optimization_points"] == [{"kind": "correction", "event_ids": [event["event_id"]]}]
+    assert discover(**scope)["packs"][-1]["human_attention"] == view["human_attention"]
+    op = {**scope, "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
+    observed = read_citation(**op, **citation)
+    assert observed["text"].startswith("The native measurement")
+    with pytest.raises(PackUnavailable, match="analysis_key_mismatch"):
+        read_citation(**{**op, "analysis_key": original["analysis_key"]}, **citation)
+    assert "human_attention" not in inspect_pack(**scope, pack_id=original["pack_id"])
+    (sources / "attention.json").write_text("source replaced")
+    historical = inspect_pack(**scope)
+    assert historical["human_attention"]["applicability"] == "historical"
+    assert historical["human_attention"]["projection"] == projection
+    assert read_citation(**op, **citation)["applicability"] == "historical"
+    assert not list(scope["runtime_root"].glob("benchmark/trajectory-assessments/*/jobs/*"))

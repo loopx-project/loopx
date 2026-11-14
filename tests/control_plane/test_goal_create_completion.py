@@ -240,6 +240,89 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("mode", ["soft_claim", "hard_lease"])
+def test_confirmed_task_start_recovers_the_same_claim_and_dispatch(environment, app, monkeypatch, provider, mode):
+    import runpy
+
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, _, _, project, runtime = environment
+    store, request, service = app
+    configure(provider, mode=mode)
+    goal = preview_goal(request)
+    status, created = request(f"/api/actions/{goal['proposal_id']}/apply", {})
+    assert status == 200, created
+
+    capture, binary = runtime / "task-native-requests.jsonl", runtime / "task-codex"
+    source = runpy.run_path(str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py"))["FAKE_CODEX"]
+    binary.write_text(source.replace('    method = request.get("method")',
+        f'    with open({str(capture)!r}, "a") as stream:\n        stream.write(json.dumps(request) + "\\n")\n'
+        '    method = request.get("method")'))
+    binary.chmod(0o700)
+    chat = ChatSessionStore(runtime / "chat")
+    controller = ChatRuntimeController(store=chat, codex_bin=str(binary), registry_path=service.registry_path,
+        project_contexts=ChatProjectContexts([project]))
+    service.chat_store, service.runtime_controller = chat, controller
+
+    try:
+        status, preview = request("/api/actions/preview", {
+            "action_kind": "todo.create", "summary": "Start the appendix check", "idempotency_key": "start-appendix",
+            "context": {"kind": "goal", "goal_id": "report"},
+            "normalized_parameters": {"goal_id": "report", "text": "Verify the supporting appendix",
+                                      "agent_id": "codex", "start_execution": True},
+        })
+        assert status == 201, preview
+        proposal_id = preview["proposal"]["proposal_id"]
+        apply = f"/api/actions/{proposal_id}/apply"
+        save_checkpoint = store.save_checkpoint
+
+        service.runtime_controller = None
+        status, unavailable = request(apply, {})
+        assert status == 400 and "Runtime Controller" in unavailable["error"], unavailable
+        todo_id = store.load(proposal_id)["checkpoint"]["steps"]["todo_created"]["todo_id"]
+        partial = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="report", include_leases=True)
+        assert [todo.get("claimed_by") for todo in partial["todos"] if todo["todo_id"] == todo_id] == [None]
+        assert partial["leases"] == []
+        service.runtime_controller = controller
+
+        def lose_claim_response(*args, **kwargs):
+            if kwargs.get("step") == "todo_assigned":
+                raise OSError("Lost the response after committing the Task assignment")
+            return save_checkpoint(*args, **kwargs)
+
+        monkeypatch.setattr(store, "save_checkpoint", lose_claim_response)
+        status, failed = request(apply, {})
+        assert status == 424, failed
+        assert store.load(proposal_id)["checkpoint"]["steps"]["todo_created"]["todo_id"] == todo_id
+        authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="report", include_leases=True)
+        assert [todo["claimed_by"] for todo in authority["todos"] if todo["todo_id"] == todo_id] == ["codex"]
+        assert chat.list_sessions(goal_id="report") == []
+
+        monkeypatch.setattr(store, "save_checkpoint", save_checkpoint)
+        status, recovered = request(apply, {})
+        assert status == 202, recovered
+        ids = recovered["proposal"]["receipt"]["resource_ids"]
+        assert ids["todo_id"] == todo_id
+        turn = controller.wait_for_turn(session_id=ids["session_id"], turn_id=ids["turn_id"], timeout_sec=10)
+        assert turn["status"] == "completed"
+        sessions = chat.list_sessions(goal_id="report")
+        assert [session["channel_id"] for session in sessions] == [f"task.{todo_id}"]
+        messages = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert [row["params"]["sandbox"] for row in messages if row.get("method") == "thread/start"] == ["workspace-write"]
+        assert sum(row.get("method") == "turn/start" for row in messages) == 1
+        status, replay = request(apply, {})
+        assert status == 202 and replay["proposal"]["receipt"] == recovered["proposal"]["receipt"]
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="report", include_leases=True) == authority
+        assert [(lease["todo_id"], lease["owner"]) for lease in authority["leases"]] == (
+            [(todo_id, "codex")] if mode == "hard_lease" else [])
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("completion_surface", ["native-cli", "external-worker"])
 def test_ordinary_goal_replans_after_first_todo_and_delivers_the_missing_section(environment, app, monkeypatch, provider, completion_surface):
     """Real creation, native CLI and authority; only the work decision is scripted."""

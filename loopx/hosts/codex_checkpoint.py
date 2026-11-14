@@ -173,15 +173,18 @@ def _idle_native_reader(env: dict[str, str], *, timeout: float, deadline: float,
 
 
 def native_idle_turn(env: dict[str, str], session_id: str, *, process_started_at: float,
-                     timeout: float = 30, sealed_store_paths: tuple[str, ...] | None = None) -> dict[str, Any]:
-    """Observe a stable completed history predating an uncertain Host launch.
+                     process_stopped_at: float | None = None, timeout: float = 30,
+                     sealed_store_paths: tuple[str, ...] | None = None) -> dict[str, Any]:
+    """Observe a stable idle session at a stopped Host's process boundary.
 
-    The caller separately proves the original namespace stopped, seals its
-    source, and explicitly requests a finite handoff. This read neither retries
-    the failed Host nor turns its failure into a completed native Turn.
+    With a verified completed process window, require its last native Turn
+    inside that window. Otherwise require completed history before the
+    uncertain launch. The caller owns source termination and phase admission.
     """
     if (not session_id or any(type(v) not in (int, float) or not math.isfinite(v)
-            for v in (process_started_at, timeout)) or timeout <= 0):
+            for v in (process_started_at, timeout)) or timeout <= 0
+            or (process_stopped_at is not None and (type(process_stopped_at) not in (int, float)
+                or not math.isfinite(process_stopped_at) or process_stopped_at < process_started_at))):
         raise ValueError("Native idle readback requires its original process boundary")
     deadline = time.monotonic() + timeout
     with _idle_native_reader(env, timeout=timeout, deadline=deadline,
@@ -194,14 +197,18 @@ def native_idle_turn(env: dict[str, str], session_id: str, *, process_started_at
             return transport.request(method, params)
         _native_thread_readback(request, env, session_id)
         turns = _complete_history(request, session_id)
+        tail = turns[-1]
         for turn in turns:
             start, end = turn.get("startedAt"), turn.get("completedAt")
             if (any(type(v) not in (int, float) or not math.isfinite(v) for v in (start, end))
-                    or not start <= end < math.floor(process_started_at)
-                    or any(item.get("status") in {"inProgress", "running", "pending"}
-                           for item in turn.get("items", []))):
+                    or start > end or any(item.get("status") in {"inProgress", "running", "pending"}
+                                          for item in turn.get("items", []))):
                 raise ValueError("Native history is not idle before the original Host")
-        tail = turns[-1]
+            if turn is tail and process_stopped_at is not None:
+                if not math.floor(process_started_at) <= start <= end <= process_stopped_at:
+                    raise ValueError("Native completed Turn is outside the original Host process")
+            elif end >= math.floor(process_started_at):
+                raise ValueError("Native history is not idle before the original Host")
         if tail.get("error") is not None:
             raise ValueError("Native idle cursor retains an error")
         encoded = json.dumps(turns, sort_keys=True, separators=(",", ":")).encode()
@@ -210,7 +217,8 @@ def native_idle_turn(env: dict[str, str], session_id: str, *, process_started_at
             raise ValueError("Native idle history advanced during readback")
         return {"session_id": session_id, "turn_id": tail["id"], "status": "completed",
                 "completed_at": tail["completedAt"], "turn_count": len(turns),
-                "visible_history_sha256": hashlib.sha256(encoded).hexdigest()}
+                "visible_history_sha256": hashlib.sha256(encoded).hexdigest(),
+                **({"started_at": tail["startedAt"]} if process_stopped_at is not None else {})}
 
 
 def native_failure_error_digest(error: Any, *, cli_projection: bool = False) -> str:

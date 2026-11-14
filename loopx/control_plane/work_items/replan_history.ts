@@ -9,6 +9,7 @@ import { projectTodoResumePlanning } from "../todos/resume_planning.ts";
 import { monitorIsActive } from "../todos/summary_lanes.ts";
 import { authorityUnicodeCompare } from "../coordination/authority_store_codec.ts";
 import { qualifySettlementHistory } from "../quota/settlement_phase.ts";
+import { MONITOR_TARGET_SCHEMA } from "../scheduler/monitor_successor.ts";
 import { normalizeStrideStrategy } from "./stride_policy.ts";
 
 export const PROGRESS_RESULT_CLASSES = [
@@ -22,6 +23,7 @@ interface Progress {
 }
 interface Monitor {
   target: string | null;
+  targetSchema: string | null;
   mode: string | null;
   material: boolean | null;
   frontier: string | null;
@@ -46,6 +48,8 @@ interface MonitorTodo {
   claim: string | null;
   publicClaim: string | null;
   target: string;
+  targetKey: string | null | undefined;
+  watchOnly: boolean;
   count: number;
   due: number | null;
   expiry: number | null;
@@ -161,6 +165,7 @@ function decode(value: unknown): Request {
         progress: decodeProgress(row.progress),
         monitor: {
           target: optionalNonEmptyString(monitor.target_id, "target_id"),
+          targetSchema: optionalNonEmptyString(monitor.target_schema, "target_schema"),
           mode: optionalNonEmptyString(monitor.mode, "mode"),
           material: monitor.material_change == null
             ? null : requireBoolean(monitor.material_change, "material_change"),
@@ -176,6 +181,8 @@ function decode(value: unknown): Request {
         id: optionalNonEmptyString(row.id, "monitor.id"), claim: optionalNonEmptyString(row.claim, "claim"),
         publicClaim: optionalNonEmptyString(row.public_claim, "public_claim"),
         target: text(row.target, "monitor.target"),
+        targetKey: row.target_key === undefined ? undefined : optionalNonEmptyString(row.target_key, "monitor.target_key"),
+        watchOnly: row.watch_only === undefined ? false : requireBoolean(row.watch_only, "watch_only"),
         count: integer(row.no_change_count, "no_change_count", Number.MIN_SAFE_INTEGER),
         due: time(row.due_at, "due_at"), expiry: time(row.expires_at, "expires_at"),
       })),
@@ -323,6 +330,7 @@ function monitorTrigger(runs: readonly Run[], request: Request): Trigger | null 
     };
   }
   const repeated = signals.filter(run => (run.monitor.todo || run.monitor.key) &&
+    !isIntentionalWatch(run, request, signals[0]!.observedAt) &&
     ["due_monitor_observed_without_material_transition", "external_monitor_observed_without_material_transition"]
       .includes(run.monitor.mode!)).slice(0, request.monitor);
   const target = sole(repeated.map(run => run.monitor.target));
@@ -333,9 +341,22 @@ function monitorTrigger(runs: readonly Run[], request: Request): Trigger | null 
     latest_generated_at: repeated[0]!.generatedAt, agent_id: sole(repeated.map(run => run.agent)),
   };
 }
+function isIntentionalWatch(run: Run, request: Request, observedAt: number | null): boolean {
+  const digest = run.monitor.targetSchema === MONITOR_TARGET_SCHEMA;
+  const agent = run.monitorAgent ?? (digest ? null : request.monitorAgent);
+  if (!agent) return false;
+  const target = run.monitor.key ?? (digest ? null : run.monitor.target);
+  return request.todos.monitors.some(row => {
+    if (!row.watchOnly || (row.claim && row.claim !== agent) ||
+        (run.monitor.todo ? row.id !== run.monitor.todo : !run.monitor.key) ||
+        (row.expiry !== null && (observedAt === null || !monitorIsActive({expiresAt: row.expiry}, observedAt)))) return false;
+    const legacyLabel = row.targetKey === undefined || (!digest && !run.monitor.key && row.targetKey === null);
+    return (legacyLabel ? row.target : row.targetKey) === target;
+  });
+}
 function monitorStreak(request: Request): Trigger | null {
   const frontier = request.operation === "frontier_monitor_streak";
-  const stalled = request.todos.monitors.filter(row => row.count >= request.streak &&
+  const stalled = request.todos.monitors.filter(row => !row.watchOnly && row.count >= request.streak &&
     (request.observedAt === null || monitorIsActive({expiresAt: row.expiry}, request.observedAt)))
     .sort((a, b) => b.count - a.count || (frontier ? authorityUnicodeCompare(a.target, b.target) : 0))[0];
   if (!stalled || !frontier && request.todos.advancements.some(row => row.status === "open" &&
