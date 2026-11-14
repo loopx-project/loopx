@@ -6,8 +6,11 @@ import {PostgreSqlAuthorityService} from "./postgresql_authority_service.ts";
 import type {PostgreSqlAuthorityDatabase} from "./postgresql_authority_store.ts";
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "./todo_update.ts";
+import {executeCoordinationTodoCreate} from "./todo_create.ts";
+import {executeCoordinationTodoTerminalLifecycle} from "./todo_terminal_lifecycle.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "./task_lease_lifecycle.ts";
 import {leaseVersion, leaseEpoch} from "../work_items/task_lease_acquire.ts";
+import {TODO_DOMAIN_ITEM_SCHEMA} from "./coordination_state_contract.ts";
 import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
 import {decodeRemoteAuthorityRequest, remoteAuthorityOperationId, remoteAuthorityResponse,
   type RemoteAuthorityMode, type RemoteAuthorityRequest} from "./remote_authority_contract.ts";
@@ -80,7 +83,8 @@ function pinnedStore(store: AuthorityStore, identity: string, admission: JsonObj
 function commandResult(result: JsonObject): JsonObject {
   const output: JsonObject = {};
   for (const key of ["status", "reason_code", "changed", "todo_id", "claimed_by", "operation_id",
-    "claim_operation_id", "provider_revision", "cursor", "handoff_mode", "released", "renewed", "missing"]) {
+    "claim_operation_id", "provider_revision", "cursor", "handoff_mode", "released", "renewed", "missing",
+    "completed", "completion_receipt_id", "evidence", "receipt_sha256"]) {
     if (Object.hasOwn(result, key)) output[key] = result[key];
   }
   if (result.lease && typeof result.lease === "object" && !Array.isArray(result.lease)) {
@@ -88,6 +92,10 @@ function commandResult(result: JsonObject): JsonObject {
     output.lease = {...Object.fromEntries(["goal_id", "todo_id", "owner", "idempotency_key", "status",
       "acquired_at", "updated_at", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]])),
       version: leaseVersion(lease), lease_epoch: leaseEpoch(lease)};
+  }
+  if (result.todo && typeof result.todo === "object" && !Array.isArray(result.todo)) {
+    const todo = result.todo as JsonObject;
+    output.todo = Object.fromEntries(["todo_id", "status", "role", "priority", "claimed_by", "note"].filter(k => k in todo).map(k => [k, todo[k]]));
   }
   return output;
 }
@@ -101,7 +109,7 @@ export class RemoteAuthorityService {
     try { request = decodeRemoteAuthorityRequest(raw); }
     catch { return {status: "rejected", reason_code: "invalid_remote_authority_request"}; }
     const reply = (payload: JsonObject) => remoteAuthorityResponse(request, mode, payload);
-    if (mode !== "execute" && mode !== "recover" || mode === "recover" && request.operation === "read") {
+    if (mode !== "execute" && mode !== "recover" || mode === "recover" && (request.operation === "read" || request.operation === "snapshot")) {
       return reply({status: "rejected", reason_code: "invalid_remote_authority_mode"});
     }
     let admission: RemoteAuthorityAdmission;
@@ -125,7 +133,7 @@ export class RemoteAuthorityService {
     const store = pinnedStore(opened.store, request.store_identity, binding, operationId);
     let dispatched = false;
     try {
-      const previous = request.operation === "read" ? null : await store.readReceipt(operationId);
+      const previous = (request.operation === "read" || request.operation === "snapshot") ? null : await store.readReceipt(operationId);
       if (previous?.status === "found") {
         const original = previous.receipts[0];
         const recorded = original?.remote_admission as JsonObject | undefined;
@@ -161,6 +169,47 @@ export class RemoteAuthorityService {
           lease: lease ? {...Object.fromEntries(["owner", "status", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]])),
             version: leaseVersion(lease), lease_epoch: leaseEpoch(lease)} : null});
       }
+      if (request.operation === "snapshot") {
+        const todos = [...index.todos.values()]
+          .filter(t => !request.todo_id || t.todo_id === request.todo_id)
+          .map(t => {
+            const projected = Object.fromEntries(
+              ["todo_id", "status", "role", "priority", "claimed_by", "note"]
+                .filter(k => k in t)
+                .map(k => [k, t[k]]),
+            );
+            if (Object.hasOwn(projected, "note") && Buffer.byteLength(JSON.stringify(projected.note)) > MAX_READ_NOTE_BYTES) {
+              delete projected.note;
+              projected.note_omitted = true;
+            }
+            return projected;
+          });
+        const leases = [...index.leases.values()]
+          .filter(l => !request.todo_id || l.todo_id === request.todo_id)
+          .map(l => ({
+            ...Object.fromEntries(["goal_id", "todo_id", "owner", "status", "expires_at"].filter(k => k in l).map(k => [k, l[k]])),
+            version: leaseVersion(l),
+            lease_epoch: leaseEpoch(l),
+          }));
+        const receiptSha = canonicalAuthoritySha256({
+          schema_version: "loopx_goal_snapshot_receipt_v0",
+          tenant_id: request.tenant_id,
+          goal_id: request.goal_id,
+          store_identity: request.store_identity,
+          provider_revision: head.provider_revision,
+          todos,
+          leases,
+        });
+        return reply({
+          status: "snapshot",
+          provider_revision: head.provider_revision,
+          store_identity: request.store_identity,
+          goal_id: request.goal_id,
+          receipt_sha256: receiptSha,
+          todos,
+          leases,
+        });
+      }
       if (head.head.handoff_mode !== "hard_lease") return reply({status: "rejected", reason_code: "remote_authority_requires_hard_lease"});
       const now = this.#dependencies.now?.() ?? new Date();
       if (!Number.isFinite(now.valueOf())) return reply({status: "unavailable", reason_code: "remote_authority_clock_unavailable"});
@@ -175,7 +224,57 @@ export class RemoteAuthorityService {
         operation_id: operationId, actor_agent_id: request.actor_id, expected_role: "agent", dry_run: false,
         claim_operation_id: remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id),
         patch: {note: request.note}, clear_fields: []});
-      else result = await executeCanonicalTaskLeaseLifecycle(store, {...common, operation: request.operation,
+      else if (request.operation === "complete") {
+        const claimOpId = remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id);
+        result = await executeCoordinationTodoTerminalLifecycle(store, {
+          goal_id: request.goal_id, todo_id: request.todo_id, command: "complete",
+          expected_role: "agent", actor_agent_id: request.actor_id,
+          registered_agents: admission.registered_agents, lifecycle_grants: [], authority_reason: null,
+          decision_outcome: null, operation_identity: {kind: "explicit", operation_id: operationId},
+          claim_operation_id: claimOpId, lease_idempotency_key: null, lease_expected_version: null,
+          allow_user_gate_auto_acquire: false, requested_no_followup: true,
+          requested_completion_turn_key: null, requested_completion_identity_source: null,
+          linked_successor_todo_ids: [], successor_intents: [], note: request.note ?? null,
+          evidence: request.evidence, reason: null, clear_claim: true, validation_declaration: null,
+          validation_receipt: null, completion_policy_request: null, dry_run: false, now,
+        });
+        if (result.status === "applied") result.completed = true;
+      } else if (request.operation === "block" || request.operation === "defer") {
+        const claimOpId = request.claim_request_id
+          ? remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id)
+          : undefined;
+        result = await executeCoordinationTodoUpdate(store, {
+          ...common, operation_id: operationId, actor_agent_id: request.actor_id,
+          expected_role: "agent", dry_run: false, ...(claimOpId ? {claim_operation_id: claimOpId} : {}),
+          patch: {...(request.note ? {note: request.note} : {})}, clear_fields: [],
+          planning_intent: {
+            status: request.operation === "block" ? "blocked" : "deferred",
+            reason: request.reason,
+            ...(request.resume_when ? {resume_when: request.resume_when} : {}),
+          },
+        });
+      } else if (request.operation === "todo_add") {
+        const todoRecord = {
+          schema_version: TODO_DOMAIN_ITEM_SCHEMA,
+          todo_id: request.todo_id,
+          role: request.role ?? "agent",
+          status: "open",
+          done: false,
+          text: request.text,
+          archive_state: "active",
+          ...(request.priority ? {priority: request.priority} : {}),
+          ...(request.task_class ? {task_class: request.task_class} : {}),
+          ...(request.action_kind ? {action_kind: request.action_kind} : {}),
+          ...(request.task_repository ? {task_repository: request.task_repository} : {}),
+          ...(request.required_write_scopes ? {required_write_scopes: [...request.required_write_scopes]} : {}),
+          ...(request.claimed_by ? {claimed_by: request.claimed_by} : {}),
+          ...(request.note ? {note: request.note} : {}),
+        };
+        result = await executeCoordinationTodoCreate(store, {
+          goal_id: request.goal_id, todo: todoRecord, actor_agent_id: request.actor_id,
+          registered_agents: admission.registered_agents, operation_id: operationId, dry_run: false, now,
+        });
+      } else result = await executeCanonicalTaskLeaseLifecycle(store, {...common, operation: request.operation,
         owner: request.actor_id, idempotency_key: request.idempotency_key, required_handoff_mode: "hard_lease",
         expected_version: request.expected_version, ttl_seconds: request.operation === "renew" ? request.ttl_seconds : null});
       return reply({status: "result", operation_id: operationId, result: commandResult(result)});

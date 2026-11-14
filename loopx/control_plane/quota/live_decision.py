@@ -971,6 +971,24 @@ def build_live_quota_should_run_decision(
         registry_path=registry_path,
         runtime_root=runtime_root,
     )
+    from ..coordination.remote_authority_gateway import (
+        is_remote_authority_goal,
+        check_remote_authority_gateway_status,
+        get_remote_authority_projection,
+    )
+    goals = registry_goal_by_id(decision_status_payload)
+    if is_remote_authority_goal(goal_id, goals):
+        gateway_status = check_remote_authority_gateway_status(goal_id, goals)
+        if gateway_status and gateway_status.get("ok") is False:
+            payload["ok"] = False
+            payload["should_run"] = False
+            payload["status"] = gateway_status.get("status", "unavailable")
+            payload["reason_code"] = gateway_status.get("reason_code", "remote_authority_unreachable")
+            payload["reason"] = gateway_status.get("reason", "Remote authority unavailable")
+            payload["remote_gateway"] = gateway_status.get("remote_gateway")
+        else:
+            payload["remote_gateway"] = get_remote_authority_projection(goal_id, goals)
+
     from ..work_items.context_readback import attach_work_context
 
     attach_work_context(payload, registry_path=registry_path, runtime_root=runtime_root,

@@ -40,7 +40,7 @@ The policy schema is `loopx_remote_authority_policy_v0`:
       "tenant_id": "tenant-one",
       "goal_id": "goal-one",
       "actor_id": "actor-a",
-      "operations": ["read", "claim", "progress", "renew", "release"]
+      "operations": ["read", "claim", "progress", "renew", "release", "complete", "block", "defer", "todo_add", "snapshot"]
     }]
   }]
 }
@@ -70,6 +70,11 @@ POST JSON to `/v0/tasks/execute` with a `Bearer` credential. Every command inclu
 | `progress` | `request_id`, `claim_request_id`, `note` | Update a note using the original claim and current execution fence. |
 | `renew` | `idempotency_key`, `expected_version`, `ttl_seconds` | Renew the current lease through the existing lifecycle owner. |
 | `release` | `idempotency_key`, `expected_version` | Release execution; this does not clear the task's assignment or complete it. |
+| `complete` | `request_id`, `claim_request_id`, `evidence`, `note?` | Settle task completion with verified evidence string, release lease, and generate receipt. |
+| `block` | `request_id`, `reason`, `claim_request_id?`, `resume_when?`, `note?` | Pause task as blocked with explicit reason, releasing execution lease. |
+| `defer` | `request_id`, `reason`, `resume_when`, `claim_request_id?`, `note?` | Defer task with resumption condition and rationale, releasing execution lease. |
+| `todo_add` | `request_id`, `text`, `priority?`, `role?`, ... | Create a canonical task under policy grant and tenant fence. |
+| `snapshot` | `todo_id?` (optional) | Read-only projection of Goal todos, leases, and deterministic cross-machine receipt digest. |
 
 Use the lease key/version returned by claim or renewal for lifecycle commands.
 Progress names the original claim's client `request_id`; normal activity can
