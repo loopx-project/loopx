@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { access, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {planTodoCreationPriority, readTodoPriority} from "../todos/priority.ts";
-import { monitorSuccessorIntent, monitorSuccessorRoute, monitorSuccessorPriorities } from "../scheduler/monitor_successor.ts";
+import { MONITOR_TARGET_SCHEMA, monitorSuccessorIntent, monitorSuccessorRoute, monitorSuccessorPriorities } from "../scheduler/monitor_successor.ts";
 import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
 import { normalizeMonitorChangeScope } from "../todos/monitor_scope.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
@@ -54,7 +54,6 @@ export const QUOTA_MONITOR_POLL_COMMIT_RECEIPT_SCHEMA =
 const MONITOR_PENDING_ADMISSION_SCHEMA = "quota_monitor_poll_pending_admission_v1";
 export const QUOTA_MONITOR_POLL_CLASSIFICATION = "quota_monitor_poll";
 
-const MONITOR_TARGET_SCHEMA = "quota_monitor_target_v0";
 const MONITOR_TODO_PROVIDER_PLAN_SCHEMA = "monitor_poll_todo_provider_plan_v0";
 const LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA = "monitor_poll_todo_provider_plan_v1";
 const MONITOR_TODO_WRITEBACK_SCHEMA = "monitor_poll_todo_writeback_v0";
