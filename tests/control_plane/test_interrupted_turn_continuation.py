@@ -1,7 +1,13 @@
 """Interrupted work must remain runnable rather than acquire a fictitious wait."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import shlex
+
+import pytest
+
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _run_generated_cli,
@@ -10,20 +16,33 @@ from test_quota_settlement_cli import (
 )
 
 
-def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Path) -> None:
+@pytest.mark.parametrize("c1_capture", [False, True], ids=["codex", "antigravity-c1"])
+def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Path, c1_capture: bool) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     prior_turn = "interrupted-original"
     recovery_turn = "interrupted-recovery"
+    capture_root = tmp_path / "private captures"
+    capture_root.mkdir(mode=0o700)
+    transport = (
+        ("--antigravity_app", "--turn-envelope", "--context-delivery", "auto",
+         "--decision-output-root", str(capture_root))
+        if c1_capture else ("--codex-app",)
+    )
 
     def guard(turn: str):
+        before = set(capture_root.glob("*/decision.json"))
         rc, result = _run_cli(
-            registry, runtime, "quota", "should-run", "--codex-app",
+            registry, runtime, "quota", "should-run", *transport,
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
             "--turn-instance-id", turn, "--todo-id", TODO_ID,
         )
         assert rc == 0, result
+        if c1_capture:
+            decision, = set(capture_root.glob("*/decision.json")) - before
+            result = json.loads(decision.read_text())
+            assert_complete_turn_decision(result)
         return result
 
     admitted = guard(prior_turn)
@@ -33,10 +52,18 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
     assert interrupted["unsettled_host_turn_recovery"]["repair"] == "resume_prior_turn"
     actions = interrupted["interaction_contract"]["cli_channel"]["next_cli_actions"]
     assert not any("--resume-when" in action for action in actions)
+    if c1_capture:
+        for action in (actions[1], actions[-1]):
+            argv = shlex.split(action)
+            assert "--turn-envelope" in argv and "--complete-turn" not in argv
+            assert argv[argv.index("--decision-output-root") + 1] == str(capture_root)
+            assert argv[argv.index("--context-delivery") + 1] == "auto"
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_before = state_path.read_bytes()
     rc, resumed = _run_generated_cli(actions[1], registry_path=registry)
     assert rc == 0, resumed
+    if c1_capture:
+        assert_complete_turn_decision(resumed)
     assert state_path.read_bytes() == state_before
     assert resumed["effective_action"] != "unsettled_host_turn_recovery", resumed
     assert resumed["selected_todo"]["todo_id"] == TODO_ID
@@ -64,6 +91,8 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
     assert _spend_run_count(runtime) == 1
     rc, next_guard = _run_generated_cli(actions[-1], registry_path=registry)
     assert rc == 0, next_guard
+    if c1_capture:
+        assert_complete_turn_decision(next_guard)
     assert next_guard["effective_action"] != "unsettled_host_turn_recovery", next_guard
     assert next_guard["selected_todo"]["todo_id"] == TODO_ID
 

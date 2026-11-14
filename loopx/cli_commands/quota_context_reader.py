@@ -13,6 +13,7 @@ from typing import Any
 from ..command_invocation import current_loopx_cli_argv, same_context_reader_route, validate_context_reader_route
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
@@ -88,6 +89,41 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         return
     if not isinstance(template, str):
         return
+    command = _bind_capture_transport_options(template, args, root=root, capture_root=capture_root)
+    if isinstance(selection, dict):
+        selection["command_args_template"] = command
+    else:
+        from ..control_plane.work_items.interaction_contract import bind_cli_turn_selection_action
+
+        bind_cli_turn_selection_action(payload, previous=template, command=command)
+
+
+def bind_capture_recovery_transport(payload: dict[str, Any], args: argparse.Namespace, *,
+                                    capture_directory: Path | None, registry_path: Path,
+                                    runtime_root: Path) -> None:
+    """Keep a caller-owned envelope on the recovery guards emitted by the quota owner."""
+    if (payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
+            or capture_directory is None or not getattr(args, "turn_envelope", False)
+            or any(getattr(args, name, None) for name in (
+                "decision_handoff_socket", "codex_context_dir", "codex_context_root",
+            ))):
+        # Session-local transports have their own continuity and cannot follow a prior Turn.
+        return
+    from ..control_plane.work_items.action_selection_contract import render_cli_command_prefix
+
+    cli = payload["interaction_contract"]["cli_channel"]
+    prefix = render_cli_command_prefix(runtime_root=str(runtime_root), registry_path=str(registry_path))
+    guard_prefix = prefix + " --format json quota should-run "
+    root = getattr(args, "decision_output_root", None)
+    cli["next_cli_actions"] = [
+        _bind_capture_transport_options(action, args, root=root, capture_root=capture_directory.parent)
+        if action.startswith(guard_prefix) else action
+        for action in cli["next_cli_actions"]
+    ]
+
+
+def _bind_capture_transport_options(template: str, args: argparse.Namespace, *,
+                                    root: str | None, capture_root: Path | None) -> str:
     words = shlex.split(template)
     options: dict[str, str] = {}
     # A saved guard already carries its capture root. Preserve it unless this
@@ -95,9 +131,9 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     selected_root = root if root is not None else capture_root
     if selected_root is not None and (root is not None or "--decision-output-root" not in words):
         options["--decision-output-root"] = str(Path(selected_root).expanduser().absolute())
-    if handoff:
+    if handoff := getattr(args, "decision_handoff_socket", None):
         options["--decision-handoff-socket"] = handoff
-    # Selection is part of the same Turn, including a caller's explicit opt-out.
+    # Preserve a caller's explicit opt-out as well as opt-in.
     if getattr(args, "context_delivery", None) is not None:
         options["--context-delivery"] = args.context_delivery
     if getattr(args, "delta_delivery", None) is not None:
@@ -125,17 +161,11 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         while option in words[start:]:
             index = words.index(option, start)
             del words[index:index + 2]
-    if turn_envelope and "--turn-envelope" not in words:
+    if getattr(args, "turn_envelope", False) and "--turn-envelope" not in words:
         words.append("--turn-envelope")
-    if complete_turn and "--complete-turn" not in words:
+    if getattr(args, "complete_turn", False) and "--complete-turn" not in words:
         words.append("--complete-turn")
-    command = shlex.join(words)
-    if isinstance(selection, dict):
-        selection["command_args_template"] = command
-    else:
-        from ..control_plane.work_items.interaction_contract import bind_cli_turn_selection_action
-
-        bind_cli_turn_selection_action(payload, previous=template, command=command)
+    return shlex.join(words)
 
 
 def _observed_read_presentation(fields: dict[str, Any], text_append: dict[str, Any] | None = None) -> dict[str, Any]:

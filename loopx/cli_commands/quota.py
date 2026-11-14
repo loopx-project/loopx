@@ -22,6 +22,7 @@ from .quota_capture import (
     handle_native_context_command, prepare_quota_capture,
     native_context_activation, progressive_context_or_current, quota_context_surface,
 )
+from .quota_context_reader import bind_capture_recovery_transport
 from ..control_plane.turn_driver.decision_capture import project_captured_context
 from ..usage_goal import observe_quota_result
 
@@ -357,6 +358,9 @@ def _prepare_quota_result_context(
         runtime_root=context.runtime_root if context is not None else None)
     bind_capture_selection_transport(payload, args, capture_directory=capture_directory,
         retain_delivery_options=complete_source)
+    if args.quota_command == "should-run" and context is not None:
+        bind_capture_recovery_transport(payload, args, capture_directory=capture_directory,
+            registry_path=registry_path, runtime_root=context.runtime_root)
     if capture_directory is not None and payload.get("replan_action_packet"):
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": reader_argv}
