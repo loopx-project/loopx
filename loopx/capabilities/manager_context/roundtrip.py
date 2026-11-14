@@ -794,10 +794,9 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     # Keep one eligibility instant for the scan. The per-return transaction
     # observes its own time after acquiring the route and source guards.
     scan_at = clock()
-    try:
-        exact = load_project_registry(registry).get("profile_id") == SOURCE_SESSION_PROFILE_ID
-    except (OSError, ValueError, TypeError):
-        exact = False
+    # An unreadable registry cannot authorize legacy delivery. Let the hosted
+    # worker retry the scan without advancing any of its receipts.
+    exact = load_project_registry(registry).get("profile_id") == SOURCE_SESSION_PROFILE_ID
     processed = 0
     host = {
         "root": root, "registry": registry, "store": store,

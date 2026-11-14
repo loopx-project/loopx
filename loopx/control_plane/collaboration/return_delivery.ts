@@ -212,8 +212,13 @@ function unavailableRecord(error: unknown): boolean {
     || typeof (error as NodeJS.ErrnoException)?.code === "string";
 }
 
+function deliveryProfileMatches(command: ReturnCommand, state: JsonObject): boolean {
+  // A legacy transition cannot honor a persisted exact identity or admission.
+  return command.exact || (state.goal_ref == null && state.status !== "admitted" && state.admission == null);
+}
+
 function pendingDelivery(command: ReturnCommand, state: JsonObject): boolean {
-  if (TERMINAL.has(String(state.status))) return false;
+  if (TERMINAL.has(String(state.status)) || !deliveryProfileMatches(command, state)) return false;
   if (!command.exact || state.status !== "admitted") {
     if (state.retry_at && command.nowMicros < returnClockMicros(state.retry_at)) return false;
   }
@@ -551,6 +556,9 @@ export async function transactManagerReturnDelivery(value: unknown): Promise<Jso
     catch (error) {
       if (command.request.phase === "prepare" && unavailableRecord(error)) return returnResponse();
       throw error;
+    }
+    if (!deliveryProfileMatches(command, state)) {
+      throw new EffectRuntimeRequestError("saved return requires the exact delivery profile");
     }
     return command.request.phase === "prepare" ? prepareReturn(command, state) : finishReturn(command, state);
   });
