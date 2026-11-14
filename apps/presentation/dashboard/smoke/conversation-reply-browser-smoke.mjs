@@ -11,10 +11,12 @@ import {launchBrowser, loadPlaywright} from "../../../../examples/dashboard-brow
 
 const repo = resolve(import.meta.dirname, "../../../..");
 const returnedFiles = process.argv.includes("--returned-files");
+const historyImages = process.argv.includes("--history-images");
 const output = resolve(process.env.LOOPX_REPLY_OUTPUT ?? resolve(repo, "output/playwright/conversation-reply"));
 await mkdir(output, {recursive: true});
 const child = spawn(resolveTestPython({repoRoot: repo}), ["-u",
-  "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py", returnedFiles ? "--returned-files" : "--reply-context"],
+  "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py", returnedFiles ? "--returned-files" : "--reply-context",
+  ...(historyImages ? ["--history-images"] : [])],
   {cwd: repo, env: {...process.env, LOOPX_USAGE_PING: "0"}, stdio: ["pipe", "pipe", "pipe"]});
 const exited = once(child, "exit"), queue = [], waiting = [];
 let stderr = "", browser;
@@ -118,6 +120,70 @@ async function checkReturnedFiles(ready, page, errors, writes) {
   console.log(baseline ? "returned-files-browser: baseline reproduced (published files omitted from history and full reader; zero model Turns or repeat sends)"
     : "returned-files-browser: passed (real publisher, bound source, original history/reader, byte-exact downloads, desktop/narrow, keyboard, English, zero model Turns or repeat sends)");
 }
+
+async function checkHistoryImages(ready, page, errors, writes) {
+  const {old, current} = ready.historyImages;
+  const requests = [];
+  const responses = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (url.origin === ready.origin && url.pathname.includes("/images/")) requests.push(url.pathname);
+  });
+  page.on("response", response => {
+    const url = new URL(response.url());
+    if (url.origin === ready.origin && url.pathname.includes(`/messages/${old}/images/`))
+      responses.push({path: url.pathname, status: response.status()});
+  });
+  const requested = id => requests.filter(path => path.includes(`/messages/${id}/images/`)).length;
+  const timeline = page.locator(".personal-channel-timeline");
+  const image = name => timeline.locator(`img[alt="${name}.png"]`);
+  await page.goto(ready.origin + "/chat/");
+  await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
+  await timeline.getByText("Latest original result after archived images.", {exact: true}).waitFor();
+  await page.waitForFunction(() => document.querySelector('img[alt="latest-image.png"]')?.naturalWidth === 3);
+  assert.equal(await image("archived-image").evaluate(node => node.naturalWidth), 0);
+  assert.equal(requested(old), 0, "Opening the latest conversation must not request the offscreen image");
+  assert.equal(requested(current), 1);
+  await image("archived-image").scrollIntoViewIfNeeded();
+  const oldMessage = timeline.locator(`article[data-message-id="${old}"]`);
+  const retry = oldMessage.getByRole("button", {name: "重试图片"});
+  await retry.waitFor();
+  assert.equal(requested(old), 1, "Scrolling requests only the selected original image");
+  assert.deepEqual(responses.map(response => response.status), [503]);
+  await retry.click();
+  await page.waitForFunction(() => document.querySelector('img[alt="archived-image.png"]')?.naturalWidth === 4);
+  assert.equal(requested(old), 2, "An inline retry reads the same original image without leaving the conversation");
+  assert.deepEqual(responses.map(response => response.status), [503, 200]);
+  assert.equal(responses[0].path, responses[1].path, "Retry must preserve the original message and content digest");
+
+  requests.length = 0;
+  const focus = new URL(ready.origin + "/chat/");
+  focus.search = new URLSearchParams({view: "conversation", conversationBinding: ready.bindingId,
+    conversationSession: ready.sessionId, messageSession: ready.sessionId, message: old});
+  await page.goto(focus.href);
+  await page.waitForFunction(id => document.activeElement?.getAttribute("data-message-id") === id
+    && document.querySelector('img[alt="archived-image.png"]')?.naturalWidth === 4, old);
+  assert.equal(requested(old), 1, "Opening an original message link positions and loads that image");
+  assert.equal(requested(current), 0, "An unrelated offscreen image stays deferred when reading a link");
+  const oldUrl = await image("archived-image").getAttribute("src");
+  child.stdin.write("history-image-refresh\n");
+  assert.equal((await next()).history_image_refreshed, old);
+  assert.equal((await page.request.get(ready.origin + oldUrl)).status(), 404);
+  await page.getByRole("button", {name: "刷新状态", exact: true}).click();
+  await page.waitForFunction(previous => {
+    const image = document.querySelector('img[alt="archived-image.png"]');
+    return Boolean(image?.getAttribute("src") && image.getAttribute("src") !== previous && image.naturalWidth === 3);
+  }, oldUrl);
+  assert.equal(await oldMessage.count(), 1, "The refreshed image remains in the original message");
+  assert.deepEqual(errors, []);
+  assert.ok(!writes.some(path => /\/turns(?:\/|$)/u.test(path)), "Reading history cannot submit a Turn");
+  child.stdin.write("inspect\n");
+  const inspection = await next();
+  assert.equal(inspection.model_turns, 0);
+  assert.equal(inspection.reply_evidence_unchanged, true);
+  console.log("history-images-browser: passed (latest, scroll, inline retry and original message link; zero model Turns)");
+}
+
 try {
   const ready = await next();
   browser = await launchBrowser(loadPlaywright().chromium);
@@ -126,7 +192,9 @@ try {
   const errors = [], writes = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("request", request => {if (request.method() !== "GET") writes.push(new URL(request.url()).pathname);});
-  if (returnedFiles) {
+  if (historyImages) {
+    await checkHistoryImages(ready, page, errors, writes);
+  } else if (returnedFiles) {
     await checkReturnedFiles(ready, page, errors, writes);
   } else {
   const snapshot = await (await page.request.get(`${ready.origin}/api/chat/sessions/${ready.sessionId}`)).json();

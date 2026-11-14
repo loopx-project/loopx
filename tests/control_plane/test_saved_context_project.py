@@ -628,7 +628,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         if placement != "physical":
             command[command.index("--capture-file") + 1] = str(alias / source.relative_to(source.parent.parent))
     else:
-        source = wake / "checkpoint-start-view.json"
+        source, = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
     raw = source.read_bytes()
     assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
     assert not list(native.iterdir())  # Host preflight must not publish before native SessionStart.

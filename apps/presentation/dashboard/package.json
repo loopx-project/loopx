@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "smoke:conversation-find": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/conversation-find-browser-smoke.mjs",
     "smoke:queue-input-recovery": "vite build --ssr smoke/queue-input-recovery-smoke.mjs --outDir node_modules/.cache/queue-input-recovery --emptyOutDir && node node_modules/.cache/queue-input-recovery/queue-input-recovery-smoke.js",
     "smoke:todo-ownership": "vite build --ssr smoke/todo-ownership-smoke.mjs --outDir node_modules/.cache/todo-ownership --emptyOutDir && node node_modules/.cache/todo-ownership/todo-ownership-smoke.js",
     "smoke:workspace-progressive-loader": "node smoke/workspace-progressive-status-smoke.mjs",
@@ -79,6 +80,7 @@
     "smoke:conversation-history-order": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/conversation-history-order-browser-smoke.mjs",
     "smoke:conversation-returns-packaged": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/conversation-return-browser-smoke.mjs",
     "smoke:research-evidence-version": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/research-evidence-version-browser-smoke.mjs",
+    "smoke:research-human-attention": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/research-human-attention-browser-smoke.mjs",
     "smoke:workspace-scope-packaged": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/workspace-scope-browser-smoke.mjs",
     "smoke:recent-completions": "tsc --ignoreConfig --target ES2022 --module CommonJS --moduleResolution Node --ignoreDeprecations 6.0 --resolveJsonModule --esModuleInterop --jsx react-jsx --skipLibCheck --strict --types node --outDir /tmp/loopx-recent-completions-smoke smoke/recent-completions-smoke.ts && NODE_PATH=\"$PWD/node_modules\" node /tmp/loopx-recent-completions-smoke/apps/presentation/dashboard/smoke/recent-completions-smoke.js",
     "smoke:task-inspector-route": "npm run smoke:goal-work-browse && LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/task-inspector-route-smoke.mjs",

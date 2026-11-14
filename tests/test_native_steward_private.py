@@ -578,7 +578,7 @@ def test_steward_reads_every_registration_across_pages_and_future_goals(steward)
     saved = transport.bindings.resolve(binding_id=binding["binding_id"], **source)["context"]
     goals = [{"id": f"work-{i:03d}", "coordination": {"registered_agents": ["builder", "reviewer"]}}
              for i in range(150)]
-    goals[-1]["activation_state"] = "stopped"
+    goals[-1]["activation"] = {"state": "stopped"}
     runtime.registry_path.write_text(json.dumps({"goals": goals}))
     inspection = ManagerInspection(context={"scope": "external_authorized", "goals": []},
         registry_path=runtime.registry_path, runtime_root=getattr(runtime, "coordination_runtime_root", store.root.parent),

@@ -192,6 +192,7 @@ jobs:
           npm run smoke:chat-upgrade
           npm run smoke:delegation-search
           npm run smoke:task-inspector-route
+          npm run smoke:conversation-find
       - name: Qualify packaged team evidence and feedback recovery
         if: matrix.shard == 2
         working-directory: apps/presentation/dashboard

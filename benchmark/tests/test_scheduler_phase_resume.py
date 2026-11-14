@@ -20,6 +20,7 @@ def test_scheduler_continuation_clock_reaches_both_host_capture_paths(tmp_path, 
     """Actual guest scheduler + archive IO; only native sealing is substituted."""
     import docker
     from benchmark.edgebench import checkpoint_supervisor as host
+    from benchmark.edgebench.checkpoint_controller import _phase_budget
     from benchmark.edgebench.checkpoint_worker import _archive
     from benchmark.runtime.layout import _PHASE_DEADLINE
 
@@ -45,7 +46,7 @@ state.with_name(state.name+'.host-attempt').write_text('{"pending":false}')
 receipt=root/'wakes/scheduler/receipt.json';receipt.parent.mkdir(parents=True)
 receipt.write_text(json.dumps({'budget_exhausted':True,'host_invoked':False,'mode':'heartbeat','stage':'execute'}))
 if not continued:state.unlink()
-os.environ.update(LOOPX_PHASE_DEADLINE_EPOCH=str(int(time.time())+800 if continued else original),LOOPX_AGENT_ID='agent',
+os.environ.update(LOOPX_PHASE_DEADLINE_EPOCH=str(int(time.time())+800.25 if continued else original),LOOPX_AGENT_ID='agent',
  LOOPX_WAKE_LOG_DIR=str(root/'wakes'),LOOPX_EXECUTION_MODE='heartbeat',LOOPX_CLI='/bin/true',
  LOOPX_REGISTRY='/registry.json',LOOPX_RUNTIME_ROOT='/runtime',LOOPX_GOAL_ID='fixture')
 sys.argv=['scheduler','--python',sys.executable,'--source','/source','--state-file',str(state),'--host-timeout','30']
@@ -71,18 +72,24 @@ mailbox=Path('/logs/agent/checkpoint-controller');mailbox.mkdir(parents=True)
         def capture(*args, **kwargs):
             request = json.loads(kwargs["request_file"].read_text())
             path = _archive(container, request["phase_deadline_path"], tmp_path / f"read-{len(observed)}")
-            observed.append((request["phase_deadline_path"], float(path.read_text()) - time.time()))
-            supervisor.stop.set()
+            try:
+                budget = _phase_budget(path.read_bytes(), {"captured_at_epoch": time.time()})
+                observed.append((request["phase_deadline_path"], budget))
+            finally:
+                supervisor.stop.set()
             return {"research_point_qualified": False}
 
         monkeypatch.setattr(host, "capture_worker", capture)
         monkeypatch.setattr("benchmark.edgebench.checkpoint_worker.capture_worker", capture)
         supervisor._run(container)
+        reply = json.loads((destination / ("b" * 32 + ".json")).read_bytes())
+        assert reply["ok"], reply
         supervisor.finish_solver({"execution_started": True, "exit_code": 2})
         expected_path = "/opt/loopx-benchmark/control/active-phase-deadline" if continued else _PHASE_DEADLINE
         assert [path for path, _ in observed] == [expected_path, expected_path]
-        limit = 800 if continued else 400
-        assert all(limit - 100 < remaining <= limit for _, remaining in observed)
+        limit = 800.25 if continued else 400
+        assert all(limit - 100 < budget["remaining_seconds"] <= limit for _, budget in observed)
+        assert all(budget["source_deadline_epoch"] % 1 == (.25 if continued else 0) for _, budget in observed)
         original = _archive(container, _PHASE_DEADLINE, tmp_path / "original")
         assert original.read_bytes() == original_bytes
     finally:

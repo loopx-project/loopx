@@ -564,6 +564,97 @@ fn chat_readiness_retains_identity_and_state_checks() {
     }
 }
 
+fn read_probe_request(stream: &mut TcpStream, path: &str) -> bool {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut bytes = Vec::new();
+    while !bytes.ends_with(b"\r\n\r\n") {
+        let mut buffer = [0; 512];
+        let Ok(read) = stream.read(&mut buffer) else {
+            return false;
+        };
+        if read == 0 {
+            return false;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    String::from_utf8(bytes)
+        .unwrap()
+        .starts_with(&format!("GET {path} HTTP/1.1"))
+}
+
+#[test]
+fn a_trickling_readiness_response_cannot_extend_the_deadline() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let responder = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert!(read_probe_request(&mut stream, "/api/chat/readiness"));
+        let fragments: &[&[u8]] = &[
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+            b"{\"ok\":true,",
+            b"\"schema_version\":",
+            b"\"loopx_chat_readiness_v1\",",
+            b"\"state\":",
+            b"\"ready\"}",
+        ];
+        for (index, fragment) in fragments.iter().enumerate() {
+            if index > 0 {
+                thread::sleep(Duration::from_millis(150));
+            }
+            if stream.write_all(fragment).is_err() {
+                break;
+            }
+        }
+    });
+    let actual = probe_on_port(ServiceKind::Chat, port, None);
+    responder.join().unwrap();
+    assert_eq!(actual, Probe::Unresponsive);
+}
+
+#[test]
+fn legacy_chat_fallback_shares_the_original_readiness_deadline() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let responder = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert!(read_probe_request(&mut stream, "/api/chat/readiness"));
+        thread::sleep(Duration::from_millis(300));
+        if stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .is_err()
+        {
+            return;
+        }
+        drop(stream);
+        // Do not block the test if the first attempt has already timed out.
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("fallback accept: {error}"),
+            }
+        };
+        if !read_probe_request(&mut stream, "/api/chat/capabilities") {
+            return;
+        }
+        thread::sleep(Duration::from_millis(300));
+        let body = r#"{"ok":true,"schema_version":"loopx_chat_capabilities_v1"}"#;
+        let _ = write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}");
+    });
+    let actual = probe_on_port(ServiceKind::Chat, port, None);
+    responder.join().unwrap();
+    assert_eq!(actual, Probe::Unresponsive);
+}
+
 #[test]
 fn legacy_chat_readiness_uses_the_original_capabilities_fallback() {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -573,19 +664,7 @@ fn legacy_chat_readiness_uses_the_original_capabilities_fallback() {
     let responder = thread::spawn(move || {
         for path in ["/api/chat/readiness", "/api/chat/capabilities"] {
             let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut bytes = Vec::new();
-            while !bytes.ends_with(b"\r\n\r\n") {
-                let mut buffer = [0; 512];
-                let read = stream.read(&mut buffer).unwrap();
-                assert!(read > 0);
-                bytes.extend_from_slice(&buffer[..read]);
-            }
-            assert!(String::from_utf8(bytes)
-                .unwrap()
-                .starts_with(&format!("GET {path} HTTP/1.1")));
+            assert!(read_probe_request(&mut stream, path));
             let response = if path.ends_with("readiness") {
                 "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
             } else {
@@ -1006,6 +1085,10 @@ fn runtime_alignment_requires_exact_identity_and_keeps_recovery_codes() {
     payload["runtime_identity"] = serde_json::json!({"release_id":"old"});
     assert!(managed_runtime_alignment_result(output(payload.clone(), 0), Some(&identity)).is_err());
     for reason in [
+        "native_account_work_pending",
+        "native_observer_provider_binding_required",
+        "native_observer_provider_upgrade_required",
+        "native_observer_requires_target_runtime",
         "chat_work_pending",
         "chat_state_unverified",
         "service_runtime_route_unverified",
@@ -1028,4 +1111,63 @@ fn runtime_alignment_requires_exact_identity_and_keeps_recovery_codes() {
             .to_string(),
         "service_runtime_alignment_unavailable"
     );
+}
+
+#[test]
+fn connected_runtime_requires_both_healthy_exact_identity_listeners() {
+    let identity = serde_json::json!({"schema_version":"loopx_runtime_identity_v1",
+        "release_id":"qualified", "source_revision":"a".repeat(40), "package_version":"2.3.0"});
+    let runtime = SelectedRuntime {
+        executable: "unused-discovery-candidate".into(),
+        identity: Some(identity.clone()),
+    };
+    for (chat_identity, status_ready, expected) in [
+        (identity.clone(), true, true),
+        (serde_json::json!({"release_id":"other"}), true, false),
+        (identity.clone(), false, false),
+    ] {
+        let endpoints = ServiceEndpoints::allocate(true).unwrap();
+        let servers: Vec<_> = SERVICE_KINDS.into_iter().map(|kind| {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", endpoints.port(kind))).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let payload = match kind {
+                ServiceKind::Status => serde_json::json!({"source":"serve-status", "runtime_identity":identity,
+                    "readiness":{"schema_version":"loopx_status_readiness_v0",
+                        "state":if status_ready { "ready" } else { "failed" },
+                        "reason":if status_ready { "registry_readable" } else { "registry_invalid" }}}),
+                ServiceKind::Chat => serde_json::json!({"ok":true,"schema_version":"loopx_chat_readiness_v1",
+                    "state":"ready","runtime_identity":chat_identity}),
+            };
+            thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    if let Ok((mut stream, _)) = listener.accept() {
+                        stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+                        let mut request = [0; 1024];
+                        let _ = stream.read(&mut request);
+                        let _ = write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{payload}");
+                        return;
+                    }
+                    if Instant::now() >= deadline { return; }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            })
+        }).collect();
+        assert_eq!(runtime_ready(&runtime, &endpoints), expected);
+        for server in servers {
+            server.join().unwrap();
+        }
+    }
+    let endpoints = ServiceEndpoints::allocate(true).unwrap();
+    assert!(
+        !runtime_ready(&runtime, &endpoints),
+        "a qualified install alone is not readiness"
+    );
+    assert!(!runtime_ready(
+        &SelectedRuntime {
+            executable: "unused".into(),
+            identity: None
+        },
+        &endpoints
+    ));
 }

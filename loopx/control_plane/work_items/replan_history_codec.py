@@ -16,7 +16,10 @@ from typing import Any, Literal
 from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
 from ..runtime.time import now_utc, parse_timestamp
 from ..goals.goal_vision_policy import normalize_effective_turn_replan_threshold
-from ..todos.contract import normalize_todo_claimed_by, normalize_todo_id, normalize_todo_id_list
+from ..todos.contract import (
+    normalize_todo_claimed_by, normalize_todo_id, normalize_todo_id_list,
+    normalize_todo_watch_only,
+)
 from ..todos.resume_planning import build_todo_resume_planning_request
 
 REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS = {
@@ -88,6 +91,7 @@ def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict
            if isinstance(run.get("blocked_retry"), dict) else {}),
         "monitor": {
             "target_id": str(target.get("target_id") or "").strip() or None,
+            "target_schema": target.get("schema_version"),
             "mode": str(target.get("monitor_mode") or "").strip() or None,
             "material_change": (
                 event.get("material_change")
@@ -119,6 +123,8 @@ def _todo_facts(value: Any, *, include_resume: bool, frontier: bool = False) -> 
             "claim": normalize_todo_claimed_by(item.get("claimed_by")),
             "public_claim": str(item.get("claimed_by") or "").strip() or None,
             "target": str(item.get("target_key") or item.get("todo_id") or "monitor").strip(),
+            "target_key": str(item.get("target_key") or "").strip() or None,
+            "watch_only": normalize_todo_watch_only(item.get("watch_only")) is True,
             "no_change_count": count,
             "due_at": _timestamp(item.get("next_due_at")),
             "expires_at": _timestamp(item.get("expires_at")),

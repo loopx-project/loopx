@@ -273,35 +273,40 @@ def read_interrupted_host(state: dict, *, state_file: Path, env: dict[str, str],
 
 
 def read_idle_host(state: dict, *, state_file: Path, env: dict[str, str], wake_log_dir: str) -> dict:
-    """Explicitly hand off one stopped legacy Host to its unchanged idle session.
-
-    An empty output and unknown failure do not establish idleness. The native
-    owner must independently return its complete stable history before the
-    original attempt. No failure classification or original receipt is changed.
-    """
-    from benchmark.edgebench.stopped_recovery import native_source_paths, validate_idle_host_return
+    """Qualify the stopped Host's unchanged idle session and current authority."""
+    from benchmark.edgebench.stopped_recovery import (
+        completed_host_window, native_source_paths, require_sealed_host_pending, validate_idle_host_return,
+    )
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
     from loopx.hosts.codex_checkpoint import native_idle_turn
     from .codex import process_environment
     from .codex_readiness import require_native_receiver_allowance
-    from scripts.external_scheduler_worker import _host_pending
+    from scripts.external_scheduler_worker import _host_pending_path
     from .worker import host_output_paths
 
     env = process_environment(Path(env['LOOPX_CODEX_HOME']), base=env)
-    if _host_pending(state_file) is not True:
-        raise ValueError('Idle handoff requires its original pending Host witness')
     path, raw, receipt, source = _stopped_source(state_file, state, env, wake_log_dir)
     if source.get('idle_host_handoff') is not True:
         raise ValueError('Idle handoff requires its explicitly sealed stopped source')
-    stdout, stderr = host_output_paths(path.parent)
-    validate_idle_host_return(state, receipt, stdout=_physical_read(stdout),
-                              stderr=_physical_read(stderr),
-                              lineage={'goal_id': env['LOOPX_GOAL_ID'], 'agent_id': env['LOOPX_AGENT_ID']})
+    completed = source.get('completed_host') is True
+    pending_path = _host_pending_path(state_file)
+    require_sealed_host_pending(_physical_read(pending_path), proof=source, source_path=pending_path,
+                                pending=not completed)
+    lineage = {'goal_id': env['LOOPX_GOAL_ID'], 'agent_id': env['LOOPX_AGENT_ID']}
     started = _number(source['process_started_at'])
     stopped = _number(source['process_stopped_at'])
-    if (receipt.get('turn_id') != path.parent.name or stopped != math.floor(path.stat().st_mtime)
-            or started > stopped):
-        raise ValueError('Idle handoff differs from its original returned Host window')
+    if completed:
+        clock = _number(source['source_phase_deadline_epoch'])
+        if completed_host_window(state, receipt, lineage=lineage, phase=clock) != (started, stopped):
+            raise ValueError('Idle handoff differs from its original completed Host window')
+    else:
+        stdout, stderr = host_output_paths(path.parent)
+        validate_idle_host_return(state, receipt, stdout=_physical_read(stdout),
+                                  stderr=_physical_read(stderr), lineage=lineage)
+        if stopped != math.floor(path.stat().st_mtime) or started > stopped:
+            raise ValueError('Idle handoff differs from its original returned Host window')
+    if receipt.get('turn_id') != path.parent.name:
+        raise ValueError('Idle handoff wake differs from its original receipt')
     session = receipt['session']['session_id']
     current = CodexAgentSession(env, context='resume',
         sandbox=env.get('LOOPX_CODEX_SANDBOX', 'danger-full-access'), receipt={})
@@ -311,7 +316,8 @@ def read_idle_host(state: dict, *, state_file: Path, env: dict[str, str], wake_l
         raise ValueError('Idle handoff native session binding changed')
     allowance = require_native_receiver_allowance(env)
     native = native_idle_turn(env, session, process_started_at=started,
-        sealed_store_paths=tuple(native_source_paths(source['declaration']).values()))
+        sealed_store_paths=tuple(native_source_paths(source['declaration']).values()),
+        **({'process_stopped_at': stopped} if completed else {}))
     with current.admission.launch_lifetime(operation='benchmark_idle_host_handoff'):
         from loopx.file_lock import _effect_mutation_lock_path, lock_holder_paths
         from loopx.control_plane.goals.source_session_registry_state import guard_path
@@ -334,12 +340,16 @@ def read_idle_host(state: dict, *, state_file: Path, env: dict[str, str], wake_l
             'wake_turn_id': receipt['turn_id'], 'process_started_at': started,
             'source_phase_deadline_epoch': source['source_phase_deadline_epoch'],
             'session_profile_digest': current.digest, 'allowance': allowance,
-            'original_host_failure': state['host_attempt']['host_failure'], 'native': native}
+            'native': native, **({'process_stopped_at': stopped} if completed
+                                 else {'original_host_failure': state['host_attempt']['host_failure']})}
 
 
 def verify_idle_host_replay(state_file: Path, recovery: dict, *, env: dict[str, str]) -> None:
     """A repeated phase selection retains its original qualification and clock."""
-    from benchmark.edgebench.stopped_recovery import validate_idle_host_return
+    from benchmark.edgebench.stopped_recovery import (
+        completed_host_window, require_sealed_host_pending, validate_idle_host_return,
+    )
+    from scripts.external_scheduler_worker import _host_pending_path
     from .worker import host_output_paths
 
     native, allowance = recovery.get('native'), recovery.get('allowance')
@@ -352,14 +362,34 @@ def verify_idle_host_replay(state_file: Path, recovery: dict, *, env: dict[str, 
     source = json.loads(_physical_read(state_file))
     raw = _physical_read(Path(recovery['receipt_path']))
     receipt = json.loads(raw)
-    stdout, stderr = host_output_paths(Path(recovery['receipt_path']).parent)
-    validate_idle_host_return(source, receipt, stdout=_physical_read(stdout),
-                              stderr=_physical_read(stderr),
-                              lineage={'goal_id': env['LOOPX_GOAL_ID'], 'agent_id': env['LOOPX_AGENT_ID']})
-    if (hashlib.sha256(raw).hexdigest() != recovery['receipt_sha256']
-            or source['host_attempt']['host_failure'] != recovery['original_host_failure']
+    lineage = {'goal_id': env['LOOPX_GOAL_ID'], 'agent_id': env['LOOPX_AGENT_ID']}
+    started = _number(recovery.get('process_started_at'))
+    completed_at = _number(native.get('completed_at'))
+    completed = 'process_stopped_at' in recovery
+    pending_path = _host_pending_path(state_file)
+    try:
+        proof_raw = _physical_read(Path(env['LOOPX_INTERRUPTED_SOURCE']))
+        if hashlib.sha256(proof_raw).hexdigest() != recovery['source_proof_sha256']:
+            raise ValueError('Original stopped-source proof changed')
+        require_sealed_host_pending(_physical_read(pending_path), proof=json.loads(proof_raw),
+                                    source_path=pending_path, pending=not completed)
+    except (OSError, ValueError) as error:
+        raise ValueError('Idle handoff replay differs from its original pending Host witness') from error
+    if completed:
+        stopped = _number(recovery['process_stopped_at'])
+        clock = _number(recovery.get('source_phase_deadline_epoch'))
+        window_ok = (
+            completed_host_window(source, receipt, lineage=lineage, phase=clock) == (started, stopped)
+            and math.floor(started) <= _number(native.get('started_at')) <= completed_at <= stopped
+        )
+    else:
+        stdout, stderr = host_output_paths(Path(recovery['receipt_path']).parent)
+        validate_idle_host_return(source, receipt, stdout=_physical_read(stdout),
+                                  stderr=_physical_read(stderr), lineage=lineage)
+        window_ok = (source['host_attempt']['host_failure'] == recovery['original_host_failure']
+                     and completed_at < math.floor(started))
+    if (not window_ok or hashlib.sha256(raw).hexdigest() != recovery['receipt_sha256']
             or native.get('status') != 'completed' or native.get('session_id') != receipt['session']['session_id']
-            or not _number(native.get('completed_at')) < math.floor(_number(recovery['process_started_at']))
             or type(native.get('turn_count')) is not int or native['turn_count'] < 1
             or not re.fullmatch(r'[a-f0-9]{64}', native.get('visible_history_sha256', ''))):
         raise ValueError('Idle handoff replay differs from the original qualified source')
