@@ -22,6 +22,7 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { hasMonitorPollTransaction } from "./monitor_poll_commit.ts";
+import { readQuotaSpendEventFromRun } from "./accounting_artifact_transaction.ts";
 import {
   jsonObject,
   requireJsonObject,
@@ -1489,9 +1490,16 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     return prepareBlockedWait(value);
   }
   const request = decodeRequest(value);
-  const spendPrecheck = jsonObject(value)?.spend_precheck;
+  const input = requireJsonObject(value, "quota settlement readback request");
+  const spendPrecheck = input.spend_precheck;
   if (spendPrecheck !== undefined && typeof spendPrecheck !== "boolean") {
     throw new EffectRuntimeRequestError("spend_precheck must be a boolean");
+  }
+  const spendRequest = input.spend_request === undefined ? null
+    : requireJsonObject(input.spend_request, "spend_request");
+  if (spendRequest !== null && (!spendPrecheck ||
+      !Number.isSafeInteger(spendRequest.slots) || typeof spendRequest.source !== "string")) {
+    throw new EffectRuntimeRequestError("spend_request requires spend_precheck, integer slots and a source");
   }
   if (spendPrecheck) request.include_record_bodies = true;
   const withOwner = request.borrow_source_admission
@@ -1518,14 +1526,60 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
       // only its receipts and whether a spend Run already needs receipt repair.
       const settlement = requireJsonObject(result.settlement, "quota settlement bundle");
       const outcome = requireJsonObject(settlement.result, "quota settlement result");
+      const spendRun = jsonObject(result.spend_run);
+      const spendRejection = spendRequest && identity
+        ? await originalSpendRejection(request, result, spendRequest, spendRun)
+        : null;
       return {
         schema_version: result.schema_version,
         found: true,
         identity: result.identity,
         settlement: {...settlement, result: {...outcome, value: null}},
         progress: result.progress,
-        spend_run_present: jsonObject(result.spend_run) !== null,
+        spend_run_present: spendRun !== null,
+        ...(spendRejection === null ? {} : {spend_request_rejection: bundle(spendRejection)}),
       };
     },
   );
+}
+
+async function originalSpendRejection(
+  request: ReadbackRequest, readback: JsonObject, proposed: JsonObject,
+  spendRun: JsonObject | null,
+): Promise<SettlementResult<JsonObject> | null> {
+  const progress = requireJsonObject(readback.progress, "quota settlement progress");
+  const guard = jsonObject(readback.heartbeat_receipt);
+  const authorizedSource = guard ? details(guard).quota_spend_source : null;
+  // Older ledgers can have a rollout receipt but no readable artifact. Keep
+  // their receipt facts available and never repair an already mismatched debit.
+  const spendEvent = jsonObject(readback.spend_event);
+  const receipt = spendEvent ? details(spendEvent) : {};
+  const retained = spendRun === null ? null : await readQuotaSpendEventFromRun(
+    join(request.runtime_root, "goals", request.goal_id, "runs"), spendRun, request.goal_id,
+  );
+  const recordedSlots = retained?.slots ?? (receipt.slots === "" ? undefined : receipt.slots);
+  const recordedSource = retained?.source ?? (receipt.source === "" ? undefined : receipt.source);
+  const fallbackSource = recordedSource === "heartbeat" || recordedSource === "visible-goal"
+    ? recordedSource : progress.quota_spend_source;
+  const source = authorizedSource ?? fallbackSource;
+  // Every admitted CLI settlement plan authorizes one slot and the original
+  // source. The same check gates initial spend, receipt repair, and replay.
+  if (proposed.slots !== 1 || proposed.source !== source) {
+    return settlementFailed({
+      kind: "quota_spend_rejected", step_kind: "quota_spend",
+      reason: `original Turn settlement requires --slots 1 --source ${String(source)}`,
+    });
+  }
+  const slotsConflict = recordedSlots !== undefined && recordedSlots !== proposed.slots;
+  const sourceConflict = recordedSource !== undefined && recordedSource !== source;
+  // Historical complete receipts may lack the amount projection. A partial
+  // debit needs the original charge facts before we can certify its receipt.
+  const unverifiableRepair = spendRun !== null && spendEvent === null &&
+    (recordedSlots === undefined || recordedSource === undefined);
+  return slotsConflict || sourceConflict || unverifiableRepair ? settlementFailed({
+    kind: "quota_spend_rejected", step_kind: "quota_spend",
+    reason: unverifiableRepair
+      ? "the recorded debit has no verifiable billing terms for receipt repair"
+      : "the recorded debit differs from the original Turn settlement plan",
+  }) : null;
 }
