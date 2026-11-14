@@ -164,15 +164,23 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
         root = _root(runtime)
         return {file.relative_to(root): file.read_bytes() for file in root.rglob("*.json")}
 
-    cursor, seen, captured_pages = None, set(), 0
+    cursor, seen, captured_pages, logical_pages = None, set(), 0, 0
     while True:
         stdout = invoke([*command, *(["--cursor", cursor] if cursor else [])])
         page = json.loads(stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
+        logical_pages += 1
         if "command" in page:
             assert page["ok"] and not page["read_complete"] and "items" not in page
             reader = shlex.split(page["command"])
-            assert reader[0] == str(console) and "context-read" in reader
-            pinned = reader[reader.index("--capture-sha256") + 1]
+            assert reader[:3] == [str(console), "--cli-bin", str(console)] and "context-read" in reader
+            assert "--capture-sha256" not in reader and "--capture-file" not in reader
+            reference_path, descriptor = read_context_read_reference(reader[reader.index("--reference-file") + 1])
+            saved = Path(descriptor["path"])
+            pinned = page["sha256"]
+            assert pinned == descriptor["sha256"] and reference_path.parent == saved.parent
+            direct = shlex.split(page["recovery_command"])
+            assert direct[:3] == reader[:3]
+            assert direct[direct.index("--capture-sha256") + 1] == pinned
             before = read_receipts()
             raw = bytearray()
             while reader:
@@ -182,7 +190,19 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
                 assert len(raw) > part["offset"]
                 assert len(raw) == (part["total_bytes"] if part["eof"] else part["next_offset"])
                 reader = shlex.split(part["next_command"]) if not part["eof"] else None
+                if reader:
+                    assert reader[:3] == direct[:3] and "--capture-sha256" not in reader
+                    assert Path(reader[reader.index("--reference-file") + 1]) == reference_path
                 captured_pages += 1
+            assert raw == saved.read_bytes()
+            if logical_pages == 1:
+                reference_path.unlink()
+                failed = subprocess.run(shlex.split(page["command"]), cwd=project, capture_output=True, timeout=40)
+                assert failed.returncode == 1 and len(failed.stdout) <= 12_000
+                assert "content" not in json.loads(failed.stdout)
+                recovered = json.loads(invoke(direct))
+                assert recovered["offset"] == 0 and recovered["sha256"] == pinned
+                assert raw.startswith(recovered["content"].encode("utf-8"))
             assert read_receipts() == before
             page = json.loads(raw)
         page_ids = {item["request_id"] for item in page["items"]}
@@ -193,7 +213,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
         cursor = page["next_cursor"]
         if cursor is None:
             break
-    assert seen == request_ids and captured_pages > 1
+    assert seen == request_ids and logical_pages == 2 and captured_pages > 1
     _, saved = read_selection(view["recovery"]["command"] + " --select " + shlex.quote(address))
     assert saved[address] == channel["work_context"]["sources"][index]["content"]["unfinished_delegations"]
     assert path.read_bytes() == original
@@ -386,7 +406,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
 
 
-def test_inbox_markdown_keeps_different_or_missing_guidance_on_each_item(tmp_path):
+@pytest.mark.parametrize("variant", ["identical", "different", "missing"])
+def test_inbox_markdown_keeps_different_or_missing_guidance_on_each_item(tmp_path, variant):
     from loopx.cli_commands.manager_inbox import _read_markdown
 
     items = [
@@ -394,16 +415,26 @@ def test_inbox_markdown_keeps_different_or_missing_guidance_on_each_item(tmp_pat
         {"instruction": "Read the complete source.", "next_action": "Wait for the original return.", "revision": 2},
         {"instruction": "Read the complete source.", "unavailable": True},
     ]
+    advice = {"step": "assess", "answer_owed": True, "future_details": {"attempt": 1}}
+    for item in items:
+        item["receiver_followthrough"] = advice
+    if variant == "different":
+        items[1]["receiver_followthrough"] = {**advice, "future_details": {"attempt": True}}
+    elif variant == "missing":
+        del items[1]["receiver_followthrough"]
     source = {"ok": True, "items": items, "has_more": True, "next_cursor": "scoped-next"}
     body, ok = _read_markdown(source, runtime_root=tmp_path)
     assert ok and not (tmp_path / "context-delivery").exists()
     body = body.split("\n```json\n", 1)[1].removesuffix("\n```")
     view = json.loads(body)
     common = view.pop("shared_item_guidance")
-    assert common == {"instruction": "Read the complete source."}
+    expected = {"instruction": "Read the complete source."}
+    if variant == "identical":
+        expected["receiver_followthrough"] = advice
+    assert common == expected
     assert all("instruction" not in item for item in view["items"])
     view["items"] = [{**common, **item} for item in view["items"]]
-    assert view == source
+    assert json.dumps(view, sort_keys=True) == json.dumps(source, sort_keys=True)
 
 
 def test_real_overflow_keeps_total_and_full_read_route(flow):

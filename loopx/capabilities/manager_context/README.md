@@ -358,22 +358,26 @@ that path are outside this integration. Frontend/Lark conversations retain their
 existing request and return views; no new screen or setting is introduced.
 
 The progressive quota hook's required command requests the Inbox Markdown view.
-When every item on a page has the same `instruction` or `next_action`, apply
-that exact value from `shared_item_guidance` to each item on that page. Differing
-values and all request bodies, current state, read receipts, warnings, and
+When every item on a page has the same `instruction`, `next_action` or
+`receiver_followthrough`, apply that exact field from `shared_item_guidance`
+to each item on that page. Differing values and all request bodies, current state, read receipts, warnings, and
 cursors are delivered in full. If a Markdown page exceeds the 12,000-byte tool
 output budget, the command returns a private, digest-checked reader for that
-exact Inbox result. Follow its byte offsets to EOF before following the Inbox
-`--cursor` or `--operation-cursor`; they continue different reads. A transport
+exact Inbox result. Compare each page's digest with the opening and use its
+direct recovery command if the reference is unavailable. Read the captured
+bytes to EOF, then use the Inbox `--cursor` or `--operation-cursor` for the next
+Inbox page. A transport
 failure is not an empty Inbox. Reading the saved result does not record a
 second Inbox read, consume a return, or qualify context retention. Plain or JSON
 CLI reads retain the per-item fields, including the required read when context
 delivery is explicitly off.
 
-渐进 quota 的必读命令使用 Inbox Markdown 视图。当前页每条的 `instruction` 或
-`next_action` 完全相同时，从 `shared_item_guidance` 读取原值并应用到本页每条。
+渐进 quota 的必读命令使用 Inbox Markdown 视图。当前页每条的 `instruction`、
+`next_action` 或 `receiver_followthrough` 完全相同时，从 `shared_item_guidance`
+读取原值并应用到本页每条。
 不同指引、请求全文、当前状态、读回执、警告和游标均完整交付。Markdown 页超出
-12,000 字节工具输出预算时，命令给出绑定原 Inbox 结果摘要的私有 reader。先按字节偏移
+12,000 字节工具输出预算时，命令给出绑定原 Inbox 结果摘要的私有 reader。逐页与开场
+摘要核对，引用不可用时使用直接恢复命令。先按字节偏移
 读到 EOF，再按 Inbox 的 `--cursor` 或 `--operation-cursor` 读后续请求；这两类分页
 不能混用。交付失败不表示 Inbox 为空。读回保存结果不会再次记 Inbox 读取回执、消费
 返回结果或证明模型保留了上下文。普通或 JSON CLI 读保留逐条字段；显式关闭上下文
