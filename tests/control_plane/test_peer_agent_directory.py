@@ -490,7 +490,8 @@ def test_a_cursor_that_cannot_be_published_is_rejected_not_echoed() -> None:
         )
 
 
-def test_cli_agent_directory_continues_with_cursor(tmp_path) -> None:
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cli_agent_directory_continues_with_cursor(tmp_path, provider) -> None:
     registered = [f"agent-{index:02d}" for index in range(MAX_DIRECTORY_ROWS + 4)]
     registry = tmp_path / "registry.json"
     registry.write_text(
@@ -514,13 +515,14 @@ def test_cli_agent_directory_continues_with_cursor(tmp_path) -> None:
     config["common_runtime_root"] = str(runtime)
     config["goals"][0].update(repo=str(tmp_path), state_file=str(state))
     registry.write_text(json.dumps(config), encoding="utf-8")
-    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider="sqlite")
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
 
-    def run(*extra: str) -> dict[str, object]:
+    def run(*extra: str, runtime_override: str | None = None) -> dict[str, object]:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             exit_code = cli_main(
                 [
+                    *(["--runtime-root", runtime_override] if runtime_override else []),
                     "--registry",
                     str(registry),
                     "--format",
@@ -536,6 +538,7 @@ def test_cli_agent_directory_continues_with_cursor(tmp_path) -> None:
         assert exit_code == 0
         return json.loads(output.getvalue())
 
+    before = state.read_bytes(), registry.read_bytes()
     first = run()
     assert first["row_count"] == MAX_DIRECTORY_ROWS
     assert first["next_cursor"]
@@ -547,6 +550,12 @@ def test_cli_agent_directory_continues_with_cursor(tmp_path) -> None:
     assert sorted(ids) == registered
     assert len(ids) == len(set(ids))
     assert second["next_cursor"] is None
+    assert (state.read_bytes(), registry.read_bytes()) == before
+    explicit = run("--cursor", str(first["next_cursor"]), runtime_override=str(runtime))
+    assert explicit["rows"] == second["rows"]
+    denied = run("--agent-id", "agent-not-registered")
+    assert denied["rows"] == []
+    assert denied["scope"]["gaps"][0]["kind"] == GAP_AUDIENCE_NOT_AUTHORIZED
 
 
 def test_rows_report_a_peer_route_without_selecting_one() -> None:
@@ -680,3 +689,85 @@ def test_unavailable_source_does_not_resurrect_project_asset_or_hint() -> None:
     packet = build_peer_agent_directory(payload)
     assert _rows_by_agent(packet)[WORKING_AGENT]["work"] is None
     assert projected_agent_goals(payload)[GOAL_ID][WORKING_AGENT]["open_todo_ids"] == []
+
+
+def test_adapter_sends_one_projection_request_with_complete_membership(monkeypatch) -> None:
+    from loopx.control_plane.agents import directory
+
+    ids = [f"agent-{index:02d}" for index in range(MAX_DIRECTORY_ROWS + 3)]
+    payload = _status_payload(ids)
+    source = {"schema_version": "synthetic-envelope"}
+    payload["projection_envelope"] = source
+    calls = []
+    result = {"ok": True, "schema_version": PEER_AGENT_DIRECTORY_SCHEMA_VERSION,
+              "rows": [], "projection_envelope": {}}
+
+    def project(method, request):
+        calls.append((method, request))
+        return result
+
+    monkeypatch.setattr(directory, "effect_runtime_result", project)
+    monkeypatch.setattr(directory, "now_utc_iso", lambda: "2026-01-02T00:00:00Z")
+    assert build_peer_agent_directory(payload, execution_facts={}) is result
+    assert len(calls) == 1
+    method, request = calls[0]
+    assert method == "agent.directory.project"
+    assert request["registered_agent_ids"] == ids
+    assert len(request["agents"]) == MAX_DIRECTORY_ROWS
+    assert request["execution_fact_agent_ids"] == []
+    assert request["upstream_envelopes"] == [source]
+    assert request["observed_at"] == "2026-01-02T00:00:00Z"
+
+
+@pytest.mark.parametrize("result", [None, {}, {"schema_version": PEER_AGENT_DIRECTORY_SCHEMA_VERSION}])
+def test_adapter_rejects_malformed_result_without_python_fallback(monkeypatch, result) -> None:
+    from loopx.control_plane.agents import directory
+
+    monkeypatch.setattr(directory, "effect_runtime_result", lambda *args: result)
+    with pytest.raises(TypeError, match="invalid peer agent directory projection result"):
+        build_peer_agent_directory(_status_payload())
+
+
+def test_adapter_propagates_failed_projection_without_fallback(monkeypatch) -> None:
+    from loopx.control_plane.agents import directory
+
+    def fail(*args):
+        raise OSError("typed runtime unavailable")
+
+    monkeypatch.setattr(directory, "effect_runtime_result", fail)
+    with pytest.raises(OSError, match="typed runtime unavailable"):
+        build_peer_agent_directory(_status_payload())
+
+
+def test_missing_source_envelope_is_unknown_and_visible() -> None:
+    packet = build_peer_agent_directory(_status_payload())
+    envelope = packet["projection_envelope"]
+    assert envelope["fresh"] is False
+    assert envelope["complete"] is False
+    assert envelope["sources"][0]["last_read_at"] is None
+    assert "projection alerts" in render_agent_directory(packet)
+
+
+def test_adapter_preserves_safe_text_fallback_and_unicode_boundaries(monkeypatch) -> None:
+    from loopx.control_plane.agents import directory
+
+    row = {
+        "agent_id": WORKING_AGENT,
+        "last_activity_at": "/tmp/private-activity",
+        "current_todo": {
+            "todo_id": "todo_directory_text",
+            "title": "/tmp/private-title",
+            "text": "This fallback must not replace a rejected preferred title",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "claimed_by": WORKING_AGENT,
+        },
+    }
+    monkeypatch.setattr(directory, "build_agent_management_projection", lambda *args, **kwargs: {
+        "agents": [row], "source_summary": {"selected_agent_count": 1},
+    })
+    work = build_peer_agent_directory(_status_payload())["rows"][0]["work"]
+    assert "title" not in work
+    assert "last_activity_at" not in work
+    row["current_todo"]["title"] = "🌱" * 225
+    work = build_peer_agent_directory(_status_payload())["rows"][0]["work"]
+    assert work["title"] == "🌱" * 219 + "…"
