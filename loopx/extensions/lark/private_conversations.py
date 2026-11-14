@@ -47,7 +47,7 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
 from .outbound import normalize_lark_outbound_text, present_lark_conversation_text as _presentation_text
 from .presentation.markdown_post import lark_markdown_readback_matches
 from .private_images import private_message_caption, private_message_images
-from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits
+from .private_delivery_discovery import PrivateDeliveryDiscovery, answer_media_dispatch, prepared_steward_binding_waits, resumable_answer_image_session
 from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from . import private_steward_triage as triage
@@ -1301,7 +1301,7 @@ class LarkPrivateConversations:
             image_keys = uploaded_chat_images(root=self.runtime_root, profile=record["profile"],
                 provider_ref=resource_scope, attachments=image_attachments, private_transport=self,
                 before_upload=image_authorized, verify_only=bool(phase_state.get("started") or phase_state.get("attempt")),
-                dispatch_guard=partial(self.core.answer_media_dispatch, record) if kind == "answer_images" else None)
+                dispatch_guard=partial(answer_media_dispatch, self.core, record) if kind == "answer_images" else None)
             if phase_state.get("image_keys", list(image_keys)) != list(image_keys):
                 raise ValueError("App image delivery resources changed after an attempt")
             phase_state["image_keys"] = list(image_keys)
@@ -1433,7 +1433,7 @@ class LarkPrivateConversations:
             if native.get("status") != "accepted" or not same_request:
                 return False
             turn = self.core.controller.store.load_turn(native["session_id"], native["turn_id"])
-            return self.core.resumable_answer_image_session(native, turn) is not None
+            return resumable_answer_image_session(self.core, native, turn) is not None
 
         state = record.setdefault("answer_images", {})
         # Hold the source and the exact completed body fixed across retries.
@@ -1509,7 +1509,7 @@ class LarkPrivateConversations:
                 or hashlib.sha256(answer.encode()).hexdigest() != plan["answer_sha256"]
                 or terminal.get("text") != _presentation_text(answer)
                 or not _private_answer_images(answer)[1]
-                or (session := self.core.resumable_answer_image_session(native, turn)) is None):
+                or (session := resumable_answer_image_session(self.core, native, turn)) is None):
             raise ValueError("original completed answer or its authority changed")
         return session
 

@@ -7,7 +7,6 @@ runner. Write it before admission so a crash can replay the same client identity
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from functools import cache
 from pathlib import Path
@@ -28,7 +27,7 @@ from ...control_plane.quota.automation_cadence_readback import (
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import FileChatDiscovery, later_equivalent_source_input, source_control_fields
+from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, source_control_fields
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -291,42 +290,6 @@ class ChatExternalConversations:
                 and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
                 for item in (source_controls or self.source_controls)())))
 
-    def _source_route_path(self, binding_id: str, source_ref: str) -> Path:
-        return self.root / "source-fences" / f"{binding_id}.{source_ref}.json"
-
-    def resumable_answer_image_session(
-        self, native: dict[str, Any], turn: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
-        """Check original source controls before reading the current Session."""
-        store = self.controller.store
-        if turn is None or turn.get("status") != "completed" or self._source_stop_observed(
-                native, turn, store.events_after(native["session_id"], native["turn_id"], None)):
-            return None
-        session = store.load_session(native["session_id"])
-        return session if session and session.get("status") in RESUMABLE_SESSION_STATES else None
-
-    @contextmanager
-    def answer_media_dispatch(self, request: dict[str, Any]) -> Iterator[None]:
-        """Serialize new media dispatch with the original source and Session controls."""
-        store = self.controller.store
-        session_id, turn_id = request["session_id"], request["turn_id"]
-        route = self._source_route_path(request["binding_id"], request["source"]["source_ref"])
-        # Ingress takes the route before its binding and Session operations.
-        # Contention defers this upload before spawn and leaves control responsive.
-        with ExitStack() as fences:
-            for path in (route, self.bindings.path, store._session_path(session_id)):
-                if fences.enter_context(try_exclusive_file_lock(path, operation="dispatch_external_answer_media")) is None:
-                    raise ValueError("original media authority is being updated")
-            if not any(binding.get("enabled") is True and binding["binding_id"] == request["binding_id"]
-                       and binding["transport_ref"] == request["profile"] for binding in self.bindings.read()["bindings"]):
-                raise ValueError("original media binding unavailable")
-            native = self.read_request(request["request_ref"])
-            if (native.get("status") != "accepted"
-                    or any(native.get(key) != request[key] for key in ("binding_id", "source", "session_id", "turn_id"))
-                    or self.resumable_answer_image_session(native, store.load_turn(session_id, turn_id)) is None):
-                raise ValueError("original Session or source no longer authorizes an upload")
-            yield
-
     def quota_backlog_observer(
         self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
@@ -585,8 +548,7 @@ class ChatExternalConversations:
             # route already owns the fence, leave this request unchanged for
             # the existing worker's next fresh visit, rather than admitting
             # from an observation that waited behind that route.
-            with try_exclusive_file_lock(self._source_route_path(row["binding_id"], row["source"]["source_ref"]),
-                                         operation="route_external_chat_request") as acquired:
+            with try_exclusive_file_lock(external_source_route_path(self.root, row["binding_id"], row["source"]["source_ref"]), operation="route_external_chat_request") as acquired:
                 if acquired is None:
                     return row
                 current = self.bindings.read()
@@ -778,7 +740,7 @@ class ChatExternalConversations:
             proof = recovered.get("native_observation")
         selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
         source = source_observation(selected)
-        with try_exclusive_file_lock(self._source_route_path(row["binding_id"], row["source"]["source_ref"]),
+        with try_exclusive_file_lock(external_source_route_path(self.root, row["binding_id"], row["source"]["source_ref"]),
                                      operation="route_external_chat_request") as acquired:
             if acquired is None:
                 return row
@@ -864,8 +826,7 @@ class ChatExternalConversations:
             raise ValueError("invalid historical answer source")
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(path, operation="admit_external_chat_request"):
-            with exclusive_file_lock(self._source_route_path(binding_id, source["source_ref"]),
-                                     operation="route_external_chat_request"):
+            with exclusive_file_lock(external_source_route_path(self.root, binding_id, source["source_ref"]), operation="route_external_chat_request"):
                 selected = self.bindings.resolve(binding_id=binding_id, **source, include_observation=True)
                 if source_preflight(deepcopy(selected)) is not None:
                     raise ValueError("source preflight must verify or raise")
@@ -1429,7 +1390,7 @@ class ChatExternalConversations:
         # A duplicate waits on its own request before taking the route fence;
         # it must not hold up other messages while native cancellation runs.
         with exclusive_file_lock(path, operation="admit_external_chat_request"):
-            with exclusive_file_lock(self._source_route_path(binding_id, source["source_ref"]),
+            with exclusive_file_lock(external_source_route_path(self.root, binding_id, source["source_ref"]),
                                      operation="route_external_chat_request"):
                 # Resolve and verify the source inside both fences before
                 # creating or replaying any canonical request.

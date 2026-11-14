@@ -2,12 +2,54 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from ...chat_store import RESUMABLE_SESSION_STATES, ChatSessionStore, _read_json
-from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
+from ...capabilities.native_chat.file_discovery import FileChatDiscovery, external_source_route_path, file_change_fingerprint
+from ...file_lock import try_exclusive_file_lock
 from .private_progress import legacy_recovery_repairs
+
+if TYPE_CHECKING:
+    from ...capabilities.native_chat.external_conversations import ChatExternalConversations
+
+
+def resumable_answer_image_session(
+    core: ChatExternalConversations, request: dict[str, Any], turn: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Apply source controls before reading the current Session."""
+    store = core.controller.store
+    session_id, turn_id = request["session_id"], request["turn_id"]
+    if (turn is None or turn.get("status") != "completed"
+            or core._source_stop_observed(request, turn, store.events_after(session_id, turn_id, None))):
+        return None
+    session = store.load_session(session_id)
+    return session if session is not None and session.get("status") in RESUMABLE_SESSION_STATES else None
+
+
+@contextmanager
+def answer_media_dispatch(core: ChatExternalConversations, request: dict[str, Any]) -> Iterator[None]:
+    """Use Core's existing source, binding and Session fences through CLI spawn."""
+    store = core.controller.store
+    session_id, turn_id = request["session_id"], request["turn_id"]
+    route = external_source_route_path(core.root, request["binding_id"], request["source"]["source_ref"])
+    # Ingress takes the route before its binding and Session operations.
+    # Contention leaves the original control writer free to finish first.
+    with ExitStack() as fences:
+        for path in (route, core.bindings.path, store._session_path(session_id)):
+            if fences.enter_context(try_exclusive_file_lock(path, operation="dispatch_external_answer_media")) is None:
+                raise ValueError("original media authority is being updated")
+        if not any(binding.get("enabled") is True and binding["binding_id"] == request["binding_id"]
+                   and binding["transport_ref"] == request["profile"] for binding in core.bindings.read()["bindings"]):
+            raise ValueError("original media binding unavailable")
+        native = core.read_request(request["request_ref"])
+        if (native.get("status") != "accepted"
+                or any(native.get(key) != request[key] for key in ("binding_id", "source", "session_id", "turn_id"))
+                or resumable_answer_image_session(core, native, store.load_turn(session_id, turn_id)) is None):
+            raise ValueError("original Session or source no longer authorizes an upload")
+        yield
+
 
 def prepared_steward_binding_waits(
     request: dict[str, Any], bindings: list[dict[str, Any]], store: ChatSessionStore
