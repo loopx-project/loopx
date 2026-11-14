@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from itertools import product
+import os
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -297,3 +298,28 @@ def test_windows_paths_outside_the_private_roots_stay_public(tmp_path: Path) -> 
     (tmp_path / "sample.md").write_text(line + "\n", encoding="utf-8")
 
     assert contract.scan_public_boundary([tmp_path])["ok"] is True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX allows CR in a filename")
+def test_pruned_scan_root_keeps_a_carriage_return_tracked_name(tmp_path: Path) -> None:
+    """A CR inside a tracked name survives the Git-side enumeration.
+
+    Pruned roots such as a virtualenv are enumerated from Git alone, so a
+    pathname the text-mode read tore apart would leave the public-boundary
+    scan without any other way to notice the file.
+    """
+
+    repo = tmp_path / "repo"
+    scan_root = repo / "venv"
+    scan_root.mkdir(parents=True)
+    (scan_root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    name = "carriage\rreturn.py"
+    (scan_root / name).write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "-f", "--", "venv/pyvenv.cfg", f"venv/{name}"],
+        check=True,
+    )
+
+    assert contract._tracked_scan_files(scan_root) == [scan_root / name]
+    assert contract.iter_scan_files(scan_root) == [scan_root / name]

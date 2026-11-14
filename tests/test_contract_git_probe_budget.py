@@ -81,11 +81,18 @@ def test_an_unanswered_ownership_question_is_not_a_negative_answer(
 
     def fake_query(*arguments: str) -> contract._GitAnswer | None:
         asked.append(arguments)
-        if "rev-parse" in arguments:
-            return contract._GitAnswer(returncode=0, stdout=f"{tmp_path}\n")
         return None
 
+    def fake_bytes_query(*arguments: str) -> contract._GitBytesAnswer | None:
+        asked.append(arguments)
+        return contract._GitBytesAnswer(
+            returncode=0, stdout=os.fsencode(str(tmp_path)) + b"\n"
+        )
+
     monkeypatch.setattr(contract, "_git_query", fake_query)
+    # The worktree root is a byte record now, so the probe's own read is the
+    # one that answers `rev-parse`; ownership still asks the text helper.
+    monkeypatch.setattr(contract, "_git_query_bytes", fake_bytes_query)
     observed = contract._git_probe(target)
 
     assert observed["tracked"] is None

@@ -42,7 +42,13 @@ from .history import (
     build_run_history_audit,
     collect_history,
 )
-from .paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT, rel_or_abs, resolve_runtime_root
+from .paths import (
+    DEFAULT_RUNTIME_ROOT,
+    LEGACY_RUNTIME_ROOT,
+    display_path_text,
+    rel_or_abs,
+    resolve_runtime_root,
+)
 from .public_safe_text import PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
 from .registry import inspect_registry, inspect_registry_boundary, registry_goals, resolve_state_file
 from .state_projection import state_projection_gap_warning
@@ -372,7 +378,13 @@ class _GitAnswer:
     stdout: str
 
 
-def _retire_owned_probe(process: subprocess.Popen[str]) -> None:
+@dataclass(frozen=True)
+class _GitBytesAnswer:
+    returncode: int
+    stdout: bytes
+
+
+def _retire_owned_probe(process: subprocess.Popen[str] | subprocess.Popen[bytes]) -> None:
     """Stop this probe's own process group, then drop its pipes unread.
 
     A descendant that inherited the pipes keeps them open after the leader
@@ -429,6 +441,36 @@ def _git_query(*arguments: str) -> _GitAnswer | None:
     return _GitAnswer(returncode=process.returncode, stdout=stdout)
 
 
+def _git_query_bytes(*arguments: str) -> _GitBytesAnswer | None:
+    """One bounded local Git read that keeps the raw output bytes.
+
+    Pathname listings carry their record identity in these bytes. The text read
+    above translates a CR inside a legal name into LF and replaces an
+    undecodable record with U+FFFD, so a pathname rebuilt from it can name a
+    file that does not exist and the tracked file would leave the scan.
+    """
+
+    argv = ["git", *arguments]
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=os.name == "posix",
+        )
+    except OSError:
+        return None
+    try:
+        stdout, _stderr = process.communicate(timeout=GIT_PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _retire_owned_probe(process)
+        return None
+    except BaseException:
+        _retire_owned_probe(process)
+        raise
+    return _GitBytesAnswer(returncode=process.returncode, stdout=stdout)
+
+
 def _git_worktree_root(path: Path) -> Path | None:
     """Return the worktree root, or None when Git says this is not one.
 
@@ -438,15 +480,22 @@ def _git_worktree_root(path: Path) -> Path | None:
 
     path = path.resolve()
     target = path if path.is_dir() else path.parent
-    answer = _git_query("-C", str(target), "rev-parse", "--show-toplevel")
+    # The root is a directory name like any other: it may carry a CR, an LF or
+    # bytes UTF-8 cannot encode. A text read turns those bytes into LF/U+FFFD,
+    # the rebuilt root then names no directory, and every tracked file below it
+    # silently leaves the scan. Read the answer as bytes and remove only the
+    # terminator Git appends, so the root keeps its own identity.
+    answer = _git_query_bytes("-C", str(target), "rev-parse", "--show-toplevel")
     if answer is None:
         raise GitProbeUnavailable("git did not answer the worktree probe")
     if answer.returncode != 0:
         return None
-    root = answer.stdout.strip()
-    if not root:
+    record = answer.stdout
+    if record.endswith(b"\n"):
+        record = record[: -1]
+    if not record:
         return None
-    return Path(root).resolve()
+    return Path(os.fsdecode(record)).resolve()
 
 
 def _git_probe(path: Path) -> dict[str, Any]:
@@ -1071,17 +1120,17 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
     if not rel_root:
         rel_root = "."
 
-    tracked = _git_query("-C", str(repo_root), "ls-files", "-z", "--", rel_root)
+    tracked = _git_query_bytes("-C", str(repo_root), "ls-files", "-z", "--", rel_root)
     if tracked is None:
         raise GitProbeUnavailable("git did not answer the tracked-file enumeration")
     if tracked.returncode != 0:
         return []
 
     files: list[Path] = []
-    for rel_path in tracked.stdout.split("\0"):
-        if not rel_path:
+    for record in tracked.stdout.split(b"\0"):
+        if not record:
             continue
-        path = repo_root / rel_path
+        path = repo_root / os.fsdecode(record)
         if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
             continue
         path = path.resolve()
@@ -1119,6 +1168,19 @@ def _record_unreadable_directory(
     unreadable_directories.append((directory, _directory_reason(error)))
 
 
+def _display_scan_path(path: Path, root: Path) -> str:
+    """Label a scanned path so even an undecodable name reaches the report.
+
+    ``rel_or_abs`` returns ``os.fsdecode``'s text, which keeps a name that is
+    not valid UTF-8 as lone surrogates. A report that carried those verbatim
+    wrote bytes no strict UTF-8 reader accepts, and the JSON consumer could not
+    read the finding that named the file. The escape keeps the record's exact
+    bytes readable and distinct from every other name.
+    """
+
+    return display_path_text(rel_or_abs(path, root))
+
+
 def _unreadable_directory_label(
     directory: Path, scan_roots: Mapping[Path, Path]
 ) -> str:
@@ -1130,9 +1192,9 @@ def _unreadable_directory_label(
     """
     containing = [root for root in scan_roots if directory.is_relative_to(root)]
     if not containing:
-        return str(directory)
+        return display_path_text(directory)
     root = min(containing, key=lambda candidate: (len(candidate.parts), str(candidate)))
-    return str(directory.relative_to(scan_roots[root])) or "."
+    return display_path_text(directory.relative_to(scan_roots[root])) or "."
 
 
 def _unreadable_directory_labels(
@@ -1266,7 +1328,7 @@ def scan_public_boundary(
         if not resolved_scan_root.exists():
             # A scan root that is not there contributes no files, so a typo in
             # the caller's path would otherwise report a clean empty boundary.
-            missing_scan_roots.append(str(scan_root))
+            missing_scan_roots.append(display_path_text(scan_root))
             continue
         display_root = resolved_scan_root.parent if resolved_scan_root.is_file() else resolved_scan_root
         # `file_roots` renders a file relative to the root that asked for it and
@@ -1291,7 +1353,10 @@ def scan_public_boundary(
         if _is_local_private_state_path(resolved_scan_root, classification_root):
             # Explicit outgoing selection cannot turn an ignored private file
             # or a pruned private directory into a successful empty scan.
-            record_hit(f"{rel_or_abs(resolved_scan_root, classification_root)}: local_private_state")
+            record_hit(
+                f"{_display_scan_path(resolved_scan_root, classification_root)}: "
+                "local_private_state"
+            )
             continue
         for file_path in iter_scan_files(
             resolved_scan_root,
@@ -1337,11 +1402,11 @@ def scan_public_boundary(
                     skipped_private_state_files.append(rel_or_abs(path, root))
                     if git.get("inside_worktree") and not git.get("ignored"):
                         private_state_git_warnings.append(
-                            f"{rel_or_abs(path, root)}: private state should be gitignored"
+                            f"{_display_scan_path(path, root)}: private state should be gitignored"
                         )
                     continue
                 private_file_git[path] = git
-                record_hit(f"{rel_or_abs(path, root)}: local_private_state")
+                record_hit(f"{_display_scan_path(path, root)}: local_private_state")
             yield path
 
     for read in iter_utf8_file_reads(public_files()):
@@ -1353,7 +1418,7 @@ def scan_public_boundary(
                 read.error.strerror or type(read.error).__name__
                 if isinstance(read.error, OSError) else "invalid UTF-8"
             )
-            unreadable_files.append(f"{rel_or_abs(path, root)}: {detail}")
+            unreadable_files.append(f"{_display_scan_path(path, root)}: {detail}")
             continue
         text = read.text
         assert text is not None
@@ -1376,7 +1441,7 @@ def scan_public_boundary(
                         ):
                             display_package = package_path or "<root>"
                             record_hit(
-                                f"{rel_or_abs(path, root)}: "
+                                f"{_display_scan_path(path, root)}: "
                                 "non_public_package_registry "
                                 f"({display_package})"
                             )
@@ -1397,7 +1462,7 @@ def scan_public_boundary(
                 if name == "private_doc_url":
                     scan_line = _PUBLIC_LARK_DEVELOPER_CONSOLE_HOST.sub("", scan_line)
                 if rule.pattern.search(scan_line):
-                    hit = f"{rel_or_abs(path, root)}:{line_no}: {name}"
+                    hit = f"{_display_scan_path(path, root)}:{line_no}: {name}"
                     if name == "credential" and _credential_hits_are_all_references(line):
                         credential_reference_hits.append(hit)
                         continue
@@ -1418,10 +1483,12 @@ def scan_public_boundary(
             or unreadable_directories
             or unavailable_git_probes
         ),
-        "scan_roots": [str(path) for path in scan_roots],
+        "scan_roots": [display_path_text(path) for path in scan_roots],
         "files": len(files),
         "scanned_files": len(files) - len(skipped_private_state_files),
-        "skipped_private_state_files": skipped_private_state_files,
+        "skipped_private_state_files": [
+            display_path_text(item) for item in skipped_private_state_files
+        ],
         "credential_reference_hits": credential_reference_hits,
         "unreadable_files": unreadable_files,
         # Identity is the absolute directory, so two roots that each hold an
@@ -1432,7 +1499,9 @@ def scan_public_boundary(
         "missing_scan_roots": missing_scan_roots,
         # A Git question that was not answered leaves the boundary unknown:
         # this list keeps a partial answer from being reported as clean.
-        "unavailable_git_probes": sorted(set(unavailable_git_probes)),
+        "unavailable_git_probes": sorted(
+            {display_path_text(item) for item in unavailable_git_probes}
+        ),
         "allowed_hits": allowed_hits,
         "private_state_git_warnings": private_state_git_warnings,
         "policy": policy,
@@ -1691,7 +1760,7 @@ def check_contract(
         "ok": not errors,
         "registry": str(registry_path),
         "runtime_root": str(runtime_root),
-        "scan_roots": [str(path) for path in scan_roots],
+        "scan_roots": [display_path_text(path) for path in scan_roots],
         "summary": {
             "errors": len(errors),
             "warnings": len(warnings),
