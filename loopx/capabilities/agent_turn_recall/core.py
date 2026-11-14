@@ -7,7 +7,6 @@ from typing import Any
 from ...control_plane.digest_envelope import sha256_envelope
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ..context_providers.base import ContextProvider
-from ..reward_memory.runtime_hooks import run_reward_memory_automatic_recall_hook
 
 
 AGENT_TURN_SITUATION_SCHEMA_VERSION = "agent_turn_situation_v0"
@@ -214,6 +213,8 @@ def run_agent_turn_recall(
     provider: ContextProvider | None = None,
 ) -> dict[str, Any]:
     """Recall guidance and inject it into this turn's private reasoning context."""
+
+    from ..reward_memory.runtime_hooks import run_reward_memory_automatic_recall_hook
 
     query = _turn_query(situation)
     context = {
