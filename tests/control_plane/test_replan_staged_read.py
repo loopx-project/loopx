@@ -290,6 +290,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             capture_root = capture.parent
         else:
             capture_root = Path(commands[0][commands[0].index("--decision-output-root") + 1])
+            view_path = capture_root / "checkpoint-start-view.json"
         [captured] = capture_root.glob("decision-*/decision.json")
         raw = source_path.read_bytes()
         source, view = json.loads(raw), json.loads(view_path.read_bytes())

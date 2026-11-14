@@ -640,7 +640,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(
         if placement != "physical":
             command[command.index("--capture-file") + 1] = str(alias / source.relative_to(source.parent.parent))
     else:
-        source = wake / "checkpoint-start-view.json"
+        source, = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
     raw = source.read_bytes()
     if enabled:
         assert raw == original_guard
