@@ -821,6 +821,17 @@ def test_owed_command_checks_child_receipts_or_recovers_without_another_debit(tm
     settle(wrong)
     assert not wrong["ok"] and not calls and readbacks == [TURN_ID] and _spend_run_count(runtime) == 0
     readbacks.clear()
+    foreign = copy.deepcopy(original)
+    owed = foreign["settlement_owed"]
+    argv = owed.get("command_argv") or shlex.split(owed["command"])
+    argv = ["foreign-loopx", *argv[1:]]
+    if "command_argv" in owed:
+        owed["command_argv"] = argv
+    owed["command"] = refresh_settlement.render_owed_host_command(argv)
+    settle(foreign)
+    assert not foreign["ok"] and "current CLI route" in foreign["error"]
+    assert not calls and readbacks == [TURN_ID] and _spend_run_count(runtime) == 0
+    readbacks.clear()
     result = copy.deepcopy(original)
     settle(result)
     assert result["ok"] and result["settlement_progress"]["state"] == "settled", result
