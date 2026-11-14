@@ -506,7 +506,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const recordUnit = read.complete && history.canonical && read.events.length > history.canonical.events.length
     ? (zh ? "条原始记录" : "source rows") : read.total === 1 ? copy.record : copy.records;
   const emptySourceHistory = hasNativeSource && emptyHistory;
-  const hasSavedResult = Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
+  const hasSavedResult = Boolean(analysis.pack?.result || analysis.pack?.native_outcomes || analysis.pack?.human_attention);
   const emptyWithAnalysis = emptyHistory && hasSavedResult;
   const historyBeforeAnalysisSummary = hasNativeSource && Boolean(value?.nodes.length) && !hasSavedResult;
   // Reorder the existing reader in the DOM so visual and keyboard order agree.

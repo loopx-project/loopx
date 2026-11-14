@@ -153,7 +153,9 @@ publishing, production writes, and final ownership stay with the human.
 
 Open a Goal to inspect its work, responsible Agents and recorded Explore history.
 Use **Deep analysis** to inspect a registered trajectory, its citations, native
-outcome readback and separately measured costs. An Agent prepares the source;
+outcome readback and separately measured costs. Research also shows source-bound
+[human attention](docs/reference/trajectory-assessment.md#human-attention-in-research-optional),
+with recorded inputs, timing coverage and inspectable optimization points. An Agent prepares the source;
 opening a page or reading a result does not start a model call. Explicit analysis
 uses the configured host and account.
 
