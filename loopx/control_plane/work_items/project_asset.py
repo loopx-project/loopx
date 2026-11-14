@@ -319,6 +319,9 @@ def attach_active_state_project_asset_fields(
         else None
     )
     if replan_obligation is None and autonomous_replan_obligation_from_runs is not None:
+        shared_todos = item.get("agent_todos")
+        monitor_todos = {"monitor_open_items":
+            shared_todos.get("monitor_open_items", []) if isinstance(shared_todos, dict) else []}
         agent_ids = sorted(
             {
                 agent_id
@@ -333,9 +336,10 @@ def attach_active_state_project_asset_fields(
             if (
                 obligation := autonomous_replan_obligation_from_runs(
                     latest_runs or [],
-                    # The shared todo summary is goal-scoped here. Quota derives
-                    # todo-based replans later from its agent-filtered summary.
-                    agent_todos=None,
+                    # The TS history owner matches monitor intent by Todo,
+                    # target and lane. Share those facts without importing
+                    # goal-scoped advancement/resume decisions into this lane.
+                    agent_todos=monitor_todos,
                     agent_id=agent_id,
                 )
             )
