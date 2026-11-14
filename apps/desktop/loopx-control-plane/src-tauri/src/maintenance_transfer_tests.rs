@@ -37,6 +37,10 @@ impl Server {
     }
 
     fn with_archive(bytes: Vec<u8>, signature: String) -> Self {
+        Self::with_version(bytes, signature, "1.1.0")
+    }
+
+    fn with_version(bytes: Vec<u8>, signature: String, version: &'static str) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -88,7 +92,7 @@ impl Server {
                         pause(&done, Duration::from_secs(40));
                         return;
                     }
-                    let feed = json!({"version":"1.1.0", "url":format!("{url}/{mode}"), "signature":signature}).to_string();
+                    let feed = json!({"version":version, "url":format!("{url}/{mode}"), "signature":signature}).to_string();
                     let body = if path.starts_with("/feed/") {
                         feed.as_bytes()
                     } else {
@@ -610,4 +614,42 @@ fn terminal_preparation_rejects_bad_download_before_any_handoff() {
         );
         assert!(!request.exists());
     });
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn rejected_cross_channel_preparation_preserves_original_verified_cache() {
+    let app = app(KEY);
+    let server = Server::with_version(BODY.to_vec(), SIGNATURE.into(), "1.1.0-main.2");
+    let automatic = tempfile::tempdir().unwrap();
+    let request = tempfile::tempdir().unwrap();
+    crate::prepared_update::save(automatic.path(), "stable", "1.1.0", SIGNATURE, BODY).unwrap();
+    let before = std::fs::read(automatic.path().join("prepared.json")).unwrap();
+    let update = tauri::async_runtime::block_on(find_update(
+        app.handle(),
+        "main",
+        server.feed("tampered"),
+        Duration::from_secs(5),
+    ))
+    .unwrap();
+    let result = tauri::async_runtime::block_on(prepare_terminal_candidate(
+        update,
+        "1.0.0",
+        "main",
+        KEY,
+        automatic.path(),
+        request.path(),
+    ));
+    assert_eq!(result.unwrap_err(), "update_signature_invalid");
+    assert!(!request.path().join("prepared.json").exists());
+    assert_eq!(
+        std::fs::read(automatic.path().join("prepared.json")).unwrap(),
+        before
+    );
+    let original = crate::prepared_update::load(automatic.path(), "1.0.0", "stable", KEY)
+        .unwrap()
+        .expect("failed Main preparation must retain the signed Stable cache");
+    assert_eq!(original.bytes, BODY);
+    assert_eq!(original.signature, SIGNATURE);
+    assert_eq!(server.requests.load(Ordering::Acquire), 2);
 }

@@ -1517,7 +1517,7 @@ async fn prepare_terminal_candidate(
     let Some(update) = update else {
         return Ok(current.into());
     };
-    let cached = crate::prepared_update::load(automatic_root, current, channel, key)
+    let cached = crate::prepared_update::peek(automatic_root, current, channel, key)
         .ok()
         .flatten()
         .filter(|cached| cached.version == update.version && cached.signature == update.signature);
