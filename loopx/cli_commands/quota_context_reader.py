@@ -100,10 +100,11 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
 
 def bind_capture_recovery_transport(payload: dict[str, Any], args: argparse.Namespace, *,
                                     capture_directory: Path | None, registry_path: Path,
-                                    runtime_root: Path) -> None:
-    """Keep a caller-owned envelope on the recovery guards emitted by the quota owner."""
+                                    runtime_root: Path, preserve_app_delivery: bool = False) -> None:
+    """Keep the caller's stateless delivery on the quota owner's recovery guards."""
+    caller_capture = capture_directory is not None and getattr(args, "turn_envelope", False)
     if (payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
-            or capture_directory is None or not getattr(args, "turn_envelope", False)
+            or not (caller_capture or preserve_app_delivery)
             or any(getattr(args, name, None) for name in (
                 "decision_handoff_socket", "codex_context_dir", "codex_context_root",
             ))):
@@ -115,8 +116,9 @@ def bind_capture_recovery_transport(payload: dict[str, Any], args: argparse.Name
     prefix = render_cli_command_prefix(runtime_root=str(runtime_root), registry_path=str(registry_path))
     guard_prefix = prefix + " --format json quota should-run "
     root = getattr(args, "decision_output_root", None)
+    capture_root = capture_directory.parent if capture_directory is not None else None
     cli["next_cli_actions"] = [
-        _bind_capture_transport_options(action, args, root=root, capture_root=capture_directory.parent)
+        _bind_capture_transport_options(action, args, root=root, capture_root=capture_root)
         if action.startswith(guard_prefix) else action
         for action in cli["next_cli_actions"]
     ]
