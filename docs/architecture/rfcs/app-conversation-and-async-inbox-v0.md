@@ -189,6 +189,15 @@ it cannot silently fall back to a peer or ordinary conversation. Goal-scoped,
 project, explicit original, managed-Agent and remote/read-only views retain their
 own navigation. A newly selected preference does not retarget an already frozen
 original conversation.
+The default `POST /api/chat/sessions` manager entry resolves the same saved
+choice on the server, including for API callers. It resumes that original
+Session or rejects the request; a new-session/model override cannot silently
+create a separate local steward. Existing explicitly addressed Sessions retain
+their identity. If the original Session closes or changes identity during
+discovery, the manager request fails with its history preserved. A verified
+Lark bot with an unavailable owner login is reported
+as an owner-login recovery, without clearing the selection or weakening source
+verification. Restore the original owner's login for the same App and retry.
 Overview quick prompts and its composer use the same explicit choice and the
 existing exact Session send, active-Turn queue, stream recovery and readback.
 Resolving the entry does not open Chat or block Goal navigation. Sending stays
