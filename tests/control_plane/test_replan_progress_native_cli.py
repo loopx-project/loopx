@@ -484,7 +484,7 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
 
         recovery_root = path.parent / "context-delivery"
         prior_recoveries = set(recovery_root.glob("recovery-*"))
-        for limit in (80, 96):
+        for limit in (80, 96, 256, 400):
             denied = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
             assert denied["ok"] is False and "command" not in denied
             reason = denied["reason"].lower()
@@ -532,6 +532,11 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         output_limit = 1450
         bounded = read(f"{writer_command} --max-page-output-bytes {output_limit}", output_limit=output_limit)
         assert bounded["source_hash"] == writer["source_hash"]
+        published_recoveries = set(recovery_root.glob("recovery-*"))
+        assert len(published_recoveries - prior_recoveries) == 1
+        denied = read(f"{writer_command} --max-page-output-bytes 400", expected=1, output_limit=400)
+        assert denied["ok"] is False and "command" not in denied
+        assert set(recovery_root.glob("recovery-*")) == published_recoveries
         page_command = bounded["command"]
         body = bytearray()
         while True:
