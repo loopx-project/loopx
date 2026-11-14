@@ -706,54 +706,62 @@ test("a review-bound dependency authored after admission preserves the original 
     triggers: [{kind: "completed_advancement_without_successor", todo_id: row.todo_id,
       completion_turn_key: row.completion_turn_key, agent_id: agent}]};
   for (const edge of [{resume_when: `todo_done:${row.todo_id}`}, {unblocks_todo_id: row.todo_id}]) {
+    // Canonical Todo updates truncate to whole seconds. A review-bound
+    // successor stored as 01Z after admission at 01.500Z is post-admission,
+    // as is one stored on the next second.
+    for (const updated_at of ["2026-08-01T00:00:02Z", "2026-08-01T00:00:01Z"]) {
+      const successor = {todo_id: "todo_successor", status: "open", done: false,
+        task_class: "advancement_task", last_actor_agent_id: agent, claimed_by: agent,
+        replan_obligation_id: id, updated_at, ...edge};
+      const items = [row, successor], before = structuredClone(items);
+      assert.deepEqual(projectReplanSemantics({...source, items}), {items: [row], settled: false});
+      // Recovering the original review preserves its identity, not an ACK or a
+      // grant to dispatch this successor before the original Turn is settled.
+      const recovered = projectReplanSemantics({operation: "receipt_bound_obligation",
+        guard_scoped: true, replay_phase: "open", selected_obligation_id: id,
+        agent_id: agent, current_obligation: null, transition_candidates: [{
+          obligation: original, source_obligation: original, items,
+          guard_recorded_at: source.guard_recorded_at, lifecycle_settled: false,
+        }]}).obligation as JsonObject;
+      assert.equal(recovered.obligation_id, id);
+      assert.equal(recovered.resolution_mode, "todo_lifecycle_settlement");
+      const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
+        source: "todo_replan_successor_transition", semantic_delta: {
+          schema_version: "replan_semantic_delta_v0", accepted: true, obligation_id: id,
+          outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"],
+          successor_todo_id: successor.todo_id,
+        }};
+      const settlement = projectReplanSemantics({operation: "receipt_bound_obligation",
+        guard_scoped: true, replay_phase: "open", selected_obligation_id: id,
+        agent_id: agent, current_obligation: null, transition_candidates: [{
+          obligation: original, source_obligation: original, items, ack,
+          guard_recorded_at: source.guard_recorded_at, lifecycle_settled: false,
+        }]}).obligation as JsonObject;
+      assert.equal(settlement.obligation_id, id);
+      assert.equal(settlement.resolution_mode, "receipt_bound_replan_settlement");
+      assert.equal((settlement.settlement_action_packet as JsonObject).successor_todo_id, successor.todo_id);
+      // An invalid transition retains the pending lifecycle; it cannot turn into
+      // an ACK, discard its original completion identity or release the next task.
+      const invalid = projectReplanSemantics({operation: "receipt_bound_obligation",
+        guard_scoped: true, replay_phase: "open", selected_obligation_id: id,
+        agent_id: agent, current_obligation: null, transition_candidates: [{
+          obligation: original, source_obligation: original, items,
+          ack: {...ack, recorded: false},
+          guard_recorded_at: source.guard_recorded_at, lifecycle_settled: false,
+        }]}).obligation as JsonObject;
+      assert.equal(invalid.resolution_mode, "todo_lifecycle_settlement");
+      assert.deepEqual(items, before);
+    }
     const successor = {todo_id: "todo_successor", status: "open", done: false,
       task_class: "advancement_task", last_actor_agent_id: agent, claimed_by: agent,
       replan_obligation_id: id, updated_at: "2026-08-01T00:00:02Z", ...edge};
-    const items = [row, successor], before = structuredClone(items);
-    assert.deepEqual(projectReplanSemantics({...source, items}), {items: [row], settled: false});
-    // Recovering the original review preserves its identity, not an ACK or a
-    // grant to dispatch this successor before the original Turn is settled.
-    const recovered = projectReplanSemantics({operation: "receipt_bound_obligation",
-      guard_scoped: true, replay_phase: "open", selected_obligation_id: id,
-      agent_id: agent, current_obligation: null, transition_candidates: [{
-        obligation: original, source_obligation: original, items,
-        guard_recorded_at: source.guard_recorded_at, lifecycle_settled: false,
-      }]}).obligation as JsonObject;
-    assert.equal(recovered.obligation_id, id);
-    assert.equal(recovered.resolution_mode, "todo_lifecycle_settlement");
-    const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
-      source: "todo_replan_successor_transition", semantic_delta: {
-        schema_version: "replan_semantic_delta_v0", accepted: true, obligation_id: id,
-        outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"],
-        successor_todo_id: successor.todo_id,
-      }};
-    const settlement = projectReplanSemantics({operation: "receipt_bound_obligation",
-      guard_scoped: true, replay_phase: "open", selected_obligation_id: id,
-      agent_id: agent, current_obligation: null, transition_candidates: [{
-        obligation: original, source_obligation: original, items, ack,
-        guard_recorded_at: source.guard_recorded_at, lifecycle_settled: false,
-      }]}).obligation as JsonObject;
-    assert.equal(settlement.obligation_id, id);
-    assert.equal(settlement.resolution_mode, "receipt_bound_replan_settlement");
-    assert.equal((settlement.settlement_action_packet as JsonObject).successor_todo_id, successor.todo_id);
-    // An invalid transition retains the pending lifecycle; it cannot turn into
-    // an ACK, discard its original completion identity or release the next task.
-    const invalid = projectReplanSemantics({operation: "receipt_bound_obligation",
-      guard_scoped: true, replay_phase: "open", selected_obligation_id: id,
-      agent_id: agent, current_obligation: null, transition_candidates: [{
-        obligation: original, source_obligation: original, items,
-        ack: {...ack, recorded: false},
-        guard_recorded_at: source.guard_recorded_at, lifecycle_settled: false,
-      }]}).obligation as JsonObject;
-    assert.equal(invalid.resolution_mode, "todo_lifecycle_settlement");
-    assert.deepEqual(items, before);
     for (const change of [{replan_obligation_id: "replan-2222222222222222"},
-      {last_actor_agent_id: "peer"}, {claimed_by: "peer"}, {updated_at: "2026-08-01T00:00:01Z"},
+      {last_actor_agent_id: "peer"}, {claimed_by: "peer"}, {updated_at: "2026-08-01T00:00:00Z"},
       {updated_at: "invalid"}, {updated_at: null}]) {
       assert.deepEqual(projectReplanSemantics({...source, items: [row, {...successor, ...change}]}),
         {items: [], settled: false});
     }
-    assert.deepEqual(projectReplanSemantics({...source, selected_obligation_id: undefined, items}),
+    assert.deepEqual(projectReplanSemantics({...source, selected_obligation_id: undefined, items: [row, successor]}),
       {items: [], settled: false});
   }
 });
