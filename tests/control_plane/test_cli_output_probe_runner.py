@@ -429,13 +429,20 @@ def test_complete_plan_receipt_checks_original_goal_bytes(tmp_path):
             receipt_row(**kwargs, measurement=measure)
 
 
+@pytest.fixture
+def stable_budget_root(tmp_path):
+    # The reader command contributes to the projection's break-even point.
+    with probe._stable_budget_fixture_root(tmp_path) as root:
+        yield root
+
+
 @pytest.mark.parametrize("output_format", ["json", "markdown"])
-def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path, output_format):
+def test_signed_todo_row_projection_recovers_its_original_decision(stable_budget_root, output_format):
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from loopx.control_plane.testing.canary_harness import import_fixture_authority
     from loopx.rollout_event_log import rollout_event_log_path
 
-    project, runtime, registry, state = probe._write_fixture(tmp_path, probe.SCENARIOS[2])
+    project, runtime, registry, state = probe._write_fixture(stable_budget_root, probe.SCENARIOS[2])
     # Partial overlap between lanes permits row references even when there is
     # no outcome history to defer. Make that projection worth its reader cost.
     state.write_text(state.read_text().replace("without reading archival detail.",

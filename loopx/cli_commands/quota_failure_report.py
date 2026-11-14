@@ -550,6 +550,7 @@ def _bounded_quota_transport_failure(
 
     if digest is None and _failure_output_size(failure) <= limit:
         return failure
+    original_locator = {"path": str(path), "sha256": digest} if path is not None and digest is not None else None
     receipt = failure.get("heartbeat_receipt")
     command = None
     if reader is not None:
@@ -589,6 +590,13 @@ def _bounded_quota_transport_failure(
     if command is not None or isinstance(receipt, Mapping):
         compact = _compact_quota_failure(command, receipt=receipt if command is None else None)
         guided = {**compact, "instruction": "Read the original Turn receipt before recovering. Do not rerun admission."}
+        if command is not None and original_locator is not None:
+            # Keep the independently checkable identity when the receipt and
+            # full failure do not fit. A fallback diagnostic is not the original.
+            for reference in (original_locator, {"sha256": original_locator["sha256"]}):
+                located = {**guided, "captured_decision": reference}
+                if _failure_output_size(located) <= limit:
+                    return located
         if _failure_output_size(guided) <= limit:
             return guided
         if _failure_output_size(compact) <= limit:
