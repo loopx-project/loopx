@@ -101,22 +101,37 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
 def bind_capture_recovery_transport(payload: dict[str, Any], args: argparse.Namespace, *,
                                     capture_directory: Path | None, registry_path: Path,
                                     runtime_root: Path) -> None:
-    """Keep a caller-owned envelope on the recovery guards emitted by the quota owner."""
-    if (payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
-            or capture_directory is None or not getattr(args, "turn_envelope", False)
-            or any(getattr(args, name, None) for name in (
-                "decision_handoff_socket", "codex_context_dir", "codex_context_root",
-            ))):
-        # Session-local transports have their own continuity and cannot follow a prior Turn.
+    """Keep the caller's work contract on the quota owner's recovery guards."""
+    if payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
         return
+    complete_turn = getattr(args, "complete_turn", False)
+    legacy_capture = capture_directory is not None and getattr(args, "turn_envelope", False)
+    if not (complete_turn or legacy_capture):
+        return
+    native_transport = any(getattr(args, name, None) for name in (
+        "decision_handoff_socket", "codex_context_dir", "codex_context_root",
+    ))
+    if native_transport:
+        # A hook journal or rendezvous is bound to its live host. An explicit
+        # complete-source caller can resume through the same stateless reader.
+        if not complete_turn:
+            return
+        from copy import copy
+
+        args = copy(args)
+        args.decision_handoff_socket = args.codex_context_dir = args.codex_context_root = None
+        if args.context_delivery == "on":
+            args.context_delivery = "auto"
+        args.delta_delivery = "off"
     from ..control_plane.work_items.action_selection_contract import render_cli_command_prefix
 
     cli = payload["interaction_contract"]["cli_channel"]
     prefix = render_cli_command_prefix(runtime_root=str(runtime_root), registry_path=str(registry_path))
     guard_prefix = prefix + " --format json quota should-run "
     root = getattr(args, "decision_output_root", None)
+    capture_root = capture_directory.parent if capture_directory is not None else None
     cli["next_cli_actions"] = [
-        _bind_capture_transport_options(action, args, root=root, capture_root=capture_directory.parent)
+        _bind_capture_transport_options(action, args, root=root, capture_root=capture_root)
         if action.startswith(guard_prefix) else action
         for action in cli["next_cli_actions"]
     ]

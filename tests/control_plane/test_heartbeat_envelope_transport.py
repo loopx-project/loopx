@@ -463,6 +463,87 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     assert _spend_run_count(runtime) == 1
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("native", [False, True], ids=["inline", "native"])
+def test_default_worker_recovery_preserves_complete_source_and_settlement(tmp_path, monkeypatch, provider, native):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+    from tests.control_plane.test_quota_settlement_cli import _configure_read_only_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    logs = tmp_path / "wake logs"
+    cli = str(Path(sys.executable).parent / "loopx")
+    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT), LOOPX_CLI=cli,
+        LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
+        LOOPX_PROJECT=str(project), LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
+        LOOPX_WAKE_LOG_DIR=str(logs), LOOPX_EXECUTION_MODE="heartbeat",
+        LOOPX_CONTEXT_DELIVERY="on" if native else "off",
+        LOOPX_TURN_ENVELOPE="0", LOOPX_COMPLETE_TURN="0")
+    if native:
+        context = tmp_path / "native context"
+        context.mkdir(mode=0o700)
+        env["LOOPX_CODEX_CONTEXT_DIR"] = str(context)
+
+    def run(argv):
+        result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True, timeout=45)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return read_cli_policy_payload(result.stdout, returncode=result.returncode)
+
+    def guard(turn):
+        (logs / turn).mkdir(parents=True)
+        body = heartbeat_body(env, turn, native_goal=False)
+        command = next(line for line in body.splitlines() if " quota should-run " in line)
+        argv = shlex.split(command.replace('${LOOPX_TURN:?}', turn))
+        assert "--complete-turn" in argv and "--turn-envelope" not in argv
+        return run([*argv, "--todo-id", TODO_ID])
+
+    original_turn, later_turn = "original-worker-turn", "later-worker-turn"
+    original = guard(original_turn)
+    assert_complete_turn_decision(original)
+    identity = original["heartbeat_receipt"]["settlement_identity"]
+    recovery = guard(later_turn)
+    assert recovery["unsettled_host_turn_recovery"]["repair"] == "resume_prior_turn"
+    actions = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    resume, reenter = map(shlex.split, (actions[1], actions[-1]))
+    for argv in (resume, reenter):
+        assert "--complete-turn" in argv
+        assert not {"--turn-envelope", "--decision-handoff-socket",
+                    "--codex-context-dir", "--codex-context-root"} & set(argv)
+        if native:
+            assert argv[argv.index("--context-delivery") + 1] == "auto"
+            assert argv[argv.index("--delta-delivery") + 1] == "off"
+            assert argv[argv.index("--decision-output-root") + 1] == str(logs / later_turn / "decisions")
+        else:
+            assert argv[argv.index("--context-delivery") + 1] == "off"
+    resumed = run(resume)
+    assert_complete_turn_decision(resumed)
+    plan = resumed["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == plan["identity"] == identity
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")["owner"] == "runtime"
+    assert _heartbeat_receipt_count(runtime, original_turn) == 1 and _spend_run_count(runtime) == 0
+
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    command = writeback["command_template"]
+    for token, value in {
+        "<validated_progress>": "verified_worker_result", "<scale>": "implementation",
+        "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation",
+    }.items():
+        command = command.replace(token, value)
+    command += " --delivery-boundary in_flight_continuation --no-global-sync --suppress-external-sinks"
+    settled = run(shlex.split(command))
+    assert settled["settlement_progress"]["state"] == "settled"
+    assert settled["settlement_identity"] == identity
+    assert run(shlex.split(command))["idempotent_replay"]
+    continued = run(reenter)
+    assert_complete_turn_decision(continued)
+    assert continued["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == later_turn
+    assert _heartbeat_receipt_count(runtime, original_turn) == 1 and _spend_run_count(runtime) == 1
+
+
 def test_native_worker_and_stable_bootstrap_cannot_use_capture(tmp_path):
     project, runtime, registry = _write_fixture(tmp_path)
     env = dict(os.environ, LOOPX_CLI='unused', LOOPX_REGISTRY=str(registry),
