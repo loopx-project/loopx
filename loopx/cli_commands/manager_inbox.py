@@ -23,6 +23,11 @@ def _share_item_guidance(result: dict) -> dict:
             text = items[0].get(key)
             if isinstance(text, str) and text and all(item.get(key) == text for item in items[1:]):
                 shared[key] = text
+        advice = items[0].get("receiver_followthrough")
+        if isinstance(advice, dict) and advice:
+            encoded = json.dumps(advice)
+            if all(json.dumps(item.get("receiver_followthrough")) == encoded for item in items[1:]):
+                shared["receiver_followthrough"] = advice
 
     if shared and "shared_item_guidance" not in result:
         return {
@@ -55,26 +60,49 @@ def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
     from ..command_invocation import current_loopx_cli_argv
     from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
     from ..control_plane.turn_driver.decision_capture import (
-        CONTEXT_CAPTURE_CODE_MODE_GUIDANCE, context_capture_read_command,
+        CONTEXT_CAPTURE_CODE_MODE_GUIDANCE,
+        context_capture_read_command,
+        private_capture_supported,
+        write_context_read_reference,
     )
     from .context_machine import capture_context_recovery
 
     if size <= MAX_REQUEST_BYTES:
         reference = capture_context_recovery(view, runtime_root=runtime_root, index_and_select=False)
         if reference.get("available") is not False:
-            command = context_capture_read_command(Path(reference["path"]), reference["sha256"],
-                page_bytes=limit, max_page_output_bytes=limit, reader_argv=current_loopx_cli_argv())
-            opening = _render_read_markdown({"ok": True, "read_complete": False, "command": command,
+            path = Path(reference["path"])
+            digest = reference["sha256"]
+            reader_argv = current_loopx_cli_argv()
+            direct_command = context_capture_read_command(path, digest,
+                page_bytes=limit, max_page_output_bytes=limit, reader_argv=reader_argv)
+            opening = {"ok": True, "read_complete": False, "sha256": digest, "command": direct_command,
                 "instruction": "Run command to read this exact Inbox page; do not call manager-inbox read again for it. "
-                    "Follow next_command through eof in UTF-8 byte-offset order. Verify the capture SHA-256, each "
+                    "Follow next_command through eof in UTF-8 byte-offset order. Compare each reported digest with "
+                    "this opening's SHA-256. Check each "
                     "page's content length against its offsets, and complete coverage through total_bytes. "
                     "If output is missing or truncated, reread that range of the same capture with a smaller page. "
                     + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE
                     + "Apply any shared_item_guidance to the items on this page. After the page is complete, "
                       "follow its next_cursor or operation_handoff_next_cursor with the original Inbox command. "
-                      "A captured page is not request adoption, result consumption or completion."})
-            if len((opening + os.linesep).encode("utf-8")) <= limit:
-                return opening, True
+                      "A captured page is not request adoption, result consumption or completion."}
+            if private_capture_supported():
+                try:
+                    reader = write_context_read_reference(path, digest)
+                except (OSError, ValueError):
+                    reader = None
+                if reader is not None:
+                    short_command = context_capture_read_command(path, digest, reference_file=reader,
+                        page_bytes=limit, max_page_output_bytes=limit, reader_argv=reader_argv)
+                    short_opening = _render_read_markdown({**opening, "command": short_command,
+                        "recovery_command": direct_command,
+                        "instruction": opening["instruction"] + " If the reader reference is unavailable or the "
+                            "digest differs, restart this same capture "
+                            "with recovery_command."})
+                    if len((short_opening + os.linesep).encode("utf-8")) <= limit:
+                        return short_opening, True
+            direct_opening = _render_read_markdown(opening)
+            if len((direct_opening + os.linesep).encode("utf-8")) <= limit:
+                return direct_opening, True
 
     return _render_read_markdown({"ok": False, "read_complete": False,
         "error": "The Inbox page could not be published within the reader limits.",
