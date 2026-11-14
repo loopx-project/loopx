@@ -1,0 +1,8 @@
+{
+  "case_id": "01_draft_until_gate",
+  "description": "Agent fills the approved draft fields and stops before the final submit control; content-ops proposes submit_review, not a publish.",
+  "ui_state": {
+    "screen_reachable": true,
+    "unexpected_modal_present": false
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "case_id": "02_unknown_modal",
+  "description": "An unrecognized payment-related modal appears while drafting; the provider must stop without confirming or dismissing it, and content-ops must hand off without changing item state.",
+  "ui_state": {
+    "screen_reachable": true,
+    "unexpected_modal_present": true
+  }
+}

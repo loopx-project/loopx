@@ -1,0 +1,25 @@
+{
+  "case_id": "13_closed_gate_status_reject",
+  "description": "Action request for external_write carries a well-formed but closed gate_binding.status; the protocol requires a provider to refuse an action whose gate is not open, not attempt it.",
+  "expect": "reject",
+  "expected_reason_contains": "'open' was expected",
+  "request": {
+    "schema_version": "computer_use_action_request_v0",
+    "goal_id": "loopx-meta",
+    "todo_id": "todo_publish_approved_draft",
+    "provider_id": "computer_use_runtime",
+    "action_unit": "publish_after_approved_gate",
+    "effect_class": "external_write",
+    "write_scope": {
+      "allowed_actions": ["click the approved submit control"],
+      "forbidden_effect_classes": ["credential_use"]
+    },
+    "gate_binding": {
+      "gate_id": "gate_contact_form_publish",
+      "revision": 4,
+      "status": "closed"
+    },
+    "stop_condition": "stop if the live gate revision has changed since approval",
+    "validation_target": "submit is clicked only under the exact approved gate revision"
+  }
+}
