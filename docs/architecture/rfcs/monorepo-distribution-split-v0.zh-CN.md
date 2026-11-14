@@ -3179,3 +3179,23 @@ R1/M3、C1 切换和原目标回归仍未完成资格验证。
 - **剩余：**本切片修复消费者资格的前置缺口。完整 V1–V5/V10、R1/M3、
   当前 D2/D5 闭包、真实 Host/模型上下文采用、渐进产品控制、可比完整成本、
   C1 默认切换和原 Goal 回归仍开放。
+
+### 2026-11-14 — 禁用 Turn 召回延迟加载执行依赖
+
+- **基线：**`main@4604f938b612`；C1 #8266 为 `79d7ebc81fbc`。
+- **缺口：**独立 Core 的 File/SQLite Turn journal 记录召回关闭、无上下文和
+  零 provider 调用，但准入仍经召回 package 导入执行 hook 和读权限实现。
+- **交付：**既有召回和 checkpoint 函数在实际调用时导入这两个实现。实验解析、
+  ingest reconciliation、schema owner、导出函数标识、权限和 C1 composition
+  保留既有 owner。共享编排和默认行为均未改变。
+- **证据：**禁用 helper 用例和真实安装 CLI 用例在基线上失败、修复后通过。
+  capability 回归覆盖启用召回、权限拒绝、provider 故障、去重和 outcome lifecycle。
+  独立 Core 的安装、执行、中断恢复、重放与上下文套件在主干及固定 C1 组合上
+  通过，runtime 字节与声明的源码相同。观测到的首次 File/SQLite Turn 从
+  516 个 Python 模块降为 514 个，capability 模块从 102 个降为 100 个；
+  RPC 仍为 223/222，重放仍为 432/50 个模块及 12 次 RPC。四次 Node 启动
+  分别是两次版本探测，以及两个已加观测的 runtime/Host bridge 进程。
+  这只验证加载边界，带观测开销的耗时不构成延迟或完整成本资格。
+- **剩余：**内置 capability 打包与完整 D2/D5 闭包、真实模型/Host 上下文采用、
+  渐进控制、可比完整成本、完整 V1–V5/V10、R1/M3 和 C1 默认切换仍未完成
+  资格验证。进程 Host 与 native context 事件属于 synthetic fixture。
