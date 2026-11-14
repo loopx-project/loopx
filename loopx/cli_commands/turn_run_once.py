@@ -872,6 +872,11 @@ def execute_turn_run_once(
                 semantic_replan_guard_scoped=replan_guard_scoped,
                 semantic_replan_obligation_id=replan_obligation_id,
                 semantic_replan_capability_guard=capability_guard,
+                quota_spend_source=(
+                    quota_spend_source_for_execution_context(payload.get("scheduler_execution_context"))
+                    if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None
+                    else None
+                ),
                 goal_ref=goal_ref,
             )
 
