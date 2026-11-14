@@ -1689,27 +1689,42 @@ export function revalidateLoopXTeamWork(sessionId: string, operationId: string) 
     method: "POST", body: JSON.stringify({operation: "revalidate", operation_id: operationId}),
   });
 }
-export type ManagedGoalResultRow = {
-  todo_id: string; title: string; producer_agent_id: string; sha256: string;
-  content_type: string; size_bytes: number; completed_at?: string | null;
-};
-export type ManagedGoalResultPage = {
-  ok: true; items: ManagedGoalResultRow[]; total: number; next_cursor: string | null;
-  unavailable_count: number; unavailable_todo_ids: string[];
-};
-export type ManagedGoalResultRead = {
-  ok: true; goal_id: string; todo_id: string; text: string;
-  result: {sha256: string; content_type: string; producer_agent_id: string};
-};
-export function fetchManagedGoalResults(goalId: string, cursor?: string) {
+const managedResultIdentitySchema = z.object({
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  content_type: z.string().min(1), producer_agent_id: z.string().min(1),
+}).passthrough();
+const managedGoalResultRowSchema = managedResultIdentitySchema.extend({
+  todo_id: z.string().min(1), title: z.string().min(1), size_bytes: z.number().int().nonnegative(),
+  completed_at: z.string().nullable().optional(),
+});
+const managedGoalResultPageSchema = z.object({
+  ok: z.literal(true), items: z.array(managedGoalResultRowSchema), total: z.number().int().nonnegative(),
+  next_cursor: z.string().min(1).nullable(), unavailable_count: z.number().int().nonnegative(),
+  unavailable_todo_ids: z.array(z.string().min(1)),
+}).passthrough().refine(page => page.unavailable_count === page.unavailable_todo_ids.length
+  && page.items.length + page.unavailable_count <= page.total);
+const managedGoalResultReadSchema = z.object({
+  ok: z.literal(true), goal_id: z.string().min(1), todo_id: z.string().min(1), text: z.string(),
+  result: managedResultIdentitySchema,
+}).passthrough();
+export type ManagedGoalResultRow = z.infer<typeof managedGoalResultRowSchema>;
+export type ManagedGoalResultPage = z.infer<typeof managedGoalResultPageSchema>;
+export type ManagedGoalResultRead = z.infer<typeof managedGoalResultReadSchema>;
+export async function fetchManagedGoalResults(goalId: string, cursor?: string) {
   const params = new URLSearchParams({goal_id: goalId});
   if (cursor) params.set("cursor", cursor);
-  return requestJson<ManagedGoalResultPage>(`/api/chat/goal-results?${params}`);
+  const page = managedGoalResultPageSchema.safeParse(await requestJson<unknown>(`/api/chat/goal-results?${params}`));
+  if (!page.success) throw new Error("报告列表响应不完整 / Report inventory response is incomplete");
+  return page.data;
 }
-export function readManagedGoalResult(goalId: string, todoId: string) {
-  return requestJson<ManagedGoalResultRead>(
+export async function readManagedGoalResult(goalId: string, todoId: string) {
+  const response = managedGoalResultReadSchema.safeParse(await requestJson<unknown>(
     `/api/chat/goal-results/${encodeURIComponent(todoId)}?goal_id=${encodeURIComponent(goalId)}`,
-  );
+  ));
+  if (!response.success || response.data.goal_id !== goalId || response.data.todo_id !== todoId) {
+    throw new Error("报告详情响应不完整或不匹配 / Report detail response is incomplete or mismatched");
+  }
+  return response.data;
 }
 export type DelegationState = "unavailable" | "accepted" | "rejected" | "recovery_required"
   | "stopped" | "executing" | "validating" | "dispatched" | "unknown";

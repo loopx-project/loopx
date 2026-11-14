@@ -35,8 +35,7 @@ export function GoalManagedResults({goalId, zh, hideEmpty = false, catalogOnly =
   async function read(row: ManagedGoalResultRow, current: number, focusReader = false) {
     const result = await readManagedGoalResult(goalId, row.todo_id);
     if (current !== generation.current) return;
-    if (result.todo_id !== row.todo_id || result.goal_id !== goalId ||
-        result.result.sha256 !== row.sha256 || result.result.producer_agent_id !== row.producer_agent_id ||
+    if (result.result.sha256 !== row.sha256 || result.result.producer_agent_id !== row.producer_agent_id ||
         result.result.content_type !== row.content_type) {
       throw new Error(zh ? "报告版本或验收已变化" : "Report version or acceptance changed");
     }
@@ -55,13 +54,6 @@ export function GoalManagedResults({goalId, zh, hideEmpty = false, catalogOnly =
     try {
       const next = await fetchManagedGoalResults(goalId, cursor);
       if (current !== generation.current) return;
-      if (!Array.isArray(next.items) || !Number.isInteger(next.total) ||
-          !Number.isInteger(next.unavailable_count) ||
-          !Array.isArray(next.unavailable_todo_ids) ||
-          next.unavailable_count !== next.unavailable_todo_ids.length ||
-          (next.next_cursor !== null && typeof next.next_cursor !== "string")) {
-        throw new Error(zh ? "报告列表响应不完整" : "Report inventory response is incomplete");
-      }
       setPage(next);
       inventoryRead = true;
       const previous = chosen.current;
