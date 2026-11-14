@@ -56,6 +56,14 @@ def test_host_spawn_result_parent_review_and_restart(tmp_path: Path):
     assert len(events) == 4
     assert "private child" not in json.dumps(events)
     assert all(event.get("event_kind") != "quota_spend" for event in events)
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    inbox = effect_runtime_result("multi_subagent.native_result_inbox", {
+        "operation": "list", "runtime_root": str(tmp_path),
+        "goal_id": GOAL, "agent_id": AGENT, "goal_ref": None,
+    })
+    assert len(inbox["items"]) == 1
+    assert inbox["items"][0]["text"] == "private child result"
+    assert inbox["items"][0]["operation_id"] == operation["operation_id"]
 
 
 @pytest.mark.parametrize("items", [[], [{"type": "agentMessage", "text": "I spawned three children"}],
@@ -328,6 +336,66 @@ def test_restart_replay_uses_the_original_invocation_binding(tmp_path):
     _observe(tmp_path, [followup])
     _observe(tmp_path, [followup])
     assert len(load_rollout_events(rollout_event_log_path(tmp_path, GOAL))) == 2
+
+
+def test_rejected_terminal_replay_never_delivers_conflicting_text(tmp_path):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    completed = {**wait, "agentsStates": {"child-1": {"status": "completed"}}}
+    _observe(tmp_path, [spawn, completed])
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+
+    conflicting = {**wait, "agentsStates": {
+        "child-1": {"status": "errored", "message": "Contradictory terminal text"},
+    }}
+    with pytest.raises(ValueError, match="conflicting"):
+        _observe(tmp_path, [conflicting])
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+    read = {"operation": "list", "runtime_root": str(tmp_path), "goal_id": GOAL,
+            "agent_id": AGENT, "goal_ref": None}
+    assert effect_runtime_result("multi_subagent.native_result_inbox", read)["items"] == []
+
+    # A matching terminal replay can supply the omitted result body.
+    _observe(tmp_path, [wait, wait])
+    result, = effect_runtime_result("multi_subagent.native_result_inbox", read)["items"]
+    assert result["outcome"] == "completed" and result["text"] == "private child result"
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+
+
+def test_interrupted_terminal_append_preserves_recoverable_body(tmp_path, monkeypatch):
+    import loopx.rollout_event_log as event_log
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    _admit(tmp_path)
+    spawn, wait = _turn()["items"]
+    _observe(tmp_path, [spawn])
+    original_append = event_log._append_rollout_event_line
+    read = {"operation": "list", "runtime_root": str(tmp_path), "goal_id": GOAL,
+            "agent_id": AGENT, "goal_ref": None}
+
+    def interrupted(path, payload):
+        snapshot = effect_runtime_result("multi_subagent.native_result_inbox", read)
+        assert snapshot["items"] == []
+        assert snapshot["unavailable_count"] == 1
+        assert "private child result" not in json.dumps(snapshot)
+        raise OSError("simulated interruption after private write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(event_log, "_append_rollout_event_line", interrupted)
+        with pytest.raises(OSError, match="simulated interruption"):
+            _observe(tmp_path, [wait])
+    assert event_log._append_rollout_event_line is original_append
+    assert not any(row["event_kind"] == "native_child_result"
+                   for row in load_rollout_events(rollout_event_log_path(tmp_path, GOAL)))
+
+    _observe(tmp_path, [wait, wait])
+    result, = effect_runtime_result("multi_subagent.native_result_inbox", read)["items"]
+    assert result["text"] == "private child result"
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert sum(row["event_kind"] == "native_child_result" for row in events) == 1
+    assert "private child result" not in json.dumps(events)
 
 
 @pytest.mark.parametrize('with_spawn', [False, True])

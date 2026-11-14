@@ -95,12 +95,16 @@ def private_snapshot(frozen_private_reply, tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def read(*, expected_status=200, **query):
+    def read(*, expected_status=200, session_id=session["session_id"], headers=None, path=None, raw=False, **query):
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
-            connection.request("GET", f"/api/chat/sessions/{session['session_id']}?{urlencode(query)}")
+            connection.request("GET", path or f"/api/chat/sessions/{session_id}?{urlencode(query)}",
+                               headers=headers or {})
             response = connection.getresponse()
-            payload = json.loads(response.read())
+            body = response.read()
+            if raw:
+                return response.status, dict(response.getheaders()), body
+            payload = json.loads(body)
             assert response.status == expected_status, payload
             return payload
         finally:
@@ -137,6 +141,10 @@ def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
     store, session, turn, request, *_ = frozen_private_reply
     sid = session["session_id"]
     answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
+    assistant = store.create_session(goal_id="notes", agent_id="codex", adapter_kind="codex_app_server",
+                                     upstream_thread_id="assistant")
+    other_id = assistant["session_id"]
+    other = store.append_message(other_id, role="agent", text="The second conversation")
     journal = store.sessions_root / sid / "messages.jsonl"
     original_row = journal.read_bytes().split(b"\n", 1)[0]
     decoded_original_rows = []
@@ -151,6 +159,9 @@ def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
     first = private_snapshot(message_limit=1)
     assert "reply_context" in first["messages"][0]
     cursor = first["message_page"]["next_cursor"]
+    # Reading the other Bot between pages must not force another decode of this
+    # unchanged journal or substitute the other Session's messages.
+    assert private_snapshot(session_id=other_id, message_limit=1)["messages"] == [other]
     assert private_snapshot(message_limit=1, message_cursor=cursor)["messages"] == [answer]
     # Cached parsing must not keep a deleted provider receipt visible.
     (store.root / "lark-private-deliveries" / f"{request}.json").unlink()
@@ -1349,6 +1360,57 @@ def test_returned_file_http_rechecks_original_source_and_snapshot(returned_file_
     status, _, raw = returned_file_http(url, {"Origin": "https://unrelated.example"} if drift == "origin" else None)
     assert status == (503 if drift == "snapshot" else 403 if drift == "origin" else 404)
     assert json.loads(raw)["ok"] is False
+
+
+def test_original_steward_history_links_images_but_preserves_bytes_and_cursor(
+        frozen_private_reply, private_snapshot):
+    from base64 import b64decode, b64encode
+
+    store, session, *_ = frozen_private_reply
+    session_id = session["session_id"]
+    encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jrWQAAAAASUVORK5CYII="
+    body = b64decode(encoded)
+    image = {"id": "one", "name": "original.png", "mime_type": "image/png",
+             "size": len(body), "data_url": f"data:image/png;base64,{encoded}"}
+    row = store.append_message(session_id, role="user", text="Keep my original image",
+                               origin="lark", attachments=[image])
+    headers = {"X-LoopX-History-Images": "linked"}
+
+    def message(payload):
+        return next(r for r in payload["messages"] if r["message_id"] == row["message_id"])
+
+    assert message(private_snapshot(message_limit=200))["attachments"] == [image]
+    snapshot = private_snapshot(message_limit=200, headers=headers)
+    projected = message(snapshot)["attachments"][0]
+    url = projected["data_url"]
+    assert url.startswith(f"/api/chat/sessions/{session_id}/messages/{row['message_id']}/images/0/")
+    assert projected == {**image, "data_url": url}
+    assert message(snapshot)["text"] == row["text"]
+    assert store.messages(session_id, strict=True)[-1] == row
+
+    code, image_headers, saved_bytes = private_snapshot(path=url, raw=True)
+    assert code == 200 and saved_bytes == body
+    assert image_headers["Content-Type"] == "image/png"
+    assert image_headers["Cross-Origin-Resource-Policy"] == "same-origin"
+    assert private_snapshot(path=url, raw=True, headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert private_snapshot(path=url, raw=True, headers={"Origin": "https://unrelated.example"})[0] == 403
+    assert private_snapshot(path=url.replace(row["message_id"], "unknown-message"), raw=True)[0] == 404
+    assert private_snapshot(path=url.replace(session_id, "unknown-session"), raw=True)[0] == 404
+    assert private_snapshot(path=url.rsplit("/", 1)[0] + "/" + "0" * 64, raw=True)[0] == 404
+
+    page = snapshot["message_page"]
+    basis = f"{page['total']}:{page['visible_page_sha256']}"
+    resumed = private_snapshot(message_limit=200, known_history=basis, headers=headers)
+    assert resumed["history_resume"]["next"] == basis and resumed["messages"] == []
+    assert private_snapshot(message_limit=200, known_history=basis)["status"] == "restart"
+
+    journal = store.sessions_root / session_id / "messages.jsonl"
+    changed_bytes = body[:-1] + bytes([body[-1] ^ 1])
+    journal.write_bytes(journal.read_bytes().replace(encoded.encode(), b64encode(changed_bytes), 1))
+    assert private_snapshot(path=url, raw=True)[0] == 404
+    current_url = message(private_snapshot(message_limit=200, headers=headers))["attachments"][0]["data_url"]
+    assert current_url != url
+    assert private_snapshot(path=current_url, raw=True)[2] == changed_bytes
 
 
 def test_download_attachment_does_not_expand_chat_input_admission(returned_file_history):

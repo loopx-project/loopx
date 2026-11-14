@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import shlex
+import sys
 
 import pytest
 
@@ -605,6 +606,47 @@ def test_reference_damage_fails_closed(tmp_path, damage):
         reference.chmod(0o644)
     rejected = read(model["command"], reference_file=str(reference))
     assert rejected["ok"] is False and "content" not in rejected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Private reader references require POSIX")
+@pytest.mark.parametrize("damage", ["capture", "selection", "unsafe_route", "different_launcher"])
+def test_compact_recovery_reference_rejects_changed_source_or_route(tmp_path, damage):
+    from loopx.cli import build_parser
+
+    source = tmp_path / "decision.json"
+    source.write_text('{"heartbeat_receipt":{"turn_instance_id":"original"}}\n')
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    launcher = tmp_path / "launcher with spaces"
+    launcher.touch()
+    route = [str(launcher), "--cli-bin", str(launcher)]
+    original = write_context_read_reference(source, digest, reference_file=tmp_path / "r", reader_argv=route)
+    parser = build_parser()
+
+    def invoke(reference, *extra):
+        args = parser.parse_args(["--format", "json", "quota", "context-read",
+            "--reference-file", str(reference), "--max-page-output-bytes", "650", *extra])
+        return read_context_capture(args, reader_argv=route)
+
+    assert invoke(original, "--select", "/heartbeat_receipt")["ok"]
+    [selected] = tmp_path.glob("r.*")
+    if damage == "capture":
+        source.write_bytes(source.read_bytes() + b" ")
+    elif damage == "selection":
+        metadata = json.loads(selected.read_text())
+        metadata["selection"]["sha256"] = "0" * 64
+        selected.write_text(json.dumps(metadata))
+    else:
+        metadata = json.loads(selected.read_text())
+        metadata["reader_argv"] = ([str(launcher), "-c", "raise SystemExit()"] if damage == "unsafe_route"
+            else [str(tmp_path / "another CLI")])
+        selected.write_text(json.dumps(metadata))
+    rejected = invoke(selected)
+    assert rejected["ok"] is False and "content" not in rejected
+    expected = {
+        "capture": "digest", "selection": "digest",
+        "unsafe_route": "invalid CLI route", "different_launcher": "original LoopX",
+    }
+    assert expected[damage] in rejected["reason"]
 
 
 def test_reference_publication_never_overwrites_an_existing_document(tmp_path):

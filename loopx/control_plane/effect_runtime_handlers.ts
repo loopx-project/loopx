@@ -670,6 +670,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.request.amendment_readback", lazyHandler(() => import("./collaboration/request_control.ts"), ({requestAmendmentReadback}) => requestAmendmentReadback)],
     ["goal.amendment.request_receipt", lazyHandler(() => import("./goals/goal_amendment_authority.ts"), ({projectRequestAmendmentReceipt}) => projectRequestAmendmentReceipt)],
     ["collaboration.inbox.read", lazyHandler(() => import("./collaboration/inbox_read.ts"), ({readCollaborationInbox}) => readCollaborationInbox)],
+    ["multi_subagent.native_result_inbox", lazyHandler(() => import("./capabilities/native_child_result_inbox.ts"), ({nativeChildResultInbox}) => nativeChildResultInbox)],
     ["collaboration.result.plan_publication", lazyHandler(() => import("./collaboration/result_publication.ts"), ({planCollaborationResult}) => planCollaborationResult)],
     ["collaboration.result.attachment_refs", lazyHandler(() => import("./collaboration/result_publication.ts"), ({resultAttachmentRefs}) => resultAttachmentRefs)],
     ["collaboration.result.delivery_ready", lazyHandler(() => import("./collaboration/result_publication.ts"), ({collaborationResultDeliveryReady}) => collaborationResultDeliveryReady)],

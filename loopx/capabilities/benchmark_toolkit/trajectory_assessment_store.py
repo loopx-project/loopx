@@ -55,6 +55,8 @@ def _pack_id(owner_goal_id: str, record: dict) -> str:
         identity["solver_usage"] = record["solver_usage"]
     if "native_outcomes" in record:
         identity["native_outcomes"] = record["native_outcomes"]
+    if "human_attention" in record:
+        identity["human_attention"] = record["human_attention"]
     if "base_pack_id" in record:
         identity["base_pack_id"] = record["base_pack_id"]
     if "case_study" in record:
@@ -365,6 +367,9 @@ def _summary(record: dict, reason: str | None, prepared: dict | None = None) -> 
         "config": analysis["config"],
         "availability": "unavailable" if reason else "available",
         "reason_code": reason,
+        **({"human_attention": {"projection": analysis["human_attention"],
+            "applicability": "historical" if reason else "current"}}
+           if "human_attention" in analysis else {}),
         **({"case_study_summary": {"title": record["case_study"]["title"],
                                    "language": record["case_study"]["language"]}}
            if "case_study" in record else {}),
@@ -413,6 +418,8 @@ def register_pack(
         },
     }
     _verify_sources(record)
+    if "human_attention" in prepared:
+        record["human_attention"] = prepared["human_attention"]
     if "case_study" in prepared:
         record["case_study"] = prepared["case_study"]
     if base_pack_id is not None:
@@ -737,6 +744,8 @@ def read_citation(
     citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]
     citations.extend(c for field in ((result or {}).get("display") or {}).get("fields", [])
                      for c in field.get("context_citations", []))
+    attention = (view.get("human_attention") or {}).get("projection") or {}
+    citations.extend(event["citation"] for event in attention.get("events", []))
     synthesis = (result or {}).get("synthesis")
     case_study = view.get("case_study")
     if case_study:

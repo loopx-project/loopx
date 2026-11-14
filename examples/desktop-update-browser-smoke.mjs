@@ -363,7 +363,7 @@ try {
   nativeState = { phase: "idle", details: {} };
   await page.reload();
   await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
-  await page.getByText(/先打开本地版本，更新在后台准备，下次打开时生效/).waitFor();
+  await page.getByText(/启动直接打开本地工作区，更新在后台准备/).waitFor();
   await page.getByText("高级选项", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), true, "legacy native status retains its available repair action");
 
@@ -572,6 +572,25 @@ try {
   await page.getByText(/启动用时较长/).waitFor();
   nativeState = { phase: "service_error", details: { code: "service_start_failed" } };
   await page.getByText("本地服务连接失败，正在等待重试", { exact: true }).waitFor();
+  await page.locator("details.recovery > summary").click();
+  // Core's refusal reason must survive the native-to-browser projection. A
+  // missing provider is not a rolled-back service transaction.
+  for (const code of ["native_observer_provider_binding_required", "native_observer_provider_upgrade_required", "native_observer_requires_target_runtime", "native_account_work_pending"]) {
+    nativeState = { phase: "service_error", details: { code, retry_after_ms: 30000 } };
+    await page.waitForFunction((expected) => JSON.parse(document.querySelector("#diagnostics").value).error_code === expected, code);
+    assert.ok((await page.locator("#update-status").innerText()).includes("现有服务保持运行"));
+    assert.ok(!(await page.locator("#update-status").innerText()).includes("已尝试恢复原配置"));
+    if (code !== "native_account_work_pending") {
+      assert.ok((await page.locator("#boot-detail").innerText()).includes("重复重启不会补齐组件"));
+    }
+  }
+  nativeState = { phase: "service_error", details: { code: "native_observer_provider_binding_required", retry_after_ms: 30000 } };
+  await page.getByText("需要兼容的账号服务组件", { exact: true }).waitFor();
+  await page.screenshot({ path: resolve(output, "startup-provider-prerequisite.png") });
+  nativeState = { phase: "ready", details: {} };
+  await page.getByText("本地服务已就绪，正在打开工作区", { exact: true }).waitFor();
+  assert.equal(calls.length, beforeBootFailures, "projecting refusal/recovery must not invoke installation or task execution");
+
   // Background preparation observes native progress without disabling a
   // user's explicit action or manufacturing an installation/restart effect.
   const beforeBackground = calls.length;
@@ -602,7 +621,7 @@ try {
   nativeState = { phase: "available", details: { channel: "stable", version: "0.5.5", background: true, prepared: true } };
   await page.reload();
   await page.getByRole("button", { name: "更新已准备" }).click();
-  await page.getByText(/下次打开时自动安装/).waitFor();
+  await page.getByText(/可更新并重启/).waitFor();
   await page.screenshot({ path: resolve(output, "background-prepared-desktop.png") });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "打开 Goal 导航" }).click();
@@ -612,7 +631,7 @@ try {
   await page.reload();
   await page.getByRole("button", { name: "Open Goal navigation" }).click();
   await page.getByRole("button", { name: "Update prepared" }).click();
-  await page.getByText(/It installs on the next open/).waitFor();
+  await page.getByText(/Update and restart when ready/).waitFor();
   assert.deepEqual(calls.slice(beforeBackground).map((call) => call.args?.action), ["check"]);
   // Reopening observes a transfer; it must neither restart it nor invent a
   // total/percentage when the native source has not reported Content-Length.
