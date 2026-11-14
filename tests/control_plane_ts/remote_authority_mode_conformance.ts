@@ -16,7 +16,7 @@ export function registerRemoteAuthorityModeConformance(connectionString: string 
       await t.test(`mode change ${timing} cannot commit a remote ${operation} under soft mode`, async child => {
         const claim = claimRequest("a", `todo_${operation}_${timing.replaceAll("-", "_")}`);
         const {request_id: _, ...scope} = claim as Extract<RemoteAuthorityRequest, {operation: "claim"}>;
-        const request: RemoteAuthorityRequest = operation === "claim" ? claim
+        const request = operation === "claim" ? claim
           : {...scope, operation, idempotency_key: "missing-lease-key", expected_version: 0};
         await fixture.seed([request.todo_id]);
         let switched = false, headReads = 0, commitAttempts = 0;

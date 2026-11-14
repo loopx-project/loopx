@@ -1,0 +1,32 @@
+[Unit]
+Description=LoopX Remote Authority Coordination Service (Volcengine cn-beijing)
+Documentation=https://github.com/loopx-project/loopx
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/loopx
+Environment=NODE_ENV=production
+Environment=LOOPX_AUTHORITY_DATABASE_URL=postgresql://loopx_app:REPLACE_WITH_RESTRICTED_APP_PASSWORD@rds-pg-internal.cn-beijing.volces.com:5432/loopx_coordination
+ExecStart=/usr/bin/node --no-warnings --experimental-strip-types examples/coordination/remote-authority-service.ts --policy /etc/loopx/remote-policy.json --cert /etc/ssl/loopx/cert.pem --key /etc/ssl/loopx/key.pem --port 8443 --host 127.0.0.1
+Restart=on-failure
+RestartSec=5s
+
+# Security Hardening
+DynamicUser=yes
+User=loopx-authority
+Group=loopx-authority
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

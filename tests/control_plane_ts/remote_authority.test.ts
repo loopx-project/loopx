@@ -201,3 +201,157 @@ test("a body completed after shutdown starts cannot dispatch a new command", asy
   await stopping;
   assert.equal(admissions, 0);
 });
+
+test("complete, block, defer, todo_add and snapshot request decoding validates typed lifecycle semantics", () => {
+  const base = {
+    schema_version: "loopx_remote_authority_request_v0" as const,
+    tenant_id: "tenant-one",
+    goal_id: "goal-one",
+    actor_id: "actor-a",
+    store_identity: `postgresql:${"c".repeat(32)}`,
+    todo_id: "todo_0aaf8c3edda601ecc3c5b8c0",
+  };
+
+  // Complete
+  const completeReq = {
+    ...base,
+    operation: "complete" as const,
+    request_id: "req-complete-1",
+    claim_request_id: "req-claim-1",
+    evidence: "sha256:abcd verified delivery receipt",
+    note: "optional completion note",
+  };
+  assert.deepEqual(decodeRemoteAuthorityRequest(completeReq), completeReq);
+  assert.throws(() => decodeRemoteAuthorityRequest({...completeReq, evidence: ""}));
+  assert.throws(() => decodeRemoteAuthorityRequest({...completeReq, claim_request_id: ""}));
+
+  // Block
+  const blockReq = {
+    ...base,
+    operation: "block" as const,
+    request_id: "req-block-1",
+    reason: "waiting on upstream schema",
+    resume_when: "schema_applied",
+    note: "paused temporarily",
+  };
+  assert.deepEqual(decodeRemoteAuthorityRequest(blockReq), blockReq);
+  assert.throws(() => decodeRemoteAuthorityRequest({...blockReq, reason: ""}));
+
+  // Defer
+  const deferReq = {
+    ...base,
+    operation: "defer" as const,
+    request_id: "req-defer-1",
+    reason: "resuming next week",
+    resume_when: "resume_at:2026-11-20T00:00:00Z",
+  };
+  assert.deepEqual(decodeRemoteAuthorityRequest(deferReq), deferReq);
+  assert.throws(() => decodeRemoteAuthorityRequest({...deferReq, resume_when: ""}));
+
+  // Todo add
+  const addReq = {
+    ...base,
+    operation: "todo_add" as const,
+    request_id: "req-add-1",
+    text: "[P1] new remote task",
+    priority: "P1",
+    role: "agent" as const,
+    task_class: "advancement_task",
+    required_write_scopes: ["loopx/control_plane/**"],
+  };
+  assert.deepEqual(decodeRemoteAuthorityRequest(addReq), addReq);
+  assert.throws(() => decodeRemoteAuthorityRequest({...addReq, priority: "P9"}));
+  assert.throws(() => decodeRemoteAuthorityRequest({...addReq, role: "invalid" as any}));
+
+  // Snapshot (todo_id is optional)
+  const snapshotGoal = {
+    schema_version: "loopx_remote_authority_request_v0" as const,
+    tenant_id: "tenant-one",
+    goal_id: "goal-one",
+    actor_id: "actor-a",
+    store_identity: `postgresql:${"c".repeat(32)}`,
+    operation: "snapshot" as const,
+  };
+  assert.deepEqual(decodeRemoteAuthorityRequest(snapshotGoal), snapshotGoal);
+  const snapshotTodo = {...snapshotGoal, todo_id: "todo_0aaf8c3edda601ecc3c5b8c0"};
+  assert.deepEqual(decodeRemoteAuthorityRequest(snapshotTodo), snapshotTodo);
+});
+
+test("policy admits complete, block, defer, todo_add and snapshot grants and rejects ungranted operations", () => {
+  const policy = servicePolicy();
+  const grant = policy.principals[0].grants[0];
+  grant.operations = ["read", "claim", "progress", "renew", "release", "complete", "block", "defer", "todo_add", "snapshot"];
+  const decodedPolicy = decodeRemoteAuthorityPolicy(policy);
+
+  const base = {
+    schema_version: "loopx_remote_authority_request_v0" as const,
+    tenant_id: "tenant-one",
+    goal_id: "goal-one",
+    actor_id: "actor-a",
+    store_identity: `postgresql:${"c".repeat(32)}`,
+    todo_id: "todo_one",
+  };
+
+  const completeReq = decodeRemoteAuthorityRequest({
+    ...base, operation: "complete", request_id: "req-comp", claim_request_id: "req-claim", evidence: "evidence-1",
+  });
+  const snapshotReq = decodeRemoteAuthorityRequest({
+    ...base, operation: "snapshot",
+  });
+
+  const admComplete = remoteAuthorityPolicyAdmission(decodedPolicy, credentials.a, completeReq);
+  assert.equal(admComplete.status, "allowed");
+
+  const admSnapshot = remoteAuthorityPolicyAdmission(decodedPolicy, credentials.a, snapshotReq);
+  assert.equal(admSnapshot.status, "allowed");
+
+  // Default-deny check: principal b does not have "complete" granted
+  policy.principals[1].grants[0].operations = ["read", "claim"];
+  const decodedPolicyWithRestrictedB = decodeRemoteAuthorityPolicy(policy);
+  assert.equal(policy.principals[1].grants[0].operations.includes("complete" as any), false);
+  const admDenied = remoteAuthorityPolicyAdmission(decodedPolicyWithRestrictedB, credentials.b, {
+    ...completeReq, actor_id: "actor-b",
+  });
+  assert.equal(admDenied.status, "rejected");
+  assert.equal(admDenied.reason_code, "remote_authority_scope_denied");
+});
+
+test("decodeRemoteAuthorityResponse validates snapshot and complete response payloads", () => {
+  const base = {
+    schema_version: "loopx_remote_authority_request_v0" as const,
+    tenant_id: "tenant-one",
+    goal_id: "goal-one",
+    actor_id: "actor-a",
+    store_identity: `postgresql:${"c".repeat(32)}`,
+    todo_id: "todo_one",
+  };
+  const snapshotReq = decodeRemoteAuthorityRequest({...base, operation: "snapshot"});
+  const snapResponse = remoteAuthorityResponse(snapshotReq, "execute", {
+    status: "snapshot",
+    provider_revision: `${base.store_identity}:10`,
+    store_identity: base.store_identity,
+    goal_id: base.goal_id,
+    receipt_sha256: "a".repeat(64),
+    todos: [{todo_id: "todo_one", status: "open", role: "agent"}],
+    leases: [],
+  });
+  assert.deepEqual(decodeRemoteAuthorityResponse(snapResponse, snapshotReq, "execute"), snapResponse);
+
+  const completeReq = decodeRemoteAuthorityRequest({
+    ...base, operation: "complete", request_id: "req-c", claim_request_id: "req-cl", evidence: "proof",
+  });
+  const opId = remoteAuthorityOperationId(completeReq, "principal-a");
+  const compResponse = remoteAuthorityResponse(completeReq, "execute", {
+    status: "result",
+    operation_id: opId,
+    result: {
+      status: "applied",
+      changed: true,
+      completed: true,
+      todo_id: "todo_one",
+      provider_revision: `${base.store_identity}:11`,
+      cursor: "11",
+    },
+  });
+  assert.deepEqual(decodeRemoteAuthorityResponse(compResponse, completeReq, "execute"), compResponse);
+});

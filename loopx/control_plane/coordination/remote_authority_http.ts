@@ -23,7 +23,7 @@ export function createRemoteAuthorityServer(service: RemoteAuthorityService,
       response.writeHead(status, {Connection: "close"});
       response.end(JSON.stringify({status: "rejected", reason_code: code}));
     };
-    const mode = request.url === "/v0/tasks/execute" ? "execute" : request.url === "/v0/tasks/recover" ? "recover" : null;
+    const mode = request.url === "/v0/tasks/execute" || request.url === "/v0/tasks/snapshot" ? "execute" : request.url === "/v0/tasks/recover" ? "recover" : null;
     if (request.method !== "POST" || !mode) return reject(404, "route_unavailable");
     if (draining || active >= maxInFlight) return reject(503, "remote_authority_busy");
     const authorization = request.headers.authorization;
@@ -49,7 +49,7 @@ export function createRemoteAuthorityServer(service: RemoteAuthorityService,
       const encoded = JSON.stringify(result);
       if (Buffer.byteLength(encoded) > MAX_RESPONSE_BYTES) {
         response.end(JSON.stringify(remoteAuthorityResponse(decoded, mode, {status:
-          mode === "recover" || decoded.operation === "read" ? "unavailable" : "ambiguous",
+          mode === "recover" || decoded.operation === "read" || decoded.operation === "snapshot" ? "unavailable" : "ambiguous",
           reason_code: "remote_authority_response_too_large"})));
       } else response.end(encoded);
     } catch {
@@ -102,7 +102,7 @@ export async function callRemoteAuthority(endpoint: string, credential: string,
   const timeout = options.timeoutMs ?? 15000;
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 120000) throw new TypeError("Invalid request deadline");
   const uncertain = () => remoteAuthorityResponse(request, mode, {status:
-    mode === "recover" || request.operation === "read" ? "unavailable" : "ambiguous",
+    mode === "recover" || request.operation === "read" || request.operation === "snapshot" ? "unavailable" : "ambiguous",
     reason_code: "remote_authority_transport_uncertain"});
   return new Promise(resolve => {
     const body = JSON.stringify(request);
