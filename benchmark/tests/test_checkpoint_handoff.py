@@ -124,11 +124,16 @@ def test_completed_attempt_survives_artifact_index_permission_recovery(tmp_path,
     assert not list(index.iterdir()) and witness.read_bytes() == original
 
 
-@pytest.mark.parametrize("response", ["captured", "failed", "foreign", "timeout"])
+@pytest.mark.parametrize("response", ["captured", "failed", "missing_component",
+                                      "foreign_component", "missing_image", "foreign_image",
+                                      "forged_diagnostic", "foreign", "timeout"])
 def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response):
     mailbox = tmp_path / "checkpoint-controller"
     ready = mailbox / "ready.json"
     observed = []
+    error_kinds = {"missing_component": "NotFound", "foreign_component": "NotFound",
+                   "missing_image": "ImageNotFound", "foreign_image": "ImageNotFound",
+                   "forged_diagnostic": "SyntheticFailure"}
     def controller():
         until = time.time() + 2
         while not ready.exists() and time.time() < until:
@@ -141,6 +146,9 @@ def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response
         result = {"request_sha256": hashlib.sha256(raw).hexdigest(),
                   "ok": response == "captured", "error_kind": "SyntheticFailure",
                   "capture": {"research_point_qualified": False, "sha256": "retained"}}
+        if response in error_kinds:
+            result["error_kind"] = error_kinds[response]
+            result["missing_component_id"] = "other" if response.startswith("foreign_") else "code"
         if response == "foreign":
             result["request_sha256"] = "another-point"
         pending = mailbox / "reply.tmp"
@@ -154,8 +162,13 @@ def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response
         if response == "captured":
             assert await_controller_capture(*args)["sha256"] == "retained"
         else:
-            with pytest.raises(TimeoutError if response == "timeout" else ValueError):
+            with pytest.raises(TimeoutError if response == "timeout" else ValueError) as error:
                 await_controller_capture(*args, phase_deadline=args[-1])
+            if response in error_kinds:
+                expected = f"controller checkpoint failed: {error_kinds[response]}"
+                if response in {"missing_component", "missing_image"}:
+                    expected += " (missing component code)"
+                assert str(error.value) == expected
     finally:
         thread.join(3)
     assert not thread.is_alive() and not ready.exists() and len(observed) == 1
@@ -362,6 +375,94 @@ def test_foreign_capture_root_does_not_commit_quota_guard(tmp_path, provider, in
             stdout, stderr = process.communicate(timeout=15)
             assert process.returncode == 0, (stdout, stderr)
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_quota_handoff_rejects_replacement_before_contacting_checkpoint_host(tmp_path, provider):
+    import select
+    import socket
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TURN_ID, _configure_autonomous_replan_fixture, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _run_cli, _spend_run_count, _write_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path / "authority")
+    _configure_autonomous_replan_fixture(project, runtime, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    root = tmp_path / "captures"
+    root.mkdir(mode=0o700)
+    original_file = tmp_path / "original.json"
+    # Inject a byte-only replacement immediately after the production writer.
+    # Decoded content and the replan signature are still valid.
+    inject = """
+import sys
+from pathlib import Path
+from loopx.control_plane.turn_driver import decision_capture
+original = Path(sys.argv.pop(1))
+write = decision_capture.write_decision_capture
+def replace_published(path, payload, **kwargs):
+    digest = write(path, payload, **kwargs)
+    if path.name == 'decision.json' and path.parent.parent.name == 'captures':
+        raw = path.read_bytes()
+        original.write_bytes(raw)
+        path.write_bytes(raw + b' ')
+    return digest
+decision_capture.write_decision_capture = replace_published
+from loopx.cli import main
+raise SystemExit(main())
+"""
+    with tempfile.TemporaryDirectory(prefix="quota-host-", dir="/tmp") as short:
+        endpoint = Path(short).resolve() / "host.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            listener.listen(1)
+            command = [sys.executable, "-c", inject, str(original_file), "--format", "json",
+                       "--registry", str(registry), "--runtime-root", str(runtime), "quota", "should-run",
+                       "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
+                       "--runtime-profile", "generic_cli", "--context-delivery", "off",
+                       "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint)]
+            env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+            with subprocess.Popen(command, cwd=project, env=env, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True) as process:
+                try:
+                    ready, _, _ = select.select([listener, process.stdout], [], [], 30)
+                    assert ready, "quota did not reach either the Host or its failure response"
+                    host_contacted = listener in ready
+                    if host_contacted:
+                        with held_quota_decision(listener, root, goal_id=GOAL_ID, agent_id=AGENT_ID,
+                                                turn_instance_id=TURN_ID, interrupt_when=lambda _: False) as held:
+                            assert held["intent"]["capture"] is True
+                    stdout, stderr = process.communicate(timeout=20)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+    assert not host_contacted, "the Host accepted bytes different from the published decision"
+    assert process.returncode == 1, (stdout, stderr)
+    failure = json.loads(stdout)
+    assert failure["error_code"] == "quota_decision_transport_failed"
+    raw = original_file.read_bytes()
+    decision = json.loads(raw)
+    receipt = decision["heartbeat_receipt"]
+    assert receipt["status"] == "committed" and failure["heartbeat_receipt"] == receipt
+    path = Path(failure["captured_decision"]["path"])
+    digest = hashlib.sha256(raw).hexdigest()
+    assert failure["captured_decision"]["sha256"] == digest
+    assert path.read_bytes() == raw + b" "
+    read = ["quota", "context-read", "--capture-file", str(path), "--capture-sha256", digest,
+            "--select", "/heartbeat_receipt"]
+    rc, refused = _run_cli(registry, runtime, *read)
+    assert rc != 0 and refused["ok"] is False
+    path.write_bytes(raw)  # Restore the original fixture bytes only.
+    rc, page = _run_cli(registry, runtime, *read)
+    assert rc == 0 and json.loads(page["content"])["selections"][0]["value"] == receipt
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Qualifies the Linux writer process group")
@@ -706,7 +807,6 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(
         return
     body = checkpoint.capture_before_replan(env, receipt, "current work")
     assert body.endswith("current work")
-    view = wake / "checkpoint-start-view.json"
     assert observed == [not native_participant]
     if native_context:
         pattern = "checkpoint-start-*/decision-original/decision.json"
@@ -721,9 +821,10 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(
         second, = set(wake.glob(pattern)) - {original}
         assert str(second) in resumed and hashlib.sha256(second.read_bytes()).hexdigest() in resumed
         assert original.read_bytes() == first_bytes != second.read_bytes()
-        assert not view.exists()
+        assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
         assert len(guard_commands) == 2
     else:
+        view, = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
         assert str(view) in body and json.loads(view.read_text())["ok"]
     assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
 

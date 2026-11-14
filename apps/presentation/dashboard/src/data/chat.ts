@@ -959,6 +959,7 @@ export type ChatSessionSnapshot = {
   session: ChatSessionSummary;
   messages: ChatVisibleMessage[];
   active_turn: Record<string, unknown> | null;
+  selected_turn?: {turn_id: string; status: string; terminal: boolean; error?: string};
   // Derived from one complete, verified read. Never persisted or an authority grant.
   verifiedHistoryBasis?: string;
   message_page?: {
@@ -1092,8 +1093,24 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
   return readChatSessionHistory(session, signal, turnId);
 }
 
+export async function fetchConfirmedTaskTurn(
+  {goalId, todoId, sessionId, turnId}: {goalId: string; todoId: string; sessionId: string; turnId: string},
+  signal: AbortSignal,
+) {
+  const history = await readChatSessionHistory(sessionId, signal, turnId, undefined, undefined, {taskScope: {goalId, todoId}});
+  const turn = history.selected_turn;
+  if (history.session.goal_id !== goalId || history.session.channel_id !== `task.${todoId}`
+    || turn?.turn_id !== turnId || typeof turn.status !== "string" || !turn.status
+    || typeof turn.terminal !== "boolean" || (turn.error !== undefined && typeof turn.error !== "string")) {
+    throw new Error("The original Task Turn could not be verified.");
+  }
+  return {turn, messages: history.messages};
+}
+
 async function readChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string,
-  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void): Promise<ChatSessionSnapshot> {
+  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void,
+  {linkImages = false, taskScope}: {linkImages?: boolean; taskScope?: {goalId: string; todoId: string}} = {},
+): Promise<ChatSessionSnapshot> {
   const sessionId = typeof session === "string" ? session : session.session_id;
   // A delegation has the original Session ID; pin its first verified page's
   // scope. History discovery callers keep validating against their own source.
@@ -1110,10 +1127,15 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
     signal?.throwIfAborted();
     const query = new URLSearchParams({message_limit: "200"});
     if (turnId !== undefined) query.set("turn_id", turnId);
+    if (taskScope) {
+      query.set("task_goal_id", taskScope.goalId);
+      query.set("task_todo_id", taskScope.todoId);
+    }
     if (cursor !== null) query.set("message_cursor", cursor);
     const snapshot = await requestJson<ChatSessionSnapshot>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
-      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)]) : AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)});
+      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)]) : AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS),
+        headers: historyImageHeaders(linkImages)});
     signal?.throwIfAborted();
     const expected = expectedSession;
     const sameSource = snapshot.session?.session_id === sessionId && (!expected || sameHistorySource(snapshot.session, expected));
@@ -1167,7 +1189,13 @@ function historyBasisMatches(basis: string, count: number) {
     && match[2].length === Math.ceil(count / 200) * 64;
 }
 
-async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: ChatSessionSnapshot) {
+function historyImageHeaders(linkImages: boolean): HeadersInit | undefined {
+  // The linked bytes are same-origin resources. A separately configured Chat
+  // server still uses the compatible inline representation.
+  return linkImages && !configuredChatOrigin ? {"X-LoopX-History-Images": "linked"} : undefined;
+}
+
+async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: ChatSessionSnapshot, linkImages: boolean) {
   const basis = saved.verifiedHistoryBasis;
   if (!basis || !sameHistorySource(saved.session, session) || !historyBasisMatches(basis, saved.messages.length)) return null;
   const query = new URLSearchParams({message_limit: "200", known_history: basis});
@@ -1175,7 +1203,7 @@ async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: C
   try {
     snapshot = await requestJson<typeof snapshot>(
       "/api/chat/sessions/" + encodeURIComponent(session.session_id) + "?" + query,
-      {signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)});
+      {signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS), headers: historyImageHeaders(linkImages)});
   } catch (error) {
     // A service rollback may no longer accept this optional argument.
     if (error instanceof ChatApiError && error.payload.http_status === 400) return null;
@@ -1370,9 +1398,10 @@ export async function fetchChatHistory(options: {
       ? pendingReturnBasis : previous?.snapshots.find(row => row.session.session_id === session.session_id));
     let snapshot: ChatSessionSnapshot;
     try {
-      snapshot = (saved ? await tryResumeChatSessionHistory(session, saved) : null)
+      const linkImages = Boolean(options.bound);
+      snapshot = (saved ? await tryResumeChatSessionHistory(session, saved, linkImages) : null)
         ?? await readChatSessionHistory(session, undefined, undefined, progress,
-          checkpoint => pendingReads.set(session.session_id, checkpoint));
+          checkpoint => pendingReads.set(session.session_id, checkpoint), {linkImages});
     } catch (error) {
       // Reuse the hook's existing retry schedule only for a lost transport.
       // Revoked sources, invalid pages and stale cursors must start a fresh read.

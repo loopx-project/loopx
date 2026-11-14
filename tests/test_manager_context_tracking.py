@@ -1,6 +1,7 @@
 """Handoff states, durable receipts and audience separation through real stores."""
 
 import json
+import shlex
 import subprocess
 import sys
 from argparse import Namespace
@@ -44,7 +45,8 @@ def test_delivery_read_decision_are_separate_and_restart_safe(fixture, capsys):
     assert first["delivery"]["at"] and first["read"]["status"] == "not_recorded"
     hook = turn_start_hook(root, registry, "research", "worker")
     assert hook.producer()["agent_read_required"] is True
-    assert "manager-inbox read" in hook.required_read["command"]
+    argv = shlex.split(hook.required_read["command"])
+    assert argv[argv.index("manager-inbox") + 1] == "read"
     assert status()["read"]["status"] == "not_recorded"
     args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker")
     assert handle_manager_inbox(args, registry, root) == 0
@@ -65,6 +67,79 @@ def test_delivery_read_decision_are_separate_and_restart_safe(fixture, capsys):
         "replayed"
     ]
     assert status()["delivery"]["at"] == first["delivery"]["at"]
+
+
+def test_next_turn_requires_reading_a_durable_native_child_result(fixture, capsys):
+    from loopx.capabilities.multi_subagent.native_child_receipts import record_native_child
+    from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path
+
+    root, registry, _session, _turn, _target = fixture
+    turn = "turn-native-result"
+    append_rollout_event(rollout_event_log_path(root, "research"), build_rollout_event(
+        goal_id="research", event_kind="quota_should_run", agent_id="worker",
+        run_id=turn, todo_id="todo_native_1", status="normal_run",
+        details={"todo_id": "todo_native_1", "settlement_effect_id": f"research:worker:todo_native_1:{turn}"},
+    ))
+    identity = dict(runtime_root=root, goal_id="research", agent_id="worker",
+                    turn_instance_id=turn, operation_id="operation-native-result",
+                    configured_limit=3, execute=True, _host_observed=True)
+    record_native_child(**identity, stage="decision", operation="spawn",
+                        outcome="started", entrypoint_id="codex_native_tools")
+    record_native_child(**identity, stage="result", outcome="completed",
+                        _host_result_text="The independent check found one actionable boundary.")
+    hook = turn_start_hook(root, registry, "research", "worker")
+    observed = hook.producer()
+    assert observed["status"] == "observed"
+    assert observed["agent_read_required"] is True
+    assert observed["observation_count"] == 1
+
+    args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker")
+    assert handle_manager_inbox(args, registry, root) == 0
+    read = json.loads(capsys.readouterr().out)
+    [result] = read["native_child_results"]["items"]
+    assert result["operation_id"] == identity["operation_id"]
+    assert result["text"] == "The independent check found one actionable boundary."
+    assert "native-child acknowledge-result" in result["acknowledge_command"]
+
+    # Delivery does not consume the result; without acknowledgement, restart
+    # projects the same stable identity again on the next Turn.
+    replay = turn_start_hook(root, registry, "research", "worker").producer()
+    assert replay["agent_read_required"] is True
+    assert replay["observation_count"] == 1
+
+
+def test_native_result_continuation_runs_via_manager_inbox_cli(fixture, capsys):
+    from loopx.capabilities.multi_subagent.native_child_receipts import record_native_child
+    from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path
+
+    root, registry, _session, _turn, _target = fixture
+    turn = "turn-native-result-continuation"
+    append_rollout_event(rollout_event_log_path(root, "research"), build_rollout_event(
+        goal_id="research", event_kind="quota_should_run", agent_id="worker",
+        run_id=turn, todo_id="todo_native_1", status="normal_run",
+        details={"todo_id": "todo_native_1", "settlement_effect_id": f"research:worker:todo_native_1:{turn}"},
+    ))
+    identity = dict(runtime_root=root, goal_id="research", agent_id="worker",
+                    turn_instance_id=turn, operation_id="operation-native-result",
+                    configured_limit=3, execute=True, _host_observed=True)
+    record_native_child(**identity, stage="decision", operation="spawn",
+                        outcome="started", entrypoint_id="codex_native_tools")
+    record_native_child(**identity, stage="result", outcome="completed",
+                        _host_result_text="Continuation preserves the original result.")
+    metadata, = (root / ".local" / "native-child-result-inbox").glob("*/*.json")
+    from hashlib import sha256
+    scope = sha256(json.dumps(["native-child-result", str(metadata.parent.resolve())],
+                              separators=(",", ":")).encode()).hexdigest()
+    args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker",
+                     cursor=f"native-child:1:{scope}:ncr_{'0' * 32}")
+    assert handle_manager_inbox(args, registry, root) == 0
+    result = json.loads(capsys.readouterr().out)
+    [native] = result["native_child_results"]["items"]
+    assert native["result_id"] == metadata.stem
+    assert result["items"] == [] and "unfinished_delegations" not in result
+    assert result["native_child_results"]["next_cursor"] is None
+    readback = json.loads(metadata.read_bytes())
+    assert readback["delivery"]["delivery_count"] == 1
 
 
 def test_legacy_decision_is_not_a_fabricated_read(fixture):

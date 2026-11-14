@@ -170,6 +170,108 @@ def test_turn_observes_dependencies_synchronized_during_turn_start(tmp_path, mon
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_quota_should_run_dry_run_is_read_only(tmp_path, monkeypatch, provider):
+    from loopx.capabilities.issue_fix import pr_lifecycle
+    from loopx import usage_goal
+    from loopx.capabilities.manager_context import _root, pending
+    from loopx.control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+    from loopx.control_plane.collaboration.peers import request
+    from loopx.control_plane.quota.host_poll_receipts import receipt_path_for_goal
+    from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+    from tests.test_loopx_turn_driver import _write_live_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    config = json.loads(registry.read_text())
+    goal = config["goals"][0]
+    goal["available_capabilities"] = ["external_evidence_poll"]
+    goal["coordination"]["registered_agents"].append("reviewer")
+    registry.write_text(json.dumps(config))
+    goal_id = goal["id"]
+    agent_id = "codex-fixture"
+    state = project / goal["state_file"]
+    received = request(runtime, registry, goal_id, "reviewer", agent_id, "preview-inbox-fact", {
+        "schema_version": "collaboration_brief_v0",
+        "purpose": "Review the original request",
+        "context": "Existing pending Inbox work must remain visible",
+        "constraints": [],
+        "inputs": [],
+        "acceptance": ["Read the pending Inbox entry"],
+        "return_requirement": "Return through the existing request",
+    })
+    inbox_root = _root(runtime)
+    inbox_before = {path: path.read_bytes() for path in inbox_root.rglob("*.json")}
+    todo_id = add_goal_todo(
+        registry_path=registry, goal_id=goal_id, role="agent", claimed_by=agent_id,
+        text="Continue when the exact dependency merges", status="deferred", resume_when="pr_merged:owner/repo#42",
+    )["todo_id"]
+    monkeypatch.chdir(project)
+    calls = []
+    usage = []
+
+    def fetch(reference, **kwargs):
+        calls.append(reference)
+        return {"url": "https://github.com/owner/repo/pull/42", "state": "MERGED",
+                "mergedAt": "2026-10-01T00:00:00Z"}
+
+    monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fetch)
+    monkeypatch.setattr(usage_goal, "observe_quota_cycle", lambda **event: usage.append(event["phase"]))
+    argv = [
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "quota", "should-run", "--goal-id", goal_id, "--agent-id", agent_id,
+        "--codex-app", "--app-automation-current-rrule", "FREQ=MINUTELY;INTERVAL=30",
+        "--available-capability", "external_evidence_poll", "--context-delivery", "off",
+        "--record-host-poll", "--write-projection-cache",
+    ]
+    events_path = rollout_event_log_path(runtime, goal_id)
+    host_receipt = receipt_path_for_goal(goal, state)
+    assert host_receipt is not None and not host_receipt.exists()
+    before = list_goal_todos(registry_path=registry, goal_id=goal_id, todo_id=todo_id)
+    assert before["todo"]["resume_ready"] is False
+    events_before = load_rollout_events(events_path)
+
+    code, preview = _invoke_turn([*argv, "--dry-run"])
+    assert code == 0 and preview.get("should_run") is True, list(preview)
+    assert calls == [] and usage == [], "dry run dispatched an executing observation"
+    assert _observation(preview) is None and "host_poll_receipt" not in preview
+    assert "rollout_event" not in preview and not host_receipt.exists()
+    assert load_rollout_events(events_path) == events_before
+    reads = preview["interaction_contract"]["agent_channel"]["required_reads"]
+    inbox_read, = (item for item in reads if item["hook_id"] == "manager.context_inbox")
+    assert inbox_read["ordering"] == "before_work" and "manager-inbox read" in inbox_read["command"]
+    with collaboration_goal_scope(registry, goal_id=goal_id, agents=(agent_id,)) as scope:
+        assert any(item["request_id"] == received["request_id"] for item in pending(
+            runtime, goal_id, agent_id, scope=scope,
+        )["items"])
+    assert {path: path.read_bytes() for path in inbox_root.rglob("*.json")} == inbox_before
+    after_preview = list_goal_todos(registry_path=registry, goal_id=goal_id, todo_id=todo_id)
+    assert after_preview["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"]
+    assert after_preview["todo"]["resume_ready"] is False
+
+    code, refused = _invoke_turn([*argv, "--dry-run", "--turn-instance-id", "preview-should-not-admit"])
+    assert code == 1 and refused["reason"] == "turn-scoped `quota should-run` cannot use --dry-run"
+    assert not calls and not usage and not host_receipt.exists()
+    assert load_rollout_events(events_path) == events_before
+    assert "status_projection_cache" not in preview and not (runtime / "status-projection-cache").exists()
+
+    code, executed = _invoke_turn(argv)
+    assert code == 0 and executed["should_run"] is True, executed.get("reason")
+    assert inbox_read in executed["interaction_contract"]["agent_channel"]["required_reads"]
+    assert len(calls) == 1 and usage == ["start"] and _observation(executed)["merged_count"] == 1
+    assert executed["host_poll_receipt"]["poll_count"] == 1
+    assert executed["status_projection_cache"]["written"] is True
+    assert list((runtime / "status-projection-cache").glob("*.json"))
+    assert json.loads(host_receipt.read_bytes())["poll_count"] == 1
+    after_run = list_goal_todos(registry_path=registry, goal_id=goal_id, todo_id=todo_id)["todo"]
+    assert after_run["resume_ready"] is True
+    for key in ("status", "text", "claimed_by", "resume_when"):
+        assert after_run[key] == before["todo"][key]
+    kinds = [event["event_kind"] for event in load_rollout_events(events_path)[len(events_before):]]
+    assert kinds.count("pr_merge") == 1 and kinds.count("quota_should_run") == 1
+    assert not {"quota_spend", "todo_complete"}.intersection(kinds)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("mode", ["absent-capability", "dry-run", "plan"])
 def test_read_only_and_unconfigured_turns_do_not_observe(tmp_path, monkeypatch, provider, mode):
     from loopx.capabilities.issue_fix import pr_lifecycle

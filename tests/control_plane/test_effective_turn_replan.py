@@ -20,7 +20,10 @@ from tests.control_plane.test_quota_settlement_cli import (
     GOAL_ID,
     TODO_ID,
     _configure_selectable_alternative,
+    _heartbeat_receipt_count,
     _initialize_fixture_authority,
+    _run_generated_cli,
+    _spend_run_count,
     ALTERNATIVE_TODO_ID,
 )
 from canonical_authority_fixture import isolate_sqlite_runtime
@@ -407,6 +410,29 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert reread["autonomous_replan_obligation"].get("resolution_mode") != "receipt_bound_replan_settlement"
     assert reread["replan_action_packet"]["stride_control"]["required_on_periodic_review"] is True
     assert reread["replan_action_packet"]["stride_control"]["decision_value_review"] == value_review
+    replan_identity = reread["heartbeat_receipt"]["settlement_identity"]
+    receipt_count = _heartbeat_receipt_count(runtime, "stride-due-review")
+    spend_count = _spend_run_count(runtime)
+    refresh = ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--no-global-sync", "--suppress-external-sinks")
+    maintenance = (*refresh, "--classification", "local_upgrade_status_updated",
+                   "--delivery-outcome", "surface_only")
+    missing_turn = call(*refresh, "--replan-obligation-id", obligation["obligation_id"],
+        "--classification", "bounded_replan_progress", "--delivery-outcome", "outcome_progress",
+        expected_code=1)
+    assert "turn_instance_id" in missing_turn["error"]
+    surface = call(*maintenance, expected_code=1)
+    assert not surface["appended"] and "settlement_identity" not in surface
+    assert surface["replan_transition"]["reason_code"] == "stride_decision_required"
+    assert "settlement_recovery" in missing_turn, missing_turn
+    assert "settlement_recovery" in surface, surface
+    pending = missing_turn["settlement_recovery"]
+    assert pending == surface["settlement_recovery"]
+    assert surface["replan_transition"]["next_cli_actions"] == pending["next_cli_actions"]
+    assert pending["settlement_identity"] == replan_identity
+    assert pending["settlement_progress"]["next_step"] == "durable_writeback"
+    assert _heartbeat_receipt_count(runtime, "stride-due-review") == receipt_count
+    assert _spend_run_count(runtime) == spend_count
     rejected = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", obligation["obligation_id"],
         "--turn-instance-id", "stride-due-review",
@@ -461,9 +487,6 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         state_path.write_text(state_path.read_text().replace(
             "Settle one standard Codex App delivery.",
             "Settle one standard delivery and verify the newly required source."))
-    from tests.control_plane.test_quota_settlement_cli import _heartbeat_receipt_count, _spend_run_count
-    receipt_count = _heartbeat_receipt_count(runtime, "stride-due-review")
-    spend_count = _spend_run_count(runtime)
     rejected_reference = decision["reference_context_id"] if changed_context else "replan-context-" + "b" * 24
     decision_path.write_text(json.dumps({**vision_packet,
         "stride_decision": {**decision, "reference_context_id": rejected_reference}}))
@@ -479,11 +502,23 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert transition["reason_code"] == "stride_review_basis_mismatch"
     assert transition["host_action"] == "read_current_replan_context"
     assert transition["next_cli_actions"] == []  # No unbound repeat of the rejected write.
+    owed_recovery = foreign["settlement_recovery"]
+    assert owed_recovery == pending
+    recovered_code, recovered_turn = _run_generated_cli(pending["next_cli_actions"][0],
+        registry_path=registry, cwd=project)
+    assert recovered_code == 0, json.dumps(recovered_turn, indent=2)
+    assert recovered_turn["heartbeat_receipt"]["settlement_identity"] == owed_recovery["settlement_identity"]
+    assert _heartbeat_receipt_count(runtime, "stride-due-review") == receipt_count
+    assert _spend_run_count(runtime) == spend_count
     reference = transition["context_recovery"]
     # A rejected write must not eagerly import historical acceptance/evidence
     # into the model. Its exact write-time basis remains independently readable.
     if os.name == "posix":
-        assert len(json.dumps(foreign, ensure_ascii=False).encode()) < 4096
+        # Preserve the old diagnostic budget; the additive original-Turn
+        # recovery has its own bounded allowance, not historical context.
+        assert len(json.dumps({key: value for key, value in foreign.items() if key != "settlement_recovery"}, ensure_ascii=False).encode()) < 4096
+        assert len(json.dumps(owed_recovery, ensure_ascii=False).encode()) < 2048
+        assert len(json.dumps(foreign, ensure_ascii=False).encode()) < 6144
         from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
         saved, _, recovery = read_context_capture_file(reference["path"], reference["sha256"], private=True)
         assert saved.stat().st_mode & 0o077 == 0
@@ -521,13 +556,17 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert persisted["agent_vision"]["stride_decision"] == decision
     assert persisted["settlement_identity"]["schema_version"] == "quota_settlement_identity_v1"
     assert persisted["replan_obligation_id"] == obligation["obligation_id"]
-    assert persisted["settlement_identity"] == reread["heartbeat_receipt"]["settlement_identity"]
+    assert persisted["settlement_identity"] == replan_identity
+    after_write = call(*maintenance)["settlement_recovery"]
+    spend = after_write["settlement_owed"]
+    assert after_write["next_cli_actions"] == [spend["command"]]
+    assert spend["effect_id"] == replan_identity["effect_id"]
     for _ in range(2):
-        call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-             "--replan-obligation-id", obligation["obligation_id"], "--turn-instance-id", "stride-due-review",
-             "--slots", "1", "--source", "heartbeat", "--execute")
+        rc, spent = _run_generated_cli(spend["command"], registry_path=registry, cwd=project)
+        assert rc == 0 and spent["settlement_result"]["ok"], spent
     assert _spend_run_count(runtime) == spend_count + 1
     assert _heartbeat_receipt_count(runtime, "stride-due-review") == receipt_count
+    assert "settlement_recovery" not in call(*maintenance)
 
     # Continue through real authority/history, rather than injecting a crafted
     # context. The next periodic review must see the accepted autonomous decision.

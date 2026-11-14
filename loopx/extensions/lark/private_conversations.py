@@ -10,9 +10,10 @@ import json
 import re
 import subprocess
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from itertools import tee
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -254,7 +255,20 @@ class LarkPrivateConversations:
         bindings = self.bindings.read()["bindings"]
         if not bindings:
             return {}
-        result = call(self.runner, [self.cli_bin, "profile", "list"])
+        apps = self.configured_profile_apps()
+        profiles = {}
+        for row in bindings:
+            app_id = apps.get(row["transport_ref"], "")
+            if row.get("enabled") is not True or not app_id or identity_ref(app_id) != row["provider_ref"]:
+                continue
+            profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
+                "bot_app_id": app_id, "audience": row.get("audience", "owner"),
+                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
+        return profiles
+
+    def configured_profile_apps(self, *, cli_bin: str | None = None) -> dict[str, str]:
+        """Read local App identities for listener leases, without granting access."""
+        result = call(self.runner, [cli_bin or self.cli_bin, "profile", "list"])
         try:
             configured = json.loads(str(result.get("stdout") or ""))
         except json.JSONDecodeError as exc:
@@ -271,16 +285,7 @@ class LarkPrivateConversations:
         # profile names take precedence over the App-ID fallback.
         for app_id in list(apps.values()):
             apps.setdefault(app_id, app_id)
-        profiles = {}
-        for row in bindings:
-            app_id = apps.get(row["transport_ref"], "")
-            if (row.get("enabled") is not True or not APP_ID_PATTERN.fullmatch(app_id)
-                    or identity_ref(app_id) != row["provider_ref"]):
-                continue
-            profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
-                "bot_app_id": app_id, "audience": row.get("audience", "owner"),
-                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
-        return profiles
+        return {profile: app_id for profile, app_id in apps.items() if APP_ID_PATTERN.fullmatch(app_id)}
 
     @effect_runtime_request_scope()
     def health(self) -> dict[str, dict[str, int]]:
@@ -288,36 +293,38 @@ class LarkPrivateConversations:
         quota_pending = self.core.quota_backlog_observer()
         completed: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
+        def count(row: dict[str, Any]) -> None:
+            entry = health[row["binding_id"]]
+            entry["pending_count"] += 1
+            entry["recovery_count"] += any(phase.get("started") and not phase.get("verified")
+                                           for phase in row["deliveries"].values())
+
         def observe_completed() -> None:
             flags = quota_pending([native for _, native in completed])
             for (row, _), pending in zip(completed, flags, strict=True):
                 if pending:
-                    health[row["binding_id"]]["pending_count"] += 1
-                    health[row["binding_id"]]["recovery_count"] += int(any(
-                        phase.get("started") and not phase.get("verified") for phase in row["deliveries"].values()))
+                    count(row)
             completed.clear()
 
-        for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
-            row = _read_json(path)
-            entry = health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
-            pending = row["status"] != "delivered"
-            if (not pending and path.parent == self.root
-                    and row.get("session_id") and row.get("turn_id")):
-                # Delivery of a quota failure or partial result does not finish
-                # the request. Read only the existing Core correlation and Turn;
-                # recovery eligibility, allowance and effects still belong to
-                # the original worker's fresh admission checks.
-                native = self.core.read_request(row["request_ref"])
-                if (native.get("status") == "accepted" and native.get("command") is None
-                        and all(native.get(key) == row.get(key) for key in
+        def delivered_requests() -> Iterator[dict[str, Any]]:
+            for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
+                row = _read_json(path)
+                health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
+                if row["status"] != "delivered":
+                    count(row)
+                elif path.parent == self.root and row.get("session_id") and row.get("turn_id"):
+                    yield row
+
+        # Pair the original receipts with the current Core correlation and Turn.
+        receipts, refs = tee(delivered_requests())
+        natives = self.core.read_backlog_requests(row["request_ref"] for row in refs)
+        for row, native in zip(receipts, natives, strict=True):
+            if (native.get("status") == "accepted" and native.get("command") is None
+                    and all(native.get(key) == row.get(key) for key in
                             ("binding_id", "source", "session_id", "turn_id"))):
-                    completed.append((row, native))
-                    if len(completed) >= QUOTA_BACKLOG_BATCH_SIZE:
-                        observe_completed()
-            if pending:
-                entry["pending_count"] += 1
-                entry["recovery_count"] += int(any(phase.get("started") and not phase.get("verified")
-                                                   for phase in row["deliveries"].values()))
+                completed.append((row, native))
+                if len(completed) >= QUOTA_BACKLOG_BATCH_SIZE:
+                    observe_completed()
         observe_completed()
         return health
 
@@ -822,10 +829,13 @@ class LarkPrivateConversations:
 
     @effect_runtime_request_scope()
     def admit(self, profile: str, event: dict[str, Any], *,
-              defer_background_stop: bool = False, history_review: bool = False) -> dict[str, Any]:
+              defer_background_stop: bool = False, history_review: bool = False,
+              expected_binding_id: str | None = None) -> dict[str, Any]:
         record_event_timing(profile, str(event.get("message_id") or ""), "admission_started")
         try:
             binding = self._binding(profile)
+            if expected_binding_id is not None and binding["binding_id"] != expected_binding_id:
+                return {"status": "audience_rejected"}
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
             if history_review and (binding.get("context_kind") != "steward"
                     or binding.get("audience", "owner") != "owner" or event.get("chat_type") != "p2p"):
