@@ -453,16 +453,6 @@ class _QuotaFailureReader:
     command: str
     reader_argv: list[str]
 
-    def bind(self, path: Path | None, digest: str | None, failure: dict[str, object]) -> None:
-        from ..control_plane.turn_driver.decision_capture import write_context_read_reference, write_decision_capture
-
-        if path is None or digest is None:
-            # No original capture was published. Preserve the committed receipt
-            # as diagnostics without writing or replacing decision.json.
-            path = self.reference.with_name("failure.json")
-            digest = write_decision_capture(path, failure)
-        write_context_read_reference(path, digest, reference_file=self.reference, reader_argv=self.reader_argv)
-
 
 def _quota_failure_reader_route(cli_bin: str | None) -> list[str]:
     if cli_bin is None:
@@ -556,34 +546,46 @@ def _bounded_quota_transport_failure(
     failure: dict[str, object], limit: int, reader: _QuotaFailureReader | None,
     path: Path | None, digest: str | None,
 ) -> dict[str, object]:
-    original = failure.get("captured_decision")
-    if original is None and _failure_output_size(failure) <= limit:
+    from ..control_plane.turn_driver.decision_capture import write_context_read_reference, write_decision_capture
+
+    if digest is None and _failure_output_size(failure) <= limit:
         return failure
     receipt = failure.get("heartbeat_receipt")
-    command = str(original["command"]) if isinstance(original, Mapping) and "command" in original else None
-    reference_written = False
+    command = None
     if reader is not None:
         try:
-            reader.bind(path, digest, failure)
+            if path is None or digest is None:
+                # Preserve the committed receipt when decision.json could
+                # not be published. Keep these bytes if the reference fails.
+                path = reader.reference.with_name("failure.json")
+                digest = write_decision_capture(path, failure)
+            write_context_read_reference(
+                path, digest, reference_file=reader.reference, reader_argv=reader.reader_argv,
+            )
         except (OSError, ValueError):
-            # A second IO failure cannot revoke the receipt or silently bind a
-            # different file. Return whatever original identity fits below.
             pass
         else:
-            reference_written = True
             command = reader.command
-            if isinstance(original, Mapping) and path is not None and digest is not None:
-                failure = {**failure, "captured_decision": {**original, "command": command}}
+    locator = None
+    if path is not None and digest is not None:
+        capture: dict[str, object] = {"path": str(path), "sha256": digest}
+        if command is not None:
+            capture["command"] = command
+        else:
+            # The direct reader can need more space than the opening reply.
+            # Expose its saved identity without advertising unqualified argv.
+            locator = {
+                **_compact_quota_failure(),
+                "captured_decision": capture,
+                "instruction": "Use a larger output channel to read the saved capture by its path and SHA-256. "
+                "Do not rerun admission.",
+            }
+            failure = {**failure, "instruction": locator["instruction"]}
+        failure = {**failure, "captured_decision": capture}
     if _failure_output_size(failure) <= limit:
         return failure
-    if not reference_written and path is not None and digest is not None:
-        locator = {**_compact_quota_failure(), "captured_decision": {"path": str(path), "sha256": digest},
-            "instruction": "Read the saved decision by its original SHA-256. Do not rerun admission."}
-        with_command = {**locator, "command": command}
-        if command is not None and _failure_output_size(with_command) <= limit:
-            return with_command
-        if _failure_output_size(locator) <= limit:
-            return locator
+    if locator is not None and _failure_output_size(locator) <= limit:
+        return locator
     if command is not None or isinstance(receipt, Mapping):
         compact = _compact_quota_failure(command, receipt=receipt if command is None else None)
         guided = {**compact, "instruction": "Read the original Turn receipt before recovering. Do not rerun admission."}
