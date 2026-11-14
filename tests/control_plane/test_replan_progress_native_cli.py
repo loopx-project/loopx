@@ -434,6 +434,53 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
         assert writer["allowed_terminal"] == source["replan_action_packet"]["allowed_terminal"]
 
+        recovery_root = path.parent / "context-delivery"
+        prior_recoveries = set(recovery_root.glob("recovery-*"))
+        for limit in (80, 96):
+            denied = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
+            assert denied["ok"] is False and "command" not in denied
+            reason = denied["reason"].lower()
+            assert "budget" in reason and "retry" in reason and "read" in reason
+        # Below the compact reason, preserve the process error and diagnostic
+        # without emitting a partial JSON response.
+        minimal_failure = b'{"ok":false}' + os.linesep.encode()
+        for limit in (len(minimal_failure) - 1, len(minimal_failure)):
+            args = shlex.split(f"{writer_command} --max-page-output-bytes {limit}")
+            denied = subprocess.run(args, cwd=fixture["project"], capture_output=True, timeout=30)
+            assert denied.returncode == 1 and len(denied.stdout) <= limit
+            assert b"output budget" in denied.stderr
+            assert denied.stdout == (minimal_failure if limit == len(minimal_failure) else b"")
+
+        # Exercise the production printer with CRLF even on a POSIX test host.
+        writer_argv = shlex.split(writer_command)
+        cli_args = writer_argv[writer_argv.index("--format"):]
+        crlf_cli = (
+            "import os, sys; from loopx.entrypoint import main; "
+            "os.linesep = '\\r\\n'; sys.stdout.reconfigure(newline=os.linesep); raise SystemExit(main())"
+        )
+        for limit in (13, 14, 77):
+            denied = subprocess.run([sys.executable, "-c", crlf_cli, *cli_args, "--max-page-output-bytes", str(limit)],
+                cwd=fixture["project"], capture_output=True, timeout=30)
+            assert denied.returncode == 1 and len(denied.stdout) <= limit
+            assert b"output budget" in denied.stderr
+            if limit == 13:
+                assert denied.stdout == b""
+            else:
+                assert denied.stdout.endswith(b"\r\n") and json.loads(denied.stdout)["ok"] is False
+        assert set(recovery_root.glob("recovery-*")) == prior_recoveries
+
+        moved = path.with_name("unavailable-source.json")
+        path.rename(moved)
+        try:
+            missing = subprocess.run(shlex.split(f"{writer_command} --max-page-output-bytes 80"),
+                cwd=fixture["project"], capture_output=True, text=True, timeout=30)
+            assert missing.returncode == 1 and len(missing.stdout.encode()) <= 80
+            refusal = json.loads(missing.stdout)
+            assert refusal["ok"] is False and "stderr" in refusal["reason"]
+            assert str(path) in missing.stderr
+        finally:
+            moved.rename(path)
+
         output_limit = 1450
         bounded = read(f"{writer_command} --max-page-output-bytes {output_limit}", output_limit=output_limit)
         assert bounded["source_hash"] == writer["source_hash"]
@@ -481,6 +528,11 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
             for command in (packet["review"], writer_command):
                 rejected = read(command, expected=1)
                 assert rejected["ok"] is False and "capture digest mismatch" in rejected["reason"]
+            for limit in (80, 96, 256):
+                rejected = read(f"{writer_command} --max-page-output-bytes {limit}", expected=1, output_limit=limit)
+                assert rejected["ok"] is False and "command" not in rejected
+                reason = rejected["reason"].lower()
+                assert all(word in reason for word in ("digest", "restore", "do not rerun admission"))
         finally:
             path.write_bytes(raw)
         assert read(writer_command) == writer

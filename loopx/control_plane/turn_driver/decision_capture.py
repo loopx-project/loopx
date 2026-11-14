@@ -462,6 +462,10 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     return path, payload
 
 
+class ContextCaptureDigestMismatch(ValueError):
+    """The saved capture does not match the digest supplied by its reader."""
+
+
 def read_context_capture_file(value: str, digest: str, *, private: bool = False) -> tuple[Path, bytes, dict[str, Any]]:
     """One bounded physical-file/hash check for readers and native observations."""
     from ..effect_runtime import MAX_REQUEST_BYTES
@@ -484,7 +488,7 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
             raise ValueError("native context requires a private capture owned by this user")
         raw = stream.read(metadata.st_size + 1)
     if len(raw) != metadata.st_size or hashlib.sha256(raw).hexdigest() != digest:
-        raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
+        raise ContextCaptureDigestMismatch("capture digest mismatch; restore the original capture, do not rerun admission")
     payload = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("capture must contain a complete JSON object")
