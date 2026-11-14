@@ -427,6 +427,7 @@ def collect_history(
     agent_lane_id: str | None = None,
     scoped_agent_id: str | None = None,
     registry: dict[str, Any] | None = None,
+    tolerate_undecodable: bool = False,
 ) -> dict[str, Any]:
     from .capabilities.machine_configuration.builtins import (
         read_builtin_goal_machine_configuration,
@@ -481,7 +482,7 @@ def collect_history(
         index_snapshot = load_index_snapshot(
             index_path,
             include_artifact_status=False,
-            tolerate_undecodable=True,
+            tolerate_undecodable=tolerate_undecodable,
         )
         runs = index_snapshot.records
         raw_count = index_snapshot.raw_count

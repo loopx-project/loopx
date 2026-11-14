@@ -303,6 +303,7 @@ def _quota_history(tmp_path: Path, index_bytes: bytes) -> dict:
         runtime_root=tmp_path / "runtime",
         goal_id=goal_id,
         limit=10,
+        tolerate_undecodable=True,
     )["goals"][0]["quota"]
 
 
@@ -357,3 +358,54 @@ def test_torn_unrelated_row_still_marks_usage_unreadable_but_keeps_the_spend(
     # The intact spend is still counted; only the unknown row is flagged.
     assert quota["spent_slots"] == 1
     assert quota["unreadable_event_count"] == 1
+
+
+def test_history_export_keeps_the_prior_corpus_when_a_row_cannot_be_decoded(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.openviking_semantic_preference.history_export import (
+        export_goal_conclusions,
+    )
+
+    goal_id = "torn-export-goal"
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps({"goals": [{"id": goal_id}]}), encoding="utf-8")
+    runs_dir = tmp_path / "runtime" / "goals" / goal_id / "runs"
+    runs_dir.mkdir(parents=True)
+    index_path = runs_dir / "index.jsonl"
+
+    def row(generated_at: str, summary: str) -> bytes:
+        return json.dumps(
+            {
+                "goal_id": goal_id,
+                "generated_at": generated_at,
+                "classification": "progress",
+                "recommended_action": summary,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+    older = row("2026-09-15T00:00:00+00:00", "older conclusion")
+    newer = row("2026-09-16T00:00:00+00:00", "进度更新")
+    good = older + b"\n" + newer + b"\n"
+    index_path.write_bytes(good)
+    kwargs = {
+        "goal_id": goal_id,
+        "registry_path": registry_path,
+        "runtime_root": tmp_path / "runtime",
+        "out_dir": tmp_path / "out",
+    }
+    first = export_goal_conclusions(**kwargs)
+    assert first["public_projection"]["written"] == 2
+    corpus = tmp_path / "out" / goal_id / "history-conclusions"
+    before = {path.name: path.read_bytes() for path in corpus.iterdir()}
+
+    # The newer row is torn inside a multibyte character: the export must keep
+    # the last verified corpus instead of replacing it with a smaller one.
+    index_path.write_bytes(older + b"\n" + newer[: newer.index("进".encode("utf-8")) + 1])
+    with pytest.raises(UnicodeDecodeError):
+        export_goal_conclusions(**kwargs)
+    assert {path.name: path.read_bytes() for path in corpus.iterdir()} == before
+
+    index_path.write_bytes(good)
+    assert export_goal_conclusions(**kwargs)["public_projection"]["written"] == 2
