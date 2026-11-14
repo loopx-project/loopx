@@ -152,6 +152,7 @@ class QuotaSpendPrecheck:
     settlement: SettlementResult[dict[str, Any]]
     progress: dict[str, Any] | None
     spend_run_present: bool
+    spend_request_rejection: SettlementResult[dict[str, Any]] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +425,7 @@ def read_quota_spend_precheck(
     allow_unbound_binding: bool = False,
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
+    spend_request: Mapping[str, Any] | None = None,
 ) -> QuotaSpendPrecheck | None:
     """Read the identity and replay controls before building a fresh preview."""
 
@@ -438,6 +440,7 @@ def read_quota_spend_precheck(
             "infer_turn_instance_id": infer_turn_instance_id,
             "allow_unbound_binding": allow_unbound_binding,
             "spend_precheck": True,
+            **({"spend_request": dict(spend_request)} if spend_request is not None else {}),
         },
         registry_path=registry_path,
         goal_ref=goal_ref,
@@ -452,6 +455,10 @@ def read_quota_spend_precheck(
         settlement=_readback_result(payload.get("settlement")),
         progress=_optional_readback_record(payload.get("progress")),
         spend_run_present=spend_run_present,
+        spend_request_rejection=(
+            _readback_result(payload["spend_request_rejection"])
+            if "spend_request_rejection" in payload else None
+        ),
     )
 
 

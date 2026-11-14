@@ -7281,6 +7281,20 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
     owed = recovering["settlement_owed"]
     assert owed["command"] == refresh["settlement_owed"]["command"]
     assert owed["effect_id"] == original["effect_id"]
+
+    def reject_changed_spend() -> None:
+        for flag, replacement in (("--slots", "2"), ("--source", "visible-goal")):
+            tokens = shlex.split(owed["command"])
+            tokens[tokens.index(flag) + 1] = replacement
+            refused_rc, refused = _run_generated_cli(
+                shlex.join(tokens), registry_path=registry_path, cwd=project,
+            )
+            assert refused_rc == 1 and refused["ok"] is False, refused
+            assert refused["appended"] is False
+            assert refused["settlement_result"]["failure"]["kind"] == "quota_spend_rejected"
+
+    reject_changed_spend()
+    assert _spend_run_count(runtime) == 0
     from concurrent.futures import ThreadPoolExecutor
 
     def settle() -> dict[str, Any]:
@@ -7305,6 +7319,23 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
     assert sum(
         event["event_kind"] == "quota_spend" and event.get("run_id") == turn_instance_id
         for event in events
+    ) == 1
+    assert _spend_run_count(runtime) == 1
+    reject_changed_spend()
+    # Simulate the debit committing before its rollout receipt. Refused
+    # requests must not fill the missing receipt with different billing terms.
+    partial_log = "".join(json.dumps(event) + "\n" for event in events if event["event_kind"] != "quota_spend")
+    rollout_log.write_text(partial_log, encoding="utf-8")
+    reject_changed_spend()
+    assert rollout_log.read_text(encoding="utf-8") == partial_log
+    repaired = settle()
+    assert repaired["appended"] is False and repaired["receipt_repaired"] is True
+    assert repaired["settlement_result"]["ok"] is True
+    repaired_events = [json.loads(line) for line in rollout_log.read_text(encoding="utf-8").splitlines()]
+    assert sum(
+        event["event_kind"] == "quota_spend"
+        and event["details"]["settlement_effect_id"] == original["effect_id"]
+        for event in repaired_events
     ) == 1
     assert _spend_run_count(runtime) == 1
     assert _classification_count(runtime, "validated_progress") == 1
