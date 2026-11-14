@@ -11,6 +11,8 @@ from arkruntime.mcp import custom_tool_items
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
 
+from loopx.extensions.turn_host import supervised_stdio_command
+
 from .config import AdapterError, Config, tool_environment
 
 
@@ -48,8 +50,9 @@ async def connect(config: Config, identity: Mapping[str, str]) -> AsyncIterator[
     if not config.mcp_command:
         yield Tools(None, [], config)
         return
+    command = supervised_stdio_command(config.mcp_command)
     server = StdioServerParameters(
-        command=config.mcp_command[0], args=list(config.mcp_command[1:]),
+        command=command[0], args=command[1:],
         env=tool_environment(config, identity), cwd=str(config.workspace),
     )
     async with stdio_client(server) as (reader, writer):

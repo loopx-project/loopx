@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
-import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from loopx.command_invocation import pinned_python_module_command
 from loopx.control_plane.agents.workspace_guard import capture_delivery_workspace
 
 
@@ -25,8 +24,7 @@ class KunlunNativeGoalRuntimeError(RuntimeError):
 
 
 def _default_loopx_prefix() -> list[str]:
-    executable = shutil.which("loopx")
-    return [executable] if executable else [sys.executable, "-m", "loopx.cli"]
+    return pinned_python_module_command("loopx.cli")
 
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]

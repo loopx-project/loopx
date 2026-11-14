@@ -172,6 +172,50 @@ def _brief(purpose: str) -> dict:
     }
 
 
+def test_recreated_goal_cannot_stop_original_delegation_or_read_its_stop_receipt(
+    tmp_path, monkeypatch,
+):
+    from loopx.collaboration_mcp import Delegations
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry = _create_source_registry(tmp_path)
+    config = tmp_path / "delegations.json"
+    config.write_text(json.dumps({
+        "schema_version": "loopx_local_delegation_v0",
+        "bindings": [{
+            "id": "review", "agent_id": "reviewer", "todo_id": "todo_probe",
+            "requesters": ["builder"], "workspace": str(tmp_path),
+            "timeout_seconds": 30, "output_refs": ["result.json"],
+            "host_args": ["--host", "generic-cli"],
+        }],
+    }), encoding="utf-8")
+    original = Delegations(tmp_path, registry, "delivery", "builder", config)
+    # The exact profile currently admits preparation, not native execution.
+    # Keep the real request/operation creation and lifetime transactions.
+    monkeypatch.setattr(original, "_spawn", lambda _operation_id: None)
+    original.start("review", "original-operation", _brief("Inspect the original Goal"))
+    path = original.path("original-operation")
+    before = path.read_bytes()
+    _recreate(registry)
+    replacement = Delegations(tmp_path, registry, "delivery", "builder", config)
+
+    with pytest.raises(ValueError, match="captured Goal instance"):
+        replacement.stop("original-operation", execute=True)
+    assert path.read_bytes() == before
+    assert not original._stop_path(path).exists()
+
+    # The original requester retains the ability to drain its historical work.
+    stopped = original.stop("original-operation", execute=True)
+    assert stopped["status"] == "stopped"
+    stopped_bytes = path.read_bytes()
+    receipt_bytes = original._stop_path(path).read_bytes()
+    with pytest.raises(ValueError, match="captured Goal instance"):
+        replacement.stop("original-operation", execute=True)
+    assert path.read_bytes() == stopped_bytes
+    assert original._stop_path(path).read_bytes() == receipt_bytes
+
+
 def _manager_request(root: Path, registry: Path, *, channel="manager", complete=True):
     store = ChatSessionStore(root)
     session = store.create_session(

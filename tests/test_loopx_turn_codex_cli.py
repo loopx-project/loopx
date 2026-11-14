@@ -8,6 +8,7 @@ import time
 import stat
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -1124,9 +1125,15 @@ def test_codex_source_session_rejects_alias_only_descriptor(
     assert descriptor_path.read_bytes() == descriptor_before
 
 
+@pytest.mark.parametrize("mcp_command", [
+    [sys.executable, "-m", "loopx.collaboration_mcp", "--agent-id", "reviewer"],
+    ["/tmp/🔬/python", "/tmp/🧪/server.py", "--label=研究"],
+    [r"C:\Program Files\python.exe", r"C:\tools\server.py", 'quotes"\\\b\t\n\f\r\x01'],
+])
 def test_codex_cli_host_materializes_bound_mcp_tools_for_fresh_and_resume(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mcp_command: list[str],
 ) -> None:
     executable, log_path = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
@@ -1136,13 +1143,7 @@ def test_codex_cli_host_materializes_bound_mcp_tools_for_fresh_and_resume(
     server = {
         "schema_version": CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION,
         "name": "loopx_delegation",
-        "command": [
-            sys.executable,
-            "-m",
-            "loopx.collaboration_mcp",
-            "--agent-id",
-            "reviewer",
-        ],
+        "command": mcp_command,
     }
 
     run_codex_cli_host(
@@ -1171,23 +1172,20 @@ def test_codex_cli_host_materializes_bound_mcp_tools_for_fresh_and_resume(
             for index, value in enumerate(argv)
             if value == "-c"
         ]
-        assert (
-            f'mcp_servers.loopx_delegation.command={json.dumps(sys.executable)}'
-            in config_values
-        )
-        assert (
-            "mcp_servers.loopx_delegation.args="
-            + json.dumps(server["command"][1:])
-            in config_values
-        )
-        assert "mcp_servers.loopx_delegation.enabled=true" in config_values
-        assert "mcp_servers.loopx_delegation.required=true" in config_values
-        assert (
-            'mcp_servers.loopx_delegation.default_tools_approval_mode="approve"'
-            in config_values
-        )
-        assert "mcp_servers.loopx_delegation.startup_timeout_sec=30" in config_values
-        assert "mcp_servers.loopx_delegation.tool_timeout_sec=60" in config_values
+        # Codex parses each override as TOML, not JSON. Decode with that grammar
+        # to prove argv values survive, including non-BMP paths and escapes.
+        overrides = tomllib.loads("\n".join(
+            value for value in config_values if value.startswith("mcp_servers.")
+        ))["mcp_servers"]["loopx_delegation"]
+        assert overrides == {
+            "command": mcp_command[0],
+            "args": mcp_command[1:],
+            "enabled": True,
+            "required": True,
+            "default_tools_approval_mode": "approve",
+            "startup_timeout_sec": 30,
+            "tool_timeout_sec": 60,
+        }
 
 
 def test_codex_cli_host_rejects_invalid_mcp_binding_before_launch(

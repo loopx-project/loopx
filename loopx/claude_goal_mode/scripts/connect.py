@@ -11,11 +11,11 @@ install.py. No global config, no OS sandbox. The run loop is native `/loop`.
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+from loopx.command_invocation import pinned_python_module_command
 from loopx.control_plane.projects.registry_codec import (
     ProjectRegistryProtocolError,
     add_project_registry_backend,
@@ -27,8 +27,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _gh_prefix():
-    exe = shutil.which("loopx")
-    return [exe] if exe else [sys.executable, "-m", "loopx.cli"]
+    return pinned_python_module_command("loopx.cli")
 
 
 def main():

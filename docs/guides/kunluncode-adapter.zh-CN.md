@@ -41,7 +41,7 @@ KunlunCode 使用独立的 `.loopx/kunluncode.json` 绑定和注册身份。它�
 | --- | --- | --- | --- |
 | LoopX shell CLI | `loopx ...`、`loopx-kunluncode ...` | LoopX 控制面 | 连接、添加 todo、启动原生 Goal 控制器、读取合并状态 |
 | KunlunCode TUI slash | `/goal`、`/goal-pro`、`/plan`、`/mcp` | KunlunCode session runtime | 仍由 TUI 解析；适配器通过等价 app-server API 激活 Goal，不把 slash 文本塞进 prompt |
-| LoopX MCP tools | `should_run`、`list_todos`、`claim_task`、`complete_task` | `loopx-kunluncode` MCP server | 供交互/兼容模式使用；native run 期间写工具会失败关闭，由外层控制器独占 writeback |
+| LoopX MCP tools | `should_run`、`list_todos`、`claim_task`、`complete_task`、`review_task_vision` | `loopx-kunluncode` MCP server | 供交互/兼容模式使用；native run 期间写工具会失败关闭，由外层控制器独占 writeback |
 
 ### `/goal` 是 KunlunCode 原生 Goal
 
@@ -270,14 +270,18 @@ kunluncode --cwd "$TARGET_PROJECT" mcp test loopx-kunluncode
 `status: complete` 和 `verification_passed: true`，且 resumed goal id 与首次运行一致。
 这个 smoke 只保留摘要，不记录原始输出、trajectory、凭据或绝对路径。
 
-MCP 握手成功时应看到四个工具：
+MCP 握手成功时应看到五个工具：
 
 ```text
 should_run
 list_todos
 claim_task
 complete_task
+review_task_vision
 ```
+
+`review_task_vision` 用于在原 Todo 完成后补齐遗漏的 vision 判断，不会重复完成
+Todo 或扣减额度；native run 期间同样由外层控制器限制写入。
 
 再读取 LoopX lane：
 
@@ -503,7 +507,7 @@ uv pip install --python .venv/bin/python -e . 'mcp==1.28.1'
 
 然后用绝对 `--python` 路径重新执行 `install`。
 
-### MCP test 无法连接或没有四个工具
+### MCP test 无法连接或缺少工具
 
 依次检查：
 
@@ -587,7 +591,7 @@ log 对账，并从缺失阶段继续。
 - [ ] `connect` 返回 `ok: true`，goal id 和 Agent id 正确；
 - [ ] `.loopx/kunluncode.json` 未被 Git 跟踪；
 - [ ] 连接已有 goal 时其他 registered agents 仍存在；
-- [ ] 若安装了 MCP，`kunluncode mcp test loopx-kunluncode` 显示四个工具；
+- [ ] 若安装了 MCP，`kunluncode mcp test loopx-kunluncode` 显示上述五个工具；
 - [ ] `status` 显示 registered `kunlun`、host `kunluncode`、source
   `runtime_profile:kunluncode`；
 - [ ] `examples/kunluncode-app-server-goal-pro-smoke.py --require` 证明 strict Goal、verifier PASS

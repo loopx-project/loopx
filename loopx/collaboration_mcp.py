@@ -35,6 +35,7 @@ from .control_plane.effect_runtime import (
     effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
 )
 from .control_plane.runtime.validation_command import noninteractive_validation
+from .command_invocation import pinned_python_module_command
 from .control_plane.turn_driver.journal_store import (
     load_turn_journal,
     turn_journal_path,
@@ -82,15 +83,6 @@ from .presentation.answer_instruction import (
 )
 
 
-_PINNED_MODULE_LAUNCHER = (
-    "import runpy,sys;"
-    "release_root,module=sys.argv[1:3];"
-    "sys.path.insert(0,release_root);"
-    "sys.argv=[module,*sys.argv[3:]];"
-    "runpy.run_module(module,run_name='__main__')"
-)
-
-
 def _release_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -126,14 +118,9 @@ def _python_module_command(module: str) -> list[str]:
 def _pinned_module_command(module: str, *, interpreter: str | None = None) -> list[str]:
     """Build a self-contained module argv for hosts that sanitize env vars."""
 
-    return [
-        interpreter or sys.executable,
-        "-P",
-        "-c",
-        _PINNED_MODULE_LAUNCHER,
-        str(_release_root()),
-        module,
-    ]
+    return pinned_python_module_command(
+        module, interpreter=interpreter, release_root=_release_root(),
+    )
 
 
 def _mcp_python_candidates() -> tuple[Path, ...]:
@@ -979,6 +966,8 @@ class Delegations:
         with exclusive_file_lock(self._dispatch_lock(path)):
             row = _read(path)
             binding = self._bound(row)
+            if self._caller_goal_ref() is not None:
+                delegation_results.operation_brief(self, row)
             stop = self._read_stop(path)
             if stop is None:
                 if row["status"] in DELEGATION_TERMINAL_STATUSES:
