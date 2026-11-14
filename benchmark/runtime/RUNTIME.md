@@ -192,10 +192,12 @@ establish safe recovery, the command returns a typed transport failure with the
 original full-read reference and receipt; use that explicit reference without
 rerunning admission. An optional cache write after recovery is established can
 still fall back to the same full input. A bad source hash/scope is refused before
-publication. This does not renew decision
-freshness or establish autonomous solver benefit. Default-off preloading is
-unchanged. Include the projection command, descriptor, recovery and page reads
-in subsequent total-cost comparisons.
+publication. This does not renew decision freshness or establish autonomous solver benefit.
+With context delivery off, the worker supplies a bounded, digest-checked reader
+for the complete saved CLI view. Follow its page cursors before using the original
+Turn's interaction contract. This requires no hooks and performs no new admission.
+Include the projection command, descriptor, recovery and page reads in subsequent
+total-cost comparisons.
 Across distinct worker wakes, settle the prior Turn before selecting new work;
 reading an old prompt from resumed history cannot supply the next wake's guard.
 Do not modify an active/frozen trial. Set `context_delivery: "off"` for a new trial

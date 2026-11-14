@@ -111,6 +111,54 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, chan
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
 
 
+@pytest.mark.skipif(os.name != "posix", reason="benchmark uses the POSIX source launcher")
+def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch):
+    import shlex
+    import subprocess
+    import sys
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    state = project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    cli._initialize_fixture_authority(project, runtime, provider="sqlite")
+    cli_path = Path(__file__).resolve().parents[2] / "scripts/loopx"
+    turn = "wake-bounded-off-context"
+    wake = tmp_path / "wakes" / turn
+    wake.mkdir(parents=True)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(tmp_path / "checkpoints"),
+        "components": [{"id": "fixture", "source_path": str(state)}], "point_metadata": {}}))
+    env = {**os.environ, "LOOPX_PROJECT": str(project), "LOOPX_CLI": str(cli_path),
+        "LOOPX_PYTHON": sys.executable, "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
+        "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID, "LOOPX_WAKE_LOG_DIR": str(wake.parent),
+        "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "off", "LOOPX_COMPLETE_TURN": "1"}
+
+    receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
+    body = capture_before_replan(env, receipt, "original work")
+    command = next(line for line in body.splitlines() if " quota context-read " in line)
+    view = wake / "checkpoint-start-view.json"
+    original = view.read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    received = bytearray()
+    pages = 0
+    while command:
+        argv = shlex.split(command)
+        assert argv[:3] == [str(cli_path), "--cli-bin", str(cli_path)]
+        assert "should-run" not in argv and "context-project" not in argv
+        result = subprocess.run(argv, cwd=project, env=env, capture_output=True, check=True)
+        page = json.loads(result.stdout)
+        assert page["ok"] and page["offset"] == len(received) and page["sha256"] == digest
+        assert len(result.stdout) <= 8000
+        received.extend(page["content"].encode("utf-8"))
+        assert len(received) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+        command = page.get("next_command")
+        pages += 1
+    assert pages > 1 and received == original == view.read_bytes()
+    assert json.loads(received)["heartbeat_receipt"]["turn_instance_id"] == turn
+    assert cli._heartbeat_receipt_count(runtime, turn) == 1
+    assert cli._spend_run_count(runtime) == 0
+
+
 def test_closed_budget_never_reads_the_request_or_replays_work(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("closed budget must not read sources")
