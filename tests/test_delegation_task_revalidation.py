@@ -1,11 +1,13 @@
 """Version-bound requester decisions through real Turn acceptance and durable IO."""
 import asyncio
+import http.client
 import json
 import os
 import sys
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from pathlib import Path
+from threading import Event, Thread, get_ident
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -102,6 +104,145 @@ def test_revalidation_preserves_an_internal_lock_timeout(service, monkeypatch):
     with pytest.raises(LockAcquireTimeoutError) as raised:
         runner.revalidate("analysis-1")
     assert raised.value is failure
+
+
+@pytest.fixture
+def revalidation_http(service):
+    from loopx.agent_registry import load_goal_from_registry
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    root, runner = service
+    workspace = Path(load_goal_from_registry(runner.registry, runner.goal_id)["repo"])
+    config = workspace / ".loopx/config/delegations.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_bytes(runner.config.read_bytes())
+    runner.config = config
+    store = ChatSessionStore(runner.root)
+    controller = ChatRuntimeController(store=store, codex_bin="fixture", registry_path=runner.registry)
+    store.create_session(goal_id=runner.goal_id, agent_id="codex", channel_id=f"goal.{runner.goal_id}",
+                         upstream_thread_id="fixture", session_id="recovery",
+                         adapter_kind="codex_app_server", upstream_mode="chat")
+    store.update_session("recovery", native_goal={"status": "active"}, loopx_mode={"settings": {
+        "agent_id": runner.agent_id, "execution_config": ".loopx/config/delegations.json"}})
+
+    with ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler) as server:
+        server.daemon_threads = False
+        server.verbose = False
+        server.registry_path, server.runtime_root = runner.registry, runner.root
+        server.chat_store, server.runtime_controller = store, controller
+        serving = Thread(target=server.serve_forever, daemon=True)
+        serving.start()
+
+        def post(operation, expected=200):
+            conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=60)
+            try:
+                conn.request("POST", "/api/chat/sessions/recovery/loopx",
+                             json.dumps({"operation": operation, "operation_id": "analysis-1"}),
+                             {"Content-Type": "application/json",
+                              "Origin": f"http://127.0.0.1:{server.server_port}"})
+                response = conn.getresponse()
+                payload = json.loads(response.read())
+                assert response.status == expected, payload
+                return payload
+            finally:
+                conn.close()
+
+        try:
+            yield root, runner, post
+        finally:
+            server.shutdown()
+            serving.join(timeout=10)
+            controller.close()
+
+
+@pytest.mark.parametrize("reader_state", ["registered", "registering", "held", "revoked"])
+def test_revalidation_survives_a_concurrent_status_read(revalidation_http, monkeypatch, reader_state):
+    """Exercise the kernel-acquired, owner-record-not-yet-published interval over HTTP."""
+    from loopx import file_lock
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+
+    root, runner, post = revalidation_http
+    output = root / "analyst/initial/output.json"
+    saved = output.read_bytes()
+    output.write_text("{}")
+    runner.start("analysis", "analysis-1", brief())
+    failed = wait(runner)
+    turn_key = failed["task_failure"]["turn_key"]
+    output.write_bytes(saved)
+    path = runner.path("analysis-1")
+    journal = turn_journal_path(runner.root, goal_id=runner.goal_id, turn_key=turn_key)
+    original_record, original_journal = path.read_bytes(), journal.read_bytes()
+    # The last invocation registered as single flight and already released.
+    # Until the new reader publishes, this metadata says nothing about it.
+    with file_lock.try_exclusive_file_lock(path) as lock:
+        assert lock is not None
+        lock_stat = lock.stat()
+    assert file_lock.lock_holder_liveness(path)[0] == file_lock.LOCK_HOLDER_RELEASED
+
+    read_locked, release_read = Event(), Event()
+    persist = file_lock._persist_holder_record
+    try_acquire = file_lock._try_acquire_kernel_lock
+    reader_thread = None
+    collided = False
+
+    def same_lock(stream):
+        return os.path.samestat(os.fstat(stream.fileno()), lock_stat)
+
+    def hold_read_record(stream, **kwargs):
+        nonlocal reader_thread
+        if same_lock(stream) and not read_locked.is_set():
+            reader_thread = get_ident()
+            if reader_state == "registered":
+                persist(stream, **kwargs)
+            read_locked.set()
+            assert release_read.wait(20), "status read did not reach the revalidation request"
+            if reader_state == "registered":
+                return
+        persist(stream, **kwargs)
+
+    def release_on_second_attempt(stream):
+        nonlocal collided
+        if not same_lock(stream) or get_ident() == reader_thread:
+            return try_acquire(stream)
+        if collided and reader_state != "held":
+            release_read.set()
+            reading.result(timeout=20)
+            if reader_state == "revoked":
+                config = json.loads(runner.config.read_text())
+                config["bindings"][0]["requesters"] = []
+                runner.config.write_text(json.dumps(config))
+        acquired = try_acquire(stream)
+        collided |= not acquired
+        return acquired
+
+    with ThreadPoolExecutor(max_workers=1) as pool, monkeypatch.context() as patch:
+        patch.setattr(file_lock, "_persist_holder_record", hold_read_record)
+        patch.setattr(file_lock, "_try_acquire_kernel_lock", release_on_second_attempt)
+        reading = pool.submit(post, "read")
+        try:
+            assert read_locked.wait(20)
+            resumed = post("revalidate", expected=409 if reader_state == "revoked" else 200)
+            assert collided, "requests did not contend on the same kernel lock"
+            if reader_state == "held":
+                assert resumed["status"] == "rejected", resumed
+                assert resumed["worker_active"] is True
+                assert resumed["task_failure"]["turn_key"] == turn_key
+            if reader_state in {"held", "revoked"}:
+                assert path.read_bytes() == original_record
+                assert journal.read_bytes() == original_journal
+        finally:
+            release_read.set()
+            reading.result(timeout=30)
+
+    if reader_state in {"registered", "registering"}:
+        assert resumed["status"] in {"turn_returned", "accepted"}, resumed
+        accepted = wait(runner)
+        assert accepted["status"] == "accepted", accepted
+        assert any(artifact["ref"] == "output.json" for artifact in accepted["artifacts"])
+        assert json.loads(path.read_bytes())["turn_key"] == turn_key
+    assert (root / "analyst/initial/host-invocations").read_text() == "1"
 
 
 def test_original_task_revalidation_repairs_output_without_repeating_host(service):
