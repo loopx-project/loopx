@@ -148,10 +148,14 @@ async function sourceLeaseBytes(path: string): Promise<Buffer> {
     const bytes = await handle.readFile();
     const after = await handle.stat();
     const current = await lstat(path);
+    // Tolerate Windows ctime-only skew only with a volume and file index in
+    // every observation; POSIX keeps ctime in the lease fence.
+    const fenceCtime = process.platform !== "win32" ||
+      !(before.dev && before.ino && after.dev && after.ino && current.dev && current.ino);
     if (current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino ||
         before.size !== bytes.length || after.size !== bytes.length || current.size !== bytes.length ||
-        before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs ||
-        after.mtimeMs !== current.mtimeMs || after.ctimeMs !== current.ctimeMs) {
+        before.mtimeMs !== after.mtimeMs || after.mtimeMs !== current.mtimeMs ||
+        (fenceCtime && (before.ctimeMs !== after.ctimeMs || after.ctimeMs !== current.ctimeMs))) {
       throw new ShadowManagementError("source_changed_retry");
     }
     return bytes;

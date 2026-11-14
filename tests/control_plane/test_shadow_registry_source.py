@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -400,3 +402,76 @@ def test_global_registry_writers_respect_native_promotion_marker(tmp_path, write
             action()
         assert (registry.read_bytes(), global_path.read_bytes()) == before
     assert action()["ok"]
+
+
+@pytest.mark.parametrize("unavailable_identity", [None, "st_dev", "st_ino"])
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("field", ["st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"])
+def test_lease_read_identity_change_policy(tmp_path, monkeypatch, platform, field, unavailable_identity):
+    from loopx.control_plane.coordination import authority_source_capture
+
+    state, runtime, registry, goal, _ = workspace(tmp_path)
+    directory = runtime / "goals" / goal["id"] / "task-leases"
+    directory.mkdir(parents=True)
+    lease = directory / "todo_policy.json"
+    original = json.dumps({"schema_version": "task_lease_v0", "goal_id": goal["id"],
+        "todo_id": "todo_policy", "owner": "agent-a", "status": "released", "version": 1}).encode()
+    lease.write_bytes(original)
+    lease_stat = lease.stat()
+    assert lease_stat.st_dev and lease_stat.st_ino
+    original_fstat = os.fstat
+    original_lstat = Path.lstat
+    descriptor_observations = 0
+    path_observations = 0
+
+    def partial_identity(observed):
+        if unavailable_identity is None or (observed.st_dev, observed.st_ino) != (
+            lease_stat.st_dev, lease_stat.st_ino
+        ):
+            return observed
+        # Unavailable volume/file indexes are injected only at the stat boundary.
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields[unavailable_identity] = 0
+        return SimpleNamespace(**fields)
+
+    def path_stat(path, *args, **kwargs):
+        nonlocal path_observations
+        raw = original_lstat(path, *args, **kwargs)
+        is_lease = Path(path) == lease
+        if is_lease:
+            path_observations += 1
+        observed = partial_identity(raw)
+        if not is_lease or path_observations != 2 or field not in ("st_dev", "st_ino"):
+            return observed
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields[field] += 1
+        return SimpleNamespace(**fields)
+
+    def descriptor_stat(fd):
+        nonlocal descriptor_observations
+        observed = original_fstat(fd)
+        if (observed.st_dev, observed.st_ino) != (lease_stat.st_dev, lease_stat.st_ino):
+            return observed
+        descriptor_observations += 1
+        observed = partial_identity(observed)
+        if descriptor_observations != 2 or field not in ("st_size", "st_mtime_ns", "st_ctime_ns"):
+            return observed
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields[field] += 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(Path, "lstat", path_stat)
+    monkeypatch.setattr(authority_source_capture, "os", SimpleNamespace(**{
+        **vars(os), "name": platform, "fstat": descriptor_stat,
+    }))
+    if platform == "nt" and field == "st_ctime_ns" and unavailable_identity is None:
+        projection, snapshot = capture(state, runtime, registry, goal)
+        assert snapshot["lease_inventory"] == [{
+            "name": lease.name,
+            "bytes_sha256": "sha256:" + hashlib.sha256(original).hexdigest(),
+        }]
+    else:
+        with pytest.raises(ShadowManagementError, match="source_changed_retry"):
+            capture(state, runtime, registry, goal)
+    assert descriptor_observations == 2
+    assert path_observations == 2

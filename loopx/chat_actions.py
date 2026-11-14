@@ -20,7 +20,7 @@ from .chat_action_store import (
 )
 from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat.monitor_actions import ChatMonitorActionMixin
-from .chat_store import ChatSessionStore
+from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .chat.todo_actions import ChatTodoActionMixin
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
 from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
@@ -844,6 +844,12 @@ class ChatActionService(
             )
         turn_result: dict[str, Any] | None = None
         session_id = ""
+        first_turn_message = (f"/goal start --tokens {parameters['native_token_budget']} {objective}"
+            if parameters.get("native_token_budget") else (
+            f"开始推进 Goal {goal_id}。先核对目标边界和现有 Todo，"
+            f"首个 Todo：{'；'.join(str(item) for item in (parameters.get('initial_todos') or [])[:3]) or '按目标边界建立首个可验证进展'}。"
+            "然后直接推进并报告可验证结果；遇到权限边界时停止并提出明确 Gate。"
+        ))
         if progress.get("firstTurn"):
             session_id = progress["firstTurn"]["sessionId"]
             turn_id = progress["firstTurn"]["turnId"]
@@ -854,46 +860,68 @@ class ChatActionService(
                 raise ValueError("The recorded first Turn is unavailable; restore its original Session instead of starting another")
             require_first_turn_readback(turn)
             turn_result = {"turn_id": turn_id, "status": str(turn["status"]), "created": False}
+        elif progress.get("sessionId"):
+            turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
+            if turn_store is None:
+                raise ValueError("The original first Session is unavailable; restore it before retrying")
+            session, turn = self._read_task_start(
+                turn_store, goal_id=goal_id, agent_id=agent_id, channel_id=f"goal.{goal_id}",
+                client_turn_id=f"goal-start-{proposal_id}", checkpoint={"session_id": progress["sessionId"]},
+            )
+            if turn is not None:
+                if turn.get("message") != first_turn_message:
+                    raise ValueError("The original first Turn request changed; retain its recorded operation")
+                require_first_turn_readback(turn)
+                if turn.get("status") in TERMINAL_TURN_STATES or turn.get("started_at") or turn.get("upstream_turn_id"):
+                    session_id = session["session_id"]
+                    turn_result = {"turn_id": turn["turn_id"], "status": str(turn["status"]), "created": False}
+                    self.store.save_checkpoint(proposal_id, step="first_turn_started", receipt={
+                        "outcome": "first_turn_started", "session_id": session_id, "turn_id": turn["turn_id"],
+                    })
         first_turn_gate: dict[str, Any] | None = None
-        try:
-            from .status import collect_status
+        if agent_id and self.runtime_controller is not None and turn_result is None:
+            try:
+                from .status import collect_status
 
-            status_payload = collect_status(
-                registry_path=self.registry_path,
-                runtime_root_override=str(runtime_root) if runtime_root else None,
-                limit=5,
-                goal_id=goal_id,
-                available_capabilities=(
-                    self.runtime_controller.capabilities()
-                    if self.runtime_controller is not None
-                    else None
-                ),
-            )
-            guard = build_quota_should_run(
-                status_payload,
-                goal_id=goal_id,
-                agent_id=agent_id or None,
-                available_capabilities=(
-                    self.runtime_controller.capabilities()
-                    if self.runtime_controller is not None
-                    else None
-                ),
-            )
-        except Exception:
-            guard = {"should_run": True, "state": "status_unavailable"}
-        if guard.get("should_run") is not True and turn_result is None:
-            first_turn_gate = {
-                "kind": "goal_quota_gate",
-                "summary": str(
-                    guard.get("reason")
-                    or "The new Goal is not eligible for its first Agent Turn."
-                )[:600],
-                "next_action": str(
-                    guard.get("recommended_action")
-                    or "Resolve the projected Goal Gate and retry the first Turn."
-                )[:600],
-                "quota_state": str(guard.get("state") or "waiting"),
-            }
+                status_payload = collect_status(
+                    registry_path=self.registry_path,
+                    runtime_root_override=str(runtime_root) if runtime_root else None,
+                    limit=5,
+                    goal_id=goal_id,
+                    available_capabilities=(
+                        self.runtime_controller.capabilities()
+                        if self.runtime_controller is not None
+                        else None
+                    ),
+                )
+                guard = build_quota_should_run(
+                    status_payload,
+                    goal_id=goal_id,
+                    agent_id=agent_id or None,
+                    available_capabilities=(
+                        self.runtime_controller.capabilities()
+                        if self.runtime_controller is not None
+                        else None
+                    ),
+                )
+            except Exception as exc:
+                raise ValueError(
+                    "The first Turn's Goal admission could not be verified. "
+                    "Retain this creation and retry when its admission source is available."
+                ) from exc
+            if guard.get("should_run") is not True:
+                first_turn_gate = {
+                    "kind": "goal_quota_gate",
+                    "summary": str(
+                        guard.get("reason")
+                        or "The new Goal is not eligible for its first Agent Turn."
+                    )[:600],
+                    "next_action": str(
+                        guard.get("recommended_action")
+                        or "Resolve the projected Goal Gate and retry the first Turn."
+                    )[:600],
+                    "quota_state": str(guard.get("state") or "waiting"),
+                }
         if agent_id and self.runtime_controller is not None and first_turn_gate is None and turn_result is None:
             if progress.get("sessionId"):
                 session = self.runtime_controller.store.load_session(progress["sessionId"])
@@ -920,12 +948,7 @@ class ChatActionService(
             first_turn, created = self.runtime_controller.submit_turn(
                 session_id=session_id,
                 client_turn_id=f"goal-start-{proposal_id}",
-                message=(f"/goal start --tokens {parameters['native_token_budget']} {objective}"
-                    if parameters.get("native_token_budget") else (
-                    f"开始推进 Goal {goal_id}。先核对目标边界和现有 Todo，"
-                    f"首个 Todo：{'；'.join(str(item) for item in (parameters.get('initial_todos') or [])[:3]) or '按目标边界建立首个可验证进展'}。"
-                    "然后直接推进并报告可验证结果；遇到权限边界时停止并提出明确 Gate。"
-                )),
+                message=first_turn_message,
                 work_dir=project,
                 objective=objective,
             )

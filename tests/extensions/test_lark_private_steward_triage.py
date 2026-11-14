@@ -190,6 +190,84 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
     assert (capture.read_bytes(), store.messages(original["session_id"])) == before
 
 
+def test_visible_steward_card_can_be_clicked_during_sender_readback(steward, monkeypatch):
+    store, runtime, provider, transport, _, capture, _ = steward
+    profile = "steward-app"
+    transport.steward_callback_readiness[(profile, provider.profile_apps[profile])] = lambda: True
+    writes, lost = fixture_card_provider(provider, transport, monkeypatch)
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {"private_profiles": transport.profiles()},
+        runtime_root=transport.runtime_root, runtime_controller=runtime, private_conversations=transport)
+
+    menu = provider.event(profile, "menu-slow-readback", "/triage")
+    assert service._admit_private(profile, menu)["status"] == "triage_queued"
+    path, = transport.pending_body_paths()
+    provider_runner = transport.runner
+    failed_once = False
+
+    def delay_first_card_readback(args, cwd=None, timeout=None):
+        nonlocal failed_once
+        if writes and not failed_once and f"/open-apis/im/v1/messages/{writes[0]}" in args:
+            failed_once = True
+            return {"returncode": 1, "stdout": ""}
+        return provider_runner(args, cwd, timeout)
+
+    monkeypatch.setattr(transport, "runner", delay_first_card_readback)
+    try:
+        # A lost Send reply is still ambiguous even if the provider shows a card.
+        lost[0] = True
+        assert transport.reconcile_request(path) == 0
+        message_id, = writes
+        card = json.loads(provider.messages[message_id]["body"]["content"])
+        action = buttons(card)["待我处理"]
+        click = event_for(message_id, action)
+        with pytest.raises(ValueError):
+            service._handle_private_steward_callback(profile, click, action)
+        assert set(transport.root.glob("*.json")) == {path}
+
+        # Retry recovers the same provider id. The sender's separate verification
+        # temporarily fails, but the user can already see and click the card.
+        assert transport.reconcile_request(path) == 0
+        assert failed_once
+        original = json.loads(path.read_text())
+        assert original["status"] == "captured" and original["triage"]["message_id"] == message_id
+
+        other_id = "om_fixture_copied_menu"
+        provider.messages[other_id] = {**provider.messages[message_id], "message_id": other_id}
+        with pytest.raises(ValueError):
+            service._handle_private_steward_callback(profile, {**click, "message_id": other_id}, action)
+        full_content = provider.messages[message_id]["body"]
+        provider.messages[message_id]["body"] = {"content": "unverified card projection"}
+        with pytest.raises(ValueError):
+            service._handle_private_steward_callback(profile, click, action)
+        provider.messages[message_id]["body"] = full_content
+        assert set(transport.root.glob("*.json")) == {path}
+
+        receipt = service._handle_private_steward_callback(profile, click, action)
+        assert receipt["status"] == "triage_callback_queued"
+        assert service._handle_private_steward_callback(profile, click, action)["status"] == "triage_callback_already_captured"
+        callback_path, = set(transport.pending_body_paths()) - {path}
+        assert transport.reconcile_request(callback_path) == 1
+        assert json.loads(path.read_text()) == original
+        assert len(writes) == 2 and writes[0] == message_id
+        result = provider.messages[writes[1]]
+        assert result["chat_id"] == menu["chat_id"]
+        assert json.loads(result["body"]["content"])["header"]["title"]["content"] == "待我处理"
+        assert transport.reconcile_request(path) == 1
+        assert json.loads(path.read_text())["status"] == "delivered"
+        assert transport.reconcile() == 0 and len(writes) == 2
+
+        snapshot = transport.bindings.read()
+        binding_id = original["binding_id"]
+        transport.bindings.disconnect(binding_id, expected_revision=snapshot["revision"])
+        with pytest.raises(ValueError):
+            service._handle_private_steward_callback(profile, {**click, "event_id": "revoked-click"}, action)
+        assert not transport.pending_body_paths() and len(writes) == 2
+        assert not store.list_sessions() and not capture.exists()
+        assert not list(transport.core.root.glob("*.json"))
+    finally:
+        service.close()
+
+
 def test_private_callback_consumer_dispatches_the_steward_action_on_its_original_stream(tmp_path: Path):
     seen = threading.Event()
     observed = []
