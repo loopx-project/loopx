@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -181,6 +182,52 @@ def test_progress_cli_reads_policy_with_context_delivery(
             assert "settlement_plan" not in policy["interaction_contract"]["cli_channel"]
         else:
             assert policy["replan_action_packet"] == source["replan_action_packet"]
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.skipif(os.name != "posix" or shutil.which("pwsh") is None,
+                    reason="The private capture reader needs a POSIX host with PowerShell 7")
+@pytest.mark.parametrize(("provider", "complete"), [("file", False), ("sqlite", True)])
+def test_replan_stage_commands_run_verbatim_in_powershell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, complete: bool,
+) -> None:
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    workspace = tmp_path / "reader's O’Neil workspace"
+    workspace.mkdir()
+    fixture = make_progress_cli_fixture(workspace, provider, "advanced")
+    launcher = workspace / "loopx.ps1"
+    checkout = Path(__file__).resolve().parents[2]
+    shutil.copyfile(checkout / "scripts/loopx.ps1", launcher)
+    launcher.with_name("loopx-current-release.json").write_text(json.dumps({
+        "release_root": str(checkout), "python": sys.executable,
+    }), encoding="utf-8")
+    monkeypatch.delenv("LOOPX_CURRENT_RELEASE_FILE", raising=False)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    powershell = shutil.which("pwsh")
+    assert powershell is not None
+
+    def run(*args: str) -> dict:
+        result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", *args],
+            cwd=fixture["project"], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    try:
+        opening = run("-File", str(launcher), "--cli-bin", str(launcher), "--format", "json",
+            "--registry", str(fixture["registry"]), "--runtime-root", str(fixture["runtime"]),
+            "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--context-delivery", "on", "--delta-delivery", "off",
+            *(["--complete-turn"] if complete else []))
+        page = run("-Command", opening["first_read_command"])
+        assert page["eof"]
+        command = selected_context_values(page["content"])["/replan_action_packet/review"]
+        review = run("-Command", command)
+        writeback = run("-Command", review["next"]["writeback"])
+        assert review["stage"] == "review" and writeback["stage"] == "writeback"
+        assert review["context_id"] == writeback["context_id"]
+        assert review["source_hash"] == writeback["source_hash"]
     finally:
         restart_effect_runtime(wait_for_exit=True)
 

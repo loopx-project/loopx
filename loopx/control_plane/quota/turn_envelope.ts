@@ -735,13 +735,23 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
       (typeof captureSha256 !== "string" || !BARE_SHA256_PATTERN.test(captureSha256))) {
     throw new EffectRuntimeRequestError("captured replan byte digest is malformed");
   }
-  const mode = progressive && payload.schema_version === COMPLETE_TURN_DECISION_VERSION &&
-    object(packet.stride_control).required_on_periodic_review === true ? " --context-delivery on" : "";
-  const command = `${argv.map(arg => shellQuote(arg as string)).join(" ")} --format json quota replan-view --decision-file ${shellQuote(path)}` +
-    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}${mode}` +
-    (captureSha256 === undefined ? "" : ` --capture-sha256 ${captureSha256}`);
-  return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
-    acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
+  const [program, ...prefix] = argv as string[];
+  const args = [...prefix, "--format", "json", "quota", "replan-view", "--decision-file", path,
+    "--source-hash", verifiedSourceHash ?? decisionSourceHash(payload)];
+  if (progressive && payload.schema_version === COMPLETE_TURN_DECISION_VERSION &&
+      object(packet.stride_control).required_on_periodic_review === true) {
+    args.push("--context-delivery", "on");
+  }
+  if (typeof captureSha256 === "string") args.push("--capture-sha256", captureSha256);
+  // Match the host CLI renderer for the PowerShell launcher captured by the first read.
+  const powershell = /\.ps1$/iu.test(program);
+  const quote = powershell ? powershellLiteral : shellQuote;
+  const executable = powershell && !/^[A-Za-z0-9_./-]+$/u.test(program)
+    ? `& ${quote(program)}`
+    : shellQuote(program);
+  const command = [executable, ...args.map(quote), quote("--replan-stage")].join(" ");
+  return {review: `${command} ${quote("review")}`, writeback: `${command} ${quote("writeback")}`,
+    acceptance: `${command} ${quote("acceptance")}`, explore: `${command} ${quote("explore")}`};
 }
 
 /** One entry lens for CLI and Turn. The executor still receives the signed
@@ -1717,6 +1727,11 @@ export function quotaActionSignatureDocument(value: unknown, supplied?: unknown)
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(value)) return value;
   return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function powershellLiteral(value: string): string {
+  // PowerShell recognizes typographic single quotes as delimiters too.
+  return `'${value.replace(/['\u2018-\u201b]/gu, quote => quote + quote)}'`;
 }
 
 function commandPrefix(runtimeRoot: unknown, registry?: unknown): string {
