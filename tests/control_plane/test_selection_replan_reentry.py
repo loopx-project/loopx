@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 import pytest
-from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from test_quota_settlement_cli import (
@@ -778,3 +778,82 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     assert json.loads(read["content"])["selections"][0]["value"] == original["heartbeat_receipt"]
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "turn-captured-composed-replan"
+    retained = "todo_chain_000000000001"
+    capture = tmp_path / "capture"
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "captured-composed-replan")
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    codex_context_hook(str(native), dict(session_id="captured-composed-replan", cwd=str(project),
+        hook_event_name="SessionStart", source="startup"))
+    cli = str(Path(sys.executable).with_name("loopx"))
+    rc, shown = _run_cli(registry, runtime, "--cli-bin", cli, "quota", "should-run", "--codex-app", "--complete-turn",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        "--todo-id", retained, "--context-delivery", "on", "--codex-context-dir", str(native),
+        "--decision-output-dir", str(capture), "--max-page-output-bytes", "64000", cwd=project)
+    assert rc == 0 and shown["ok"], shown
+    path = capture / "decision.json"
+    raw = path.read_bytes()
+    original = json.loads(raw)
+    assert original["schema_version"] == "loopx_turn_envelope_v1"
+    receipt = original["heartbeat_receipt"]
+    identity = receipt["settlement_identity"]
+    assert receipt["status"] == "committed" and identity["binding_kind"] == "autonomous_replan"
+    assert receipt["pending_action_selection"]["todo_id"] == retained
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
+
+    def run(command, expected=0):
+        result = subprocess.run(shlex.split(command) if isinstance(command, str) else command,
+            cwd=project, capture_output=True, check=False, timeout=30)
+        assert result.returncode == expected, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    # This mainline reader accepts an explicitly captured complete decision;
+    # newer C1 hosts generate the same review route in their first-read view.
+    source_hash = original["contract_binding"]["content_hash"]
+    review = run([cli, "--cli-bin", cli, "--format", "json", "quota", "replan-view",
+        "--decision-file", str(path), "--source-hash", source_hash, "--replan-stage", "review"])
+    writer = run(review["next"]["writeback"])
+    assert writer["context_id"] == review["context_id"]
+    assert writer["writeback"]["settlement_plan"] == original["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert writer["writeback"]["settlement_plan"]["identity"] == identity
+    assert _spend_run_count(runtime) == 0 and path.read_bytes() == raw
+    vision = tmp_path / "measured decision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Validate the new evidence before dependent work."},
+        "path_delta": {"outcome": "replan", "prior_assumption": "The existing route was supported.",
+            "observed_reality": "The validation found an independent alternate route.",
+            "changed": ["Review before a fresh delivery."], "evidence_refs": ["evidence:independent-validation"]},
+    }))
+    placeholder = "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>"
+    args = [str(vision) if token == placeholder else token for token in shlex.split(writer["settlement_command"])]
+    assert str(vision) in args and "--settlement-receipt" in args
+    args += ["--no-global-sync", "--suppress-external-sinks"]
+
+    # Missing semantic evidence must never trigger the composed debit.
+    withheld = [token if token != str(vision) else str(vision.with_name("missing decision.json")) for token in args]
+    refusal = run(withheld, expected=1)
+    assert not refusal["ok"] and _spend_run_count(runtime) == 0
+    settled = run(args)
+    assert settled["settlement_progress"]["state"] == "settled"
+    assert settled["settlement_identity"] == identity and settled["quota_spend"]["appended"]
+    assert settled["autonomous_replan_ack"]["semantic_delta"]["accepted"]
+    assert "settlement_owed" not in settled
+    assert _spend_run_count(runtime) == 1
+    replay = run(args)
+    assert replay["idempotent_replay"] and not replay["appended"]
+    assert replay["settlement_result"] == settled["settlement_result"]
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 1
+    assert path.read_bytes() == raw
