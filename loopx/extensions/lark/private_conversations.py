@@ -28,7 +28,7 @@ from ...capabilities.native_chat.external_conversations import (
 from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, normalize_chat_image_attachments
-from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, RESUMABLE_SESSION_STATES, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
+from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope
 from ...file_lock import exclusive_file_lock
@@ -46,7 +46,7 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
 from .outbound import normalize_lark_outbound_text, present_lark_conversation_text as _presentation_text
 from .presentation.markdown_post import lark_markdown_readback_matches
 from .private_images import private_message_caption, private_message_images
-from .private_delivery_discovery import PrivateDeliveryDiscovery, answer_image_source_continues, prepared_steward_binding_waits
+from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits, resumable_answer_image_session
 from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from . import private_steward_triage as triage
@@ -1428,7 +1428,10 @@ class LarkPrivateConversations:
         def authorized() -> bool:
             native = self.core.read_request(record["request_ref"])
             same_request = all(native.get(key) == record[key] for key in ("binding_id", "source", "session_id", "turn_id"))
-            return native.get("status") == "accepted" and same_request and answer_image_source_continues(self.core, native)
+            if native.get("status") != "accepted" or not same_request:
+                return False
+            turn = self.core.controller.store.load_turn(native["session_id"], native["turn_id"])
+            return resumable_answer_image_session(self.core, native, turn) is not None
 
         state = record.setdefault("answer_images", {})
         # Hold the source and the exact completed body fixed across retries.
@@ -1499,16 +1502,12 @@ class LarkPrivateConversations:
                 or any(native.get(key) != record.get(key)
                        for key in ("request_ref", "binding_id", "source", "session_id", "turn_id"))):
             raise ValueError("original request no longer matches")
-        store = self.core.controller.store
-        session = store.load_session(record["session_id"]) or {}
-        turn = store.load_turn(record["session_id"], record["turn_id"]) or {}
-        if (session.get("status") not in RESUMABLE_SESSION_STATES or turn.get("status") != "completed"
-                or not isinstance(answer := (turn.get("response") or {}).get("message"), str)
+        turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"]) or {}
+        if (not isinstance(answer := (turn.get("response") or {}).get("message"), str)
                 or hashlib.sha256(answer.encode()).hexdigest() != plan["answer_sha256"]
                 or terminal.get("text") != _presentation_text(answer)
                 or not _private_answer_images(answer)[1]
-                or self.core._source_stop_observed(native, turn, store.events_after(
-                    record["session_id"], record["turn_id"], None))):
+                or (session := resumable_answer_image_session(self.core, native, turn)) is None):
             raise ValueError("original completed answer or its authority changed")
         return session
 

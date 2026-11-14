@@ -1070,8 +1070,9 @@ def source_https(monkeypatch):
 @pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request",
     "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
     "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect", "stopped", "stopped_after_fetch",
-    "closed_on_upload_preview", "stopped_on_upload_source_read", "closed_on_upload_source_read"])
-def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, source_https, fault):  # noqa: F811
+    "closed_on_upload_preview", "stopped_on_upload_source_read", "closed_on_upload_source_read",
+    "closed_on_source_controls_read"])
+def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, source_https, monkeypatch, fault):  # noqa: F811
     from test_chat_image_attachments import PNG_BYTES
     from test_lark_app_image_projection import ImageIO
 
@@ -1086,7 +1087,7 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         f'"message": {authored!r} if turn_count == 1 else "Next original reply.",', 1))
     article_url = "https://source.example/article"
     stopped = fault in ("stopped", "stopped_after_fetch", "stopped_on_upload_source_read")
-    closed = fault in ("closed_on_upload_preview", "closed_on_upload_source_read")
+    closed = fault in ("closed_on_upload_preview", "closed_on_upload_source_read", "closed_on_source_controls_read")
     redirect_targets = {
         "listed_redirect": "/canonical.png",
         "same_host_redirect": "/unlisted.png",
@@ -1118,6 +1119,19 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     io.corrupt_download = fault in ("corrupt_readback", "legacy_cached_readback")
     upload_previewed = False
     control_committed = False
+
+    if fault == "closed_on_source_controls_read":
+        read_controls = transport.core.source_controls
+
+        def close_during_control_read():
+            nonlocal control_committed
+            if upload_previewed and not control_committed:
+                control_committed = True
+                assert runtime.close_session(sid)
+                assert store.load_session(sid)["status"] == "closed"
+            return read_controls()
+
+        monkeypatch.setattr(transport.core, "source_controls", close_during_control_read)
 
     def media(args, cwd=None, timeout=None):
         nonlocal upload_previewed, control_committed
@@ -1168,7 +1182,7 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         assert all(row["chat_id"] == source["chat_id"] for _, row, _ in out)
         assert any("[Source chart](" in nodes[0][0]["text"] for _, _, nodes in out)
         assert all(not any("![Source chart]" in node.get("text", "") for line in nodes for node in line) for _, _, nodes in out)
-        if fault in ("stopped_on_upload_source_read", "closed_on_upload_source_read"):
+        if fault in ("stopped_on_upload_source_read", "closed_on_upload_source_read", "closed_on_source_controls_read"):
             assert control_committed
         if stopped or closed:
             assert io.uploads == 0 and transport.core.read_request(ref).get("delivery_verified", False) is False
@@ -1235,7 +1249,7 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
 @pytest.mark.parametrize("fault", ["readback", "edited_source", "edited_original_reply", "edit_on_image_get",
     "edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_preview", "edit_on_send_source_read",
     "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied", "upload_scope_then_granted",
-    "upload_scope_with_conflicting_stdout",
+    "upload_scope_with_conflicting_stdout", "closed_on_source_controls_read",
     "unlisted_redirect", "unlisted_cached_redirect"])
 def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, source_https, fault):  # noqa: F811
     from hashlib import sha256
@@ -1340,6 +1354,16 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         assert path not in worker.pending_delivery_paths()
         assert worker.reconcile_request(path) == 0 and io.uploads == 0
 
+        if fault == "closed_on_source_controls_read":
+            read_controls = worker.core.source_controls
+
+            def close_during_control_read():
+                if upload_previews and store.load_session(sid)["status"] != "closed":
+                    assert runtime.close_session(sid)
+                return read_controls()
+
+            monkeypatch.setattr(worker.core, "source_controls", close_during_control_read)
+
         plan = {"binding_id": saved["binding_id"], "turn_id": tid, "message_id": prior_id,
                 "answer_sha256": sha256(answer.encode()).hexdigest(),
                 "images": [{"url": url, "sha256": sha256(figures[url]).hexdigest()} for url in urls]}
@@ -1375,6 +1399,8 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             provider.lose_next_reply = True
 
         assert worker.reconcile_request(path) == 0
+        if fault == "closed_on_source_controls_read":
+            assert upload_previews == 1 and store.load_session(sid)["status"] == "closed"
         if fault in {"readback", "unknown_send", "upload_scope_then_granted", "upload_scope_with_conflicting_stdout"}:
             pending = json.loads(path.read_text())
             assert pending["historical_answer_images"]["status"] == "pending"

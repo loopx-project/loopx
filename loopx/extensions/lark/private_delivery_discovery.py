@@ -13,18 +13,17 @@ if TYPE_CHECKING:
     from ...capabilities.native_chat.external_conversations import ChatExternalConversations
 
 
-def answer_image_source_continues(core: ChatExternalConversations, request: dict[str, Any]) -> bool:
-    """Apply the original Core session and source controls to delayed media."""
+def resumable_answer_image_session(
+    core: ChatExternalConversations, request: dict[str, Any], turn: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Apply source controls and then read the current session for delayed media."""
     store = core.controller.store
     session_id, turn_id = request["session_id"], request["turn_id"]
+    if (turn is None or turn.get("status") != "completed"
+            or core._source_stop_observed(request, turn, store.events_after(session_id, turn_id, None))):
+        return None
     session = store.load_session(session_id)
-    if session is None or session.get("status") not in RESUMABLE_SESSION_STATES:
-        return False
-    turn = store.load_turn(session_id, turn_id)
-    return (
-        turn is not None and turn.get("status") == "completed"
-        and not core._source_stop_observed(request, turn, store.events_after(session_id, turn_id, None))
-    )
+    return session if session is not None and session.get("status") in RESUMABLE_SESSION_STATES else None
 
 
 def prepared_steward_binding_waits(
