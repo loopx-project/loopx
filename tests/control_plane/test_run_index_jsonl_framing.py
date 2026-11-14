@@ -409,3 +409,55 @@ def test_history_export_keeps_the_prior_corpus_when_a_row_cannot_be_decoded(
 
     index_path.write_bytes(good)
     assert export_goal_conclusions(**kwargs)["public_projection"]["written"] == 2
+
+
+def _history_payload(tmp_path: Path, index_bytes: bytes, *, registered: bool) -> dict:
+    goal_id = "markdown-goal"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps({"goals": [{"id": goal_id}] if registered else []}), encoding="utf-8"
+    )
+    runs_dir = tmp_path / "runtime" / "goals" / goal_id / "runs"
+    runs_dir.mkdir(parents=True)
+    (runs_dir / "index.jsonl").write_bytes(index_bytes)
+    return history.collect_history(
+        registry_path=registry_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id=goal_id,
+        limit=10,
+        tolerate_undecodable=True,
+    )
+
+
+def _two_rows(goal_id: str = "markdown-goal") -> bytes:
+    rows = [
+        {"goal_id": goal_id, "generated_at": f"2026-09-1{n}T00:00:00+00:00", "classification": "progress"}
+        for n in (4, 5)
+    ]
+    return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+
+
+@pytest.mark.parametrize("registered", [True, False], ids=["registered", "runtime_only"])
+def test_default_history_markdown_distinguishes_a_torn_row_from_a_healthy_duplicate(
+    tmp_path: Path, registered: bool
+) -> None:
+    torn_row = json.dumps(
+        {"goal_id": "markdown-goal", "generated_at": "2026-09-16T00:00:00+00:00", "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    torn = _two_rows() + torn_row[: torn_row.index("进".encode("utf-8")) + 1]
+    # A healthy duplicate of an existing row also adds one raw record and no run.
+    duplicate = _two_rows() + _two_rows().splitlines()[0] + b"\n"
+
+    torn_payload = _history_payload(tmp_path / "torn", torn, registered=registered)
+    healthy_payload = _history_payload(tmp_path / "healthy", duplicate, registered=registered)
+    torn_text = history.render_history_markdown({"ok": True, **torn_payload})
+    healthy_text = history.render_history_markdown({"ok": True, **healthy_payload})
+
+    assert torn_payload["goals"][0]["unreadable_index_rows"] == 1
+    assert "unreadable_index_rows" not in healthy_payload["goals"][0]
+    assert "WARNING unreadable_index_rows: `1`" in torn_text
+    assert "unreadable_index_rows=`1`" in torn_text
+    assert "WARNING" not in healthy_text and "unreadable_index_rows" not in healthy_text
+    assert torn_text != healthy_text

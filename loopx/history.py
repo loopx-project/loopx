@@ -557,6 +557,13 @@ def collect_history(
             "index_digest": index_snapshot.digest,
             "index_exists": index_path.exists(),
             "raw_index_records": raw_count,
+            # Rows that are not text were skipped, not read: say so for every Goal,
+            # including a runtime-only one that has no quota projection to carry it.
+            **(
+                {"unreadable_index_rows": index_snapshot.undecodable_count}
+                if index_snapshot.undecodable_count
+                else {}
+            ),
             "unique_runs": len(runs),
             "latest_status_run": latest_status_run(runs),
             "latest_runs": latest_runs_with_agent_context(
@@ -1056,6 +1063,16 @@ def render_history_markdown(payload: dict[str, Any]) -> str:
         f"- goal_filter: `{payload.get('goal_filter')}`",
         f"- goals: `{payload.get('goal_count')}`",
         f"- unique_runs: `{payload.get('run_count')}`",
+    ]
+    unreadable = sum(
+        int(goal.get("unreadable_index_rows") or 0) for goal in payload.get("goals") or []
+    )
+    if unreadable:
+        lines.append(
+            f"- WARNING unreadable_index_rows: `{unreadable}` "
+            "(rows that could not be decoded were skipped; the listing below is incomplete)"
+        )
+    lines += [
         "",
         markdown_table_row(["generated_at", "goal", "classification", "files", "action"]),
         markdown_table_separator(5),
@@ -1083,6 +1100,11 @@ def render_history_markdown(payload: dict[str, Any]) -> str:
             f"index_exists=`{goal.get('index_exists')}`, "
             f"records=`{goal.get('raw_index_records')}`, "
             f"unique_runs=`{goal.get('unique_runs')}`"
+            + (
+                f", unreadable_index_rows=`{goal.get('unreadable_index_rows')}`"
+                if goal.get("unreadable_index_rows")
+                else ""
+            )
         )
     return "\n".join(lines)
 
