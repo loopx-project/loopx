@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 from pathlib import Path
 from typing import Any
 
+from ..command_invocation import current_loopx_cli_argv, same_context_reader_route
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.error_codes import QuotaDecisionTransportError
@@ -126,74 +128,33 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                   list_depth: int | None = None,
                   initial_read: bool = False,
                   reference_file: Path | None = None,
-                  reader_argv: list[str] | None = None) -> dict[str, Any]:
-    end = min(offset + size, len(raw))
-    while end < len(raw) and raw[end] & 0xC0 == 0x80:
-        end -= 1
-    content = raw[offset:end].decode("utf-8")
+                  reader_argv: list[str] | None = None,
+                  compact_reader: bool = False) -> dict[str, Any]:
+    total = len(raw)
 
     def page(text: str) -> dict[str, Any]:
-        cursor = offset + len(text.encode("utf-8"))
-        result: dict[str, Any] = {**(presentation or {}), "ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
-            "offset": offset, "next_offset": cursor if cursor < len(raw) else None,
-            "total_bytes": len(raw), "eof": cursor == len(raw), "content": text}
-        if select is not None:
-            result["selection_sha256"] = selection_sha256
-            # The new initial view already names addresses in content; its
-            # short continuation pins that view's digest. Existing explicit
-            # selectors retain their original metadata and continuation.
-            if not initial_read:
-                result["selected_pointers"] = select
-            if list_fields:
-                result["list_fields"] = True
-            result["read_instruction"] = ("This is selected detail from the original capture, not a complete context read. "
-                "Offsets and EOF describe only this selected view. Follow next_command to finish it; "
-                "keep both digests. Detail delivery does not establish a full-context baseline or grant authority.")
-        elif instruction or (offset == 0 and output_limit is not None):
-            # A digest-bound native reference may be read in a fresh shell
-            # without its session lookup. Deliver paging obligations with the
-            # first bounded page rather than repeating them in file metadata.
-            # Historical unbounded readers retain their exact wire shape.
-            result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
-        if reference_file is not None and select is not None:
-            # Selected pages have never been full-input receipts. Give this
-            # compact transport a distinct schema so old observers cannot
-            # mistake an omitted digest for a full capture observation.
-            result["schema_version"] = "context_capture_selection_page_v1"
-            for key in ("sha256", "selection_sha256", "selected_pointers"):
-                result.pop(key, None)
-            result["reference_file"] = str(reference_file)
-            result["read_instruction"] = ("Selected detail only. Follow next_command for contiguous bytes; "
-                "the immutable reference pins both complete digests, which the CLI verifies on every page. "
-                "Offsets and EOF describe only this selected view. "
-                "EOF is not full-context retention, authority or freshness.")
-        if cursor < len(raw):
-            result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
-                max_page_output_bytes=next_page_output_bytes or output_limit,
-                select=None if initial_read or reference_file is not None else select,
-                selection_sha256=selection_sha256 if reference_file is None else None,
-                list_fields=list_fields if reference_file is None else False,
-                list_depth=list_depth if reference_file is None else None,
-                initial_read=initial_read if reference_file is None else False, reference_file=reference_file,
-                reader_argv=reader_argv)
-        return result
+        return _render_capture_page(path, text, digest, offset=offset, total=total,
+            size=size, output_limit=output_limit, instruction=instruction,
+            presentation=presentation, next_page_bytes=next_page_bytes,
+            next_page_output_bytes=next_page_output_bytes, select=select, selection_sha256=selection_sha256,
+            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read,
+            reference_file=reference_file, reader_argv=reader_argv, compact_reader=compact_reader)
 
-    def fits(result: dict[str, Any]) -> bool:
-        # Match cli_runtime.print_payload exactly, including print's newline.
-        return output_limit is None or len(json.dumps(result, ensure_ascii=False,
-            separators=(",", ":")).encode("utf-8")) + 1 <= output_limit
-
+    end = min(offset + size, total)
+    while end < total and raw[end] & 0xC0 == 0x80:
+        end -= 1
+    content = raw[offset:end].decode("utf-8")
     result = page(content)
-    if fits(result):
+    if output_limit is None or _page_output_size(result) <= output_limit:
         return result
     # EOF drops next_command: test it above before searching the monotone
     # non-EOF prefix sizes. Never return a zero-progress continuation.
-    low, high = 1, len(content) - (end == len(raw))
+    low, high = 1, len(content) - (end == total)
     best = None
     while low <= high:
         middle = (low + high) // 2
         candidate = page(content[:middle])
-        if fits(candidate):
+        if _page_output_size(candidate) <= output_limit:
             best, low = candidate, middle + 1
         else:
             high = middle - 1
@@ -202,9 +163,90 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     return best
 
 
+def _page_output_size(page: dict[str, Any]) -> int:
+    # Match cli_runtime.print_payload exactly, including print's newline.
+    return len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + len(os.linesep)
 
 
+def _render_capture_page(path: Path, text: str, digest: str, *, offset: int, total: int,
+                         size: int, output_limit: int | None, instruction: bool,
+                         presentation: dict[str, Any] | None = None,
+                         next_page_bytes: int | None = None, next_page_output_bytes: int | None = None,
+                         select: list[str] | None = None, selection_sha256: str | None = None,
+                         list_fields: bool = False, list_depth: int | None = None, initial_read: bool = False,
+                         reference_file: Path | None = None, reader_argv: list[str] | None = None,
+                         compact_reader: bool = False) -> dict[str, Any]:
+    cursor = offset + len(text.encode("utf-8"))
+    result: dict[str, Any] = {**(presentation or {}), "ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
+        "offset": offset, "next_offset": cursor if cursor < total else None,
+        "total_bytes": total, "eof": cursor == total, "content": text}
+    if select is not None:
+        result["selection_sha256"] = selection_sha256
+        # The new initial view already names addresses in content; its
+        # short continuation pins that view's digest. Existing explicit
+        # selectors retain their original metadata and continuation.
+        if not initial_read:
+            result["selected_pointers"] = select
+        if list_fields:
+            result["list_fields"] = True
+        result["read_instruction"] = ("This is selected detail from the original capture, not a complete context read. "
+            "Offsets and EOF describe only this selected view. Follow next_command to finish it; "
+            "keep both digests. Detail delivery does not establish a full-context baseline or grant authority.")
+    elif instruction or (offset == 0 and output_limit is not None):
+        # A digest-bound native reference may be read in a fresh shell
+        # without its session lookup. Deliver paging obligations with the
+        # first bounded page rather than repeating them in file metadata.
+        # Historical unbounded readers retain their exact wire shape.
+        result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
+    if reference_file is not None and select is not None:
+        # Selected pages have never been full-input receipts. Give this
+        # compact transport a distinct schema so old observers cannot
+        # mistake an omitted digest for a full capture observation.
+        result["schema_version"] = "context_capture_selection_page_v1"
+        for key in ("sha256", "selection_sha256", "selected_pointers"):
+            result.pop(key, None)
+        result["reference_file"] = str(reference_file)
+        result["read_instruction"] = ("Selected detail only. Follow next_command for contiguous bytes; "
+            "the immutable reference pins both complete digests, which the CLI verifies on every page. "
+            "Offsets and EOF describe only this selected view. "
+            "EOF is not full-context retention, authority or freshness.")
+    if compact_reader:
+        result.pop("reference_file", None)  # The cursor already locates the immutable selection.
+    if cursor < total:
+        result["next_command"] = context_capture_read_command(path, digest, offset=cursor,
+            page_bytes=next_page_bytes if compact_reader else next_page_bytes or size,
+            max_page_output_bytes=next_page_output_bytes or output_limit,
+            select=None if initial_read or reference_file is not None else select,
+            selection_sha256=selection_sha256 if reference_file is None else None,
+            list_fields=list_fields if reference_file is None else False,
+            list_depth=list_depth if reference_file is None else None,
+            initial_read=initial_read if reference_file is None else False, reference_file=reference_file,
+            reader_argv=reader_argv, compact=compact_reader)
+    if compact_reader:
+        # The opening supplies the recovery instruction. Keep it on the last
+        # page, where the now-absent continuation leaves room for it.
+        if cursor < total:
+            result.pop("read_instruction", None)
+        else:
+            result["read_instruction"] = "Recovery read complete. Do not rerun admission."
+    return result
 
+
+def validate_compact_recovery_budget(reference: Path, limit: int, reader_argv: list[str]) -> None:
+    """Reserve enough for one escaped character and the longest compact cursor."""
+    # Use the largest decimal width of the bounded transport. A selected
+    # view may grow beyond the source when it repeats requested values.
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+
+    offset = 10 ** len(str(MAX_REQUEST_BYTES))
+    selected = reference.with_name(reference.name + "." + "0" * 16)
+    for path, selection in ((reference, None), (selected, [""])):
+        frame = _render_capture_page(path, "\x00", "0" * 64, offset=offset,
+            total=offset * 9, size=1, output_limit=limit, instruction=False, select=selection,
+            list_fields=selection is not None,
+            reference_file=path, reader_argv=reader_argv, compact_reader=True)
+        if _page_output_size(frame) > limit:
+            raise ValueError("Output limit cannot fit a recovery page.")
 
 
 
@@ -244,7 +286,9 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         value = getattr(args, "capture_file", None)
         reference_file = getattr(args, "reference_file", None)
         pinned_selection = None
+        bound_route = None
         if reference_file:
+            requested_reference = Path(reference_file).expanduser().absolute()
             if value or digest or getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None):
                 raise ValueError("reference-file cannot be combined with capture or native session lookup")
             if args.format != "json":
@@ -252,6 +296,11 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             reference_file, reference = read_context_read_reference(reference_file)
             value, digest = reference["path"], reference["sha256"]
             pinned_selection = reference.get("selection")
+            if bound_route := reference.get("reader_argv"):
+                if not same_context_reader_route(reader_argv or current_loopx_cli_argv(), bound_route):
+                    raise ValueError("run the recovery command with its original LoopX executable")
+                reader_argv = bound_route
+                reference_file = requested_reference
         offset, size = args.offset, args.page_bytes
         output_limit = getattr(args, "max_page_output_bytes", None)
         if output_limit is not None and (type(output_limit) is not int or output_limit <= 0
@@ -389,11 +438,13 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     reference_file = write_context_read_reference(path, digest, selection=context_selection_binding(
                         selectors, list_fields=list_fields, list_depth=list_depth, sha256=expected,
                         presented=bool(plan.get("presentation_pointers"))),
-                        selection_paths=[item["path"] for item in plan["selections"]] if not list_fields else None)
+                        selection_paths=[item["path"] for item in plan["selections"]] if not list_fields else None,
+                        reference_file=reference_file if bound_route is not None else None,
+                        reader_argv=bound_route)
                 except OSError:
                     # A verified read must not require a writable capture root.
                     # Legacy cursors pin the same capture, selection and digest.
-                    reference_file = None
+                    reference_file, bound_route = None, None
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         return _capture_page(path, raw, digest, offset=offset, size=size,
@@ -401,7 +452,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             presentation=presentation, next_page_bytes=next_page_bytes,
             next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest,
             list_fields=list_fields, list_depth=list_depth, initial_read=initial_read, reference_file=reference_file,
-            reader_argv=reader_argv)
+            reader_argv=reader_argv, compact_reader=bound_route is not None)
     except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
@@ -597,7 +648,6 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
     Stop once this candidate cannot win. This measures one complete wire read,
     not model tokens, retention or the caller's later selective/recovery reads.
     """
-    from ..command_invocation import current_loopx_cli_argv
     from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
 
     if len(raw) > MAX_REQUEST_BYTES:

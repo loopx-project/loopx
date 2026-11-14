@@ -319,11 +319,14 @@ def load_index_snapshot(
     *,
     artifact_root: Path | None = None,
     include_artifact_status: bool = True,
+    skip_invalid_encoding: bool = False,
 ) -> RunIndexSnapshot:
     """Decode the complete index; derived artifact status is optional internally.
 
     Full readers keep fresh status by default. History collection defers only
     filesystem observation until its complete semantic selection is known.
+    An incomplete presentation may skip undecodable rows and report them
+    through invalid_count. Strict readers still receive the decoding error.
     """
     try:
         stream = path.open("rb")
@@ -339,7 +342,14 @@ def load_index_snapshot(
     with stream:
         for encoded_line in stream:
             digest.update(encoded_line)
-            line = encoded_line.decode("utf-8")
+            try:
+                line = encoded_line.decode("utf-8")
+            except UnicodeDecodeError:
+                if not skip_invalid_encoding:
+                    raise
+                raw_count += 1
+                invalid_count += 1
+                continue
             if not line.strip():
                 continue
             raw_count += 1

@@ -3,7 +3,6 @@ import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
 import {registryAuthoritySourceCheck} from "./authority_source.ts";
-import {ResearchTerminalEvidenceHost} from "../capabilities/explore_research_terminal.ts";
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
 import type {ClaimWorkspaceObserver} from "./claim_execution.ts";
 import {LeaseWorktreeObservationError, observeLeaseWorktree} from "../work_items/task_lease_workspace.ts";
@@ -21,7 +20,7 @@ import type { JsonObject } from "../effect_program.ts";
 import {decodeCompletionValidationRevision} from "../todos/completion_validation_revision.ts";
 import {executeCoordinationMonitorPoll, COORDINATION_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_MONITOR_RECEIPT_ONLY_REQUEST_SCHEMA,
   COORDINATION_MONITOR_POLL_RESULT_SCHEMA} from "./todo_monitor_poll.ts";
-import { requireJsonObject, requireBoolean } from "../runtime_decode.ts";
+import { requireJsonObject, requireBoolean, requireStringArray, optionalNonEmptyString } from "../runtime_decode.ts";
 import {
   LOCAL_COORDINATION_PROMOTION_RECEIPT_SCHEMA,
   LOCAL_COORDINATION_PROMOTION_REQUEST_SCHEMA,
@@ -482,6 +481,10 @@ export async function pollLocalCoordinationMonitor(value: unknown,
       evidence.source_authority = sourceAuthorityFor(store);
       return {...await executeCoordinationMonitorPoll(store, {
         goal_id: goalId, operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
+        runtime_root: root,
+        available_capabilities: input.available_capabilities == null ? undefined :
+          requireStringArray(input.available_capabilities, "available_capabilities"),
+        admitted_resume_when: optionalNonEmptyString(input.admitted_resume_when, "admitted_resume_when") ?? undefined,
         actor_agent_id: input.actor_agent_id == null ? null : claimAgentValue(input.actor_agent_id, "actor_agent_id"),
         registered_agents: registered, dry_run: input.dry_run as boolean,
         receipt_only: receiptOnly,
@@ -1363,6 +1366,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
       requireAuthorityStoreId(todoId, "linked successor Todo id"));
     const successorIntents = input.successor_intents.map((intent, index) =>
       requireJsonObject(intent, `successor_intents[${index}]`));
+    const {ResearchTerminalEvidenceHost} = await import("../capabilities/explore_research_terminal.ts");
     return await withCanonicalWriter(root, goalId, input.dry_run === true, async () => {
       const store = await openRuntimeStore(root, goalId, dependencies);
       sourceAuthority = sourceAuthorityFor(store);
