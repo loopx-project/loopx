@@ -50,6 +50,17 @@ An outcome is useful when it has a separately recognizable result and criteria,
 especially across multiple turns, tasks or repeated user corrections. Do not
 promote every message, housekeeping action or intermediate step.
 
+## Evolution beyond additive refinement
+
+[Goal contract evolution](goal-contract-evolution-v0.md) defines the next R4/R5
+proposal: unify operating-objective and requirement changes, retain exact prior
+versions, separate applicability from satisfaction, and provide bounded working
+context over scalable canonical records. It also qualifies whether a model
+recognizes a natural correction and adopts it in subsequent work. This extends
+the existing acceptance/amendment owners; it does not replace today's additive
+operation, capacity limits or full-context obligations before migration qualifies.
+Vision remains a route checkpoint, never fallback acceptance after a failed save.
+
 ## Ordinary user messages
 
 <a id="current-operating-objective"></a>
