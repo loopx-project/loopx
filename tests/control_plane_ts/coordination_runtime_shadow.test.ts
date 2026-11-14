@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, readdir, rm, writeFile, unlink, symlink } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile, unlink, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
@@ -287,3 +289,98 @@ test("archiving a Todo drops its retained lease from the candidate head", async 
   assert.deepEqual(leased.leases, []);
   assert.deepEqual(leased.todos, [todo("todo_one")]);
 });
+
+
+// An applied bootstrap rechecks each lease twice (admission plus the final
+// pre-write recheck), so both passes must tolerate the injected skew. The
+// ctime-kept fence branch (POSIX policy) is exercised through an incomplete
+// volume identity, which is the same code path on every real platform;
+// reverse platform spoofing on Windows leaks EPERM from unrelated owners.
+for (const scenario of [
+  {name: "Windows ctime-only skew with a full identity bootstraps", platform: "win32", skew: "ctime", zeroIdentity: false, expected: "applied"},
+  {name: "an incomplete volume identity keeps ctime and fails closed", platform: "win32", skew: "ctime", zeroIdentity: true, expected: "source_changed_retry"},
+  {name: "Windows mtime skew still rejects", platform: "win32", skew: "mtime", zeroIdentity: false, expected: "source_changed_retry"},
+  {name: "Windows without skew is the applied control", platform: "win32", skew: "none", zeroIdentity: false, expected: "applied"},
+]) {
+  test(`lease recheck metadata policy: ${scenario.name}`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "loopx-lease-ctime-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const statePath = join(root, "ACTIVE_GOAL_STATE.md");
+    await writeFile(statePath, "---\ngoal_id: goal-a\nhandoff_mode: hard_lease\n---\n\n## Agent Todo\n\n");
+    const leaseRecord = { schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_one",
+      owner: "agent-a", status: "released", version: 1 };
+    const leasePath = join(root, "goals", "goal-a", "task-leases", "todo_one.json");
+    await mkdir(join(root, "goals", "goal-a", "task-leases"), { recursive: true });
+    await writeFile(leasePath, JSON.stringify(leaseRecord));
+    const head = projection([todo("todo_one", "done")], [leaseRecord]);
+    const request = await sourceRequest({ root, statePath, baseline: head } as unknown as ShadowFixture, head);
+    // Only the lease's stat observations and the platform predicate are
+    // injected in an isolated child; every byte, identity, lock and digest
+    // uses the production filesystem owner through a real bootstrap.
+    const script = `
+      import * as fs from "node:fs/promises";
+      import {join} from "node:path";
+      import {mock} from "node:test";
+      const [shadowUrl, schemasUrl, request, scenario] = JSON.parse(process.argv[1]);
+      const leasePath = join(request.runtime_root, "goals", request.goal_id, "task-leases", "todo_one.json");
+      let lstatCalls = 0, statCalls = 0;
+      function copy(observed) {
+        return Object.assign(Object.create(Object.getPrototypeOf(observed)), observed);
+      }
+      const {default: ignored, ...namedExports} = fs;
+      mock.module("node:fs/promises", {namedExports: {...namedExports,
+        lstat: async (file, ...args) => {
+          const observed = await fs.lstat(file, ...args);
+          if (file !== leasePath) return observed;
+          lstatCalls++;
+          if (!scenario.zeroIdentity) return observed;
+          const skewed = copy(observed);
+          skewed.dev = 0;
+          return skewed;
+        },
+        open: async (file, flags, ...args) => {
+          const handle = await fs.open(file, flags, ...args);
+          if (file !== leasePath) return handle;
+          const realStat = handle.stat.bind(handle);
+          handle.stat = async (...statArgs) => {
+            const observed = await realStat(...statArgs);
+            statCalls++;
+            const skewed = copy(observed);
+            if (scenario.zeroIdentity) skewed.dev = 0;
+            if (scenario.skew === "ctime") skewed.ctimeMs += 1;
+            if (scenario.skew === "mtime") skewed.mtimeMs += 1;
+            return skewed;
+          };
+          return handle;
+        },
+      }});
+      const shadow = await import(shadowUrl);
+      const schemas = await import(schemasUrl);
+      Object.defineProperty(process, "platform", {value: scenario.platform});
+      let status = null, reason_code = null;
+      try {
+        const result = await shadow.bootstrapCoordinationRuntimeShadow({...request,
+          schema_version: schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
+          operation_id: "bootstrap:test:ctime-policy", source_version: "source:initial"});
+        status = result.status;
+        reason_code = result.reason_code ?? null;
+      } catch (error) { status = "threw"; reason_code = String(error); }
+      console.log(JSON.stringify({status, reason_code, lstatCalls, statCalls}));
+    `;
+    const result = spawnSync(process.execPath, [
+      "--no-warnings", "--experimental-test-module-mocks", "--experimental-strip-types",
+      "--experimental-sqlite", "--input-type=module", "-e", script,
+      JSON.stringify([
+        new URL("../../loopx/control_plane/coordination/runtime_shadow.ts", import.meta.url).href,
+        new URL("../../loopx/control_plane/coordination/coordination_state_contract.generated.ts", import.meta.url).href,
+        request, scenario,
+      ]),
+    ], {encoding: "utf8", timeout: 60_000});
+    assert.equal(result.status, 0, result.stderr);
+    const observed = JSON.parse(result.stdout.trim().split("\n").at(-1));
+    assert.equal(observed.status === "failed" ? observed.reason_code : observed.status, scenario.expected);
+    const passes = scenario.expected === "applied" ? 2 : 1;
+    assert.equal(observed.lstatCalls, 2 * passes);
+    assert.equal(observed.statCalls, 2 * passes);
+  });
+}
