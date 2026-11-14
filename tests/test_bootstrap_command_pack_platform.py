@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -13,11 +14,92 @@ import pytest
 
 import loopx.project_prompt as project_prompt
 from loopx.bootstrap_command_pack import build_start_goal_guided_packet
+from host_surface_cli_probes import connected_project, run_cli
 
 
 PWSH = shutil.which("pwsh")
 GOAL_ID = "windows-guided-connect"
 GOAL_TEXT = "Verify native PowerShell guided connection"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        ("bootstrap-command-pack", "--host-surface", "antigravity-app"),
+        ("agent-onboard", "--agent-type", "antigravity-app"),
+    ],
+)
+def test_activation_uses_explicit_runtime_for_linked_project_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: tuple[str, ...],
+) -> None:
+    from loopx import paths
+
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    monkeypatch.delenv("LOOPX_REGISTRY", raising=False)
+    markers = {}
+    for root in (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT):
+        marker = root / "owned-state" / "marker.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{"preserved":true}\n', encoding="utf-8")
+        markers[marker] = marker.read_bytes()
+    assert paths.default_runtime_route()["status"] == "conflict"
+
+    primary = connected_project(tmp_path / "canonical")
+    registry = primary / ".loopx" / "registry.json"
+    state = primary / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\nVerify the selected activation route.\n", encoding="utf-8")
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    document["common_runtime_root"] = str(tmp_path / "other runtime")
+    goal = document["goals"][0]
+    goal["state_file"] = state.name
+    goal["coordination"] = {"registered_agents": ["probe-agent"], "agent_model": "peer_v1"}
+    registry.write_text(json.dumps(document), encoding="utf-8")
+    for argv in (
+        ["init"],
+        ["-c", "user.name=LoopX Test", "-c", "user.email=loopx@example.invalid",
+         "commit", "--allow-empty", "-m", "test fixture"],
+    ):
+        subprocess.run(["git", *argv], cwd=primary, check=True, capture_output=True)
+    linked = tmp_path / "linked project"
+    subprocess.run(["git", "worktree", "add", "--detach", str(linked)], cwd=primary,
+                   check=True, capture_output=True)
+    selected = primary / "selected runtime"
+    selected.mkdir()
+    global_registry = paths.global_registry_path(selected)
+    global_registry.write_text(json.dumps({
+        "goals": [{**goal, "source_registry": str(registry)}],
+    }), encoding="utf-8")
+
+    args = (
+        "--registry", str(registry), *entry, "--project", str(linked),
+        "--goal-id", "surface-goal", "--agent-id", "probe-agent",
+    )
+    for route, registry_args in (
+        (selected.name, args),
+        (str(selected), args[2:]),
+        (str(selected), ("--registry", "@host-global", *args[2:])),
+    ):
+        explicit = run_cli("--runtime-root", route, *registry_args, cwd=tmp_path)
+        assert explicit.returncode == 0, explicit.stdout + explicit.stderr
+        packet = json.loads(explicit.stdout)
+        alias = packet["project_connection"]["canonical_project_alias"]
+        assert alias["applied"]
+        assert Path(alias["global_registry"]) == global_registry
+        assert Path(packet["project_connection"]["registry"]) == registry
+        assert packet["host_loop_activation"]["activation_allowed"]
+        commands = [packet["host_loop_activation"]["activation_input_command"]]
+        if entry[0] == "agent-onboard":
+            commands += [packet["commands"][key] for key in (
+                "bootstrap_command_pack", "agent_onboard_recheck", "quota_guard",
+            )]
+        for command in commands:
+            argv = shlex.split(command, posix=os.name != "nt")
+            assert Path(argv[argv.index("--runtime-root") + 1].strip("'")) == selected
+
+    implicit = run_cli(*args, cwd=tmp_path)
+    assert implicit.returncode != 0
+    assert "Both default LoopX runtime roots contain state" in implicit.stdout + implicit.stderr
+    assert all(path.read_bytes() == data for path, data in markers.items())
 
 
 def guided_packet(
