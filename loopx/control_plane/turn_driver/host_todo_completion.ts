@@ -277,6 +277,11 @@ function writebackContinueWhen(identity: JsonObject): JsonObject {
     ...exactIdentityConditions(["settlement_identity"], identity),
     objectAt(["settlement_result"]),
     nullish(["settlement_result", "failure"]),
+    equals(["settlement_progress", "schema_version"], "quota_settlement_progress_v0"),
+    any(
+      equals(["settlement_progress", "quota_spend_source"], "heartbeat"),
+      equals(["settlement_progress", "quota_spend_source"], "visible-goal"),
+    ),
   );
 }
 
@@ -365,8 +370,6 @@ function providerSteps(
         request.goal_id,
         "--slots",
         "1",
-        "--source",
-        "heartbeat",
         "--execute",
         "--agent-id",
         request.agent_id,

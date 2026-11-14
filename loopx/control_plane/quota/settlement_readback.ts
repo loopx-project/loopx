@@ -694,6 +694,13 @@ function spendResult(
   )]);
 }
 
+function committedSpendReceiptSource(event: JsonObject | null): string | null {
+  if (event === null || !optionalString(event.event_id)) return null;
+  const {slots, source} = details(event);
+  return slots === 1 && (source === "heartbeat" || source === "visible-goal")
+    ? source : null;
+}
+
 function terminalResult(
   identity: SettlementIdentity,
   event: JsonObject | null,
@@ -1397,8 +1404,13 @@ function readQuotaSettlementFromRequest(
     ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
     : refreshDecision;
 
+  // Fully committed historical debits retain their original accounting.
+  // An incomplete settlement still uses the source authorized by admission.
+  const replaySource = settled.failure === null && spend.failure === null && noSpendKind === null
+    ? committedSpendReceiptSource(spendEvent) : null;
   const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
     receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
+  if (replaySource !== null) progress.quota_spend_source = replaySource;
   // The combined caller consumes controls and receipts after verification.
   // Keep original bodies by default and throughout any pending recovery,
   // including the same Runs carried by the four result bundles. Identity,
@@ -1561,9 +1573,11 @@ async function originalSpendRejection(
   const recordedSource = retained?.source ?? (receipt.source === "" ? undefined : receipt.source);
   const fallbackSource = recordedSource === "heartbeat" || recordedSource === "visible-goal"
     ? recordedSource : progress.quota_spend_source;
-  const source = authorizedSource ?? fallbackSource;
-  // Every admitted CLI settlement plan authorizes one slot and the original
-  // source. The same check gates initial spend, receipt repair, and replay.
+  const replaySource = progress.state === "settled" && progress.closeout_kind == null && spendRun !== null
+    ? committedSpendReceiptSource(spendEvent) : null;
+  const source = replaySource ?? authorizedSource ?? fallbackSource;
+  // First debit and receipt repair must match admission. A fully receipted
+  // replay must match the existing debit and cannot append another charge.
   if (proposed.slots !== 1 || proposed.source !== source) {
     return settlementFailed({
       kind: "quota_spend_rejected", step_kind: "quota_spend",
