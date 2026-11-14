@@ -6,7 +6,6 @@ owners decide capture eligibility. This Host adapter never restores old authorit
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
@@ -63,32 +62,13 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
         raise ValueError("restored checkpoint lacks its immutable source; capture remains disabled")
     unit = Path(source)
     manifest = effect_runtime_result("runtime.checkpoint_artifacts", {
-        "action": "read_basis", "root": str(unit), "expected_sha256": sha,
+        "action": "read_basis", "root": str(unit), "expected_sha256": sha, "include_pending_replan": True,
     }, large_local_snapshot=True)
     # Admission already verified all artifact bytes. Here only the immutable
     # declaration, original pending packet and native history are inputs; do
     # not rehash large code/incumbent archives on every ordinary work wake.
     metadata = manifest["point_metadata"]
-    pending = metadata.get("replan") or metadata.get("operator_metadata", {}).get("replan")
-    packet = None
-    if pending:
-        component = metadata.get("held_decision_component_id")
-        if component not in {entry["id"] for entry in manifest["components"]}:
-            raise ValueError("restored replan point lacks its original pending packet; capture remains disabled")
-        path = unit / "components" / component
-        if path.resolve(strict=True) != path:
-            raise ValueError("restored pending packet must be a physical artifact member")
-        raw = path.read_bytes()
-        if hashlib.sha256(raw).hexdigest() != metadata.get("decision_sha256"):
-            raise ValueError("restored pending replan packet digest differs")
-        packet = json.loads(raw)
-        intent = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "select_replan", "quota": packet,
-            "goal_id": metadata["loopx_state"]["goal_id"], "agent_id": metadata["loopx_state"]["agent_id"],
-            "turn_instance_id": packet["heartbeat_receipt"]["turn_instance_id"],
-        }, large_local_snapshot=True)
-        if intent != pending or intent.get("capture") is not True:
-            raise ValueError("restored original replan binding differs")
+    pending = manifest["pending_replan"]
     result = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "restore_capture", **lineage, "checkpoint_sha256": sha,
         "current_obligation_id": current_obligation_id, "review": None,
@@ -149,8 +129,8 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
         "rebind the old Turn. Capture eligibility requires an accepted, settled current semantic "
         "replan and a completed destination Codex conversation turn, not a benchmark evaluation; "
         "it does not grant execution.\n\n"
-        + ("Original pending packet (read this immutable file in full as historical basis):\n" + str(path) + "\n\n"
-           if packet is not None else "This source has no retained pending replan packet.\n\n")
+        + ("Original pending packet (read this immutable file in full as historical basis):\n" + pending["decision_path"] + "\n\n"
+           if pending is not None else "This source has no retained pending replan packet.\n\n")
     )
     return result
 

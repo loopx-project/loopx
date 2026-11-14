@@ -1,10 +1,12 @@
 """A restored fork needs a current, settled semantic decision before recapture."""
 import copy
+import hashlib
+import json
 
 import pytest
 
 from loopx.control_plane.effect_program import SettlementIdentity
-from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, effect_runtime_result
 
 
 def test_nonrestored_conversation_has_no_completed_checkpoint_review(tmp_path):
@@ -78,10 +80,106 @@ def test_readonly_participant_capture_and_limited_basis_read(tmp_path):
     basis = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "read_basis", "root": str(unit),
         "expected_sha256": captured["sha256"]})
     assert basis["integrity_verified"] is False and basis["execution_authority_granted"] is False
-    from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
     with pytest.raises(EffectRuntimeRemoteError):
         effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(unit),
             "expected_sha256": captured["sha256"]})
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_sealed_pending_basis_reuses_original_guard_and_rejects_replacements(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from benchmark.runtime.checkpoint_continuation import restored_checkpoint_review
+    from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+    from types import SimpleNamespace
+    from test_replan_successor_guard_reentry import AGENT, GOAL, TURN, _fixture
+
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider)
+    original = call("quota", "should-run", "--runtime-profile", "generic_cli", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", TURN,
+        "--decision-output-dir", str(tmp_path / "original"))
+    assert original["effective_action"] == "autonomous_replan_required"
+    retained = tmp_path / "original" / "decision.json"
+    source_bytes = retained.read_bytes()
+    source = json.loads(source_bytes)
+    identity = source["heartbeat_receipt"]["settlement_identity"]
+    runs = runtime / "goals" / GOAL / "runs" / "index.jsonl"
+    original_runs = runs.read_bytes()
+    pending = {"capture": True, "obligation_id": identity["replan_obligation_id"],
+               "settlement_effect_id": identity["effect_id"], "execution_authority_granted": False}
+    complete = compose_turn_decision({**source, "future_observation": {"exact": 2**53 + 1, "decimal": 1.0}})
+    packet = tmp_path / "held-decision.json"
+    packet.touch(mode=0o600)
+    evidence = [{"id": "held_decision", "source_path": str(packet)}]
+
+    def seal(name, payload, *, wanted=pending, decision_digest=None):
+        raw = json.dumps(payload, ensure_ascii=False).encode()
+        packet.write_bytes(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        request = {"action": "capture", "components": evidence, "destination": str(tmp_path / name),
+            "point_metadata": {"held_decision_component_id": "held_decision", "loopx_state": {
+                "goal_id": GOAL, "agent_id": AGENT}, "replan": wanted, "decision_sha256": decision_digest or digest},
+            "expected_source_sha256": effect_runtime_result("runtime.checkpoint_artifacts", {
+                "action": "probe", "components": evidence})["source_sha256"]}
+        sealed = effect_runtime_result("runtime.checkpoint_artifacts", request, retry_safe=False)
+        return {"action": "read_basis", "root": request["destination"], "expected_sha256": sealed["sha256"],
+            "include_pending_replan": True}, digest
+
+    for name, payload in (("historical", source), ("complete", complete)):
+        request, digest = seal(name, payload)
+        selected = effect_runtime_result("runtime.checkpoint_artifacts", request)
+        assert selected["pending_replan"] == {"intent": pending, "decision_sha256": digest,
+            "decision_path": str(tmp_path / name / "components" / "held_decision")}
+        assert not selected["integrity_verified"] and not selected["execution_authority_granted"]
+
+        # Exercise both actual receivers with a sealed source and an already
+        # admitted native binding. Only the external native transport is fake.
+        binding = {"session_id": "synthetic-session", "checkpoint_artifact_sha256": request["expected_sha256"],
+                   "checkpoint_artifact_root": request["root"]}
+        declaration = tmp_path / "warm-start.json"
+        declaration.write_text(json.dumps({"root": request["root"], "sha256": request["expected_sha256"],
+            "goal_id": GOAL, "agent_id": AGENT, "fresh_replan": True}))
+        partial = tmp_path / "context-refresh" / "pre-replan.json"
+        partial.parent.mkdir(exist_ok=True)
+        partial.touch()  # Recovery of a lost external reply must not re-admit.
+        env = {"LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_GOAL_ID": GOAL, "LOOPX_AGENT_ID": AGENT,
+               "LOOPX_WARM_START": str(declaration), "LOOPX_ITERATION_CONTEXT": "resume",
+               "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes")}
+        observations = []
+        session = SimpleNamespace(**binding, binding=binding, prepare_checkpoint_refresh=lambda *args, **kw:
+                                 observations.append((args, kw)))
+        with monkeypatch.context() as m:
+            m.setattr("benchmark.runtime.checkpoint_continuation.load_codex_cli_session", lambda *a, **kw: binding)
+            m.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a: session)
+            notice = prepare_session_refresh(env, session, tmp_path)
+            assert "BEFORE a pending replan" in notice and observations == [(
+                (None, partial, tmp_path / "stdout.jsonl"),
+                {"pre_replan_basis": {"pending_replan": pending, "decision_sha256": digest}},
+            )]
+            review = restored_checkpoint_review(env)
+            assert not review["semantic_review_accepted"]
+            assert selected["pending_replan"]["decision_path"] in review["instructions"]
+
+    for name, payload, wanted, expected in (
+        ("tampered", {**complete, "future_observation": {"exact": 2**53}}, pending, "integrity mismatch"),
+        ("unknown", {**complete, "schema_version": "unknown"}, pending, "unsupported complete Turn decision version"),
+        ("wrong-intent", source, {**pending, "obligation_id": "replan-" + "b" * 16}, "binding differs"),
+        ("missing-intent", source, None, "checkpoint pending replan must be an object"),
+    ):
+        request, _ = seal(name, payload, wanted=wanted)
+        with pytest.raises(EffectRuntimeRemoteError, match=expected):
+            effect_runtime_result("runtime.checkpoint_artifacts", request)
+
+    request, _ = seal("wrong-member", source, decision_digest="a" * 64)
+    with pytest.raises(EffectRuntimeRemoteError, match="packet digest differs"):
+        effect_runtime_result("runtime.checkpoint_artifacts", request)
+    request, _ = seal("replaced-member", source)
+    member = tmp_path / "replaced-member" / "components" / "held_decision"
+    saved = member.read_bytes()
+    member.write_bytes(b" " + saved[1:])  # Same size as the sealed file.
+    with pytest.raises(EffectRuntimeRemoteError, match="packet digest differs"):
+        effect_runtime_result("runtime.checkpoint_artifacts", request)
+    assert retained.read_bytes() == source_bytes
+    assert runs.read_bytes() == original_runs
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
