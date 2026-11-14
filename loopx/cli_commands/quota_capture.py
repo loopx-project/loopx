@@ -24,7 +24,7 @@ from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
-    write_context_read_reference, private_capture_uid, read_turn_observation_text,
+    write_context_read_reference, private_capture_uid, open_regular_capture, read_turn_observation_text,
 )
 from ..control_plane.turn_driver.native_context_profile import (
     NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
@@ -32,6 +32,8 @@ from ..control_plane.turn_driver.native_context_profile import (
 )
 from .quota_context_reader import (
     budgeted_ready_opening,
+    _bounded_context_read_failure,
+    _compact_context_restart,
     _capture_selection_transport_template,
     bind_capture_selection_transport as bind_capture_selection_transport,
     _saved_context_read_page,
@@ -360,7 +362,7 @@ def _saved_context_transport_failure(
             "next_command only for that selection and verify contiguous offsets, total_bytes and sha256. "
             "Authority and freshness are unchanged. " + CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
         )
-    return {"ok": False, "error_code": QuotaDecisionTransportError.error_code,
+    failure = {"ok": False, "error_code": QuotaDecisionTransportError.error_code,
         "reason": " ".join(str(error).split())[:500],
         "heartbeat_receipt": receipt, "capture_sha256": args.capture_sha256,
         "recovery": {**recovery, "command": context_capture_read_command(
@@ -368,6 +370,18 @@ def _saved_context_transport_failure(
             max_page_output_bytes=output_bytes, list_fields=not source_unverified,
             select=["/heartbeat_receipt"] if source_unverified else None, reader_argv=reader_argv)},
         "instruction": instruction}
+    attached = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
+    if (attached and args.format == "json" and type(limit) is int and limit > 0
+            and len(_native_output_bytes(failure)) + len(os.linesep) - 1 > limit):
+        # A short refusal must lead to a usable read. At tight budgets the
+        # normal recovery command may itself have no room for a first page.
+        selectors = ["/heartbeat_receipt"] if source_unverified else getattr(args, "select", None)
+        initial = not source_unverified and getattr(args, "initial_read", False)
+        return _bounded_context_read_failure(failure, limit, restart_fits=False,
+            restart=lambda: _compact_context_restart(Path(recovery["path"]), recovery["sha256"],
+                limit=output_bytes, page_bytes=max(256, page_bytes), reader_argv=reader_argv,
+                select=selectors, initial_read=initial, list_fields=not (selectors or initial)))
+    return failure
 
 
 def project_saved_context_capture(
@@ -702,25 +716,34 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
 
 
 def capture_decision(directory: Path | None, payload: dict[str, object], *,
-                     args: argparse.Namespace | None = None, native_context: bool = False) -> str | None:
+                     args: argparse.Namespace | None = None, native_context: bool = False,
+                     record_capture: Callable[[dict[str, object], str], None] | None = None) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
         digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
-        if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
-            from ..control_plane.turn_driver.codex_context import record_native_claim_source
-
-            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
-                context_root=getattr(args, "codex_context_root", None))
-        return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
             "already exist. Do not treat this as missing admission or blindly rerun "
             f"the guard. Inspect the existing Turn receipt. Capture directory: {directory}"
         ) from exc
+    if record_capture is not None:
+        record_capture(payload, digest)
+    if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
+        from ..control_plane.turn_driver.codex_context import record_native_claim_source
+
+        try:
+            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
+                context_root=getattr(args, "codex_context_root", None))
+        except (OSError, ValueError) as exc:
+            raise QuotaDecisionTransportError(
+                "The decision was saved, but the native Host could not register it. "
+                "Read the original decision and receipt before recovering this Turn."
+            ) from exc
+    return digest
 
 
 def settlement_capture_failure_view(
@@ -823,7 +846,8 @@ def budgeted_settlement_result(
 
 
 def handoff_decision(directory: Path | None, socket_path: str | None,
-                     context_delivery_enabled: bool = False) -> tuple[dict[str, Any], str] | None:
+                     context_delivery_enabled: bool = False, *,
+                     capture_sha256: str | None) -> tuple[dict[str, Any], str] | None:
     """Withhold the original output until the Host releases these exact bytes.
 
     No second guard, admission, settlement or retry is performed here. A lost
@@ -832,24 +856,27 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
     """
     if socket_path is None:
         return None
-    if directory is None:
-        raise ValueError("decision handoff requires a captured decision")
+    if directory is None or capture_sha256 is None:
+        raise ValueError("decision handoff requires a captured decision and its published digest")
     path = directory / "decision.json"
-    raw = path.read_bytes()
-    digest = hashlib.sha256(raw).hexdigest()
     try:
+        with os.fdopen(open_regular_capture(path), "rb") as source:
+            raw = source.read()
+        if hashlib.sha256(raw).hexdigest() != capture_sha256:
+            raise ValueError("captured decision changed before handoff")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
             channel.settimeout(120)
             channel.connect(str(validate_handoff_socket(socket_path)))
-            channel.sendall(json.dumps({"path": str(path), "sha256": digest}).encode() + b"\n")
+            channel.sendall(json.dumps({"path": str(path), "sha256": capture_sha256}).encode() + b"\n")
             with channel.makefile("rb") as stream:
                 line = stream.readline(1025)
             response = json.loads(line)
-            ordinary_release = {"released": True, "sha256": digest}
+            ordinary_release = {"released": True, "sha256": capture_sha256}
             if response not in (ordinary_release, {**ordinary_release, "context_delivery": True}):
                 raise ValueError("Host did not release the original decision digest")
-        if path.read_bytes() != raw:
-            raise ValueError("captured decision changed during handoff")
+        with os.fdopen(open_regular_capture(path), "rb") as source:
+            if source.read(len(raw) + 1) != raw:
+                raise ValueError("captured decision changed during handoff")
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision handoff failed after guard evaluation; inspect the original "
@@ -869,30 +896,41 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
             metadata = os.fstat(source.fileno())
             if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077 or
                     metadata.st_size > MAX_REQUEST_BYTES or metadata.st_uid != os.getuid()):
-                return {}, digest
+                return {}, capture_sha256
             raw = source.read(MAX_REQUEST_BYTES + 1)
         if len(raw) > MAX_REQUEST_BYTES:
-            return {}, digest
+            return {}, capture_sha256
         request = json.loads(raw)
-        return (request if isinstance(request, dict) else {}), digest
+        return (request if isinstance(request, dict) else {}), capture_sha256
     except (OSError, ValueError, RecursionError):
-        return {}, digest
+        return {}, capture_sha256
 
 
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch captured reads and native lifecycle IO before quota authority access."""
+    project_page = args.quota_command == "context-project" and bool(
+        getattr(args, "initial_read", False) or getattr(args, "select", None))
+    read_limit = getattr(args, "max_page_output_bytes", None) if (
+        (args.quota_command == "context-read" or project_page) and args.format == "json") else None
+
+    def print_read_result(payload: dict[str, Any]) -> int:
+        if payload or read_limit is None or read_limit >= 2 + len(os.linesep):
+            print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
+        return 0 if payload.get("ok") is True else 1
+
+    def reject_reader_option(reason: str) -> int:
+        return print_read_result(_bounded_context_read_failure({"ok": False, "reason": reason}, read_limit))
+
     if getattr(args, "complete_turn", False) and (args.quota_command != "should-run" or args.format != "json"):
-        print_payload({"ok": False, "reason": "--complete-turn requires JSON quota should-run"}, args.format, str)
-        return 1
+        return reject_reader_option("--complete-turn requires JSON quota should-run")
     if getattr(args, "host_todo_settlement", False):
         from .quota_request import validate_host_todo_settlement_request
 
         try:
             validate_host_todo_settlement_request(args)
         except QuotaCommandValidationError as exc:
-            print_payload({"ok": False, "reason": str(exc)}, args.format, str)
-            return 1
+            return reject_reader_option(str(exc))
         # Keep this machine observation independent of environment and profile
         # presentation settings. The guard still evaluates and records normally.
         args.context_delivery = "off"
@@ -906,8 +944,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             # reader, Turn, receipt or capture options.
             validate_scheduler_observation_request(args)
         except QuotaCommandValidationError as exc:
-            print_payload({"ok": False, "reason": str(exc)}, args.format, str)
-            return 1
+            return reject_reader_option(str(exc))
         return None
     if getattr(args, "initial_read", False) and args.quota_command not in ("context-read", "context-project"):
         print_payload({"ok": False, "reason": "--initial-read is only supported by context-read or JSON context-project"},
@@ -916,17 +953,12 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     list_depth = getattr(args, "list_depth", None)
     if list_depth is not None and (args.quota_command != "context-read" or not getattr(args, "list_fields", False)
             or type(list_depth) is not int or not 1 <= list_depth <= 8):
-        print_payload({"ok": False, "reason": "--list-depth requires context-read --list and an integer from 1 to 8"}, args.format, str)
-        return 1
+        return reject_reader_option("--list-depth requires context-read --list and an integer from 1 to 8")
     if getattr(args, "selection_sha256", None) is not None and (args.quota_command != "context-read"
             or (getattr(args, "select", None) is None and not getattr(args, "initial_read", False))):
-        print_payload({"ok": False, "reason": "selection-sha256 requires context-read with --select or --initial-read"},
-            args.format, lambda value: str(value["reason"]))
-        return 1
+        return reject_reader_option("selection-sha256 requires context-read with --select or --initial-read")
     if getattr(args, "outcome_ref", None) is not None and args.quota_command != "replan-view":
-        print_payload({"ok": False, "reason": "outcome-ref is only supported by replan-view"},
-            args.format, lambda value: str(value["reason"]))
-        return 1
+        return reject_reader_option("outcome-ref is only supported by replan-view")
     if getattr(args, "list_fields", False) and args.quota_command != "context-read":
         print_payload({"ok": False, "reason": "--list is only supported by context-read"}, args.format, str)
         return 1
@@ -951,6 +983,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         try:
             apply_context_machine_options(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
         except (OSError, ValueError, TypeError) as exc:
+            if args.quota_command == "context-read":
+                return reject_reader_option(str(exc))
             print_payload({"ok": False, "reason": str(exc)}, args.format,
                 lambda value: json.dumps(value, ensure_ascii=False, indent=2))
             return 1
@@ -1135,6 +1169,11 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         return 0
     if args.quota_command == "context-project":
         payload = project_saved_context_capture(args)
+        if project_page and payload.get("ok") is not True:
+            # The projector may reject before reaching the ordinary page
+            # reader. Apply the same stdout limit to that refusal as well.
+            return print_read_result(_bounded_context_read_failure(
+                payload or {"ok": False, "reason": "The saved page did not fit."}, read_limit))
         print_payload(payload, args.format, lambda value: str(value.get("command", value.get("reason", ""))))
         return 0 if payload["ok"] else 1
     if args.quota_command == "context-read":
@@ -1142,9 +1181,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 
         # Presentation recovery reads the original capture, never current Goal
         # state. In particular it must not evaluate a guard or append a receipt.
-        payload = read_context_capture(args, reader_argv=current_loopx_cli_argv())
-        print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
-        return 0 if payload["ok"] else 1
+        return print_read_result(read_context_capture(args, reader_argv=current_loopx_cli_argv()))
     if args.quota_command == "replan-view":
         return handle_replan_view(args, print_payload)
     return None

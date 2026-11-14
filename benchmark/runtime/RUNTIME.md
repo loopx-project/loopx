@@ -207,6 +207,8 @@ capture directory, so a retry of the same Turn preserves previously issued
 page cursors. Follow those cursors before using the original Turn's instructions.
 An explicit short envelope keeps its v0 display and same-Turn selection flags.
 The checkpoint selector uses the original signed capture in all cases.
+The short view also supplies a paged read of that source for required
+fields such as the original Todo selection command.
 Reading the saved view requires no hooks and performs no new admission.
 Include the projection command, descriptor, recovery and page reads in subsequent
 total-cost comparisons.

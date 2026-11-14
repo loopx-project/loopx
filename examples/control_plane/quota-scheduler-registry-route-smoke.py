@@ -147,6 +147,7 @@ def main() -> None:
             "--agent-id",
             AGENT_ID,
             "--codex-app",
+            "--complete-turn",
             cwd=project,
         )
         assert_complete_turn_decision(follow_up)
