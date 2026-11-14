@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 from .file_lock import (
-    exclusive_file_lock, try_exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
+    exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
     LOCK_HOLDER_ABSENT, LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED,
     LOCK_HOLDER_FOREIGN_HOST, LOCK_HOLDER_LIVE, LockAcquisitionPolicy, LockAcquireTimeoutError,
 )
@@ -690,18 +690,13 @@ class Delegations:
         """Explicitly rerun the original postcondition; never repeat Host work."""
         path = self.path(require_operation_id(operation_id))
         with ExitStack() as locks:
-            acquired = locks.enter_context(try_exclusive_file_lock(path))
-            if acquired is None:
-                # Terminal publication can precede the original worker's release.
-                _, holder = lock_holder_liveness(path)
-                if holder.get("operation") != _DELEGATION_STATUS_READ:
-                    return self.read(operation_id)
-                # A status probe briefly takes this same fence. Give that read
-                # time to release it, then recheck authority under the fence.
-                try:
-                    locks.enter_context(exclusive_file_lock(path, timeout_seconds=0.25))
-                except LockAcquireTimeoutError:
-                    return self.read(operation_id)
+            # A reader can hold the kernel fence before it publishes its
+            # holder record. Use one short acquisition window for either case.
+            try:
+                locks.enter_context(exclusive_file_lock(path, timeout_seconds=0.25))
+            except LockAcquireTimeoutError:
+                # An active worker can publish rejection before releasing.
+                return self.read(operation_id)
             if self._read_stop(path) is not None:
                 raise ValueError(DELEGATION_STOPPED_MESSAGE)
             row = _read(path)
