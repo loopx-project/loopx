@@ -360,7 +360,19 @@ class LarkGoalTopicRuntimeService:
         """Return content-free listener health keyed by safe profile reference."""
 
         with self._lock:
-            return {profile: dict(health) for profile, health in self._health.items()}
+            snapshot = {profile: dict(health) for profile, health in self._health.items()}
+            workers = [
+                (profile, fingerprint.transport.app_id)
+                for profile, (stop, _thread, fingerprint) in self._workers.items()
+                if not stop.is_set() and profile in snapshot
+            ]
+        if self.private_conversations is not None:
+            readiness = self.private_conversations.steward_callback_readiness
+            for profile, app_id in workers:
+                probe = readiness.get((profile, app_id))
+                if probe is not None and not probe():
+                    snapshot[profile]["callback_error_code"] = "lark_review_callback_source_disconnected"
+        return snapshot
 
     @staticmethod
     def _disconnect_message_consumer(consumer: MessageConsumer) -> bool:
@@ -486,7 +498,6 @@ class LarkGoalTopicRuntimeService:
                     profile,
                     status="starting" if restart_count == 0 else "retrying",
                     error_code=None,
-                    callback_error_code=None,
                     restart_count=restart_count,
                 )
                 try:
