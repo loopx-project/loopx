@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from test_native_steward_private import finish, steward  # noqa: F401
+from test_native_steward_private import finish, steward as steward
 
 from loopx.capabilities.native_chat import steward_triage
 from loopx.extensions.lark import private_steward_triage
@@ -67,7 +67,7 @@ def event_for(message_id, action, *, suffix="1", **changes):
             "timestamp": str(int(time.time() * 1000)), "action_value": action, **changes}
 
 
-def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, monkeypatch):  # noqa: F811
+def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, monkeypatch):
     store, runtime, provider, transport, binding, capture, _ = steward
     registry = json.loads(runtime.registry_path.read_text())
     registry["goals"] = [{"id": "demo-a"}, {"id": "demo-b"}]
@@ -338,7 +338,7 @@ def test_triage_reads_declared_source_before_shared_runtime(steward, monkeypatch
 
 
 @pytest.mark.parametrize("shared_app", [False, True])
-def test_private_callback_recovers_without_restarting_messages(steward, monkeypatch, shared_app):  # noqa: F811
+def test_private_callback_recovers_without_restarting_messages(steward, monkeypatch, shared_app):
     from loopx.extensions.lark import goal_topic_runtime
     from extensions.test_lark_goal_topic_runtime import _seed_legacy_topic
     from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
