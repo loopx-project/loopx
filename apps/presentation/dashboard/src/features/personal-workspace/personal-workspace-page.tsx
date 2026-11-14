@@ -126,7 +126,7 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   const latest = new Map<string, WorkspaceActionPreview>();
   proposals.forEach((proposal) => {
     const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
-    const key = proposal.actionKind === "operation.execute" ? proposal.previewId
+    const key = proposal.actionKind === "operation.execute" || proposal.reviewPlan?.taskExecution ? proposal.previewId
       : [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
     // Two records can describe the same draft; keep the newest by its stored
     // time rather than whichever one this list happened to end with, since a
@@ -1715,10 +1715,15 @@ export function PersonalWorkspacePage({
       .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
         || compileActionReviewPlan(proposal).retryOriginal === true
         || (proposal.action_kind === "team.plan" && proposal.status === "applied")
+        || (proposal.action_kind === "todo.create" && proposal.status === "applied")
         // Terminal operations replace cached gated cards, including in an
         // already-open drawer. They never authorize local execution.
         || proposal.action_kind === "operation.execute")
-      .map((proposal) => workspaceProposal(proposal, t));
+      .map((proposal) => workspaceProposal(proposal, t))
+      // Keep a launch receipt reachable after a reload; plain creation does
+      // not have a Turn to revisit.
+      .filter(proposal => proposal.actionKind !== "todo.create" || proposal.status !== "applied"
+        || Boolean(proposal.reviewPlan?.taskExecution));
     const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
     const previousIds = restoredProposalIdsRef.current;
     restoredProposalIdsRef.current = new Set(Object.keys(restored));
@@ -2147,14 +2152,15 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      if (!stored && ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) && !readbackMismatch) {
+      const scopedReadback = ["team.plan", "goal.create", "todo.update", "todo.create"].includes(proposal.actionKind);
+      if (!stored && scopedReadback && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
         if (readback.isSuccess) stored = readback.data?.find(item => item.proposal_id === proposal.previewId);
       }
       if (stored?.proposal_id === proposal.previewId && stored.action_kind === proposal.actionKind
         && matchesTodoTarget(stored)
-        && (!["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
+        && (!scopedReadback || stored.normalized_parameters.goal_id === proposal.goalId)) {
         await actionReadback.acceptProposal(stored);
         const observed = workspaceProposal(stored, t);
         const reconciled = { ...observed, errorMessage: observed.status === "error"
@@ -2829,7 +2835,8 @@ export function PersonalWorkspacePage({
           else setSelection(entry.destination.selection);
         }} />}
       notice={serviceNotice}
-      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={drawerReadOnly ? [] : larkConnections}
+      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })}
+        callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={drawerReadOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && !goal.loadState && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
@@ -2841,7 +2848,8 @@ export function PersonalWorkspacePage({
         onRetryProposalReadback={() => void (creationProposalId ? proposalReadback.refetch() : actionReadback.refetch())} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)
-          && !(drawerSelection.item.status === "applied" && ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind))) {
+          && !(drawerSelection.item.status === "applied" && (drawerSelection.item.reviewPlan?.taskExecution
+            || ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind)))) {
           setProposals((current) => {
             const next = { ...current };
             delete next[drawerSelection.item.previewId];

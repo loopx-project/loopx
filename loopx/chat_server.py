@@ -67,6 +67,7 @@ from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
     parse_chat_history_selection,
+    prepare_chat_history_session,
     read_chat_history_selection,
 )
 from .control_plane.goals.active_state_metadata import active_state_section_text
@@ -929,11 +930,9 @@ class ChatRequestHandler(
     def _session_snapshot(self, session_id: str) -> None:
         try:
             selection = parse_chat_history_selection(parse_qs(urlparse(self.path).query, keep_blank_values=True))
-            # A historical Turn read must not recover an unrelated execution.
-            if selection["turn_id"] is None:
-                self.server.runtime_controller.recover_exited_turn(session_id)
             store = self.server.chat_store
-            session = store.load_session(session_id) or {}
+            session = prepare_chat_history_session(store, session_id, selection,
+                recover_turn=self.server.runtime_controller.recover_exited_turn)
             media = self.server.private_media_history
             contexts = getattr(self.server.runtime_controller, "project_contexts", None)
             bindings = getattr(contexts, "conversation_bindings", None)
