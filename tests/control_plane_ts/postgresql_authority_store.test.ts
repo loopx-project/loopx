@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   POSTGRESQL_SCHEMA_VERSION,
   rotatePostgreSqlAuthorityStoreIdentity,
+  PostgreSqlAuthorityStore,
   type PostgreSqlAuthorityConnection,
   type PostgreSqlAuthorityDatabase,
 } from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
@@ -216,3 +217,103 @@ test("PostgreSQL identity rotation commits the next incarnation", async () => {
   assert.equal(harness.calls.at(-1)?.text, "COMMIT");
   assert.deepEqual(harness.releases, [undefined]);
 });
+
+test("PostgreSQL store inserts checkpoints and deltas on commit and rebinds projections in scanCommitted", async () => {
+  const executed: {text: string; values: readonly unknown[] | undefined}[] = [];
+  const connection: PostgreSqlAuthorityConnection = {
+    query: async (text, values) => {
+      executed.push({text, values});
+      try {
+        if (text === "BEGIN" || text === "COMMIT" || text.includes("pg_advisory_xact_lock")) {
+          return {rows: [], rowCount: 1};
+        }
+        if (text.includes("set_config('loopx.tenant_id'")) {
+          return {rows: [{tenant_id: values?.[0]}], rowCount: 1};
+        }
+        if (text.includes("FROM loopx_control_plane.authority_store_metadata")) {
+          return metadataResult(STORE_IDENTITY);
+        }
+        if (text.includes("FROM loopx_control_plane.authority_heads")) {
+          return {
+            rows: [{provider_revision: "0", cursor: "0", head: null}],
+            rowCount: 1,
+          };
+        }
+        if (text.includes("INSERT INTO loopx_control_plane.authority_checkpoints")) {
+          return {rows: [], rowCount: 1};
+        }
+        if (text.includes("INSERT INTO loopx_control_plane.authority_commits")) {
+          return {rows: [], rowCount: 1};
+        }
+        if (text.includes("INSERT INTO loopx_control_plane.authority_events")) {
+          return {rows: [], rowCount: 1};
+        }
+        if (text.includes("INSERT INTO loopx_control_plane.authority_receipts")) {
+          return {rows: [], rowCount: 1};
+        }
+        if (text.includes("UPDATE loopx_control_plane.authority_heads")) {
+          return {rows: [], rowCount: 1};
+        }
+        if (text.includes("INSERT INTO loopx_control_plane.authority_heads")) {
+          return {rows: [], rowCount: 1};
+        }
+        if (text.includes("FROM loopx_control_plane.authority_checkpoints")) {
+          return {
+            rows: [
+              {
+                checkpoint_cursor: "1",
+                projection: {schema_version: "loopx_authority_projection_v0", counter: 1},
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        return {rows: [], rowCount: 0};
+      } catch (e) {
+        console.error("Mock query error:", e);
+        throw e;
+      }
+    },
+    release: () => {},
+  };
+
+  const database: PostgreSqlAuthorityDatabase = {
+    connect: async () => connection,
+  };
+
+  const store = new PostgreSqlAuthorityStore(database, {
+    tenant_id: "tenant-test",
+    goal_id: "goal-test",
+  });
+
+  const commitRes = await store.commitAuthority({
+    operation_id: "op-genesis",
+    expected_provider_revision: null,
+    events: [{kind: "init"}],
+    receipts: [{test: true}],
+    next_projection: {schema_version: "loopx_authority_projection_v0", counter: 1},
+  });
+
+  assert.equal(commitRes.status, "applied");
+  if (commitRes.status === "applied") {
+    assert.equal(commitRes.cursor, "1");
+  }
+
+  // Verify checkpoint insert was executed for cursor 1
+  const checkpointCall = executed.find(c =>
+    c.text.includes("INSERT INTO loopx_control_plane.authority_checkpoints")
+  );
+  assert.ok(checkpointCall, "Checkpoint insert must be called for genesis cursor 1");
+  assert.equal(checkpointCall?.values?.[2], "1"); // checkpoint_cursor
+
+  // Verify commit insert stored delta and null projection
+  const commitCall = executed.find(c =>
+    c.text.includes("INSERT INTO loopx_control_plane.authority_commits")
+  );
+  assert.ok(commitCall, "Commit insert must be called");
+  assert.equal(commitCall?.values?.[2], "1"); // cursor
+  assert.equal(commitCall?.values?.[4], "op-genesis"); // operation_id
+  assert.ok(commitCall.text.includes("NULL)"), "projection in authority_commits should be literal NULL");
+  assert.ok(commitCall?.values?.[5], "delta in authority_commits must be present");
+});
+
