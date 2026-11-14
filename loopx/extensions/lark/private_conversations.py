@@ -1575,9 +1575,13 @@ class LarkPrivateConversations:
                         or not self._source_verified(record, expected_text=event["content"])):
                     return 0
                 terminal = record["deliveries"]["terminal"]
-                message = self._historical_image_bot_post(record, observation, plan["message_id"])
-                if not lark_markdown_readback_matches(text=normalize_lark_outbound_text(
-                        terminal["text"], limit=None, preserve_format=True), message=message):
+                original_text = normalize_lark_outbound_text(terminal["text"], limit=None, preserve_format=True)
+
+                def original_reply_matches() -> bool:
+                    return lark_markdown_readback_matches(text=original_text, message=self._historical_image_bot_post(
+                        record, observation, plan["message_id"]))
+
+                if not original_reply_matches():
                     return 0
 
                 attachments = state.get("attachments")
@@ -1599,10 +1603,9 @@ class LarkPrivateConversations:
 
                 def authorized() -> bool:
                     try:
-                        self._historical_image_source(record, plan)
+                        return bool(self._historical_image_source(record, plan)) and original_reply_matches()
                     except (KeyError, OSError, ValueError):
                         return False
-                    return True
 
                 phase = "answer_images.historical"
                 if not self._deliver(path, record, phase, "原图（按原文顺序）",

@@ -1120,7 +1120,8 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         runtime.close()
 
 
-@pytest.mark.parametrize("fault", ["readback", "edited_source", "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied"])
+@pytest.mark.parametrize("fault", ["readback", "edited_source", "edited_original_reply", "edit_on_image_get",
+    "edit_on_send_preview", "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied"])
 def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, fault):  # noqa: F811
     from hashlib import sha256
     from loopx.chat_store import _atomic_write_json
@@ -1139,17 +1140,30 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
     assert marker in script
     fake.write_text(script.replace(marker, f'"message": {answer!r},', 1))
     io = ImageIO(provider)
+    edited_body = None
+
+    def edit_original_reply():
+        nonlocal edited_body
+        edited_body = {"content": json.dumps({"zh_cn": {"content": [[{"tag": "text", "text": "The original answer was edited."}]]}})}
+        provider.messages[prior_id]["body"] = edited_body
+
     def provider_io(args, cwd=None, timeout=None):
         if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
             provider.calls.append(list(args))
             return {"returncode": 3, "stderr": '{"ok":false,"error":{"type":"authorization","code":99991672}}'}
-        return io(args, cwd, timeout)
+        result = io(args, cwd, timeout)
+        if fault == "edit_on_send_preview" and "+messages-send" in args and "--dry-run" in args and "--content" in args:
+            if "原图（按原文顺序）" in args[args.index("--content") + 1]:
+                edit_original_reply()
+        return result
 
     transport.runner = provider_io
 
     def fetch(url, *, deadline):
         if url == origin:
             return url, "text/html", "".join(f'<img src="{url}">' for url in urls).encode()
+        if fault == "edit_on_image_get":
+            edit_original_reply()
         return url, "image/png", figures[url]
 
     monkeypatch.setattr(public_source_reader, "fetch", fetch)
@@ -1190,6 +1204,8 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         assert path in worker.pending_delivery_paths() and worker.is_recovery_path(path)
         if fault == "edited_source":
             provider.messages[event["message_id"]]["content"] = "Changed source."
+        elif fault == "edited_original_reply":
+            edit_original_reply()
         elif fault == "foreign_sender":
             provider.messages[prior_id]["sender"]["id"] = provider.profile_apps["steward-app"]
         elif fault == "changed_bytes":
@@ -1228,13 +1244,13 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             assert len(keys) == 4 and [io.resources[key] for key in keys] == list(figures.values())
             assert worker.reconcile_request(path) == 0
         else:
-            assert io.uploads == 0 and len(provider.writes) == writes
+            assert io.uploads == (4 if fault == "edit_on_send_preview" else 0) and len(provider.writes) == writes
             if fault == "upload_denied":
                 pending = json.loads(path.read_text())
                 assert pending["historical_answer_images"]["status"] == "pending"
                 assert "answer_images.historical" not in pending["deliveries"]
                 assert any("images" in cmd and "create" in cmd and "--dry-run" not in cmd for cmd in provider.calls)
-        assert json.dumps(provider.messages[prior_id]["body"]) == prior_body
+        assert provider.messages[prior_id]["body"] == (edited_body if edited_body is not None else json.loads(prior_body))
         assert json.loads(path.read_text())["deliveries"]["terminal"] == terminal
         assert core == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
         assert sum(json.loads(line).get("method") == "turn/start" for line in ordinary[4].read_text().splitlines()) == 1
