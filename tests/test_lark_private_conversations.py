@@ -58,8 +58,8 @@ def test_app_steward_discovery_only_projects_the_bound_session(tmp_path, monkeyp
             start = len(provider.calls)
             assert bindings.app_steward_target() == {"binding_id": binding["binding_id"], "session_id": original_id}
             assert sum("auth" in args and "--verify" in args for args in provider.calls[start:]) == 1
-        assert metadata == {original_id: 2, other["session_id"]: 1}
-        assert transcripts == [original_id]
+        assert metadata == {original_id: 3, other["session_id"]: 1}
+        assert transcripts == []
         assert before == (capture.read_bytes(), bindings.path.read_bytes(), store.messages(original_id))
 
         # The alias's own context is unrelated, but its declared ID still
@@ -4773,7 +4773,8 @@ def test_group_identity_requires_verified_bot_and_private_identity_requires_veri
     provider.owner_ready = False
     group = observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
     assert group["operator_ref"] != identity_ref(group["provider_ref"], "ou_notes_app")
-    with pytest.raises(ValueError, match="owner independently"):
+    from loopx.extensions.lark.conversation_identity import LarkOwnerIdentityUnavailable
+    with pytest.raises(LarkOwnerIdentityUnavailable):
         observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli")
     provider.bot_ready = False
     with pytest.raises(ValueError, match="App identity"):

@@ -4,7 +4,7 @@ import {once} from "node:events";
 import {resolve} from "node:path";
 import {createInterface} from "node:readline";
 import {resolveTestPython} from "../../../../scripts/test-python.mjs";
-import {fetchAppStewardTarget, fetchPrivateConversations, selectAppSteward,
+import {ChatApiError, fetchAppStewardTarget, fetchPrivateConversations, selectAppSteward,
   fetchChatHistory, resolveBoundChatSession} from "../src/data/chat";
 
 const repoRoot = resolve(process.cwd(), "../../..");
@@ -31,6 +31,12 @@ try {
   globalThis.fetch = (input, init) => originalFetch(new URL(String(input), origin), init);
   let connections = await fetchPrivateConversations();
   const inspect = async () => {child.stdin.write("inspect\n"); return next();};
+  const openDefault = async (overrides = {}) => {
+    const response = await fetch("/api/chat/sessions", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({context_kind: "manager", ...overrides})});
+    return {status: response.status, body: await response.json()};
+  };
   const before = await inspect();
   assert.equal(before.sessions, 3);
   assert.equal(await fetchAppStewardTarget(), null, "No implicit selection between two original stewards");
@@ -39,6 +45,12 @@ try {
   connections = await selectAppSteward(bindingId, connections.revision);
   const target = {bindingId, sessionId};
   assert.deepEqual(await fetchAppStewardTarget(), target);
+  const opened = await openDefault();
+  assert.equal(opened.status, 200);
+  assert.equal(opened.body.session_id, sessionId, "Default API entry must reuse the configured private conversation");
+  for (const overrides of [{mode: "new"}, {agent_model_id: "different-model"}]) {
+    assert.equal((await openDefault(overrides)).status, 400, "Explicit overrides cannot silently fork the selected source");
+  }
   await assert.rejects(() => selectAppSteward(peer.binding_id, connections.revision - 1), /selection could not/);
   assert.deepEqual(await fetchAppStewardTarget(), target, "Stale selection cannot retarget the App");
   const history = await fetchChatHistory({bound: target});
@@ -53,8 +65,14 @@ try {
   child.stdin.write("deny\n"); await next();
   await assert.rejects(() => fetchAppStewardTarget(), /selected original steward is unavailable/);
   await assert.rejects(() => selectAppSteward(bindingId, connections.revision), /selection could not/);
+  assert.equal((await openDefault()).status, 400, "Failed identity verification must not fall back to a local manager");
+  child.stdin.write("owner-login-missing\n"); await next();
+  await assert.rejects(() => fetchAppStewardTarget(), error => error instanceof ChatApiError
+    && error.payload.error_code === "lark_owner_identity_unavailable");
+  assert.equal((await openDefault()).status, 400);
   child.stdin.write("recover\n"); await next();
   assert.deepEqual(await fetchAppStewardTarget(), target);
+  assert.equal((await openDefault()).body.session_id, sessionId, "Login recovery returns to the same original Session");
   const after = await inspect();
   assert.equal(after.sessions, before.sessions);
   assert.deepEqual(after.messages, before.messages);
@@ -67,7 +85,26 @@ try {
   assert.equal(futurePeer.binding_id, replaced.new_peer_binding_id);
   assert.deepEqual(await fetchAppStewardTarget(), target, "A newly connected steward cannot capture the selected entry");
   peer = futurePeer;
-  child.stdin.write("close\n"); await next();
+  const beforeClose = await inspect();
+  child.stdin.write("hold-steward-discovery\n");
+  assert.deepEqual(await next(), {steward_discovery_armed: true});
+  const opening = openDefault();
+  assert.deepEqual(await next(), {steward_discovery_held: true});
+  try {
+    const closed = await fetch(`/api/chat/sessions/${sessionId}`, {method: "DELETE"});
+    assert.equal(closed.status, 200);
+    assert.equal((await closed.json()).closed, true);
+  } finally {
+    child.stdin.write("resume-steward-discovery\n");
+    assert.deepEqual(await next(), {steward_discovery_released: true});
+  }
+  const rejected = await opening;
+  assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+  assert.match(rejected.body.error, /original steward Session is unavailable/i);
+  const afterClose = await inspect();
+  assert.equal(afterClose.sessions, beforeClose.sessions);
+  assert.deepEqual(afterClose.messages, beforeClose.messages);
+  assert.equal(afterClose.native_requests, beforeClose.native_requests);
   await assert.rejects(() => fetchAppStewardTarget(), /selected original steward is unavailable/);
   child.stdin.write("revoke\n"); await next();
   connections = await fetchPrivateConversations();
@@ -76,6 +113,9 @@ try {
   assert.equal((await fetchPrivateConversations()).connections[0].binding_id, peer.binding_id);
   connections = await selectAppSteward(null, connections.revision);
   assert.equal(await fetchAppStewardTarget(), null, "Only an explicit clear restores the ordinary entry");
+  const local = await openDefault();
+  assert.equal(local.status, 201);
+  assert.equal(local.body.session.channel_id, "manager", "Cleared selection preserves the existing local manager path");
   const routedFetch = globalThis.fetch;
   for (const malformed of [{ok: true}, {ok: true, binding_id: null, session_id: sessionId},
     {ok: true, binding_id: bindingId, session_id: "../other"}]) {
