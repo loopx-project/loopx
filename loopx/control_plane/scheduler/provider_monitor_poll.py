@@ -24,6 +24,8 @@ def poll_canonical_monitor_if_promoted(
     observation: dict[str, Any], intent: dict[str, Any],
     lease_proof: dict[str, Any] | None = None, gate_scope_guard: bool = False,
     receipt_only: bool = False,
+    available_capabilities: list[str] | None = None,
+    admitted_resume_when: str | None = None,
 ) -> dict[str, Any]:
     with authority_registry_source(registry_path) as registry_source:
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
@@ -33,6 +35,8 @@ def poll_canonical_monitor_if_promoted(
             else "loopx_coordination_monitor_poll_request_v2"),
         **({"lease_proof": lease_proof} if lease_proof is not None else {}),
         **({"gate_scope_guard": True} if gate_scope_guard else {}),
+        **({"available_capabilities": available_capabilities} if available_capabilities is not None else {}),
+        **({"admitted_resume_when": admitted_resume_when} if admitted_resume_when is not None else {}),
         "runtime_root": str(runtime_root.expanduser().resolve()), "goal_id": goal_id,
         "operation_id": monitor_effect_id or f"monitor-poll:{goal_id}:{uuid4().hex}",
         "actor_agent_id": agent_id,

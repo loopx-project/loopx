@@ -510,6 +510,7 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         assert len(original_refresh.encode()) > 420
         staged_argv = shlex.split(staged_refresh)
         assert staged_argv == shlex.split(original_refresh)
+        assert "--turn-instance-id" not in staged_argv
         values = {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
                   "<surface-id>": "surface-existing", "<hypothesis-id>": "hypothesis-existing",
                   "<probe-kind>": "probe-independent", "<evidence-id>": "evidence-current"}

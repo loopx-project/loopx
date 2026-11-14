@@ -3995,3 +3995,32 @@ owners. A valid terminal request still loads the adapter, including when its
 ordinary-Todo guard returns early. Complete workflow isolation, paired complete
 costs, real-host adoption, R1/M3 and C1 writer/consumer cutover remain open.
 These tests do not authorize C1 default promotion or establish model benefit.
+
+
+### 2026-11-14 — Ordinary completion defers research implementations
+
+`ResearchTerminalEvidenceHost.qualify` loads its research execution and
+configuration implementations after its existing Todo applicability check.
+A Todo without research or replan applicability signals can therefore persist
+its completion evidence and replay its original receipt while either research
+implementation is unavailable.
+Research-qualified Todos still select the same policy and evidence owners;
+module failures retain their error and commit no completion state or receipt.
+The existing source checks, writer fence, qualification, CAS and cleanup apply.
+
+Fresh-process fault cases cover both unavailable implementations on real File
+and SQLite authority. Both retained baseline probes fail at the ordinary
+completion; the candidate completes and independently reads back the result,
+replays without a new effect and refuses repeated selected-research failures.
+The available-module comparison passes the same 107 existing native cases;
+the candidate additionally passes the failure-isolation case, for 108 total.
+The real research CLI suite passes 11 cases. The same production delta and
+fault cases pass with the exact C1 candidates #8266 (`b0b930bfb92a`) and #8484
+(`b7e4e01cc423`), with 190 and 189 authority, context and recovery cases. An independently built Core wheel, installed alone, also passes the same File/SQLite fault paths with production module bytes equal to the source; this does not qualify an installed model Host or adoption.
+
+This closes the evidenced ordinary-completion dependency failure using the
+existing research guard, without duplicating the C1 work contract or its
+producer/consumer pipeline. Research- or replan-associated Todos still enter the existing policy check and
+load its implementations; a disabled policy does not remove that remaining
+loading dependency. Complete D2/D5 closure, real-model Host/context continuity, progressive controls,
+comparable complete cost, R1/M3 and C1 default cutover remain unqualified.
