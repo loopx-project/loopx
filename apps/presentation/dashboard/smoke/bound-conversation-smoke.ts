@@ -167,6 +167,24 @@ try {
     assert.equal(recovered.pendingReads?.size, 0);
     assert.ok(calls.every(row => row.method === "GET"), "Recovery never starts work");
     globalThis.fetch = routedRead;
+    const plain503Offsets: number[] = [];
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (new URL(String(input), origin).pathname !== `/api/chat/sessions/${sessionId}`) return response;
+      const {message_page: {offset}} = await response.clone().json();
+      plain503Offsets.push(offset);
+      if (offset === 200 && plain503Offsets.length === 2) {
+        return Response.json({error: "Original history store unavailable"}, {status: 503});
+      }
+      return response;
+    };
+    const boundUnavailable = await fetchChatHistory(options);
+    assert.deepEqual(boundUnavailable.messages, []);
+    assert.equal(boundUnavailable.pendingReads?.get(sessionId)?.messages.length, 200);
+    assert.deepEqual((await fetchChatHistory(options, boundUnavailable)).messages, recovered.messages);
+    assert.deepEqual(plain503Offsets, [0, 200, 200, 400]);
+    globalThis.fetch = routedRead;
+
     // If the fresh post-history source read loses its connection, keep the
     // verified pages private until a later source check succeeds.
     const isBoundDiscovery = (input: RequestInfo | URL) =>

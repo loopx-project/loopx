@@ -1337,11 +1337,11 @@ function hasPendingReturnDelivery(snapshot: ChatSessionSnapshot) {
   );
 }
 
-function historyTransportUnavailable(error: unknown) {
+function historyTransportUnavailable(error: unknown, allowPlain503 = false) {
   if (!(error instanceof ChatApiError) || error.payload.session_invalidated === true) return false;
   const {error_code: code, http_status: status} = error.payload;
-  // The history endpoint sends a plain 503 when its store is temporarily unavailable.
-  if (status === 503 && code === undefined) return true;
+  // Bound private history can be confirmed separately when its store returns a plain 503.
+  if (allowPlain503 && status === 503 && code === undefined) return true;
   // A response body can be interrupted after successful history headers.
   return code === "chat_api_unavailable" && (status === undefined || status === 200 || Number(status) >= 500);
 }
@@ -1413,7 +1413,9 @@ export async function fetchChatHistory(options: {
     } catch (error) {
       // Reuse the hook's existing retry schedule only for a lost transport.
       // Revoked sources, invalid pages and stale cursors must start a fresh read.
-      if (!historyTransportUnavailable(error)) pendingReads.delete(session.session_id);
+      if (!historyTransportUnavailable(error, Boolean(options.bound && !options.managed))) {
+        pendingReads.delete(session.session_id);
+      }
       throw error;
     }
     pendingReads.delete(session.session_id);
@@ -1436,7 +1438,7 @@ export async function fetchChatHistory(options: {
           throw new Error("The original Session scope changed during history read.");
         }
       } catch (error) {
-        if (options.managed || read?.status !== "fulfilled" || !historyTransportUnavailable(error)) throw error;
+        if (options.managed || read?.status !== "fulfilled" || !historyTransportUnavailable(error, true)) throw error;
         return {
           messages: [],
           sessions: listed.sessions,
@@ -1456,7 +1458,7 @@ export async function fetchChatHistory(options: {
   let usingStaleBoundHistory = false;
   const failed = results[0];
   const saved = current && priorSnapshots.get(current.session_id);
-  if (options.bound && !options.managed && failed?.status === "rejected" && historyTransportUnavailable(failed.reason)
+  if (options.bound && !options.managed && failed?.status === "rejected" && historyTransportUnavailable(failed.reason, true)
     && current && saved && sameHistorySource(current, saved.session)) {
     // Keep only an already proven transcript. If the binding changed while the
     // failed read was in flight, rechecking it here keeps this path fail-closed.
