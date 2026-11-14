@@ -248,6 +248,8 @@ def test_large_inbox_does_not_fall_back_to_unbounded_output(flow):
 @pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell 7 is not installed")
 @pytest.mark.parametrize("directory", ["release", "owner's release"])
 def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory):
+    from loopx.command_invocation import loopx_cli_route
+
     root, registry, _, create = flow
     _, _, receipt = create()
     entry, = (_root(root) / "entries").glob(f"*/{receipt['request_id']}.json")
@@ -264,10 +266,11 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
     environment.pop("LOOPX_CURRENT_RELEASE_FILE", None)
     environment["LOOPX_USAGE_PING"] = "0"
     powershell = [shutil.which("pwsh"), "-NoProfile", "-NonInteractive"]
-    invocation = [str(launcher), "--cli-bin", str(launcher), "--registry", str(registry),
-        "--runtime-root", str(root), "manager-inbox", "read", "--format", "markdown",
-        "--goal-id", "research", "--agent-id", "worker"]
-    opening = subprocess.run([*powershell, "-File", *invocation], cwd=root, env=environment,
+    with loopx_cli_route(str(launcher)):
+        hook = turn_start_hook(root, registry, "research", "worker", model_read=True)
+        dispatch = dispatch_turn_start_hooks([hook])
+    required_read, = dispatch["required_reads"]
+    opening = subprocess.run([*powershell, "-Command", required_read["command"]], cwd=root, env=environment,
         capture_output=True, timeout=60)
     assert opening.returncode == 0, opening.stderr
     assert 0 < len(opening.stdout) <= 12_000
@@ -435,8 +438,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert rows[queued["request_id"]]["pending_return_count"] == 1
         assert rows[peer["request_id"]]["step"] == "consume_peer_result"
         manager_read = next(item for item in required_reads if item["hook_id"] == "manager.context_inbox")
-        assert "manager-inbox read" in manager_read["command"]
-        assert ("--format markdown" in manager_read["command"]) == (delivery == "native_files")
+        manager_argv = shlex.split(manager_read["command"])
+        assert "manager-inbox" in manager_argv and "read" in manager_argv
+        assert ("markdown" in manager_argv) == (delivery == "native_files")
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
     if delivery == "native_files":
