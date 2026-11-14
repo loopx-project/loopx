@@ -9,23 +9,26 @@ Both consumers *already import* from ``freshness``, so borrowing the owner objec
 adds no new import edge and cannot introduce a cycle. Every site now references
 the single owner and the restated name is retired.
 
-The by-name semantic inventory cannot see this: the owner and the retired
-capture name are private ``_``-bindings (the inventory only catalogues
-``UPPER_NAME`` carriers), they differ by name, and four of the seven sites had no
-name to key on. This guard keys on the **folded value** instead, so a renamed or
-anonymous inline restatement is caught, while the genuinely different neighbours
--- the four-member ``_SCAN_STATUSES`` vocabulary and the ordered four-status
-report tuple -- are never swept.
+Blocking checks are bound to the two known consumers and their status-decision
+slots: a named binding of the folded set, or an ``in`` / ``not in`` membership
+comparand stating it inline. Equal value alone is not proof of one concept
+(semantic-vocabulary-convergence-v0): the ordered four-status report tuple in
+``_source_coverage`` is display data, and regrouping it as
+``(*("completed", "no_change"), "failed", "unavailable")`` preserves every
+observable output. The whole-tree folded-value census still collects such
+same-value candidates, but only as advisory output -- never a failure.
 
-Two layers: a whole-tree folded-value census (only the owner states the set), and
-behavioural parity through the owner's own ``source_freshness_row`` gate, so a
-migration that silently changed which statuses count as success fails here.
+Behavioural parity runs through the owner's own ``source_freshness_row`` gate
+and the real ``_source_coverage`` report, so a migration that silently changed
+which statuses count as success -- or reordered the report keys -- fails here.
 """
 
 from __future__ import annotations
 
 import ast
 import pathlib
+import warnings
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -67,15 +70,14 @@ def _members(node: ast.expr) -> frozenset[str] | None:
     return None
 
 
-def _status_literal_sites(source: str) -> list[int]:
-    """Every collection literal in the source folding to SUCCESS, counted once.
+def _wrapped_inner_ids(tree: ast.AST) -> set[int]:
+    """Inner literals of a ``set(...)`` / ``frozenset(...)`` call.
 
-    ``frozenset({...})`` is walked as both the call and its inner set; the inner
-    node is skipped so one restatement is one site, not two.
+    The call and its inner collection fold to the same members; skipping the
+    inner node keeps one restatement one site, not two.
     """
 
-    tree = ast.parse(source)
-    wrapped = {
+    return {
         id(node.args[0])
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
@@ -83,10 +85,51 @@ def _status_literal_sites(source: str) -> list[int]:
         in {"frozenset", "set"}
         and len(node.args) == 1
     }
+
+
+def _status_literal_sites(source: str) -> list[int]:
+    """Every collection literal in the source folding to SUCCESS, counted once.
+
+    This is the advisory census: a same-value site is a merge candidate to
+    investigate, not proof of a second success decision.
+    """
+
+    tree = ast.parse(source)
+    wrapped = _wrapped_inner_ids(tree)
     return [
         node.lineno
         for node in ast.walk(tree)
         if id(node) not in wrapped and _members(node) == SUCCESS
+    ]
+
+
+def _decision_slot_sites(source: str) -> list[int]:
+    """SUCCESS-folding literals in status-decision slots, counted once.
+
+    A decision slot is a named binding (an ``Assign`` / ``AnnAssign`` value) or
+    a membership comparand (``in`` / ``not in``). Iteration and display order
+    -- the ``status_counts`` report tuple, including a starred regrouping of
+    it -- are not decisions and are left to the advisory census.
+    """
+
+    tree = ast.parse(source)
+    wrapped = _wrapped_inner_ids(tree)
+    slots: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            slots.add(id(node.value))
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            slots.add(id(node.value))
+        elif isinstance(node, ast.Compare):
+            slots.update(
+                id(comparator)
+                for op, comparator in zip(node.ops, node.comparators)
+                if isinstance(op, (ast.In, ast.NotIn))
+            )
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if id(node) in slots and id(node) not in wrapped and _members(node) == SUCCESS
     ]
 
 
@@ -103,10 +146,14 @@ def tree_offenders() -> dict[str, list[int]]:
     return offenders
 
 
-def test_only_the_owner_states_the_success_set(tree_offenders) -> None:
-    assert tree_offenders == {}, (
-        f"a restatement of the successful-read statuses remains: {tree_offenders}"
-    )
+def test_whole_tree_same_value_candidates_are_advisory(tree_offenders) -> None:
+    # The RFC keeps equal-value findings advisory: outside the known decision
+    # slots a same-value site is a merge candidate, never a failure.
+    if tree_offenders:
+        warnings.warn(
+            f"advisory same-value candidates (not a failure): {tree_offenders}",
+            stacklevel=1,
+        )
 
 
 def test_the_owner_states_the_recorded_members_once() -> None:
@@ -126,13 +173,13 @@ def test_assembler_borrows_the_owner_object() -> None:
 def test_capture_retired_its_restated_name() -> None:
     assert not hasattr(capture_mod, "_READ_SUCCESS_STATUSES")
     source = (REPO_ROOT / CAPTURE_PATH).read_text(encoding="utf-8")
-    assert _status_literal_sites(source) == []
+    assert _decision_slot_sites(source) == []
     assert "_SUCCESS_STATUSES" in source
 
 
-def test_assembler_has_no_inline_restatement() -> None:
+def test_assembler_has_no_restated_success_decision() -> None:
     source = (REPO_ROOT / ASSEMBLER_PATH).read_text(encoding="utf-8")
-    assert _status_literal_sites(source) == []
+    assert _decision_slot_sites(source) == []
     assert "_SUCCESS_STATUSES" in source
 
 
@@ -201,30 +248,104 @@ def test_a_failed_attempt_alerts_with_the_status(status: str) -> None:
     assert row["alert_reasons"] == [f"last_attempt_{status}"]
 
 
-# --- the census bites every restatement form and leaves the others ----------------------
+def test_successful_read_consumers_keep_observable_semantics() -> None:
+    # The report side of the consumers: the four display keys keep their
+    # recorded order and counts while only the success decision is
+    # single-sourced. Reordering or dropping a key fails here; a regrouping
+    # that preserves order and counts (the starred form) changes nothing.
+    collected = tuple(
+        assembler_mod._CollectedSource(
+            source=replace(_spec(), source_id=f"source:{index}"),
+            scan=sources_mod.DecisionSourceScan(
+                provider_id="source-provider",
+                source_id=f"source:{index}",
+                status=status,
+                observed_at=OBSERVED_AT.isoformat(),
+                requested_limit=1,
+            ),
+            exact_reads=(),
+            exact_read_failed=exact_read_failed,
+            receipt={},
+        )
+        for index, (status, exact_read_failed) in enumerate(
+            (
+                ("completed", False),
+                ("no_change", False),
+                ("failed", False),
+                ("unavailable", False),
+                ("completed", True),
+            )
+        )
+    )
+    report = assembler_mod._source_coverage(collected)
+    p0 = report["priority_rows"][0]
+    assert p0["priority"] == "p0"
+    assert list(p0["status_counts"]) == [
+        "completed",
+        "no_change",
+        "failed",
+        "unavailable",
+    ]
+    assert p0["status_counts"] == {
+        "completed": 2,
+        "no_change": 1,
+        "failed": 1,
+        "unavailable": 1,
+    }
+    assert p0["complete_count"] == 2
+    assert p0["exact_read_incomplete_count"] == 1
+    assert report["incomplete_required_source_ids"] == [
+        "source:2",
+        "source:3",
+        "source:4",
+    ]
+    assert report["status"] == "incomplete"
+    assert report["complete"] is False
+
+
+def test_same_value_without_same_slot_remains_advisory() -> None:
+    # The reviewer counterexample: the starred regrouping of the ordered
+    # report keys folds to SUCCESS inside a display tuple, so the advisory
+    # census sees it -- but it decides nothing, so the hard check stays silent.
+    starred_report = (
+        'for status in (*("completed", "no_change"), "failed", "unavailable"):\n'
+        "    pass\n"
+    )
+    assert _status_literal_sites(starred_report) == [1]
+    assert _decision_slot_sites(starred_report) == []
+
+
+# --- the census bites every restatement form; the hard check bites decisions only -------
 
 POISON_CORPUS = (
-    ("bare set restatement", 'X = {"completed", "no_change"}\n', 1),
-    ("frozenset call", 'X = frozenset({"completed", "no_change"})\n', 1),
-    ("set call over a list", 'X = set(["completed", "no_change"])\n', 1),
-    ("list literal", 'X = ["completed", "no_change"]\n', 1),
-    ("tuple literal", 'X = ("completed", "no_change")\n', 1),
-    ("reordered members fold the same", 'X = {"no_change", "completed"}\n', 1),
-    ("renamed binding is still caught", '_ANY = {"completed", "no_change"}\n', 1),
-    ("nested inside a function", 'def f():\n    return {"completed", "no_change"}\n', 1),
-    ("importing the owner is not a restatement", "from .m import _SUCCESS_STATUSES\n", 0),
-    ("alias rebind is not a restatement", "_READ_SUCCESS_STATUSES = _SUCCESS_STATUSES\n", 0),
-    ("the full scan vocabulary is not this set", '_SCAN = {"completed", "failed", "no_change", "unavailable"}\n', 0),
-    ("the ordered report tuple is not this set", 'X = ("completed", "no_change", "failed", "unavailable")\n', 0),
-    ("a superset is not this set", 'X = {"completed", "no_change", "failed"}\n', 0),
-    ("a single status is not this set", 'X = {"completed"}\n', 0),
+    ("bare set restatement", 'X = {"completed", "no_change"}\n', 1, 1),
+    ("frozenset call", 'X = frozenset({"completed", "no_change"})\n', 1, 1),
+    ("set call over a list", 'X = set(["completed", "no_change"])\n', 1, 1),
+    ("list literal", 'X = ["completed", "no_change"]\n', 1, 1),
+    ("tuple literal", 'X = ("completed", "no_change")\n', 1, 1),
+    ("reordered members fold the same", 'X = {"no_change", "completed"}\n', 1, 1),
+    ("renamed binding is still caught", '_ANY = {"completed", "no_change"}\n', 1, 1),
+    ("annotated binding is still caught", '_ANY: frozenset = frozenset({"completed", "no_change"})\n', 1, 1),
+    ("membership inside a function", 'def f(status):\n    return status in {"completed", "no_change"}\n', 1, 1),
+    ("negative membership is a decision too", 'def f(status):\n    return status not in {"completed", "no_change"}\n', 1, 1),
+    ("importing the owner is not a restatement", "from .m import _SUCCESS_STATUSES\n", 0, 0),
+    ("alias rebind is not a restatement", "_READ_SUCCESS_STATUSES = _SUCCESS_STATUSES\n", 0, 0),
+    ("the full scan vocabulary is not this set", '_SCAN = {"completed", "failed", "no_change", "unavailable"}\n', 0, 0),
+    ("the ordered report tuple is not this set", 'X = ("completed", "no_change", "failed", "unavailable")\n', 0, 0),
+    ("a superset is not this set", 'X = {"completed", "no_change", "failed"}\n', 0, 0),
+    ("a single status is not this set", 'X = {"completed"}\n', 0, 0),
+    ("the starred report regrouping is advisory only", 'for status in (*("completed", "no_change"), "failed", "unavailable"):\n    pass\n', 1, 0),
+    ("iterating the success pair for display is advisory only", 'for status in ("completed", "no_change"):\n    pass\n', 1, 0),
 )
 
 
 @pytest.mark.parametrize(
-    "label,source,expected", POISON_CORPUS, ids=[case[0] for case in POISON_CORPUS]
+    "label,source,census_expected,slots_expected",
+    POISON_CORPUS,
+    ids=[case[0] for case in POISON_CORPUS],
 )
-def test_the_census_names_every_form_and_leaves_the_others(
-    label: str, source: str, expected: int
+def test_census_and_decision_slots_classify_every_form(
+    label: str, source: str, census_expected: int, slots_expected: int
 ) -> None:
-    assert len(_status_literal_sites(source)) == expected, label
+    assert len(_status_literal_sites(source)) == census_expected, label
+    assert len(_decision_slot_sites(source)) == slots_expected, label
