@@ -413,6 +413,27 @@ test("a receipt that does not opt in never becomes a recovery obligation", async
   }
 });
 
+test("an admitted Todo-bound replan without verified writeback does not hold a later guard", async () => {
+  const admitted = {
+    ...closeoutRequired("turn-replan", "todo_alpha"), closeout_required: false,
+    semantic_replan_obligation_id: `replan-${"b".repeat(16)}`,
+    ok: true, should_run: true, interaction_mode: "autonomous_replan",
+    must_attempt_work: true, delivery_allowed: false, quiet_noop_allowed: false,
+  };
+  const runtime = await runtimeWith([
+    receipt("turn-normal", closeoutRequired("turn-normal", "todo_beta")),
+    receipt("turn-replan", admitted),
+  ]);
+  const replanOnly = await runtimeWith([receipt("turn-replan", admitted)]);
+  try {
+    assert.equal(candidateFrom(await preflight(runtime.root)).prior_turn_instance_id, "turn-normal");
+    assert.equal((await preflight(replanOnly.root)).reason, "no_prior_turn_requires_closeout");
+  } finally {
+    await runtime.close();
+    await replanOnly.close();
+  }
+});
+
 test("the current Turn, other goals, other agents, and other event kinds are ignored", async () => {
   const runtime = await runtimeWith([
     receipt("current-turn", closeoutRequired("current-turn", "todo_current")),
@@ -852,6 +873,9 @@ test("typed lifecycle closeouts are accepted and other open Todos are not", asyn
         assert.equal(verdict.status, "none");
         assert.equal(verdict.accepted_closeout, accepted);
       }
+      const pending = reduce(candidate, ["quota_spend_receipt"], READ_TODO(todo));
+      assert.equal(pending.status, "recovery_required");
+      assert.equal((pending.recovery as JsonObject).repair, "resume_prior_turn");
     }
   } finally {
     await runtime.close();
@@ -912,9 +936,9 @@ test("continuation is a guarded route, not a closeout or an inferred wait", asyn
       for (const [todo, repair] of [
         [ADVANCEMENT_OPEN, "resume_prior_turn"],
         [{...ADVANCEMENT_OPEN, has_successor_todo_ids: true}, "resume_prior_turn"],
-        [{...ADVANCEMENT_OPEN, has_resume_when: true}, "lifecycle"],
-        [{...ADVANCEMENT_OPEN, task_class: "user_gate"}, "lifecycle"],
-        [{...ADVANCEMENT_OPEN, status: "open "}, "lifecycle"],
+        [{...ADVANCEMENT_OPEN, has_resume_when: true}, missing.length === 1 ? "resume_prior_turn" : "lifecycle"],
+        [{...ADVANCEMENT_OPEN, task_class: "user_gate"}, missing.length === 1 ? "resume_prior_turn" : "lifecycle"],
+        [{...ADVANCEMENT_OPEN, status: "open "}, missing.length === 1 ? "resume_prior_turn" : "lifecycle"],
         [null, "lifecycle"],
       ] as const) {
         const verdict = reduce(candidate, missing, READ_TODO(todo));
