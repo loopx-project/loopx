@@ -81,6 +81,28 @@ agents:
       replan_after_turns: 6
 ```
 
+### Official-style Codex Stop hook
+
+Set `execution_mode: plain` and `official_stop_hook: true` in
+`BenchmarkCodex` kwargs for a deadline-driven native Codex baseline. One
+`codex exec` owns the conversation. On attempted completion, the native Stop
+hook asks Codex to continue working, using the same instruction as EdgeBench's
+SForge official profile. The worker uses the remaining phase clock through
+native execution. The task controller may stop it earlier when the task's
+original final submission is accepted.
+
+The runner stages only its own hook in the trial's Codex home and trusts the
+exact handler identity discovered by that Codex binary. Both discovery requests
+share the worker deadline. If the phase expires during discovery, the wake
+records budget exhaustion and no model launch. Earlier discovery failures
+still fail the trial before inference. Install and trajectory receipts record
+the opt-in. The wake receipt records successful hook discovery.
+Use the same pinned task, model, reasoning effort, time and evaluator in
+comparison arms. The benchmark adapter still owns feedback, final submission,
+and scoring. EdgeBench's SForge auto-resume remains a provider-specific part of
+its official profile. Use a fresh trial with the option omitted for a
+single-pass Codex baseline.
+
 For an explicitly selected **heartbeat-only** context experiment, add
 `turn_envelope: true` to `kwargs` (default `false`). Each wake creates a private
 capture root and asks the product renderer for a short TurnEnvelope dispatcher.
