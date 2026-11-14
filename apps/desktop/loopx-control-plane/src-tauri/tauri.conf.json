@@ -19,6 +19,7 @@
     "createUpdaterArtifacts": false,
     "resources": {"../runtime/runtime-source.tar.gz": "runtime/runtime-source.tar.gz", "../runtime/identity.json": "runtime/identity.json"},
     "active": true,
+    "macOS": {"infoPlist": "Info.plist"},
     "targets": ["app", "dmg", "msi", "nsis", "deb", "appimage"],
     "category": "DeveloperTool",
     "shortDescription": "Local LoopX control plane",
