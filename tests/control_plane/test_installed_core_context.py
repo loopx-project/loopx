@@ -123,8 +123,9 @@ def test_installed_lifecycle_review_recovers_a_late_dependent_successor(core_pyt
         "--turn-instance-id", turn]
     guard = command(*admission)
     obligation = guard["autonomous_replan_obligation"]["obligation_id"]
-    # Canonical updates have whole-second timestamps. Use the real clock to
-    # ensure this dependency is authored strictly after the admitted review.
+    # Canonical updates have whole seconds. Same-second review-bound recovery
+    # is pinned by the replan semantics behavior test. This installed path
+    # still qualifies a successor stamped on a later whole second.
     time.sleep(1.05)
     successor = command("todo", "add", "--goal-id", GOAL, "--role", "agent",
         "--claimed-by", AGENT, "--text", "Independently recheck the retained squares report.",

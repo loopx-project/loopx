@@ -5,7 +5,7 @@ import { cleanupBrowserSmoke, launchBrowser, loadPlaywright, startViteDashboardS
 const dashboardDir = fileURLToPath(new URL("..", import.meta.url));
 const port = Number(process.env.LOOPX_HISTORY_ORDER_PORT ?? "5298");
 const origin = `http://127.0.0.1:${port}`;
-const server = startViteDashboardServer({ dashboardDir, port });
+const server = await startViteDashboardServer({ dashboardDir, port });
 const scenarios = ["late-backfill", "failed-backfill", "backfill-during-refresh", "refresh-after-backfill", "overlapping-refreshes", "scope-switch", "scope-return", "retry-progress", "closed-first", "closed-only", "failed-current"];
 
 function session(id, goal, version = 0) {
