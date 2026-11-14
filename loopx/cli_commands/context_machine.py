@@ -6,8 +6,10 @@ with the existing TypeScript transport. This layer performs native path IO.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
+from shutil import rmtree
 import stat
 import tempfile
 from typing import Any
@@ -54,6 +56,7 @@ def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
         capture_context_projection, context_capture_read_command,
     )
 
+    directory: Path | None = None
     try:
         from ..control_plane.runtime.private_permissions import protect_private_path, require_private_path
 
@@ -82,6 +85,12 @@ def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
             "index_command": context_capture_read_command(path, digest, list_fields=True, list_depth=2),
             "select_command": context_capture_read_command(path, digest, select=["<pointer>"])}
     except (OSError, ValueError) as error:
+        if directory is not None:
+            try:
+                rmtree(directory)
+            except OSError:
+                # Preserve the original publication refusal for the caller.
+                logging.getLogger(__name__).exception("Could not discard an unpublished context recovery directory")
         return {"available": False, "error_kind": type(error).__name__,
             "instruction": "Repair the private context transport, then retry the original unchanged operation "
                 "to obtain its current recovery reference. Do not rerun admission, substitute an old capture, "

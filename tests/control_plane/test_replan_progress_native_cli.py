@@ -431,7 +431,10 @@ def test_progressive_replan_uses_the_saved_decision(tmp_path, monkeypatch, provi
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("envelope", [(), ("--complete-turn",)], ids=["quota", "complete"])
-def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, provider, envelope):
+def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, capsys, provider, envelope):
+    from loopx.control_plane.runtime import private_permissions
+    from loopx.entrypoint import main
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     scope = ("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, *envelope)
@@ -537,6 +540,33 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         denied = read(f"{writer_command} --max-page-output-bytes 400", expected=1, output_limit=400)
         assert denied["ok"] is False and "command" not in denied
         assert set(recovery_root.glob("recovery-*")) == published_recoveries
+
+        if os.name == "posix":
+            protect = private_permissions.protect_private_path
+            failed_captures = []
+
+            def fail_capture_protection(leaf, *, directory=False):
+                if not directory and leaf.name == "required-context.json" and leaf.parent.parent == recovery_root:
+                    assert leaf.is_file() and leaf.stat().st_size > 0
+                    failed_captures.append(leaf)
+                    raise PermissionError("could not set recovery capture permissions")
+                protect(leaf, directory=directory)
+
+            with monkeypatch.context() as fault:
+                fault.setattr(private_permissions, "protect_private_path", fail_capture_protection)
+                fault.chdir(fixture["project"])
+                for _ in range(2):
+                    assert main([*cli_args, "--max-page-output-bytes", str(output_limit)]) == 1
+                    stdout = capsys.readouterr().out
+                    assert len(stdout.encode()) <= output_limit
+                    rejected = json.loads(stdout)
+                    assert rejected["ok"] is False and "command" not in rejected
+                    assert "repair private capture storage" in rejected["reason"].lower()
+            assert len(failed_captures) == 2
+            assert set(recovery_root.glob("recovery-*")) == published_recoveries
+            assert path.read_bytes() == raw
+            assert _authority(fixture) == authority
+
         page_command = bounded["command"]
         body = bytearray()
         while True:
