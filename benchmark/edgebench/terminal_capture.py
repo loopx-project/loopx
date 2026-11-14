@@ -188,11 +188,12 @@ class FailurePreservation:
         try:
             from .checkpoint_controller import capture
 
+            supervisor = self.supervisor
             retained["capture"] = capture(
-                self.supervisor.controller_file,
-                token=self.supervisor.token,
+                supervisor.controller_file,
+                token=supervisor.token,
                 capture_id=capture_id,
-                destination=self.supervisor.destination / f"terminal-native-{capture_id}",
+                destination=supervisor.destination / f"terminal-native-{capture_id}",
             )
             retained["capture_succeeded"] = True
         except Exception as error:
