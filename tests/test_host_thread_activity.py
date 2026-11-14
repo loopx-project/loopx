@@ -1153,3 +1153,53 @@ def test_attach_reports_the_window_from_an_installed_automation(tmp_path: Path) 
         expectations=lambda scopes: pytest.fail("no observed lane may ask for a cadence"),
     )
     assert unattached == expected
+
+
+@pytest.mark.parametrize("unavailable_identity", [None, "st_dev", "st_ino"])
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("field", ["st_mtime_ns", "st_ctime_ns"])
+def test_same_size_read_fence_metadata_policy(home, monkeypatch, platform, field, unavailable_identity):
+    rollout = home.thread("t", [_event(T2, "task_complete")])
+    rollout_stat = rollout.stat()
+    assert rollout_stat.st_dev and rollout_stat.st_ino
+    original_fstat = os.fstat
+    original_stat = Path.stat
+    descriptor_observations = 0
+
+    def partial_identity(observed):
+        if unavailable_identity is None or (observed.st_dev, observed.st_ino) != (
+            rollout_stat.st_dev, rollout_stat.st_ino
+        ):
+            return observed
+        # Unavailable volume/file indexes are injected at every rollout stat.
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields[unavailable_identity] = 0
+        return SimpleNamespace(**fields)
+
+    def path_stat(self, *args, **kwargs):
+        return partial_identity(original_stat(self, *args, **kwargs))
+
+    def descriptor_stat(fd):
+        nonlocal descriptor_observations
+        observed = original_fstat(fd)
+        if (observed.st_dev, observed.st_ino) != (rollout_stat.st_dev, rollout_stat.st_ino):
+            return observed
+        descriptor_observations += 1
+        observed = partial_identity(observed)
+        if descriptor_observations != 2:
+            return observed
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields[field] += 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(Path, "stat", path_stat)
+    monkeypatch.setattr(codex_activity, "os", SimpleNamespace(**{
+        **vars(os), "name": platform, "fstat": descriptor_stat,
+    }))
+    result = observe_codex_threads(["t"], homes=[home.root])["t"]
+    if platform == "nt" and field == "st_ctime_ns" and unavailable_identity is None:
+        assert result.state is HostThreadState.IDLE
+        assert result.last_turn_ended_at == T2
+    else:
+        assert result == HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+    assert descriptor_observations == 2
