@@ -69,7 +69,7 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
 
     view = select(
         payload, "ok", "goal_id", "goal_ref", "runtime_root", "state",
-        "error", "error_code", "reason", "status", "recommended_action", "effective_action",
+        "error", "error_code", "reason", "status", "recommended_action", "effective_action", "should_run",
     )
     if payload.get("ok") is not True:
         return view
