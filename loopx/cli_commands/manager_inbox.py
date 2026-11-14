@@ -15,6 +15,15 @@ from ..control_plane.collaboration.peers import InboxReadResponseAmbiguous
 from ..presentation.answer_instruction import collaboration_answer_instruction
 
 
+class ManagerInboxCommandError(ValueError):
+    """Typed refusal whose recovery details must remain visible to the caller."""
+
+    def __init__(self, message: str, *, error_code: str, **details: object) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.details = details
+
+
 def _share_item_guidance(result: dict) -> dict:
     items = result.get("items")
     shared = {}
@@ -324,6 +333,23 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             from ..control_plane.collaboration.peer_host_route import resolve_peer_host_route
             if not args.brief_file:
                 raise ValueError("--brief-file is required for a peer request")
+            if args.peer_agent_id not in registered_agent_ids_for_goal(goal):
+                raise ManagerInboxCommandError(
+                    "peer requests require both Agents to be registered to the same Goal; "
+                    "no request was recorded",
+                    error_code="peer_request_same_goal_required",
+                    host_delivery={"status": "not_attempted"},
+                    goal_id=args.goal_id,
+                    sender_agent_id=args.agent_id,
+                    peer_agent_id=args.peer_agent_id,
+                    recommended_action=(
+                        "Resolve the peer's exact Codex task link with resolve-agent-thread. "
+                        "If it is bound to another Goal, use an authorized host task-message tool "
+                        "and require its submission receipt; the receiver may consume the message "
+                        "on its next Turn. Do not register either Agent to another Goal solely to "
+                        "send a message."
+                    ),
+                )
             if (args.peer_thread_link or args.peer_host_surface) and not args.require_host_route:
                 raise ValueError("peer host selection requires --require-host-route")
             route = None
@@ -447,6 +473,13 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             )
     except InboxReadResponseAmbiguous as exc:
         result = exc.result
+    except ManagerInboxCommandError as exc:
+        result = {
+            "ok": False,
+            "error": str(exc),
+            "error_code": exc.error_code,
+            **exc.details,
+        }
     except (OSError, ValueError) as exc:
         result = {"ok": False, "error": str(exc)}
     fmt = getattr(args, "subcommand_format", None) or getattr(args, "format", None)
