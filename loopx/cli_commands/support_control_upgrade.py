@@ -72,6 +72,11 @@ def desktop_upgrade_plan(ref: str | None) -> dict[str, Any]:
         "changes_applied": False,
         "application": str(app),
         "channel": channel,
+        # A protected installation retains the existing interactive native
+        # authorization path. Preparation must not remove that capability.
+        "preparation_supported": (
+            info.get("LoopXUpgradePreparation") == 1 and os.access(app.parent, os.W_OK)
+        ),
         **evidence,
         "reason": "The native App verifies its signed channel update, restarts and qualifies both services.",
     }
@@ -157,7 +162,8 @@ def _running_receipt(receipt: dict[str, Any]) -> bool:
 
 
 def _restart_app(
-    app: Path, request_id: str, channel: str, timeout_seconds: int
+    app: Path, request_id: str, channel: str, timeout_seconds: int,
+    *, target: str | None = None,
 ) -> None:
     # AppleScript receives the path as an argv value, never interpolated code.
     # Quit is asynchronous. Keep the bounded wait in the same normal App
@@ -187,6 +193,7 @@ def _restart_app(
             "--args",
             f"--loopx-upgrade-request={request_id}",
             f"--loopx-upgrade-channel={channel}",
+            *([f"--loopx-upgrade-target={target}"] if target else []),
         ],
         check=True,
         capture_output=True,
@@ -199,9 +206,37 @@ def _upgrade_desktop(plan: dict[str, Any], timeout_seconds: int) -> dict[str, An
     request_id = uuid.uuid4().hex
     receipt = _receipt_directory() / f"{request_id}.json"
     started = time.monotonic()
-    _restart_app(app, request_id, plan["channel"], timeout_seconds)
     last = None
     try:
+        target = None
+        if plan.get("preparation_supported"):
+            info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+            executable = info.get("CFBundleExecutable", "")
+            if (not isinstance(executable, str) or not executable or executable in {".", ".."}
+                    or Path(executable).name != executable):
+                raise ValueError("invalid native upgrade executable")
+            prepared = subprocess.run(
+                [str(app / "Contents/MacOS" / executable),
+                 "--loopx-upgrade-prepare", f"--loopx-upgrade-request={request_id}",
+                 f"--loopx-upgrade-channel={plan['channel']}"],
+                capture_output=True, text=True, timeout=timeout_seconds,
+            )
+            result = json.loads(prepared.stdout)
+            target = result.get("target") if isinstance(result, dict) else None
+            if (not isinstance(result, dict) or prepared.returncode != 0 or result.get("ok") is not True
+                    or result.get("channel") != plan["channel"]
+                    or not isinstance(target, str) or not target or len(target) > 128
+                    or any(c not in "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-+" for c in target)):
+                return {**plan, "ok": False, "status": "preparation_failed",
+                        "changes_applied": False,
+                        "reason": "Native App preparation failed; the running App was not restarted."}
+        remaining = timeout_seconds - (time.monotonic() - started)
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("native upgrade preparation", timeout_seconds)
+        if target is None:
+            _restart_app(app, request_id, plan["channel"], remaining)
+        else:
+            _restart_app(app, request_id, plan["channel"], remaining, target=target)
         while time.monotonic() - started < timeout_seconds:
             try:
                 if receipt.stat().st_size <= 16 * 1024:
@@ -231,6 +266,7 @@ def _upgrade_desktop(plan: dict[str, Any], timeout_seconds: int) -> dict[str, An
                     }
                 if (
                     last.get("phase") == "ready"
+                    and (target is None or last.get("app_version") == target)
                     and last.get("update_checked") is True
                     and _running_receipt(last)
                     and isinstance(last.get("runtime_identity"), dict)
@@ -262,6 +298,11 @@ def _upgrade_desktop(plan: dict[str, Any], timeout_seconds: int) -> dict[str, An
         }
     finally:
         receipt.unlink(missing_ok=True)
+        # Only this request's disposable, signed archive; never another
+        # window's automatic cache or an installation/recovery journal.
+        if plan.get("preparation_supported"):
+            import shutil
+            shutil.rmtree(receipt.with_suffix(".prepared"), ignore_errors=True)
 
 
 def finish_upgrade(
@@ -304,7 +345,7 @@ def finish_upgrade(
         return payload
     try:
         progress(
-            "Updating and restarting App; waiting for native update and service readback"
+            "Preparing App update before restart; then verifying native service readiness"
         )
         desktop = _upgrade_desktop(desktop, timeout_seconds)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
