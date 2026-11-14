@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+import re
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -18,7 +19,43 @@ if TYPE_CHECKING:
     from ...capabilities.native_chat.external_conversations import ChatExternalConversations
 
 
-def historical_image_source_matches(message: Mapping | None, event: Mapping) -> bool:
+_SOURCE_URL = re.compile(r"https://[^\s<>()\[\]\"，。；！？]+")
+
+
+def allowed_answer_image_urls(source: str, targets: list[str], *, deadline: float) -> set[str]:
+    """Authorize exact owner URLs and images listed by the original same-host article."""
+    from urllib.parse import urlsplit
+
+    from ..public_source_reader import article, public_url
+
+    def candidate(url: str) -> str | None:
+        try:
+            return public_url(url) if not urlsplit(url).query else None
+        except ValueError:
+            return None
+
+    owner_links = {url for link in _SOURCE_URL.findall(source) if (url := candidate(link))}
+    wanted = {candidate(target) for target in targets}
+    if None in wanted or not owner_links:
+        return set()
+    if wanted <= owner_links:
+        return owner_links
+    if len(owner_links) != 1:
+        return set()
+    [original] = owner_links
+    host = urlsplit(original).hostname
+    if any(urlsplit(url).hostname != host for url in wanted - owner_links):
+        return set()
+    observed = article(original, deadline=deadline, allowed_urls={original})
+    if observed.get("ok") is not True:
+        return set()
+    listed = {url for item in observed["images"]
+              if (url := candidate(item["url"])) and urlsplit(url).hostname == host}
+    allowed_urls = owner_links | listed
+    return allowed_urls if wanted <= allowed_urls else set()
+
+
+def answer_image_source_matches(message: Mapping | None, event: Mapping) -> bool:
     if message is None or message.get("deleted") is True or message.get("chat_id") != event["chat_id"]:
         return False
     sender = message.get("sender")
@@ -64,8 +101,9 @@ def resumable_answer_image_session(
 
 
 @contextmanager
-def answer_media_dispatch(core: ChatExternalConversations, request: dict[str, Any]) -> Iterator[None]:
-    """Use Core's existing source, binding and Session fences through CLI spawn."""
+def answer_media_dispatch(core: ChatExternalConversations, request: dict[str, Any],
+                          source_is_current: Callable[[], bool]) -> Iterator[None]:
+    """Check the provider source at dispatch under the original local controls."""
     store = core.controller.store
     session_id, turn_id = request["session_id"], request["turn_id"]
     route = external_source_route_path(core.root, request["binding_id"], request["source"]["source_ref"])
@@ -83,6 +121,13 @@ def answer_media_dispatch(core: ChatExternalConversations, request: dict[str, An
                 or any(native.get(key) != request[key] for key in ("binding_id", "source", "session_id", "turn_id"))
                 or resumable_answer_image_session(core, native, store.load_turn(session_id, turn_id)) is None):
             raise ValueError("original Session or source no longer authorizes an upload")
+        # Feishu has no conditional image upload tied to a message revision.
+        # Do the final provider read here, with these local locks held through
+        # CLI start. Edits made later are checked again before posting the images.
+        if not source_is_current():
+            raise ValueError("original upload source changed")
+        if resumable_answer_image_session(core, native, store.load_turn(session_id, turn_id)) is None:
+            raise ValueError("original Session or source changed during upload authorization")
         yield
 
 

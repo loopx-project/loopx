@@ -46,7 +46,8 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
                              mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
 from .outbound import normalize_lark_outbound_text, present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
-from .private_delivery_discovery import PrivateDeliveryDiscovery, answer_media_dispatch, historical_image_reply_matches, historical_image_source_matches, prepared_steward_binding_waits, resumable_answer_image_session
+from .private_delivery_discovery import (PrivateDeliveryDiscovery, allowed_answer_image_urls, answer_image_source_matches,
+    answer_media_dispatch, historical_image_reply_matches, prepared_steward_binding_waits, resumable_answer_image_session)
 from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from . import private_steward_triage as triage
@@ -59,10 +60,10 @@ from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC
 PROGRESS_EDIT_BUDGET = 12
 CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}
 ANSWER_IMAGE_RETRY_SECONDS = 300
+ANSWER_IMAGE_SOURCE_TIMEOUT = 5
 _UNSUPPORTED_MEDIA_LABELS = {"audio": "音频", "file": "文件", "media": "视频"}
 _MARKDOWN_CODE_SPAN = re.compile(r"((?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\2(?!\x60))")
 _ANSWER_IMAGE = re.compile(r"""(?<!\\)!\[([^\]\n]*)\]\(\s*(?:<([^<>\n]+)>|([^\s<>()]+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)""")
-_SOURCE_URL = re.compile(r"https://[^\s<>()\[\]\"，。；！？]+")
 
 
 def _private_answer_images(text: str) -> tuple[str, list[str]]:
@@ -111,45 +112,12 @@ def _private_answer_image(url: str, *, allowed_urls: set[str], deadline: float, 
             "mime_type": mime, "size": len(data), "data_url": f"data:{mime};base64," + base64.b64encode(data).decode()}
 
 
-def _allowed_answer_image_urls(source: str, targets: list[str], *, deadline: float) -> set[str]:
-    """Authorize exact owner URLs and images listed by the original same-host article."""
-    from urllib.parse import urlsplit
-
-    from ..public_source_reader import article, public_url
-
-    def candidate(url: str) -> str | None:
-        try:
-            return public_url(url) if not urlsplit(url).query else None
-        except ValueError:
-            return None
-
-    owner_links = {url for link in _SOURCE_URL.findall(source) if (url := candidate(link))}
-    wanted = {candidate(target) for target in targets}
-    if None in wanted or not owner_links:
-        return set()
-    if wanted <= owner_links:
-        return owner_links
-    if len(owner_links) != 1:
-        return set()
-    [original] = owner_links
-    host = urlsplit(original).hostname
-    if any(urlsplit(url).hostname != host for url in wanted - owner_links):
-        return set()
-    observed = article(original, deadline=deadline, allowed_urls={original})
-    if observed.get("ok") is not True:
-        return set()
-    listed = {url for item in observed["images"]
-              if (url := candidate(item["url"])) and urlsplit(url).hostname == host}
-    allowed_urls = owner_links | listed
-    return allowed_urls if wanted <= allowed_urls else set()
-
-
 def _read_answer_images(source: str, targets: list[str], cached: list | None,
                         delivery: Mapping[str, Any]) -> list[dict[str, Any]]:
     if (delivery.get("started") and not delivery.get("attempt")) or (delivery.get("attempt") and cached is None):
         raise ValueError("image delivery acknowledgement or frozen bytes are unavailable")
     deadline = time.monotonic() + 15
-    allowed_urls = _allowed_answer_image_urls(source, targets, deadline=deadline)
+    allowed_urls = allowed_answer_image_urls(source, targets, deadline=deadline)
     if not allowed_urls:
         raise ValueError("image was not referenced by the original source")
     images = normalize_chat_image_attachments([
@@ -467,11 +435,11 @@ class LarkPrivateConversations:
             return None
         return _message(payload, message_id)
 
-    def _original_message_pair(self, profile: str, message_id: str,
-                               other_id: str) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+    def _original_message_pair(self, profile: str, message_id: str, other_id: str, *,
+                               runner=None) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
         # Read both admitted IDs at once. Callers verify the returned envelopes
         # and the current Core selection before using either as authority.
-        result = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=profile,
+        result = call(runner or self.runner, lark_args(cli_bin=self.cli_bin, profile=profile,
             tail=["api", "GET", "/open-apis/im/v1/messages/mget", "--params",
                   json.dumps({"message_ids": [message_id, other_id]}), "--as", "bot"]))
         payload = json_payload(result)
@@ -485,6 +453,13 @@ class LarkPrivateConversations:
             return None, None
         messages = {item["message_id"]: item for item in items}
         return messages[message_id], messages[other_id]
+
+    def _read_answer_image_source(self, args: list[str], cwd: Path | None, _timeout: float):
+        return self.runner(args, cwd, ANSWER_IMAGE_SOURCE_TIMEOUT)
+
+    def _group_source_pair(self, profile: str, message_id: str,
+                           root_id: str) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+        return self._original_message_pair(profile, message_id, root_id)
 
     def _completed_stop_root(self, record: Mapping[str, Any], binding: Mapping[str, Any]) -> str | None:
         """Read scheduling only; fresh Core resolution still owns authorization."""
@@ -532,7 +507,7 @@ class LarkPrivateConversations:
                 root = self._completed_stop_root(record, read_binding) if read_binding else None
                 if root:
                     with ThreadPoolExecutor(max_workers=1) as reads:
-                        envelopes = reads.submit(self._original_message_pair,
+                        envelopes = reads.submit(self._group_source_pair,
                                                  record["profile"], event["message_id"], root)
                         selected = self.bindings.resolve(binding_id=record["binding_id"],
                                                          include_observation=True, **record["source"])
@@ -611,7 +586,7 @@ class LarkPrivateConversations:
                         if completed_stop:
                             if prefetched is not None and read_binding == selected["binding"]:
                                 return prefetched
-                            return self._original_message_pair(record["profile"], event["message_id"], root_id)
+                            return self._group_source_pair(record["profile"], event["message_id"], root_id)
                         return self._group_source_message(record["profile"], event["message_id"]), None
 
                     if observation is not None:
@@ -775,7 +750,7 @@ class LarkPrivateConversations:
         # change while the provider reads run must not inherit an earlier check.
         try:
             record_event_timing(record["profile"], record["event"]["message_id"], "control_source_read_started")
-            envelopes = self._original_message_pair(record["profile"], record["event"]["message_id"], root)
+            envelopes = self._group_source_pair(record["profile"], record["event"]["message_id"], root)
             record_event_timing(record["profile"], record["event"]["message_id"], "control_source_read_returned")
         except (KeyError, ValueError, OSError):
             return {"status": "source_verification_failed"}
@@ -1284,6 +1259,16 @@ class LarkPrivateConversations:
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_started")
         config = inbox()
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_inbox_ready")
+        def provider_images_current() -> bool:
+            if historical_source_check is not None:
+                return historical_source_check()
+            source = record["event"]
+            ref = source["message_id"]
+            args = lark_args(cli_bin=self.cli_bin, profile=record["profile"],
+                tail=["api", "GET", f"/open-apis/im/v1/messages/{ref}", "--as", "bot"])
+            reply = call(self._read_answer_image_source, args)
+            return reply.get("returncode") == 0 and answer_image_source_matches(_message(json_payload(reply), ref), source)
+
         def verified_source() -> bool:
             if historical_source_check is not None:
                 return historical_source_check()
@@ -1293,9 +1278,8 @@ class LarkPrivateConversations:
 
         def image_authorized() -> bool:
             # A provider read can overlap Stop, Close, or an edit to the old reply.
-            return authorization_check is not None and (
-                verified_source() and authorization_check() if kind == "answer_images"
-                else authorization_check() and verified_source())
+            return authorization_check is not None and (provider_images_current() and authorization_check()
+                if kind == "answer_images" else authorization_check() and verified_source())
 
         image_keys = ()
         if image_attachments:
@@ -1303,7 +1287,8 @@ class LarkPrivateConversations:
                               if kind == "answer_images" else record["binding_id"])
             image_keys = uploaded_chat_images(root=self.runtime_root, profile=record["profile"],
                 provider_ref=resource_scope, attachments=image_attachments, private_transport=self,
-                before_upload=image_authorized, verify_only=bool(phase_state.get("started") or phase_state.get("attempt")),
+                before_upload=image_authorized, dispatch_source_check=provider_images_current,
+                verify_only=bool(phase_state.get("started") or phase_state.get("attempt")),
                 dispatch_guard=partial(answer_media_dispatch, self.core, record) if kind == "answer_images" else None)
             if phase_state.get("image_keys", list(image_keys)) != list(image_keys):
                 raise ValueError("App image delivery resources changed after an attempt")
@@ -1586,8 +1571,9 @@ class LarkPrivateConversations:
                 original_text = normalize_lark_outbound_text(
                     record["deliveries"]["terminal"]["text"], limit=None, preserve_format=True)
                 def original_pair_matches() -> bool:
-                    source, reply = self._original_message_pair(record["profile"], event["message_id"], plan["message_id"])
-                    return historical_image_source_matches(source, event) and historical_image_reply_matches(
+                    source, reply = self._original_message_pair(record["profile"], event["message_id"], plan["message_id"],
+                                                               runner=self._read_answer_image_source)
+                    return answer_image_source_matches(source, event) and historical_image_reply_matches(
                         reply, event["chat_id"], observation, original_text)
 
                 if not original_pair_matches():

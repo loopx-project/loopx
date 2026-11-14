@@ -81,26 +81,24 @@ def _chat_images(attachments):
 
 
 def uploaded_chat_images(*, root, profile, provider_ref, attachments, private_transport,
-                         before_upload, verify_only=False, dispatch_guard=None):
+                         before_upload, verify_only=False, dispatch_guard=None, dispatch_source_check=None):
     """Reuse resource IO; never regenerate an unknown upload or sent intent."""
+    if dispatch_guard is not None and dispatch_source_check is None:
+        raise ValueError("guarded image upload requires current source verification")
     return _uploaded_resources(root=root, profile=profile, provider_ref=provider_ref,
         attachments=_chat_images(attachments), cache_dir="lark-chat-images", resource="images",
         key_field="image_key", key_pattern=CHAT_IMAGE_KEY_PATTERN,
         read_bytes=lambda image: image["raw"],
         upload_data=lambda _image: {"image_type": "message"}, runner=None,
         private_transport=private_transport, before_upload=before_upload, verify_only=verify_only,
-        fence_upload=True, dispatch_guard=dispatch_guard)
+        fence_upload=True, dispatch_guard=dispatch_guard, dispatch_source_check=dispatch_source_check)
 
 
 @contextmanager
-def _authorize_upload_dispatch(guard, before_upload, cache, saved):
+def _authorize_upload_dispatch(guard, source_check, cache, saved):
     with ExitStack() as authority:
         try:
-            # Re-read provider source and reply after committing the intent.
-            # Acquire the local Stop/Close fences only after provider IO.
-            if not before_upload():
-                raise ValueError("original upload source changed")
-            authority.enter_context(guard())
+            authority.enter_context(guard(source_check))
         except (KeyError, OSError, ValueError) as exc:
             # The CLI has yet to start. Only preserve receipts for an earlier
             # attempt, including a known scope denial.
@@ -114,7 +112,7 @@ def _authorize_upload_dispatch(guard, before_upload, cache, saved):
 
 def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, resource,
                         key_field, key_pattern, read_bytes, upload_data, runner, private_transport,
-                        before_upload, verify_only, fence_upload=False, dispatch_guard=None):
+                        before_upload, verify_only, fence_upload=False, dispatch_guard=None, dispatch_source_check=None):
     keys = []
     for attachment in attachments:
         identity = {"profile": profile, "provider_ref": provider_ref,
@@ -149,7 +147,7 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
                     raise ValueError("result file return authority revoked")
                 if fence_upload:
                     _write(cache, {"identity": identity, "upload_started": True})
-                guard = (partial(_authorize_upload_dispatch, dispatch_guard, before_upload, cache, saved)
+                guard = (partial(_authorize_upload_dispatch, dispatch_guard, dispatch_source_check, cache, saved)
                          if dispatch_guard is not None else None)
                 uploaded = _call(args, cwd, runner=runner, private_transport=private_transport,
                                  dispatch_guard=guard)
