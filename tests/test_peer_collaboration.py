@@ -531,6 +531,35 @@ def test_operation_replay_conflicts_and_independent_requests(scenario):
         )
 
 
+def test_cli_cross_goal_peer_failure_is_typed_and_records_no_delivery(scenario):
+    root, registry, brief, *_ = scenario
+    brief_path = root / "cross-goal-review.json"
+    brief_path.write_text(json.dumps(brief))
+    operations = root / "manager-context" / "peer-operations"
+    before = sorted(operations.rglob("*.json")) if operations.exists() else []
+
+    result = cli(
+        root,
+        registry,
+        "builder",
+        "request",
+        "--peer-agent-id",
+        "agent-from-another-goal",
+        "--operation-id",
+        "cross-goal-review",
+        "--brief-file",
+        str(brief_path),
+        ok=False,
+    )
+
+    assert result["error_code"] == "peer_request_same_goal_required"
+    assert result["host_delivery"]["status"] == "not_attempted"
+    assert "next Turn" in result["recommended_action"]
+    assert "submission receipt" in result["recommended_action"]
+    after = sorted(operations.rglob("*.json")) if operations.exists() else []
+    assert after == before
+
+
 @pytest.mark.parametrize(
     "change",
     [
