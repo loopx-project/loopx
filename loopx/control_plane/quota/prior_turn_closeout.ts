@@ -31,6 +31,8 @@ export interface PriorHostTurnCloseoutCandidate extends JsonObject {
   /** The Todo id or autonomous replan obligation id, per `binding_kind`. */
   binding_id: string;
   settlement_effect_id: string | null;
+  /** The effective guard admitted a replan under this Todo's settlement identity. */
+  admitted_todo_replan?: true;
 }
 
 interface CloseoutCandidateCheck {
@@ -42,6 +44,7 @@ function candidate(
   binding: HeartbeatReceiptBinding,
   turnInstanceId: string,
   fact: HeartbeatReceiptFact,
+  admittedTodoReplan: boolean,
 ): PriorHostTurnCloseoutCandidate {
   return {
     prior_turn_instance_id: turnInstanceId,
@@ -49,6 +52,7 @@ function candidate(
     binding_kind: binding.binding_kind,
     binding_id: binding.binding_id,
     settlement_effect_id: binding.settlement_effect_id,
+    ...(admittedTodoReplan ? {admitted_todo_replan: true as const} : {}),
   };
 }
 
@@ -56,7 +60,7 @@ function admitsAutonomousReplan(event: JsonObject, fact: HeartbeatReceiptFact): 
   const guard = heartbeatReceiptDetails(event);
   const obligationId = normalizeHeartbeatReplanObligationId(guard.semantic_replan_obligation_id);
   return fact.settlement_effect_id !== null && obligationId !== null
-    && (fact.todo_id !== null || guard.semantic_replan_obligation_id === fact.replan_obligation_id)
+    && (fact.todo_id !== null || obligationId === fact.replan_obligation_id)
     && guard.interaction_mode === "autonomous_replan" && guard.ok === true && guard.should_run === true
     && guard.must_attempt_work === true && guard.delivery_allowed === false && guard.quiet_noop_allowed === false;
 }
@@ -124,10 +128,11 @@ export function selectCloseoutCandidates(
     const fact = heartbeatReceiptFactFromEvent(effective);
     const binding = heartbeatReceiptBinding(goalId, agentId, fact);
     if (binding === null) continue;
-    if (!fact.closeout_required && !(admitsAutonomousReplan(effective, fact) &&
-        (binding.binding_kind === "todo" ||
-          (includeUnwrittenReplans && binding.binding_kind === "autonomous_replan")))) continue;
-    candidates.push({candidate: candidate(binding, turnInstanceId, fact),
+    const admittedReplan = admitsAutonomousReplan(effective, fact);
+    const admittedTodoReplan = admittedReplan && binding.binding_kind === "todo";
+    if (!fact.closeout_required && !admittedTodoReplan &&
+        !(includeUnwrittenReplans && admittedReplan)) continue;
+    candidates.push({candidate: candidate(binding, turnInstanceId, fact, admittedTodoReplan),
       requireWritebackForRecovery: !fact.closeout_required && !includeUnwrittenReplans});
   }
   return {candidates, turnsValidated: validated};

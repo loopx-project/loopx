@@ -7285,7 +7285,9 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
 
     def settle() -> dict[str, Any]:
         rc, result = _run_generated_cli(owed["command"], registry_path=registry_path, cwd=project)
-        assert rc == 0 and result["settlement_identity"] == original, result
+        if rc != 0:
+            pytest.fail(f"Original settlement failed: {result.get('error_code')}: {result.get('reason') or result.get('error')}")
+        assert result["settlement_identity"] == original
         return result
 
     with ThreadPoolExecutor(max_workers=2) as pool:

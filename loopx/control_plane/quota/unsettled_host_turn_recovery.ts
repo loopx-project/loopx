@@ -254,6 +254,13 @@ function decodeCandidate(value: unknown): PriorHostTurnCloseoutCandidate {
       "prior host Turn recovery candidate autonomous replan binding is malformed",
     );
   }
+  const settlementEffectId = optionalHeartbeatString(raw.settlement_effect_id);
+  if (raw.admitted_todo_replan !== undefined &&
+      (raw.admitted_todo_replan !== true || bindingKind !== "todo" || settlementEffectId === null)) {
+    throw new EffectRuntimeRequestError(
+      "prior host Turn recovery candidate has an invalid Todo-bound replan fact",
+    );
+  }
   return {
     prior_turn_instance_id: requireNonEmptyString(
       raw.prior_turn_instance_id,
@@ -262,7 +269,8 @@ function decodeCandidate(value: unknown): PriorHostTurnCloseoutCandidate {
     event_id: optionalHeartbeatString(raw.event_id),
     binding_kind: bindingKind,
     binding_id: bindingId,
-    settlement_effect_id: optionalHeartbeatString(raw.settlement_effect_id),
+    settlement_effect_id: settlementEffectId,
+    ...(raw.admitted_todo_replan === true ? {admitted_todo_replan: true as const} : {}),
   };
 }
 
@@ -364,12 +372,10 @@ type RecoveryRepair = "monitor_poll" | "resume_prior_turn" | "lifecycle";
 function recoveryRepair(
   bindingKind: HeartbeatReceiptBinding["binding_kind"],
   todo: CandidateTodoFacts | null,
-  missingReceipts: readonly string[],
 ): RecoveryRepair {
   if (bindingKind !== "todo") return "lifecycle";
   if (todo?.task_class === MONITOR_TASK_CLASS) return "monitor_poll";
   if (todo === null) return "lifecycle";
-  if (awaitingQuotaSpend(missingReceipts)) return "resume_prior_turn";
   // Missing receipts do not prove an external dependency. Re-enter
   // the original guard to recheck eligibility and retain its settlement id.
   // This is a recovery route, never an accepted closeout or delivery grant.
@@ -419,9 +425,10 @@ function recoveryObligation(
  * Reduce the selected prior Turn to its closeout verdict.
  *
  * The accepted closeout order is policy: a validated settlement wins, then an
- * exactly committed monitor-poll closeout, then a typed lifecycle transition
- * if there is no verified writeback still owed a debit.
- * Otherwise recovery names the exact missing receipts.
+ * exactly committed monitor-poll closeout, then a typed lifecycle transition.
+ * For a Todo-bound autonomous replan, a verified writeback keeps its debit
+ * obligation even when the Todo has changed. Ordinary lifecycle closeouts
+ * retain their existing meaning.
  */
 export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
   const request = requireJsonObject(value, "prior host Turn recovery request");
@@ -466,8 +473,8 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     };
   }
 
-  // A later Todo transition cannot replace a verified Turn writeback's debt.
-  const lifecycleCloseout = awaitingQuotaSpend(missingReceipts) ? null : acceptedLifecycleCloseout(todo);
+  const replanSpendOwed = selected.admitted_todo_replan === true && awaitingQuotaSpend(missingReceipts);
+  const lifecycleCloseout = replanSpendOwed ? null : acceptedLifecycleCloseout(todo);
   if (lifecycleCloseout !== null) {
     return {
       schema_version: UNSETTLED_HOST_TURN_RECOVERY_RESULT_SCHEMA,
@@ -496,7 +503,7 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     recovery.binding_target_key = todo.target_key;
     recovery.binding_cadence = todo.cadence;
   }
-  const repair = recoveryRepair(selected.binding_kind, todo, missingReceipts);
+  const repair = replanSpendOwed ? "resume_prior_turn" : recoveryRepair(selected.binding_kind, todo);
   // The typed repair lane lets the CLI renderer project its command list
   // without re-deriving which closeout family the Turn belongs to.
   recovery.repair = repair;
