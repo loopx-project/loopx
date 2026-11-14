@@ -95,6 +95,42 @@ test("schema, malformed line numbers and tolerant valid rows survive reuse", asy
   });
 });
 
+test("invalid UTF-8 rows are malformed, never receipts", async () => {
+  await fixture(async (path) => {
+    const valid = Buffer.from('{"run_id":"turn-1"}\n');
+    const bad = Buffer.concat([
+      Buffer.from('{"run_id":"turn-2","summary":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}\n'),
+    ]);
+    await writeFile(path, Buffer.concat([valid, bad]));
+    const snapshot = (await read(path))!;
+    assert.deepEqual(snapshot.records.map((r) => r.run_id), ["turn-1"]);
+    assert.equal(snapshot.firstErrorLine, 2);
+    // Cached prefix reuse must not resurrect or forget the bad row.
+    const reused = (await read(path))!;
+    assert.equal(reused.firstErrorLine, 2);
+    assert.deepEqual(reused.records.map((r) => r.run_id), ["turn-1"]);
+    // An unterminated tail with invalid bytes is malformed, never a record.
+    await writeFile(path, Buffer.concat([
+      valid,
+      Buffer.from('{"run_id":"turn-3","summary":"'),
+      Buffer.from([0xff]),
+    ]));
+    const tail = (await read(path))!;
+    assert.deepEqual(tail.records.map((r) => r.run_id), ["turn-1"]);
+    assert.equal(tail.firstErrorLine, 2);
+    // Terminating the damaged tail keeps it malformed but never hides a later row.
+    await appendFile(path, Buffer.from('\n{"run_id":"turn-4"}\n'));
+    const completed = (await read(path))!;
+    assert.deepEqual(
+      completed.records.map((r) => r.run_id),
+      ["turn-1", "turn-4"],
+    );
+    assert.equal(completed.firstErrorLine, 2);
+  });
+});
+
 test("eviction and concurrent cold readers affect cost, never evidence", async () => {
   await fixture(async (path) => {
     const row = JSON.stringify({payload: "x".repeat(2048)}) + "\n";

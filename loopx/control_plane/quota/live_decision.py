@@ -685,6 +685,7 @@ def build_live_quota_should_run_decision(
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     inline_goal_source: bool = False,
+    tolerate_malformed_settlement_history: bool = False,
 ) -> dict[str, Any]:
     """Build one live CLI decision while keeping host observation injectable."""
     resolved_context = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -742,6 +743,7 @@ def build_live_quota_should_run_decision(
         ),
         registry_path=registry_path,
         goal_ref=goal_ref,
+        tolerate_malformed_history=tolerate_malformed_settlement_history,
     )
     receipt_bound_monitor_phase = (
         settlement_readback.monitor_phase if settlement_readback else None

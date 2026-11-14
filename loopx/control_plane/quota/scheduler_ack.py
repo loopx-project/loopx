@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 import json
@@ -184,14 +185,17 @@ def _run_native_followup(
     host_facts: dict[str, Any],
     use_current_hint: bool,
     reason_summary: str | None,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Decision-free compatibility transport for in-process Python callers."""
 
     request = {
         "schema_version": _FOLLOWUP_REQUEST_SCHEMA,
         "runtime_root": str(runtime_root),
-        "turn_instance_id": None,
-        "require_heartbeat_receipt": False,
+        "goal_ref": dict(goal_ref) if goal_ref is not None else None,
+        "turn_instance_id": turn_instance_id,
+        "require_heartbeat_receipt": bool(turn_instance_id),
         "before": before,
         "host_facts": host_facts,
         "use_current_hint": use_current_hint,
@@ -298,6 +302,8 @@ def record_quota_scheduler_ack_for_decision(
     generated_at: str | None = None,
     use_current_hint: bool = False,
     host_match_observed: bool = False,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     state_key = _followup_state_key(before, surface=surface, state_key=state_key)
     safe_agent_id = normalize_todo_claimed_by(agent_id)
@@ -367,6 +373,8 @@ def record_quota_scheduler_ack_for_decision(
             host_facts=facts,
             use_current_hint=use_current_hint,
             reason_summary=reason_summary,
+            turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
         )
     except ValueError as exc:
         return _failure_payload(
@@ -396,6 +404,8 @@ def record_quota_scheduler_failure_for_decision(
     observed_host_rrule: str | None = None,
     failure_kind: str = "host_tool_failure",
     generated_at: str | None = None,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     state_key = _followup_state_key(before, surface=surface, state_key=state_key)
     safe_agent_id = normalize_todo_claimed_by(agent_id)
@@ -443,6 +453,8 @@ def record_quota_scheduler_failure_for_decision(
             host_facts=facts,
             use_current_hint=False,
             reason_summary=None,
+            turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
         )
     except ValueError as exc:
         return _failure_payload(

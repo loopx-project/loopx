@@ -36,7 +36,10 @@ async function tempRuntime(t: CleanupContext): Promise<string> {
   return runtimeRoot;
 }
 
-async function writeReceipt(runtimeRoot: string): Promise<void> {
+async function writeReceipt(
+  runtimeRoot: string,
+  goalRef?: Record<string, string>,
+): Promise<void> {
   const path = join(runtimeRoot, "goals", goalId, "rollout-event-log.jsonl");
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify({
@@ -45,12 +48,25 @@ async function writeReceipt(runtimeRoot: string): Promise<void> {
     goal_id: goalId,
     agent_id: agentId,
     run_id: turnId,
+    ...(goalRef === undefined ? {} : { goal_ref: goalRef }),
   })}\n`, "utf8");
 }
 
-function hintPayload(): Record<string, unknown> {
+const goalRefA = {
+  goal_id: goalId,
+  goal_instance_id: `ginst_${"a".repeat(32)}`,
+};
+const goalRefB = {
+  goal_id: goalId,
+  goal_instance_id: `ginst_${"b".repeat(32)}`,
+};
+
+function hintPayload(
+  goalRef?: Record<string, string>,
+): Record<string, unknown> {
   return {
     schema_version: "loopx_scheduler_host_followup_hint_v0",
+    ...(goalRef === undefined ? {} : { goal_ref: goalRef }),
     before: {
       should_run: true,
       normal_delivery_allowed: true,
@@ -115,8 +131,12 @@ function argv(runtimeRoot: string, format = "json", hint = hintPayload()): strin
   return result;
 }
 
-function failureArgv(runtimeRoot: string, format = "json"): string[] {
-  const payload = hintPayload();
+function failureArgv(
+  runtimeRoot: string,
+  format = "json",
+  goalRef?: Record<string, string>,
+): string[] {
+  const payload = hintPayload(goalRef);
   const facts = payload.host_facts as Record<string, unknown>;
   payload.use_current_hint = false;
   payload.host_facts = {
@@ -312,6 +332,44 @@ test("native host-failure CLI preserves the legacy Markdown surface", async (t) 
   assert.match(child.stdout, /- observed_host_rrule: `FREQ=MINUTELY;INTERVAL=3`/);
   assert.match(child.stdout, /- failure_kind: `timeout`/);
   assert.match(child.stdout, /- failure_count: `1`/);
+});
+
+test("native scheduler CLI carries the hint Goal instance into ACK and failure writeback", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceipt(runtimeRoot, goalRefA);
+
+  const acknowledged = runCli(argv(runtimeRoot, "json", hintPayload(goalRefA)));
+  assert.equal(acknowledged.status, 0, acknowledged.stderr);
+  const ack = JSON.parse(acknowledged.stdout) as Record<string, unknown>;
+  assert.equal((ack.scheduler_commit as Record<string, unknown>).status, "written");
+
+  const failed = runCli(failureArgv(runtimeRoot, "json", goalRefA));
+  assert.equal(failed.status, 0, failed.stderr);
+  const failure = JSON.parse(failed.stdout) as Record<string, unknown>;
+  assert.equal(failure.ok, true);
+  assert.equal(failure.failure_count, 1);
+});
+
+test("native scheduler CLI rejects a receipt from another Goal instance without writing", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceipt(runtimeRoot, goalRefA);
+
+  const child = runCli(argv(runtimeRoot, "json", hintPayload(goalRefB)));
+
+  assert.notEqual(child.status, 0);
+  const result = JSON.parse(child.stdout) as Record<string, unknown>;
+  assert.equal(result.status, "heartbeat_receipt_missing");
+  assert.equal(
+    result.error_code,
+    "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_MISSING",
+  );
+  assert.equal(result.scheduler_state_mutated, false);
+  assert.equal(result.write_performed, false);
+  assert.equal(result.appended, false);
+  assert.deepEqual(
+    await readdir(join(runtimeRoot, "goals", goalId)),
+    ["rollout-event-log.jsonl"],
+  );
 });
 
 test("native host-followup CLI returns the legacy receipt failure without writing", async (t) => {

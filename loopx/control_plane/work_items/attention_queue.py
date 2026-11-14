@@ -50,6 +50,7 @@ class AttentionQueueContext:
     monitor_signal_waiting_on: str
     registry_path: Path | None = None
     external_progress_review_context: Optional[Callable[..., dict[str, Any] | None]] = None
+    tolerate_malformed_settlement_history: bool = False
 
 
 def merge_global_registry_findings(
@@ -335,7 +336,14 @@ def build_attention_queue(
                     next_action_projection_warning=context.next_action_projection_warning,
                     autonomous_replan_obligation_from_runs=context.autonomous_replan_obligation_from_runs,
                     external_progress_review=external_progress_review,
-                    effective_turn_cadence=effective_turn_cadence_context(goal, runtime_root, registry_path=context.registry_path),
+                    effective_turn_cadence=effective_turn_cadence_context(
+                        goal,
+                        runtime_root,
+                        registry_path=context.registry_path,
+                        tolerate_malformed_history=(
+                            context.tolerate_malformed_settlement_history
+                        ),
+                    ),
                 )
                 item["quota"] = context.quota_status(
                     goal,
