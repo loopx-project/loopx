@@ -5,7 +5,8 @@ import os
 import sys
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from contextlib import contextmanager
+from threading import Event, get_ident
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -102,6 +103,59 @@ def test_revalidation_preserves_an_internal_lock_timeout(service, monkeypatch):
     with pytest.raises(LockAcquireTimeoutError) as raised:
         runner.revalidate("analysis-1")
     assert raised.value is failure
+
+
+def test_revalidation_survives_a_concurrent_status_read(service, monkeypatch):
+    """A passive read can release its lock just as the original recheck reaches it."""
+    from loopx import collaboration_mcp as delegation
+    from loopx.file_lock import exclusive_file_lock, try_exclusive_file_lock
+
+    root, runner = service
+    output = root / "analyst/initial/output.json"
+    saved = output.read_bytes()
+    output.write_text("{}")
+    runner.start("analysis", "analysis-1", brief())
+    failed = wait(runner)
+    turn_key = failed["task_failure"]["turn_key"]
+    output.write_bytes(saved)
+    path = runner.path("analysis-1")
+    read_locked, release_read = Event(), Event()
+    requester = get_ident()
+
+    @contextmanager
+    def hold_status_read(target, **kwargs):
+        with exclusive_file_lock(target, **kwargs) as held:
+            if target == path and get_ident() != requester:
+                read_locked.set()
+                assert release_read.wait(15), "status read did not reach revalidation"
+            yield held
+
+    with ThreadPoolExecutor(max_workers=1) as pool, monkeypatch.context() as patch:
+        patch.setattr(delegation, "exclusive_file_lock", hold_status_read)
+        reading = pool.submit(runner.read, "analysis-1")
+
+        @contextmanager
+        def release_when_recheck_meets_read(target, **kwargs):
+            with try_exclusive_file_lock(target, **kwargs) as held:
+                if target == path:
+                    assert held is None, "the reader should still own the kernel lock"
+                    release_read.set()
+                    reading.result(timeout=15)
+                yield held
+
+        patch.setattr(delegation, "try_exclusive_file_lock", release_when_recheck_meets_read)
+        try:
+            assert read_locked.wait(15)
+            resumed = runner.revalidate("analysis-1")
+        finally:
+            release_read.set()
+
+    assert resumed["status"] in {"turn_returned", "accepted"}, resumed
+    accepted = wait(runner)
+    assert accepted["status"] == "accepted", accepted
+    assert any(artifact["ref"] == "output.json" for artifact in accepted["artifacts"])
+    assert json.loads(path.read_bytes())["turn_key"] == turn_key
+    assert (root / "analyst/initial/host-invocations").read_text() == "1"
 
 
 def test_original_task_revalidation_repairs_output_without_repeating_host(service):
