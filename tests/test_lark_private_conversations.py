@@ -1199,7 +1199,8 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
 
 
 @pytest.mark.parametrize("fault", ["readback", "edited_source", "edited_original_reply", "edit_on_image_get",
-    "edit_on_send_preview", "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied",
+    "edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_preview", "edit_on_send_source_read",
+    "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied",
     "unlisted_redirect", "unlisted_cached_redirect"])
 def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, source_https, fault):  # noqa: F811
     from hashlib import sha256
@@ -1219,6 +1220,8 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
     fake.write_text(script.replace(marker, f'"message": {answer!r},', 1))
     io = ImageIO(provider)
     edited_body = None
+    upload_previews = 0
+    send_preview_seen = False
 
     def edit_original_reply():
         nonlocal edited_body
@@ -1226,13 +1229,26 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         provider.messages[prior_id]["body"] = edited_body
 
     def provider_io(args, cwd=None, timeout=None):
+        nonlocal upload_previews, send_preview_seen
         if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
             provider.calls.append(list(args))
             return {"returncode": 3, "stderr": '{"ok":false,"error":{"type":"authorization","code":99991672}}'}
         result = io(args, cwd, timeout)
-        if fault == "edit_on_send_preview" and "+messages-send" in args and "--dry-run" in args and "--content" in args:
+        if "images" in args and "create" in args and "--dry-run" in args:
+            upload_previews += 1
+        uploads_before_edit = {"edit_on_upload_source_read": 0, "edit_on_next_upload_source_read": 1}
+        if (fault in uploads_before_edit and upload_previews == uploads_before_edit[fault] + 1 and edited_body is None
+                and io.uploads == uploads_before_edit[fault]
+                and "+messages-mget" in args and args[args.index("--message-ids") + 1] == event["message_id"]):
+            edit_original_reply()
+        if (fault == "edit_on_send_source_read" and send_preview_seen and edited_body is None
+                and "+messages-mget" in args and args[args.index("--message-ids") + 1] == event["message_id"]):
+            edit_original_reply()
+        if "+messages-send" in args and "--dry-run" in args and "--content" in args:
             if "原图（按原文顺序）" in args[args.index("--content") + 1]:
-                edit_original_reply()
+                send_preview_seen = True
+                if fault == "edit_on_send_preview":
+                    edit_original_reply()
         return result
 
     transport.runner = provider_io
@@ -1336,7 +1352,16 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             assert len(keys) == 4 and [io.resources[key] for key in keys] == list(figures.values())
             assert worker.reconcile_request(path) == 0
         else:
-            assert io.uploads == (4 if fault == "edit_on_send_preview" else 0) and len(provider.writes) == writes
+            expected_uploads = {"edit_on_send_preview": 4, "edit_on_send_source_read": 4,
+                                "edit_on_next_upload_source_read": 1}
+            assert io.uploads == expected_uploads.get(fault, 0) and len(provider.writes) == writes
+            if fault in {"edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_source_read"}:
+                assert edited_body is not None
+                pending = json.loads(path.read_text())
+                pending["historical_answer_images"]["next_check_at"] = 0
+                _atomic_write_json(path, pending)
+                assert restart().reconcile_request(path) == 0
+                assert io.uploads == expected_uploads.get(fault, 0) and len(provider.writes) == writes
             if fault in ("unlisted_redirect", "unlisted_cached_redirect"):
                 assert fetched == [origin, *urls] and resolutions == ["source.example"] * len(fetched)
                 assert unlisted not in fetched

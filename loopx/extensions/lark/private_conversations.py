@@ -1282,12 +1282,16 @@ class LarkPrivateConversations:
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_started")
         config = inbox()
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_inbox_ready")
-        def image_authorized() -> bool:
-            if authorization_check is None or not authorization_check():
-                return False
+        def verified_source() -> bool:
             name, verified = self._source_authority(record, record["profile"],
                 record["event"]["chat_id"], record["event"]["message_id"], expected_text=expected_text)
             return bool(name) and verified
+
+        def image_authorized() -> bool:
+            # A source read can overlap an edit to the old reply.
+            return authorization_check is not None and (
+                verified_source() and authorization_check() if phase == "answer_images.historical"
+                else authorization_check() and verified_source())
 
         image_keys = ()
         if image_attachments:
@@ -1325,13 +1329,10 @@ class LarkPrivateConversations:
             raise ValueError("a new private message cannot replace an existing source reply")
 
         def before_send(_intent: str) -> dict[str, bool]:
-            # Provider preview is external IO. Recheck the original source and
-            # current Core grant afterwards, including every resumed rich part.
+            # Recheck source and grant after preview, including resumed parts.
             if authorization_check is not None and not authorization_check():
                 return {"continue_delivery": False}
-            name, verified = self._source_authority(record, record["profile"],
-                record["event"]["chat_id"], record["event"]["message_id"], expected_text=expected_text)
-            if not name or not verified or (authorization_check is not None and not authorization_check()):
+            if not verified_source() or (authorization_check is not None and not authorization_check()):
                 return {"continue_delivery": False}
             phase_state.update(text=text, started=True)
             record["deliveries"][phase] = phase_state
@@ -1593,9 +1594,8 @@ class LarkPrivateConversations:
                 if (selected["binding"]["transport_ref"] != record["profile"]
                         or not self._source_verified(record, expected_text=event["content"])):
                     return 0
-                terminal = record["deliveries"]["terminal"]
-                original_text = normalize_lark_outbound_text(terminal["text"], limit=None, preserve_format=True)
-
+                original_text = normalize_lark_outbound_text(
+                    record["deliveries"]["terminal"]["text"], limit=None, preserve_format=True)
                 def original_reply_matches() -> bool:
                     return lark_markdown_readback_matches(text=original_text, message=self._historical_image_bot_post(
                         record, observation, plan["message_id"]))
@@ -1616,10 +1616,10 @@ class LarkPrivateConversations:
                 if recheck_sources:
                     state.update(attachments=attachments, source_urls_verified=True)
                     _atomic_write_json(path, record)
-
                 def authorized() -> bool:
                     try:
-                        return bool(self._historical_image_source(record, plan)) and original_reply_matches()
+                        return (original_reply_matches() and selected["binding"] in self.bindings.read()["bindings"]
+                                and bool(self._historical_image_source(record, plan)))
                     except (KeyError, OSError, ValueError):
                         return False
 
@@ -1629,8 +1629,8 @@ class LarkPrivateConversations:
                                      reply_placement="chat_root", image_attachments=attachments):
                     return 0
                 media = record["deliveries"][phase]
-                sent = self._historical_image_bot_post(record, observation, media["attempt"]["message_ref"])
-                if not lark_markdown_readback_matches(text=media["text"], message=sent, image_keys=tuple(media["image_keys"])):
+                if not lark_markdown_readback_matches(text=media["text"], image_keys=tuple(media["image_keys"]),
+                        message=self._historical_image_bot_post(record, observation, media["attempt"]["message_ref"])):
                     return 0
             except (KeyError, ValueError, OSError, http.client.HTTPException):
                 return 0
