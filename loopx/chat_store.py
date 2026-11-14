@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from collections import OrderedDict
 from contextlib import suppress
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,11 @@ REPLAY_ONLY_EVENT_KINDS = {"answer.delta", "assistant.delta", "agent.phase", "tu
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 _SESSION_RELEASE_UNSET = object()
+
+# Keep both active conversation journals warm within the original total budget.
+_PAGED_HISTORY_MAX_SESSIONS = 2
+_PAGED_HISTORY_MAX_BYTES = 64 * 1024 * 1024
+_PAGED_HISTORY_MAX_ROWS = 8192
 
 
 def utc_now() -> str:
@@ -221,7 +227,8 @@ class ChatSessionStore(ChatIngressStore):
         self._event_cache = ChatEventCache(self._event_lock)
         self._event_pending: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
         self._event_flush_locks: WeakValueDictionary[tuple[str, str], threading.Lock] = WeakValueDictionary()
-        self._paged_history: tuple[str, bytes, list[dict[str, Any]]] | None = None
+        self._paged_history_lock = threading.Lock()
+        self._paged_history: OrderedDict[str, tuple[bytes, int, list[dict[str, Any]]]] = OrderedDict()
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.sessions_root, 0o700)
@@ -897,23 +904,38 @@ class ChatSessionStore(ChatIngressStore):
                           raise_on_error=strict, strict=strict)
 
     def _paged_history_messages(self, session_id: str) -> list[dict[str, Any]]:
-        """Reuse one bounded parse only after a fresh read of identical bytes."""
+        """Reuse a per-session parse only after a fresh read of identical bytes."""
         try:
             raw = (self._session_dir(session_id) / "messages.jsonl").read_bytes()
         except FileNotFoundError:
             raw = b""
-        digest = hashlib.sha256(raw).digest() if len(raw) <= 64 * 1024 * 1024 else None
-        cached = self._paged_history
-        if cached is not None and cached[:2] == (session_id, digest):
+        size = len(raw)
+        digest = hashlib.sha256(raw).digest() if size <= _PAGED_HISTORY_MAX_BYTES else None
+        with self._paged_history_lock:
+            cached = self._paged_history.get(session_id)
+            if cached is not None and cached[0] == digest:
+                self._paged_history.move_to_end(session_id)
+            else:
+                self._paged_history.pop(session_id, None)
+                cached = None
+        if cached is not None:
             with suppress(RecursionError):
                 return deepcopy(cached[2])
-        self._paged_history = None
         lines = raw.split(b"\n")
         del raw
         rows = _decode_jsonl(lines, strict=True)
-        if digest is not None and len(rows) <= 8192:
+        if digest is not None and len(rows) <= _PAGED_HISTORY_MAX_ROWS:
             with suppress(RecursionError):
-                self._paged_history = (session_id, digest, deepcopy(rows))
+                saved = deepcopy(rows)
+                with self._paged_history_lock:
+                    self._paged_history[session_id] = (digest, size, saved)
+                    self._paged_history.move_to_end(session_id)
+                    while (
+                        len(self._paged_history) > _PAGED_HISTORY_MAX_SESSIONS
+                        or sum(entry[1] for entry in self._paged_history.values()) > _PAGED_HISTORY_MAX_BYTES
+                        or sum(len(entry[2]) for entry in self._paged_history.values()) > _PAGED_HISTORY_MAX_ROWS
+                    ):
+                        self._paged_history.popitem(last=False)
         return rows
 
     def prepared_managed_turn_request(

@@ -95,10 +95,10 @@ def private_snapshot(frozen_private_reply, tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def read(*, expected_status=200, **query):
+    def read(*, expected_status=200, session_id=session["session_id"], **query):
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
-            connection.request("GET", f"/api/chat/sessions/{session['session_id']}?{urlencode(query)}")
+            connection.request("GET", f"/api/chat/sessions/{session_id}?{urlencode(query)}")
             response = connection.getresponse()
             payload = json.loads(response.read())
             assert response.status == expected_status, payload
@@ -137,6 +137,10 @@ def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
     store, session, turn, request, *_ = frozen_private_reply
     sid = session["session_id"]
     answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
+    assistant = store.create_session(goal_id="notes", agent_id="codex", adapter_kind="codex_app_server",
+                                     upstream_thread_id="assistant")
+    other_id = assistant["session_id"]
+    other = store.append_message(other_id, role="agent", text="The second conversation")
     journal = store.sessions_root / sid / "messages.jsonl"
     original_row = journal.read_bytes().split(b"\n", 1)[0]
     decoded_original_rows = []
@@ -151,6 +155,9 @@ def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
     first = private_snapshot(message_limit=1)
     assert "reply_context" in first["messages"][0]
     cursor = first["message_page"]["next_cursor"]
+    # Reading the other Bot between pages must not force another decode of this
+    # unchanged journal or substitute the other Session's messages.
+    assert private_snapshot(session_id=other_id, message_limit=1)["messages"] == [other]
     assert private_snapshot(message_limit=1, message_cursor=cursor)["messages"] == [answer]
     # Cached parsing must not keep a deleted provider receipt visible.
     (store.root / "lark-private-deliveries" / f"{request}.json").unlink()
