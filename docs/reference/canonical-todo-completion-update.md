@@ -214,6 +214,49 @@ Python 只复用 OS I/O；准入、声明、期限、源/租约见证和完成�
 
 ## Linked User completion effects
 
+### Monitor observations of a User prerequisite
+
+A Monitor observation and a User gate completion have different identities.
+When authorized work includes confirming an externally supplied prerequisite,
+read the exact User gate and validate the actual evidence before settling the
+Monitor poll. Record the satisfied prerequisite through the existing lifecycle:
+
+```sh
+loopx --registry '<registry>' --runtime-root '<runtime>' --format json todo complete \
+  --goal-id example --role user --todo-id '<verified-user-gate-id>' \
+  --agent-id agent-a --decision-outcome approve --evidence '<verified prerequisite evidence>'
+```
+
+This command deliberately has no Monitor `--turn-instance-id` or Monitor claim
+proof. It is an unscoped User lifecycle completion, subject to the gate's own
+registered actor, binding, ownership and lease checks. An eligible open User
+gate can use the existing atomic auto-acquire/release path. Active foreign
+leases and unrelated authority remain protected. A plain `todo update` with
+evidence is neither a gate decision nor a substitute for execution proof.
+
+Observation does not grant authority: a file appearing, a changed hash, or a
+successful external job cannot supply a missing human approval. If the user
+still owns a decision, surface the exact action and retain the gate. Confirming
+an already-authorized evidence prerequisite does not require inventing another
+human decision. An unchanged observation can still satisfy an unresolved gate;
+do not restrict reconciliation to `material_change=true`.
+
+Read the completion's `unblock_resume` and remaining requirements. The exact
+linked target can become `open`; `resume_when=todo_done:<gate-id>` becomes
+satisfied only after the gate completes, not merely after the file appears.
+Finish the Monitor observation using its original binding. A committed
+`quota monitor-poll` settles that Turn without quota spend and cannot be reused
+to settle the gate or independent delivery. Yield for a fresh guarded Turn;
+the host reevaluates the newly runnable target and obtains its own managed claim
+before delivery. A poll already committed before reconciliation must not be
+rebound; reconcile during the next admitted observation instead.
+
+Retire a Monitor when its declared stop condition is met. A one-time file watch
+may stop once its authorized handoff is complete; a Monitor declared to continue
+until dependent delivery is validated remains active until that outcome. A
+changed hash alone neither completes the Monitor nor justifies endless polling
+of a prerequisite whose authorized handoff is ready.
+
 An admitted `todo complete --decision-outcome approve|reject|cancel` now commits
 its exact linked Agent Todo effects in the **same** provider transaction as the
 User completion and receipt. Ordinary User actions completed through update or
