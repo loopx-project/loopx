@@ -109,6 +109,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/capabilities/explore_result_page.ts",
   "control_plane/capabilities/external_evidence.ts",
   "control_plane/capabilities/goal_capability_organization.ts",
+  "control_plane/capabilities/native_child_result_inbox.ts",
   "control_plane/capabilities/trajectory_assessment.ts",
   "control_plane/capabilities/trajectory_input_usage.ts",
   "control_plane/capabilities/trajectory_tool_context.ts",
