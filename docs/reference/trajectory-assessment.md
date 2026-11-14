@@ -731,10 +731,18 @@ presentation; attention remains unrecorded in the source disclosure.
 
 ![Research without a human-observation capture](../development/assets/research-analysis/attention-before-desktop.webp)
 
-With a supplied capture, the first screen shows recorded inputs and timing
-coverage together. This synthetic example has 16 distinct inputs, ten minutes
-of recorded active attention and nineteen minutes of overlapping response
-waiting after union; timing coverage remains partial.
+With a supplied capture, the first screen uses a ring and category icons to show
+the share of each type among recorded completed inputs. Rounded percentages
+describe input counts, not cognitive effort. Active attention and response
+waiting have separate time tracks against the capture window; unfilled regions
+do not establish idle time, and the two durations are not added.
+
+This synthetic example has 16 distinct inputs, ten minutes of recorded active
+attention and nineteen minutes of response waiting after separate interval
+unions, within a 59-minute capture window. Timing coverage remains partial. The
+necessity bar shows eight inputs **Marked avoidable** (50%), six required and two
+unknown. These are recorder declarations to inspect through the original
+evidence, not measured savings or a reason to remove required review.
 
 ![Recorded human inputs and separate active and waiting time](../development/assets/research-analysis/attention-after-desktop.webp)
 
@@ -744,9 +752,11 @@ page. These are packaged UI screenshots from the retained
 
 ![Narrow reader with source-linked optimization points](../development/assets/research-analysis/attention-optimization-narrow.webp)
 
-研究页将人工介入与求解 Token、经过时间分开展示。展开“优化点与介入记录”可核对
-澄清、纠偏、审查、授权判断等投入的必要性、关联研究片段与原始依据；主动投入和
-等待分别统计。浏览不调用模型；旧记录在“来源与用量”中显示“未采集”。
+研究页将人工介入与求解 Token、经过时间分开展示。圆环和图标表示已记录完成介入
+的类型次数占比，不代表脑力权重；主动投入和等待分别对照记录窗口，不相加，未填色
+不能推断为空闲。必要性比例保留“标记可避免”的限定，不代表实际节省，也不把必要
+审查视为浪费。展开“优化点与介入记录”可核对必要性、关联研究片段与原始依据。
+浏览不调用模型；旧记录在“来源与用量”中显示“未采集”，未采集不能当作零。
 
 An Agent/provider prepares the capture from typed human receipts or explicit
 human observations within the already authorized source root. Add the complete

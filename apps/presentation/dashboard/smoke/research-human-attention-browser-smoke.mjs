@@ -25,11 +25,11 @@ async function fixture(mode) {
   const texts = ['Human supplied an already recorded constraint.', 'Human corrected evidence applied outside its tested version.',
     'Human reviewed independent evidence before accepting the result.', 'Human approved a new scope.',
     'Human responded to a progress update.', 'Human changed the research objective.'];
-  const events = Array.from({length: mode === 'empty' ? 0 : 16}, (_, i) => ({
+  const events = Array.from({length: mode === 'empty' ? 0 : mode === 'sparse' ? 1 : 16}, (_, i) => ({
     event_id: `input-${i + 1}`, episode_id: i % 5 ? input.episodes[0].id : null,
     kind: kinds[i % 6], necessity: [0,1,4].includes(i % 6) ? 'avoidable' : i % 6 === 5 ? 'unknown' : 'required',
-    occurred_at: at(i + 10), active: i % 3 ? {start: at(i + 10), end: at(i + 11)} : null,
-    request: i % 4 ? {start: at(i + 5), end: at(i + 10)} : null,
+    occurred_at: at(i + 10), active: mode === 'sparse' ? {start: at(10), end: at(10)} : i % 3 ? {start: at(i + 10), end: at(i + 11)} : null,
+    request: mode === 'sparse' ? null : i % 4 ? {start: at(i + 5), end: at(i + 10)} : null,
     citation: {source_id: 'human-receipts', first_line: i + 1, last_line: i + 1},
   }));
   const evidence = Array.from({length: 16}, (_,i) => texts[i % 6] + ' Synthetic observation only.').join('\n');
@@ -45,7 +45,7 @@ async function fixture(mode) {
 }
 try {
   await mkdir(output, {recursive: true});
-  const full = await fixture('populated'), absent = await fixture('absent'), empty = await fixture('empty');
+  const full = await fixture('populated'), absent = await fixture('absent'), empty = await fixture('empty'), sparse = await fixture('sparse');
   browser = await launchBrowser(loadPlaywright().chromium);
   const page = await browser.newPage({locale: 'zh-CN', viewport: {width: 1440, height: 1000}});
   const errors = [], writes = [];
@@ -63,6 +63,19 @@ try {
   assert.match(await attention.innerText(), /16/);
   assert.match(await attention.innerText(), /10.*分钟|10.*min/);
   assert.match(await attention.innerText(), /19.*分钟|19.*min/);
+  const slices = await attention.locator('.research-attention-donut circle[data-kind]').evaluateAll(nodes => nodes.map(node => ({
+    kind: node.dataset.kind, count: Number(node.dataset.count), share: Number(node.dataset.share),
+    length: Number(node.getAttribute('stroke-dasharray').split(' ')[0]),
+  })));
+  assert.equal(slices.length, 6);
+  assert.equal(slices.reduce((sum, slice) => sum + slice.count, 0), 16);
+  assert.ok(Math.abs(slices.reduce((sum, slice) => sum + slice.length, 0) - 100) < 1e-8);
+  assert.equal(slices.find(slice => slice.kind === 'review').length, 18.75, 'Three of sixteen recorded reviews occupy 3/16 of the ring');
+  assert.equal(slices.find(slice => slice.kind === 'status').length, 12.5);
+  const timeShares = await attention.locator('.research-attention-time-track > span').evaluateAll(nodes => nodes.map(n => Number(n.dataset.share)));
+  assert.ok(Math.abs(timeShares[0] - 10 / 59) < 1e-8 && Math.abs(timeShares[1] - 19 / 59) < 1e-8,
+    'Active and waiting tracks independently use the captured 59-minute window, not their summed time');
+  assert.match(await attention.locator('.research-attention-necessity-legend').innerText(), /8.*50%/);
   assert.equal(await attention.locator('.research-attention-detail').evaluate(e => e.open), false);
   await page.screenshot({path: resolve(output, 'after-desktop.png')});
   await attention.locator('.research-attention-detail > summary').focus();
@@ -86,10 +99,19 @@ try {
   await page.setViewportSize({width: 390, height: 844});
   await attention.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await checkPanels(page);
   await page.screenshot({path: resolve(output, 'optimization-narrow.png')});
   await visit(empty);
   assert.match(await attention.locator('.research-attention-total').innerText(), /0/);
   assert.match(await attention.locator('.research-attention-times').innerText(), /未采集|Not recorded/);
+  assert.equal(await attention.locator('.research-attention-donut circle[data-kind]').count(), 0, 'Zero inputs cannot invent a type share');
+  assert.equal(await attention.locator('.research-attention-time-track > span').count(), 0, 'Unmeasured time is not a zero-width measurement');
+  await visit(sparse);
+  assert.equal(await attention.locator('.research-attention-donut circle[data-kind]').count(), 1);
+  assert.equal(await attention.locator('.research-attention-donut circle[data-kind]').getAttribute('stroke-dasharray'), '100 0');
+  assert.equal(await attention.locator('.attention-active .research-attention-time-track').getAttribute('data-observed'), 'true');
+  assert.equal(await attention.locator('.attention-active .research-attention-time-track > span').getAttribute('data-share'), '0');
+  assert.equal(await attention.locator('.attention-waiting .research-attention-time-track').getAttribute('data-observed'), 'false');
   // This preference belongs only to this disposable browser context.
   await page.addInitScript(() => localStorage.setItem('loopx-pw-locale', 'en'));
   await visit(full);
@@ -100,11 +122,20 @@ try {
   assert.match(await attention.innerText(), /Active attention/);
   await attention.locator('.research-attention-detail > summary').click();
   assert.match(await attention.locator('.research-attention-opportunities').innerText(), /counterevidence/);
+  await checkPanels(page);
   await page.screenshot({path: resolve(output, 'optimization-english-narrow.png')});
+  await page.setViewportSize({width: 320, height: 844});
+  await checkPanels(page);
   assert.deepEqual(errors, []); assert.deepEqual(writes, []);
-  console.log('PASS: source-bound totals, empty/absent, pagination, evidence, failure/retry, keyboard return, narrow layout; zero model writes');
+  console.log('PASS: measured type shares, separate capture-window tracks, necessity shares, sparse/unknown/zero, internal overflow, pagination and source recovery; zero model writes');
 } finally {
   await browser?.close();
   await Promise.all(owners.map(owner => owner.close()));
   await rm(root, {recursive: true, force: true});
+}
+
+async function checkPanels(page) {
+  const overflow = await page.locator('.research-attention-breakdown, .research-attention-counts, .research-attention-times, .research-attention-necessity-legend').evaluateAll(nodes =>
+    nodes.filter(n => n.scrollWidth > n.clientWidth + 1).map(n => n.className));
+  assert.deepEqual(overflow, [], 'Named attention panels must fit internally, including long English labels');
 }
