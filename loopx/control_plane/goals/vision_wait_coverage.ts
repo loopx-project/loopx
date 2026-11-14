@@ -1,6 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { jsonObject, optionalNonEmptyString, requireInteger, requireJsonObject, requireStringArray } from "../runtime_decode.ts";
+import { optionalNonEmptyString, requireInteger, requireJsonObject, requireStringArray } from "../runtime_decode.ts";
 import { projectTodoResumePlanning } from "../todos/resume_planning.ts";
 import { automaticResumeFields, normalizedTodoId, selectPendingResume } from "../todos/automatic_resume.ts";
 

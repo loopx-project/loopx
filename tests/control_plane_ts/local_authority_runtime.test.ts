@@ -50,10 +50,8 @@ import {computeContinuationTodoFacts} from "../../loopx/control_plane/coordinati
 import {
   checkLegacyCoordinationWriteAllowed,
   engageLegacyCoordinationWriterFence,
-  legacyCoordinationWriterFencePath,
   loadLegacyCoordinationWriterFence,
   LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
-  LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
   LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {
@@ -68,7 +66,6 @@ import {
   TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
   executeTaskLeaseLifecycle,
 } from "../../loopx/control_plane/work_items/task_lease_lifecycle.ts";
-import {atomicWriteJson} from "../../loopx/control_plane/effect_runtime_io.ts";
 
 function sha256(value: unknown): string {
   return createHash("sha256").update(canonicalAuthorityBytes(value)).digest("hex");

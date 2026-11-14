@@ -23,7 +23,6 @@ import {
   legacyCoordinationWriterFencePath,
 } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {acknowledgeLocalCoordinationTodoArchive, archiveLocalCoordinationTodos} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
-import {listLocalCoordinationTodos} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 
 for (const [fault, source, reason] of [
   ["database_missing", "sqlite_v0", "local_authority_provider_missing"],

@@ -1,6 +1,6 @@
 /** Isolated process barriers around the production persistence methods. No
  * runtime test flag or alternate store implementation enters product code. */
-import {existsSync, readFileSync, writeFileSync} from "node:fs";
+import {existsSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
