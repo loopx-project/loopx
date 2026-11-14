@@ -118,6 +118,24 @@ export function goalHeartbeatReceiptsFromSnapshot(
   return heartbeatReceiptsFromEvents(snapshot.events, goalId, agentId);
 }
 
+/**
+ * One receipt predicate, shared by discovery and by successor scans.
+ *
+ * A failed invocation without a real Turn identity is an audit: the host
+ * protocol keeps it visible in the log, but lets it neither grant host
+ * writeback nor expire the receipt of the Turn it follows.
+ */
+export function isHeartbeatReceiptEvent(
+  event: JsonObject,
+  goalId: string,
+  agentId?: string | null,
+): boolean {
+  return event.event_kind === HEARTBEAT_RECEIPT_EVENT_KIND &&
+    event.goal_id === goalId &&
+    typeof event.run_id === "string" && event.run_id.trim().length > 0 &&
+    (agentId === undefined || event.agent_id === agentId);
+}
+
 /** The heartbeat receipt filter over events a caller already read. */
 export function heartbeatReceiptsFromEvents(
   events: readonly JsonObject[],
@@ -125,12 +143,7 @@ export function heartbeatReceiptsFromEvents(
   agentId?: string | null,
 ): JsonObject[] {
   return events.filter((event) =>
-    event.event_kind === HEARTBEAT_RECEIPT_EVENT_KIND &&
-    event.goal_id === goalId &&
-    // A failed invocation without a real Turn identity is an audit, not a
-    // receipt that can grant host writeback or supersede an admitted Turn.
-    typeof event.run_id === "string" && event.run_id.trim().length > 0 &&
-    (agentId === undefined || event.agent_id === agentId)
+    isHeartbeatReceiptEvent(event, goalId, agentId)
   );
 }
 
@@ -177,21 +190,14 @@ export async function heartbeatReceiptStatus(params: {
     ? -1
     : snapshot.events.indexOf(firstReceipt);
   if (firstMatch < 0) return "missing";
-  return snapshot.events.slice(firstMatch + 1).some((event) => {
-    if (
-      event.event_kind !== HEARTBEAT_RECEIPT_EVENT_KIND ||
-      event.goal_id !== params.goalId ||
-      event.agent_id !== params.agentId
-    ) return false;
-    if (typeof event.run_id === "string" && event.run_id.trim().length > 0) {
-      return event.run_id !== params.turnInstanceId;
-    }
-    const details = event.details;
-    return event.status === "normal_run" &&
-      typeof details === "object" && details !== null && !Array.isArray(details) &&
-      (details as JsonObject).ok === true &&
-      (details as JsonObject).should_run === true;
-  })
+  // Only a real Turn receipt expires an admitted one. Identity-less quota rows
+  // are diagnostics: the protocol neither grants them host writeback nor lets
+  // them supersede the receipt they follow, so the successor scan reuses the
+  // discovery predicate rather than re-deciding what a receipt is.
+  return snapshot.events.slice(firstMatch + 1).some((event) =>
+    isHeartbeatReceiptEvent(event, params.goalId, params.agentId) &&
+    event.run_id !== params.turnInstanceId
+  )
     ? "stale"
     : "fresh";
 }

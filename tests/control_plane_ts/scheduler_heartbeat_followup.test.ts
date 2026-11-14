@@ -325,7 +325,7 @@ test("another Agent receipt cannot supersede ACK or host-failure writeback", asy
   assert.equal(failed.failure_count, 1);
 });
 
-test("a successful identity-less quota guard supersedes an older host receipt", async (t) => {
+test("a successful identity-less quota guard cannot supersede an older host receipt", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   await appendReceipt(runtimeRoot, "turn-followup-1");
   await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
@@ -337,6 +337,14 @@ test("a successful identity-less quota guard supersedes an older host receipt", 
     details: { ok: true, should_run: true },
   })}\n`, { flag: "a" });
 
+  // The host protocol keeps identity-less quota rows as diagnostic audits: they
+  // never expire the admitted Turn's receipt, so this ACK still commits.
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(acknowledged.ok, true);
+  assert.equal((acknowledged.scheduler_commit as Record<string, unknown>).status, "written");
+
+  // A real newer Turn still supersedes the older receipt, diagnostics or not.
+  await appendReceipt(runtimeRoot, "turn-followup-2");
   const stale = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
   assert.equal(stale.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE");
   assert.equal(stale.scheduler_state_mutated, false);

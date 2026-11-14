@@ -195,3 +195,64 @@ def test_stale_receipt_rejection_does_not_migrate_legacy_scheduler_state(
     assert result["scheduler_state_mutated"] is False
     assert legacy_path.read_bytes() == legacy_bytes
     assert not canonical_path.exists()
+
+
+def _diagnostic_row(runtime: Path) -> None:
+    """Append one identity-less successful quota row: a host-protocol audit."""
+
+    append_rollout_event(
+        rollout_event_log_path(runtime, GOAL),
+        build_rollout_event(
+            goal_id=GOAL,
+            event_kind="quota_should_run",
+            agent_id=SCOPED_AGENT_ID,
+            status="normal_run",
+            details={"ok": True, "should_run": True},
+        ),
+    )
+
+
+def test_identity_less_diagnostic_row_cannot_expire_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A diagnostic row after the receipt is audit, not a successor.
+
+    The host protocol requires a nonempty Turn identity for a heartbeat
+    receipt; an identity-less quota row must neither grant host writeback nor
+    expire the admitted Turn's receipt, on either backend.
+    """
+
+    registry, runtime, project = _fixture(tmp_path, monkeypatch)
+    _should_run(registry, runtime, project, TURN_1)
+    _diagnostic_row(runtime)
+
+    code, result = _ack(registry, runtime, project, TURN_1)
+
+    assert code == 0, result
+    assert result["ok"] is True
+    assert result["scheduler_state_mutated"] is True
+    state = load_scheduler_state(
+        runtime, goal_id=GOAL, agent_id=SCOPED_AGENT_ID, state_key=APP_KEY
+    )
+    assert state is not None
+    assert state["last_applied_rrule"]
+
+
+def test_a_real_successor_receipt_still_expires_the_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strategy: the relaxation above must not weaken real successors."""
+
+    registry, runtime, project = _fixture(tmp_path, monkeypatch)
+    _should_run(registry, runtime, project, TURN_1)
+    _diagnostic_row(runtime)
+    _supercede(runtime, TURN_2)
+
+    code, result = _ack(registry, runtime, project, TURN_1)
+
+    assert code == 1, result
+    assert result["status"] == "heartbeat_receipt_stale"
+    assert result["scheduler_state_mutated"] is False
+    assert not scheduler_state_path(
+        runtime, goal_id=GOAL, agent_id=SCOPED_AGENT_ID, state_key=APP_KEY
+    ).exists()
