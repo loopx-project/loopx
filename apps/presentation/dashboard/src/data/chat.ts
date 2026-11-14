@@ -1340,11 +1340,13 @@ export async function fetchChatHistory(options: {
   const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
   const pending = previous?.pendingBoundSnapshot;
   const current = listed.sessions[0];
+  const retained = !options.managed && pending && options.bound?.bindingId === pending.bindingId && current
+    && sameHistorySource(current, pending.snapshot.session) ? pending.snapshot : undefined;
+  const pendingReturnBasis = retained && hasPendingReturnDelivery(retained) ? retained : undefined;
   // This discovery happened after the retained read. An unchanged exact
   // source and revision can qualify a retained read with no outstanding returns.
-  if (!options.managed && pending && pending.bindingId === options.bound?.bindingId && current
-    && sameHistoryRevision(current, pending.snapshot.session) && !hasPendingReturnDelivery(pending.snapshot)) {
-    known.set(current.session_id, pending.snapshot);
+  if (current && retained && !pendingReturnBasis && sameHistoryRevision(current, retained.session)) {
+    known.set(current.session_id, retained);
   }
   const pendingReads = new Map(previous?.pendingReads);
   for (const id of pendingReads.keys()) if (!listed.sessions.some(session => session.session_id === id)) pendingReads.delete(id);
@@ -1362,7 +1364,10 @@ export async function fetchChatHistory(options: {
     const savedProgress = pendingReads.get(session.session_id);
     if (savedProgress && !sameHistorySource(savedProgress.first.session, session)) pendingReads.delete(session.session_id);
     const progress = pendingReads.get(session.session_id);
-    const saved = options.bound && !progress && previous?.snapshots.find(row => row.session.session_id === session.session_id);
+    // A retained read with pending returns is still private. Use it only as
+    // the basis for a fresh proof of the visible prefix through the same source.
+    const saved = options.bound && !progress && (pendingReturnBasis?.session.session_id === session.session_id
+      ? pendingReturnBasis : previous?.snapshots.find(row => row.session.session_id === session.session_id));
     let snapshot: ChatSessionSnapshot;
     try {
       snapshot = (saved ? await tryResumeChatSessionHistory(session, saved) : null)

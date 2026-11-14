@@ -291,6 +291,26 @@ try {
     calls.length = 0;
     assert.equal(returnStatus(await fetchChatHistory(options, queued)), "queued");
     assert.equal(readRequests().length, 1, "An unchanged pending return only needs the history proof");
+
+    sourceChecks = 0;
+    globalThis.fetch = (input, init) => {
+      if (isBoundDiscovery(input) && ++sourceChecks === 2) throw new Error("Lost pending return source check");
+      return routedRead(input, init);
+    };
+    const awaitingReturnSource = await fetchChatHistory(options);
+    assert.deepEqual(awaitingReturnSource.messages, []);
+    assert.deepEqual(awaitingReturnSource.snapshots, []);
+    assert.equal(awaitingReturnSource.pendingBoundSnapshot?.snapshot.messages
+      .find(row => row.message_id === messageId)?.return_delivery?.status, "queued");
+    globalThis.fetch = routedRead;
+
+    calls.length = 0;
+    assert.equal(returnStatus(await fetchChatHistory(options, awaitingReturnSource)), "queued");
+    assert.deepEqual(readRequests().map(url => url.searchParams.has("known_history")), [true],
+      "Recovery of a private transcript with a pending return only needs the history proof if it still matches");
+    assert.equal(calls.filter(row => new URL(row.path, origin).pathname === "/api/chat/sessions").length, 2,
+      "Recovery checks the original binding again after verifying the retained history");
+
     child.stdin.write("history-return-delivered\n");
     assert.equal((await next()).messageId, messageId);
     calls.length = 0;
@@ -300,6 +320,12 @@ try {
     assert.equal(delivered.messages.length, queued.messages.length);
     assert.equal(readRequests()[0].searchParams.has("known_history"), true);
     assert.ok(calls.every(row => row.method === "GET"));
+    calls.length = 0;
+    const deliveredWhileWaiting = await fetchChatHistory(options, awaitingReturnSource);
+    assert.deepEqual(deliveredWhileWaiting.messages, delivered.messages);
+    assert.equal(readRequests()[0].searchParams.has("known_history"), true);
+    assert.equal(readRequests()[1].searchParams.has("message_cursor"), false,
+      "A pending return that changed while the source was unavailable restarts at page zero");
     calls.length = 0;
     assert.equal(returnStatus(await fetchChatHistory(options, delivered)), "delivered");
     assert.equal(readRequests().length, 0, "A settled immutable transcript uses the compact discovery read again");
