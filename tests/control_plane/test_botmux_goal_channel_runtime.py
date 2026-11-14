@@ -5,6 +5,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -114,10 +115,14 @@ def _requester(
                 "triggerId": "trigger-public-fixture",
                 "target": {"sessionId": SESSION_ID},
             }
-        if path.endswith("/trigger-result"):
+        if "/trigger-result" in path:
+            # Like the provider: a pinned trigger id selects that turn and is
+            # echoed back; without one the answer is for the session's latest.
+            pinned = parse_qs(urlsplit(path).query).get("triggerId", [None])[0]
             return {
                 "ok": True,
                 "state": "completed",
+                "triggerId": pinned or "trigger-public-fixture",
                 "output": {"content": "validated"},
             }
         raise AssertionError(f"unexpected botmux request: {kwargs}")
@@ -740,7 +745,7 @@ def test_status_ignores_provider_regression_after_local_terminal_state(
     )
 
     def terminal(**kwargs: Any) -> dict[str, Any]:
-        return {"ok": True, "state": local_state}
+        return {"ok": True, "state": local_state, "triggerId": "trigger-public-fixture"}
 
     status_botmux_runtime(
         goal_id=GOAL_ID,
@@ -750,7 +755,7 @@ def test_status_ignores_provider_regression_after_local_terminal_state(
     )
 
     def stale(**kwargs: Any) -> dict[str, Any]:
-        return {"ok": True, "state": provider_state}
+        return {"ok": True, "state": provider_state, "triggerId": "trigger-public-fixture"}
 
     observed = status_botmux_runtime(
         goal_id=GOAL_ID,
@@ -1215,3 +1220,387 @@ def test_runtime_reads_return_typed_packet_when_setup_lock_times_out(
     assert result["operator_action"]["action"] == "inspect_lock_holder"
     assert json.loads(json.dumps(result)) == result
     _assert_public_packet(result)
+
+
+def _setup_reused_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[dict[str, Any], Path, Path]:
+    registry, registry_path = _registry(tmp_path)
+    binding_path = tmp_path / ".loopx" / "goal-channel-runtime.json"
+    monkeypatch.setenv("BOTMUX_TEST_TOKEN", "secret-public-fixture")
+    common = {
+        "registry": registry,
+        "registry_path": registry_path,
+        "goal_id": GOAL_ID,
+        "binding_path": binding_path,
+    }
+    setup_botmux_runtime(
+        **common,
+        endpoint="http://127.0.0.1:7891",
+        bot_id=BOT_ID,
+        chat_id=CHAT_ID,
+        token_env="BOTMUX_TEST_TOKEN",
+        execute=True,
+        requester=_requester([], tmp_path),
+    )
+    first = trigger_botmux_runtime(
+        **common, execute=True, requester=_requester([], tmp_path)
+    )
+    assert first["status"] == "queued"
+    return registry, registry_path, binding_path
+
+
+def test_status_never_vouches_for_rejected_dispatch_on_reused_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, registry_path, binding_path = _setup_reused_session(tmp_path, monkeypatch)
+    ok = _requester([], tmp_path)
+
+    def reject_trigger(**kwargs: Any) -> dict[str, Any]:
+        if kwargs["path"] == "/api/trigger":
+            raise BotmuxApiError(409, {"error": "busy"})
+        return ok(**kwargs)
+
+    rejected = trigger_botmux_runtime(
+        registry=registry,
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        binding_path=binding_path,
+        turn_key="second-segment",
+        execute=True,
+        requester=reject_trigger,
+    )
+    assert rejected["status"] == "rejected"
+
+    # The session's trigger-result still describes the first, completed turn.
+    for execute in (False, True):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID,
+            binding_path=binding_path,
+            execute=execute,
+            requester=ok,
+        )
+        assert status["ok"] is False
+        assert status["status"] == "rejected"
+        assert status["readback_verified"] is False
+        assert status["blocker"] == "botmux_api_rejected"
+
+
+def test_status_promotes_unresolved_attempt_on_reused_session_without_provider_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _registry_value, _registry_path, binding_path = _setup_reused_session(
+        tmp_path, monkeypatch
+    )
+    payload = read_botmux_runtime_binding(binding_path)
+    binding = botmux_binding_for_goal(payload, GOAL_ID)
+    assert binding is not None
+    dispatch_key = "sha256:" + ("b" * 64)
+    binding["receipts"][dispatch_key] = {
+        "state": "attempting",
+        "attempted_at": "2026-01-01T00:00:00+00:00",
+        "session_reused": True,
+    }
+    binding["session"] = {
+        "session_id": SESSION_ID,
+        "active_dispatch_key": dispatch_key,
+    }
+    payload["bindings"][GOAL_ID] = binding
+    binding_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    status = status_botmux_runtime(
+        goal_id=GOAL_ID,
+        binding_path=binding_path,
+        execute=True,
+        requester=_requester([], tmp_path),
+    )
+
+    assert status["ok"] is False
+    assert status["status"] == "unknown"
+    assert status["readback_verified"] is False
+    persisted = botmux_binding_for_goal(
+        read_botmux_runtime_binding(binding_path), GOAL_ID
+    )
+    assert persisted is not None
+    assert persisted["receipts"][dispatch_key]["state"] == "unknown"
+
+
+def test_repeated_status_never_adopts_previous_result_for_interrupted_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, registry_path, binding_path = _setup_reused_session(tmp_path, monkeypatch)
+    ok = _requester([], tmp_path)
+
+    def interrupt_trigger(**kwargs: Any) -> dict[str, Any]:
+        if kwargs["path"] == "/api/trigger":
+            raise BotmuxTransportError("connection reset before acceptance")
+        return ok(**kwargs)
+
+    interrupted = trigger_botmux_runtime(
+        registry=registry,
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        binding_path=binding_path,
+        turn_key="second-segment",
+        execute=True,
+        requester=interrupt_trigger,
+    )
+    assert interrupted["status"] == "dispatch_unknown"
+    provider_reads: list[dict[str, Any]] = []
+    status_requester = _requester(provider_reads, tmp_path)
+
+    # The session's trigger-result still describes the first, completed turn.
+    for _ in range(3):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID,
+            binding_path=binding_path,
+            execute=True,
+            requester=status_requester,
+        )
+        assert status["ok"] is False
+        assert status["status"] == "unknown"
+        assert status["readback_verified"] is False
+
+    persisted = botmux_binding_for_goal(
+        read_botmux_runtime_binding(binding_path), GOAL_ID
+    )
+    assert persisted is not None
+    active_key = persisted["session"]["active_dispatch_key"]
+    assert persisted["receipts"][active_key]["state"] == "unknown"
+    assert provider_reads == []
+
+
+def test_status_recovers_accepted_dispatch_after_a_status_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _registry_value, _registry_path, binding_path = _setup_reused_session(
+        tmp_path, monkeypatch
+    )
+    ok = _requester([], tmp_path)
+
+    def unreachable(**kwargs: Any) -> dict[str, Any]:
+        if "/trigger-result" in str(kwargs["path"]):
+            raise BotmuxTransportError("status read failed after acceptance")
+        return ok(**kwargs)
+
+    lost = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=unreachable
+    )
+    assert lost["status"] == "unknown"
+    persisted = botmux_binding_for_goal(
+        read_botmux_runtime_binding(binding_path), GOAL_ID
+    )
+    assert persisted is not None
+    active_key = persisted["session"]["active_dispatch_key"]
+    assert persisted["receipts"][active_key]["state"] == "unknown"
+
+    recovered = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=ok
+    )
+    assert recovered["ok"] is True
+    assert recovered["status"] == "completed"
+
+
+def _second_accepted_trigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trigger_id: str
+) -> tuple[Path, Any]:
+    """A second turn accepted on the reused session under its own trigger id."""
+    registry, registry_path, binding_path = _setup_reused_session(tmp_path, monkeypatch)
+    base = _requester([], tmp_path)
+
+    def accept_second(**kwargs: Any) -> dict[str, Any]:
+        if kwargs["path"] == "/api/trigger":
+            return {
+                "ok": True,
+                "action": "queued",
+                "triggerId": trigger_id,
+                "target": {"sessionId": SESSION_ID},
+            }
+        return base(**kwargs)
+
+    second = trigger_botmux_runtime(
+        registry=registry,
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        binding_path=binding_path,
+        turn_key="second-segment",
+        execute=True,
+        requester=accept_second,
+    )
+    assert second["status"] == "queued"
+    return binding_path, base
+
+
+def _persisted_active_receipt(binding_path: Path) -> dict[str, Any]:
+    persisted = botmux_binding_for_goal(read_botmux_runtime_binding(binding_path), GOAL_ID)
+    assert persisted is not None
+    return persisted["receipts"][persisted["session"]["active_dispatch_key"]]
+
+
+def test_status_reads_the_turn_this_receipt_was_queued_under(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+    calls: list[dict[str, Any]] = []
+
+    def provider(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        pinned = parse_qs(urlsplit(str(kwargs["path"])).query).get("triggerId", [None])[0]
+        # Turn two failed; another client has since completed a third turn.
+        if pinned == "trigger-two":
+            return {"ok": True, "state": "failed", "triggerId": "trigger-two"}
+        return {
+            "ok": True, "state": "completed", "triggerId": "trigger-three",
+            "output": {"content": "someone else"},
+        }
+
+    for execute in (False, True):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID, binding_path=binding_path, execute=execute, requester=provider
+        )
+        assert status["status"] == "failed"
+        assert status["readback_verified"] is False
+    assert all("triggerId=trigger-two" in str(call["path"]) for call in calls)
+    assert _persisted_active_receipt(binding_path)["state"] == "failed"
+
+
+def test_status_does_not_promote_a_result_attributed_to_another_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def ignores_the_pin(**kwargs: Any) -> dict[str, Any]:
+        # A provider that answers with the session's latest turn whatever is asked.
+        return {
+            "ok": True, "state": "completed", "triggerId": "trigger-three",
+            "output": {"content": "someone else"},
+        }
+
+    for execute in (False, True):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID, binding_path=binding_path, execute=execute, requester=ignores_the_pin
+        )
+        assert status["ok"] is False and status["status"] == "unknown"
+        assert status["readback_verified"] is False
+        assert status["details"]["output_available"] is False
+    receipt = _persisted_active_receipt(binding_path)
+    assert receipt["state"] == "unknown"
+    assert receipt["unknown_reason"] == "trigger_identity_unverified"
+
+
+def test_status_without_a_stored_trigger_id_asks_the_provider_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _registry_value, _registry_path, binding_path = _setup_reused_session(tmp_path, monkeypatch)
+    payload = read_botmux_runtime_binding(binding_path)
+    binding = botmux_binding_for_goal(payload, GOAL_ID)
+    assert binding is not None
+    receipt = binding["receipts"][binding["session"]["active_dispatch_key"]]
+    receipt.pop("trigger_id")
+    payload["bindings"][GOAL_ID] = binding
+    binding_path.write_text(json.dumps(payload), encoding="utf-8")
+    calls: list[dict[str, Any]] = []
+
+    status = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True,
+        requester=_requester(calls, tmp_path),
+    )
+
+    assert status["status"] == "unknown" and status["readback_verified"] is False
+    assert calls == []
+
+
+def test_a_not_found_naming_another_turn_cannot_seal_this_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def wrong_turn_missing(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": True, "state": "not_found", "triggerId": "trigger-three",
+            "output": {"content": "someone else"},
+        }
+
+    for execute in (False, True):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID, binding_path=binding_path, execute=execute,
+            requester=wrong_turn_missing,
+        )
+        assert status["status"] == "unknown" and status["ok"] is False
+        assert status["details"]["output_available"] is False
+    assert _persisted_active_receipt(binding_path)["state"] == "unknown"
+
+    def own_completion(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": True, "state": "completed", "triggerId": "trigger-two",
+            "output": {"content": "mine"},
+        }
+
+    # The receipt is not sealed: this request's real completion still lands.
+    done = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=own_completion
+    )
+    assert done["status"] == "completed" and done["readback_verified"] is True
+    assert _persisted_active_receipt(binding_path)["state"] == "completed"
+
+
+def test_a_not_found_for_this_turn_is_accepted_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def own_missing(**kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "state": "not_found", "triggerId": "trigger-two"}
+
+    status = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=own_missing
+    )
+
+    assert status["status"] == "not_found"
+    assert status["details"]["output_available"] is False
+    assert _persisted_active_receipt(binding_path)["state"] == "not_found"
+
+
+def test_a_generic_404_not_found_cannot_seal_an_accepted_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def generic_404(**kwargs: Any) -> dict[str, Any]:
+        # Not-found state, but neither a named turn nor an explicit unknown_session.
+        raise BotmuxApiError(404, {"state": "not_found"})
+
+    for execute in (False, True):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID, binding_path=binding_path, execute=execute, requester=generic_404
+        )
+        assert status["status"] == "unknown" and status["ok"] is False
+    assert _persisted_active_receipt(binding_path)["state"] == "unknown"
+
+    def own_completion(**kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "state": "completed", "triggerId": "trigger-two",
+                "output": {"content": "mine"}}
+
+    done = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=own_completion
+    )
+    assert done["status"] == "completed" and done["readback_verified"] is True
+
+
+def test_a_404_naming_another_turn_is_not_a_session_level_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def other_turn_404(**kwargs: Any) -> dict[str, Any]:
+        raise BotmuxApiError(404, {"error": "unknown_session", "triggerId": "trigger-three"})
+
+    status = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=other_turn_404
+    )
+    assert status["status"] == "unknown"
+    assert _persisted_active_receipt(binding_path)["state"] == "unknown"
