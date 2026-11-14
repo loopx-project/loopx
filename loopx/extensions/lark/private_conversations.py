@@ -56,6 +56,7 @@ from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC
 # Reserve edits for a final/closing notice; continue long Turns on a new draft.
 PROGRESS_EDIT_BUDGET = 12
 CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}
+ANSWER_IMAGE_RETRY_SECONDS = 300
 _UNSUPPORTED_MEDIA_LABELS = {"audio": "音频", "file": "文件", "media": "视频"}
 _MARKDOWN_CODE_SPAN = re.compile(r"((?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\2(?!\x60))")
 _ANSWER_IMAGE = re.compile(r"""(?<!\\)!\[([^\]\n]*)\]\(\s*(?:<([^<>\n]+)>|([^\s<>()]+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)""")
@@ -135,6 +136,21 @@ def _answer_image_sources(source: str, targets: list[str], *, deadline: float) -
     observed = article(original, deadline=deadline)
     return (observed.get("ok") is True and urlsplit(observed["observed_url"]).hostname == host
             and wanted <= owner_links | {candidate(item["url"]) for item in observed["images"]})
+
+
+def _is_answer_image_followup(record: Mapping[str, Any]) -> bool:
+    if record.get("status") != "accepted" or not isinstance(record.get("answer_images"), dict):
+        return False
+    terminal = record.get("deliveries", {}).get(presentation_phase(record, "terminal"), {})
+    return terminal.get("verified") is True
+
+
+def _answer_image_retry_waits(record: Mapping[str, Any], now: float) -> bool:
+    if not _is_answer_image_followup(record):
+        return False
+    state = record["answer_images"]
+    retry_at = state.get("next_check_at")
+    return state.get("status") != "delivered" and type(retry_at) in (int, float) and retry_at > now
 
 
 def _unsupported_media_label(row: Mapping[str, Any]) -> str | None:
@@ -1383,18 +1399,20 @@ class LarkPrivateConversations:
         digest = hashlib.sha256(text.encode()).hexdigest()
         if state.setdefault("answer_sha256", digest) != digest:
             return False
-        now = datetime.now(timezone.utc).timestamp()
-        if old.get("verified") is True:
-            if state.get("status") == "delivered" and record["deliveries"].get(media_phase, {}).get("images_verified") is True:
-                return True
-            if now < state.get("next_check_at", 0):
-                return False
-        state.setdefault("status", "pending")
-        _atomic_write_json(path, record)
-        if not self._deliver(path, record, "terminal", body + "\n\n原图会另发；有链接的图名可打开原始来源。",
-                             inbox=inbox, finalize_source=False):
+        if old.get("verified") is not True:
+            state.setdefault("status", "pending")
+            _atomic_write_json(path, record)
+            self._deliver(path, record, "terminal", body + "\n\n原图会另发；有链接的图名可打开原始来源。",
+                          inbox=inbox, finalize_source=False)
+            # Release the existing body worker as soon as the explanation is
+            # sent. The same pool discovers the pending image work separately.
             return False
-        state.update(status="pending", next_check_at=now + 300)
+        if state.get("status") == "delivered" and record["deliveries"].get(media_phase, {}).get("images_verified") is True:
+            return True
+        now = datetime.now(timezone.utc).timestamp()
+        if _answer_image_retry_waits(record, now):
+            return False
+        state.update(status="pending", next_check_at=now + ANSWER_IMAGE_RETRY_SECONDS)
         _atomic_write_json(path, record)
         try:
             event = record["event"]
@@ -1615,7 +1633,7 @@ class LarkPrivateConversations:
         metadata cache local to the scanner; it grants no admission or send.
         """
         paths = [path for path, row, _ in self._body_discovery.rows()
-                 if row["status"] != "delivered"]
+                 if row["status"] != "delivered" and not _is_answer_image_followup(row)]
         return [*paths, *self._pending_web_projection_paths()]
 
     @effect_runtime_request_scope()
@@ -1623,9 +1641,11 @@ class LarkPrivateConversations:
         """The durable transport store is the queue; no in-memory admission."""
         paths = []
         recovery_candidate = self.core.context_recovery_observer()
+        now = datetime.now(timezone.utc).timestamp()
         for path, row, repairs in self._delivery_discovery.rows():
             if row["status"] != "delivered":
-                paths.append(path)
+                if not _answer_image_retry_waits(row, now):
+                    paths.append(path)
             elif (row.get("session_id") and row.get("turn_id")
                     and time.monotonic() >= self._context_recovery_probe_at.get(path, 0)):
                 # Only a discovery/backoff hint, never execution authority.
@@ -1642,7 +1662,10 @@ class LarkPrivateConversations:
         A verified old notice may need a native recovery probe, but must not
         precede an unsent body just because both have zero worker attempts.
         """
-        return path.parent != self.root / "web-projections" and _read_json(path).get("status") == "delivered"
+        if path.parent == self.root / "web-projections":
+            return False
+        row = _read_json(path)
+        return row.get("status") == "delivered" or _is_answer_image_followup(row)
 
     def _pending_web_projection_paths(self) -> list[Path]:
         paths = []
@@ -2076,6 +2099,8 @@ class LarkPrivateConversations:
         # Repair only this persisted source. Core still owns admission, recovery
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
+        if _answer_image_retry_waits(row, datetime.now(timezone.utc).timestamp()):
+            return 0
         record_event_timing(row["profile"], row["event"]["message_id"], "reconciliation_started")
         if row["status"] == "delivered" and row.get("session_id") and row.get("turn_id"):
             # Discovery may find more candidates than the shared pool can run.

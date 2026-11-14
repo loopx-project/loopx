@@ -1027,8 +1027,10 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     url = ("https://unrelated.example" if fault == "foreign_source" else "https://source.example") + "/chart.png"
     authored = f'Original explanation.\n\n![Source chart](<{url}> "Figure 6")'
     script = fake.read_text()
-    assert '"message": "Runtime response.",' in script
-    fake.write_text(script.replace('"message": "Runtime response.",', '"message": ' + repr(authored) + ",", 1))
+    default = '"message": "Runtime response.",'
+    assert default in script
+    fake.write_text(script.replace(default,
+        f'"message": {authored!r} if turn_count == 1 else "Next original reply.",', 1))
     fetched = []
 
     def fetch(target, *, deadline):
@@ -1057,7 +1059,15 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         if fault == "changed_request":
             provider.messages[source["message_id"]]["content"] = "Source URL removed."
         path = transport.root / f"{ref}.json"
-        transport.reconcile_request(path)
+        assert path in transport.pending_body_paths()
+        assert transport.reconcile_request(path) == 0
+        text_only = json.loads(path.read_text())
+        assert text_only["deliveries"]["terminal"]["verified"] is True
+        assert transport.core.read_request(ref).get("delivery_verified", False) is False
+        assert fetched == [] and io.uploads == 0
+        assert path not in transport.pending_body_paths()
+        assert path in transport.pending_delivery_paths() and transport.is_recovery_path(path)
+        assert transport.reconcile_request(path) == (1 if fault == "none" else 0)
         saved = json.loads(path.read_text())
         assert saved["answer_images"]["status"] == ("delivered" if fault == "none" else "unverified")
         out = [(mid, row, json.loads(row["body"]["content"])["zh_cn"]["content"])
@@ -1074,15 +1084,37 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         if fault == "corrupt_readback":
             io.corrupt_download = False
             from loopx.chat_store import _atomic_write_json
-            saved["answer_images"]["next_check_at"] = 0
-            _atomic_write_json(path, saved)
             restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
                                                   runner=media, cli_bin="lark-cli")
             writes = list(provider.writes)
-            restarted.reconcile_request(path)
+            assert path not in restarted.pending_body_paths()
+            assert path not in restarted.pending_delivery_paths()
+            assert restarted.reconcile_request(path) == 0
+            assert provider.writes == writes and io.uploads == 1 and fetched == [url]
+            saved["answer_images"]["next_check_at"] = 0
+            _atomic_write_json(path, saved)
+            assert path in restarted.pending_delivery_paths()
+            assert restarted.reconcile_request(path) == 1
             assert transport.core.read_request(ref)["delivery_verified"] is True
             assert provider.writes == writes and io.uploads == 1 and fetched == [url]
-        assert sum(json.loads(line).get("method") == "turn/start" for line in capture.read_text().splitlines()) == 1
+        expected_turns = 1
+        if fault == "upload_denied":
+            followup = provider.event("notes-app", "text-after-image-denial", "Answer the next question")
+            retry = transport.admit("notes-app", followup)
+            assert retry["status"] == "durably_accepted"
+            later_ref = identity_ref(transport._binding("notes-app")["provider_ref"], followup["message_id"])
+            later = transport.core.read_request(later_ref)
+            assert later["session_id"] == sid
+            assert runtime.wait_for_turn(session_id=sid, turn_id=later["turn_id"], timeout_sec=10)["status"] == "completed"
+            later_path = transport.root / f"{later_ref}.json"
+            assert path not in transport.pending_body_paths() and path not in transport.pending_delivery_paths()
+            assert later_path in transport.pending_body_paths()
+            assert transport.reconcile_request(later_path) == 1
+            assert transport.core.read_request(later_ref)["delivery_verified"] is True
+            assert transport.core.read_request(ref).get("delivery_verified", False) is False
+            expected_turns = 2
+        packets = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(packet.get("method") == "turn/start" for packet in packets) == expected_turns
         assert any(row["text"].endswith(authored) for row in store.messages(sid) if row["role"] == "agent")
     finally:
         runtime.close()
