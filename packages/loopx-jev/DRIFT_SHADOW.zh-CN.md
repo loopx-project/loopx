@@ -25,6 +25,8 @@
 
 路径必须是文件，不是目录或通配符；最多选 32 个，并受下文的字节上限约束。初始化后清单固定；要变更范围，需显式新建观察器/预算并建立新基线。Agent 在清单外做的工作可能完全有效，`no_delta` 只表示所观察材料没有变化，不表示整个任务没有进展。读取测试报告也不等于执行测试或独立认证其中的声明。
 
+路径任何层级的 Git 元数据目录（`.git`）均被排除。在 Windows 上，同一规则也检查从已打开文件句柄取得的、相对工作区的规范路径，大小写变体和 8.3 别名不能绕过。将文件或中间目录记为缺失之前，采集会把最深的已有、身份已核验祖先的规范路径与全部剩余组件拼接，再应用相同规则。Windows 范围路径拒绝尾随点或空格、盘符相对路径及备用数据流写法，因为不存在的组件无法通过句柄规范化。无法取得规范句柄路径时，采集直接拒绝。
+
 例如只选择函数所在文件，而漏掉被调用的 helper 和对应测试，评估就不能证明完整行为。应主动纳入相关测试、结果和依赖；必要材料装不下时，不能把部分材料包装成完整证据。
 
 ## 绑定规范任务 criterion
@@ -64,7 +66,7 @@ binding 固定 Goal/Agent/Todo 身份、contract 修订／摘要、任务语义�
 
 ## 操作方法
 
-使用 Python 3.11+ 和 LoopX 检出要求的 Node 运行时。采集器目前面向 Linux/macOS 的 POSIX 文件处理；Windows 采集未验证，缺少所需文件原语时记录观察不可用。此可选发行包不进入 LoopX 默认 wheel；从源码根目录在新环境中安装，再执行不需要 key 的集成测试：
+使用 Python 3.11+ 和 LoopX 检出要求的 Node 运行时。采集器在 Linux/macOS 上沿用 POSIX no-follow 文件处理，在 Windows 上使用原生句柄、reparse point、身份和规范路径检查。原生 Windows 测试覆盖本地 NTFS 采集；受限 ACL 和网络共享场景尚未验证。缺少所需文件原语或无法取得规范路径时，记录观察不可用。采集期间目录句柄保持固定，可能与并发写入或重命名冲突。此可选发行包不进入 LoopX 默认 wheel；从源码根目录在新环境中安装，再执行不需要 key 的集成测试：
 
 ```bash
 uv venv .venv-jev
@@ -72,6 +74,8 @@ uv pip install --python .venv-jev/bin/python -e '.[test]' -e packages/loopx-jev
 .venv-jev/bin/python -m pytest packages/loopx-jev/tests/test_drift.py packages/loopx-jev/tests/test_drift_cli.py -q
 .venv-jev/bin/loopx-jev drift --help
 ```
+
+Windows 上将上述 `bin` 入口替换为 `.venv-jev/Scripts/python.exe` 和 `.venv-jev/Scripts/loopx-jev.exe`。
 
 本切片只观察任务进展，不提供其他评估方向或排序代码。使用 `loopx_jev_drift_config_v0` 和 `minimum_label_probability`；旧多方向试点配置会被拒绝，不会静默提升。配置 key 本身不启用 shadow 或允许出站。失败时原 Agent 工作继续，不会自动启动独立 Agent 裁判。
 

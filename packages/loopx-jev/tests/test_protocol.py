@@ -2,21 +2,26 @@
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from loopx_jev.config import load_config, strict_json
 from loopx_jev.progress import DOMAINS, decode_assessment
 from loopx_jev.protocol import validate_choice
-from loopx_jev.transport import send, TransportFailure
+from loopx_jev.transport import TransportFailure, send
 
 
 @pytest.mark.parametrize("code", ["unsupported_method", "invalid_request", "io_permission_denied"])
 def test_manual_basis_preserves_only_the_typed_legacy_method_boundary(tmp_path, monkeypatch, code):
-    from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeRejected, EffectRuntimePermanentIOError
     from loopx_jev.runner import read_basis
+
+    from loopx.control_plane.effect_runtime import (
+        EffectRuntimePermanentIOError,
+        EffectRuntimeRejected,
+        EffectRuntimeRemoteError,
+    )
 
     path = tmp_path / "basis.json"
     manifest = {"goal_id": "study", "objective": "Study a declared file",
@@ -134,6 +139,7 @@ assert 'loopx_jev.runner' not in sys.modules
 """
     process = subprocess.run(
         [sys.executable, "-c", code],
+        check=False,
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -180,8 +186,15 @@ def test_only_actual_refresh_command_is_observed(args, expected):
 
 
 def test_unavailable_platform_file_primitives_are_explicit(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from loopx_jev import drift_capture
     from loopx_jev.drift_capture import capture
 
-    monkeypatch.delattr(os, "O_NOFOLLOW")
+    platform = SimpleNamespace(**vars(os))
+    platform.name = "unsupported"
+    if hasattr(platform, "O_NOFOLLOW"):
+        del platform.O_NOFOLLOW
+    monkeypatch.setattr(drift_capture, "os", platform)
     with pytest.raises(ValueError, match="unsupported_capture_platform"):
         capture(tmp_path, ["file.txt"])
