@@ -3940,3 +3940,34 @@ The earlier failed tests and original acceptance remain negative/open evidence.
 Full V1–V5/V10, R1/M3, default closure, progressive product control, comparable
 complete costs, Standard/workspace delivery and original-Goal regression remain
 open. No installed host, model service, authority history or frozen budget changed.
+
+### 2026-11-14 — Installed composition recovers the original receipt chain
+
+PR #8707 (`d695b40f633742fb0a5e1cb6b970a56c46dba5e9`, integrated as
+`dd44cdcd0c9482bdf135e54ae0b71eb398b4cfe7`) repairs explicitly requested
+Core composition after writeback. The adapter reuses the canonical parser,
+quota registrar and registry codec, validates the complete current CLI prefix
+and original binding, and executes the packaged entrypoint. It retains the
+existing TypeScript settlement owner and producing workspace.
+
+Independent Python 3.11 installed File/SQLite comparisons cover default and
+explicit routes: the baseline commits writeback and fails on the absent facade;
+the candidate recovers that same identity, returns three receipts and retains
+one debit after replay. Ordinary refresh still leaves spend owed without an automatic
+debit. Further installed comparisons place rejecting foreign modules in
+PYTHONPATH and the working directory; the originating Core remains selected.
+
+The preserved installed governance corpus now has 16 confirmed cases in each
+Core and ordinary edition at `78e936f9d1f1a00505c4026ee0a5857de95cee27`.
+Earlier resource failures remain failures. The wider source run retained one
+pre-existing incomplete mocked-readback failure, reproduced at the same base
+and candidate. Its existing settled-intent test now supplies the canonical
+identity/result types; all 32 affected cases pass without weakening the
+production readback or changing the independent intent/no-reopened-work oracle.
+The earlier full-run failure is not rewritten as a passing run.
+
+This qualifies a V2/V3 installed-settlement prerequisite. Full V1–V5/V10,
+R1/M3, real-host compaction/thread retention, progressive control, comparable
+complete costs, Standard/workspace delivery and original-Goal regression remain
+open. No default activation, host upgrade, release or frozen-budget change is
+implied by these protocol fixtures.

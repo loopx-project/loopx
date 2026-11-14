@@ -200,6 +200,31 @@ def test_chat_idempotency_keys_reject_different_requests(tmp_path: Path) -> None
         )
 
 
+@pytest.mark.parametrize("damage", ['{"schema_version": ', "[]", '{"schema_version": "other"}'])
+def test_unreadable_ingress_receipt_is_not_recreated_as_absent(tmp_path: Path, damage: str) -> None:
+    store = ChatSessionStore(tmp_path)
+    session_id = str(
+        store.create_session(
+            goal_id="goal-one",
+            agent_id="codex",
+            executor_endpoint_id="codex",
+            adapter_kind="codex_app_server",
+            upstream_thread_id="thread-one",
+            upstream_mode="chat",
+        )["session_id"]
+    )
+    request = {"client_ingress_id": "ingress-key", "mode": "live_steering", "message": "first"}
+    store.create_ingress_receipt(session_id, **request)
+    store.update_ingress_receipt(session_id, "ingress-key", status="delivered", active_turn_id="turn-one")
+    path = store._ingress_path(session_id, "ingress-key")
+    path.write_text(damage, encoding="utf-8")
+
+    with pytest.raises(OSError, match="unreadable"):
+        store.create_ingress_receipt(session_id, **request)
+
+    assert path.read_text(encoding="utf-8") == damage
+
+
 def test_generated_message_id_skips_transcript_deduplication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2215,3 +2240,50 @@ def test_managed_close_clears_terminal_active_turn_left_by_crash(
     assert current["status"] == "closed"
     assert current["active_turn_id"] is None
     assert adapter.closed is True
+
+
+def test_dangling_ingress_receipt_link_is_not_recreated_as_absent(tmp_path: Path) -> None:
+    store = ChatSessionStore(tmp_path)
+    session_id = str(
+        store.create_session(
+            goal_id="goal-one",
+            agent_id="codex",
+            executor_endpoint_id="codex",
+            adapter_kind="codex_app_server",
+            upstream_thread_id="thread-one",
+            upstream_mode="chat",
+        )["session_id"]
+    )
+    request = {"client_ingress_id": "ingress-key", "mode": "live_steering", "message": "first"}
+    store.create_ingress_receipt(session_id, **request)
+    path = store._ingress_path(session_id, "ingress-key")
+    target = path.with_name("moved-away.json")
+    path.rename(target)
+    path.symlink_to(target.name)
+    target.unlink()
+
+    with pytest.raises(OSError, match="unreadable"):
+        store.create_ingress_receipt(session_id, **request)
+
+    assert path.is_symlink(), "the existing entry is preserved"
+
+
+def test_padded_ingress_id_replays_against_the_normalized_receipt(tmp_path: Path) -> None:
+    store = ChatSessionStore(tmp_path)
+    session_id = str(
+        store.create_session(
+            goal_id="goal-one",
+            agent_id="codex",
+            executor_endpoint_id="codex",
+            adapter_kind="codex_app_server",
+            upstream_thread_id="thread-one",
+            upstream_mode="chat",
+        )["session_id"]
+    )
+    request = {"client_ingress_id": " ingress-key ", "mode": "live_steering", "message": "first"}
+
+    first, created = store.create_ingress_receipt(session_id, **request)
+    replay, created_again = store.create_ingress_receipt(session_id, **request)
+
+    assert created is True and created_again is False
+    assert replay["client_ingress_id"] == first["client_ingress_id"] == "ingress-key"
