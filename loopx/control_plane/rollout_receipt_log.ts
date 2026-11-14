@@ -11,7 +11,7 @@ import { relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
-import { requireNonEmptyString } from "./runtime_decode.ts";
+import { jsonObject, requireNonEmptyString } from "./runtime_decode.ts";
 import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
@@ -154,44 +154,66 @@ export async function readGoalHeartbeatReceipts(
   );
 }
 
+/** A receipt without an exact Goal instance belongs to the legacy goal scope. */
+function receiptMatchesGoalRef(event: JsonObject, goalRef: JsonObject | null): boolean {
+  if (goalRef === null) return !Object.hasOwn(event, "goal_ref");
+  const eventGoalRef = jsonObject(event.goal_ref);
+  return eventGoalRef !== null &&
+    eventGoalRef.goal_id === goalRef.goal_id &&
+    eventGoalRef.goal_instance_id === goalRef.goal_instance_id;
+}
+
+/**
+ * One qualified receipt view for both originating and superseding reads.
+ *
+ * The originating Turn and every candidate successor must come from the same
+ * set: a heartbeat receipt with a real Turn identity in this Goal/Agent and
+ * this exact Goal instance scope. Diagnostic audit rows and rows from another
+ * Goal lifetime therefore cannot renew or retire this transaction.
+ */
+function scopedHeartbeatReceipts(
+  snapshot: GoalRolloutEventSnapshot,
+  goalId: string,
+  agentId: string,
+  goalRef: JsonObject | null,
+): JsonObject[] {
+  if (snapshot.goalId !== goalId) {
+    throw new EffectRuntimeRequestError(
+      "rollout event snapshot does not belong to the requested goal",
+      "rollout_event_snapshot_scope_mismatch",
+    );
+  }
+  return heartbeatReceiptsFromEvents(snapshot.events, goalId, agentId).filter(
+    (event) => receiptMatchesGoalRef(event, goalRef),
+  );
+}
+
 export async function heartbeatReceiptStatus(params: {
   runtimeRoot: string;
   goalId: string;
   agentId: string;
   turnInstanceId: string;
+  goalRef?: JsonObject | null;
 }): Promise<HeartbeatReceiptStatus> {
+  const goalRef = params.goalRef ?? null;
   const snapshot = await readGoalRolloutEventSnapshot(
     params.runtimeRoot,
     params.goalId,
   );
-  const receipts = goalHeartbeatReceiptsFromSnapshot(
+  if (snapshot === null) return "missing";
+  const receipts = scopedHeartbeatReceipts(
     snapshot,
     params.goalId,
     params.agentId,
+    goalRef,
   );
-  if (snapshot === null || receipts === null) return "missing";
-  const firstReceipt = receipts.find(
+  const firstIndex = receipts.findIndex(
     (event) => event.run_id === params.turnInstanceId,
   );
-  const firstMatch = firstReceipt === undefined
-    ? -1
-    : snapshot.events.indexOf(firstReceipt);
-  if (firstMatch < 0) return "missing";
-  return snapshot.events.slice(firstMatch + 1).some((event) => {
-    if (
-      event.event_kind !== HEARTBEAT_RECEIPT_EVENT_KIND ||
-      event.goal_id !== params.goalId ||
-      event.agent_id !== params.agentId
-    ) return false;
-    if (typeof event.run_id === "string" && event.run_id.trim().length > 0) {
-      return event.run_id !== params.turnInstanceId;
-    }
-    const details = event.details;
-    return event.status === "normal_run" &&
-      typeof details === "object" && details !== null && !Array.isArray(details) &&
-      (details as JsonObject).ok === true &&
-      (details as JsonObject).should_run === true;
-  })
+  if (firstIndex < 0) return "missing";
+  return receipts.slice(firstIndex + 1).some(
+    (event) => event.run_id !== params.turnInstanceId,
+  )
     ? "stale"
     : "fresh";
 }

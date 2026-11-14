@@ -111,6 +111,7 @@ interface ReadbackRequest {
   pending_closeout: boolean;
   borrow_source_admission: boolean;
   include_record_bodies: boolean;
+  tolerate_malformed_history: boolean;
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
   owner: QuotaAccountingOwner;
@@ -225,6 +226,14 @@ function decodeRequest(
   if (request.include_record_bodies !== undefined && typeof request.include_record_bodies !== "boolean") {
     throw new EffectRuntimeRequestError("include_record_bodies must be a boolean");
   }
+  if (
+    request.tolerate_malformed_history !== undefined &&
+    typeof request.tolerate_malformed_history !== "boolean"
+  ) {
+    throw new EffectRuntimeRequestError(
+      "tolerate_malformed_history must be a boolean",
+    );
+  }
   if (request.resolve_original_binding === true && request.infer_turn_instance_id) {
     throw new EffectRuntimeRequestError("original binding requires an explicit Turn identity");
   }
@@ -292,6 +301,7 @@ function decodeRequest(
     pending_closeout: request.pending_closeout === true,
     borrow_source_admission: request.borrow_source_admission === true,
     include_record_bodies: request.include_record_bodies !== false,
+    tolerate_malformed_history: request.tolerate_malformed_history === true,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
     heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
       : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
@@ -299,9 +309,12 @@ function decodeRequest(
   };
 }
 
-async function readRunReceipts(path: string): Promise<readonly JsonObject[]> {
+async function readRunReceipts(
+  path: string,
+  tolerateMalformedHistory: boolean = false,
+): Promise<readonly JsonObject[]> {
   const snapshot = await readReceiptLogSnapshot(path);
-  if (snapshot?.firstErrorLine != null) {
+  if (!tolerateMalformedHistory && snapshot?.firstErrorLine != null) {
     throw new EffectRuntimeRequestError(
       `settlement readback line ${snapshot.firstErrorLine} is malformed`,
       "malformed_settlement_state",
@@ -382,6 +395,7 @@ export async function readQuotaSettlementSnapshot(
   runtimeRoot: string,
   goalId: string,
   rolloutSnapshot?: GoalRolloutEventSnapshot | null,
+  tolerateMalformedHistory: boolean = false,
 ): Promise<QuotaSettlementReadbackSnapshot> {
   settlementScope(runtimeRoot, goalId);
   if (
@@ -402,12 +416,17 @@ export async function readQuotaSettlementSnapshot(
     rolloutSnapshot === undefined
       ? readGoalRolloutEventSnapshot(runtimeRoot, goalId)
       : Promise.resolve(rolloutSnapshot),
-    readRunReceipts(join(goalRoot, "runs", "index.jsonl")),
+    readRunReceipts(join(goalRoot, "runs", "index.jsonl"), tolerateMalformedHistory),
   ]);
+  // Settlement-authority callers keep failing closed on the first damaged row.
+  // The scheduler follow-up route only needs the receipts it can actually read,
+  // so it opts into the same tolerant view the heartbeat reader already uses.
   return indexSettlementSnapshot(
     runtimeRoot,
     goalId,
-    strictGoalRolloutEvents(snapshot),
+    tolerateMalformedHistory
+      ? snapshot?.events ?? []
+      : strictGoalRolloutEvents(snapshot),
     runs,
   );
 }
@@ -1501,7 +1520,12 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     request.owner,
     async () => {
       const result = readQuotaSettlementFromRequest(request,
-        await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id));
+        await readQuotaSettlementSnapshot(
+          request.runtime_root,
+          request.goal_id,
+          undefined,
+          request.tolerate_malformed_history,
+        ));
       const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
       if (identity && request.refresh_retry &&
           jsonObject(result.refresh_recovery)?.decision !== "reject" &&

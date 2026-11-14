@@ -71,6 +71,7 @@ class StatusCollectionContext:
     build_goal_channel_notification_projection: StatusCallback
     status_control_plane_context_limit: int
     max_todo_index_items: int
+    tolerate_malformed_settlement_history: bool = False
 
 
 def collect_status(
@@ -89,6 +90,7 @@ def collect_status(
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
     include_presentation_projections: bool = True,
+    tolerate_malformed_settlement_history: bool = False,
 ) -> dict[str, Any]:
     """Collect the status read model.
 
@@ -187,6 +189,10 @@ def collect_status(
         current_registry=registry,
         registry_path=registry_path,
         include_goal_channel_projection=include_presentation_projections,
+        tolerate_malformed_settlement_history=(
+            tolerate_malformed_settlement_history
+            or context.tolerate_malformed_settlement_history
+        ),
     )
     # No later projection consumes the shared status snapshot.
     del todo_snapshot

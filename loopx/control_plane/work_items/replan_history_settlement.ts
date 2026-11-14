@@ -22,6 +22,11 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
     scope.runtime_root,
     scope.goal_id,
   );
+  const tolerateMalformedHistory = scope.tolerate_malformed_history;
+  if (tolerateMalformedHistory !== undefined &&
+      typeof tolerateMalformedHistory !== "boolean") {
+    throw new Error("settlement_source.tolerate_malformed_history must be a boolean");
+  }
   const owner = parseQuotaAccountingOwner({runtimeRoot, goalId,
     goalRefValue: scope.goal_ref, sourceAdmissionValue: scope.source_admission});
   const withOwner = scope.borrow_source_admission === true
@@ -31,7 +36,12 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
     const runs = (Array.isArray(request.runs) ? request.runs : []).filter(
       raw => quotaOwnerOwnsProjection(owner, jsonObject(raw)?.goal_ref));
     const rolloutSnapshot = await readGoalRolloutEventSnapshot(runtimeRoot, goalId);
-    const events = strictGoalRolloutEvents(rolloutSnapshot);
+    // Scheduler writeback returns only need the receipts they can read; a
+    // damaged row is never a receipt. Settlement-authority callers keep the
+    // strict view.
+    const events = tolerateMalformedHistory === true
+      ? rolloutSnapshot?.events ?? []
+      : strictGoalRolloutEvents(rolloutSnapshot);
     const receiptKeys = new Set(events.filter(event =>
       event.event_kind === "quota_should_run" && event.goal_id === goalId &&
       typeof event.agent_id === "string" && typeof event.run_id === "string" &&
@@ -49,7 +59,12 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
     if (settlementRuns.length === 0) {
       return projectReplanHistory({...request, runs}, new Set());
     }
-    const snapshot = await readQuotaSettlementSnapshot(runtimeRoot, goalId, rolloutSnapshot);
+    const snapshot = await readQuotaSettlementSnapshot(
+      runtimeRoot,
+      goalId,
+      rolloutSnapshot,
+      tolerateMalformedHistory === true,
+    );
     const qualified = new Set<string>();
     const seen = new Set<string>();
     for (const raw of settlementRuns) {

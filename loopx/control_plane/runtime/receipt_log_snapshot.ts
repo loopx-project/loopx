@@ -59,6 +59,19 @@ function freezeRecord(record: JsonObject): JsonObject {
   return record;
 }
 
+// One strict decoder for the whole read: replacement characters must never
+// become a different, valid-looking receipt identity. `ignoreBOM` matches
+// Buffer#toString, so a leading BOM still fails JSON parsing as before.
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+function strictUtf8(bytes: Uint8Array): string | null {
+  try {
+    return STRICT_UTF8.decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 function decodeLine(line: string, schemaVersion?: string): JsonObject {
   const record = jsonObject(JSON.parse(line));
   if (record === null || (schemaVersion !== undefined &&
@@ -106,9 +119,11 @@ export async function readReceiptLogSnapshot(
     let batchStart = offset;
     while (offset < completeBytes) {
       const end = bytes.indexOf(10, offset);
-      const line = bytes.subarray(offset, end).toString("utf8");
+      const line = strictUtf8(bytes.subarray(offset, end));
       lines += 1;
-      if (line.trim()) {
+      if (line === null) {
+        firstErrorLine ??= lines;
+      } else if (line.trim()) {
         try {
           records.push(decodeLine(line, schemaVersion));
         } catch {
@@ -128,7 +143,13 @@ export async function readReceiptLogSnapshot(
     });
   }
   remember(key, prefix);
-  const tail = bytes.subarray(completeBytes).toString("utf8");
+  const tail = strictUtf8(bytes.subarray(completeBytes));
+  if (tail === null) {
+    return Object.freeze({
+      records: prefix.records,
+      firstErrorLine: prefix.firstErrorLine ?? prefix.lines + 1,
+    });
+  }
   if (!tail.trim()) return prefix;
   try {
     return Object.freeze({

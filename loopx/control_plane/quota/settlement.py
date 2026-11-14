@@ -474,6 +474,7 @@ def read_heartbeat_settlement(
     borrow_source_admission: bool = False,
     heartbeat_reentry_guard: dict[str, Any] | None = None,
     include_record_bodies: bool = True,
+    tolerate_malformed_history: bool = False,
 ) -> QuotaSettlementReadback | None:
     """Read one complete heartbeat settlement through the TS domain owner."""
 
@@ -490,6 +491,11 @@ def read_heartbeat_settlement(
             **(
                 {"include_record_bodies": include_record_bodies}
                 if include_record_bodies is not True
+                else {}
+            ),
+            **(
+                {"tolerate_malformed_history": True}
+                if tolerate_malformed_history
                 else {}
             ),
             **({"resolve_original_binding": True} if resolve_original_binding else {}),

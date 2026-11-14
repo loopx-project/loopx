@@ -38,6 +38,7 @@ def effective_turn_cadence_context(
     registry_path: Path | None = None,
     goal_ref: dict[str, str] | None = None,
     source_admission: dict[str, Any] | None = None,
+    tolerate_malformed_history: bool = False,
 ) -> dict[str, Any] | None:
     """Encode a Goal whose live cadence was resolved by the caller."""
     profile = goal.get("execution_profile") or {}
@@ -58,6 +59,11 @@ def effective_turn_cadence_context(
         "settlement_source": {
             "runtime_root": str(runtime_root.resolve()),
             "goal_id": goal["id"],
+            **(
+                {"tolerate_malformed_history": True}
+                if tolerate_malformed_history
+                else {}
+            ),
         },
     }
 

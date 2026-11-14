@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  appendFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -68,7 +69,11 @@ function receiptPath(runtimeRoot: string): string {
   return join(runtimeRoot, "goals", scope.goal_id, "rollout-event-log.jsonl");
 }
 
-async function appendReceipt(runtimeRoot: string, turnId: string): Promise<void> {
+async function appendReceipt(
+  runtimeRoot: string,
+  turnId: string,
+  goalRef?: Record<string, string>,
+): Promise<void> {
   const path = receiptPath(runtimeRoot);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify({
@@ -77,6 +82,7 @@ async function appendReceipt(runtimeRoot: string, turnId: string): Promise<void>
     goal_id: scope.goal_id,
     agent_id: scope.agent_id,
     run_id: turnId,
+    ...(goalRef === undefined ? {} : { goal_ref: goalRef }),
   })}\n`, { encoding: "utf8", flag: "a" });
 }
 
@@ -226,6 +232,77 @@ test("missing or superseded heartbeat receipt rejects before scheduler mutation"
   assert.equal(JSON.parse(await readFile(legacyPath, "utf8")).goal_id, scope.goal_id);
 });
 
+async function appendMalformedReceipt(
+  runtimeRoot: string,
+  turnId: string,
+): Promise<void> {
+  const path = receiptPath(runtimeRoot);
+  await mkdir(dirname(path), { recursive: true });
+  // Structurally a newer receipt, but the summary carries one raw 0xff byte.
+  const head = Buffer.from(
+    `{"schema_version":"loopx_rollout_event_v0","event_kind":"quota_should_run",` +
+    `"goal_id":"${scope.goal_id}","agent_id":"${scope.agent_id}",` +
+    `"run_id":"${turnId}","summary":"`,
+  );
+  await appendFile(path, Buffer.concat([head, Buffer.from([0xff]), Buffer.from('"}\n')]));
+}
+
+test("a malformed newer log row cannot block a still-valid ACK or failure", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await appendReceipt(runtimeRoot, "turn-followup-1");
+  const base = request(runtimeRoot);
+  const statePath = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+
+  await appendMalformedReceipt(runtimeRoot, "turn-bad-bytes");
+  const snapshot = await readGoalRolloutEventSnapshot(runtimeRoot, scope.goal_id);
+  assert.equal(snapshot!.firstStrictErrorLine, 2);
+  assert.deepEqual(
+    goalHeartbeatReceiptsFromSnapshot(snapshot, scope.goal_id)!.map((r) => r.run_id),
+    ["turn-followup-1"],
+  );
+  // Strict settlement readback still reports the damaged row.
+  assert.throws(() => strictGoalRolloutEvents(snapshot), {
+    code: "malformed_settlement_state",
+  });
+
+  const ack = await evaluateSchedulerHeartbeatFollowup(base);
+  assert.equal(ack.ok, true);
+  assert.equal((ack.scheduler_commit as Record<string, unknown>).status, "written");
+
+  const failure = await evaluateSchedulerHeartbeatFollowup({
+    ...base,
+    host_facts: {
+      ...(base.host_facts as Record<string, unknown>),
+      operation: "host_failure",
+      applied_rrule: "FREQ=MINUTELY;INTERVAL=3",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=3",
+      failure_kind: "timeout",
+      source: "quota_scheduler_host_update_failure",
+    },
+  });
+  assert.equal(failure.ok, true);
+  assert.equal(failure.mode, "scheduler-fail-current");
+
+  // A genuinely newer receipt still fences both writebacks.
+  await appendReceipt(runtimeRoot, "turn-followup-2");
+  const staleAck = await evaluateSchedulerHeartbeatFollowup({
+    ...base,
+    host_facts: {
+      ...(base.host_facts as Record<string, unknown>),
+      generated_at: "2026-08-27T06:35:00Z",
+    },
+  });
+  assert.equal(staleAck.ok, false);
+  assert.equal(staleAck.status, "heartbeat_receipt_stale");
+  assert.equal(staleAck.scheduler_state_mutated, false);
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).goal_id, scope.goal_id);
+});
+
 test("receipt-bound ACK rechecks freshness after waiting for the scheduler lock", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   await appendReceipt(runtimeRoot, "turn-followup-1");
@@ -251,6 +328,87 @@ test("receipt-bound ACK rechecks freshness after waiting for the scheduler lock"
   assert.equal(stale.status, "heartbeat_receipt_stale");
   assert.equal(stale.scheduler_state_mutated, false);
   await assert.rejects(readFile(path, "utf8"), { code: "ENOENT" });
+});
+
+test("another Goal instance cannot authorize or supersede an exact-instance receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const goalRefA = {
+    goal_id: scope.goal_id,
+    goal_instance_id: `ginst_${"a".repeat(32)}`,
+  };
+  const goalRefB = {
+    goal_id: scope.goal_id,
+    goal_instance_id: `ginst_${"b".repeat(32)}`,
+  };
+  const statePath = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+  await appendReceipt(runtimeRoot, "turn-followup-1", goalRefB);
+
+  const foreign = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+    goal_ref: goalRefA,
+  }));
+  assert.equal(foreign.ok, false);
+  assert.equal(foreign.status, "heartbeat_receipt_missing");
+  assert.equal(foreign.scheduler_state_mutated, false);
+  await assert.rejects(readFile(statePath, "utf8"), { code: "ENOENT" });
+
+  await appendReceipt(runtimeRoot, "turn-followup-1", goalRefA);
+  const fresh = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+    goal_ref: goalRefA,
+  }));
+  assert.equal(fresh.ok, true);
+  assert.equal((fresh.scheduler_commit as Record<string, unknown>).status, "written");
+
+  // A newer receipt for another Goal lifetime is outside this transaction's
+  // freshness scope and cannot turn the exact instance's receipt stale.
+  await appendReceipt(runtimeRoot, "turn-followup-2", goalRefB);
+  const stillFresh = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot, {
+    goal_ref: goalRefA,
+    host_facts: {
+      ...((request(runtimeRoot).host_facts) as Record<string, unknown>),
+      generated_at: "2026-08-27T06:35:00Z",
+    },
+  }));
+  assert.equal(stillFresh.ok, true);
+});
+
+test("the scheduler lock rechecks freshness inside the exact Goal instance", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const goalRefA = {
+    goal_id: scope.goal_id,
+    goal_instance_id: `ginst_${"c".repeat(32)}`,
+  };
+  const goalRefB = {
+    goal_id: scope.goal_id,
+    goal_instance_id: `ginst_${"d".repeat(32)}`,
+  };
+  const exactRequest = request(runtimeRoot, { goal_ref: goalRefA });
+  await appendReceipt(runtimeRoot, "turn-followup-1", goalRefA);
+  const path = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+  const held = await acquireFileMutationLock(path);
+  let released = false;
+  t.after(async () => {
+    if (!released) await releaseFileMutationLock(held.targetPath, held.token);
+  });
+
+  const inFlight = evaluateSchedulerHeartbeatFollowup(exactRequest);
+  await delay(250);
+  await appendReceipt(runtimeRoot, "turn-followup-2", goalRefB);
+  released = await releaseFileMutationLock(held.targetPath, held.token);
+
+  const written = await inFlight;
+  assert.equal(written.ok, true);
+  assert.equal((written.scheduler_commit as Record<string, unknown>).status, "written");
+  assert.equal(JSON.parse(await readFile(path, "utf8")).goal_id, scope.goal_id);
 });
 
 test("decision-free compatibility requests can omit a heartbeat receipt", async (t) => {
@@ -325,9 +483,12 @@ test("another Agent receipt cannot supersede ACK or host-failure writeback", asy
   assert.equal(failed.failure_count, 1);
 });
 
-test("a successful identity-less quota guard supersedes an older host receipt", async (t) => {
+test("a successful identity-less quota guard cannot supersede a host receipt", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   await appendReceipt(runtimeRoot, "turn-followup-1");
+  // A historical-shaped audit row carries no Turn identity. It cannot retire
+  // the originating receipt, because the same bytes are indistinguishable
+  // from an audit row copied out of older history.
   await writeFile(receiptPath(runtimeRoot), `${JSON.stringify({
     schema_version: "loopx_rollout_event_v0",
     event_kind: "quota_should_run",
@@ -337,6 +498,14 @@ test("a successful identity-less quota guard supersedes an older host receipt", 
     details: { ok: true, should_run: true },
   })}\n`, { flag: "a" });
 
+  const acknowledged = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
+  assert.equal(acknowledged.ok, true);
+  const commit = acknowledged.scheduler_commit as Record<string, unknown>;
+  assert.equal(commit.status, "written");
+  assert.equal(commit.written, true);
+
+  // A real newer Turn in the same Goal instance remains authoritative.
+  await appendReceipt(runtimeRoot, "turn-followup-2");
   const stale = await evaluateSchedulerHeartbeatFollowup(request(runtimeRoot));
   assert.equal(stale.error_code, "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE");
   assert.equal(stale.scheduler_state_mutated, false);
