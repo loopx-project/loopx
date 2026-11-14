@@ -44,6 +44,7 @@ def _decision(*, state: str = "claim_required", host_execution_allowed: bool = T
             "reason_code": "task_lease_missing",
             "claim": {
                 "command": "loopx todo claim",
+                "command_line": "loopx todo claim --goal-id " + GOAL + " --thin",
                 "cli_args": advertised if cli_args is None else cli_args,
                 "host_execution_allowed": host_execution_allowed,
                 "postcondition": (
@@ -316,3 +317,68 @@ def test_a_legacy_unstarted_cadence_reservation_recovers_without_a_second_start(
     migrated.confirm()
     duplicate = migrated.admit(attempt)
     assert duplicate["admitted"] is False and duplicate["reason"] == "duplicate_or_stale_trigger"
+
+
+def test_unconsumed_preparation_refusal_names_the_advertised_claim() -> None:
+    from loopx.control_plane.turn_driver.codex_execution_preparation import (
+        unconsumed_preparation_refusal,
+    )
+
+    refusal = unconsumed_preparation_refusal(_decision())
+    assert refusal is not None
+    assert refusal["reason_code"] == "turn_execution_preparation_claim_not_consumed"
+    assert refusal["todo_id"] == TODO
+    assert refusal["claim_command"].startswith("loopx todo claim")
+
+
+def test_unconsumed_preparation_refusal_leaves_other_states_alone() -> None:
+    from loopx.control_plane.turn_driver.codex_execution_preparation import (
+        unconsumed_preparation_refusal,
+    )
+
+    assert unconsumed_preparation_refusal(_decision(state="ready")) is None
+    assert unconsumed_preparation_refusal({"ok": True}) is None
+    without_command = _decision()
+    without_command["execution_preparation"]["claim"] = {"host_execution_allowed": False}
+    refusal = unconsumed_preparation_refusal(without_command)
+    assert refusal is not None and "claim_command" not in refusal
+
+
+def test_run_once_refuses_typed_when_the_builtin_claim_is_not_consumed(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import contextlib
+    import io
+
+    from loopx.cli import main
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+    from test_loopx_turn_codex_cli import _fake_codex
+    from test_loopx_turn_driver import _write_live_fixture
+
+    project, runtime, registry = _write_live_fixture(tmp_path, handoff_mode="hard_lease")
+    native, marker = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(marker))
+    declined: list[int] = []
+    monkeypatch.setattr(
+        codex_execution_preparation,
+        "builtin_execution_preparation_claim",
+        lambda *args, **kwargs: declined.append(1) or None,
+    )
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(native),
+            "--codex-sandbox", "read-only", "--no-global-sync", "--iteration-context", "fresh",
+            "--timeout-seconds", "15", "--execute",
+        ])
+    packet = json.loads(output.getvalue())
+    assert code == 1, packet
+    assert declined == [1], packet
+    assert packet.get("status") == "execution_preparation_required", packet
+    assert packet["reason_code"] == "turn_execution_preparation_claim_not_consumed"
+    assert "todo claim" in packet["claim_command"]
+    effects = packet.get("effects") or {}
+    assert not effects.get("quota_spent") and not effects.get("state_written")
+    assert not marker.exists(), "the Host must not be invoked on a refused preparation"
