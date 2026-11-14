@@ -2,7 +2,7 @@ import {DocumentAttachment, isDocumentAttachment} from "./document-attachment";
 import { MessageActivity } from "./message-activity";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import {Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState} from "react";
+import {Fragment, memo, useEffect, useEffectEvent, useLayoutEffect, useRef, useState} from "react";
 import { CollaborationCards } from "./collaboration-card";
 import {ConversationReplyContext} from "./conversation-requests";
 import { Activity, Bot, Sparkles } from "lucide-react";
@@ -54,7 +54,7 @@ function LinkedHistoryImage({name, source, ready, zh}: {name: string; source: st
     onError={() => setImageRead(current => current?.source === source ? {source, failed: true} : current)}/>;
 }
 
-export function ChannelTimeline({
+export const ChannelTimeline = memo(function ChannelTimeline({
   emptyState,
   readOnly = false,
   items,
@@ -307,4 +307,4 @@ export function ChannelTimeline({
       </div>
     </>
   );
-}
+});

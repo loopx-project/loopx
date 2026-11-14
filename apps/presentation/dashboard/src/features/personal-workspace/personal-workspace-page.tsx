@@ -22,7 +22,7 @@ import {
 } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import { refreshAttention } from "./attention-details";
 import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes, teamPlanTodoIds } from "./team-plan-preview";
-import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
 
 import {
   applyTypedAction,
@@ -1312,7 +1312,9 @@ export function PersonalWorkspacePage({
     active: Boolean(runningMessage || selectedAgentModelReadback?.active_turn_id),
     refreshKey: `${managerMessages.length}:${Boolean(managerMessages.at(-1)?.pending)}:${steering}`,
   });
-  const queuedTurnKeys = new Set(conversationQueue.turns.map(turn => JSON.stringify([conversationSessionId, turn.turn_id])));
+  const queueTurns = conversationQueue.readReady ? conversationQueue.turns : undefined;
+  const queuedTurnKeys = useMemo(() => queueTurns && new Set(queueTurns.map(turn =>
+    JSON.stringify([conversationSessionId, turn.turn_id]))), [queueTurns, conversationSessionId]);
   const observedQueue = useRef<{scope: string; snapshot: string} | null>(null);
   useEffect(() => {
     const turnId = conversationQueue.activeTurnId;
@@ -1376,8 +1378,55 @@ export function PersonalWorkspacePage({
         || managerChannelProposalIds.includes(item.proposal.previewId)))),
     [items, managerSessionProposalIds, managerChannelProposalIds],
   );
+  const boundManagerChat = Boolean(selectedWorkspaceRef || originalConversation);
+  const managerTimelineItems = useMemo(() => boundManagerChat
+    ? managerChatItems.filter(item => item.kind === "message") : managerChatItems, [boundManagerChat, managerChatItems]);
+  const managedTimelineItems = useMemo(() => visibleTimelineItems.filter(item => item.kind === "message"), [visibleTimelineItems]);
+  const managerTimelineUnavailable = Boolean(originalConversation && (originalSourceUnresolved
+    || (conversationHistoryState && conversationHistoryState.phase !== "ready")));
+  const managerTimelineTitle = managerTimelineUnavailable
+    ? originalConversation?.error || conversationHistoryState?.phase === "unavailable" || conversationHistoryState?.phase === "partial"
+      ? (locale === "zh-CN" ? "原会话暂不可用" : "Original conversation unavailable")
+      : (locale === "zh-CN" ? "正在读取原会话…" : "Reading the original conversation…")
+    : workspaceTitle;
+  const managerTimelineDescription = managerTimelineUnavailable ? "" : t("workspace.empty");
+  const managerTimelineEmpty = useMemo(() => managerTimelineTitle
+    ? {title: managerTimelineTitle, description: managerTimelineDescription} : undefined,
+    [managerTimelineTitle, managerTimelineDescription]);
+  const timelineKey = `${selectionScope}:${conversationKey}:${selectedAgentId}`;
+
+  // Draft edits do not change history. A retained history action still calls
+  // the latest committed handler in its own conversation.
+  const currentTimelineActions = useRef<typeof nextTimelineActions>(null);
+  const timelineActionTarget = agentWorkActive ? conversationKey : selectedGoal?.goalId ?? conversationKey;
+  const canCancelTimelineTurn = !readOnly && Boolean(callbacks.onCancelConversationPreparation);
+  const canInterruptTimelineTurn = !readOnly && Boolean(callbacks.onInterruptConversationTurn);
+  const nextTimelineActions = {
+    key: timelineKey,
+    select: setSelection,
+    review: readOnly ? undefined : reviewGoalDraft,
+    suggest: readOnly ? undefined : suggestReply,
+    adjust: focusTurnComposer,
+    cancel: canCancelTimelineTurn ? () => callbacks.onCancelConversationPreparation?.(timelineActionTarget) : undefined,
+    interrupt: canInterruptTimelineTurn ? (turnId: string) => callbacks.onInterruptConversationTurn?.(timelineActionTarget, turnId) : undefined,
+    openEvidence: (goalId: string) => { selectGoal(goalId, "chat"); },
+  };
+  useLayoutEffect(() => { currentTimelineActions.current = nextTimelineActions; });
+  const timelineActions = useMemo(() => {
+    const current = () => currentTimelineActions.current?.key === timelineKey ? currentTimelineActions.current : null;
+    return {
+      onSelect: (value: WorkspaceDrawerSelection) => current()?.select(value),
+      onReviewGoalDraft: async (...args: Parameters<typeof reviewGoalDraft>) => { await current()?.review?.(...args); },
+      onSuggestReply: (text: string) => current()?.suggest?.(text),
+      onAdjustTurn: (turnId: string) => current()?.adjust(turnId),
+      onCancelPreparation: () => current()?.cancel?.(),
+      onInterruptTurn: async (turnId: string) => { await current()?.interrupt?.(turnId); },
+      onOpenGoalEvidence: (goalId: string) => current()?.openEvidence(goalId),
+    };
+  }, [timelineKey]);
   const conversationOpen = (!agentWorkActive || managedWorkActive) && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
   const boundHistory = Boolean(originalConversation);
+  const onReadTimelineMessage = useCallback(() => { followConversationRef.current = false; }, []);
   const historyPositionScope = JSON.stringify([selectionScope, conversationKey, selectedAgentId,
     conversationMessageFocus?.sessionId, conversationMessageFocus?.messageId]);
   const [positionedHistoryScope, setPositionedHistoryScope] = useState<string | null>(null);
@@ -1387,7 +1436,7 @@ export function PersonalWorkspacePage({
     historyPhase: conversationHistoryState?.phase,
     historyPositionReady: !boundHistory || (conversationOpen && positionedHistoryScope === historyPositionScope),
     onRetryHistory: conversationHistoryState?.retry,
-    onReadMessage: () => { followConversationRef.current = false; },
+    onReadMessage: onReadTimelineMessage,
   };
   const latestMessage = managerMessages.at(-1);
   const latestMessageTextLength = latestMessage?.text.length ?? 0;
@@ -3013,10 +3062,10 @@ export function PersonalWorkspacePage({
                     sessionId={selectedWorkSessionId} onSession={(id, replace) => callbacks.onSelectWorkSession?.(id, replace)}
                     onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}>
                     {workspaceConversations?.managed?.error ? <p role="alert">{workspaceConversations.managed.error} <button type="button" onClick={workspaceConversations.managed.retry}>{t("history.retry")}</button></p> : null}
-                    <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly} items={visibleTimelineItems.filter(item => item.kind === "message")} onSelect={setSelection} selectedGoal={selectedGoal}
-                      onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
-                      onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
-                      onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? turnId => callbacks.onInterruptConversationTurn!(conversationKey, turnId) : undefined}/>
+                    <ChannelTimeline key={timelineKey} {...timelineReading} readOnly={readOnly} items={managedTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={selectedGoal}
+                      onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
+                      onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
+                      onInterruptTurn={canInterruptTimelineTurn ? timelineActions.onInterruptTurn : undefined}/>
                   </GoalAgentWorkPage> : (<>
                     {selectedGoal && activeSessionRun?.goalId === selectedGoal.goalId ? (
                       <SessionRecordHeader
@@ -3025,13 +3074,12 @@ export function PersonalWorkspacePage({
                         run={activeSessionRun}
                       />
                     ) : null}
-                    <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal}
-                      onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
-                      onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
-                        ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
-                      onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
-                        ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId)
-                        : undefined} />
+                    <ChannelTimeline key={timelineKey} {...timelineReading} readOnly={readOnly}
+                      onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft} onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
+                      items={visibleTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={selectedGoal}
+                      onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
+                      onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
+                      onInterruptTurn={canInterruptTimelineTurn ? timelineActions.onInterruptTurn : undefined} />
                   </>),
                 }} />
               </GoalWorkBrowseProvider>
@@ -3043,24 +3091,13 @@ export function PersonalWorkspacePage({
                 recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})} />
             ) : (
-              <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly}
-                emptyState={originalConversation && (originalSourceUnresolved
-                  || (conversationHistoryState && conversationHistoryState.phase !== "ready")) ? {
-                  title: originalConversation.error || conversationHistoryState?.phase === "unavailable" || conversationHistoryState?.phase === "partial"
-                    ? (locale === "zh-CN" ? "原会话暂不可用" : "Original conversation unavailable")
-                    : (locale === "zh-CN" ? "正在读取原会话…" : "Reading the original conversation…"),
-                  description: "",
-                } : workspaceTitle ? {title: workspaceTitle, description: t("workspace.empty")} : undefined}
-                onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply}
-                items={selectedWorkspaceRef || originalConversation ? managerChatItems.filter((item) => item.kind === "message") : managerChatItems}
-                onSelect={setSelection} selectedGoal={null} showManagerTeamResults={!selectedWorkspaceRef && !originalConversation}
-                onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
-                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
-                  ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
-                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
-                  ? (turnId) => callbacks.onInterruptConversationTurn!(conversationKey, turnId)
-                  : undefined}
-                onOpenGoalEvidence={(goalId) => { selectGoal(goalId, "chat"); }} />
+              <ChannelTimeline key={timelineKey} {...timelineReading} readOnly={readOnly} emptyState={managerTimelineEmpty}
+                onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft} onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
+                items={managerTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={null} showManagerTeamResults={!boundManagerChat}
+                onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
+                onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
+                onInterruptTurn={canInterruptTimelineTurn ? timelineActions.onInterruptTurn : undefined}
+                onOpenGoalEvidence={timelineActions.onOpenGoalEvidence} />
             ))}
             </> : null}
           </div>

@@ -28,6 +28,10 @@ export const goalDraftScenario = {
       const requests = api.turnRequests.length;
       await card.getByRole("button", {name: "资本支出变化", exact: true}).click();
       assert.equal(await composer.inputValue(), "资本支出变化");
+      await composer.fill("保留现金流的判断。");
+      await card.getByRole("button", {name: "资本支出变化", exact: true}).click();
+      assert.equal(await composer.inputValue(), "保留现金流的判断。\n资本支出变化",
+        "An existing suggestion appends to the current draft");
       assert.equal(api.turnRequests.length, requests, "Suggestion auto-sent a request");
       assert.equal(api.actionPreviews.length, 0);
       assert.equal(api.durableWriteCount, writes);
