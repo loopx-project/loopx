@@ -150,6 +150,36 @@ transport lifecycle belong to an optional extension provider; its provider ID
 and registered contract binding are an implementation decision before coding.
 The gateway never supplies a model or assumes ownership of local runtime tools.
 
+### Storage-independent access credentials
+
+Every cross-computer client authenticates at the LoopX service boundary,
+whether the backend is PostgreSQL, a NAS-backed qualified provider or another
+store. Backend choice does not change the client credential or permission
+contract. The gateway retains backend/database/NAS credentials; clients cannot
+bypass admission by mounting writable authority files. This defines no new NAS
+provider or permission to use an unqualified network filesystem as authority.
+Same-account local stdio/filesystem access keeps its existing OS boundary;
+this rule does not add a network key to local-only operation.
+
+The first profile uses separately revocable, high-entropy API keys for client
+bindings, with distinct device keys when independent revocation is required.
+Do not distribute one team-wide key. The server binds each key to an authenticated
+principal and its allowed Goal/actor/host/operation scopes and stores a verifier
+digest, following the existing remote service pattern. Keys stay in trusted
+local credential configuration and travel only through verified TLS transport,
+outside prompts and model tool arguments. Rotation/revocation preserves historical
+receipts and does not itself release, reacquire or transfer execution leases.
+A bearer key authenticates its configured binding; it does not attest a physical
+device or truthful Agent behavior. The current candidate does not establish a
+complete multi-device credential-management product.
+
+An API key is a shared secret, not an asymmetric private key. A later key-pair
+profile may register a public key with the service while the client keeps its
+private key locally and proves possession with a request-bound, freshness-checked
+signature. Qualify replay rejection and key rotation/revocation before enabling
+that profile. Authentication alone never grants Goal/evidence access, acceptance
+or a task lease; both profiles use the same authorization and receipt owners.
+
 ### Work and feedback lifecycle
 
 1. An operator grants scope; the person connects and reads the selected Goal,
@@ -242,7 +272,7 @@ requires reviewed export/cutover rather than a silent failover.
 
 | ID / claim | Decisive evidence | Required result / limit |
 | --- | --- | --- |
-| C1 Scoped access | Two people on two physical computers; wrong principal/tenant/Goal, same alias/different lifetime, revocation and mixed-version cases | Only granted scopes discoverable; stale/unauthorized writes have no effect; one-host processes are insufficient |
+| C1 Scoped access | Two people on two physical computers; wrong/missing key or principal/tenant/Goal, same alias/different lifetime, per-client rotation/revocation and mixed-version cases; provider-neutral admission conformance | Only granted scopes discoverable; stale/unauthorized writes have no effect; revoking one client's key preserves another granted client and historical receipts; one-host processes or an unqualified NAS provider are insufficient |
 | C2 Complete collaboration | Real request → local investigation → portable artifact → independent exact-version check → receiver's next action → original-route return | Recoverable commitments and observed adoption; submission/message count does not pass |
 | C3 Portable evidence | Second computer opens exact bytes; denied/offline/deleted source, conflicting version/digest and common-origin copies | Permitted bytes reproducible, failures visible, no permission transfer or false corroboration |
 | C4 Failure and cost | Lost response after commit, reconnect, service restart/restore, lease expiry/takeover, stop/drain and budget contention | Reconcile the same intent once; no duplicate effect/debit, stale completion or hidden local-write fallback |
@@ -301,9 +331,10 @@ results in canonical Todos/ledgers. M2 cannot stop at a serializer or MCP demo.
 ## 12. Open decisions
 
 1. **Deployment and identity profile — service/identity owners, before M1:**
-   operator-managed scoped credentials versus federated identity. Recommend a
-   small operator-provisioned cohort first; qualify custody, revocation and host
-   compatibility before a public enrollment service.
+   operator-managed API keys versus key-pair/federated identity profiles. Start
+   with the API-key profile in §5 and a small operator-provisioned cohort; keep
+   asymmetric signing and public enrollment unapproved until their custody,
+   rotation/revocation, replay and host compatibility are qualified.
 2. **Evidence hosting/retention — evidence/material and source owners, before M1:**
    authorized source resolution versus consented immutable replica. Recommend
    small shareable artifacts first; choose limits from source rights, second-host
