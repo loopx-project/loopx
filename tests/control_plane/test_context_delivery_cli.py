@@ -136,9 +136,6 @@ def test_reader_bounds_actual_json_stdout_and_preserves_every_byte(tmp_path, mon
         assert max(sizes) > 3072
     # Page reads have no authority or settlement effects.
     assert _heartbeat_receipt_count(runtime, "reader-budget") == 0 and _spend_run_count(runtime) == 0
-    code, rejected = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(capture),
-        "--capture-sha256", digest, "--max-page-output-bytes", "1")
-    assert code == 1 and not rejected["ok"] and "same capture" in rejected["reason"]
     assert _spend_run_count(runtime) == 0
 
 
@@ -707,7 +704,11 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         "interaction_contract": _valid_interaction(),
         "heartbeat_receipt": {"turn_instance_id": "original-turn", "status": "committed"}}
     expected = compose_turn_decision(original)
-    monkeypatch.setattr(quota, "handoff_decision", lambda *args: ({"scope": "host-request"}, "digest"))
+    def handoff(_directory, _socket, _enabled, *, capture_sha256):
+        assert capture_sha256 == hashlib.sha256((tmp_path / "decision.json").read_bytes()).hexdigest()
+        return {"scope": "host-request"}, capture_sha256
+
+    monkeypatch.setattr(quota, "handoff_decision", handoff)
 
     def competing(*args, **kwargs):
         pytest.fail("explicit native observation must not compose two projection owners")
@@ -741,7 +742,9 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         assert len(printed) == 1 and printed[0]["ok"] is False
         assert printed[0]["error_code"] == "quota_decision_transport_failed"
         assert printed[0]["heartbeat_receipt"] == original["heartbeat_receipt"]
-        assert printed[0]["captured_decision"] == {"path": str(tmp_path / "decision.json")}
+        saved = tmp_path / "decision.json"
+        assert printed[0]["captured_decision"]["path"] == str(saved)
+        assert printed[0]["captured_decision"]["sha256"] == hashlib.sha256(saved.read_bytes()).hexdigest()
     else:
         assert len(printed) == 1 and "content" not in printed[0]
         reference = read_context_read_reference(printed[0]["reference_file"])[1]

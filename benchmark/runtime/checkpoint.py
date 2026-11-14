@@ -279,12 +279,34 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         reading = preflight_context_instruction(env, source_path, guard_digest,
             receipt["turn_id"], guide_in_host=guide_in_host)
     else:
+        from loopx.command_invocation import loopx_cli_argv
+        from loopx.control_plane.runtime.document_io import atomic_write_state_text
+        from loopx.control_plane.turn_driver.decision_capture import (
+            CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
+        )
+
+        reader_argv = loopx_cli_argv(env["LOOPX_CLI"])
+
+        def bounded_read(path: Path, raw: bytes) -> str:
+            return context_capture_read_command(path, hashlib.sha256(raw).hexdigest(),
+                page_bytes=8000, max_page_output_bytes=8000, reader_argv=reader_argv)
+
         view_path = guard_path.with_name("checkpoint-start-view.json")
-        view_path.write_text(guard_run.stdout, encoding="utf-8")
-        view_path.chmod(0o600)
+        view = guard_run.stdout
+        atomic_write_state_text(view_path, view, private=True)
+        reader = bounded_read(view_path, view.encode("utf-8"))
         action = "action, required reads and settlement instructions" if legacy_display else "interaction_contract"
-        reading = (f"Read the complete CLI view at {view_path} before work, then follow its {action} "
-            "and replan review/writeback reads when present. ")
+        reading = (f"Read the complete saved CLI view before work, then follow its {action} "
+            "and replan review/writeback reads when present.\n```sh\n" + reader + "\n```\n"
+            + CONTEXT_CAPTURE_PAGE_GUIDANCE + " ")
+        if legacy_display:
+            reading += (
+                "Use this paged command for the short view's detail_ref.full_decision. "
+                "To read only a required field, append --select with its JSON pointer, for example "
+                "--select /interaction_contract/cli_channel/selection_command when Todo selection is required. "
+                "Apply the same byte checks and follow this source's own page cursors.\n```sh\n"
+                + bounded_read(source_path, raw_guard) + "\n```\n"
+            )
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)

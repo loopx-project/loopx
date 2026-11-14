@@ -134,7 +134,8 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
             assert denied["detail_ref"]["captured_decision"]["path"] == str(capture / "decision.json")
             denied = captured
         assert denied["error_code"] == "quota_action_selection_rejected"
-        if source == "ordinary":
+        ordinary_source = source == "ordinary" and profile == "generic_cli"
+        if ordinary_source:
             assert "schema_version" not in captured and "contract_binding" not in captured
             assert "schema_version" not in denied and "contract_binding" not in denied
             assert denied["heartbeat_receipt"] == captured["heartbeat_receipt"]
@@ -159,7 +160,7 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
             "selection_rejection" in denied
             or "action_selection_qualification" in denied
         )
-        if source != "ordinary":
+        if not ordinary_source:
             binding = denied["contract_binding"]["scheduler_execution_args"]
             from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
 
