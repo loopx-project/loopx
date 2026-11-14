@@ -147,6 +147,10 @@ export async function inspectAuthorityBackup(dataRoot: string, row: JsonObject):
   // then supplies its private verified copy to the Goal read-model owner.
   return withVerifiedAuthorityArchive(join(directory, "authority.jsonl"), String(expected.archive_sha256), async archive => {
     if (canonicalAuthoritySha256({...archive.summary}) !== canonicalAuthoritySha256(expected)) throw new Error("authority capture summary mismatch");
+    const commitCount = Number(archive.summary.commits);
+    if (!Number.isSafeInteger(commitCount) || String(commitCount) !== archive.summary.commits) {
+      throw new Error("authority history count cannot be represented in the recovery report");
+    }
     const selector = await sourceBytes(join(directory, "selector.json"));
     if (selector !== null) {
       const selection = decodeLocalAuthoritySelection(JSON.parse(selector.toString("utf8")), goalId);
@@ -160,7 +164,7 @@ export async function inspectAuthorityBackup(dataRoot: string, row: JsonObject):
     const collection = canonicalTodoCollection(head, goalId, true);
     return {provider: archive.summary.source_provider, head_digest: archive.summary.projection_sha256,
       provider_revision: archive.summary.source_provider_revision, cursor: archive.summary.commits,
-      history_commits: Number(archive.summary.commits), todo_count: collection.projection.todo_ids.length,
+      history_commits: commitCount, todo_count: collection.projection.todo_ids.length,
       historical_lease_count: collection.leaseIndex?.lease_todo_ids.length ?? 0,
       capture_started_at: row.started_at, capture_completed_at: row.completed_at};
   });
