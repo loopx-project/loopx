@@ -7,6 +7,7 @@ from urllib.parse import quote, unquote
 
 from ..capabilities.manager_context.roundtrip import read_chat_return_file
 from ..chat_attachments import CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_TYPES
+from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import effect_runtime_request_scope
 
 
@@ -116,7 +117,7 @@ class ChatResultFilesRequestMixin:
             self._send_error("Conversation images are only available to the original App.", status=403)
             return True
         try:
-            if not re.fullmatch(r"[0-9]{1,3}", parts[7]) or not re.fullmatch(r"[a-f0-9]{64}", parts[8]):
+            if not re.fullmatch(r"[0-9]{1,3}", parts[7]) or not BARE_SHA256_PATTERN.fullmatch(parts[8]):
                 raise KeyError("image unavailable")
             mime, body = read_chat_history_image(
                 self.server.chat_store, unquote(parts[3]), unquote(parts[5]), int(parts[7]), parts[8])
