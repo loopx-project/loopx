@@ -339,7 +339,7 @@ def _prepare_quota_result_context(
     payload: dict[str, object], args: argparse.Namespace, *,
     context: QuotaCommandContext | None, registry_path: Path,
     heartbeat_turn_id: str | None, capture_directory: Path | None, reader_argv: list[str],
-    complete_source: bool, activation: Mapping[str, Any],
+    complete_source: bool, preserve_app_delivery: bool, activation: Mapping[str, Any],
     remember_result: Callable[[dict[str, object], str | None], None],
 ) -> tuple[dict[str, object], list[dict[str, Any]]]:
     """Stage optional context after the capture and settlement route is decided."""
@@ -360,7 +360,8 @@ def _prepare_quota_result_context(
         retain_delivery_options=complete_source)
     if args.quota_command == "should-run" and context is not None:
         bind_capture_recovery_transport(payload, args, capture_directory=capture_directory,
-            registry_path=registry_path, runtime_root=context.runtime_root)
+            registry_path=registry_path, runtime_root=context.runtime_root,
+            preserve_app_delivery=preserve_app_delivery)
     if capture_directory is not None and payload.get("replan_action_packet"):
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": reader_argv}
@@ -506,6 +507,7 @@ def _publish_quota_result(
     host_todo_settlement = getattr(args, "host_todo_settlement", False)
     complete_source = False
     app_source = False
+    antigravity_work_turn = False
     runtime_root = context.runtime_root if context is not None else None
     if not budgeted_spend:
         try:
@@ -526,8 +528,12 @@ def _publish_quota_result(
                 scheduler_runtime_profile_for_execution_context,
             )
 
-            app_source = (scheduler_runtime_profile_for_execution_context(context.scheduler_context)
-                is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT)
+            profile = scheduler_runtime_profile_for_execution_context(context.scheduler_context)
+            # Antigravity also uses this command for turnless sidecar and Stop probes.
+            antigravity_work_turn = (
+                profile is SchedulerRuntimeProfile.ANTIGRAVITY_APP and heartbeat_turn_id is not None
+            )
+            app_source = profile is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT or antigravity_work_turn
         complete_source = (host_todo_settlement or app_source
             or any(getattr(args, name, None) for name in (
                 "complete_turn", "turn_envelope", "decision_handoff_socket",
@@ -535,7 +541,9 @@ def _publish_quota_result(
         payload, capability_context = _prepare_quota_result_context(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
-            complete_source=complete_source, activation=activation, remember_result=remember_result,
+            complete_source=complete_source,
+            preserve_app_delivery=antigravity_work_turn and not getattr(args, "complete_turn", False),
+            activation=activation, remember_result=remember_result,
         )
     _observe_live_quota_result(
         args, payload, context=context, registry_path=registry_path,
