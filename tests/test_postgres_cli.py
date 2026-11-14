@@ -31,7 +31,7 @@ def test_postgres_setup_dry_run():
     assert process.returncode == 0, process.stderr
     payload = json.loads(process.stdout)
     assert payload["status"] == "dry_run"
-    assert payload["schema_version"] == "loopx_postgresql_authority_store_v0"
+    assert payload["schema_version"] == "loopx_postgresql_authority_store_v1"
     assert payload["runtime_role"] == "loopx_worker"
     assert payload["database_url_configured"] is True
 

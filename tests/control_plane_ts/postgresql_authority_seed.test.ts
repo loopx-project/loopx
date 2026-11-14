@@ -113,6 +113,16 @@ test("scanForbiddenPrivacyTokens fails closed on sensitive credentials", () => {
     token: "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
   };
   assert.throws(() => scanForbiddenPrivacyTokens(withGithubToken), /Privacy boundary violation/);
+
+  const privateKey = "ou_123456abcdef";
+  for (let i = 0; i < 2; i++) {
+    assert.throws(() => sanitizeGenesisSeedProjection({[privateKey]: {safe: true}}), error => {
+      assert.ok(error instanceof Error);
+      return /Privacy boundary violation/.test(error.message) && !error.message.includes(privateKey);
+    });
+  }
+  assert.throws(() => sanitizeGenesisSeedProjection({[withGithubToken.token]: 1}), /Privacy boundary violation/);
+  assert.throws(() => sanitizeGenesisSeedProjection({payload: "password=syntheticSecret"}), /Privacy boundary violation/);
 });
 
 test("setupPostgreSqlAuthoritySchemaAndRole installs DDL, RLS, and restricted role", async () => {
@@ -123,7 +133,7 @@ test("setupPostgreSqlAuthoritySchemaAndRole installs DDL, RLS, and restricted ro
       executedStatements.push(sql);
       if (sql.includes("FROM loopx_control_plane.authority_store_metadata")) {
         return {
-          rows: [{schema_version: "loopx_postgresql_authority_store_v0", store_identity: storeId}],
+          rows: [{schema_version: "loopx_postgresql_authority_store_v1", store_identity: storeId}],
           rowCount: 1,
         };
       }
@@ -183,17 +193,29 @@ test("exportLocalToPgGenesisSeed exports sanitized cursor=1 genesis seed JSON", 
             required_write_scopes: ["/Users/developer/loopx/packages/core", ".local/temp"],
           },
         ],
+        authority_registry: {
+          project_materials: {internal: {boundary: "local_private", purpose: "private synthetic fixture"}},
+          topic_authority: {internal: ["internal"]},
+        },
+        goal_direction_scope: {enabled: true},
+        material_usage_receipts: [{purpose: "private usage witness"}],
       },
     });
     assert.equal(commit1.status, "applied");
 
     const outputPath = join(root, "genesis-seed.json");
+    const sourceBefore = await store.loadAuthority();
+    let attemptedTargetConnection = false;
     const result = await exportLocalToPgGenesisSeed({
       runtimeRoot: root,
       goalId,
       localStore: store,
       outputPath,
       tenantId: "custom-tenant",
+      targetDatabase: {connect: async () => {
+        attemptedTargetConnection = true;
+        throw new Error("preview must never connect");
+      }},
     });
     if (result.status !== "exported") {
       console.error("Export failed:", result);
@@ -205,6 +227,9 @@ test("exportLocalToPgGenesisSeed exports sanitized cursor=1 genesis seed JSON", 
     assert.equal(result.tenant_id, "custom-tenant");
     assert.ok(result.seed_digest);
     assert.equal(result.sanitization_report?.leases_stripped, 1);
+    assert.equal(result.sanitization_report?.private_materials_stripped, 1);
+    assert.equal(attemptedTargetConnection, false);
+    assert.deepEqual(await store.loadAuthority(), sourceBefore);
 
     const writtenJson = JSON.parse(await readFile(outputPath, "utf8"));
     assert.equal(writtenJson.schema_version, "loopx_pg_genesis_seed_v0");
@@ -213,8 +238,10 @@ test("exportLocalToPgGenesisSeed exports sanitized cursor=1 genesis seed JSON", 
     assert.equal(writtenJson.projection.leases[0].todo_id, "todo-2");
     assert.ok(!JSON.stringify(writtenJson).includes("ou_1234567890abcdef1234567890"));
     assert.ok(!JSON.stringify(writtenJson).includes(".local/temp"));
+    assert.equal(writtenJson.projection.authority_registry, undefined);
+    assert.equal(writtenJson.projection.goal_direction_scope, undefined);
+    assert.equal(writtenJson.projection.material_usage_receipts, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
-

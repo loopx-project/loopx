@@ -46,6 +46,38 @@ identity. A wrong expected identity is rejected without a write. If the server
 loses the response after `COMMIT`, the result is `ambiguous`; the service must
 read metadata before retrying, rather than guessing whether rotation applied.
 
+## Retained history and synthetic seed
+
+PostgreSQL schema v1 keeps the latest head, an append-only checkpoint at
+cursors 1, 65, 129, and so on, and one delta for each other new commit. Every
+new journal row binds its resulting projection digest. A historical read
+starts at the covering checkpoint (or a retained v0 full projection) and
+checks the full cursor interval, including any prefix before the page. A
+missing checkpoint, gap, or digest mismatch fails the scan. Events and
+receipts remain tied to the original transaction.
+
+Only an administrator runs `loopx postgres setup --execute`. When upgrading
+v0, pass that database's existing `--store-identity`. Setup preserves full
+projection rows and updates the format marker under the same lock used by
+writers and identity rotation. Old workers deliberately refuse v1; reverting a
+binary alone cannot read a v1 journal. Keep a verified pre-upgrade backup and
+quiesce old callers before the upgrade. Recover to an isolated database and
+verify its journal and receipts before any separate activation decision.
+
+Use `loopx postgres local-to-pg-seed --goal-id <synthetic-goal>` to preview
+a sanitized File or SQLite head at cursor 1. Preview never opens the target.
+`--output` optionally writes a new private file and will not overwrite an
+existing file. With `--execute`, use a provisioned restricted connection via
+`LOOPX_POSTGRES_URL` and optionally pin it with `--store-identity`. The seed
+command neither installs a schema nor changes roles. It writes only to an empty
+target Goal; repeating the same intent recovers its original receipt. Private
+direction declarations and their dependent usage evidence are omitted together
+if the declaration cannot be retained. Review the synthetic input before use:
+the privacy filter looks for known private records and tokens, and cannot
+classify arbitrary sensitive prose. The seed deliberately discards prior
+history and does not migrate or activate a real Goal; use the retained journal
+archive for history export, audit, or recovery.
+
 ## Validation
 
 The public synthetic fixture is

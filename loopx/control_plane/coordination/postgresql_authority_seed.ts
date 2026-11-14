@@ -17,6 +17,8 @@ import type { JsonObject } from "../effect_program.ts";
 import {
   canonicalAuthorityObject,
   canonicalAuthoritySha256,
+  isAuthorityJsonObject,
+  requireAuthorityStoreId,
 } from "./authority_store_codec.ts";
 import {
   POSTGRESQL_SCHEMA_VERSION,
@@ -32,14 +34,11 @@ export const PG_GENESIS_SEED_SCHEMA_VERSION = "loopx_pg_genesis_seed_v0";
 
 // Privacy token / ID patterns
 const FEISHU_ID_PATTERNS = [
-  /\bou_[0-9a-zA-Z]{20,}\b/g,
-  /\bon_[0-9a-zA-Z]{20,}\b/g,
-  /\bcli_[0-9a-zA-Z]{16,}\b/g,
-  /\boc_[0-9a-zA-Z]{20,}\b/g,
+  /(?<![a-zA-Z0-9])(?:ou|on|oc|cli)_[a-zA-Z0-9]{12,}(?![a-zA-Z0-9])/g,
 ];
 
 const LOCAL_PATH_PATTERNS = [
-  /(?:\/Users|\/home|\/private\/(?:var|tmp))\/[a-zA-Z0-9_.-]+(?:\/[^\s"')]*)?/g,
+  /(?:\/(?:Users|home|private\/(?:var|tmp)|var\/folders|tmp|root|Volumes)\/|\b[A-Za-z]:[\\/]|\\\\)[^\s"'<>]+/g,
 ];
 
 const SECRET_PATTERNS = [
@@ -75,27 +74,23 @@ export function sanitizeText(
 
   // Redact Feishu IDs
   for (const pattern of FEISHU_ID_PATTERNS) {
-    if (pattern.test(result)) {
-      result = result.replace(pattern, () => {
-        report.feishu_ids_redacted += 1;
-        return "[feishu_id_redacted]";
-      });
-    }
+    result = result.replace(pattern, () => {
+      report.feishu_ids_redacted += 1;
+      return "[feishu_id_redacted]";
+    });
   }
 
   // Redact local absolute paths in text
   for (const pattern of LOCAL_PATH_PATTERNS) {
-    if (pattern.test(result)) {
-      result = result.replace(pattern, () => {
-        report.paths_redacted += 1;
-        return "[local_path_redacted]";
-      });
-    }
+    result = result.replace(pattern, () => {
+      report.paths_redacted += 1;
+      return "[local_path_redacted]";
+    });
   }
 
   // Remove .local/ references
-  if (result.includes(".local/")) {
-    result = result.replace(/(?:^|\s|\/)\.local\/[^\s)"]*/g, () => {
+  if (isLocalReference(result)) {
+    result = result.replace(/\.local[\\/][^\s)"']*/g, () => {
       report.paths_redacted += 1;
       return "[local_scope_redacted]";
     });
@@ -115,13 +110,19 @@ export function sanitizeObjectRecursively(
     return val.map((item) => sanitizeObjectRecursively(item, report));
   }
   if (val !== null && typeof val === "object") {
-    const res: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(val)) {
-      res[k] = sanitizeObjectRecursively(v, report);
-    }
-    return res;
+    return Object.fromEntries(Object.entries(val).map(([key, value]) =>
+      [key, sanitizeObjectRecursively(value, report)]));
   }
   return val;
+}
+
+function isLocalReference(value: string): boolean {
+  return /\.local[\\/]/.test(value);
+}
+
+function matchesRedaction(pattern: RegExp, value: string): boolean {
+  // Global regexes are only used by replace. Validation never shares lastIndex.
+  return new RegExp(pattern.source).test(value);
 }
 
 export function scanForbiddenPrivacyTokens(value: unknown, path = "projection"): void {
@@ -133,20 +134,20 @@ export function scanForbiddenPrivacyTokens(value: unknown, path = "projection"):
         );
       }
     }
-    if (value.includes(".local/")) {
+    if (isLocalReference(value)) {
       throw new GenesisPrivacyBoundaryViolation(
         `Privacy boundary violation at ${path}: contains raw unredacted .local/ reference`,
       );
     }
     for (const pattern of LOCAL_PATH_PATTERNS) {
-      if (pattern.test(value)) {
+      if (matchesRedaction(pattern, value)) {
         throw new GenesisPrivacyBoundaryViolation(
           `Privacy boundary violation at ${path}: contains raw unredacted local absolute path`,
         );
       }
     }
     for (const pattern of FEISHU_ID_PATTERNS) {
-      if (pattern.test(value)) {
+      if (matchesRedaction(pattern, value)) {
         throw new GenesisPrivacyBoundaryViolation(
           `Privacy boundary violation at ${path}: contains raw unredacted Feishu ID`,
         );
@@ -163,8 +164,11 @@ export function scanForbiddenPrivacyTokens(value: unknown, path = "projection"):
   }
 
   if (value !== null && typeof value === "object") {
-    for (const [k, v] of Object.entries(value)) {
-      scanForbiddenPrivacyTokens(v, `${path}.${k}`);
+    for (const [index, [key, field]] of Object.entries(value).entries()) {
+      // A field name can itself be a private ID or secret. Never echo it.
+      const location = path + "{" + index + "}";
+      scanForbiddenPrivacyTokens(key, location);
+      scanForbiddenPrivacyTokens(field, location);
     }
   }
 }
@@ -192,7 +196,7 @@ export function sanitizeGenesisSeedProjection(rawProjection: JsonObject): {
   const nowMs = Date.now();
   if (Array.isArray(projection.leases)) {
     const originalLeaseCount = projection.leases.length;
-    projection.leases = (projection.leases as JsonObject[]).filter((lease) => {
+    const retainedLeases = (projection.leases as JsonObject[]).filter((lease) => {
       if (!lease || typeof lease !== "object") return false;
       const expiresAt = lease.expires_at;
       if (typeof expiresAt === "number" && expiresAt <= nowMs) return false;
@@ -202,12 +206,13 @@ export function sanitizeGenesisSeedProjection(rawProjection: JsonObject): {
       }
       return true;
     });
-    report.leases_stripped += originalLeaseCount - projection.leases.length;
+    projection.leases = retainedLeases;
+    report.leases_stripped += originalLeaseCount - retainedLeases.length;
   }
   if (projection.task_leases && typeof projection.task_leases === "object") {
     const taskLeases = projection.task_leases as JsonObject;
     if (taskLeases.leases && typeof taskLeases.leases === "object" && !Array.isArray(taskLeases.leases)) {
-      const remaining: Record<string, JsonObject> = {};
+      const remaining: Record<string, JsonObject> = Object.create(null);
       for (const [k, v] of Object.entries(taskLeases.leases as Record<string, JsonObject>)) {
         if (!v || typeof v !== "object") continue;
         const expiresAt = v.expires_at;
@@ -236,21 +241,26 @@ export function sanitizeGenesisSeedProjection(rawProjection: JsonObject): {
         projection[matKey] as JsonObject[]
       ).filter((material) => {
         if (!material || typeof material !== "object") return false;
-        const boundary = String(material.boundary ?? material.visibility ?? "");
-        if (
-          boundary === "local_private" ||
-          boundary === "private" ||
-          boundary === "restricted"
-        ) {
-          return false;
-        }
-        const url = String(material.source_url ?? material.url ?? "");
-        const path = String(material.source_path ?? material.path ?? "");
-        if (url.includes(".local/") || path.includes(".local/")) return false;
-        return true;
+        return !privateMaterial(material);
       });
       report.private_materials_stripped +=
         originalMaterialCount - (projection[matKey] as JsonObject[]).length;
+    }
+  }
+
+  // The direction registry, scope digest and usage receipts are one lineage.
+  // A redacted registry cannot retain source attestations or be re-signed as
+  // original evidence in a synthetic seed.
+  const registry = projection.authority_registry;
+  if (isAuthorityJsonObject(registry) && isAuthorityJsonObject(registry.project_materials)) {
+    const materials = Object.values(registry.project_materials);
+    const removed = materials.filter(row => isAuthorityJsonObject(row) && privateMaterial(row)).length;
+    const sanitizedRegistry = sanitizeObjectRecursively(registry, {...report});
+    if (removed > 0 || canonicalAuthoritySha256(sanitizedRegistry) !== canonicalAuthoritySha256(registry)) {
+      report.private_materials_stripped += removed;
+      delete projection.authority_registry;
+      delete projection.goal_direction_scope;
+      delete projection.material_usage_receipts;
     }
   }
 
@@ -265,11 +275,11 @@ export function sanitizeGenesisSeedProjection(rawProjection: JsonObject): {
         todo.required_write_scopes = (
           todo.required_write_scopes as string[]
         )
-          .filter((scope) => typeof scope === "string" && !scope.includes(".local/"))
+          .filter((scope) => typeof scope === "string" && !isLocalReference(scope))
           .map((scope) => {
             // Strip machine-specific user prefix
             for (const pattern of LOCAL_PATH_PATTERNS) {
-              if (pattern.test(scope)) {
+              if (matchesRedaction(pattern, scope)) {
                 report.paths_redacted += 1;
                 // Convert e.g. /Users/.../loopx/packages/foo -> packages/foo
                 const parts = scope.split("/");
@@ -304,6 +314,13 @@ export function sanitizeGenesisSeedProjection(rawProjection: JsonObject): {
   scanForbiddenPrivacyTokens(sanitized, "projection");
 
   return { projection: sanitized, report };
+}
+
+function privateMaterial(material: JsonObject): boolean {
+  const boundary = String(material.boundary ?? material.visibility ?? "");
+  return ["local_private", "private", "restricted"].includes(boundary) ||
+    isLocalReference(String(material.source_url ?? material.url ?? "")) ||
+    isLocalReference(String(material.source_path ?? material.path ?? ""));
 }
 
 export interface PostgreSqlAdminSetupOptions {
@@ -374,6 +391,17 @@ export async function setupPostgreSqlAuthoritySchemaAndRole(
     };
   }
 
+  const role = options.runtimeRole?.trim();
+  if (role !== undefined && !/^[a-z][a-z0-9_]{1,62}$/.test(role)) {
+    return {
+      status: "failed",
+      schema_version: POSTGRESQL_SCHEMA_VERSION,
+      store_identity: storeIdentity,
+      runtime_role: null,
+      reason: "runtime role must be a valid lowercase SQL identifier",
+    };
+  }
+
   const resolved = await resolveDatabase(options);
   if (!resolved) {
     return {
@@ -391,19 +419,7 @@ export async function setupPostgreSqlAuthoritySchemaAndRole(
       storeIdentity,
     );
 
-    if (options.runtimeRole) {
-      const role = options.runtimeRole.trim();
-      if (!/^[a-z][a-z0-9_]{1,62}$/.test(role)) {
-        return {
-          status: "failed",
-          schema_version: POSTGRESQL_SCHEMA_VERSION,
-          store_identity: storeIdentity,
-          runtime_role: role,
-          reason:
-            "runtime role must be a valid SQL identifier (lowercase letters, digits, underscores, starting with a letter)",
-        };
-      }
-
+    if (role !== undefined) {
       const connection = await resolved.database.connect();
       try {
         await connection.query(
@@ -440,7 +456,7 @@ export async function setupPostgreSqlAuthoritySchemaAndRole(
       status: "installed",
       schema_version: POSTGRESQL_SCHEMA_VERSION,
       store_identity: storeIdentity,
-      runtime_role: options.runtimeRole ?? null,
+      runtime_role: role ?? null,
     };
   } catch (error) {
     return {
@@ -489,168 +505,114 @@ export interface LocalToPgSeedExportResult {
 export async function exportLocalToPgGenesisSeed(
   options: LocalToPgSeedExportOptions,
 ): Promise<LocalToPgSeedExportResult> {
-  const tenantId = options.tenantId || "default";
+  const tenantId = options.tenantId ?? "default";
   const operationId = `${options.goalId}-genesis-seed`;
+  const base = {
+    schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
+    goal_id: options.goalId,
+    tenant_id: tenantId,
+    cursor: "1",
+    provider_revision: "1",
+    operation_id: operationId,
+  };
+  let scopeValid = false;
+  const failed = (reason: string): LocalToPgSeedExportResult =>
+    ({...base, ...(!scopeValid ? {goal_id: "", tenant_id: "", operation_id: ""} : {}), status: "failed", reason});
 
   try {
-    const store =
-      options.localStore ??
-      (
-        await openLocalAuthorityStoreHandle(
-          options.runtimeRoot,
-          options.goalId,
-        )
-      ).store;
+    for (const value of [options.goalId, tenantId, operationId]) {
+      requireAuthorityStoreId(value, "genesis scope id");
+      scanForbiddenPrivacyTokens(value, "genesis scope");
+    }
+    scopeValid = true;
+    if (options.execute && !options.targetDatabase && !options.databaseUrl) {
+      return failed("Executing a genesis seed requires a target PostgreSQL database");
+    }
+    if (options.storeIdentity !== undefined &&
+        !POSTGRESQL_STORE_IDENTITY_PATTERN.test(options.storeIdentity)) {
+      return failed("Target PostgreSQL store identity is invalid");
+    }
+
+    const store = options.localStore ??
+      (await openLocalAuthorityStoreHandle(options.runtimeRoot, options.goalId, {}, {existingOnly: true})).store;
+    if (store.providerKind === "postgresql") return failed("Genesis export requires a local File or SQLite source");
     const loaded = await store.loadAuthority();
-    if (loaded.status !== "loaded" || loaded.head === null) {
-      return {
-        status: "failed",
-        schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
-        goal_id: options.goalId,
-        tenant_id: tenantId,
-        cursor: "1",
-        provider_revision: "1",
-        operation_id: operationId,
-        reason: `Local authority head is not available for goal ${options.goalId} (status: ${loaded.status})`,
-      };
-    }
+    if (loaded.status !== "loaded") return failed("Local authority head is not available");
 
-    const { projection, report } = sanitizeGenesisSeedProjection(loaded.head);
+    const {projection, report} = sanitizeGenesisSeedProjection(loaded.head);
     const seedDigest = canonicalAuthoritySha256(projection);
-
     const seedPayload: JsonObject = {
-      schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
-      goal_id: options.goalId,
-      tenant_id: tenantId,
-      cursor: "1",
-      provider_revision: "1",
-      operation_id: operationId,
-      seed_digest: seedDigest,
-      sanitization_report: report as unknown as JsonObject,
-      projection,
+      ...base, seed_digest: seedDigest, sanitization_report: {...report}, projection,
     };
-
+    const exported = {
+      ...base, seed_digest: seedDigest, sanitization_report: report,
+      output_path: options.outputPath, seed_payload: seedPayload,
+    };
     if (options.outputPath) {
-      await writeFile(
-        options.outputPath,
-        JSON.stringify(seedPayload, null, 2),
-        "utf8",
-      );
+      await writeFile(options.outputPath, JSON.stringify(seedPayload, null, 2), {
+        encoding: "utf8", mode: 0o600, flag: "wx",
+      });
     }
+    // Export never opens the target or installs anything in either store.
+    if (!options.execute) return {...exported, status: "exported"};
 
-    if (options.execute && (options.targetDatabase || options.databaseUrl)) {
-      const resolved = await resolveDatabase(options);
-      if (!resolved) {
-        return {
-          status: "failed",
-          schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
-          goal_id: options.goalId,
-          tenant_id: tenantId,
-          cursor: "1",
-          provider_revision: "1",
-          operation_id: operationId,
-          reason: "Target PostgreSQL database is not available for execution",
-        };
+    const resolved = await resolveDatabase(options);
+    if (!resolved) return failed("Target PostgreSQL database is not available for execution");
+    try {
+      // Discover the provisioned incarnation if the caller did not pin one.
+      // Subsequent writes check this identity inside the commit's rotation lock.
+      const scope = {tenant_id: tenantId, goal_id: options.goalId};
+      const identity = await new PostgreSqlAuthorityStore(resolved.database, {
+        ...scope, expected_store_identity: options.storeIdentity,
+      }).storeIdentity();
+      if (identity.status !== "available") return failed("Target PostgreSQL store identity is unavailable or mismatched");
+      const pgStore = new PostgreSqlAuthorityStore(resolved.database, {
+        ...scope, expected_store_identity: identity.store_identity,
+      });
+
+      const original = async () => {
+        const receipt = await pgStore.readReceipt(operationId);
+        if (receipt.status !== "found" || receipt.cursor !== "1" || receipt.receipts.length !== 1) return null;
+        const record = receipt.receipts[0];
+        return record.schema_version === "genesis_seed_receipt_v0" &&
+          record.source_goal_id === options.goalId && record.seed_digest === seedDigest ? receipt : null;
+      };
+      const existing = await pgStore.loadAuthority();
+      if (existing.status === "loaded") {
+        const receipt = await original();
+        return receipt ? {...exported, status: "seeded", provider_revision: receipt.provider_revision}
+          : failed("Target PostgreSQL goal already has a different committed authority");
       }
+      if (existing.status !== "missing") return failed("Target PostgreSQL authority state is unavailable");
 
-      try {
-        const storeIdentity =
-          options.storeIdentity ??
-          `postgresql:${randomBytes(16).toString("hex").toLowerCase()}`;
-        await installPostgreSqlAuthorityStoreSchema(
-          resolved.database,
-          storeIdentity,
-        );
-
-        const pgStore = new PostgreSqlAuthorityStore(resolved.database, {
-          tenant_id: tenantId,
-          goal_id: options.goalId,
-        });
-
-        const existing = await pgStore.loadAuthority();
-        if (existing.status === "loaded" && existing.head !== null) {
-          return {
-            status: "failed",
-            schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
-            goal_id: options.goalId,
-            tenant_id: tenantId,
-            cursor: "1",
-            provider_revision: "1",
-            operation_id: operationId,
-            reason: `Target PostgreSQL goal ${options.goalId} already has committed authority; refuse to overwrite`,
-          };
-        }
-
-        const commitResult = await pgStore.commitAuthority({
-          operation_id: operationId,
-          expected_provider_revision: null,
-          events: [],
-          receipts: [
-            {
-              schema_version: "genesis_seed_receipt_v0",
-              source: "local-to-pg-seed",
-              source_goal_id: options.goalId,
-              seed_digest: seedDigest,
-              sanitization_report: report as unknown as JsonObject,
-            },
-          ],
-          next_projection: projection,
-        });
-
-        if (commitResult.status !== "applied") {
-          return {
-            status: "failed",
-            schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
-            goal_id: options.goalId,
-            tenant_id: tenantId,
-            cursor: "1",
-            provider_revision: "1",
-            operation_id: operationId,
-            reason: `Failed to commit genesis seed to PostgreSQL: ${JSON.stringify(commitResult)}`,
-          };
-        }
-
-        return {
-          status: "seeded",
-          schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
-          goal_id: options.goalId,
-          tenant_id: tenantId,
-          cursor: "1",
-          provider_revision: commitResult.provider_revision,
-          operation_id: operationId,
+      const committed = await pgStore.commitAuthority({
+        operation_id: operationId,
+        expected_provider_revision: null,
+        events: [],
+        receipts: [{
+          schema_version: "genesis_seed_receipt_v0",
+          source: "local-to-pg-seed",
+          source_goal_id: options.goalId,
           seed_digest: seedDigest,
-          sanitization_report: report,
-          output_path: options.outputPath,
-          seed_payload: seedPayload,
-        };
-      } finally {
-        await resolved.close();
+          sanitization_report: {...report},
+        }],
+        next_projection: projection,
+      });
+      if (committed.status === "applied") {
+        return {...exported, status: "seeded", provider_revision: committed.provider_revision};
       }
+      if (committed.status === "ambiguous" || committed.status === "conflict") {
+        const receipt = await original();
+        if (receipt) return {...exported, status: "seeded", provider_revision: receipt.provider_revision};
+        if (committed.status === "ambiguous") {
+          return failed("PostgreSQL seed outcome is unknown; retry the same seed to resolve the original receipt");
+        }
+      }
+      return failed(`PostgreSQL genesis seed was not applied (${committed.status})`);
+    } finally {
+      await resolved.close();
     }
-
-    return {
-      status: "exported",
-      schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
-      goal_id: options.goalId,
-      tenant_id: tenantId,
-      cursor: "1",
-      provider_revision: "1",
-      operation_id: operationId,
-      seed_digest: seedDigest,
-      sanitization_report: report,
-      output_path: options.outputPath,
-      seed_payload: seedPayload,
-    };
   } catch (error) {
-    return {
-      status: "failed",
-      schema_version: PG_GENESIS_SEED_SCHEMA_VERSION,
-      goal_id: options.goalId,
-      tenant_id: tenantId,
-      cursor: "1",
-      provider_revision: "1",
-      operation_id: operationId,
-      reason: error instanceof Error ? error.message : String(error),
-    };
+    return failed(error instanceof GenesisPrivacyBoundaryViolation ? error.message : "Genesis seed could not be prepared or written");
   }
 }

@@ -1,20 +1,20 @@
 import {AuthorityJournalScan} from "./authority_journal_scan.ts";
 import type { JsonObject } from "../effect_program.ts";
 import {
-  AUTHORITY_STATE_CHECKPOINT_INTERVAL,
   authorityStateCheckpointCursor,
   authorityStateDelta,
   isAuthorityStateCheckpoint,
   AuthorityStateReplay,
-  type AuthorityStateDelta,
 } from "./authority_state_log.ts";
 import type {
   AuthorityStore,
   AuthorityStoreCommit,
   AuthorityStoreCommitResult,
+  AuthorityStoreCommittedTransaction,
   AuthorityStoreIdentityResult,
   AuthorityStoreLoadResult,
   AuthorityStoreReadFailure,
+  AuthorityStoreReceiptBatchResult,
   AuthorityStoreReceiptResult,
   AuthorityStoreReceiptSnapshotResult,
   AuthorityStoreScanResult,
@@ -33,7 +33,8 @@ import {
 export const POSTGRESQL_STORE_IDENTITY_PATTERN = /^postgresql:[0-9a-f]{32}$/;
 const POSTGRESQL_PROVIDER_REVISION_PATTERN = /^postgresql:([0-9a-f]{32}):([1-9]\d*)$/;
 const POSTGRESQL_STORE_IDENTITY_LOCK_KEY = "5522768808912313929";
-export const POSTGRESQL_SCHEMA_VERSION = "loopx_postgresql_authority_store_v0";
+const FULL_PROJECTION_SCHEMA_VERSION = "loopx_postgresql_authority_store_v0";
+export const POSTGRESQL_SCHEMA_VERSION = "loopx_postgresql_authority_store_v1";
 export const DEFAULT_POSTGRESQL_MAX_COMMIT_BYTES = 16 * 1024 * 1024;
 
 /**
@@ -57,6 +58,8 @@ export interface PostgreSqlAuthorityDatabase {
 export interface PostgreSqlAuthorityStoreOptions {
   tenant_id: string;
   goal_id: string;
+  /** Bind an explicit target even when the expected Goal revision is empty. */
+  expected_store_identity?: string;
   /**
    * Maximum canonical bytes admitted for one atomic commit. Deployments may
    * lower this envelope; promotion still requires separately measured
@@ -69,15 +72,6 @@ interface HeadRow extends JsonObject {
   provider_revision: string;
   cursor: string;
   head: JsonObject | null;
-}
-
-interface TransactionRow extends JsonObject {
-  cursor: string;
-  provider_revision: string;
-  operation_id: string;
-  projection: JsonObject;
-  events: JsonObject[];
-  receipts: JsonObject[];
 }
 
 export const POSTGRESQL_AUTHORITY_STORE_SCHEMA_SQL = `
@@ -123,6 +117,7 @@ CREATE TABLE IF NOT EXISTS loopx_control_plane.authority_commits (
   operation_id text NOT NULL,
   delta jsonb,
   projection jsonb,
+  projection_digest text,
   committed_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
   PRIMARY KEY (tenant_id, goal_id, cursor),
   UNIQUE (tenant_id, goal_id, operation_id),
@@ -216,6 +211,9 @@ SELECT commit.cursor::text AS cursor,
        commit.operation_id,
        commit.delta,
        commit.projection,
+       commit.projection_digest,
+       checkpoint.projection AS checkpoint_projection,
+       checkpoint.projection_digest AS checkpoint_digest,
        COALESCE((
          SELECT jsonb_agg(event.event ORDER BY event.event_index)
          FROM loopx_control_plane.authority_events AS event
@@ -231,6 +229,9 @@ SELECT commit.cursor::text AS cursor,
            AND receipt.cursor = commit.cursor
        ), '[]'::jsonb) AS receipts
 FROM loopx_control_plane.authority_commits AS commit
+LEFT JOIN loopx_control_plane.authority_checkpoints AS checkpoint
+  ON checkpoint.tenant_id = commit.tenant_id AND checkpoint.goal_id = commit.goal_id
+  AND checkpoint.cursor = commit.cursor
 `;
 
 const SELECT_RECEIPT_COLUMNS_SQL = `
@@ -287,23 +288,6 @@ function decodeHeadRow(value: JsonObject): HeadRow {
   };
 }
 
-function decodeTransactionRow(value: JsonObject): TransactionRow {
-  const cursor = requiredRowString(value, "cursor");
-  const providerRevision = requiredRowString(value, "provider_revision");
-  parseAuthorityCursor(cursor);
-  if (!/^[1-9]\d*$/.test(providerRevision)) {
-    throw new AuthorityStoreProtocolError("PostgreSQL provider revision is invalid");
-  }
-  return {
-    cursor,
-    provider_revision: providerRevision,
-    operation_id: requiredRowString(value, "operation_id"),
-    projection: canonicalAuthorityObject(value.projection, "transaction projection"),
-    events: canonicalAuthorityObjectList(value.events, "transaction events"),
-    receipts: canonicalAuthorityObjectList(value.receipts, "transaction receipts"),
-  };
-}
-
 function providerRevisionToken(storeIdentity: string, revision: string): string {
   if (!POSTGRESQL_STORE_IDENTITY_PATTERN.test(storeIdentity)) {
     throw new AuthorityStoreProtocolError("PostgreSQL store identity is invalid");
@@ -312,6 +296,16 @@ function providerRevisionToken(storeIdentity: string, revision: string): string 
     throw new AuthorityStoreProtocolError("PostgreSQL provider revision is invalid");
   }
   return `${storeIdentity}:${revision}`;
+}
+
+function decodeReceipt(row: JsonObject, storeIdentity: string): Extract<AuthorityStoreReceiptResult, {status: "found"}> {
+  const cursor = requiredRowString(row, "cursor");
+  if (parseAuthorityCursor(cursor) < 1n) {
+    throw new AuthorityStoreProtocolError("PostgreSQL receipt cursor must be positive");
+  }
+  return {status: "found", cursor, provider_revision: providerRevisionToken(
+      storeIdentity, requiredRowString(row, "provider_revision"),
+    ), receipts: canonicalAuthorityObjectList(row.receipts, "receipts")};
 }
 
 function parseExpectedRevision(value: string | null): {
@@ -436,11 +430,10 @@ export async function installPostgreSqlAuthorityStoreSchema(
   let releaseError: Error | undefined;
   try {
     await connection.query("BEGIN");
+    // Fence old writers before publishing the first journal format they
+    // cannot read. Rotation and ordinary commits take the same lock.
+    await lockStoreIdentityTransaction(connection, "exclusive");
     await connection.query(POSTGRESQL_AUTHORITY_STORE_SCHEMA_SQL);
-    await connection.query(
-      `ALTER TABLE loopx_control_plane.authority_commits ADD COLUMN IF NOT EXISTS delta jsonb;
-       ALTER TABLE loopx_control_plane.authority_commits ALTER COLUMN projection DROP NOT NULL;`,
-    );
     await connection.query(
       `INSERT INTO loopx_control_plane.authority_store_metadata
          (singleton, schema_version, store_identity)
@@ -455,11 +448,35 @@ export async function installPostgreSqlAuthorityStoreSchema(
        FOR UPDATE`,
     ), "PostgreSQL store metadata");
     if (
-      metadata === null || metadata.schema_version !== POSTGRESQL_SCHEMA_VERSION ||
-      metadata.store_identity !== storeIdentity
+      metadata === null || metadata.store_identity !== storeIdentity ||
+      (metadata.schema_version !== POSTGRESQL_SCHEMA_VERSION &&
+       metadata.schema_version !== FULL_PROJECTION_SCHEMA_VERSION)
     ) {
       throw new AuthorityStoreProtocolError(
         "PostgreSQL store identity does not match the installed database incarnation",
+      );
+    }
+    if (metadata.schema_version === FULL_PROJECTION_SCHEMA_VERSION) {
+      // The released v0 schema required every projection. A nullable v0
+      // journal is the unsupported pre-release format; do not bless it as v1.
+      const releasedLayout = oneRow(await connection.query(
+        `SELECT attnotnull FROM pg_attribute
+         WHERE attrelid = 'loopx_control_plane.authority_commits'::regclass
+           AND attname = 'projection' AND NOT attisdropped`,
+      ), "PostgreSQL v0 projection layout");
+      if (releasedLayout?.attnotnull !== true) {
+        throw new AuthorityStoreProtocolError("PostgreSQL v0 journal layout is not the released full-projection format");
+      }
+    }
+    await connection.query(
+      `ALTER TABLE loopx_control_plane.authority_commits ADD COLUMN IF NOT EXISTS delta jsonb;
+       ALTER TABLE loopx_control_plane.authority_commits ADD COLUMN IF NOT EXISTS projection_digest text;
+       ALTER TABLE loopx_control_plane.authority_commits ALTER COLUMN projection DROP NOT NULL;`,
+    );
+    if (metadata.schema_version === FULL_PROJECTION_SCHEMA_VERSION) {
+      await connection.query(
+        "UPDATE loopx_control_plane.authority_store_metadata SET schema_version = $1 WHERE singleton = TRUE",
+        [POSTGRESQL_SCHEMA_VERSION],
       );
     }
     commitStarted = true;
@@ -613,6 +630,7 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
   readonly tenantId: string;
   readonly goalId: string;
   readonly maxCommitBytes: number;
+  readonly #expectedStoreIdentity: string | undefined;
 
   constructor(
     database: PostgreSqlAuthorityDatabase,
@@ -621,6 +639,11 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
     this.database = database;
     this.tenantId = requireAuthorityStoreId(options.tenant_id, "tenant id");
     this.goalId = requireAuthorityStoreId(options.goal_id, "goal id");
+    this.#expectedStoreIdentity = options.expected_store_identity;
+    if (this.#expectedStoreIdentity !== undefined &&
+        !POSTGRESQL_STORE_IDENTITY_PATTERN.test(this.#expectedStoreIdentity)) {
+      throw new AuthorityStoreProtocolError("expected PostgreSQL store identity is invalid");
+    }
     this.maxCommitBytes = options.max_commit_bytes ?? DEFAULT_POSTGRESQL_MAX_COMMIT_BYTES;
     if (!Number.isSafeInteger(this.maxCommitBytes) || this.maxCommitBytes < 1) {
       throw new AuthorityStoreProtocolError(
@@ -631,6 +654,14 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
 
   private async connect(): Promise<PostgreSqlAuthorityConnection> {
     return await this.database.connect();
+  }
+
+  private async readStoreIdentity(connection: PostgreSqlAuthorityConnection): Promise<string> {
+    const identity = await requireStoreIdentity(connection);
+    if (this.#expectedStoreIdentity !== undefined && identity !== this.#expectedStoreIdentity) {
+      throw new AuthorityStoreProtocolError("PostgreSQL store identity does not match the expected database incarnation");
+    }
+    return identity;
   }
 
   private async readInTenantTransaction<T>(
@@ -669,7 +700,7 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
     let releaseError: Error | undefined;
     try {
       connection = await this.connect();
-      return { status: "available", store_identity: await requireStoreIdentity(connection) };
+      return { status: "available", store_identity: await this.readStoreIdentity(connection) };
     } catch (error) {
       releaseError = asError(error);
       const failure = readFailure(error);
@@ -684,7 +715,7 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
   async loadAuthority(): Promise<AuthorityStoreLoadResult> {
     try {
       return await this.readInTenantTransaction(async (connection) => {
-        const storeIdentity = await requireStoreIdentity(connection);
+        const storeIdentity = await this.readStoreIdentity(connection);
         const value = oneRow(
           await connection.query(SELECT_HEAD_SQL, [this.tenantId, this.goalId]),
           "PostgreSQL authority head",
@@ -745,7 +776,7 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
       // Keep the identity lock ahead of the per-Goal head lock. Shared mode
       // preserves cross-Goal concurrency while rotation takes exclusive mode.
       await lockStoreIdentityTransaction(connection, "shared");
-      const storeIdentity = await requireStoreIdentity(connection);
+      const storeIdentity = await this.readStoreIdentity(connection);
       await connection.query(
         `INSERT INTO loopx_control_plane.authority_heads
            (tenant_id, goal_id, provider_revision, cursor, head)
@@ -797,18 +828,14 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
 
       const nextRevision = (BigInt(current.provider_revision) + 1n).toString();
       const nextCursor = (BigInt(current.cursor) + 1n).toString();
-      const nextCursorBigInt = BigInt(nextCursor);
-      const isCheckpoint = isAuthorityStateCheckpoint(nextCursorBigInt);
+      const isCheckpoint = isAuthorityStateCheckpoint(BigInt(nextCursor));
+      const projectionDigest = canonicalAuthoritySha256(normalized.next_projection);
 
       if (isCheckpoint) {
-        const projectionDigest = canonicalAuthoritySha256(normalized.next_projection);
         await connection.query(
           `INSERT INTO loopx_control_plane.authority_checkpoints
              (tenant_id, goal_id, cursor, projection, projection_digest)
-           VALUES ($1, $2, $3::bigint, $4::jsonb, $5)
-           ON CONFLICT (tenant_id, goal_id, cursor) DO UPDATE
-             SET projection = EXCLUDED.projection,
-                 projection_digest = EXCLUDED.projection_digest`,
+           VALUES ($1, $2, $3::bigint, $4::jsonb, $5)`,
           [
             this.tenantId,
             this.goalId,
@@ -819,20 +846,22 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
         );
       }
 
-      const previousProjection = current.head ?? {};
-      const delta = authorityStateDelta(previousProjection, normalized.next_projection);
+      const delta = isCheckpoint
+        ? null
+        : JSON.stringify(authorityStateDelta(current.head ?? {}, normalized.next_projection));
 
       await connection.query(
         `INSERT INTO loopx_control_plane.authority_commits
-           (tenant_id, goal_id, cursor, provider_revision, operation_id, delta, projection)
-         VALUES ($1, $2, $3::bigint, $4::bigint, $5, $6::jsonb, NULL)`,
+           (tenant_id, goal_id, cursor, provider_revision, operation_id, delta, projection_digest)
+         VALUES ($1, $2, $3::bigint, $4::bigint, $5, $6::jsonb, $7)`,
         [
           this.tenantId,
           this.goalId,
           nextCursor,
           nextRevision,
           normalized.operation_id,
-          JSON.stringify(delta),
+          delta,
+          projectionDigest,
         ],
       );
       for (const [index, event] of normalized.events.entries()) {
@@ -919,7 +948,7 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
     }
     try {
       return await this.readInTenantTransaction(async (connection) => {
-        const storeIdentity = await requireStoreIdentity(connection);
+        const storeIdentity = await this.readStoreIdentity(connection);
         const value = oneRow(await connection.query(
           `${SELECT_RECEIPT_COLUMNS_SQL}
            WHERE commit.tenant_id = $1 AND commit.goal_id = $2 AND commit.operation_id = $3`,
@@ -927,18 +956,34 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
         ), "PostgreSQL authority receipt");
         if (value === null) return {status: "snapshot", store_identity: storeIdentity,
           receipt: {status: "missing"}} as const;
-        const cursor = requiredRowString(value, "cursor");
-        const providerRevision = requiredRowString(value, "provider_revision");
-        const receipts = canonicalAuthorityObjectList(value.receipts, "receipts");
         return {
           status: "snapshot", store_identity: storeIdentity,
-          receipt: {
-            status: "found",
-            cursor,
-            provider_revision: providerRevisionToken(storeIdentity, providerRevision),
-            receipts: structuredClone(receipts),
-          },
+          receipt: decodeReceipt(value, storeIdentity),
         } as const;
+      });
+    } catch (error) {
+      return readFailure(error);
+    }
+  }
+
+  async readReceipts(operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult> {
+    try {
+      if (!Array.isArray(operationIds) || operationIds.length < 1 || operationIds.length > 64) {
+        throw new AuthorityStoreProtocolError("receipt batch requires 1..64 operations");
+      }
+      for (const id of operationIds) requireAuthorityStoreId(id, "operation id");
+      return await this.readInTenantTransaction(async connection => {
+        const identity = await this.readStoreIdentity(connection);
+        const values = rows(await connection.query(
+          `${SELECT_RECEIPT_COLUMNS_SQL}
+           WHERE commit.tenant_id = $1 AND commit.goal_id = $2 AND commit.operation_id = ANY($3::text[])`,
+          [this.tenantId, this.goalId, [...new Set(operationIds)]],
+        ));
+        const byOperation = new Map(values.map(row => [
+          requiredRowString(row, "operation_id"), decodeReceipt(row, identity),
+        ]));
+        return {status: "receipts", results: operationIds.map(id =>
+          structuredClone(byOperation.get(id) ?? {status: "missing"}))};
       });
     } catch (error) {
       return readFailure(error);
@@ -953,7 +998,7 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
     if (!(scan instanceof AuthorityJournalScan)) return scan;
     try {
       return await this.readInTenantTransaction(async (connection) => {
-        const storeIdentity = await requireStoreIdentity(connection);
+        const storeIdentity = await this.readStoreIdentity(connection);
         const current = oneRow(
           await connection.query(SELECT_HEAD_SQL, [this.tenantId, this.goalId]),
           "PostgreSQL authority head",
@@ -978,49 +1023,9 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
         const countToFetch = remaining < requestedCount ? remaining : requestedCount;
         const toCursor = fromCursor + countToFetch - 1n;
 
-        // Bounded checkpoint window: start at the checkpoint covering fromCursor
+        // Fetch at most one checkpoint window before the visible page. Validate
+        // that prefix too: a missing row could otherwise silently change replay.
         const checkpointCursor = authorityStateCheckpointCursor(fromCursor);
-
-        // 1. Load checkpoint projection
-        let checkpointProjection: JsonObject | null = null;
-        const cpRow = oneRow(
-          await connection.query(
-            `SELECT cursor::text AS cursor, projection, projection_digest
-             FROM loopx_control_plane.authority_checkpoints
-             WHERE tenant_id = $1 AND goal_id = $2 AND cursor = $3::bigint`,
-            [this.tenantId, this.goalId, checkpointCursor.toString()],
-          ),
-          "PostgreSQL authority checkpoint",
-        );
-        if (cpRow !== null && cpRow.projection !== null) {
-          checkpointProjection = canonicalAuthorityObject(cpRow.projection, "checkpoint projection");
-          const expectedDigest = String(cpRow.projection_digest);
-          if (canonicalAuthoritySha256(checkpointProjection) !== expectedDigest) {
-            throw new AuthorityStoreProtocolError("PostgreSQL checkpoint projection digest mismatch");
-          }
-        } else {
-          // Fallback for legacy rows or when checkpoint row is not in checkpoints table
-          const legacyCp = oneRow(
-            await connection.query(
-              `SELECT projection
-               FROM loopx_control_plane.authority_commits
-               WHERE tenant_id = $1 AND goal_id = $2 AND cursor = $3::bigint`,
-              [this.tenantId, this.goalId, checkpointCursor.toString()],
-            ),
-            "PostgreSQL legacy checkpoint commit",
-          );
-          if (legacyCp !== null && legacyCp.projection !== null) {
-            checkpointProjection = canonicalAuthorityObject(legacyCp.projection, "legacy commit projection");
-          } else if (checkpointCursor === headCursorBigInt && head.head !== null) {
-            checkpointProjection = head.head;
-          } else {
-            throw new AuthorityStoreProtocolError(
-              `PostgreSQL authority checkpoint is missing for cursor ${checkpointCursor}`,
-            );
-          }
-        }
-
-        // 2. Fetch commits between checkpointCursor and toCursor
         const rawCommits = rows(
           await connection.query(
             `${SELECT_TRANSACTION_COLUMNS_SQL}
@@ -1031,42 +1036,57 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
           ),
         );
 
-        // 3. Replay deltas and collect transactions from fromCursor to toCursor
-        let replay = new AuthorityStateReplay(checkpointProjection);
+        if (BigInt(rawCommits.length) !== toCursor - checkpointCursor + 1n) {
+          throw new AuthorityStoreProtocolError("PostgreSQL authority commit window is incomplete");
+        }
+
+        let replay: AuthorityStateReplay | null = null;
         const transactions: AuthorityStoreCommittedTransaction[] = [];
+        for (const [index, raw] of rawCommits.entries()) {
+          const cursor = requiredRowString(raw, "cursor");
+          const rowCursor = parseAuthorityCursor(cursor);
+          if (rowCursor !== checkpointCursor + BigInt(index)) {
+            throw new AuthorityStoreProtocolError("PostgreSQL authority commit window is not contiguous");
+          }
 
-        for (const raw of rawCommits) {
-          const rowCursor = BigInt(requiredRowString(raw, "cursor"));
-          const providerRevision = requiredRowString(raw, "provider_revision");
-          const operationId = requiredRowString(raw, "operation_id");
-          const events = canonicalAuthorityObjectList(raw.events, "events");
-          const receipts = canonicalAuthorityObjectList(raw.receipts, "receipts");
-
-          let projection: JsonObject;
-          if (rowCursor === checkpointCursor) {
-            projection = checkpointProjection;
+          const digest = raw.projection_digest;
+          if (raw.projection !== null) {
+            // Pre-upgrade rows retained the full projection. Their original
+            // operation, event and receipt identities are unchanged.
+            if (raw.delta !== null || digest !== null || raw.checkpoint_projection !== null) {
+              throw new AuthorityStoreProtocolError("PostgreSQL legacy commit has a conflicting replay record");
+            }
+            replay = new AuthorityStateReplay(raw.projection);
           } else {
-            if (raw.delta !== null && raw.delta !== undefined) {
-              replay.applyDelta(raw.delta as unknown as AuthorityStateDelta);
-              projection = replay.snapshot();
-            } else if (raw.projection !== null && raw.projection !== undefined) {
-              projection = canonicalAuthorityObject(raw.projection, "legacy projection");
-              replay = new AuthorityStateReplay(projection);
+            if (isAuthorityStateCheckpoint(rowCursor)) {
+              if (raw.checkpoint_projection === null || raw.delta !== null ||
+                  digest !== raw.checkpoint_digest) {
+                throw new AuthorityStoreProtocolError("PostgreSQL commit has a missing or inconsistent checkpoint");
+              }
+              replay = new AuthorityStateReplay(raw.checkpoint_projection);
             } else {
-              throw new AuthorityStoreProtocolError(
-                `PostgreSQL commit at cursor ${rowCursor} has neither delta nor projection`,
-              );
+              if (replay === null || raw.delta === null || raw.checkpoint_projection !== null) {
+                throw new AuthorityStoreProtocolError("PostgreSQL commit has a missing or inconsistent delta");
+              }
+              replay.apply(raw.delta);
+            }
+            if (typeof digest !== "string" || replay.stateDigest() !== digest) {
+              throw new AuthorityStoreProtocolError("PostgreSQL commit projection digest mismatch");
             }
           }
 
+          const providerRevision = providerRevisionToken(
+            storeIdentity, requiredRowString(raw, "provider_revision"),
+          );
+          const operationId = requireAuthorityStoreId(raw.operation_id, "PostgreSQL operation id");
           if (rowCursor >= fromCursor) {
             transactions.push({
-              cursor: rowCursor.toString(),
-              provider_revision: providerRevisionToken(storeIdentity, providerRevision),
+              cursor,
+              provider_revision: providerRevision,
               operation_id: operationId,
-              projection,
-              events,
-              receipts,
+              projection: replay.snapshot(),
+              events: canonicalAuthorityObjectList(raw.events, "events"),
+              receipts: canonicalAuthorityObjectList(raw.receipts, "receipts"),
             });
           }
         }
