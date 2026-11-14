@@ -12,6 +12,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from shutil import rmtree
 from typing import Any
 
 from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
@@ -1276,17 +1277,23 @@ def _bounded_replan_writeback(args: argparse.Namespace, view: dict[str, Any]) ->
     if reference.get("available") is False:
         raise ValueError("Could not save the verified writeback. Repair private capture storage and retry the original read.")
     path, digest = Path(reference["path"]), reference["sha256"]
-    selections = [{"path": [key], "pointer": "/" + key.replace("~", "~0").replace("/", "~1")} for key in view]
-    reader, selected = write_initial_context_read_reference(path, digest, view, selections)
-    if len(selected) > MAX_REQUEST_BYTES:
-        raise ValueError("The verified writeback exceeds the context reader size limit.")
-    reader_argv = current_loopx_cli_argv()
-    page_bytes, needed = pinned_context_read_window(reader, selected,
-        page_bytes=max(256, min(NATIVE_CONTEXT_PAGE_BYTES, limit)), output_limit=limit, reader_argv=reader_argv)
-    opening["command"] = context_capture_read_command(path, digest, reference_file=reader, page_bytes=page_bytes,
-        max_page_output_bytes=limit, reader_argv=reader_argv)
-    if needed > limit or _json_output_size(opening) > limit:
-        raise ValueError(budget_error)
+    try:
+        selections = [{"path": [key], "pointer": "/" + key.replace("~", "~0").replace("/", "~1")} for key in view]
+        reader, selected = write_initial_context_read_reference(path, digest, view, selections)
+        if len(selected) > MAX_REQUEST_BYTES:
+            raise ValueError("The verified writeback exceeds the context reader size limit.")
+        reader_argv = current_loopx_cli_argv()
+        page_bytes, needed = pinned_context_read_window(reader, selected,
+            page_bytes=max(256, min(NATIVE_CONTEXT_PAGE_BYTES, limit)), output_limit=limit, reader_argv=reader_argv)
+        opening["command"] = context_capture_read_command(path, digest, reference_file=reader, page_bytes=page_bytes,
+            max_page_output_bytes=limit, reader_argv=reader_argv)
+        if needed > limit or _json_output_size(opening) > limit:
+            raise ValueError(budget_error)
+    except BaseException:
+        # This call allocated a fresh recovery directory. Its files are useful
+        # only if we can return a reader command for them.
+        rmtree(path.parent)
+        raise
     return opening
 
 

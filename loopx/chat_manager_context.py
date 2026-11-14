@@ -488,7 +488,11 @@ def manager_authorization_scope_is_current(
         or not isinstance(expected_scope_id, str)
     ):
         return False
-    current = scope_resolver(session)
+    try:
+        current = scope_resolver(session)
+    except (OSError, ValueError, KeyError, TypeError):
+        # Losing the source or its audience proof holds the existing scope.
+        return False
     return (
         isinstance(current, list)
         and manager_authorization_scope_id_for_registry(

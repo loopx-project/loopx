@@ -189,6 +189,8 @@ class RunIndexSnapshot:
     raw_count: int
     digest: str | None
     invalid_count: int = 0
+    # Rows that are not text at all, so even their goal and kind are unknown.
+    undecodable_count: int = 0
 
 
 def now_local() -> str:
@@ -319,14 +321,21 @@ def load_index_snapshot(
     *,
     artifact_root: Path | None = None,
     include_artifact_status: bool = True,
+    tolerate_undecodable: bool = False,
     skip_invalid_encoding: bool = False,
 ) -> RunIndexSnapshot:
     """Decode the complete index; derived artifact status is optional internally.
 
     Full readers keep fresh status by default. History collection defers only
     filesystem observation until its complete semantic selection is known.
-    An incomplete presentation may skip undecodable rows and report them
-    through invalid_count. Strict readers still receive the decoding error.
+    A row cut inside a multibyte character is not text, so a caller cannot tell
+    whether it was a spend, a Vision or a replan ack. By default that raises, so
+    a reader that gates a write or an admission never proceeds on a list with a
+    hole in it. A reader that reports the damage itself passes
+    ``tolerate_undecodable=True`` and reads ``undecodable_count``.
+    An incomplete internal presentation may instead pass
+    ``skip_invalid_encoding=True`` and consume ``invalid_count``. Strict readers
+    still receive the decoding error.
     """
     try:
         stream = path.open("rb")
@@ -337,6 +346,7 @@ def load_index_snapshot(
     positions: dict[tuple[str, str, str], int] = {}
     raw_count = 0
     invalid_count = 0
+    undecodable_count = 0
     digest = hashlib.sha256()
 
     with stream:
@@ -345,10 +355,14 @@ def load_index_snapshot(
             try:
                 line = encoded_line.decode("utf-8")
             except UnicodeDecodeError:
-                if not skip_invalid_encoding:
+                if not (tolerate_undecodable or skip_invalid_encoding):
                     raise
+                # A write torn inside a multibyte character leaves bytes that
+                # are not text. The caller asked to see the damage as a count.
                 raw_count += 1
                 invalid_count += 1
+                if tolerate_undecodable:
+                    undecodable_count += 1
                 continue
             if not line.strip():
                 continue
@@ -383,6 +397,7 @@ def load_index_snapshot(
         raw_count=raw_count,
         digest=f"sha256:{digest.hexdigest()}",
         invalid_count=invalid_count,
+        undecodable_count=undecodable_count,
     )
 
 
@@ -416,12 +431,13 @@ def collect_history(
     agent_lane_id: str | None = None,
     scoped_agent_id: str | None = None,
     registry: dict[str, Any] | None = None,
+    tolerate_undecodable: bool = False,
 ) -> dict[str, Any]:
     from .capabilities.machine_configuration.builtins import (
         read_builtin_goal_machine_configuration,
         project_goal_with_builtin_machine_configuration,
     )
-    from .quota import goal_quota_with_spend_ledger
+    from .quota import goal_quota_with_spend_ledger, quota_with_unreadable_index_rows
 
     if registry is None:
         registry = load_registry(registry_path)
@@ -470,6 +486,7 @@ def collect_history(
         index_snapshot = load_index_snapshot(
             index_path,
             include_artifact_status=False,
+            tolerate_undecodable=tolerate_undecodable,
         )
         runs = index_snapshot.records
         raw_count = index_snapshot.raw_count
@@ -507,6 +524,10 @@ def collect_history(
 
         adapter = cast(dict[str, Any], meta.get("adapter")) if isinstance(meta.get("adapter"), dict) else {}
         quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
+        if quota is not None and index_snapshot.undecodable_count:
+            # The undecodable rows may be the spend or void events the projection
+            # just summed without them; report that instead of an exact count.
+            quota = quota_with_unreadable_index_rows(quota, index_snapshot.undecodable_count)
         goal_record: dict[str, Any] = {
             "id": current_goal_id,
             **goal_parent_fields(meta),
@@ -540,6 +561,13 @@ def collect_history(
             "index_digest": index_snapshot.digest,
             "index_exists": index_path.exists(),
             "raw_index_records": raw_count,
+            # Rows that are not text were skipped, not read: say so for every Goal,
+            # including a runtime-only one that has no quota projection to carry it.
+            **(
+                {"unreadable_index_rows": index_snapshot.undecodable_count}
+                if index_snapshot.undecodable_count
+                else {}
+            ),
             "unique_runs": len(runs),
             "latest_status_run": latest_status_run(runs),
             "latest_runs": latest_runs_with_agent_context(
@@ -1039,6 +1067,16 @@ def render_history_markdown(payload: dict[str, Any]) -> str:
         f"- goal_filter: `{payload.get('goal_filter')}`",
         f"- goals: `{payload.get('goal_count')}`",
         f"- unique_runs: `{payload.get('run_count')}`",
+    ]
+    unreadable = sum(
+        int(goal.get("unreadable_index_rows") or 0) for goal in payload.get("goals") or []
+    )
+    if unreadable:
+        lines.append(
+            f"- WARNING unreadable_index_rows: `{unreadable}` "
+            "(rows that could not be decoded were skipped; the listing below is incomplete)"
+        )
+    lines += [
         "",
         markdown_table_row(["generated_at", "goal", "classification", "files", "action"]),
         markdown_table_separator(5),
@@ -1066,6 +1104,11 @@ def render_history_markdown(payload: dict[str, Any]) -> str:
             f"index_exists=`{goal.get('index_exists')}`, "
             f"records=`{goal.get('raw_index_records')}`, "
             f"unique_runs=`{goal.get('unique_runs')}`"
+            + (
+                f", unreadable_index_rows=`{goal.get('unreadable_index_rows')}`"
+                if goal.get("unreadable_index_rows")
+                else ""
+            )
         )
     return "\n".join(lines)
 
