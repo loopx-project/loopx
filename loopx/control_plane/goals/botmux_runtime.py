@@ -1243,16 +1243,31 @@ def _status_botmux_runtime(
             public_summary="no botmux runtime turn has been dispatched for this goal",
             details={"dispatch_state": "idle", "output_available": False},
         )
+    # The session's trigger-result without a trigger id is its latest turn,
+    # which another client may have started. Ask for the id this receipt was
+    # queued under, and promote nothing the provider does not attribute to it.
+    stored_trigger_id = (
+        str(local_receipt.get("trigger_id") or "").strip()
+        if isinstance(local_receipt, Mapping)
+        else ""
+    )
     try:
-        result = requester(
-            endpoint=_validated_endpoint(str(binding.get("endpoint") or "")),
-            path=(
-                "/api/sessions/"
-                f"{quote(_validated_private_id(session_id, 'session id'), safe='')}"
-                "/trigger-result"
-            ),
-            dashboard_auth=_dashboard_auth_for_binding(binding),
-        )
+        pinned_trigger_id: str | None = _validated_private_id(stored_trigger_id, "trigger id")
+    except ValueError:
+        pinned_trigger_id = None
+    try:
+        if pinned_trigger_id is None:
+            result = {"state": BotmuxDispatchState.UNKNOWN.value}
+        else:
+            result = requester(
+                endpoint=_validated_endpoint(str(binding.get("endpoint") or "")),
+                path=(
+                    "/api/sessions/"
+                    f"{quote(_validated_private_id(session_id, 'session id'), safe='')}"
+                    f"/trigger-result?triggerId={quote(pinned_trigger_id, safe='')}"
+                ),
+                dashboard_auth=_dashboard_auth_for_binding(binding),
+            )
     except ValueError:
         return _operation_packet(
             ok=False,
@@ -1320,6 +1335,15 @@ def _status_botmux_runtime(
         BotmuxDispatchState.NOT_FOUND,
     }:
         provider_state = BotmuxDispatchState.UNKNOWN
+    identity_unverified = pinned_trigger_id is None
+    if (
+        pinned_trigger_id is not None
+        and provider_state != BotmuxDispatchState.NOT_FOUND
+        and str(result.get("triggerId") or "").strip() != pinned_trigger_id
+    ):
+        # The provider answered for a different turn, or did not say which.
+        provider_state = BotmuxDispatchState.UNKNOWN
+        identity_unverified = True
     latest_payload = read_botmux_runtime_binding(binding_path)
     latest_binding = botmux_binding_for_goal(latest_payload, goal_id) or binding
     latest_receipts = latest_binding.get("receipts")
@@ -1338,12 +1362,14 @@ def _status_botmux_runtime(
     )
     state = local_state if provider_observation_ignored else provider_state
     output = result.get("output")
-    output_available = bool(
+    output_available = not identity_unverified and bool(
         isinstance(output, Mapping) and str(output.get("content") or "").strip()
     )
     local_receipt_updated = execute
     if execute:
         updates = None
+        if identity_unverified and state == BotmuxDispatchState.UNKNOWN:
+            updates = {"unknown_reason": "trigger_identity_unverified"}
         if provider_observation_ignored:
             updates = {
                 "provider_observation": provider_state.value,
