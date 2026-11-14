@@ -17,7 +17,11 @@ from ..context_providers.base import (
     canonical_context_matches,
     opaque_provider_ref,
 )
-from .freshness import build_source_freshness_report, source_freshness_row
+from .freshness import (
+    _SUCCESS_STATUSES,
+    build_source_freshness_report,
+    source_freshness_row,
+)
 from .packets import build_decision_evidence_packet
 from .sources import (
     DecisionSourceExactRead,
@@ -177,7 +181,7 @@ def _source_coverage(
         complete_count = sum(
             1
             for collected in sources
-            if collected.scan.status in {"completed", "no_change"}
+            if collected.scan.status in _SUCCESS_STATUSES
             and not collected.exact_read_failed
         )
         priority_rows.append(
@@ -193,7 +197,7 @@ def _source_coverage(
             incomplete_required_source_ids.extend(
                 collected.source.source_id
                 for collected in sources
-                if collected.scan.status not in {"completed", "no_change"}
+                if collected.scan.status not in _SUCCESS_STATUSES
                 or collected.exact_read_failed
             )
 
@@ -485,7 +489,7 @@ def _assembly_source_freshness(
                 observed_at=assembly_time,
                 last_read_at=(
                     assembly_time.isoformat()
-                    if attempt in {"completed", "no_change"}
+                    if attempt in _SUCCESS_STATUSES
                     else None
                 ),
                 last_attempt_status=attempt,
@@ -720,7 +724,7 @@ def assemble_decision_evidence(
                 "provider": source.provider_id,
                 "status": (
                     "healthy"
-                    if scan.status in {"completed", "no_change"}
+                    if scan.status in _SUCCESS_STATUSES
                     and not exact_read_failed
                     else "degraded"
                     if scan.status == "completed"
