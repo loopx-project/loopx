@@ -2,6 +2,92 @@ import assert from "node:assert/strict";
 import {spawnSync} from "node:child_process";
 import test from "node:test";
 
+test("coordination claims remain available without terminal research evidence", () => {
+  const entry = new URL("../../loopx/control_plane/effect_runtime_handlers.ts", import.meta.url).href;
+  const fixtures = new URL("./local_promotion_fixture.ts", import.meta.url).href;
+  const source = new URL("./shadow_file_fixture.ts", import.meta.url).href;
+  const storeModule = new URL("../../loopx/control_plane/coordination/file_authority_store.ts", import.meta.url).href;
+  const script = `
+    import assert from "node:assert/strict";
+    import {registerHooks} from "node:module";
+    import {mkdtemp, rm, writeFile} from "node:fs/promises";
+    import {createHash} from "node:crypto";
+    import {tmpdir} from "node:os";
+    import {join} from "node:path";
+    let terminalLoads = 0;
+    registerHooks({load(url, context, nextLoad) {
+      if (url.endsWith("/capabilities/explore_research_terminal.ts")) {
+        terminalLoads++;
+        throw new Error("terminal research evidence unavailable");
+      }
+      return nextLoad(url, context);
+    }});
+    const {createEffectRuntimeHandlers, dispatchEffectRuntimeMethod} = await import(${JSON.stringify(entry)});
+    const {engageCanonicalRoute} = await import(${JSON.stringify(fixtures)});
+    const {projection, todo} = await import(${JSON.stringify(source)});
+    const {FileAuthorityStore} = await import(${JSON.stringify(storeModule)});
+    const root = await mkdtemp(join(tmpdir(), "coordination-selected-loading-"));
+    try {
+      await engageCanonicalRoute(root);
+      const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
+      assert.equal((await store.commitAuthority({expected_provider_revision: null,
+        operation_id: "seed", events: [], receipts: [],
+        next_projection: projection([todo()], [], "soft_claim")})).status, "applied");
+      const handlers = createEffectRuntimeHandlers({fingerprint: "loading-test", requestShutdown() {}});
+      const request = {schema_version: "loopx_local_coordination_todo_claim_request_v0",
+        runtime_root: root, goal_id: "goal-a", todo_id: "todo_one", role: "agent",
+        claimed_by: "agent-a", actor_agent_id: "agent-a", registered_agents: ["agent-a"],
+        operation_id: "claim", observed_at: "2026-09-05T04:30:00Z", dry_run: false};
+      const applied = await dispatchEffectRuntimeMethod(handlers,
+        "coordination.local_authority.todo_claim", request);
+      assert.equal(applied.status, "applied", JSON.stringify(applied));
+      const claimed = await store.loadAuthority();
+      assert.equal(claimed.status, "loaded");
+      assert.equal(claimed.head.todos[0].claimed_by, "agent-a");
+      const receipt = await store.readReceipt("claim");
+      assert.equal(receipt.status, "found");
+      assert.equal((await dispatchEffectRuntimeMethod(handlers,
+        "coordination.local_authority.todo_claim", request)).status, "replayed");
+      assert.deepEqual(await store.loadAuthority(), claimed);
+      assert.deepEqual(await store.readReceipt("claim"), receipt);
+      const invalid = await dispatchEffectRuntimeMethod(handlers,
+        "coordination.local_authority.todo_claim", {...request, operation_id: "invalid", dry_run: "true"});
+      assert.equal(invalid.reason_code, "invalid_local_coordination_todo_claim_request");
+      assert.deepEqual(await store.readReceipt("invalid"), {status: "missing"});
+      assert.deepEqual(await store.loadAuthority(), claimed);
+      assert.equal(terminalLoads, 0);
+      const registry = join(root, "registry.json");
+      await writeFile(registry, "{}");
+      const terminalRequest = {
+        schema_version: "loopx_local_coordination_todo_terminal_lifecycle_request_v3",
+        registry_source: {path: registry, sha256: createHash("sha256").update("{}").digest("hex")},
+        runtime_root: root, goal_id: "goal-a", todo_id: "todo_one", role: "agent",
+        command: "complete", actor_agent_id: "agent-a", registered_agents: ["agent-a"],
+        lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+        operation_identity: {kind: "explicit", operation_id: "terminal"},
+        lease_idempotency_key: null, lease_expected_version: null, allow_user_gate_auto_acquire: false,
+        requested_no_followup: true, requested_completion_turn_key: null,
+        requested_completion_identity_source: null, linked_successor_todo_ids: [], successor_intents: [],
+        note: null, evidence: null, reason: null, clear_claim: false,
+        validation_declaration: null, validation_receipt: null, completion_policy_request: null,
+        observed_at: "2026-09-05T04:30:00Z", dry_run: false,
+      };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const failed = await dispatchEffectRuntimeMethod(handlers,
+          "coordination.local_authority.todo_terminal", terminalRequest);
+        assert.equal(failed.status, "failed");
+        assert.match(failed.reason, /terminal research evidence unavailable/);
+        assert.deepEqual(await store.readReceipt("terminal"), {status: "missing"});
+        assert.deepEqual(await store.loadAuthority(), claimed);
+      }
+      assert.equal((await dispatchEffectRuntimeMethod(handlers, "runtime.ping", {})).ready, true);
+    } finally {await rm(root, {recursive: true, force: true});}
+  `;
+  const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-strip-types",
+    "--input-type=module", "-e", script], {encoding: "utf8", timeout: 30_000});
+  assert.equal(child.status, 0, child.stderr);
+});
+
 test("runtime loads selected owners without importing unrelated methods", () => {
   const entry = new URL("../../loopx/control_plane/effect_runtime_handlers.ts", import.meta.url).href;
   // Observe a fresh process, not this test runner's already imported modules.
