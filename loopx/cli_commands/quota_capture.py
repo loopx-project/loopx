@@ -553,10 +553,11 @@ def project_saved_context_capture(
         if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
             raise ValueError("saved projection needs a private physical capture root owned by this user")
         cache = Path(tempfile.mkdtemp(prefix="context-", dir=root))
-        # Staged recovery can check the original digest without reserializing
-        # the private source or requiring an attached first page.
-        staged_path = str(path) if saved_source is not None or (
-            args.initial_read and activation["progressive_enabled"]) else None
+        # Explicit selectors keep the saved field values. First-read and
+        # navigation projections may stage replan from the original digest.
+        staged_path = None
+        if not args.select and (saved_source is not None or (args.initial_read and activation["progressive_enabled"])):
+            staged_path = str(path)
         # The Host may have captured this guard before native SessionStart.
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle

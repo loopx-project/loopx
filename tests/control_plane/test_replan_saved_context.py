@@ -137,6 +137,11 @@ with patch.object(turn_envelope, '_turn_envelope_result', fail):
         assert result.returncode == 0, result.stdout + result.stderr
         response = json.loads(result.stdout)
         assert response["ok"], response
+        if entry == "selected":
+            assert response["eof"]
+            assert json.loads(response["content"])["selections"] == [
+                {"pointer": "/replan_action_packet", "value": source["replan_action_packet"]},
+            ]
         first_review = None
         staged = entry in {"original", "copied", "staged", "numeric"}
         if staged:
