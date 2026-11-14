@@ -31,6 +31,7 @@ class SyntheticPrivateSource:
 
     def __init__(self, root, *, steward=False, peer=False):
         self.root, self.verified = root, True
+        self.owner_login_missing = False
         self.steward, self.peer = steward, peer
         self.peer_provider = None
         default_compact_reply = "0" if os.environ.get("LOOPX_REPLY_BEFORE") == "1" else "1"
@@ -39,6 +40,9 @@ class SyntheticPrivateSource:
             self.transport_ref = "synthetic-peer"
 
     def observe(self):
+        if self.owner_login_missing:
+            from loopx.extensions.lark.conversation_identity import LarkOwnerIdentityUnavailable
+            raise LarkOwnerIdentityUnavailable()
         provider = ("e" if self.peer else "c") * 24
         operator = ("f" if self.peer else "d") * 24
         if "--reply-context" in sys.argv and not self.peer:
@@ -196,6 +200,22 @@ class SyntheticPrivateSource:
         history_handler = server.RequestHandlerClass._session_snapshot
         sessions_handler = server.RequestHandlerClass._list_sessions
         slow_page, slow_source = threading.Event(), threading.Event()
+        hold_steward_discovery, resume_steward_discovery = threading.Event(), threading.Event()
+
+        if self.steward:
+            core = bindings._core
+
+            def controlled_core(operation, params, **kwargs):
+                result = core(operation, params, **kwargs)
+                if (operation == "collaboration.conversation.local_sessions"
+                        and params.get("app_steward_entry") and hold_steward_discovery.is_set()):
+                    hold_steward_discovery.clear()
+                    print(json.dumps({"steward_discovery_held": True}), flush=True)
+                    if not resume_steward_discovery.wait(15):
+                        raise TimeoutError("steward discovery fixture was not released")
+                return result
+
+            bindings._core = controlled_core
 
         def delayed_history(handler, selected_session):
             if selected_session == sid and slow_page.is_set():
@@ -217,12 +237,23 @@ class SyntheticPrivateSource:
                 command = line.strip()
                 if command in {"deny", "recover"}:
                     self.verified = command == "recover"
+                    self.owner_login_missing = False
                     result = {"source_verified": self.verified}
+                elif command == "owner-login-missing":
+                    self.owner_login_missing = True
+                    result = {"owner_login_missing": True}
                 elif command == "source":
                     accepted, _ = runtime.enqueue_turn(session_id=sid, message="A new synthetic message from the original private source.",
                         client_turn_id="synthetic-source-update", origin="lark", work_dir=self.root / "project", objective="")
                     turn = runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=15)
                     result = {"source_turn_status": turn["status"]}
+                elif command == "hold-steward-discovery":
+                    resume_steward_discovery.clear()
+                    hold_steward_discovery.set()
+                    result = {"steward_discovery_armed": True}
+                elif command == "resume-steward-discovery":
+                    resume_steward_discovery.set()
+                    result = {"steward_discovery_released": True}
                 elif command == "close":
                     server.chat_store.update_session(sid, status="closed")
                     result = {"closed": True}

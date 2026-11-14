@@ -3110,7 +3110,7 @@ function PersonalGoalHome({
         observedConversationRunning={observedConversationRunning}
         workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace,
           onOpenOriginal: onOpenOriginalConversation,
-          entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
+          entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, ownerLoginUnavailable: appEntry.ownerLoginUnavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
         agents={(fixedSession ? [selectedAgent] : agentOptions).map((agent) => ({
           adapterKind: agent.adapterKind,
           agentId: agent.agentId,
