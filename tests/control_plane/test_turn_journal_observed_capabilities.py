@@ -11,6 +11,7 @@ import pytest
 from loopx.control_plane.turn_driver import journal_store
 from loopx.control_plane.turn_driver import turn_journal_runtime
 from loopx.control_plane.turn_driver.journal_store import (
+    turn_journal_evidence_chain,
     turn_journal_observed_capabilities,
     write_turn_journal_checkpoint,
 )
@@ -176,6 +177,70 @@ def _observed(
     if goal_ref is not None:
         kwargs["goal_ref"] = goal_ref
     return turn_journal_observed_capabilities(runtime, **kwargs)
+
+
+def test_typescript_evidence_chain_is_available_through_python_readback(
+    tmp_path: Path,
+) -> None:
+    _commit_journal_via_typescript_writer(tmp_path, _journal())
+
+    readback = turn_journal_evidence_chain(
+        tmp_path,
+        settlement_identity=_completion_identity(),
+    )
+    assert readback["availability"] == "recorded"
+    chain = readback["evidence_chain"]
+    assert chain["settlement_identity"] == _completion_identity()
+    assert chain["turn_key"] == TURN_KEY
+    assert chain["completed_phases"] == TRANSACTION_PHASES
+    assert all(phase["completed"] for phase in chain["phases"])
+
+
+def test_evidence_chain_wrapper_preserves_exact_identity_and_missingness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[tuple[str, dict[str, Any]]] = []
+    expected = {
+        "schema_version": "loopx_turn_journal_evidence_chain_v0",
+        "availability": "missing",
+        "evidence_chain": None,
+    }
+
+    def readback(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        requests.append((method, params))
+        return expected
+
+    monkeypatch.setattr(journal_store, "effect_runtime_result", readback)
+    assert turn_journal_evidence_chain(
+        tmp_path,
+        settlement_identity=_completion_identity(),
+        goal_ref=GOAL_REF_A,
+    ) == expected
+    assert requests == [("turn_journal.evidence_chain", {
+        "runtime_root": str(tmp_path.resolve()),
+        "settlement_identity": _completion_identity(),
+        "goal_ref": GOAL_REF_A,
+    })]
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    {"schema_version": "unknown", "availability": "missing", "evidence_chain": None},
+    {
+        "schema_version": "loopx_turn_journal_evidence_chain_v0",
+        "availability": "recorded",
+        "evidence_chain": None,
+    },
+])
+def test_evidence_chain_wrapper_rejects_transport_shape_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(journal_store, "effect_runtime_result", lambda *_args, **_kwargs: payload)
+    with pytest.raises(RuntimeError, match="evidence-chain shape mismatch"):
+        turn_journal_evidence_chain(
+            tmp_path,
+            settlement_identity=_completion_identity(),
+        )
 
 
 def test_typescript_committed_journal_lends_boundary_capabilities(
