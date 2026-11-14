@@ -94,6 +94,51 @@ def test_history_append_starts_a_new_record_after_an_unterminated_tail(
     assert [row["goal_id"] for row in snapshot.records] == expected_goal_ids
 
 
+def test_a_row_torn_inside_a_multibyte_character_is_skipped_only_when_asked(
+    tmp_path: Path,
+) -> None:
+    """A write torn mid-character is not text; only an opted-in reader skips it.
+
+    The writer keeps non-ASCII text verbatim (`ensure_ascii=False`), so an
+    interrupted append can end in a partial UTF-8 sequence. The torn row could
+    be a spend, a Vision or a replan ack, so a reader that gates a write must
+    keep failing on it. A reader that reports the damage itself opts in and
+    reads the count.
+    """
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    index_path = runs_dir / "index.jsonl"
+    complete = {"goal_id": GOAL_ID, "generated_at": "2026-09-15T00:00:00Z"}
+    torn = json.dumps(
+        {"goal_id": GOAL_ID, "generated_at": GENERATED_AT, "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    index_path.write_bytes(
+        (json.dumps(complete) + "\n").encode("utf-8")
+        + torn[: torn.index("进".encode("utf-8")) + 1]
+    )
+
+    with pytest.raises(UnicodeDecodeError):
+        history.load_index_snapshot(index_path)
+    with pytest.raises(UnicodeDecodeError):
+        history.load_index(index_path)
+
+    snapshot = history.load_index_snapshot(index_path, tolerate_undecodable=True)
+    assert [row["generated_at"] for row in snapshot.records] == [
+        complete["generated_at"]
+    ]
+    assert (snapshot.raw_count, snapshot.invalid_count, snapshot.undecodable_count) == (
+        2,
+        1,
+        1,
+    )
+    # The digest still covers the original bytes, so a rewrite is detectable.
+    assert snapshot.digest == history.load_index_snapshot(
+        index_path, tolerate_undecodable=True
+    ).digest
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -226,3 +271,193 @@ def test_collision_rebuild_keeps_the_backup_and_index_bytes(tmp_path: Path) -> N
     physical_lines = run_index_rebuild.split_index_lines(rebuilt_content)
     assert len(physical_lines) == 2
     assert [json.loads(line)["todo_id"] for line in physical_lines] == ["todo-a", "todo-b"]
+
+
+def _quota_history(tmp_path: Path, index_bytes: bytes) -> dict:
+    goal_id = "torn-spend-goal"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": goal_id,
+                        "quota": {
+                            "compute": 1.0,
+                            "window_hours": 100000,
+                            "slot_minutes": 1,
+                            "allowed_slots": 1,
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runs_dir = tmp_path / "runtime" / "goals" / goal_id / "runs"
+    runs_dir.mkdir(parents=True)
+    (runs_dir / "index.jsonl").write_bytes(index_bytes)
+    return history.collect_history(
+        registry_path=registry_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id=goal_id,
+        limit=10,
+        tolerate_undecodable=True,
+    )["goals"][0]["quota"]
+
+
+def _spend_row(generated_at: str, summary: str) -> bytes:
+    return json.dumps(
+        {
+            "goal_id": "torn-spend-goal",
+            "generated_at": generated_at,
+            "classification": "quota_slot_spent",
+            "summary": summary,
+            "quota_event": {
+                "event_type": "quota_slot_spent",
+                "slots": 1,
+                "turn_instance_id": "turn-1",
+                "run_generated_at": generated_at,
+            },
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def test_torn_spend_row_is_reported_as_unreadable_not_as_zero_spend(
+    tmp_path: Path,
+) -> None:
+    spend = _spend_row("2026-09-15T00:00:00+00:00", "进度更新")
+    torn = spend[: spend.index("进".encode("utf-8")) + 1]
+
+    intact = _quota_history(tmp_path / "intact", spend + b"\n")
+    damaged = _quota_history(tmp_path / "damaged", torn)
+
+    assert intact["spent_slots"] == 1
+    assert "unreadable_event_count" not in intact
+    # The torn row may be the spend the projection could not count: the quota
+    # must say its usage is unknown instead of reading as an exact zero.
+    assert damaged["spent_slots"] == 0
+    assert damaged["unreadable_event_count"] == 1
+    assert damaged["unreadable_event_reasons"] == ["event_invalid"]
+
+
+def test_torn_unrelated_row_still_marks_usage_unreadable_but_keeps_the_spend(
+    tmp_path: Path,
+) -> None:
+    spend = _spend_row("2026-09-15T00:00:00+00:00", "done")
+    other = json.dumps(
+        {"goal_id": "torn-spend-goal", "generated_at": "2026-09-16T00:00:00+00:00", "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    torn = other[: other.index("进".encode("utf-8")) + 1]
+
+    quota = _quota_history(tmp_path, spend + b"\n" + torn)
+
+    # The intact spend is still counted; only the unknown row is flagged.
+    assert quota["spent_slots"] == 1
+    assert quota["unreadable_event_count"] == 1
+
+
+def test_history_export_keeps_the_prior_corpus_when_a_row_cannot_be_decoded(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.openviking_semantic_preference.history_export import (
+        export_goal_conclusions,
+    )
+
+    goal_id = "torn-export-goal"
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps({"goals": [{"id": goal_id}]}), encoding="utf-8")
+    runs_dir = tmp_path / "runtime" / "goals" / goal_id / "runs"
+    runs_dir.mkdir(parents=True)
+    index_path = runs_dir / "index.jsonl"
+
+    def row(generated_at: str, summary: str) -> bytes:
+        return json.dumps(
+            {
+                "goal_id": goal_id,
+                "generated_at": generated_at,
+                "classification": "progress",
+                "recommended_action": summary,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+    older = row("2026-09-15T00:00:00+00:00", "older conclusion")
+    newer = row("2026-09-16T00:00:00+00:00", "进度更新")
+    good = older + b"\n" + newer + b"\n"
+    index_path.write_bytes(good)
+    kwargs = {
+        "goal_id": goal_id,
+        "registry_path": registry_path,
+        "runtime_root": tmp_path / "runtime",
+        "out_dir": tmp_path / "out",
+    }
+    first = export_goal_conclusions(**kwargs)
+    assert first["public_projection"]["written"] == 2
+    corpus = tmp_path / "out" / goal_id / "history-conclusions"
+    before = {path.name: path.read_bytes() for path in corpus.iterdir()}
+
+    # The newer row is torn inside a multibyte character: the export must keep
+    # the last verified corpus instead of replacing it with a smaller one.
+    index_path.write_bytes(older + b"\n" + newer[: newer.index("进".encode("utf-8")) + 1])
+    with pytest.raises(UnicodeDecodeError):
+        export_goal_conclusions(**kwargs)
+    assert {path.name: path.read_bytes() for path in corpus.iterdir()} == before
+
+    index_path.write_bytes(good)
+    assert export_goal_conclusions(**kwargs)["public_projection"]["written"] == 2
+
+
+def _history_payload(tmp_path: Path, index_bytes: bytes, *, registered: bool) -> dict:
+    goal_id = "markdown-goal"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps({"goals": [{"id": goal_id}] if registered else []}), encoding="utf-8"
+    )
+    runs_dir = tmp_path / "runtime" / "goals" / goal_id / "runs"
+    runs_dir.mkdir(parents=True)
+    (runs_dir / "index.jsonl").write_bytes(index_bytes)
+    return history.collect_history(
+        registry_path=registry_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id=goal_id,
+        limit=10,
+        tolerate_undecodable=True,
+    )
+
+
+def _two_rows(goal_id: str = "markdown-goal") -> bytes:
+    rows = [
+        {"goal_id": goal_id, "generated_at": f"2026-09-1{n}T00:00:00+00:00", "classification": "progress"}
+        for n in (4, 5)
+    ]
+    return b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+
+
+@pytest.mark.parametrize("registered", [True, False], ids=["registered", "runtime_only"])
+def test_default_history_markdown_distinguishes_a_torn_row_from_a_healthy_duplicate(
+    tmp_path: Path, registered: bool
+) -> None:
+    torn_row = json.dumps(
+        {"goal_id": "markdown-goal", "generated_at": "2026-09-16T00:00:00+00:00", "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    torn = _two_rows() + torn_row[: torn_row.index("进".encode("utf-8")) + 1]
+    # A healthy duplicate of an existing row also adds one raw record and no run.
+    duplicate = _two_rows() + _two_rows().splitlines()[0] + b"\n"
+
+    torn_payload = _history_payload(tmp_path / "torn", torn, registered=registered)
+    healthy_payload = _history_payload(tmp_path / "healthy", duplicate, registered=registered)
+    torn_text = history.render_history_markdown({"ok": True, **torn_payload})
+    healthy_text = history.render_history_markdown({"ok": True, **healthy_payload})
+
+    assert torn_payload["goals"][0]["unreadable_index_rows"] == 1
+    assert "unreadable_index_rows" not in healthy_payload["goals"][0]
+    assert "WARNING unreadable_index_rows: `1`" in torn_text
+    assert "unreadable_index_rows=`1`" in torn_text
+    assert "WARNING" not in healthy_text and "unreadable_index_rows" not in healthy_text
+    assert torn_text != healthy_text

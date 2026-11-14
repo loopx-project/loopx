@@ -64,6 +64,7 @@ from .control_plane.quota.settlement import (
     settlement_result_payload,
 )
 from .control_plane.quota.ledger_readback import (
+    QUOTA_EVENT_UNREADABLE_EVENT_INVALID,
     QUOTA_EVENT_UNREADABLE_REASONS,
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
@@ -473,6 +474,26 @@ def goal_quota_with_spend_ledger(
     if void_event_count:
         payload["void_event_count"] = void_event_count
     return payload
+
+
+def quota_with_unreadable_index_rows(quota: dict[str, Any], count: int) -> dict[str, Any]:
+    """Report run-index rows that could not be read as unreadable quota events.
+
+    A row that is not text cannot be classified, so it may hold a spend or a
+    void. The remaining quota is then unknown, which ``quota_status`` already
+    treats as a ledger integrity failure rather than a zero spend.
+    """
+
+    if count <= 0:
+        return quota
+    reasons = quota.get("unreadable_event_reasons")
+    return {
+        **quota,
+        "unreadable_event_count": _int_number(quota.get("unreadable_event_count"), default=0) + count,
+        "unreadable_event_reasons": sorted(
+            {*(reasons if isinstance(reasons, list) else []), QUOTA_EVENT_UNREADABLE_EVENT_INVALID}
+        ),
+    }
 
 
 def quota_status(

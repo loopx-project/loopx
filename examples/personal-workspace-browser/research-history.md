@@ -408,7 +408,7 @@ receipt. Downloads do not launch research or change source state. While history 
 loading or no records match, downloading is unavailable; retry after a download
 failure or refresh the history after a read failure.
 
-The synthetic packaged regression exercises native paged history, an old negative
+The synthetic browser regression exercises native paged history, an old negative
 revision after 75 other findings, status filtering, full/filtered JSON and Markdown downloads,
 original-version comparison (including unmeasured versus zero), partial/stale
 coverage, interrupted reads/downloads and retry, Goal isolation and
@@ -418,7 +418,12 @@ desktop/narrow layouts without dispatching an Agent:
 node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-search.test.mjs apps/presentation/dashboard/src/features/personal-workspace/research-record-versions.test.mjs
 node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-export.test.mjs apps/presentation/dashboard/src/features/personal-workspace/research-record-report.test.mjs
 LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-record-search node examples/personal-workspace-browser-smoke.mjs
+LOOPX_DASHBOARD_COVERAGE=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-record-search node examples/personal-workspace-browser-smoke.mjs
 ```
+
+Both browser modes use the same disposable history owner and require readback
+with no source mutation. The coverage command uses Vite and must map executed
+code from the research-record browser module into the Dashboard source report.
 
 From the worktree root:
 
