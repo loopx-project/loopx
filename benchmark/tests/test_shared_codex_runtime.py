@@ -680,6 +680,66 @@ def test_harbor_owns_official_stop_hook_opt_in(tmp_path, monkeypatch):
         assert (reserve == 0) is enabled
 
 
+@pytest.mark.parametrize("blocked_method", ["initialize", "hooks/list"])
+def test_official_stop_discovery_spends_the_same_phase_clock(tmp_path, blocked_method):
+    env = worker_env(tmp_path)
+    binary = Path(env["CODEX_BIN"])
+    binary.write_text(f"#!{sys.executable}\n" + """
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+assert "app-server" in sys.argv
+Path("discovery.pid").write_text(str(os.getpid()))
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    Path("last-method").write_text(method)
+    if method == os.environ["BLOCKED_METHOD"]:
+        time.sleep(60)
+    time.sleep(.4)
+    print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+""")
+    env.update(LOOPX_OFFICIAL_STOP_HOOK="1", BLOCKED_METHOD=blocked_method)
+    started = time.time()
+    env["LOOPX_PHASE_DEADLINE_EPOCH"] = str(started + 2)
+    result = run_once(env)
+    assert time.time() - started < 5
+    assert (tmp_path / "last-method").read_text() == blocked_method
+    assert result["budget_exhausted"] and result["timed_out"]
+    assert result["host_invoked"] is False and "official_stop_hook_verified" not in result
+    assert not (tmp_path / "home" / "sessions").exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((tmp_path / "discovery.pid").read_text()), 0)
+
+
+def test_official_stop_discovery_preserves_a_protocol_rejection(tmp_path):
+    from loopx.control_plane.turn_driver.codex_stdio import NativeGoalProtocolError
+
+    env = worker_env(tmp_path)
+    binary = Path(env["CODEX_BIN"])
+    binary.write_text(f"#!{sys.executable}\n" + """
+import json
+import sys
+
+assert "app-server" in sys.argv
+request = json.loads(sys.stdin.readline())
+assert request["method"] == "initialize"
+print(json.dumps({"id": request["id"], "error": {"code": -32603, "message": "rejected"}}), flush=True)
+""")
+    env.update(LOOPX_OFFICIAL_STOP_HOOK="1", LOOPX_PHASE_DEADLINE_EPOCH=str(time.time() + 4))
+    with pytest.raises(NativeGoalProtocolError, match="app_server_request_failed:initialize"):
+        run_once(env)
+    receipt, = (tmp_path / "logs" / "wakes").glob("*/receipt.json")
+    result = json.loads(receipt.read_text())
+    assert not result["timed_out"] and "budget_exhausted" not in result
+    assert not (tmp_path / "home" / "sessions").exists()
+
+
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Explicit native Codex binary required; inference uses loopback only")
 @pytest.mark.parametrize("enabled", [False, True])

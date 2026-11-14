@@ -92,9 +92,11 @@ native execution. The task controller may stop it earlier when the task's
 original final submission is accepted.
 
 The runner stages only its own hook in the trial's Codex home and trusts the
-exact handler identity discovered by that Codex binary. If discovery fails,
-the worker refuses this treatment before inference. Install and trajectory
-receipts record the opt-in. The wake receipt records successful hook discovery.
+exact handler identity discovered by that Codex binary. Both discovery requests
+share the worker deadline. If the phase expires during discovery, the wake
+records budget exhaustion and no model launch. Earlier discovery failures
+still fail the trial before inference. Install and trajectory receipts record
+the opt-in. The wake receipt records successful hook discovery.
 Use the same pinned task, model, reasoning effort, time and evaluator in
 comparison arms. The benchmark adapter still owns feedback, final submission,
 and scoring. EdgeBench's SForge auto-resume remains a provider-specific part of

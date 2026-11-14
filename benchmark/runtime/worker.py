@@ -662,7 +662,18 @@ def run_once(env: dict[str, str]) -> dict:
         if execution.official_stop_hook:
             from benchmark.runtime.native_hooks import prepare_official_stop_hook
 
-            native_hook_args = prepare_official_stop_hook(env, home)
+            worker_remaining = (
+                None if official_worker_deadline is None else official_worker_deadline - time.time()
+            )
+            remaining, phase_limited = _phase_timeout(worker_remaining, phase_work_deadline)
+            assert remaining is not None  # The Stop-hook path requires a finite clock.
+            try:
+                native_hook_args = prepare_official_stop_hook(env, home, deadline=time.monotonic() + remaining)
+            except subprocess.TimeoutExpired:
+                receipt["host_invoked"] = False
+                if phase_limited:
+                    receipt["budget_exhausted"] = True
+                raise
             receipt["official_stop_hook_verified"] = True
         if execution.mode == "heartbeat":
             # Checkpoint capture needs the LoopX control plane, which only

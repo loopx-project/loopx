@@ -4,24 +4,25 @@ from __future__ import annotations
 
 import json
 import shlex
+from functools import partial
 from pathlib import Path
 
 
 OFFICIAL_STOP_HOOK_REASON = "Do not stop. Continue working on the implementation."
 
 
-def prepare_official_stop_hook(env: dict[str, str], home: Path) -> list[str]:
+def prepare_official_stop_hook(env: dict[str, str], home: Path, *, deadline: float) -> list[str]:
     # Put the entire handler in the declaration so native trust covers the
     # command body as well as the path to the hook declaration.
     response = shlex.quote(json.dumps({"decision": "block", "reason": OFFICIAL_STOP_HOOK_REASON}))
     command = rf"cat >/dev/null && printf '%s\n' {response}"
     return prepare_native_hooks(env, home, {
         "Stop": [{"hooks": [{"type": "command", "command": command, "timeout": 30}]}],
-    }, purpose="official-stop")
+    }, purpose="official-stop", deadline=deadline)
 
 
 def prepare_native_hooks(env: dict[str, str], home: Path, configuration: dict, *,
-                         purpose: str) -> list[str]:
+                         purpose: str, deadline: float | None = None) -> list[str]:
     from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
 
     content = json.dumps({"hooks": configuration})
@@ -40,10 +41,11 @@ def prepare_native_hooks(env: dict[str, str], home: Path, configuration: dict, *
              "app-server", "--listen", "stdio://"],
             cwd=env["LOOPX_PROJECT"], env=env, stderr=stderr, response_timeout_sec=10,
         ) as native:
-            native.request("initialize", {"clientInfo": {"name": "loopx_context_transport", "version": "0.1.0"},
-                                          "capabilities": {"experimentalApi": True}})
+            request = native.request if deadline is None else partial(native.request, deadline=deadline)
+            request("initialize", {"clientInfo": {"name": "loopx_context_transport", "version": "0.1.0"},
+                                   "capabilities": {"experimentalApi": True}})
             native.notify("initialized", {})
-            listed = native.request("hooks/list", {"cwds": [env["LOOPX_PROJECT"]]})
+            listed = request("hooks/list", {"cwds": [env["LOOPX_PROJECT"]]})
     hooks = [hook for entry in listed["data"] for hook in entry["hooks"]
              if hook.get("sourcePath") == str(path.resolve())]
     # Discovery can reorder handlers. Counts alone cannot rule out
