@@ -967,6 +967,69 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
     assert observations == ['verified']
 
 
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "exact"])
+@pytest.mark.parametrize("corrupt", [False, True], ids=["missing-registry", "malformed-registry"])
+def test_unreadable_return_registry_preserves_the_original_attempt(tmp_path, monkeypatch, exact, corrupt):
+    monkeypatch.setattr("loopx.usage_ping.observe_verified_return", lambda: None)
+    registry = _create_source_registry(tmp_path)
+    if not exact:
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _external_manager_request(tmp_path, registry)
+    state_path = _root(tmp_path) / "replies" / receipt["request_id"] / "conclusion.delivery.json"
+    attempt = {
+        "schema_version": "manager_return_delivery_attempt_v0", "provider": "lark",
+        "message_ref": "om_original_result", "intent_digest": "sha256:" + "a" * 64,
+        "provider_receipt": "sha256:" + "b" * 64,
+    }
+    calls = []
+
+    class Transport:
+        def send_with_attempt(self, route, _session, _turn, _text, record_attempt):
+            assert not calls, "the original provider write must not be repeated"
+            calls.append(("send", route["return_message_id"]))
+            record_attempt(attempt)
+            raise SystemExit("stopped after provider attempt")
+
+        def verify(self, route, current_session, _turn, _text, saved_attempt):
+            calls.append(("verify", route["return_message_id"]))
+            assert current_session["session_id"] == session["session_id"]
+            assert saved_attempt == attempt
+            return {"verification_performed": True, "reply_verified": True}
+
+    transport = Transport()
+    started = datetime(2026, 9, 28, tzinfo=timezone.utc)
+    with pytest.raises(SystemExit, match="stopped after provider attempt"):
+        drain(tmp_path, registry, store, transport, now=started)
+    original_state = state_path.read_bytes()
+    original_messages = store.messages(session["session_id"])
+    assert json.loads(original_state)["attempt"] == attempt
+    (send,) = calls
+
+    saved_registry = registry.with_suffix(".offline")
+    registry.rename(saved_registry)
+    later = started + timedelta(minutes=2)
+    try:
+        if corrupt:
+            registry.write_text("[")
+        with pytest.raises(ValueError if corrupt else FileNotFoundError):
+            drain(tmp_path, registry, ChatSessionStore(tmp_path), transport, now=later)
+        assert state_path.read_bytes() == original_state
+        assert store.messages(session["session_id"]) == original_messages
+        assert calls == [send]
+    finally:
+        saved_registry.replace(registry)
+
+    restored = later + timedelta(minutes=1)
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), transport, now=restored) == 1
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), transport, now=restored) == 0
+    assert calls == [("send", send[1]), ("verify", send[1])]
+    snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+    messages = [row for row in snapshot["messages"] if row.get("origin") == "manager_followup"]
+    assert len(messages) == 1
+    assert messages[0]["return_delivery"]["status"] == "delivered"
+    assert attempt["message_ref"] not in json.dumps(messages)
+
+
 def test_long_lived_mcp_keeps_its_captured_instance_after_recreation(
     tmp_path: Path,
 ) -> None:
