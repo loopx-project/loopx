@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -28,6 +29,8 @@ from .openai_keys import NoRedirect, api_policy
 SCHEMA = "codex_openai_api_relay_v1"
 API_SLOT = "openai-api"
 RUNTIME_SCHEMA = "codex_openai_api_relay_runtime_v1"
+REQUEST_IDLE_TIMEOUT = 10
+ERROR_BODY_LIMIT = 65536
 # Loaded once. Replacing an installed wheel cannot make its old daemon claim
 # the newly installed implementation. No credential or request data is hashed.
 BUILD = hashlib.sha256(b"".join(Path(__file__).with_name(name).read_bytes() for name in (
@@ -133,9 +136,32 @@ class RelayServer(ThreadingHTTPServer):
         self.opener = opener or urllib.request.build_opener(NoRedirect())
         self.instance_id = secrets.token_hex(16)
         self._admission_lock = threading.Lock()
+        self._receiving: set[socket.socket] = set()
         self.draining, self.active_requests = False, 0
         self.started = time.monotonic()
         super().__init__(("127.0.0.1", value["port"]), RelayHandler)
+
+    def process_request(self, request, client_address):
+        with self._admission_lock:
+            self._receiving.add(request)
+        super().process_request(request, client_address)
+
+    def shutdown_request(self, request):
+        with self._admission_lock:
+            self._receiving.discard(request)
+        super().shutdown_request(request)
+
+    def server_close(self):
+        with self._admission_lock:
+            self.draining = True
+            # Stop reads on connections still outside model admission. Keep their
+            # write half open for the control acknowledgement and error responses.
+            for request in self._receiving:
+                try:
+                    request.shutdown(socket.SHUT_RD)
+                except OSError:
+                    pass
+        super().server_close()
 
     def runtime(self):
         with self._admission_lock:
@@ -163,6 +189,7 @@ class RelayServer(ThreadingHTTPServer):
 
 class RelayHandler(BaseHTTPRequestHandler):
     server: RelayServer
+    timeout = REQUEST_IDLE_TIMEOUT
 
     def log_message(self, *_args):
         pass
@@ -237,19 +264,10 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._json(401, "relay_auth_required")
             return
         with self.server._admission_lock:
-            admitted = not self.server.draining
-            if admitted:
-                self.server.active_requests += 1
-        if not admitted:
+            draining = self.server.draining
+        if draining:
             self._json(503, "api_relay_draining")
             return
-        try:
-            self._model_request()
-        finally:
-            with self.server._admission_lock:
-                self.server.active_requests -= 1
-
-    def _model_request(self):
         upstream_path = self.path.removeprefix("/steward") if self.consumer == "steward" else self.path
         if upstream_path not in ("/v1/responses", "/v1/responses/compact"):
             self._json(404, "unsupported_route")
@@ -258,10 +276,18 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._json(503, "api_fallback_disabled")
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) != 1 or "Transfer-Encoding" in self.headers:
+                raise ValueError()
+            declared = lengths[0].strip(" \t")
+            if not re.fullmatch(r"[0-9]+", declared):
+                raise ValueError()
+            length = int(declared)
             if not 1 <= length <= 32 * 1024 * 1024:
                 raise ValueError()
             body = self.rfile.read(length)
+            if len(body) != length:
+                raise ValueError()
             value = json.loads(body)
             model = value["model"]
             if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", model) or model.startswith("sk-"):
@@ -269,6 +295,23 @@ class RelayHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError, KeyError):
             self._json(400, "invalid_request")
             return
+        with self.server._admission_lock:
+            admitted = not self.server.draining
+            if admitted:
+                self.server._receiving.discard(self.connection)
+                self.server.active_requests += 1
+        if not admitted:
+            self._json(503, "api_relay_draining")
+            return
+        try:
+            # The request idle timeout applies only before model admission.
+            self.connection.settimeout(None)
+            self._forward(upstream_path, body, model)
+        finally:
+            with self.server._admission_lock:
+                self.server.active_requests -= 1
+
+    def _forward(self, upstream_path, body, model):
         keys = self.server.owner.api_keys()
         candidates = keys.candidates(model)
         last_status, last_code = 429, "api_keys_unavailable"
@@ -288,48 +331,84 @@ class RelayHandler(BaseHTTPRequestHandler):
             try:
                 response = self.server.opener.open(request, timeout=300)
             except urllib.error.HTTPError as error:
-                encoded = error.read(65537)
+                with error:
+                    try:
+                        encoded = error.read(ERROR_BODY_LIMIT + 1)
+                    except (OSError, HTTPException):
+                        encoded = None
+                    remaining = getattr(error.fp, "length", None)
+                    # A bounded read can silently reach early EOF, and a
+                    # body larger than our limit cannot be verified in full.
+                    if encoded is None or len(encoded) > ERROR_BODY_LIMIT or (remaining or 0) > 0:
+                        self._json(502, "upstream_unavailable")
+                        return
                 try:
-                    code = json.loads(encoded).get("error", {}).get("code") if len(encoded) <= 65536 else None
+                    code = json.loads(encoded).get("error", {}).get("code")
                     code = code if isinstance(code, str) and code.isascii() and code.replace("_", "").isalnum() else None
                 except (TypeError, ValueError, AttributeError):
                     code = None
                 headers = {k.lower(): v for k, v in error.headers.items()}
                 status = error.code
-                error.close()
                 outcome = keys.record(row["id"], status=status, code=code, model=model, headers=headers)
                 last_status, last_code = status, code or "upstream_rejected"
                 if outcome["retry_next_key"]:
                     continue
                 self._json(status, last_code)
                 return
-            except (OSError, HostError):
+            except (OSError, HTTPException, HostError):
                 # Unknown upstream effects never authorize trying another key.
                 self._json(502, "upstream_unavailable")
                 return
             with response:
                 headers = {k.lower(): v for k, v in response.headers.items()}
-                keys.record(row["id"], status=response.status, code=None, model=model, headers=headers)
+
+                def observe(status: int, code: str | None = None):
+                    try:
+                        keys.record(row["id"], status=status, code=code, model=model, headers=headers)
+                    except (OSError, ValueError, HostError, subprocess.SubprocessError):
+                        # Once admitted, an observation failure must not
+                        # replace or discard the upstream's response.
+                        pass
+
+                observe(response.status)
+                # urllib removes the upstream chunk framing. Use the decoded
+                # length when known; otherwise frame the HTTP/1.1 response
+                # so a read failure cannot look like clean EOF.
+                can_have_body = response.status not in (204, 304)
+                length = getattr(response, "length", None)
+                chunked = can_have_body and length is None and self.request_version == "HTTP/1.1"
+                if chunked:
+                    self.protocol_version = "HTTP/1.1"
                 self.send_response(response.status)
                 self.send_header("Content-Type", headers.get("content-type", "text/event-stream"))
                 self.send_header("Cache-Control", "no-store")
+                if chunked:
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.send_header("Connection", "close")
+                elif can_have_body and length is not None:
+                    self.send_header("Content-Length", str(length))
                 self.end_headers()
+                if not can_have_body:
+                    return
                 # Once headers/output are admitted, disconnects and SSE errors
                 # end this request. No key rotation, synthetic completion or job replay.
-                observer = _StreamOutcome() if headers.get("content-type", "").split(";", 1)[0].strip().lower() == "text/event-stream" else None
+                content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                observer = _StreamOutcome() if content_type == "text/event-stream" else None
                 try:
                     read = getattr(response, "read1", response.read)
                     while chunk := read(8192):
                         outcome = observer.feed(chunk) if observer is not None else None
                         if outcome is not None:
-                            try:
-                                keys.record(row["id"], status=outcome["status"], code=outcome["code"],
-                                            model=model, headers=headers)
-                            except (OSError, ValueError, HostError, subprocess.SubprocessError):
-                                pass
-                        self.wfile.write(chunk)
+                            observe(outcome["status"], outcome["code"])
+                        if chunked:
+                            self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                        else:
+                            self.wfile.write(chunk)
                         self.wfile.flush()
-                except (OSError, TimeoutError):
+                    if chunked:
+                        self.wfile.write(b"0\r\n\r\n")
+                        self.wfile.flush()
+                except (OSError, HTTPException):
                     self.close_connection = True
                 return
         self._json(last_status, last_code)
