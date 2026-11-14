@@ -1070,7 +1070,7 @@ def source_https(monkeypatch):
 @pytest.mark.parametrize("fault", ["none", "foreign_source", "unlisted_image", "changed_request",
     "corrupt_readback", "legacy_cached_readback", "upload_denied", "listed_redirect", "same_host_redirect",
     "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect", "stopped", "stopped_after_fetch",
-    "closed_on_upload_preview"])
+    "closed_on_upload_preview", "stopped_on_upload_source_read", "closed_on_upload_source_read"])
 def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeholder(ordinary, source_https, fault):  # noqa: F811
     from test_chat_image_attachments import PNG_BYTES
     from test_lark_app_image_projection import ImageIO
@@ -1085,7 +1085,8 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     fake.write_text(script.replace(default,
         f'"message": {authored!r} if turn_count == 1 else "Next original reply.",', 1))
     article_url = "https://source.example/article"
-    stopped = fault in ("stopped", "stopped_after_fetch")
+    stopped = fault in ("stopped", "stopped_after_fetch", "stopped_on_upload_source_read")
+    closed = fault in ("closed_on_upload_preview", "closed_on_upload_source_read")
     redirect_targets = {
         "listed_redirect": "/canonical.png",
         "same_host_redirect": "/unlisted.png",
@@ -1115,9 +1116,25 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     images_delivered = fault in ("none", "listed_redirect")
     io = ImageIO(provider)
     io.corrupt_download = fault in ("corrupt_readback", "legacy_cached_readback")
+    upload_previewed = False
+    control_committed = False
+
     def media(args, cwd=None, timeout=None):
-        if fault == "closed_on_upload_preview" and "images" in args and "create" in args and "--dry-run" in args:
-            runtime.close_session(sid)
+        nonlocal upload_previewed, control_committed
+        if "images" in args and "create" in args and "--dry-run" in args:
+            upload_previewed = True
+            if fault == "closed_on_upload_preview":
+                runtime.close_session(sid)
+        if (fault in ("stopped_on_upload_source_read", "closed_on_upload_source_read")
+                and upload_previewed and not control_committed and "+messages-mget" in args
+                and args[args.index("--message-ids") + 1] == source["message_id"]):
+            control_committed = True
+            if stopped:
+                transport.admit("notes-app", provider.event("notes-app", "stop-during-source-read", "/stop"))
+                assert any(control.get("command") == "stop" for control in transport.core.source_controls())
+            else:
+                runtime.close_session(sid)
+                assert store.load_session(sid)["status"] == "closed"
         if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
             return {"returncode": 3, "stderr": '{"ok":false,"error":{"code":99991672}}'}
         return io(args, cwd, timeout)
@@ -1151,7 +1168,9 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         assert all(row["chat_id"] == source["chat_id"] for _, row, _ in out)
         assert any("[Source chart](" in nodes[0][0]["text"] for _, _, nodes in out)
         assert all(not any("![Source chart]" in node.get("text", "") for line in nodes for node in line) for _, _, nodes in out)
-        if stopped or fault == "closed_on_upload_preview":
+        if fault in ("stopped_on_upload_source_read", "closed_on_upload_source_read"):
+            assert control_committed
+        if stopped or closed:
             assert io.uploads == 0 and transport.core.read_request(ref).get("delivery_verified", False) is False
             assert not any(name.startswith(("answer_images.", "answer_image_notice.")) for name in saved["deliveries"])
             if stopped:
@@ -1170,7 +1189,7 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         assert resolutions == ["source.example"] * len(expected_requests)
         if fault in {"same_host_redirect", "foreign_redirect", "foreign_round_trip", "query_redirect", "article_redirect"}:
             assert io.uploads == 0 and native_images == []
-        assert ("图片尚未核验送达" in str(out)) == (not images_delivered and not stopped and fault != "closed_on_upload_preview")
+        assert ("图片尚未核验送达" in str(out)) == (not images_delivered and not stopped and not closed)
         if fault in ("corrupt_readback", "legacy_cached_readback"):
             io.corrupt_download = False
             from loopx.chat_store import _atomic_write_json

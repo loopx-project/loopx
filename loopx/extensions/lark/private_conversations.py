@@ -1288,9 +1288,9 @@ class LarkPrivateConversations:
             return bool(name) and verified
 
         def image_authorized() -> bool:
-            # A source read can overlap an edit to the old reply.
+            # A provider read can overlap Stop, Close, or an edit to the old reply.
             return authorization_check is not None and (
-                verified_source() and authorization_check() if phase == "answer_images.historical"
+                verified_source() and authorization_check() if kind == "answer_images"
                 else authorization_check() and verified_source())
 
         image_keys = ()
