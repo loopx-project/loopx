@@ -47,6 +47,17 @@ All steps require --goal-id GOAL. Proposal preparation alone requires neither
 owner input nor adoption; only an applied objective revision needs adoption.
 Authority, budgets, stops and existing gated actions remain binding.
 
+Long-horizon requirements (refine):
+  Keep the same outcome_id. Add "storage_format":"records" to the document to
+  preview/commit lossless record storage with the next authorized refinement.
+  Retained requirements/origins no longer consume the per-operation/page budget.
+  Use "review_patch":[{id,conclusion,note,evidence_refs}] for up to 32 named
+  requirements; unreviewed or stale evidence stays unchanged. "review" still
+  means a complete review. No new permission or independent check is granted.
+  After a known rejection, inspect and prepare a new operation id; after an
+  ambiguous result, recover the original operation before changing intent.
+  See docs/reference/goal-acceptance-observations.md#long-horizon-record-storage
+
 Owner check-scope reconciliation (configure without --agent-id):
   --document is the full replacement: {"scope":{"kind":"selected_work","todo_ids":["todo_current"]},
     "objective":"Retained objective","non_goals":[],"criteria":[{"id":"result","description":"Real check", "validation_argv":["python3","check.py"]}],
