@@ -275,3 +275,59 @@ def latest_lane_recommendation_from_status(
         row = context.get("latest_lane_step_run") if isinstance(context, dict) else None
         return latest_bound_recommendation([row], agent_id) if isinstance(row, dict) else None
     return latest_bound_recommendation(_latest_runs_for_goal(status_payload, goal_id=goal_id), agent_id)
+
+
+def receipt_bound_vision_history_candidate(
+    runs: list[dict[str, Any]], *, goal_id: str, agent_id: str,
+    selected_obligation_id: str, guard_recorded_at: str | None,
+    neutral_classifications: set[str], goal_status: str | None,
+) -> dict[str, Any] | None:
+    """Recover only a plain Vision source from canonical history at admission.
+
+    This is a write-time query over the complete scoped history, not the
+    current status window or its already folded semantic slots. A later
+    checkpoint supplement is not an ACK of the admitted review. Reuse the
+    ordinary source reducers, preserve their full triggers and stop, and leave
+    fresh outcome qualification and once-only settlement to their owners.
+    """
+    from ...runtime.time import parse_timestamp
+    from . import (
+        acceptance_gaps_from_agent_vision, derive_goal_frontier_replan_obligation_from_summaries,
+        outcome_continuity,
+    )
+
+    cutoff = parse_timestamp(guard_recorded_at)
+    if not agent_id or cutoff is None or cutoff.tzinfo is None:
+        return None
+    historical = []
+    for run in runs:
+        timestamp = parse_timestamp(run.get("generated_at"))
+        if (run.get("goal_id") == goal_id and run.get("agent_id") == agent_id
+                and timestamp is not None and timestamp.tzinfo is not None and timestamp <= cutoff):
+            historical.append((timestamp, run))
+    if not historical:
+        return None
+    historical.sort(key=lambda item: item[0], reverse=True)
+    status = {"run_history": {"goals": [{"id": goal_id,
+        "latest_runs": [run for _, run in historical]}]}}
+    vision = latest_agent_vision_from_status_payload(status, goal_id=goal_id, agent_id=agent_id)
+    missing = latest_missing_vision_checkpoint_from_status_payload(status, goal_id=goal_id, agent_id=agent_id)
+    checkpoint = outcome_continuity.latest_outcome_vision_checkpoint_from_status_payload(
+        status, goal_id=goal_id, agent_id=agent_id)
+    gaps = (acceptance_gaps_from_agent_vision(vision, goal_status=goal_status)
+        + outcome_continuity.acceptance_gaps_from_vision_checkpoint(missing)
+        + outcome_continuity.acceptance_gaps_from_outcome_checkpoint(vision, checkpoint))
+    if not gaps or any(gap.get("kind") not in {
+        "vision_acceptance_gap", "vision_checkpoint_missing", "vision_outcome_checkpoint_required",
+    } for gap in gaps):
+        return None
+    ack = latest_autonomous_replan_ack_from_status_payload(status, goal_id=goal_id,
+        agent_id=agent_id, neutral_classifications=neutral_classifications)
+    source = derive_goal_frontier_replan_obligation_from_summaries(
+        user_todo_summary=None, agent_todo_summary=None, work_lane_contract=None,
+        agent_id=agent_id, existing_replan_obligation=None,
+        latest_replan_ack=ack, acceptance_gaps=gaps,
+        vision_settlement_query=True)
+    if not source or source.get("obligation_id") != selected_obligation_id:
+        return None
+    return {"obligation": source, "ack": None, "reconstructed_vision_review": True}

@@ -93,6 +93,7 @@ from .semantic_history import (
     latest_autonomous_replan_ack_from_status_payload,
     latest_missing_vision_checkpoint_from_status_payload,
     latest_replan_ack_feedback_from_status_payload,
+    receipt_bound_vision_history_candidate,
 )
 from .terminal import (
     GOAL_TERMINAL_SOURCE_COMPLETENESS_SCHEMA_VERSION,  # noqa: F401
@@ -1427,6 +1428,7 @@ def build_goal_frontier_projection_context_from_status(
     agent_profile: dict[str, Any] | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_history_runs: list[dict[str, Any]] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Build the quota-facing goal-frontier read model.
@@ -1704,6 +1706,19 @@ def build_goal_frontier_projection_context_from_status(
                 "ack": source_ack,
                 "reconstructed_vision_review": True,
             }
+
+    if (receipt_bound_replan_obligation_id and receipt_bound_history_runs is not None
+            and (frontier_transition_candidate.get("obligation") or {}).get("obligation_id")
+            != receipt_bound_replan_obligation_id):
+        historical = receipt_bound_vision_history_candidate(
+            receipt_bound_history_runs, goal_id=goal_id, agent_id=agent_id or "",
+            selected_obligation_id=receipt_bound_replan_obligation_id,
+            guard_recorded_at=receipt_bound_guard_recorded_at,
+            neutral_classifications=neutral_replan_ack_classifications,
+            goal_status=goal_status,
+        )
+        if historical:
+            frontier_transition_candidate = historical
 
     lifecycle_candidate = None
     if receipt_bound_replan_obligation_id and receipt_bound_guard_recorded_at:
