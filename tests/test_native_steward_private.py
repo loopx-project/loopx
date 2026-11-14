@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 import runpy
+import subprocess
+import sys
 
 import pytest
 
@@ -72,6 +74,36 @@ def steward(tmp_path):
 
 def finish(runtime, row):
     return runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+
+
+def _steward_inspection(steward):
+    from loopx.capabilities.manager_context.inspection import ManagerInspection
+    from loopx.chat_manager_context import (
+        manager_authorization_scope_id_for_registry,
+        manager_authorization_scope_is_current,
+    )
+
+    _, runtime, _, transport, binding, _, _ = steward
+    selected = transport.bindings.resolve(
+        binding_id=binding["binding_id"], source_ref="a" * 24,
+        sender_ref=binding["operator_ref"], private_human_message=True,
+    )
+    channel = selected["channel_id"]
+    session = {"goal_id": "loopx-manager", "channel_id": channel, "steward_context": selected["context"]}
+    root = runtime.coordination_runtime_root
+    scope_id = manager_authorization_scope_id_for_registry(
+        runtime.registry_path, runtime.manager_scope_resolver(session), runtime_root=root, channel_id=channel,
+    )
+    assert scope_id is not None
+    records = []
+    return ManagerInspection(
+        context={"scope": "external_authorized", "goals": []}, registry_path=runtime.registry_path,
+        runtime_root=root, owner_scope=False, channel_id=channel, record=records.append,
+        scope_valid=lambda: manager_authorization_scope_is_current(
+            runtime.registry_path, runtime.manager_scope_resolver, session, scope_id, runtime_root=root,
+        ),
+        discovery_scope=lambda: runtime.manager_scope_resolver(session),
+    ), records
 
 
 @pytest.mark.parametrize("change", ["status", "correction", "revoked", "source-changed", "unknown", "unchanged", "route-busy"])
@@ -572,41 +604,97 @@ def test_verified_empty_steward_is_not_missing_authorization_and_does_not_inheri
 
 
 def test_steward_reads_every_registration_across_pages_and_future_goals(steward):
-    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
-    store, runtime, _, transport, binding, _, _ = steward
+    from loopx.capabilities.manager_context.inspection import TOOL_NAME
+    store, runtime, _, transport, binding, _, workspace = steward
     source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
-    saved = transport.bindings.resolve(binding_id=binding["binding_id"], **source)["context"]
     goals = [{"id": f"work-{i:03d}", "coordination": {"registered_agents": ["builder", "reviewer"]}}
              for i in range(150)]
-    goals[-1]["activation"] = {"state": "stopped"}
-    runtime.registry_path.write_text(json.dumps({"goals": goals}))
-    inspection = ManagerInspection(context={"scope": "external_authorized", "goals": []},
-        registry_path=runtime.registry_path, runtime_root=getattr(runtime, "coordination_runtime_root", store.root.parent),
-        owner_scope=False, scope_valid=lambda: True, record=lambda result: None,
-        channel_id=transport.bindings.session_context(saved)["channel_id"],
-        discovery_scope=lambda: transport.bindings.session_context(saved)["context"]["goal_ids"])
+    goals[-1]["repo"] = str(workspace)
+    payload = json.loads(runtime.registry_path.read_text())
+    runtime.registry_path.write_text(json.dumps({**payload, "goals": goals}))
+    stopped = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+         "--registry", str(runtime.registry_path), "--runtime-root", str(runtime.coordination_runtime_root),
+         "goal-lifecycle", "--goal-id", "work-149", "--operation", "stop", "--actor-kind", "owner", "--execute"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+    assert json.loads(stopped.stdout)["readback"]["verified"]
+    payload = json.loads(runtime.registry_path.read_text())
+    stopped_goal = next(goal for goal in payload["goals"] if goal["id"] == "work-149")
+    assert stopped_goal["activation"]["state"] == "stopped"
+    assert "activation_state" not in stopped_goal
+    inspection, _ = _steward_inspection(steward)
 
-    def read_all(include_stopped=False):
+    def read_all(reader, include_stopped=False):
         rows, offset = [], 0
         while True:
-            page = inspection.read(TOOL_NAME, {"view": "agents", "limit": 12, "offset": offset,
-                                    "include_stopped": include_stopped})
+            page = reader.read(TOOL_NAME, {"view": "agents", "source_id": "local",
+                                         "limit": 12, "offset": offset, "include_stopped": include_stopped})
             assert page["ok"] and not page["unknown"]
             rows.extend(page["rows"])
             if page["next_offset"] is None:
-                return {(row["goal_id"], row["agent_id"]) for row in rows}
+                identities = {(row["goal_id"], row["agent_id"]) for row in rows}
+                assert len(identities) == len(rows) == page["matched"]
+                return identities
+            assert page["next_offset"] == offset + len(page["rows"]) > offset
             offset = page["next_offset"]
 
     expected = {(goal["id"], agent) for goal in goals for agent in ["builder", "reviewer"]}
-    assert read_all(True) == expected
-    assert read_all() == {(goal, agent) for goal, agent in expected if goal != "work-149"}
-    goals.append({"id": "future-work", "coordination": {"registered_agents": ["new-worker"]}})
-    runtime.registry_path.write_text(json.dumps({"goals": goals}))
-    assert read_all(True) == expected | {("future-work", "new-worker")}
+    assert read_all(inspection, True) == expected
+    assert read_all(inspection) == {(goal, agent) for goal, agent in expected if goal != "work-149"}
+    payload["goals"].append({"id": "future-work", "coordination": {"registered_agents": ["new-worker"]}})
+    runtime.registry_path.write_text(json.dumps(payload))
+    assert inspection.read(TOOL_NAME, {"view": "agents", "source_id": "local"}) == {
+        "ok": False, "error": "authorization_changed",
+    }
+    refreshed, _ = _steward_inspection(steward)
+    assert read_all(refreshed, True) == expected | {("future-work", "new-worker")}
     assert transport.bindings.read()["bindings"][1]["goal_ids"] == []
     assert store.list_sessions() == []
     with pytest.raises(ValueError, match="audience"):
         transport.bindings.resolve(binding_id=binding["binding_id"], **{**source, "sender_ref": "b" * 24})
+
+
+@pytest.mark.parametrize("change", ["legacy_activation", "registry_unreadable", "unreadable_after_scope_check", "binding_revoked"])
+def test_steward_read_returns_a_scope_hold_when_the_original_grant_cannot_be_verified(steward, change):
+    from loopx.capabilities.manager_context.inspection import TOOL_NAME
+    from loopx.control_plane.projects.registry_codec import ProjectRegistryProtocolError, load_registry
+
+    store, runtime, _, transport, binding, _, _ = steward
+    registry = runtime.registry_path
+    payload = json.loads(registry.read_text())
+    payload["goals"] = [{"id": "registered-work", "coordination": {"registered_agents": ["builder"]}}]
+    registry.write_text(json.dumps(payload))
+    reader, records = _steward_inspection(steward)
+    query = {"view": "agents", "source_id": "local"}
+    original = reader.read(TOOL_NAME, query)
+    assert original["ok"] and [row["agent_id"] for row in original["rows"]] == ["builder"]
+    records.clear()
+    if change == "legacy_activation":
+        registry.write_text(json.dumps({"goals": [{"id": "legacy", "activation_state": "stopped"}]}))
+        with pytest.raises(ProjectRegistryProtocolError, match="metadata requires upgrade"):
+            load_registry(registry)
+    elif change == "registry_unreadable":
+        registry.unlink()
+        registry.mkdir()
+    elif change == "unreadable_after_scope_check":
+        verify = reader.scope_valid
+
+        def obstruct_registry_after_verification():
+            authorized = verify()
+            if authorized:
+                registry.unlink()
+                registry.mkdir()
+            return authorized
+
+        reader.scope_valid = obstruct_registry_after_verification
+    else:
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    assert reader.read(TOOL_NAME, query) == {
+        "ok": False, "error": "authorization_changed",
+    }
+    assert not records and not store.list_sessions()
 
 
 def test_steward_admission_configures_delivery_once_and_explicit_upgrade_preserves_blocks(steward):
