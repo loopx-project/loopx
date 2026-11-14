@@ -1,6 +1,6 @@
 import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
 import {sourceReadApiUrl} from "./local-status-query";
-import type {OracleEvidence} from "./goal-acceptance-observation";
+import {oracleEvidenceSchema, type OracleEvidence} from "./goal-acceptance-observation";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
@@ -1726,21 +1726,50 @@ export type DelegationReadback = {
     blocking_operation_id?: string; blocking_input_ref?: string; path?: string[]};
   dependencies?: DelegationDependency[]; adoptions?: DelegationAdoption[];
 };
+const delegationArtifactVersionSchema = z.object({ref: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/)});
+const delegationReadbackSchema = z.object({
+  ok: z.literal(true).optional(),
+  operation_id: z.string().min(1), request_id: z.string().min(1), agent_id: z.string().min(1),
+  todo_id: z.string().nullable(), status: z.string().min(1), worker_active: z.boolean(), recovery_required: z.boolean(),
+  artifacts: z.array(delegationArtifactVersionSchema.extend({text: z.string()})).optional(), error: z.string().optional(),
+  validation: z.object({source: z.enum(["goal_acceptance", "todo_validation", "request_validation"]),
+    basis_sha256: z.string(), check_count: z.number().int().nonnegative(), pinned_file_count: z.number().int().nonnegative(),
+    checked_at: z.string().optional(), output_versions: z.array(delegationArtifactVersionSchema).optional(),
+    oracle_checks: z.array(oracleEvidenceSchema.extend({criterion_id: z.string()})).optional()}).optional(),
+  task_failure: z.object({recovery_kind: z.enum(["repair_required", "replan_required"]),
+    summary: z.string(), turn_key: z.string()}).optional(),
+  current_use: z.object({state: z.enum(["current", "unavailable"]),
+    reason: z.string().optional(), blocking_operation_id: z.string().optional(),
+    blocking_input_ref: z.string().optional(), path: z.array(z.string()).optional()}).optional(),
+  dependencies: z.array(delegationArtifactVersionSchema.extend({operation_id: z.string(), input_ref: z.string(),
+    relation: z.enum(["responds_to", "revises", "uses"]), state: z.enum(["current", "unavailable"])})).optional(),
+  adoptions: z.array(z.object({requester_agent_id: z.string(), consumer_operation_id: z.string(),
+    consumer_request_id: z.string(), consumer_agent_id: z.string(), consumer_todo_id: z.string().nullable(),
+    state: z.enum(["current", "unavailable"]), source_artifacts: z.array(delegationArtifactVersionSchema),
+    consumer_artifacts: z.array(delegationArtifactVersionSchema)})).optional(),
+});
+function requireDelegationReadback(readback: unknown, operationId: string): DelegationReadback {
+  const parsed = delegationReadbackSchema.safeParse(readback);
+  if (!parsed.success || parsed.data.operation_id !== operationId) {
+    throw new Error("执行详情无法核验，请重新读取 / Execution details cannot be verified; retry");
+  }
+  return readback as DelegationReadback;
+}
 export function readLoopXTeamWork(sessionId: string, operationId: string) {
-  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+  return requestJson<unknown>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
-  });
+  }).then(readback => requireDelegationReadback(readback, operationId));
 }
 export function adoptLoopXTeamWork(sessionId: string, operationId: string, consumerOperationId: string) {
-  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+  return requestJson<unknown>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "adopt", operation_id: operationId,
       consumer_operation_id: consumerOperationId}),
-  });
+  }).then(readback => requireDelegationReadback(readback, operationId));
 }
 export function revalidateLoopXTeamWork(sessionId: string, operationId: string) {
-  return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
+  return requestJson<unknown>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "revalidate", operation_id: operationId}),
-  });
+  }).then(readback => requireDelegationReadback(readback, operationId));
 }
 const managedResultIdentitySchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
