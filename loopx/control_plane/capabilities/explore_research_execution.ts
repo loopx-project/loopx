@@ -2,6 +2,8 @@
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
+import {normalizeResearchCompositionPolicy} from "./explore_configuration.ts";
+export {normalizeResearchCompositionPolicy} from "./explore_configuration.ts";
 import {normalizeResearchObservation, researchCompositionGaps, researchIdentifier, researchDigest,
   validateResearchAttribution} from "./explore_research.ts";
 import {evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
@@ -11,21 +13,6 @@ const object = (value: unknown): JsonObject => value && typeof value === "object
 const array = (value: unknown): JsonObject[] => Array.isArray(value) ? value.map(row => requireJsonObject(row, "research row")) : [];
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 type CompositionFrontierState = "disabled" | "pending" | "scheduled" | "observed" | "dismissed" | "deferred" | "ineligible" | "empty";
-
-export function normalizeResearchCompositionPolicy(params: JsonObject): JsonObject {
-  const harness = requireJsonObject(params.harness, "Explore harness");
-  const mode = harness.composition_mode ?? "disabled";
-  if (!["disabled", "explicit_only"].includes(String(mode))) {
-    throw new EffectRuntimeRequestError("composition_mode must be disabled or explicit_only");
-  }
-  const scope = harness.composition_scope_id == null || harness.composition_scope_id === "" ? null
-    : researchIdentifier(harness.composition_scope_id, "composition_scope_id");
-  if (mode === "explicit_only" && scope === null) {
-    throw new EffectRuntimeRequestError("explicit_only composition requires composition_scope_id");
-  }
-  return {schema_version: "research_composition_policy_v0", mode, coverage_scope_id: scope,
-    enabled: harness.enabled === true && mode === "explicit_only"};
-}
 
 function boundTodo(todo: JsonObject, gap: JsonObject, obligationId: unknown, agent: unknown,
   retainedHistory = false): boolean {
