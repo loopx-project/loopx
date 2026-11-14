@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 from pathlib import Path
 from typing import Any
@@ -181,7 +182,7 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     def fits(result: dict[str, Any]) -> bool:
         # Match cli_runtime.print_payload exactly, including print's newline.
         return output_limit is None or len(json.dumps(result, ensure_ascii=False,
-            separators=(",", ":")).encode("utf-8")) + 1 <= output_limit
+            separators=(",", ":")).encode("utf-8")) + len(os.linesep) <= output_limit
 
     result = page(content)
     if fits(result):

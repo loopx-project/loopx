@@ -363,7 +363,8 @@ def prepare_quota_command_context(
             agent_lane_id=args.agent_id,
             include_presentation_projections=False,
         )
-        if bool(getattr(args, "write_projection_cache", False)):
+        preview = command == "should-run" and getattr(args, "dry_run", False)
+        if not preview and bool(getattr(args, "write_projection_cache", False)):
             cache_metadata = write_status_projection_cache(
                 registry_path=registry_path,
                 runtime_root=runtime_root,

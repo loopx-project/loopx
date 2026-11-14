@@ -117,13 +117,15 @@ Chat readiness uses `/api/chat/readiness`: the loaded service's frozen runtime
 identity and HTTP readiness only. It does not enumerate models, credentials,
 Sessions or Goal state, and grants no work authority. Both native and browser
 launchers retain the original capabilities fallback for older services. The
-native probe keeps its 500 ms deadline, so slow metadata reads cannot multiply
-startup probes into more capability-discovery work. Capability availability and
-original-conversation authorization are still checked by their normal owners.
+native probe gives the entire request and any legacy fallback one 500 ms
+deadline. A listener sending fragments slowly cannot delay startup recovery
+past this probe's deadline. Capability availability and original-conversation
+authorization are still checked by their normal owners.
 
 Chat 就绪探针仅读取已加载服务的固定版本身份，不枚举模型、凭据、会话或 Goal，
 也不授予执行权限。原生与浏览器启动器保留旧服务的完整能力接口兼容路径；原生探针
-仍为 500 毫秒期限，不通过延长期限掩盖问题。能力是否可用、原会话是否获授权，仍由
+的完整请求与兼容回退共用 500 毫秒期限。缓慢分段的响应不会拖住单次探测后的启动恢复。
+能力是否可用、原会话是否获授权，仍由
 原入口单独实时核验。
 
 Opening the selected original conversation is a read-only discovery. It uses a
