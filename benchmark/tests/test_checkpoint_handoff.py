@@ -706,7 +706,6 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(
         return
     body = checkpoint.capture_before_replan(env, receipt, "current work")
     assert body.endswith("current work")
-    view = wake / "checkpoint-start-view.json"
     assert observed == [not native_participant]
     if native_context:
         pattern = "checkpoint-start-*/decision-original/decision.json"
@@ -721,9 +720,10 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(
         second, = set(wake.glob(pattern)) - {original}
         assert str(second) in resumed and hashlib.sha256(second.read_bytes()).hexdigest() in resumed
         assert original.read_bytes() == first_bytes != second.read_bytes()
-        assert not view.exists()
+        assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
         assert len(guard_commands) == 2
     else:
+        view, = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
         assert str(view) in body and json.loads(view.read_text())["ok"]
     assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
 
