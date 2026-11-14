@@ -259,8 +259,7 @@ class LarkPrivateConversations:
         profiles = {}
         for row in bindings:
             app_id = apps.get(row["transport_ref"], "")
-            if (row.get("enabled") is not True or not APP_ID_PATTERN.fullmatch(app_id)
-                    or identity_ref(app_id) != row["provider_ref"]):
+            if row.get("enabled") is not True or not app_id or identity_ref(app_id) != row["provider_ref"]:
                 continue
             profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
                 "bot_app_id": app_id, "audience": row.get("audience", "owner"),
