@@ -2390,6 +2390,7 @@ const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "age
   "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
   "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
   "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
+const PREPARATION_OPENING_ORDER = {insertBefore: "/goal_boundary", defer: "/work_lane_contract"};
 
 /** The read-only plan needs the current decision and executable authoring
  * guidance. Evidence and diagnostics remain in its exact source capture. */
@@ -2442,7 +2443,7 @@ function capturedDecisionSelection(request: JsonObject): JsonObject {
       && request.initial_read === undefined && request.list_depth === undefined) {
     // Only a new pinned read uses the live opening order. A historical
     // initial-read command still resolves its original ordered selection.
-    return initialContextReadPlan(context, groups, readyWriteScope(context)?.path);
+    return initialContextReadPlan(context, groups, PREPARATION_OPENING_ORDER, readyWriteScope(context)?.path);
   }
   const pointers = [...groups.opening, ...groups.remaining];
   const result = capturedContextSelection(request, pointers);
@@ -2847,7 +2848,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const plan = checkedContextPresentationPlan(request);
     const context = requireJsonObject(request.context, "current projection");
     return prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
-      plan, readyWriteScope(context), jsonObject(context.goal_boundary)?.handoff_mode);
+      plan, readyWriteScope(context), jsonObject(context.goal_boundary)?.handoff_mode,
+      PREPARATION_OPENING_ORDER);
   }
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

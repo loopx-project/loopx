@@ -194,7 +194,7 @@ def test_app_brief_with_registry_profile_keeps_budget_and_current_settlement(reg
     assert "--codex-app" in body
     assert "execution_obligation.must_attempt_work" in body
     assert "heartbeat_recommendation.agent_must_attempt" in body
-    assert "current settlement_plan.ordered_steps, else next_cli_actions" in body
+    assert "Settle current settlement_plan.ordered_steps in order, else next_cli_actions" in body
     assert "ambiguous effects need readback/recovery, not blind retry" in body
     assert "terminal no-follow-up" in body
     assert packet["quota_spend_command"] not in body

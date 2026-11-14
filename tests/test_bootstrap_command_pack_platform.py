@@ -102,6 +102,86 @@ def test_activation_uses_explicit_runtime_for_linked_project_discovery(
     assert all(path.read_bytes() == data for path, data in markers.items())
 
 
+@pytest.mark.parametrize(
+    ("provider", "entry"),
+    [
+        ("file", ("bootstrap-command-pack", "--host-surface", "antigravity-app")),
+        ("sqlite", ("agent-onboard", "--agent-type", "antigravity-app")),
+    ],
+)
+def test_activation_relative_runtime_uses_requested_project_not_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, entry: tuple[str, ...],
+) -> None:
+    from loopx import paths
+    from loopx.capabilities.machine_configuration.store import machine_configuration_store_path
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _configure_read_only_todo, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    for root in (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT):
+        (root / "owned-state").mkdir(parents=True)
+    assert paths.default_runtime_route()["status"] == "conflict"
+
+    project, _, registry = _write_fixture(tmp_path / "requested")
+    other_project, _, foreign_registry = _write_fixture(tmp_path / "foreign")
+    runtime = project / "bound runtime"
+    foreign_runtime = other_project / runtime.name
+    for config, path in ((False, runtime), (True, foreign_runtime)):
+        settings = machine_configuration_store_path(path)
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({
+            "schema_version": "loopx_machine_configuration_v0",
+            "namespaces": {"change_quality_qualification": {
+                "schema_version": "change_quality_machine_defaults_v0",
+                "enabled": config, "safe_fix": False, "strict_receipt": False,
+            }},
+        }), encoding="utf-8")
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    source_bytes = (registry.read_bytes(), foreign_registry.read_bytes())
+    monkeypatch.setenv("LOOPX_REGISTRY", str(foreign_registry))
+
+    generated = run_cli("--runtime-root", runtime.name, *entry, "--project", str(project),
+                        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=tmp_path)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    packet = json.loads(generated.stdout)
+    connection = packet["project_connection"]
+    assert Path(connection["registry"]) == registry
+    assert Path(connection["canonical_project_alias"]["global_registry"]) == paths.global_registry_path(runtime)
+    if entry[0] == "agent-onboard":
+        assert "loopx-change-quality" not in packet["skill_delivery"]["active_project_skill_ids"]
+
+    launcher = packet["host_loop_activation"]["activation_input_command"]
+    for _ in range(2):
+        activation = shlex.split(launcher)
+        assert activation[0] == "loopx"
+        assert Path(activation[activation.index("--runtime-root") + 1]) == runtime
+        assert Path(activation[activation.index("--registry") + 1]) == registry
+        prompted = run_cli(*activation[1:], cwd=tmp_path)
+        assert prompted.returncode == 0, prompted.stdout + prompted.stderr
+        prompt = json.loads(prompted.stdout)
+        assert prompt["ok"], prompt
+        if not prompt.get("bootstrap"):
+            break
+        launcher = prompt["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0]
+    else:
+        pytest.fail("saved activation must load the current heartbeat in one follow-up")
+    guard = shlex.split(next(line for line in prompt["task_body"].splitlines() if " quota should-run " in line))
+    guard[guard.index("--turn-instance-id") + 1] = TURN_ID
+    guarded = run_cli(*guard[1:], "--context-delivery", "off", "--todo-id", TODO_ID, cwd=tmp_path)
+    assert guarded.returncode == 0, guarded.stdout + guarded.stderr
+    decision = json.loads(guarded.stdout)
+    assert decision["should_run"] and decision["normal_delivery_allowed"], decision
+    assert decision["selected_todo"]["todo_id"] == TODO_ID
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _heartbeat_receipt_count(foreign_runtime, TURN_ID) == 0
+    assert (registry.read_bytes(), foreign_registry.read_bytes()) == source_bytes
+
+
 def guided_packet(
     project: Path,
     *,
