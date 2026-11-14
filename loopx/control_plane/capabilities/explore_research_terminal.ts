@@ -9,8 +9,6 @@ import {createInterface} from "node:readline";
 import type {JsonObject} from "../effect_program.ts";
 import type {TodoTerminalEvidenceGuard} from "../coordination/todo_terminal_lifecycle.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
-import {normalizeResearchCompositionPolicy, qualifyResearchCompletion} from "./explore_research_execution.ts";
-import {resolveExploreGoalConfiguration} from "./explore_configuration.ts";
 
 export class ResearchTerminalEvidenceHost {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -26,6 +24,8 @@ export class ResearchTerminalEvidenceHost {
         && context.todo.capability_binding_ref !== "explore:research-composition-v0"
         && !(Array.isArray(context.todo.explore_result_node_refs) && context.todo.explore_result_node_refs.length)
         && !context.todo.replan_obligation_id) return {required: false, allowed: true, evidence: null};
+    const {normalizeResearchCompositionPolicy, qualifyResearchCompletion} = await import("./explore_research_execution.ts");
+    const {resolveExploreGoalConfiguration} = await import("./explore_configuration.ts");
     const source = requireJsonObject(this.source, "research registry source");
     const bytes = await readFile(String(source.path));
     if (createHash("sha256").update(bytes).digest("hex") !== source.sha256) {
