@@ -716,16 +716,19 @@ export function conversationSupportsStatusProjection(context: ConversationContex
 
 // Goal ids are single path segments, so a key containing "/" never names a Goal.
 const PROJECT_CONVERSATION_KEY_PREFIX = "project/";
+const MANAGER_GOAL_CONVERSATION_KEY = "goal/manager";
 
 export function conversationContextKey(context: ConversationContext): string {
   if (context.kind === "manager") return "manager";
   if (context.kind === "managed") return `managed/${encodeURIComponent(context.goalId)}/${encodeURIComponent(context.agentId)}/${encodeURIComponent(context.sessionId)}`;
   if (context.kind === "bound") return `bound/${encodeURIComponent(context.bindingId)}/${encodeURIComponent(context.sessionId)}`;
-  return context.kind === "goal" ? context.goalId : `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
+  if (context.kind === "goal") return context.goalId === "manager" ? MANAGER_GOAL_CONVERSATION_KEY : context.goalId;
+  return `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
 }
 
 export function conversationContextOfKey(key: string): ConversationContext {
   if (key === "manager") return { kind: "manager" };
+  if (key === MANAGER_GOAL_CONVERSATION_KEY) return { kind: "goal", goalId: "manager" };
   if (key.startsWith("managed/")) {
     const [, goalId = "", agentId = "", sessionId = ""] = key.split("/");
     return {kind: "managed", goalId: decodeURIComponent(goalId), agentId: decodeURIComponent(agentId), sessionId: decodeURIComponent(sessionId)};
