@@ -346,7 +346,8 @@ def _prepare_quota_result_context(
             payload = _project_native_cli_settlement(payload)
     attach_quota_settlement_guidance(payload, registry_path=registry_path,
         runtime_root=context.runtime_root if context is not None else None)
-    bind_capture_selection_transport(payload, args, capture_directory=capture_directory)
+    bind_capture_selection_transport(payload, args, capture_directory=capture_directory,
+        retain_delivery_options=complete_source)
     if capture_directory is not None and payload.get("replan_action_packet"):
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": reader_argv}
