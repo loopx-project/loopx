@@ -94,3 +94,59 @@ def test_current_source_admission_preempts_stale_mirror_native_launch(
         assert not state.exists()
     index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
     assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["task_text", "write_scope", "progress_note"])
+@pytest.mark.parametrize("host", ["exec", "operation"])
+def test_native_launch_rechecks_same_todo_after_planning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, change: str, host: str,
+) -> None:
+    runtime, registry, native, model, arguments = _fixture(tmp_path, monkeypatch, provider)
+    project = registry.parent.parent
+    if host == "exec":
+        executable, model = _fake_codex(tmp_path)
+        executable.write_text(executable.read_text().replace(
+            "args = sys.argv[1:]", f"pathlib.Path({str(native)!r}).write_text('native')\nargs = sys.argv[1:]", 1,
+        ))
+        monkeypatch.setenv("FAKE_CODEX_LOG", str(model))
+        arguments.remove("--codex-operation-tools")
+        arguments[arguments.index("--codex-bin") + 1] = str(executable)
+    old = _quota(registry, runtime, project)
+    assert old["should_run"] is True, old
+    todo_id = old["selected_todo"]["todo_id"]
+    mutation = {
+        "task_text": ["--text", "[P0] Verify the replacement fixture before any work."],
+        "write_scope": ["--required-write-scope", "docs/evidence/**"],
+        "progress_note": ["--note", "Independent observation received."],
+    }[change]
+    host_module = codex_cli if host == "exec" else codex_operation_host
+    original_input = host_module.prepare_codex_cli_input
+    readbacks = []
+
+    def edit_after_planning(request):
+        code, result = _cli([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "todo", "update", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--todo-id", todo_id, *mutation,
+        ])
+        assert code == 0 and result["ok"], result
+        current = _quota(registry, runtime, project)
+        assert current["should_run"] is True and current["effective_action"] == old["effective_action"], current
+        assert current["selected_todo"]["todo_id"] == todo_id
+        readbacks.append((result, _bindings(runtime)))
+        return original_input(request)
+
+    monkeypatch.setattr(host_module, "prepare_codex_cli_input", edit_after_planning)
+    code, payload = _cli([*arguments, "--execute"])
+    assert len(readbacks) == 1
+    if change == "progress_note":
+        assert native.exists() and model.exists(), payload
+    else:
+        # Operation mode already started app-server; it must not start a
+        # model Turn or publish its Session binding on the stale request.
+        assert native.exists() is (host == "operation") and not model.exists(), payload
+        assert code == 1 and "current_turn_work_changed" in json.dumps(payload), payload
+        assert _bindings(runtime) == readbacks[0][1]
+        index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+        assert not index.exists() or "quota_slot_spent" not in index.read_text()
