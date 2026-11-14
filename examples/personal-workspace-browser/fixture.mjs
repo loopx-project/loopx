@@ -2113,6 +2113,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       const storedProposal = actionProposals.get(apply[1]);
       const proposal = {
         schema_version: "loopx_chat_action_proposal_v1", proposal_id: apply[1], action_kind: actionKind,
+        idempotency_key: storedProposal?.idempotency_key,
         summary: actionKind === "team.plan" && storedProposal ? storedProposal.summary : "已应用",
         normalized_parameters: actionKind === "team.plan" && storedProposal
           ? storedProposal.normalized_parameters : preview?.normalized_parameters ?? storedProposal?.normalized_parameters ?? {},

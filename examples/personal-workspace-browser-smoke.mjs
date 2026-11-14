@@ -107,6 +107,7 @@ import { goalShowcaseScenario } from "./personal-workspace-browser/goal-showcase
 import { stewardGroupTriggerScenario } from "./personal-workspace-browser/steward-group-trigger.mjs";
 
 import { goalDraftScenario } from "./personal-workspace-browser/goal-draft.mjs";
+import { goalDraftLiveScenario } from "./personal-workspace-browser/goal-draft-live.mjs";
 import { larkCliMissingScenario } from "./personal-workspace-browser/lark-cli-missing.mjs";
 import { executionServiceOfflineScenario } from "./personal-workspace-browser/execution-service-offline.mjs";
 
@@ -164,6 +165,7 @@ scenarioCatalog.push(runtimeReadinessLiveScenario);
 scenarioCatalog.push(attentionNotificationsScenario);
 scenarioCatalog.push(attentionNotificationsLiveScenario);
 scenarioCatalog.push(firstGoalHomeLiveScenario);
+scenarioCatalog.push(goalDraftLiveScenario);
 scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
 scenarioCatalog.push(managedAgentSessionsScenario);
