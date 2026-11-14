@@ -41,12 +41,16 @@ an independent ``re.compile(<same body>, re.IGNORECASE)`` importer that accepts
 uppercase, and a plain help/display string that merely quotes the body and is
 never compiled. So for these two the census (1) walks only
 ``capabilities/reward_memory`` -- the owner and its consumers, never an unrelated
-package; (2) counts only real ``re.compile`` sites, not arbitrary string
-constants; and (3) compares the **compiled rule** ``(body, source_flags)``, so a
-flag-different compile is a different rule and is left alone. A true restatement
--- a reward-memory module that re-compiles the identical flagless body instead of
-importing the owner -- is still caught, and the accept/reject behaviour is pinned
-through both modules' own validators below.
+package; (2) counts only confirmable ``re.compile`` sites -- the callee must be
+the ``re`` module (or a tracked alias / ``from re import compile``), so an
+independent object's ``.compile()`` that renders help text is not a rule, and the
+body is read from the positional arg *or* the ``pattern=`` keyword so a real
+``re.compile(pattern=...)`` duplicate is not missed; and (3) compares the
+**compiled rule** ``(body, source_flags)``, so a flag-different compile is a
+different rule and is left alone. A true restatement -- a reward-memory module
+that re-compiles the identical flagless body instead of importing the owner -- is
+still caught, and the accept/reject behaviour is pinned through both modules' own
+validators below.
 
 Neighbours this guard deliberately does not merge, each pinned below: the
 ``field_contracts`` table in ``reward_memory/architecture.py`` describes *which
@@ -307,33 +311,93 @@ def _compile_flags(node: ast.Call) -> int | None:
     return _flag_value(flag_node)
 
 
-def compiled_rule(node: ast.expr) -> tuple[str, int | None] | None:
-    """Fold ``re.compile(<literal>[, flags])`` to ``(body, source_flags)``.
+def _re_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
+    """Names confirmably bound to the ``re`` module and to ``re.compile``.
 
-    Unlike ``pattern_body`` this keeps the flags, so an ``re.IGNORECASE`` variant
-    of the same body folds to a different rule and is not counted as a duplicate.
+    ``re`` is recognised by its canonical stdlib name even in an isolated call
+    fragment with no import line; ``import re as rx`` adds ``rx`` and
+    ``from re import compile as c`` adds a direct ``c`` callee. Anything else --
+    ``renderer.compile``, a bare builtin ``compile`` -- is not confirmably ``re``.
     """
 
-    if isinstance(node, ast.Call):
-        fname = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-        if fname == "compile" and node.args:
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                return (first.value, _compile_flags(node))
+    module_names = {"re"}
+    compile_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "re":
+                    module_names.add(alias.asname or "re")
+        elif isinstance(node, ast.ImportFrom) and node.module == "re":
+            for alias in node.names:
+                if alias.name == "compile":
+                    compile_names.add(alias.asname or "compile")
+    return frozenset(module_names), frozenset(compile_names)
+
+
+def _is_re_compile(
+    node: ast.Call, module_names: frozenset[str], compile_names: frozenset[str]
+) -> bool:
+    """True only for a confirmable ``re.compile`` callee, never any ``.compile``."""
+
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr == "compile":
+        return isinstance(func.value, ast.Name) and func.value.id in module_names
+    if isinstance(func, ast.Name):
+        return func.id in compile_names
+    return False
+
+
+def _compile_body(node: ast.Call) -> str | None:
+    """The pattern literal from the first positional arg or the ``pattern=`` keyword."""
+
+    if node.args:
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
+    for keyword in node.keywords:
+        if keyword.arg == "pattern":
+            value = keyword.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                return value.value
+    return None
+
+
+def compiled_rule(
+    node: ast.expr,
+    module_names: frozenset[str] = frozenset({"re"}),
+    compile_names: frozenset[str] = frozenset(),
+) -> tuple[str, int | None] | None:
+    """Fold a confirmable ``re.compile(<literal>[, flags])`` to ``(body, source_flags)``.
+
+    The callee must be ``re.compile`` (or a tracked alias / ``from re import
+    compile``), so an independent object's ``.compile()`` that merely renders help
+    text is not a rule. The body is read from the first positional arg *or* the
+    ``pattern=`` keyword, so a real ``re.compile(pattern=...)`` duplicate is not
+    missed. Unlike ``pattern_body`` this keeps the flags, so an ``re.IGNORECASE``
+    variant of the same body folds to a different rule and is not a duplicate.
+    """
+
+    if isinstance(node, ast.Call) and _is_re_compile(node, module_names, compile_names):
+        body = _compile_body(node)
+        if body is not None:
+            return (body, _compile_flags(node))
     return None
 
 
 def scoped_matcher_sites(source: str, body: str) -> list[int]:
     """Lines that compile exactly the owner's flagless rule ``(body, 0)``.
 
-    Compile-only (a bare help string is never counted), exact-body (a larger
-    grammar that merely embeds the body is a different rule), and flag-aware.
+    Confirmable ``re.compile`` only (an independent ``.compile()`` or a bare help
+    string is never counted), exact-body (a larger grammar that merely embeds the
+    body is a different rule), flag-aware, and covering the ``pattern=`` keyword.
     """
 
+    tree = ast.parse(source)
+    module_names, compile_names = _re_bindings(tree)
     return [
         node.lineno
-        for node in ast.walk(ast.parse(source))
-        if compiled_rule(node) == (body, 0)
+        for node in ast.walk(tree)
+        if compiled_rule(node, module_names, compile_names) == (body, 0)
     ]
 
 
@@ -703,6 +767,21 @@ def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, 
         ("larger grammar embedding the body", '_X = re.compile(r"^prefix__BODY__suffix$")\n', 0),
         ("different body", '_X = re.compile(r"^[a-z]+$")\n', 0),
         ("import from the owner", "from .memory_utility import _OPAQUE_REF_RE, _MEMORY_REF_DIGEST_RE\n", 0),
+        # P2: a real re.compile is caught regardless of argument form or alias.
+        ("pattern keyword restatement", '_X = re.compile(pattern=r"__BODY__")\n', 1),
+        ("pattern keyword with flags=0", '_X = re.compile(pattern=r"__BODY__", flags=0)\n', 1),
+        ("positional with flags=0", '_X = re.compile(r"__BODY__", flags=0)\n', 1),
+        ("re alias restatement", 'import re as rx\n_X = rx.compile(r"__BODY__")\n', 1),
+        ("from re import compile restatement", 'from re import compile\n_X = compile(r"__BODY__")\n', 1),
+        ("from re import compile alias", 'from re import compile as c\n_X = c(r"__BODY__")\n', 1),
+        # P2: a shared method name on a non-re object is not a regex source.
+        ("independent compiler positional", '_X = renderer.compile(r"__BODY__")\n', 0),
+        ("independent compiler keyword", '_X = renderer.compile(pattern=r"__BODY__")\n', 0),
+        ("method on self is not re", '_X = self.compile(r"__BODY__")\n', 0),
+        ("bare builtin compile is not re", '_X = compile(r"__BODY__")\n', 0),
+        ("pattern keyword ignorecase is different", '_X = re.compile(pattern=r"__BODY__", flags=re.IGNORECASE)\n', 0),
+        ("non-literal body is unknown", '_X = re.compile(some_var)\n', 0),
+        ("non-literal pattern keyword is unknown", '_X = re.compile(pattern=some_var)\n', 0),
     ],
     ids=[
         "renamed-restatement",
@@ -715,14 +794,29 @@ def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, 
         "larger-grammar-neighbour",
         "different-body",
         "import",
+        "pattern-keyword-restatement",
+        "pattern-keyword-flags0",
+        "positional-flags0",
+        "re-alias-restatement",
+        "from-re-import-compile",
+        "from-re-import-compile-alias",
+        "independent-compiler-positional",
+        "independent-compiler-keyword",
+        "method-on-self",
+        "bare-builtin-compile",
+        "pattern-keyword-ignorecase",
+        "non-literal-body",
+        "non-literal-pattern-keyword",
     ],
 )
 def test_the_scoped_census_bites_a_restatement_and_leaves_the_neighbours(
     name: str, label: str, source: str, expected: int
 ) -> None:
-    # The two review counterexamples are the flag-different importer and the
-    # never-compiled help string; both must read as neighbours, while a flagless
-    # recompilation of the identical body -- even under a new name -- is caught.
+    # The review counterexamples are the flag-different importer, the never-compiled
+    # help string, an independent object's .compile(), and a real re.compile(pattern=)
+    # duplicate. The first three must read as neighbours; a flagless recompilation of
+    # the identical body -- under a new name, via pattern=, or through an re alias --
+    # is caught.
     body = PATTERN_DECISIONS[name][0]
     sites = scoped_matcher_sites(source.replace("__BODY__", body), body)
     assert len(sites) == expected, label
@@ -751,3 +845,63 @@ def test_the_scoped_census_never_leaves_the_reward_memory_package(tmp_path, monk
         "loopx/capabilities/reward_memory/utility_reducer.py:1 recompiles the "
         "_OPAQUE_REF_RE rule instead of importing it"
     ]
+
+
+@pytest.mark.parametrize("name", sorted(SCOPED_COMPILED_MATCHERS))
+def test_the_census_keys_on_real_re_compile_not_a_shared_method_name(
+    name: str, tmp_path, monkeypatch
+) -> None:
+    """The review's P2 pair, executed: a real ``re.compile(pattern=...)`` restatement
+    is the owner's rule and is caught, while an independent object's ``.compile()``
+    of the same text only renders help text and is left alone. Keying on the method
+    name alone got this backwards -- it flagged the renderer and missed the keyword
+    duplicate -- so the census now confirms the callee is ``re`` and reads ``pattern=``.
+    """
+
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(
+        globals(), "REWARD_MEMORY_ROOT", tmp_path / "loopx/capabilities/reward_memory"
+    )
+    body, owner_path, _owner_module, _consumers = PATTERN_DECISIONS[name]
+    owner = tmp_path / owner_path
+    owner.parent.mkdir(parents=True)
+    owner.write_text(f'import re\n{name} = re.compile(r"{body}")\n')
+    # A real consumer restatement via the pattern= keyword: same rule, caught.
+    consumer = tmp_path / "loopx/capabilities/reward_memory/utility_reducer.py"
+    consumer.write_text(f'import re\n_X = re.compile(pattern=r"{body}")\n')
+    # An independent compiler that only renders help text: not re.compile, left alone.
+    renderer = tmp_path / "loopx/capabilities/reward_memory/render.py"
+    renderer.write_text(
+        "class Renderer:\n"
+        "    def compile(self, text):\n"
+        '        return f"help: match {text} to validate"\n'
+        "RENDERER = Renderer()\n"
+        f'_HELP = RENDERER.compile(r"{body}")\n'
+    )
+    findings = _reward_memory_matcher_scan()
+    assert findings[name] == [
+        "loopx/capabilities/reward_memory/utility_reducer.py:2 recompiles the "
+        f"{name} rule instead of importing it"
+    ]
+
+    # Execute both compilers. The keyword compile is the owner's regex -- same body,
+    # same flags, same accept/reject behaviour -- while the independent .compile()
+    # returns help text with no matching behaviour at all.
+    owner_rule = re.compile(body)
+    keyword_rule = re.compile(pattern=body)
+    assert keyword_rule.pattern == owner_rule.pattern
+    assert keyword_rule.flags == owner_rule.flags
+    accept, reject = {
+        "_OPAQUE_REF_RE": ("ref-1", "a/b"),
+        "_MEMORY_REF_DIGEST_RE": ("0123456789abcdef", "a" * 64),
+    }[name]
+    assert owner_rule.fullmatch(accept) and keyword_rule.fullmatch(accept)
+    assert owner_rule.fullmatch(reject) is None and keyword_rule.fullmatch(reject) is None
+
+    class IndependentRenderer:
+        def compile(self, text):
+            return f"help: match {text} to validate"
+
+    rendered = IndependentRenderer().compile(body)
+    assert isinstance(rendered, str)
+    assert not hasattr(rendered, "fullmatch")
