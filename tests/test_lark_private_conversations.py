@@ -1,6 +1,7 @@
 """Public synthetic provider/native Core journeys, never private credentials."""
 import json
 import re
+import sys
 import time
 import http.client
 import threading
@@ -57,8 +58,8 @@ def test_app_steward_discovery_only_projects_the_bound_session(tmp_path, monkeyp
             start = len(provider.calls)
             assert bindings.app_steward_target() == {"binding_id": binding["binding_id"], "session_id": original_id}
             assert sum("auth" in args and "--verify" in args for args in provider.calls[start:]) == 1
-        assert metadata == {original_id: 2, other["session_id"]: 1}
-        assert transcripts == [original_id]
+        assert metadata == {original_id: 3, other["session_id"]: 1}
+        assert transcripts == []
         assert before == (capture.read_bytes(), bindings.path.read_bytes(), store.messages(original_id))
 
         # The alias's own context is unrelated, but its declared ID still
@@ -2358,6 +2359,170 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
         runtime.close()
 
 
+def test_settings_health_reuses_core_correlation_but_observes_current_work(tmp_path, monkeypatch):
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.chat_store import _atomic_write_json
+    from test_private_chat_backlog_projection import fixture_history
+
+    store, core, transport, rows = fixture_history(tmp_path, count=2)
+    partial, completed = rows
+    binding = partial["binding_id"]
+    sid = partial["session_id"]
+    partial_path = transport.root / f"{partial['request_ref']}.json"
+    completed_path = transport.root / f"{completed['request_ref']}.json"
+    partial_request, completed_request = core.root / partial_path.name, core.root / completed_path.name
+    response = {"schema_version": "loopx_chat_agent_response_v0",
+                "message": "Original result", "proposals": []}
+    store.update_turn(sid, partial["turn_id"], status="completed", response={
+        **response, "unfinished_work": {"remaining": "Return the report", "dependency": "Worker",
+                                        "effects_settled": True}})
+    store.update_turn(sid, completed["turn_id"], status="completed", response=response)
+    initial_partial = json.loads(partial_path.read_text())
+    _atomic_write_json(partial_path, {**initial_partial, "deliveries": {
+        "terminal": {"started": True, "verified": False}}})
+    read_request = external_conversations._read_json
+    request_reads = []
+
+    def observe(path):
+        request_reads.append(path)
+        return read_request(path)
+
+    monkeypatch.setattr(external_conversations, "_read_json", observe)
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 1}
+    assert set(request_reads) == {partial_request, completed_request}
+    request_reads.clear()
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 1}
+    # Windows has no reliable ctime mutation stamp; its reader stays fresh.
+    assert set(request_reads) == ({partial_request, completed_request} if sys.platform == "win32" else set())
+    request_reads.clear()
+
+    # Independent native updates must not wait for the Lark receipt to change.
+    store.update_turn(sid, partial["turn_id"], status="completed", response=response)
+    store.update_turn(sid, completed["turn_id"], status="failed", error_code="usage_limit_exceeded", response=None)
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 0}
+    assert set(request_reads) == ({partial_request, completed_request} if sys.platform == "win32" else set())
+    request_reads.clear()
+
+    # Atomically replace the journal with one from a different source. Core
+    # must not pair the original delivery with this changed request.
+    _atomic_write_json(completed_request, {**completed, "source": {"source_ref": "e" * 24}})
+    assert transport.health()[binding] == {"pending_count": 0, "recovery_count": 0}
+    assert completed_request in request_reads
+    _atomic_write_json(completed_request, completed)
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 0}
+
+    _atomic_write_json(completed_path, {**json.loads(completed_path.read_text()), "status": "accepted",
+                                       "deliveries": {"terminal": {"started": True, "verified": False}}})
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 1}
+    completed_path.unlink()
+    assert transport.health()[binding] == {"pending_count": 0, "recovery_count": 0}
+
+
+@pytest.mark.parametrize("scenario", ["concurrent-close", "transient-session-read"])
+def test_settings_health_uses_current_session_for_each_batch(ordinary, monkeypatch, scenario):  # noqa: F811
+    from pathlib import Path
+
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION, _atomic_write_json
+    from test_private_chat_backlog_projection import durable_state
+
+    store, runtime, provider, transport = connect(ordinary)
+    binding_id = transport._binding("notes-app")["binding_id"]
+    session = store.create_session(goal_id="demo", agent_id="codex", adapter_kind="codex_app_server",
+                                   upstream_thread_id="native")
+    sid = session["session_id"]
+    session_path = store._session_path(sid)
+    for index in range(66):
+        ref, tid = f"{index:024x}", f"{index:032x}"
+        row = {"request_ref": ref, "binding_id": binding_id, "source": {"source_ref": "c" * 24},
+               "session_id": sid, "turn_id": tid, "command": None, "status": "accepted",
+               "delivery_verified": True, "message": "Original user request",
+               "created_at": "2026-01-01T00:00:00+00:00"}
+        _atomic_write_json(transport.core.root / f"{ref}.json", row)
+        _atomic_write_json(transport.root / f"{ref}.json", dict(row, status="delivered", deliveries={}))
+        _atomic_write_json(store._turn_path(sid, tid), {
+            "schema_version": CHAT_TURN_SCHEMA_VERSION, "session_id": sid, "turn_id": tid,
+            "client_turn_id": f"external-{ref}", "status": "failed",
+            "error_code": "usage_limit_exceeded", "response": None,
+        })
+
+    # Use the receipt scan's order, which varies across filesystems.
+    paths = list(transport.root.glob("*.json"))
+    answered = paths[:64] if scenario == "concurrent-close" else paths[2:]
+    for path in answered:
+        row = json.loads(path.read_bytes())
+        store.update_turn(sid, row["turn_id"], status="completed", response={
+            "schema_version": "loopx_chat_agent_response_v0", "message": "Already answered", "proposals": [],
+        })
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(method, path):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request(method, path)
+            response = connection.getresponse()
+            assert response.status == 200
+            return json.loads(response.read())
+        finally:
+            connection.close()
+
+    def close():
+        assert request("DELETE", f"/api/chat/sessions/{sid}") == {
+            "ok": True, "session_id": sid, "closed": True,
+        }
+
+    observed_fault = False
+    try:
+        if scenario == "concurrent-close":
+            last_turn = json.loads(paths[-1].read_bytes())["turn_id"]
+            load_turn = store.load_turn
+
+            def close_during_batch(session_id, turn_id):
+                nonlocal observed_fault
+                if session_id == sid and turn_id == last_turn and not observed_fault:
+                    observed_fault = True
+                    close()
+                return load_turn(session_id, turn_id)
+
+            monkeypatch.setattr(store, "load_turn", close_during_batch)
+        else:
+            close()
+            read_text = Path.read_text
+
+            def fail_first_session_read(path, *args, **kwargs):
+                nonlocal observed_fault
+                if path == session_path and not observed_fault:
+                    observed_fault = True
+                    raise OSError("temporary Session read failure")
+                return read_text(path, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "read_text", fail_first_session_read)
+
+        before, provider_calls = durable_state(store), list(provider.calls)
+        settings_path = "/api/chat/lark/private-conversations"
+        authorization_path = f"{settings_path}?view=authorization"
+        authorization = request("GET", authorization_path)
+        assert not observed_fault
+        result = request("GET", settings_path)
+        assert observed_fault
+        assert store.load_session(sid)["status"] == "closed"
+        assert request("GET", authorization_path) == authorization
+        before[str(session_path.relative_to(store.root))] = session_path.read_bytes()
+        assert durable_state(store) == before and provider.calls == provider_calls
+        binding = next(row for row in result["connections"] if row["binding_id"] == binding_id)
+        assert (binding["pending_count"], binding["recovery_count"]) == (0, 0)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
     "background", "later-user", "completed-later", "equivalent-later", "later-failed-effect",
     "settled-command", "later-settled-command", "unsettled-command",
@@ -4608,7 +4773,8 @@ def test_group_identity_requires_verified_bot_and_private_identity_requires_veri
     provider.owner_ready = False
     group = observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
     assert group["operator_ref"] != identity_ref(group["provider_ref"], "ou_notes_app")
-    with pytest.raises(ValueError, match="owner independently"):
+    from loopx.extensions.lark.conversation_identity import LarkOwnerIdentityUnavailable
+    with pytest.raises(LarkOwnerIdentityUnavailable):
         observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli")
     provider.bot_ready = False
     with pytest.raises(ValueError, match="App identity"):

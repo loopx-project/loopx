@@ -1,4 +1,5 @@
 import {planTodoCreationPriority} from "../todos/priority.ts";
+import {planMonitorSchedule} from "../todos/monitor_metadata.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import type { JsonObject } from "../effect_program.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
@@ -281,7 +282,14 @@ export async function executeCoordinationTodoCreate(
   }
   const todoId = requireAuthorityStoreId(input.todo.todo_id, "todo id");
   const readModel = canonicalAuthorityObject(head.head.todo_read_model, "Todo read model");
-  const plan = planCoordinationTodoCreate(input, projection.todos, readModel.schema_version);
+  // A derived due time belongs to the first result, never to the retry identity.
+  const {todo} = input;
+  const needsInitialDue = todo.role === "agent" && todo.task_class === "continuous_monitor" &&
+    todo.next_due_at == null && todo.cadence != null;
+  const initialDue = needsInitialDue
+    ? planMonitorSchedule(input.now.toISOString(), todo.cadence).next_due_at : null;
+  const plannedInput = initialDue === null ? input : {...input, todo: {...todo, next_due_at: initialDue}};
+  const plan = planCoordinationTodoCreate(plannedInput, projection.todos, readModel.schema_version);
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
   if (plan.status !== "planned") return {...plan, provider_revision: head.provider_revision, cursor: head.cursor};
   const created = canonicalAuthorityObject(plan.todo, "created Todo");

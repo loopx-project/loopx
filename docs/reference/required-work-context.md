@@ -446,6 +446,20 @@ Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整
 原索引/详情路线；折叠的支持材料仍遵守原读取义务。此选读使用无需 Session Hook 的
 通用 reader，不改变启用默认值、落盘文件、Delta 或完整读取回执。
 
+An ordinary JSON `quota should-run` with Progressive enabled can stage an
+eligible replan from its private complete `projection.json` without an
+explicit capture destination. Read `replan_action_packet.review` before choosing
+work, then use `review.next` for selection or writeback. Both stage readers pin
+the original source hash and the exact file digest. The required view's
+`context_details` still addresses the complete source for missing facts.
+These reads do not enter the guard, update authority, or spend quota.
+
+普通 JSON `quota should-run` 启用 Progressive 时，可直接用私有完整
+`projection.json` 分阶段交付符合条件的重规划，无需指定捕获目录。选定工作前先读
+`replan_action_packet.review`，再沿 `review.next` 选任务或读取回写要求。两阶段
+均校验原决策哈希和文件字节摘要。必读视图的 `context_details` 提供完整来源，
+供补读缺失事实。读取不再进入准入检查，不写入权威状态，也不扣额度。
+
 For supporting fields folded by the existing native Progressive owner,
 `context_details.unread_context_index` contains the current complete
 `projection.json` source path/digest and exact `pointers`. The initial reader
@@ -1499,6 +1513,13 @@ returned `settlement_owed` command for the original Turn. Read the result's
 supporting snapshot only when needed. Raw delivery, manual plans and other
 profiles retain their original settlement commands.
 
+A captured direct replan can also offer a combined `settlement_command` in its
+writeback view. It uses the captured semantic writer: fill the evidence
+placeholders after review, run it on the original obligation, and check its
+receipts. The original plan and manual steps remain available for recovery.
+Do not debit again after a settled receipt. Successor creation and Todo-bound
+replans retain their original authoring and settlement routes.
+
 Generated Turn-bound JSON `quota spend-slot` commands include
 `--max-page-output-bytes 64000`. This output option does not enable Context
 Delivery or create a native continuity baseline. Small results remain complete;
@@ -1529,6 +1550,11 @@ Codex App heartbeat 有原生会话，且当前 Todo 已准入并就绪时，可
 执行计划给出的写回命令。该命令会执行尚欠的扣额，并返回原回执。部分失败时，
 沿返回的 `settlement_owed` 命令恢复原 Turn。结果中的支持快照按需读取。
 原始投递、手动计划和其他运行模式继续使用原结算命令。
+
+已捕获的直接重规划也可在写回视图提供合并的 `settlement_command`。该命令复用
+捕获中的语义写回参数；复盘后填写证据占位符，沿原义务执行并检查回执。原计划和
+手动步骤仍可用于恢复。确认已结算后不再扣额。创建后继 Todo 或已绑定 Todo 的
+重规划保留原有的写回和结算路径。
 
 生成的 Turn 绑定 JSON `quota spend-slot` 命令携带
 `--max-page-output-bytes 64000`。此输出选项不启用 Context Delivery，也不建立原生

@@ -10,9 +10,10 @@ import json
 import re
 import subprocess
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from itertools import tee
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -44,6 +45,7 @@ from .private_images import private_message_caption, private_message_images
 from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits
 from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
+from . import private_steward_triage as triage
 from .return_files import uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
                                presentation_phase, presentation_stream, project_progress)
@@ -228,6 +230,7 @@ class LarkPrivateConversations:
         self.bindings = self.core.bindings
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
         self.reaction_feedback = reaction_feedback
+        self.steward_callback_readiness: dict[tuple[str, str], Callable[[], bool]] = {}
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
@@ -254,7 +257,20 @@ class LarkPrivateConversations:
         bindings = self.bindings.read()["bindings"]
         if not bindings:
             return {}
-        result = call(self.runner, [self.cli_bin, "profile", "list"])
+        apps = self.configured_profile_apps()
+        profiles = {}
+        for row in bindings:
+            app_id = apps.get(row["transport_ref"], "")
+            if row.get("enabled") is not True or not app_id or identity_ref(app_id) != row["provider_ref"]:
+                continue
+            profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
+                "bot_app_id": app_id, "audience": row.get("audience", "owner"), "context_kind": row["context_kind"],
+                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
+        return profiles
+
+    def configured_profile_apps(self, *, cli_bin: str | None = None) -> dict[str, str]:
+        """Read local App identities for listener leases, without granting access."""
+        result = call(self.runner, [cli_bin or self.cli_bin, "profile", "list"])
         try:
             configured = json.loads(str(result.get("stdout") or ""))
         except json.JSONDecodeError as exc:
@@ -271,16 +287,7 @@ class LarkPrivateConversations:
         # profile names take precedence over the App-ID fallback.
         for app_id in list(apps.values()):
             apps.setdefault(app_id, app_id)
-        profiles = {}
-        for row in bindings:
-            app_id = apps.get(row["transport_ref"], "")
-            if (row.get("enabled") is not True or not APP_ID_PATTERN.fullmatch(app_id)
-                    or identity_ref(app_id) != row["provider_ref"]):
-                continue
-            profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
-                "bot_app_id": app_id, "audience": row.get("audience", "owner"),
-                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
-        return profiles
+        return {profile: app_id for profile, app_id in apps.items() if APP_ID_PATTERN.fullmatch(app_id)}
 
     @effect_runtime_request_scope()
     def health(self) -> dict[str, dict[str, int]]:
@@ -288,36 +295,38 @@ class LarkPrivateConversations:
         quota_pending = self.core.quota_backlog_observer()
         completed: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
+        def count(row: dict[str, Any]) -> None:
+            entry = health[row["binding_id"]]
+            entry["pending_count"] += 1
+            entry["recovery_count"] += any(phase.get("started") and not phase.get("verified")
+                                           for phase in row["deliveries"].values())
+
         def observe_completed() -> None:
             flags = quota_pending([native for _, native in completed])
             for (row, _), pending in zip(completed, flags, strict=True):
                 if pending:
-                    health[row["binding_id"]]["pending_count"] += 1
-                    health[row["binding_id"]]["recovery_count"] += int(any(
-                        phase.get("started") and not phase.get("verified") for phase in row["deliveries"].values()))
+                    count(row)
             completed.clear()
 
-        for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
-            row = _read_json(path)
-            entry = health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
-            pending = row["status"] != "delivered"
-            if (not pending and path.parent == self.root
-                    and row.get("session_id") and row.get("turn_id")):
-                # Delivery of a quota failure or partial result does not finish
-                # the request. Read only the existing Core correlation and Turn;
-                # recovery eligibility, allowance and effects still belong to
-                # the original worker's fresh admission checks.
-                native = self.core.read_request(row["request_ref"])
-                if (native.get("status") == "accepted" and native.get("command") is None
-                        and all(native.get(key) == row.get(key) for key in
+        def delivered_requests() -> Iterator[dict[str, Any]]:
+            for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
+                row = _read_json(path)
+                health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
+                if row["status"] != "delivered" and triage.pending(row):
+                    count(row)
+                elif row["status"] == "delivered" and path.parent == self.root and row.get("session_id") and row.get("turn_id"):
+                    yield row
+
+        # Pair the original receipts with the current Core correlation and Turn.
+        receipts, refs = tee(delivered_requests())
+        natives = self.core.read_backlog_requests(row["request_ref"] for row in refs)
+        for row, native in zip(receipts, natives, strict=True):
+            if (native.get("status") == "accepted" and native.get("command") is None
+                    and all(native.get(key) == row.get(key) for key in
                             ("binding_id", "source", "session_id", "turn_id"))):
-                    completed.append((row, native))
-                    if len(completed) >= QUOTA_BACKLOG_BATCH_SIZE:
-                        observe_completed()
-            if pending:
-                entry["pending_count"] += 1
-                entry["recovery_count"] += int(any(phase.get("started") and not phase.get("verified")
-                                                   for phase in row["deliveries"].values()))
+                completed.append((row, native))
+                if len(completed) >= QUOTA_BACKLOG_BATCH_SIZE:
+                    observe_completed()
         observe_completed()
         return health
 
@@ -822,10 +831,13 @@ class LarkPrivateConversations:
 
     @effect_runtime_request_scope()
     def admit(self, profile: str, event: dict[str, Any], *,
-              defer_background_stop: bool = False, history_review: bool = False) -> dict[str, Any]:
+              defer_background_stop: bool = False, history_review: bool = False,
+              expected_binding_id: str | None = None) -> dict[str, Any]:
         record_event_timing(profile, str(event.get("message_id") or ""), "admission_started")
         try:
             binding = self._binding(profile)
+            if expected_binding_id is not None and binding["binding_id"] != expected_binding_id:
+                return {"status": "audience_rejected"}
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
             if history_review and (binding.get("context_kind") != "steward"
                     or binding.get("audience", "owner") != "owner" or event.get("chat_type") != "p2p"):
@@ -881,11 +893,9 @@ class LarkPrivateConversations:
                     **({"capture_origin": "provider_history"} if history_review else {})}
                 if binding.get("audience") != "group":
                     _atomic_write_json(path, record)
-            # A transport-only rejection never owned a Core request. Its
-            # verified notice stays terminal on provider redelivery too.
-            if (record["status"] == "delivered"
-                    and "session_id" not in record and "turn_id" not in record):
-                return {"status": "command_rejected"}
+            # Verified transport-only replies have no Core Turn to recover.
+            if record["status"] == "delivered" and not {"session_id", "turn_id"}.intersection(record):
+                return {"status": "triage_delivered" if "triage" in record else "command_rejected"}
             if control_root:
                 result = self._admit_group_control(path, record, binding, control_root,
                                                   defer_background_stop=defer_background_stop)
@@ -916,10 +926,11 @@ class LarkPrivateConversations:
                 if canonical_type != "text":
                     return {"status": "source_conflict"}
                 text = private_source_text(source_message)
-                if text is None:
-                    return {"status": "invalid_text"}
-                if not text.strip():
-                    return {"status": "empty_text"}
+                if not text or not text.strip():
+                    return {"status": "invalid_text" if text is None else "empty_text"}
+                captured = triage.capture_message(self, path, record, selected, text, history_review=history_review)
+                if captured is not None:
+                    return captured
             elif message_type in {"image", "post"}:
                 if source_message.get("msg_type", source_message.get("message_type")) != message_type:
                     return {"status": "source_conflict"}
@@ -1440,13 +1451,9 @@ class LarkPrivateConversations:
                 return  # Unknown authority or provider effects stay pending.
 
     def pending_body_paths(self) -> list[Path]:
-        """Find unsent bodies without waiting for historical recovery probes.
-
-        The existing pool reads the complete discovery separately. Keep this
-        metadata cache local to the scanner; it grants no admission or send.
-        """
+        """Find unsent bodies without waiting for historical recovery probes."""
         paths = [path for path, row, _ in self._body_discovery.rows()
-                 if row["status"] != "delivered"]
+                 if row["status"] != "delivered" and triage.pending(row)]
         return [*paths, *self._pending_web_projection_paths()]
 
     @effect_runtime_request_scope()
@@ -1455,7 +1462,7 @@ class LarkPrivateConversations:
         paths = []
         recovery_candidate = self.core.context_recovery_observer()
         for path, row, repairs in self._delivery_discovery.rows():
-            if row["status"] != "delivered":
+            if row["status"] != "delivered" and triage.pending(row):
                 paths.append(path)
             elif (row.get("session_id") and row.get("turn_id")
                     and time.monotonic() >= self._context_recovery_probe_at.get(path, 0)):
@@ -1907,6 +1914,8 @@ class LarkPrivateConversations:
         # Repair only this persisted source. Core still owns admission, recovery
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
+        if "triage" in row:
+            return triage.reconcile(self, path)
         record_event_timing(row["profile"], row["event"]["message_id"], "reconciliation_started")
         if row["status"] == "delivered" and row.get("session_id") and row.get("turn_id"):
             # Discovery may find more candidates than the shared pool can run.

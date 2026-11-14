@@ -236,7 +236,8 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
     def read_context(cursor: str | None = None) -> dict:
         """Read pending requests, material version checks and unconsumed peer results.
 
-        Follow next_cursor for later requests. Omit cursor to start a fresh scan.
+        Follow next_cursor for requests or native_child_results.next_cursor for host results.
+        Omit cursor to start a fresh scan.
         Pages are live; reading all pages does not complete outstanding work.
         """
         try:

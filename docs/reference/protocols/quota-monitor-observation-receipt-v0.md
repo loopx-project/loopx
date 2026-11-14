@@ -12,6 +12,14 @@ advancement work remains active.
 
 ### Contract
 
+- A successful check whose watched condition is not yet met (for example, a
+  missing input file) is an unchanged observation, not an unavailable observation.
+  Record it through the projected `quota monitor-poll --execute` command with
+  the actual observation digest. The receipt advances `next_due_at` from the
+  Monitor's cadence and settles an exact Monitor Turn without refresh or spend;
+  no separate `todo update --next-due-at` is needed. This also applies when the
+  Monitor is selected as an independent scoped-gate fallback. Only inability to
+  obtain an observation uses the clock-preserving unavailable closeout.
 - The heartbeat receipt's `todo_id` remains the only settlement Todo. Only
   that Todo may be used by `refresh-state` and `quota spend-slot`.
 - `quota monitor-poll --todo-id <monitor>` may record auxiliary, no-spend
@@ -316,6 +324,11 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
 
 ### 契约
 
+- 成功检查后条件尚未满足（例如输入文件不存在）属于未变化观察，不是观察不可用。
+  使用投影提供的 `quota monitor-poll --execute` 和实际观察摘要记录结果；回执按
+  Monitor 的 cadence 推进 `next_due_at`，并无 refresh、无扣费地结算精确 Monitor
+  Turn，无需另行 `todo update --next-due-at`。Monitor 作为独立 scoped-gate fallback
+  被选中时同样适用。只有无法取得观察结果时，才使用保留时钟的 unavailable closeout。
 - heartbeat 回执中的 `todo_id` 始终是唯一结算 Todo；只有它可用于
   `refresh-state` 与 `quota spend-slot`。
 - 仅当每个请求对象都是同一 Agent 可见且已到期的 `continuous_monitor` 时，

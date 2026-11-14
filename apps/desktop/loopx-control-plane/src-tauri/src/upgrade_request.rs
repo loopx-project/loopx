@@ -11,6 +11,8 @@ use std::{
 
 pub(crate) struct UpgradeRequest {
     pub channel: String,
+    #[cfg(target_os = "macos")]
+    pub target: Option<String>,
     id: String,
     path: PathBuf,
     version: String,
@@ -39,8 +41,16 @@ impl UpgradeRequest {
         if !matches!(channel, "main" | "stable") {
             return None;
         }
+        let target = args
+            .iter()
+            .find_map(|s| s.strip_prefix("--loopx-upgrade-target="));
+        if target.is_some_and(|value| value.len() > 128 || semver::Version::parse(value).is_err()) {
+            return None;
+        }
         Some(Self {
             channel: channel.to_string(),
+            #[cfg(target_os = "macos")]
+            target: target.map(str::to_owned),
             id: id.to_string(),
             path: directory.join("upgrades").join(format!("{id}.json")),
             version,
@@ -49,6 +59,31 @@ impl UpgradeRequest {
             failure: Mutex::new(None),
             runtime: Mutex::new(None),
         })
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn preparation_directory(&self) -> PathBuf {
+        self.path.with_extension("prepared")
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn prepared_target(
+        &self,
+        current: &str,
+        key: &str,
+    ) -> Result<Option<crate::prepared_update::PreparedUpdate>, String> {
+        let target = self
+            .target
+            .as_deref()
+            .ok_or("update_download_or_signature_failed")?;
+        if target == current {
+            let _ = crate::prepared_update::clear(&self.preparation_directory());
+            return Ok(None);
+        }
+        crate::prepared_update::load(&self.preparation_directory(), current, &self.channel, key)?
+            .filter(|prepared| prepared.version == target)
+            .map(Some)
+            .ok_or_else(|| "update_download_or_signature_failed".into())
     }
 
     pub fn services_ready(&self, identity: Option<&Value>) {

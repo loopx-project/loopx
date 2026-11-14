@@ -86,6 +86,7 @@ __all__ = [
     "receipt_bound_monitor_phase",
     "receipt_bound_replay_phase",
     "receipt_bound_terminal_phase",
+    "required_environment_arg",
     "settlement_binding_args",
     "settlement_result_payload",
     "settlement_step_command",
@@ -102,6 +103,16 @@ _POSIX_TURN_REFS = frozenset({_POSIX_TURN_REF, "${LOOPX_TURN}"})
 
 def _is_windows_host() -> bool:
     return os.name == "nt"
+
+
+def required_environment_arg(name: str) -> str:
+    """Expand a required environment variable without invoking the CLI if empty."""
+    if _is_windows_host():
+        return (
+            f'"$(if (-not $env:{name}) {{ throw \'{name} must be set and non-empty\' }}; '
+            f'$env:{name})"'
+        )
+    return f'"${{{name}:?}}"'
 
 
 def _default_turn_ref() -> str:

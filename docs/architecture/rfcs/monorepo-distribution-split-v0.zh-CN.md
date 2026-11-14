@@ -3068,3 +3068,114 @@ retry 复用既有 result builder。初始有两次 Host 调用、一次产物�
 失败测试保留为负面证据，原验收仍开放。完整 V1–V5/V10、R1/M3、默认闭包、
 渐进产品控制、可比完整成本、Standard/workspace 交付和原 Goal 回归仍开放。
 没有升级已安装 Host、启动模型服务、改写 authority history 或改变冻结预算。
+
+### 2026-11-14 — 已安装组合结算恢复原回执链
+
+PR #8707（`d695b40f633742fb0a5e1cb6b970a56c46dba5e9`，合入提交
+`dd44cdcd0c9482bdf135e54ae0b71eb398b4cfe7`）修复 Core 在写回后显式请求的
+组合结算。适配器复用 canonical parser、quota registrar 和 registry codec，
+核对完整当前 CLI 前缀及原 binding，再执行已打包 entrypoint；原 TypeScript
+结算 owner 与产出工作目录继续保留。
+
+独立 Python 3.11 安装的 File/SQLite 对照覆盖默认及显式路由：基线提交写回后
+因 facade 缺失而失败；候选恢复同一身份、返回三条回执，replay 后仍只消费一次。
+普通 refresh 继续保留待消费步骤，不自动扣额。额外安装对照在 PYTHONPATH 和
+工作目录放置导入即拒绝的 foreign module，实际仍选择原 Core。
+
+保留的已安装治理语料在 `78e936f9d1f1a00505c4026ee0a5857de95cee27` 上，Core 与
+普通版各有 16 项确认结果；此前资源失败仍为失败。扩大源码回归保留了一项既有
+不完整 mocked readback 的失败，同一基线和候选都复现。现有 settled-intent
+测试改为提供 canonical identity/result 类型，受影响的 32 项全部通过；没有
+放宽生产 readback，也没有改变“独立 intent 不重开 work”的语义 oracle。此前
+整组失败不会改写成通过记录。
+
+这只资格化 V2/V3 的已安装结算前提。完整 V1–V5/V10、R1/M3、真实 Host
+compaction／线程保留、渐进控制、可比完整成本、Standard/workspace 交付和
+原 Goal 回归仍开放。协议 fixture 不表示默认激活、Host 升级、发行或冻结预算
+发生变化。
+
+### 2026-11-14 — Coordination 在选定终结路径加载证据适配器
+
+local-authority runtime 将 `ResearchTerminalEvidenceHost` 延后到合法的
+terminal lifecycle 请求选中它时加载。普通 coordination 不再加载该适配器
+及其研究实现依赖。完成操作仍由现有 typed terminal owner、registry witness、
+研究资格检查、writer lock 和资源清理负责；没有新增竞争的工作 schema 或
+执行流水线。
+
+新进程故障注入使 terminal 适配器不可用：普通 claim 仍落盘并重放原回执，
+非法 claim 保持状态不变，选中的 terminal 请求则明确失败，不产生新回执或
+状态变更。保留的基线在同一普通 claim 探针上失败。源码 authority/terminal
+整组 93 项通过。同一补丁应用到 C1 的精确候选 #8266（`b15c443ee64d`）和
+#8484（`b7e4e01cc423`）后，authority、context 与 recovery 分别有 188 和
+193 项通过；后者还覆盖真实 SQLite admission。
+
+这只是对齐 C1 现有 owner 的加载和故障隔离前提。合法 terminal 请求仍会加载
+适配器，包括 ordinary Todo 的 guard 随后提前返回的情况。完整工作流隔离、
+成对完整成本、真实 Host 采用、R1/M3 以及 C1 writer/consumer 切换仍开放。
+这些测试不授权 C1 默认推广，也不证明模型收益。
+
+
+### 2026-11-14 — 普通任务完成延后研究实现加载
+
+`ResearchTerminalEvidenceHost.qualify` 在原有 Todo 适用性检查之后才加载研究执行与
+配置实现。因此，即使任一研究实现不可用，没有研究或重规划适用性标记的 Todo 仍能持久化
+完成证据并重放原回执。需要研究资格的 Todo 继续选中原策略和证据 owner；模块失败保留错误且不提交
+完成状态或回执。原 source 检查、writer fence、资格判定、CAS 和清理继续执行。
+
+新进程故障用例在真实 File 与 SQLite authority 上覆盖两个不可用实现。两个保留的
+基线探针均在普通完成处失败；候选能够完成并独立回读结果，重放时不产生新效果，且
+重复的已选中研究失败仍被拒绝。模块可用时，同一组原有 107 项 native 用例全部通过；
+候选另通过故障隔离用例，共 108 项。真实研究 CLI 套件通过 11 项。同一 production
+改动与故障用例和 C1 精确候选 #8266（`b0b930bfb92a`）、#8484（`b7e4e01cc423`）
+组合后，分别通过 190 与 189 项 authority、上下文和恢复用例。独立构建并单独安装的 Core wheel 也通过同一 File/SQLite 故障路径，其 production 模块字节与源码一致；这不验证模型 Host 的安装或采用。
+
+这项交付通过原研究 guard 修复已证明的普通完成依赖故障，复用 C1 的工作契约与
+producer/consumer 管线。带研究或重规划标记的 Todo 仍进入原策略检查并加载其实现；策略禁用时也保留
+这项待隔离的加载依赖。完整 D2/D5 闭包、真实模型
+Host/上下文延续、渐进控制、可比完整成本、R1/M3 与 C1 默认切换仍未完成资格验证。
+
+### 2026-11-14 — 关闭研究组合先解析配置再加载执行实现
+
+既有 Explore 配置模块现在拥有面向已声明标量 mode 的组合策略和未改动的 public-safe 标识校验；研究执行与
+证据复用这个 owner，原导出入口继续可用。native 终态资格先检查当前 source 并解析
+同一策略，再加载研究执行。原适用性、source、资格、writer、lease、CAS、回执与
+清理规则继续由既有 owner 负责。
+
+新进程 File/SQLite 用例在组合关闭时，包括明确 Goal-off 覆盖，不加载研究执行或
+图实现也能完成普通与通用重规划任务并独立回读结果。启用和仅设置继承配置的路径
+保留已选中依赖故障，不写完成状态或回执。无效 mode 与 scope 标识仍被拒绝，执行
+实现不可用不能掩盖配置错误。启用路径依赖失败后，明确关闭策略的当前 source 能以
+同一失败操作身份完成一次并重放原回执；旧 source 请求仍被拒绝。保留的两个后端
+基线探针都在原加载依赖处失败，同一候选用例通过。
+
+同一 21 项策略和 13 项标识观察保留完整返回值与错误详情。独立构建并单独安装的
+Core wheel 通过同一 File/SQLite 故障与恢复路径，production 字节与源码一致。
+该改动与 C1 #8266（`b4f958186532`）、#8484（`b7e4e01cc423`）组合后也通过选中
+的 authority、上下文与恢复检查，保留其原测试和 producer/consumer owner。
+这验证依赖故障隔离，不测量延迟、完整成本或模型收益；配置错误现在有意优先于
+不可用的执行 IO。完整所选 D2/D5 闭包、真实模型 Host/上下文采用、渐进控制、
+R1/M3、C1 切换和原目标回归仍未完成资格验证。
+
+最终反例评审还拒绝非字符串组合 mode。此前 `["explicit_only"]` 这样的单元素数组
+通过字符串强制转换，却生成 inactive policy，静默跳过研究证据。既有配置 owner
+现在在 IO 之前拒绝这种错误形状；已声明的标量 mode、默认值和错误语义保持不变。
+真实 File/SQLite 负向用例保护这个边界，不改变合法激活规则。
+
+
+### 2026-11-14 — 策略观察者恢复原始签名来源
+
+- **基线：**`main@8d7d234c6f55`；C1 #8266 为 `c3cb8b2fe7bf`。
+- **缺口：**当前 C1 的三条 guided-start 和可见 Goal 选择用例，把必要
+  展示页当成原始签名决策而拒绝。原始捕获的物理摘要和完整合同校验均
+  通过。同页 Todo 引用及其读取说明改变了展示正文，但保留原来源绑定。
+- **交付：**既有测试策略观察者在比较决策事实前，沿展示页声明的不可变
+  捕获及摘要读取原来源，复用物理捕获 reader。没有该引用的 inline/off
+  输出保留现有行为。生产者、决策、哈希编码、准入、结算 owner 和默认值
+  均未改变。
+- **证据：**固定 C1 组合的既有真实 guided-start/可见 Goal CLI 用例通过。
+  稳定 File/SQLite 回归执行共享 typed 投影，验证原来源相等、完整绑定、
+  零扣额，并拒绝捕获字节被改动或缺失，以及完整校验通过但原绑定不同的替代捕获。私有匹配观察者比较区分旧 reader
+  与修复 reader。历史失败及未完成运行继续保持失败或未完成。
+- **剩余：**本切片修复消费者资格的前置缺口。完整 V1–V5/V10、R1/M3、
+  当前 D2/D5 闭包、真实 Host/模型上下文采用、渐进产品控制、可比完整成本、
+  C1 默认切换和原 Goal 回归仍开放。
