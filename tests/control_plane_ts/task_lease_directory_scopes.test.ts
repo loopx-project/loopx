@@ -87,3 +87,31 @@ test("directory matching retains stored spelling and existing authority boundari
   assert.deepEqual(request, original);
   assert.deepEqual(comparisonWriteScopes(["src/"]), ["src/"]);
 });
+
+// A whole-segment `**/` spans zero or more directories, so each pattern below
+// reaches the concrete file in the other scope.
+for (const [pattern, file] of [
+  ["src/**/*.py", "src/a.py"],
+  ["src/**/x.py", "src/x.py"],
+  ["**/*.py", "setup.py"],
+  ["**/test_*.py", "test_a.py"],
+  ["src/**/api/**/*.py", "src/api/a.py"],
+  ["SRC/**/*.PY", "src/a.py"],
+]) {
+  test(`recursive glob ${pattern} overlaps ${file}`, () => {
+    assert.equal(overlaps(pattern, file), true);
+    assert.equal(overlaps(file, pattern), true);
+  });
+}
+
+for (const [pattern, file] of [
+  ["src/**/*.py", "docs/a.py"],
+  ["src/**/*.py", "src/a.md"],
+  ["src/**/*.py", "srcx.py"],
+  ["src/a**/x.py", "src/x.py"],
+]) {
+  test(`recursive glob ${pattern} stays disjoint from ${file}`, () => {
+    assert.equal(overlaps(pattern, file), false);
+    assert.equal(overlaps(file, pattern), false);
+  });
+}

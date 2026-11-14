@@ -115,6 +115,22 @@ def test_case_aliases_remain_exclusive_write_scopes(scope_goal):
 
 
 @pytest.mark.parametrize("first_scope,second_scope", [
+    ("src/**/*.ts", "src/main.ts"),
+    ("src/main.ts", "src/**/*.ts"),
+])
+def test_recursive_glob_conflicts_with_direct_child_scope(scope_goal, first_scope, second_scope):
+    cli, current = scope_goal
+    cli("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
+        "--idempotency-key", "recursive-a", "--expected-version", "0", "--write-scope", first_scope)
+    before = current()
+    rejected = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "recursive-b", "--expected-version", "0", "--write-scope", second_scope,
+        expected_exit=1)
+    assert rejected["error_code"] == "write_scope_conflict"
+    assert current() == before
+
+
+@pytest.mark.parametrize("first_scope,second_scope", [
     ("src/Σ.ts", "src/ς.ts"),
     ("src/ß.ts", "src/SS.ts"),
     ("src/[ρ-ς].ts", "src/Σ.ts"),
