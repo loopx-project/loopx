@@ -14,6 +14,8 @@ from loopx.capabilities.explore.research_evidence import append_research_observa
 from loopx.capabilities.explore.result_log import (
     append_explore_result_event, build_explore_edge_event, build_explore_node_event, explore_result_log_path,
 )
+from loopx.history import load_index_snapshot
+from loopx.quota import goal_quota_with_spend_ledger
 from loopx.control_plane.work_items.semantic_replan_writeback import qualify_replan_writeback
 from loopx.control_plane.testing.model_tool_behavior import QuotaToolContext
 from loopx.control_plane.effect_runtime import restart_effect_runtime
@@ -122,6 +124,17 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     before_reads = {path: path.read_bytes() for path in (
         registry, state, runtime / "goals" / GOAL / "rollout-event-log.jsonl")}
 
+    run_index = runtime / "goals" / GOAL / "runs" / "index.jsonl"
+
+    def quota_ledger():
+        index_bytes = run_index.read_bytes() if run_index.exists() else None
+        source = json.loads(registry.read_text())["goals"][0]
+        runs = load_index_snapshot(run_index, include_artifact_status=False).records
+        return index_bytes, goal_quota_with_spend_ledger(source, runs)
+
+    before_ledger = quota_ledger()
+    assert before_ledger[1]["spent_slots"] == 0
+
     def read_stage(command):
         argv = shlex.split(command)
         assert argv[0] == sys.executable
@@ -134,7 +147,9 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
         return json.loads(result.stdout)
 
     review = read_stage(packet["review"])
+    assert quota_ledger() == before_ledger
     writer = read_stage(review["next"]["writeback"])
+    assert quota_ledger() == before_ledger
     assert review["stage"] == "review" and writer["stage"] == "writeback"
     assert review["obligation_id"] == writer["obligation_id"] == obligation
     assert review["context_id"] == writer["context_id"]
@@ -200,6 +215,13 @@ def test_real_guard_and_successor_share_the_current_gap(fixture) -> None:
     spent = cli("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT, "--slots", "1", "--source", "heartbeat",
                 "--execute", "--replan-obligation-id", obligation, "--turn-instance-id", "fixture-on")
     assert spent["settlement_progress"]["state"] == "settled"
+    after_spend = quota_ledger()
+    assert after_spend[1]["spent_slots"] == 1
+    assert after_spend[1]["spend_event_count"] == 1
+    cli("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--slots", "1", "--source", "heartbeat", "--execute",
+        "--replan-obligation-id", obligation, "--turn-instance-id", "fixture-on")
+    assert quota_ledger() == after_spend
     append_explore_result_event(log, build_explore_node_event(goal_id=GOAL, node_id="joint", title="Research joint",
                                                            node_kind="experiment", status="resolved"))
     result = observation("joint")
