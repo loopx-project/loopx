@@ -1210,6 +1210,19 @@ receipts have no concrete executed-monitor identity and do not count toward
 this threshold; distinct heartbeat turn ids are idempotency evidence, not
 monitor execution evidence.
 
+A current open Monitor explicitly registered with `watch_only=true` represents
+an intentional continuing watch. Matching unchanged history does not trigger
+`dead_monitor_repeat`. Match the explicit target key and, when recorded, Todo ID
+within the same Agent scope. Current observations without an explicit target
+key match an unkeyed watch by the recorded Todo ID and Agent. The observation's
+target digest identifies its recorded context. An expiring watch must still be
+active at the latest observation.
+The same watch is excluded from current `monitor_no_change_streak` selection.
+Missing or false watch state keeps ordinary finite-monitor detection; another
+Todo, target or peer cannot discharge it. Independent typed-progress,
+blocked-successor and periodic work reviews remain effective. This does not
+change cadence, expiry, observation counters, receipts or spend rules.
+
 The current Todo `consecutive_no_change` detector shares the Monitor lifetime
 rule with scheduling. At one explicit runtime observation, `expires_at` at or
 before that instant excludes that Monitor from `monitor_no_change_streak`.
