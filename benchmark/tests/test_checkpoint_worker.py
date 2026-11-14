@@ -133,7 +133,7 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
     continued_clock = "/opt/loopx-benchmark/control/continued-phase-deadline"
     if fault == "continued_clock":
         assert container.exec_run(["python", "-c", "from pathlib import Path; "
-            f"Path({continued_clock!r}).write_bytes(Path('/phase').read_bytes()); "
+            f"Path({continued_clock!r}).write_text(str(int(Path('/phase').read_text()) + .25) + '\\n'); "
             "Path('/opt/loopx-benchmark/control/phase-deadline').write_text('1')"]).exit_code == 0
     source = "/no such image" if fault == "source_missing_image" else "/candidate"
     if fault == "source_missing_image":
@@ -218,7 +218,12 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         assert response["capture"]["research_point_qualified"] is False
         if fault == "continued_clock":
             capsule = unit / "components" / metadata["worker_file_snapshot"]["native_capsule_component_id"]
-            assert (capsule / "components/host_phase_deadline").read_bytes() == container.exec_run(["cat", "/phase"]).output
+            raw = container.exec_run(["cat", continued_clock]).output
+            assert (capsule / "components/host_phase_deadline").read_bytes() == raw
+            budget = json.loads((capsule / "checkpoint.json").read_bytes())["point_metadata"]["host_phase_budget"]
+            assert budget["source_deadline_epoch"] == float(raw)
+            assert budget["source_deadline_epoch"] % 1 == .25
+            assert budget["remaining_seconds"] == float(raw) - budget["captured_at_epoch"]
             assert container.exec_run(["cat", "/opt/loopx-benchmark/control/phase-deadline"]).output == b"1"
         if fault in {"retention", "retention_default"}:
             assert not (tmp_path / "points/old").exists()
