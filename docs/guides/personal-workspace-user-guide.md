@@ -570,6 +570,31 @@ The local Chat HTTP read is `GET /api/chat/delivery-review?goal_id=example-goal`
 Lark continues using its existing Goal Channel projection; this slice adds no
 Lark card or notification and does not qualify cross-channel presentation parity.
 
+### 查找先前的要求和答复 / Find earlier instructions and answers
+
+在管家或 Goal 的**对话**中点击 **查找对话 / Find in conversation**，输入原消息中的
+文字。查找不区分大小写，支持中文；数字表示匹配消息的位置和总数，同一消息中的
+多次出现只算一条。使用箭头或 Enter / Shift+Enter 跳到下一条 / 上一条，匹配的
+历史长回复会展开原文。Esc 关闭查找并将键盘焦点还给入口，切换对话后查询会清空。
+
+查找只检查当前已加载的消息文本，不搜索附件内容、工具输出或未读取的会话。
+历史读取失败或仍在加载时，提示会明确说明范围；沿原历史提示重试读取，补载后
+仍保留正在查看的原消息。没有匹配不代表尚未读取的历史中没有结果。
+查找不会发送消息、创建 Turn 或调用模型，也不会把查询存到服务器。
+
+English: **Find in conversation** locates matching loaded messages, including full
+text behind folded answers. Enter / Shift+Enter navigate; Esc closes the reader.
+Results are case-insensitive literal matches, one per message. Attachments, tool
+output and unread history are outside the search. Retry failed history reads from
+the existing history notice; new pages preserve the selected original message.
+Searching does not send messages, start a Turn or persist the query.
+
+下图为合成会话示例。桌面保留周围消息，手机上输入框独占一行，箭头仍可直接操作。
+
+![Find an earlier instruction in the desktop conversation](assets/conversation-find/desktop.png)
+
+<img src="assets/conversation-find/mobile.png" alt="Find controls and the selected original message on a narrow screen" width="390" />
+
 ## 💬 5. 悬浮会话托盘（ManagerConversationTray）
 
 无论你在浏览总览还是在处理看板，只要点击带有 **`立即发送`** 标识的快捷指令，页面右下角都会弹出抽屉式的轻量对话托盘：
