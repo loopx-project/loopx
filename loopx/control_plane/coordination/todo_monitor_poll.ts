@@ -11,6 +11,7 @@ import {requireBoolean} from "../runtime_decode.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
 import {decodeTaskLeaseProof, type TaskLeaseProof} from "./task_lease_proof.ts";
 import {monitorPollRequestHash, normalizeMonitorPollFields, planMonitorBatch} from "../scheduler/monitor_batch.ts";
+import {evaluateTodoResumeConditionsFromSource, todoResumeDependencyId, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION} from "../todos/resume_condition.ts";
 export {monitorPollRequestHash} from "../scheduler/monitor_batch.ts";
 
 export const COORDINATION_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v0";
@@ -37,6 +38,11 @@ export interface CoordinationMonitorPollInput {
   receipt_only?: boolean;
   /** Authority clock supplied by the runtime, never observation.generated_at. */
   now?: Date;
+  /** Physical runtime already selected by the canonical provider. */
+  runtime_root?: string;
+  /** Capacity depends on this dispatch's runtime facts and admitted condition. */
+  available_capabilities?: readonly string[];
+  admitted_resume_when?: string;
 }
 
 type CoordinationMonitorPollFailureKind = "decision_rejection" | "protocol_failure";
@@ -97,11 +103,31 @@ function normalize(raw: CoordinationMonitorPollInput): NormalizedMonitorPollInpu
   return input;
 }
 
-function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
+async function assertMonitorWait(
+  input: NormalizedMonitorPollInput, monitor: JsonObject, todos: readonly JsonObject[],
+): Promise<void> {
+  if (typeof monitor.resume_when !== "string" || !monitor.resume_when.trim()) return;
+  const evaluated = await evaluateTodoResumeConditionsFromSource({
+    schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION, items: [monitor],
+    source_items: todoResumeDependencyId(monitor.resume_when) === null ? [] : todos,
+    evaluated_at: input.now.toISOString(), available_capabilities: input.available_capabilities ?? null,
+    ...(input.runtime_root === undefined ? {} : {rollout_event_source: {
+      runtime_root: input.runtime_root, goal_id: input.goal_id,
+    }}),
+  });
+  const [wait] = evaluated.conditions as {condition: JsonObject}[];
+  if (wait?.condition.satisfied !== true) throw new Error("Monitor resume condition is not satisfied");
+  if (wait.condition.kind === "capacity_available" && wait.condition.resume_when !== input.admitted_resume_when) {
+    throw new Error("Monitor capacity wait changed since admission; re-evaluate the current condition");
+  }
+}
+
+async function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
   const indexed = indexCoordinationProjection(head, input.goal_id);
   validateCoordinationTodoReadModel(head, input.goal_id);
   const readModel = canonicalAuthorityObject(head.todo_read_model, "Todo read model");
-  const result = planMonitorBatch({...input, todos: [...indexed.todos.values()],
+  const todos = [...indexed.todos.values()];
+  const result = planMonitorBatch({...input, todos,
     read_model_schema: String(readModel.schema_version),
     admit_monitor(monitor) {
       const rejected = monitorMutationRejection({goal_id: input.goal_id, todo: monitor, todos: indexed.todos,
@@ -110,8 +136,11 @@ function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
         operation: "observe", proof: input.lease_proof, now: input.now});
       if (rejected !== null) throw new Error(rejected.reason);
     }});
-  return {mutations: result.mutations as {kind: "todo_upsert"; todo: JsonObject}[],
-    writeback: canonicalAuthorityObject(result.writeback, "Monitor writeback")};
+  const writeback = canonicalAuthorityObject(result.writeback, "Monitor writeback");
+  const monitor = indexed.todos.get(String(writeback.todo_id));
+  if (!monitor) throw new Error("Monitor target is unavailable in the commit snapshot");
+  await assertMonitorWait(input, monitor, todos);
+  return {mutations: result.mutations as {kind: "todo_upsert"; todo: JsonObject}[], writeback};
 }
 
 export async function executeCoordinationMonitorPoll(store: AuthorityStore,
@@ -134,8 +163,8 @@ export async function executeCoordinationMonitorPoll(store: AuthorityStore,
   if (observation.kind === "receipt") return observation.result;
   const head = observation.authority;
   if (head.status !== "loaded") return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, ...head};
-  let plan: ReturnType<typeof planWriteback>;
-  try { plan = planWriteback(input, head.head); }
+  let plan: Awaited<ReturnType<typeof planWriteback>>;
+  try { plan = await planWriteback(input, head.head); }
   catch (error) {
     // Receipt lookup succeeded and planning failed before commit. Only this
     // boundary can certify no effect; outages and commit failures cannot.

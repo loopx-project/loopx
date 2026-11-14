@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from pathlib import Path
 from typing import Any
 
+from ..chat_store import ChatSessionStore, TERMINAL_TURN_STATES
+from ..file_lock import exclusive_cross_runtime_file_lock
+from ..history import load_registry
+from ..registry import find_registry_goal
+from ..control_plane.goals.activation import goal_is_stopped
+from ..control_plane.coordination.shadow_management import shadow_maintenance_lock_target
+from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )
 from ..paths import effective_runtime_root
 from ..control_plane.todos.provider_projection import projection_delivery_requires_ack
+from ..control_plane.work_items.task_lease import lease_is_active
 
 
 def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:
@@ -23,6 +34,158 @@ def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:
 
 class ChatTodoActionMixin:
     """Keep Todo preview/apply parity separate from general orchestration."""
+
+    @contextmanager
+    def _confirmed_task_commit(
+        self, *, goal_id: str, todo_id: str, endpoint: str, project: Path,
+        claim: dict[str, Any],
+    ) -> Iterator[None]:
+        """Fence acceptance with the same registry and canonical writers as Stop and Todo edits."""
+        invoked = self.registry_path.resolve()
+        route = resolve_goal_source_runtime_route(registry_path=invoked, goal_id=goal_id)
+        source = Path(route["source_registry"])
+        # Claim used this runtime. Recheck it after taking the same maintenance
+        # guard as canonical writers, in the order used by Goal deletion.
+        runtime = effective_runtime_root(invoked, None).resolve()
+        targets: tuple[Path, ...] = (shadow_maintenance_lock_target(runtime, goal_id), source)
+        if source != invoked:
+            targets += (invoked,)
+        with ExitStack() as locks:
+            for target in targets:
+                locks.enter_context(exclusive_cross_runtime_file_lock(target, operation="confirm_task_admission"))
+            if (route != resolve_goal_source_runtime_route(registry_path=invoked, goal_id=goal_id)
+                    or runtime != effective_runtime_root(invoked, None).resolve()):
+                raise ValueError("The reviewed Task's Goal source changed")
+            goal = find_registry_goal(load_registry(source), goal_id)
+            if goal is None or goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+                raise ValueError("The Task's Goal is no longer active")
+            if Path(str(goal.get("repo") or ".")).expanduser().resolve() != project:
+                raise ValueError("The reviewed Task's project root changed")
+            owner = claim["claimed_by"]
+            if self._resolve_goal_agent(goal_id, endpoint, goal=goal) != owner:
+                raise ValueError("The reviewed Agent endpoint now belongs to another Goal Agent")
+            authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id, include_leases=True)
+            todo = next((row for row in authority["todos"] if row["todo_id"] == todo_id), None)
+            if (todo is None or todo.get("role") != "agent" or todo.get("status") != "open"
+                    or todo.get("claimed_by") != owner or authority["handoff_mode"] != claim["handoff_mode"]):
+                raise ValueError("The reviewed Task assignment changed before launch")
+            if authority["handoff_mode"] == "hard_lease":
+                lease = next((row for row in authority["leases"] if row["todo_id"] == todo_id), None)
+                original = claim.get("lease")
+                if (not lease or not isinstance(original, dict) or not lease_is_active(lease)
+                        or any(lease.get(key) != original.get(key) for key in ("owner", "idempotency_key", "lease_epoch"))):
+                    raise ValueError("The reviewed Task execution lease changed before launch")
+            yield
+
+    @staticmethod
+    def _read_task_start(
+        chat: ChatSessionStore, *, goal_id: str, agent_id: str, channel_id: str,
+        client_turn_id: str, checkpoint: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        from ..chat_actions import _opaque
+
+        if checkpoint is not None:
+            sid = _opaque(checkpoint.get("session_id"), field="session_id")
+            session = chat.load_session(sid)
+            if (session is None or session.get("goal_id") != goal_id
+                    or session.get("agent_id") != agent_id or session.get("channel_id") != channel_id):
+                raise ValueError("The original Task Session is unavailable")
+            return session, chat.turn_for_client(sid, client_turn_id)
+
+        # A process may have persisted the Session before the proposal's
+        # checkpoint. Include closed Sessions so retry cannot replace one.
+        sessions = chat.session_candidates(goal_id=goal_id, agent_id=agent_id, channel_id=channel_id)
+        matches = [
+            (session, turn) for session in sessions
+            if (turn := chat.turn_for_client(session["session_id"], client_turn_id)) is not None
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(sessions) > 1:
+            raise ValueError("The original Task Session is ambiguous")
+        return (sessions[0] if sessions else None), None
+
+    def _start_confirmed_task(
+        self, proposal_id: str, parameters: dict[str, Any], todo_id: str, steps: dict[str, Any],
+    ) -> dict[str, Any]:
+        from ..chat_actions import _opaque
+
+        controller = self.runtime_controller
+        chat = getattr(controller, "store", None) or self.chat_store
+        if chat is None:
+            raise ValueError("Chat Runtime Controller is unavailable")
+        goal_id = str(parameters["goal_id"])
+        owner = str(parameters["agent_id"])
+        endpoint = str(parameters.get("endpoint_id") or owner)
+        message = str(parameters["text"])
+        channel_id = f"task.{todo_id}"
+        client_turn_id = f"task-start-{proposal_id}"
+        opened = steps.get("task_session_opened")
+        execution = steps.get("execution_started")
+        session, turn = self._read_task_start(
+            chat, goal_id=goal_id, agent_id=endpoint, channel_id=channel_id,
+            client_turn_id=client_turn_id, checkpoint=execution if execution is not None else opened,
+        )
+        if execution is not None and (turn is None or turn["turn_id"] != execution.get("turn_id")):
+            raise ValueError("The original Task Turn is unavailable")
+        if turn is not None and turn.get("message") != message:
+            raise ValueError("The original Task Turn request changed")
+
+        # An already dispatched or terminal Turn is readback. Only work that
+        # still needs dispatch passes through the current Goal and claim gates.
+        created = False
+        if turn is None or (
+            turn.get("status") not in TERMINAL_TURN_STATES
+            and not (turn.get("started_at") or turn.get("upstream_turn_id"))
+        ):
+            if controller is None:
+                raise ValueError("Chat Runtime Controller is unavailable")
+            if session is not None and session.get("status") == "closed":
+                raise ValueError("The original Task Session is closed")
+            goal = self._goal(goal_id)
+            if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+                raise ValueError("The Task's Goal is no longer active")
+            project = Path(str(goal.get("repo") or ".")).expanduser().resolve()
+            if not project.is_dir():
+                raise ValueError("the Goal project root is unavailable")
+            self._agent_eligibility(endpoint, project=project)
+            if parameters.get("endpoint_id") and self._resolve_goal_agent(goal_id, endpoint) != owner:
+                raise ValueError("The reviewed Agent endpoint now belongs to another Goal Agent")
+            claim_args = {
+                "registry_path": self.registry_path, "goal_id": goal_id, "todo_id": todo_id,
+                "claimed_by": owner, "agent_id": owner, "claim_only": True, "manage_execution": True,
+            }
+            claim = update_goal_todo(**claim_args, claim_operation_id=f"chat-task-start:{proposal_id}", dry_run=False)
+            if claim["handoff_mode"] == "soft_claim" and claim["status"] in {"recovered", "replayed"}:
+                # A past soft claim still needs a read-only current-owner check.
+                if update_goal_todo(**claim_args, dry_run=True)["changed"]:
+                    raise ValueError("The reviewed Task assignment changed before launch")
+            if not isinstance(steps.get("todo_assigned"), dict):
+                self.store.save_checkpoint(
+                    proposal_id, step="todo_assigned", receipt={"todo_id": todo_id, "agent_id": owner},
+                )
+            if session is None:
+                session, _ = controller.open_session(
+                    goal_id=goal_id, agent_id=endpoint, work_dir=project, objective=message,
+                    mode="resume_latest", channel_id=channel_id, agent_goal_id=goal_id,
+                )
+            sid = _opaque(session.get("session_id"), field="session_id")
+            if opened is None and execution is None:
+                self.store.save_checkpoint(proposal_id, step="task_session_opened", receipt={"session_id": sid})
+            turn, created = controller.submit_turn(
+                session_id=sid, client_turn_id=client_turn_id, message=message, work_dir=project, objective=message,
+                _goal_commit=lambda: self._confirmed_task_commit(
+                    goal_id=goal_id, todo_id=todo_id, endpoint=endpoint, project=project, claim=claim,
+                ),
+            )
+
+        identity = {
+            "session_id": _opaque(turn.get("session_id"), field="session_id"),
+            "turn_id": _opaque(turn.get("turn_id"), field="turn_id"),
+        }
+        if execution is None:
+            self.store.save_checkpoint(proposal_id, step="execution_started", receipt=identity)
+        return {**identity, "status": str(turn.get("status") or "accepted"), "created": created}
 
     def _run_todo_update(
         self, parameters: dict[str, Any], *, dry_run: bool,

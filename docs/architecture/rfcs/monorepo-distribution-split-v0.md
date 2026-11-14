@@ -3780,3 +3780,285 @@ Unicode readback through the real LoopX reader with a synthetic Desktop peer.
 This qualifies optional record reading, not model-context retention, managed
 V4/R1, split-package M3, installed-App adoption or complete costs. The original
 Goal regression, acceptance gaps, authority and frozen failures remain intact.
+
+### 2026-11-13 — Standalone continuation retains its installation
+
+Standalone startup previously returned an ambient `loopx` command even when
+the caller selected an isolated core interpreter. Executing that complete
+command could import another installation through PATH/PYTHONPATH. Earlier
+installed tests discarded the executable and replayed its arguments, hiding
+the failure. Core-generated commands now retain the same environment's Python
+with `-I -m loopx.entrypoint` through the existing invocation owner. An explicit
+global `--cli-bin` and ordinary-distribution defaults retain their behavior;
+invalid arguments retain complete parser diagnostics. Multi-Goal selection
+uses the same command renderer.
+
+Core module diagnosis verifies its actual imported distribution, recorded
+module and present recorded console entrypoints. Version/catalog/help probes
+use the same isolated module invocation, so a foreign PYTHONPATH cannot
+silently change the artifact being checked. Missing or redirected module
+records, absent console records/files, unrecorded launchers and missing runtime
+files remain failures. The installed qualification executes whole returned
+activation and diagnosis commands, with a foreign-package sentinel and an
+explicit-route control, alongside existing SQLite/File recovery and context
+checks. This repairs command provenance without adding a lifecycle, authority,
+configuration or protocol owner.
+
+Full R1/V1–V5/V10, real model recovery/adoption, progressive product control,
+minimal dependency closure, M3/Standard/workspace/meta packaging and complete
+cost acceptance remain open. This does not upgrade an installed host, start a
+model service or establish effectiveness from protocol fixtures. Preserve all
+nine original requirements, the original-Goal regression and earlier failures.
+
+### 2026-11-13 — Successful work records a fresh checkpoint on the same route
+
+The generic Host result boundary previously required a fresh Vision to use
+`material_replan` and `replan_required`. A successful task retaining its route
+could only reuse an unchanged reason, even when it had new outcome evidence.
+An explicit `path_delta_mode: unchanged` now accepts the existing Vision packet
+with `path_delta.outcome: continue` or `no_change`, without an unchanged reason.
+The existing TypeScript Vision, task, validation and settlement owners still
+decide durable effects. Material replans, stop decisions, malformed packets and
+conflicting declarations retain their refusal. Omitted modes retain legacy
+inference; generic and Codex guidance describe the same boundary.
+
+One existing isolated inventory task used the current model's tools through a
+stdio adapter and a Python 3.11 standalone core artifact on SQLite. Revised
+inputs yielded quantities 22/10/5 and value 185.25, versus 172.25 previously.
+Independent checks verified the 13.00 reconciliation, all six excluded rows,
+reusable generator and preservation of all five original files. After the
+normalized result was journaled, SIGKILL interrupted the driver and validator.
+The original Turn resumed at validation without invoking the Host, completed
+the Todo and spent once; completed replay added no Host, writeback or spend.
+The initial invalid completion/replan reply and three resume setup refusals
+remain failed attempts. There were two Host dispatches and one model work pass;
+the rejected reply was not treated as confirmed work.
+
+Source executor/driver checks and Codex/dsh regression pass. Installed File and
+SQLite checks retain legacy completion and qualify both fresh checkpoint
+outcomes plus replay; the initial oversized inline test command failed its
+existing bound, then the fixture used an ordinary script path. No command
+budget, authority, default or historical receipt was changed. This qualifies
+the touched success/checkpoint and recovery path, not full V1–V5/V10 or R1.
+Complete context retention, minimal closure, progressive product control,
+comparable complete costs, M3/Standard/workspace delivery and the original-Goal
+regression remain open. All nine original requirements and frozen failures
+remain intact; no installed host or model service was upgraded.
+
+### 2026-11-13 — Task presentation omits outer executor data
+
+Current built-in model renderers derive `loopx_turn_model_context_v0` from the
+validated complete v1 source in an adapter request. Task requirements, scope, required reads,
+backlog and unknown additions survive; source binding, effect projection and
+scheduler/automation execution data remain with the outer executor. Existing
+replan authoring and Explore guidance references resolve before their owner is
+omitted, preserving source numbers and text. The model view cannot substitute
+for a signed source. Generic adapter stdin, private journals, original-reader
+provenance and historical envelope-only v0 rendering keep their existing contracts.
+
+Seven alternating paired fresh-process probes and 49 warm renders per version
+on the same captured inventory request measure model JSON at 44,841 versus
+34,986 bytes and Codex prompt at 48,724 versus 38,859 bytes. Warm median/p95
+rendering is 9.31/11.27 ms versus 9.02/10.26 ms. An earlier candidate batch
+measured 9.18/11.46 ms versus 10.09/12.44 ms. Final fresh-process median/p95 is
+25.03/435.52 ms versus 23.81/1,405.85 ms; retain the higher candidate tail and
+batch variability without claiming latency improvement. These use warm OS/file
+caches. Model tokens, Node startup/IPC breakdown, service/tool costs and human
+attention remain unavailable; these probes do not establish complete-cost or
+long-horizon benefit.
+
+The current native model completed a new movement audit in an existing isolated
+inventory Goal/Agent through stdio and the Python 3.11 standalone core on SQLite.
+All 14 rows, six excluded rows, quantities 22/10/5 and value 185.25 reconcile
+independently. A deliberately altered report is refused without overwriting
+audit outputs; 11 retained input/generator/report files keep their hashes. The
+closed preceding stage first refused task admission; normal evidence-linked
+replanning established the audit stage before a fresh work Turn. That extra
+replan settlement remains a cost. Completed replay invokes no Host, writeback
+or spend. Source and installed Host checks use synthetic providers separately
+from this native-model task; the initial compatibility failures and the
+pre-fix dangling-reference counterexample remain negative evidence.
+
+Broader Ark adapter regression initially failed eight SDK model-input checks
+while 817 other cases passed. Those checks still expected `work_contract` in
+the model presentation, so their subsequent original-receipt replay assertions
+were not reached. The counterpart uses the shared task/source parity oracle,
+requires unchanged operator input and its original receipt binding, and rejects
+the model-view version before any provider call. Complete-source historical
+v0/v1 input and running/completed replay remain in the matrix. The optional CI
+command exits on the first test failure so its traceback precedes the existing
+ten-minute deadline; passing runs retain the complete case selection. Equal
+baseline/head cancellations at that deadline did not establish unrelatedness
+or semantic success. SDK HTTP fixtures qualify transport and recovery rather
+than live cloud-model adoption.
+
+This qualifies a task-presentation slice of V4/R1. Full model-context retention,
+minimal default closure, progressive product control, comparable complete costs,
+V1–V5/V10, R1/M3, Standard/workspace publication and original-Goal regression
+remain open. All nine original requirements and frozen failures remain intact;
+no installed host or model service was upgraded.
+
+### 2026-11-14 — Standalone successor recovery preserves original settlement
+
+A genuine dependent successor can be recorded after replan admission. Its new
+dependency must not erase the original lifecycle source and strand that Turn's
+settlement. Reconstruction now retains the source only for the exact bound
+review, matching owner/actor and an unambiguous later update; the existing
+trigger/digest checks still apply. The existing runnable-successor ACK can then
+settle that original Turn without rewriting completed Todos. Missing or invalid
+ACKs retain lifecycle recovery; successor execution still needs fresh admission.
+An empty operation inbox also defers its optional workspace action-store import.
+A present action store without its provider continues to fail visibly.
+
+The current native model used an independently built Python 3.11 core on SQLite
+and stdio in an existing isolated task. Normal successor creation, Vision
+writeback and original replan settlement recovered the blocked route. Initial
+and unchanged complete task reads produced a reusable inventory close/check tool
+and checked JSON/Markdown: 14 movements, six exclusions and value 185.25. An
+incorrect 185.26 candidate was refused without overwriting prior results. A
+controller-generated revision, sealed from the model until fresh task/source
+delivery, added six rows. Independent validation checked all 20 movements,
+nine exclusions, quantities 31/7/7, value 250.20 and the 64.95 difference, while
+preserving the original cutoff, decimal rules and preceding artifacts.
+
+The model rejected the older task for revised work and read the complete current
+requirements and inputs. This demonstrates the model's source-selection decision,
+not an automatic stale-input enforcement gate. After withholding the revised
+caller's JSON reply, exact committed-journal recovery performed no new Host,
+writeback or spend; the historical spend count remained one. The initial raw
+adapter reply failed result binding before effects; the supported same-Turn retry
+used the existing result builder. Two initial Host calls performed one artifact
+implementation, with one eventual writeback/spend; retain that repair cost.
+The generic bridge has no persisted provider session id. These checks qualify
+complete task recovery and committed-result replay, leaving automatic provider
+thread retention and a separately controlled real compaction case untested.
+
+Source recovery regression and a fresh standalone-install regression cover the
+touched lifecycle and optional-import paths, including invalid ownership,
+timestamps, bindings, ACK fallback and a present-but-unavailable provider.
+The earlier failed tests and original acceptance remain negative/open evidence.
+Full V1–V5/V10, R1/M3, default closure, progressive product control, comparable
+complete costs, Standard/workspace delivery and original-Goal regression remain
+open. No installed host, model service, authority history or frozen budget changed.
+
+### 2026-11-14 — Installed composition recovers the original receipt chain
+
+PR #8707 (`d695b40f633742fb0a5e1cb6b970a56c46dba5e9`, integrated as
+`dd44cdcd0c9482bdf135e54ae0b71eb398b4cfe7`) repairs explicitly requested
+Core composition after writeback. The adapter reuses the canonical parser,
+quota registrar and registry codec, validates the complete current CLI prefix
+and original binding, and executes the packaged entrypoint. It retains the
+existing TypeScript settlement owner and producing workspace.
+
+Independent Python 3.11 installed File/SQLite comparisons cover default and
+explicit routes: the baseline commits writeback and fails on the absent facade;
+the candidate recovers that same identity, returns three receipts and retains
+one debit after replay. Ordinary refresh still leaves spend owed without an automatic
+debit. Further installed comparisons place rejecting foreign modules in
+PYTHONPATH and the working directory; the originating Core remains selected.
+
+The preserved installed governance corpus now has 16 confirmed cases in each
+Core and ordinary edition at `78e936f9d1f1a00505c4026ee0a5857de95cee27`.
+Earlier resource failures remain failures. The wider source run retained one
+pre-existing incomplete mocked-readback failure, reproduced at the same base
+and candidate. Its existing settled-intent test now supplies the canonical
+identity/result types; all 32 affected cases pass without weakening the
+production readback or changing the independent intent/no-reopened-work oracle.
+The earlier full-run failure is not rewritten as a passing run.
+
+This qualifies a V2/V3 installed-settlement prerequisite. Full V1–V5/V10,
+R1/M3, real-host compaction/thread retention, progressive control, comparable
+complete costs, Standard/workspace delivery and original-Goal regression remain
+open. No default activation, host upgrade, release or frozen-budget change is
+implied by these protocol fixtures.
+
+### 2026-11-14 — Coordination loads terminal evidence on its selected route
+
+The local-authority runtime defers `ResearchTerminalEvidenceHost` until a valid
+terminal lifecycle request selects it. Ordinary coordination no longer loads
+that adapter and its research implementation dependencies. The existing typed
+terminal owner, registry witness, research qualification, writer locks and
+resource cleanup remain responsible for completion; no competing work schema
+or execution pipeline is introduced.
+
+A fresh-process fault injection makes the terminal adapter unavailable. The
+ordinary claim persists and replays its original receipt, malformed claims
+leave state unchanged, and a selected terminal request fails without a new
+receipt or state mutation. The retained base fails this same ordinary-claim
+probe. The source authority/terminal suite passes 93 cases. Applying the same
+patch to the exact C1 candidates in #8266 (`b15c443ee64d`) and #8484
+(`b7e4e01cc423`) passes 188 and 193 authority, context and recovery cases
+respectively; the latter also covers real SQLite admission.
+
+This is a loading and failure-isolation prerequisite, aligned with C1's existing
+owners. A valid terminal request still loads the adapter, including when its
+ordinary-Todo guard returns early. Complete workflow isolation, paired complete
+costs, real-host adoption, R1/M3 and C1 writer/consumer cutover remain open.
+These tests do not authorize C1 default promotion or establish model benefit.
+
+
+### 2026-11-14 — Ordinary completion defers research implementations
+
+`ResearchTerminalEvidenceHost.qualify` loads its research execution and
+configuration implementations after its existing Todo applicability check.
+A Todo without research or replan applicability signals can therefore persist
+its completion evidence and replay its original receipt while either research
+implementation is unavailable.
+Research-qualified Todos still select the same policy and evidence owners;
+module failures retain their error and commit no completion state or receipt.
+The existing source checks, writer fence, qualification, CAS and cleanup apply.
+
+Fresh-process fault cases cover both unavailable implementations on real File
+and SQLite authority. Both retained baseline probes fail at the ordinary
+completion; the candidate completes and independently reads back the result,
+replays without a new effect and refuses repeated selected-research failures.
+The available-module comparison passes the same 107 existing native cases;
+the candidate additionally passes the failure-isolation case, for 108 total.
+The real research CLI suite passes 11 cases. The same production delta and
+fault cases pass with the exact C1 candidates #8266 (`b0b930bfb92a`) and #8484
+(`b7e4e01cc423`), with 190 and 189 authority, context and recovery cases. An independently built Core wheel, installed alone, also passes the same File/SQLite fault paths with production module bytes equal to the source; this does not qualify an installed model Host or adoption.
+
+This closes the evidenced ordinary-completion dependency failure using the
+existing research guard, without duplicating the C1 work contract or its
+producer/consumer pipeline. Research- or replan-associated Todos still enter the existing policy check and
+load its implementations; a disabled policy does not remove that remaining
+loading dependency. Complete D2/D5 closure, real-model Host/context continuity, progressive controls,
+comparable complete cost, R1/M3 and C1 default cutover remain unqualified.
+
+### 2026-11-14 — Disabled research composition resolves before execution loading
+
+The existing Explore configuration module now owns the composition policy for
+the documented scalar modes and unchanged public-safe identifier validation. Research execution and evidence
+reuse that owner; their established exports remain available. Native terminal
+qualification checks the current source and resolves the same policy before
+loading research execution. The original applicability, source, qualification,
+writer, lease, CAS, receipt and cleanup rules remain in their existing owners.
+
+Fresh-process File/SQLite cases complete and independently read back ordinary
+and generic-replan results without research execution or graph implementations
+when composition is disabled, including an explicit Goal-off override. Enabled
+and inheritance-only configurations retain selected dependency failures with no
+completion or receipt. Invalid modes and scope identifiers remain rejected;
+an unavailable execution implementation cannot hide those configuration errors.
+After an enabled dependency failure, an explicitly disabled current source can
+complete the same failed operation once and replay its receipt; stale source
+requests remain refused. Both retained baseline backend probes fail on the
+original loading dependency, while the same candidate fixtures pass.
+
+The same 21 policy and 13 identifier observations retain full return values and
+error details. An independently built Core wheel, installed alone, passes the
+same File/SQLite fault and recovery paths with production bytes equal to source.
+The delta also passes selected authority/context/recovery combinations with
+C1 #8266 (`b4f958186532`) and #8484 (`b7e4e01cc423`), retaining their original
+tests and producer/consumer owners. This is dependency-failure isolation, not a
+measurement of latency, complete cost or model benefit. Configuration errors
+now precede unavailable execution IO intentionally. Full selected D2/D5 closure,
+real-model Host/context adoption, progressive controls, R1/M3, C1 cutover and
+original-goal regression remain unqualified.
+
+The final counterexample review also rejects non-string composition modes.
+Previously a single-element array such as `["explicit_only"]` passed string
+coercion but produced an inactive policy, silently skipping research evidence.
+The existing configuration owner now refuses this malformed shape before IO;
+documented scalar modes, defaults and errors retain their semantics. Real
+File/SQLite negative cases guard this boundary without changing valid activation.

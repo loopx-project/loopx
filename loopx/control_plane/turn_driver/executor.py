@@ -365,8 +365,16 @@ def _normalize_host_path_delta(
             errors.append("material_replan cannot also declare vision_unchanged_reason")
     elif path_delta_mode == "unchanged":
         if agent_vision is not None:
-            errors.append("unchanged path_delta_mode cannot include agent_vision_json")
-        if not unchanged_reason:
+            path_delta = agent_vision.get("path_delta")
+            if not isinstance(path_delta, dict):
+                errors.append("unchanged agent_vision_json requires goal_path_delta_v0")
+            elif path_delta.get("outcome") not in {"continue", "no_change"}:
+                errors.append(
+                    "unchanged goal_path_delta_v0 outcome must be continue or no_change"
+                )
+            if unchanged_reason:
+                errors.append("fresh agent_vision cannot also declare vision_unchanged_reason")
+        elif not unchanged_reason:
             errors.append("unchanged path_delta_mode requires vision_unchanged_reason")
 
     return path_delta_mode, agent_vision

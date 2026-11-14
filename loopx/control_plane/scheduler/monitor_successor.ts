@@ -10,6 +10,7 @@ import {planTodoCreationPriority} from "../todos/priority.ts";
 
 export const MONITOR_SUCCESSOR_REQUEST_SCHEMA = "loopx_monitor_successor_plan_request_v0";
 export const MONITOR_SUCCESSOR_RESULT_SCHEMA = "loopx_monitor_successor_plan_result_v0";
+export const MONITOR_TARGET_SCHEMA = "quota_monitor_target_v0";
 
 /** Select from the caller's complete snapshot, never from a compact lane. */
 export function selectMonitorTodo(items: readonly JsonObject[], todoId: string | null,

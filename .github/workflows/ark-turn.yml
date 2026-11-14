@@ -44,7 +44,7 @@ jobs:
       - run: python -m pip install -e ".[test]" -e packages/loopx-ark-turn
       - name: Public SDK, real stdio MCP, negative cases and DSH parity
         run: >-
-          python -m pytest -q packages/loopx-ark-turn/tests
+          python -m pytest -q --maxfail=1 packages/loopx-ark-turn/tests
           tests/test_dsh_goal_mode.py tests/test_turn_managed_executor_binding.py
           tests/test_ark_managed_agent_host.py
           tests/test_loopx_turn_driver.py tests/test_collaboration_mcp.py

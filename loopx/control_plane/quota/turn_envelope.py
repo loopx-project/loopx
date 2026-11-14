@@ -182,6 +182,7 @@ def assert_turn_host_request_version(request: Mapping[str, Any]) -> None:
 def complete_turn_host_source(
     request: Mapping[str, Any], *, operation: str = "host_context",
     include_session_lineage: bool = False,
+    include_model_context: bool = False,
     recorded_capability_result: bool = False,
 ) -> dict[str, Any] | None:
     if "schema_version" in request:
@@ -195,9 +196,34 @@ def complete_turn_host_source(
     # adapter, even a damaged one, on the typed owner's full Host validation.
     adapter = ({"envelope": _wire_mapping(request.get("turn_envelope"))}
                if "turn_envelope" in request or operation != "complete_host_lineage" else {})
-    return _turn_envelope_result(operation, payload=request["work_contract"], **adapter, **header,
+    checked = _turn_envelope_result(operation, payload=request["work_contract"], **adapter, **header,
                                  **({"recorded_capability_result": True} if recorded_capability_result else {}),
+                                 **({"include_model_context": True} if include_model_context else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
+    if include_model_context:
+        changes = checked.pop("model_context_changes", None)
+        if not isinstance(changes, dict):
+            raise RuntimeError("TypeScript Host model-context projection is missing")
+        checked["model_context"] = _apply_context_projection_changes(
+            dict(request["work_contract"]), changes,
+        )
+    return checked
+
+
+def projected_host_model_input(request: Mapping[str, Any], checked: Mapping[str, Any]) -> dict[str, Any]:
+    """Render task data with original-reader provenance, never a new source.
+
+    The full v1 wire/journal remains unchanged. Applying the TS owner's path
+    edits above preserves original Python numbers and complete task text.
+    """
+    context = checked.get("model_context")
+    if not isinstance(context, dict):
+        raise RuntimeError("checked Host model-context projection is missing")
+    original = captured_turn_host_input(request)
+    return {**{key: value for key, value in original.items()
+               if key not in {"work_contract", "schema_version"}},
+            "schema_version": checked["model_context_schema_version"],
+            "source_schema_version": original["schema_version"], "task_context": context}
 
 
 def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:

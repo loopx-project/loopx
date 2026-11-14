@@ -124,7 +124,7 @@ def command_release_root(command_realpath: Path | None) -> Path | None:
 
 
 def current_script_invocation_path() -> Path | None:
-    """Return the active LoopX executable when invoked through its console script."""
+    """Return the active console script or installed standalone-core module."""
     if not sys.argv or not sys.argv[0]:
         return None
     path = Path(sys.argv[0]).expanduser()
@@ -136,6 +136,12 @@ def current_script_invocation_path() -> Path | None:
         path = path.absolute()
     if path.exists() and path.name.lower() in {"loopx", "loopx.exe"}:
         return path
+    if path == Path(__file__).with_name("entrypoint.py").resolve():
+        # Module invocation is the core's isolated continuation route. Verify
+        # the imported distribution before replacing ambient PATH discovery.
+        installed = python_distribution_install(Path(__file__).resolve())
+        if installed.get("distribution_name") == "loopx-core":
+            return path
     return None
 
 
@@ -731,7 +737,11 @@ def collect_doctor(
     loopx_path = resolve_command_path("loopx")
     invocation_path = current_script_invocation_path()
     loopx_canary_path = resolve_command_path("loopx-canary")
-    command_path_primary = loopx_path or invocation_path
+    command_path_primary = (
+        invocation_path
+        if invocation_path == Path(__file__).with_name("entrypoint.py").resolve()
+        else loopx_path or invocation_path
+    )
     canary_path = loopx_canary_path
     command_path = command_path_primary
     command_realpath = command_path.resolve() if command_path else None

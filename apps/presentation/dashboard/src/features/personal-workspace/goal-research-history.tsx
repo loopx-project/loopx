@@ -62,7 +62,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const readCaseMode = () => {
     const query = new URLSearchParams(window.location.search);
     const reading = query.get("research_goal") === goalId ? query.get("research_reading") : null;
-    return {goalId, requested: reading === null ? null : reading === "case"};
+    return {goalId, requested: reading === "case" ? true : reading === "history" ? false : null};
   };
   const [caseMode, setCaseReading] = useState(readCaseMode);
   const requestedCase = caseMode.goalId === goalId ? caseMode.requested : null;
@@ -76,7 +76,8 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     const url = new URL(window.location.href);
     url.searchParams.set("research_goal", goalId);
     url.searchParams.set("research_reading", reading ? "case" : "history");
-    window.history.pushState({}, "", url); setCaseReading({goalId, requested: reading});
+    window.history.pushState(window.history.state, "", url);
+    setCaseReading({goalId, requested: reading});
   };
   const [read, setRead] = useState<Read>({events: [], total: null, complete: false});
   const [originalDisplay, setOriginalDisplay] = useState(false);
@@ -506,22 +507,37 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const recordUnit = read.complete && history.canonical && read.events.length > history.canonical.events.length
     ? (zh ? "条原始记录" : "source rows") : read.total === 1 ? copy.record : copy.records;
   const emptySourceHistory = hasNativeSource && emptyHistory;
-  const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
+  const hasSavedResult = Boolean(analysis.pack?.result || analysis.pack?.native_outcomes || analysis.pack?.human_attention);
+  const emptyWithAnalysis = emptyHistory && hasSavedResult;
+  const historyBeforeAnalysisSummary = hasNativeSource && Boolean(value?.nodes.length) && !hasSavedResult;
+  // Reorder the existing reader in the DOM so visual and keyboard order agree.
+  // Keeping its identity also preserves a focused scope selector while loading.
+  const progressSummary = !progressiveOverview && !readingSelection
+    ? <ResearchProgressSummary key="progress" analysis={analysis}/> : null;
+  const analysisDetails = !progressiveOverview ? <Fragment key="analysis">
+    <ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/><ResearchCitationPanel analysis={analysis}/>
+  </Fragment> : null;
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
   // Keep an explicitly opened study in place during a read failure. A complete
   // catalogue with no study still uses the ordinary history view.
   const awaitingRequestedCase = requestedCase === true && (analysis.loading || Boolean(analysis.readError));
-  if (hasNativeSource && strategies.selection !== null && !emptySourceHistory) {
-    return <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
-      sourceUrl={readSourceUrl} zh={zh} selection={strategies.selection}
-      onSelect={strategies.choose} onClose={() => strategies.choose(null)}/>;
-  }
-  if (caseReading && (hasCases || awaitingRequestedCase)) {
-    return <ResearchCaseReading analysis={analysis} active={active} onHistory={() => setCaseMode(false)}/>;
-  }
-  return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
-    {hasCases ? <button type="button" className="case-return-reader" onClick={() => setCaseMode(true)}>{zh ? "← Case 深度解读" : "← Case studies"}</button> : null}
+  const selectedStrategy = hasNativeSource && !emptySourceHistory ? strategies.selection : null;
+  const readingCase = caseReading && (hasCases || awaitingRequestedCase) && (requestedCase === true || selectedStrategy === null);
+  const alternateReading = readingCase ? <ResearchCaseReading analysis={analysis} active={active}/>
+    : selectedStrategy !== null ? <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
+      sourceUrl={readSourceUrl} zh={zh} selection={selectedStrategy}
+      onSelect={strategies.choose} onClose={() => strategies.choose(null)}/> : null;
+  return <>
+    {hasCases || awaitingRequestedCase ? <div className="research-reading-views" role="group" aria-label={zh ? "研究视图" : "Research view"}>
+      <button type="button" aria-pressed={!readingCase} onClick={() => {
+        if (readingCase) {analysis.closeCitation(); setCaseMode(false);}
+      }}>{zh ? "研究历程" : "Research history"}</button>
+      <button type="button" aria-pressed={readingCase} onClick={() => {
+        if (!readingCase) setCaseMode(true);
+      }}>{zh ? "案例解读" : "Case study"}</button>
+    </div> : null}
+    {alternateReading ?? <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     {progressiveOverview ? <>
       <nav className="research-reading-order" aria-label={zh ? "研究阅读" : "Research reading"}>
         <button type="button" onClick={() => jump(reportAnchor.current)}>{zh ? "汇报" : "Report"}</button><span aria-hidden>→</span>
@@ -590,15 +606,16 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       <div role="status"><strong>{emptyHistoryMessage}</strong><ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></ContextHelp></div>
       <button type="button" onClick={focusResearchMode}>{zh ? "查看研究模式" : "Review research mode"}</button>
     </div> : null}
-    {!progressiveOverview ? <><ResearchAnalysisStatus analysis={analysis}/>
-      {!readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}
-      <ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/><ResearchCitationPanel analysis={analysis}/></> : null}
-    {busy && !read.events.length ? <div className="research-history-loading" role="status" aria-label={copy.loading}>
+    {!progressiveOverview ? <ResearchAnalysisStatus analysis={analysis}/> : null}
+    {[
+      historyBeforeAnalysisSummary ? null : progressSummary,
+      analysisDetails,
+      busy && !read.events.length ? <div key="loading" className="research-history-loading" role="status" aria-label={copy.loading}>
       <span className="research-history-loading-label">{copy.loading}…</span>
       <div className="research-history-loading-phases" aria-hidden>{Array.from({length: 3}, (_, index) => <span key={index}/>)}</div>
       <div className="research-history-loading-chart" aria-hidden>{Array.from({length: 18}, (_, index) => <span key={index}/>)}</div>
-    </div> : null}
-    {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
+    </div> : null,
+    value?.nodes.length ? <div key="history" className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
 
       {selected ? <div className="research-history-detail" ref={detail} role="region" aria-label={selected.latest.title} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>
         <div className="research-reader-content">
@@ -690,7 +707,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
         <summary hidden={!readingSelection}>{zh ? "研究全景" : "Research overview"}</summary>
         {readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}{historyView}
       </details>
-    </div> : null}
+    </div> : null,
+    historyBeforeAnalysisSummary ? progressSummary : null,
+    ]}
     {(selection.nodes.some(id => !value?.nodes.some(node => node.id === id)) || (selection.day !== null && !selectedGroup)) && read.complete && !busy && !error && !history.error ? <p role="status">{copy.lost}</p> : null}
     {value?.events.length && !value.nodes.length ? <ContextHelp label={zh ? "节点结构未记录" : "Node structure not recorded"} icon={CircleHelp}><p className="research-history-note">{zh ? "尚未记录节点结构；可展开下面的已读记录。" : "Node structure has not been recorded; loaded records remain available below."}</p></ContextHelp> : null}
     {value && (value.missingLinks.length || value.unknownTimeCount || value.unknownKindCount) ? <ContextHelp icon={CircleHelp} label={zh ? "研究记录覆盖缺口" : "Research record coverage gaps"}>
@@ -707,5 +726,6 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
         renderSummary={findingNarrative}
         complete={read.complete} stale={Boolean(error || history.error)} busy={busy} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/> : null}
     </details> : null}
-  </section>;
+  </section>}
+  </>;
 }

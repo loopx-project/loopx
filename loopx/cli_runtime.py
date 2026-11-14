@@ -323,7 +323,11 @@ def cli_invocation_route(argv: list[str]):
 		if option == "--cli-bin":
 			program = argument
 		index += 1
-	with loopx_cli_route(program):
+	# A standalone core may be invoked without activating its environment. Its
+	# returned commands must stay on this artifact, even when PATH/PYTHONPATH
+	# names another LoopX installation. Explicit routes remain caller-owned.
+	default_argv = [sys.executable, "-I", "-m", "loopx.entrypoint"] if _standalone_core() else None
+	with loopx_cli_route(program, default_argv=default_argv):
 		yield
 
 

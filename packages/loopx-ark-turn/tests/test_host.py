@@ -13,10 +13,11 @@ import pytest
 from arkruntime import AsyncArk
 
 from tests.control_plane.test_turn_host_decision_capture import complete_host_request as complete_host_request
+from tests.control_plane.host_process_fixture import assert_host_task_context
 
 from loopx.control_plane.quota.turn_envelope import turn_envelope_action_signature_document
-from loopx_ark_turn.config import AdapterError, Config
-from loopx_ark_turn.host import run
+from loopx_ark_turn.config import AdapterError, Config, digest
+from loopx_ark_turn.host import run, config_digest
 from loopx_ark_turn.receipt import Receipt
 
 
@@ -342,13 +343,15 @@ def test_unsafe_configuration_is_rejected(tmp_path, override):
 
 @pytest.mark.parametrize("checkpoint", ["completed", "running"])
 @pytest.mark.parametrize("wire", [False, True])
-def test_complete_cli_input_reaches_sdk_and_replays_original_receipt(tmp_path, monkeypatch, complete_host_request, checkpoint, wire):
+def test_complete_cli_task_context_reaches_sdk_and_replays_original_receipt(tmp_path, monkeypatch, complete_host_request, checkpoint, wire):
     req, contract = complete_host_request
     if wire:
         from loopx.control_plane.turn_driver.host_candidate import complete_host_input
         req = complete_host_input(req)
         assert req["schema_version"] == "loopx_turn_host_request_v1" and "turn_envelope" not in req
     cfg = config(tmp_path, tools=False)
+    original = copy.deepcopy(req)
+    expected_binding = digest([original, config_digest(cfg)])
     provider = Provider([])
     checkpoints = []
     save = Receipt.save
@@ -365,8 +368,11 @@ def test_complete_cli_input_reaches_sdk_and_replays_original_receipt(tmp_path, m
     assert len(sent) == 1 and sent[0]["type"] == "user.message"
     prompt = sent[0]["content"][0]["text"]
     model_input, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
-    assert model_input["work_contract"] == contract
-    assert "turn_envelope" not in model_input and "turn_authority" not in model_input
+    assert_host_task_context(model_input, contract)
+    assert req == original
+    receipt = Receipt(cfg.state_dir, req["turn_key"])
+    receipt.read()
+    assert receipt.data["binding"] == expected_binding
     assert result["turn_key"] == req["turn_key"]
     if checkpoint == "running":
         # Replay a real persisted checkpoint; the provider retains the original
@@ -429,6 +435,7 @@ def test_unknown_host_version_never_reaches_provider(tmp_path, complete_host_req
     request, _ = complete_host_request
     cfg, provider = config(tmp_path, tools=False), Provider([])
     for original in (request, complete_host_input(request)):
-        with pytest.raises(AdapterError, match="request_schema_mismatch"):
-            asyncio.run(execute(provider, cfg, {**original, "schema_version": "unsupported_host_fixture"}))
+        for version in ("unsupported_host_fixture", "loopx_turn_model_context_v0"):
+            with pytest.raises(AdapterError, match="request_schema_mismatch"):
+                asyncio.run(execute(provider, cfg, {**original, "schema_version": version}))
     assert provider.calls == [] and not cfg.state_dir.exists()
