@@ -150,7 +150,9 @@ class FailurePreservation:
             self.receipt.update(capture_succeeded=True, capture=point)
         except Exception as error:
             # No remote message, output, account information or token is retained.
-            self.receipt["error_kind"] = type(error).__name__
+            from .checkpoint_worker import capture_failure_fields
+
+            self.receipt.update(capture_failure_fields(error))
         finally:
             # Native final-archive extraction and grading drain occur before its
             # cleanup callback. Stop here so orphaned work cannot run through

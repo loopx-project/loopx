@@ -77,7 +77,13 @@ def await_controller_capture(root, components, metadata, probe, deadline, *, pha
                 if result.get("request_sha256") != hashlib.sha256(raw).hexdigest():
                     raise ValueError("checkpoint controller reply belongs to another boundary")
                 if result.get("ok") is not True:
-                    raise ValueError("controller checkpoint failed: " + str(result.get("error_kind")))
+                    error_kind = result.get("error_kind")
+                    message = f"controller checkpoint failed: {error_kind}"
+                    missing = result.get("missing_component_id")
+                    if (error_kind in ("NotFound", "ImageNotFound") and isinstance(missing, str) and
+                            any(entry["id"] == missing for entry in components)):
+                        message += f" (missing component {missing})"
+                    raise ValueError(message)
                 return result["capture"]
             time.sleep(.05)
         raise TimeoutError("controller did not publish a sealed checkpoint before the completion deadline")
