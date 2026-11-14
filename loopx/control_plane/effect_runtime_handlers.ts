@@ -362,6 +362,7 @@ export function createEffectRuntimeHandlers(
     ["goal.source_session.turn_effect.gate", lazyHandler(() => import("./goals/source_session_lifetime.ts"), ({decideSourceTurnEffectGate}) => decideSourceTurnEffectGate)],
     ["goal.first_party_host_runtime.decide", lazyHandler(() => import("./goals/first_party_host_runtime.ts"), ({decideFirstPartyHostRuntime}) => decideFirstPartyHostRuntime)],
     ["goal.chat_session.lifecycle.decide", lazyHandler(() => import("./goals/chat_session_lifecycle.ts"), ({decideChatSessionLifecycle}) => decideChatSessionLifecycle)],
+    ["goal.task.validation_plan", lazyHandler(() => import("./goals/task_validation_plan.ts"), ({canonicalTaskValidationPlan}) => canonicalTaskValidationPlan)],
     ["goal.acceptance.oracle.plan", lazyHandler(() => import("./goals/acceptance_oracle.ts"), ({planAcceptanceOracle}) => planAcceptanceOracle)],
     ["goal.acceptance.oracle.observe", lazyHandler(() => import("./goals/acceptance_oracle.ts"), ({observeAcceptanceOracles}) => observeAcceptanceOracles)],
     ["goal.acceptance.refine", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({refineLocalGoalAcceptanceOutcome}) => refineLocalGoalAcceptanceOutcome)],
