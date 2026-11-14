@@ -767,18 +767,24 @@ def execute_turn_run_once(
 
         host_runner: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None
         session_binding_resolver = None
-        if args.host == "codex-app-server":
-            def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-                return current_turn_host_launch_decision(args, registry_path=current_registry,
-                    runtime_root=runtime_root, identity=settlement_identity,
-                    planned_effective_action=execution_context["effective_action"],
-                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
-                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                    turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref)
 
+        def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
+            # Both native transports recheck the original work at launch.
+            # A global route checks its source even if the mirror is unchanged.
+            return current_turn_host_launch_decision(
+                args, registry_path=current_registry, runtime_root=runtime_root,
+                identity=settlement_identity,
+                planned_effective_action=execution_context["effective_action"],
+                planned_selected_work_basis=execution_context.get("selected_work_basis"),
+                scheduler_execution_context=payload.get("scheduler_execution_context") or {},
+                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+                turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref,
+            )
+
+        if args.host == "codex-app-server":
             native_admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
-            )).with_launch_decision(native_launch_decision)
+            )).with_launch_decision(current_launch_decision)
 
             def run_native_host(request: Mapping[str, Any]) -> dict[str, Any]:
                 return native_host_runner(request, lambda: native_admission.launch_lifetime(
@@ -787,22 +793,6 @@ def execute_turn_run_once(
             host_runner = run_native_host
             session_binding_resolver = native_session_binding_resolver
         elif args.host == "codex-cli":
-
-            def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-                # Revalidate the already admitted identity through the same
-                # owner. In a global route the source is checked first, even
-                # when its mirror still advertises old quota or health.
-                return current_turn_host_launch_decision(
-                    args, registry_path=current_registry, runtime_root=runtime_root,
-                    identity=settlement_identity,
-                    planned_effective_action=execution_context["effective_action"],
-                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
-                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                    # Keep this Turn's already dispatched required reads at launch.
-                    turn_start_hook_dispatch=turn_start_hook_dispatch,
-                    goal_ref=goal_ref,
-                )
-
             host_runner = build_codex_cli_host_runner(
                 args, runtime_root=runtime_root, project=project,
                 registry_path=registry_path, goal_ref=goal_ref,

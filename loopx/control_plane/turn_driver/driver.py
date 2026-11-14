@@ -446,6 +446,7 @@ def build_loopx_turn_plan(
     session_scope: str | None = None,
     goal_ref: Mapping[str, object] | None = None,
     inspect_plan: bool = False,
+    include_selected_work_basis: bool = False,
 ) -> dict[str, Any]:
     """Plan directly from the complete source, or decode an explicit v0 envelope."""
 
@@ -486,7 +487,9 @@ def build_loopx_turn_plan(
     # the action-hash boundary rather than adding a separate identity call.
     if current:
         projection = _turn_envelope_result("planning_facts", payload=supplied,
-            turn_instance_id=turn_instance_id, **({"inspect_plan": True} if inspect_plan else {}))
+            turn_instance_id=turn_instance_id,
+            **({"inspect_plan": True} if inspect_plan else {}),
+            **({"include_selected_work_basis": True} if include_selected_work_basis else {}))
         envelope = _mapping(projection["work"])
     else:
         projection = _turn_envelope_result("driver_lineage", envelope=envelope,
@@ -613,6 +616,8 @@ def build_loopx_turn_plan(
     if current:
         payload["work_contract"] = supplied
         payload["source_decision_hash"] = projection["source_decision_hash"]
+        if include_selected_work_basis:
+            payload["_selected_work_basis"] = projection["selected_work_basis"]
         if "inspection_paths" in projection:
             payload["_inspection_paths"] = projection["inspection_paths"]
     else:

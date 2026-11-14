@@ -2011,6 +2011,7 @@ export function completePlanningFacts(request: JsonObject): JsonObject {
   return {...lineage, work, source_decision_hash: decisionSourceHash(decision),
     action_source_hash: canonicalHash(turnEnvelopeActionSignatureDocument(work)),
     scoped_settlement_identity: scopedIdentity, scoped_identity_error: identityError,
+    ...(request.include_selected_work_basis === true ? {selected_work_basis: selectedWorkLaunchBasis(decision)} : {}),
     ...(request.inspect_plan === true &&
       (lineage.route === "ready_for_host" || lineage.route === "replan_required")
       ? {inspection_paths: turnPlanInspectionPaths(decision, lineage.route)} : {})};
@@ -2070,6 +2071,19 @@ function completeTaskTextSha256(decision: JsonObject, todoId: unknown): string |
     ...(Object.hasOwn(context, "selected_todo_text_verified")
       ? {text_source_verified: context.selected_todo_text_verified} : {})};
   return capturedTodoTextSha256(declared, context, decision.recommended_action, todoId);
+}
+
+/** Launch rechecks the admitted task, not the provider revision or the bounded
+ * action signature. Progress, diagnostics and receipt changes are not edits to
+ * the work. Losing the verified body on a fresh read is not a match. */
+function selectedWorkLaunchBasis(decision: JsonObject, verifiedTextSha256?: string | null): string | null {
+  const todoId = selectedWorkTodoId(decision);
+  const selected = object(decision.selected_todo);
+  if (!todoId || todoId !== selected.todo_id) return null;
+  const textSha256 = verifiedTextSha256 === undefined ? completeTaskTextSha256(decision, todoId) : verifiedTextSha256;
+  return textSha256 === null ? null : canonicalHash({todo_id: todoId, text_sha256: textSha256,
+    required_write_scopes: selected.required_write_scopes ?? [],
+    required_capabilities: selected.required_capabilities ?? []});
 }
 
 export function composeCompleteTurnDecision(value: unknown): JsonObject {
@@ -2783,8 +2797,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const {decision, projection} = completeHostSource(request);
     const work = {selected_todo: object(projection.action).selected_todo,
       task_orchestration_contract: projection.task_orchestration_contract};
-    return {selected_todo: selectedWorkTodo(work),
-      sha256: completeTaskTextSha256(decision, selectedWorkTodoId(work) ?? ""),
+    const sha256 = completeTaskTextSha256(decision, selectedWorkTodoId(work) ?? "");
+    return {selected_todo: selectedWorkTodo(work), sha256,
+      selected_work_basis: selectedWorkLaunchBasis(decision, sha256),
       effective_action: decision.effective_action ?? null,
       writeback: object(projection.writeback),
       task_lease_proof: object(object(decision.execution_preparation).lease_proof),

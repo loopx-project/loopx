@@ -640,10 +640,15 @@ and are published atomically with owner-only file permissions without replacing
 an existing observation. They can contain private Goal context and must not be
 included in public logs or artifacts.
 
-Host retry validates and reuses the original journal's capture even if current
-source text changes. Reading detail does not invoke quota or spend a slot.
-Current source admission, cancellation, workspace/lease and mutation checks
-retain their existing owners; the observation grants no fresh authority.
+Host retry validates and reuses the original journal's capture. Before a
+native Codex launch with a verified selected Todo, the current complete
+contract must still match the original task body, required write scopes and
+required capabilities. Progress notes do not invalidate that work. A mismatch
+returns `current_turn_work_changed` before dispatching the model. Use a fresh
+eligible Turn for the changed task; keep original captures and receipts for
+readback. Reading detail does not invoke quota or spend a slot. Current source
+admission, cancellation, workspace/lease and mutation checks retain their
+existing owners; the observation grants no fresh authority.
 Missing, corrupt, wrong-identity or source-hash-mismatched captures refuse Host
 reinvocation. Restore the original evidence rather than reconstructing it from
 a new guard. A capture published before a journal write failure is retained;
@@ -664,6 +669,11 @@ unsupported declared plan, envelope or action-signature version or coverage
 blocks resume. Journal inspection can report the invalid work contract without
 performing recovery or a debit. Retain the historical reader until the last
 supported journal and its recovery window are reconciled.
+
+原生 Codex 启动前会用当前完整契约复核所选 Todo 的已验证正文、所需写入范围和
+能力。只改进度备注可以继续；改变工作声明会在模型调用前返回
+`current_turn_work_changed`。变更后的工作应通过新的合格 Turn 启动，原捕获与
+回执继续用于原轮回读。
 
 恢复预览和 journal 解释共用同一个 typed plan reader。受支持的历史记录保留原版本和
 字节。显式声明不支持的 plan、envelope 或动作签名版本及覆盖范围时，恢复会停止。

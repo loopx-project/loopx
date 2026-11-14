@@ -940,6 +940,41 @@ def test_native_turn_uses_original_app_server_and_kernel_without_a_new_session(s
     assert capture.read_bytes() == calls
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_managed_task_edit_after_planning_does_not_start_native_turn(steward, tmp_path, monkeypatch, provider):
+    from loopx.cli_commands import turn_run_once
+
+    service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    store, runtime, *_ = steward
+    original_request = turn_run_once.prepare_turn_host_request
+    revised = "[P1] Check the corrected readiness condition before continuing."
+    edits = []
+
+    def edit_after_planning(*args, **kwargs):
+        prepared = original_request(*args, **kwargs)
+        assert args[0].host == "codex-app-server"
+        edits.append(cli(runtime, "todo", "update", "--goal-id", actor["goal_id"],
+            "--todo-id", todo_id, "--agent-id", actor["agent_id"], "--text", revised))
+        return prepared
+
+    monkeypatch.setattr(turn_run_once, "prepare_turn_host_request", edit_after_planning)
+    before = capture.read_bytes()
+    accepted, created = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="changed-task-before-native-launch", todo_id=todo_id)
+    assert created
+    completed = runtime.wait_for_turn(session_id=accepted["session_id"], turn_id=accepted["turn_id"], timeout_sec=90)
+    result = completed["response"]["native_loopx"]
+    assert len(edits) == 1 and edits[0]["ok"]
+    assert not result["ok"] and "current_turn_work_changed" in json.dumps(result), result
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert all(row["method"] != "turn/start" for row in calls)
+    assert store.load_session(session["session_id"])["upstream_thread_id"] == session["upstream_thread_id"]
+    current = cli(runtime, "todo", "list", "--goal-id", actor["goal_id"], "--todo-id", todo_id)["todo"]
+    assert current["text"] == revised and not current["done"]
+    index = Path(runtime.coordination_runtime_root) / "goals" / actor["goal_id"] / "runs/index.jsonl"
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
 def test_unselected_or_unavailable_work_does_not_invoke_the_model(steward, tmp_path, monkeypatch):
     sid, actor, _ = prepare(steward, "sqlite", tmp_path, monkeypatch)
     store, runtime, _, _, binding, capture, _ = steward
