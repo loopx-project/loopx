@@ -85,6 +85,11 @@ class PrivateDeliveryDiscovery:
                 ("status", "request_ref", "binding_id", "session_id", "turn_id")}
         view.update(agent_target=bool(row.get("agent_target")),
                     event={"chat_type": row.get("event", {}).get("chat_type")})
+        historic_images = row.get("historical_answer_images") or {}
+        if historic_images:
+            view["historical_images_admitted"] = True
+        if historic_images.get("status") == "pending":
+            view["historical_images_due_at"] = historic_images.get("next_check_at", 0)
         if before is not None and file_change_fingerprint(path) == before:
             self._completed[path] = (before, view, repairs)
         return view, repairs

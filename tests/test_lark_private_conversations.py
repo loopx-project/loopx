@@ -1120,6 +1120,128 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
         runtime.close()
 
 
+@pytest.mark.parametrize("fault", ["readback", "edited_source", "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied"])
+def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, fault):  # noqa: F811
+    from hashlib import sha256
+    from loopx.chat_store import _atomic_write_json
+    from loopx.extensions import public_source_reader
+    from test_chat_image_attachments import PNG_BYTES
+    from test_lark_app_image_projection import ImageIO
+
+    store, runtime, provider, transport = connect(ordinary)
+    fake = ordinary[5]
+    origin = "https://source.example/article"
+    urls = [f"https://source.example/figure-{i}.png" for i in range(1, 5)]
+    figures = {url: PNG_BYTES + bytes([i]) for i, url in enumerate(urls)}
+    answer = f"Original explanation.\n\n![One]({urls[0]})\n\n![Two]({urls[1]})"
+    script = fake.read_text()
+    marker = '"message": "Runtime response.",'
+    assert marker in script
+    fake.write_text(script.replace(marker, f'"message": {answer!r},', 1))
+    io = ImageIO(provider)
+    def provider_io(args, cwd=None, timeout=None):
+        if fault == "upload_denied" and "images" in args and "create" in args and "--dry-run" not in args:
+            provider.calls.append(list(args))
+            return {"returncode": 3, "stderr": '{"ok":false,"error":{"type":"authorization","code":99991672}}'}
+        return io(args, cwd, timeout)
+
+    transport.runner = provider_io
+
+    def fetch(url, *, deadline):
+        if url == origin:
+            return url, "text/html", "".join(f'<img src="{url}">' for url in urls).encode()
+        return url, "image/png", figures[url]
+
+    monkeypatch.setattr(public_source_reader, "fetch", fetch)
+
+    def restart():
+        return LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                                       runner=provider_io, cli_bin="lark-cli")
+
+    try:
+        event = provider.event("notes-app", "historical-image-answer", f"Read {origin}")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        original = transport.core.pending()[0]
+        sid, tid, ref = (original[key] for key in ("session_id", "turn_id", "request_ref"))
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)["status"] == "completed"
+        path = transport.root / f"{ref}.json"
+        # Produce an actual legacy reply and provider receipt before installing
+        # the media-only repair. The stored answer and Core are real.
+        with monkeypatch.context() as legacy:
+            legacy.setattr(transport, "_deliver_completed_answer", lambda p, row, text, *, inbox:
+                           transport._deliver(p, row, "terminal", text, inbox=inbox))
+            assert transport.reconcile_request(path) == 1
+        saved = json.loads(path.read_text())
+        terminal = saved["deliveries"]["terminal"]
+        prior_id = terminal["attempt"]["message_ref"]
+        prior_body = json.dumps(provider.messages[prior_id]["body"])
+        core = (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
+        writes = len(provider.writes)
+        worker = restart()
+        assert path not in worker.pending_delivery_paths()
+        assert worker.reconcile_request(path) == 0 and io.uploads == 0
+
+        plan = {"binding_id": saved["binding_id"], "turn_id": tid, "message_id": prior_id,
+                "answer_sha256": sha256(answer.encode()).hexdigest(),
+                "images": [{"url": url, "sha256": sha256(figures[url]).hexdigest()} for url in urls]}
+        manifest = worker.root / "historical-answer-images" / path.name
+        _atomic_write_json(manifest, plan)
+        assert path not in worker.pending_body_paths()
+        assert path in worker.pending_delivery_paths() and worker.is_recovery_path(path)
+        if fault == "edited_source":
+            provider.messages[event["message_id"]]["content"] = "Changed source."
+        elif fault == "foreign_sender":
+            provider.messages[prior_id]["sender"]["id"] = provider.profile_apps["steward-app"]
+        elif fault == "changed_bytes":
+            figures[urls[-1]] = PNG_BYTES
+        elif fault == "stop":
+            # The authoritative Stop predates any possible file recovery.
+            control = {**core[0], "command": "stop"}
+            _atomic_write_json(transport.core.root / ("d" * 24 + ".json"), control)
+        elif fault == "readback":
+            io.corrupt_download = True
+        elif fault == "unknown_send":
+            provider.lose_next_reply = True
+
+        assert worker.reconcile_request(path) == 0
+        if fault in {"readback", "unknown_send"}:
+            pending = json.loads(path.read_text())
+            assert pending["historical_answer_images"]["status"] == "pending"
+            assert io.uploads == 4 and len(provider.writes) == writes + 1
+            worker = restart()
+            assert path not in worker.pending_delivery_paths()
+            pending["historical_answer_images"]["next_check_at"] = 0
+            _atomic_write_json(path, pending)
+            io.corrupt_download = False
+            assert path in worker.pending_delivery_paths()
+            assert worker.reconcile_request(path) == int(fault == "readback")
+            assert io.uploads == 4 and len(provider.writes) == writes + 1
+            row = json.loads(path.read_text())
+            assert row["historical_answer_images"]["status"] == ("delivered" if fault == "readback" else "pending")
+            outputs = [m for m in provider.messages.values() if m["msg_type"] == "post"
+                       and "原图（按原文顺序）" in m["body"]["content"]]
+            assert len(outputs) == 1
+            post = outputs[0]
+            assert post["chat_id"] == event["chat_id"] and post["sender"]["id"] == provider.profile_apps["notes-app"]
+            lines = json.loads(post["body"]["content"])["zh_cn"]["content"]
+            keys = [node["image_key"] for line in lines for node in line if node["tag"] == "img"]
+            assert len(keys) == 4 and [io.resources[key] for key in keys] == list(figures.values())
+            assert worker.reconcile_request(path) == 0
+        else:
+            assert io.uploads == 0 and len(provider.writes) == writes
+            if fault == "upload_denied":
+                pending = json.loads(path.read_text())
+                assert pending["historical_answer_images"]["status"] == "pending"
+                assert "answer_images.historical" not in pending["deliveries"]
+                assert any("images" in cmd and "create" in cmd and "--dry-run" not in cmd for cmd in provider.calls)
+        assert json.dumps(provider.messages[prior_id]["body"]) == prior_body
+        assert json.loads(path.read_text())["deliveries"]["terminal"] == terminal
+        assert core == (transport.core.read_request(ref), store.load_turn(sid, tid), store.messages(sid))
+        assert sum(json.loads(line).get("method") == "turn/start" for line in ordinary[4].read_text().splitlines()) == 1
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished", "source-changed", "closed", "lost-ack", "message-crash",
     "historical", "historical-source-changed", "historical-stop"])
 def test_original_worker_recovers_native_result_without_replay(tmp_path, language_server, monkeypatch, case):  # noqa: F811

@@ -28,7 +28,7 @@ from ...capabilities.native_chat.external_conversations import (
 from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, normalize_chat_image_attachments
-from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
+from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, RESUMABLE_SESSION_STATES, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope
 from ...file_lock import exclusive_file_lock
@@ -38,12 +38,13 @@ from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
 from .event_collector_runtime import enrich_lark_event_reply_context
 from .goal_channel_transport import call, json_payload, lark_args, lark_provider_mention_identities, record_event_timing
-from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN
+from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN, LARK_MESSAGE_ID_PATTERN
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
 from .inbox_reactions import (_reconcile_outbound_input_reactions,
                              mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
-from .outbound import present_lark_conversation_text as _presentation_text
+from .outbound import normalize_lark_outbound_text, present_lark_conversation_text as _presentation_text
+from .presentation.markdown_post import lark_markdown_readback_matches
 from .private_images import private_message_caption, private_message_images
 from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits
 from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
@@ -328,6 +329,7 @@ class LarkPrivateConversations:
         self.reaction_feedback = reaction_feedback
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
+        self._historical_image_probe_at: dict[Path, float] = {}
         self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
         self._body_discovery = PrivateDeliveryDiscovery(self.root)
         self._web_projection_scan_at = 0.0
@@ -403,7 +405,7 @@ class LarkPrivateConversations:
             for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
                 row = _read_json(path)
                 health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
-                if row["status"] != "delivered":
+                if row["status"] != "delivered" or (row.get("historical_answer_images") or {}).get("status") == "pending":
                     count(row)
                 elif path.parent == self.root and row.get("session_id") and row.get("turn_id"):
                     yield row
@@ -1450,6 +1452,164 @@ class LarkPrivateConversations:
                       inbox=inbox, finalize_source=False)
         return False
 
+    def _historical_image_source(self, record: Mapping[str, Any], plan: Mapping[str, Any]) -> dict:
+        event = record["event"]
+        terminal = record["deliveries"]["terminal"]
+        if (record["status"] != "delivered" or record.get("context_recovery")
+                or event.get("chat_type") != "p2p" or event.get("message_type") != "text"
+                or record["source"].get("private_human_message") is not True
+                or record["binding_id"] != plan["binding_id"] or record["turn_id"] != plan["turn_id"]
+                or terminal.get("verified") is not True or terminal.get("image_keys")
+                or terminal.get("attempt", {}).get("message_ref") != plan["message_id"]):
+            raise ValueError("original text-only reply unavailable")
+        native = self.core.read_request(record["request_ref"])
+        if (native.get("status") != "accepted" or native.get("origin") != "lark"
+                or native.get("command") is not None or native.get("agent_target")
+                or native.get("delivery_verified") is not True
+                or any(native.get(key) != record.get(key)
+                       for key in ("request_ref", "binding_id", "source", "session_id", "turn_id"))):
+            raise ValueError("original request no longer matches")
+        store = self.core.controller.store
+        session = store.load_session(record["session_id"]) or {}
+        turn = store.load_turn(record["session_id"], record["turn_id"]) or {}
+        if (session.get("status") not in RESUMABLE_SESSION_STATES or turn.get("status") != "completed"
+                or not isinstance(answer := (turn.get("response") or {}).get("message"), str)
+                or hashlib.sha256(answer.encode()).hexdigest() != plan["answer_sha256"]
+                or terminal.get("text") != _presentation_text(answer)
+                or not _private_answer_images(answer)[1]
+                or self.core._source_stop_observed(native, turn, store.events_after(
+                    record["session_id"], record["turn_id"], None))):
+            raise ValueError("original completed answer or its authority changed")
+        return session
+
+    def _historical_image_plan(self, record: Mapping[str, Any], plan: Mapping[str, Any]) -> dict:
+        from ..public_source_reader import public_url
+
+        if set(plan) != {"binding_id", "turn_id", "message_id", "answer_sha256", "images"}:
+            raise ValueError("invalid original image repair fields")
+        if (not isinstance(plan["message_id"], str) or not LARK_MESSAGE_ID_PATTERN.fullmatch(plan["message_id"])
+                or not isinstance(plan["answer_sha256"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", plan["answer_sha256"])
+                or not isinstance(plan["images"], list) or not 1 <= len(plan["images"]) <= CHAT_IMAGE_MAX_COUNT):
+            raise ValueError("invalid original image repair target")
+        images = []
+        for image in plan["images"]:
+            if (not isinstance(image, dict) or set(image) != {"url", "sha256"}
+                    or not isinstance(image["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", image["sha256"])
+                    or not isinstance(image["url"], str)):
+                raise ValueError("each original image requires a URL and its SHA-256")
+            images.append({"url": public_url(image["url"]), "sha256": image["sha256"]})
+        if len({image["url"] for image in images}) != len(images):
+            raise ValueError("duplicate original image URL")
+        self._historical_image_source(record, plan)
+        return {**plan, "images": images}
+
+    def _load_historical_image_plan(self, path: Path, record: dict[str, Any]) -> dict | None:
+        if record.get("historical_answer_images") is not None:
+            return record["historical_answer_images"]
+        if not re.fullmatch(r"[a-f0-9]{24}", path.stem):
+            raise ValueError("invalid original request reference")
+        # This is a private local operator input, scoped to the existing receipt.
+        # It is never loaded from a project, provider message or model response.
+        spec = self.root / "historical-answer-images" / path.name
+        try:
+            with spec.open("rb") as handle:
+                raw = handle.read(40_001)
+        except FileNotFoundError:
+            return None
+        if len(raw) > 40_000:
+            raise ValueError("original image repair descriptor exceeds its size limit")
+        plan = json.loads(raw)
+        if not isinstance(plan, dict) or path.stem != record.get("request_ref"):
+            raise ValueError("invalid original image repair descriptor")
+        plan = self._historical_image_plan(record, plan)
+        state = record["historical_answer_images"] = {"plan": plan, "status": "pending"}
+        _atomic_write_json(path, record)
+        return state
+
+    def _historical_image_bot_post(self, record: Mapping[str, Any], observation: Mapping[str, Any],
+                                   message_id: str) -> Mapping[str, Any]:
+        output = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=record["profile"], tail=[
+            "im", "+messages-mget", "--message-ids", message_id,
+            "--as", "bot", "--no-reactions", "--format", "json"]))
+        message = _message(json_payload(output), message_id) or {}
+        sender = message.get("sender") or {}
+        if (output.get("returncode") != 0 or message.get("deleted") is True
+                or message.get("chat_id") != record["event"]["chat_id"] or sender.get("sender_type") != "app"
+                or not sender.get("id") or sender["id"] not in (observation["bot_app_id"], observation["bot_open_id"])):
+            return {}
+        return message
+
+    def _reconcile_historical_answer_images(self, path: Path) -> int:
+        with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+            record = _read_json(path)
+            try:
+                state = self._load_historical_image_plan(path, record)
+            except (KeyError, ValueError, OSError):
+                return 0
+            now = time.time()
+            if not state or state.get("status") != "pending" or state.get("next_check_at", 0) > now:
+                return 0
+            state["next_check_at"] = now + ANSWER_IMAGE_RETRY_SECONDS
+            _atomic_write_json(path, record)
+            plan = state["plan"]
+            try:
+                session = self._historical_image_source(record, plan)
+                selected = self.bindings.resolve(binding_id=plan["binding_id"], session=session,
+                                                 session_context=session.get("project_context") or session.get("steward_context"),
+                                                 include_observation=True, **record["source"])
+                event = record["event"]
+                observation = selected["observation"]
+                if (selected["binding"]["transport_ref"] != record["profile"]
+                        or not self._source_verified(record, expected_text=event["content"])):
+                    return 0
+                terminal = record["deliveries"]["terminal"]
+                message = self._historical_image_bot_post(record, observation, plan["message_id"])
+                if not lark_markdown_readback_matches(text=normalize_lark_outbound_text(
+                        terminal["text"], limit=None, preserve_format=True), message=message):
+                    return 0
+
+                attachments = state.get("attachments")
+                if attachments is None:
+                    targets = plan["images"]
+                    deadline = time.monotonic() + 15
+                    if not _answer_image_sources(event["content"], [item["url"] for item in targets], deadline=deadline):
+                        return 0
+                    attachments = normalize_chat_image_attachments([
+                        _private_answer_image(item["url"], deadline=deadline, index=index)
+                        for index, item in enumerate(targets, 1)])
+                digests = [hashlib.sha256(base64.b64decode(
+                    picture["data_url"].split(",", 1)[1], validate=True)).hexdigest() for picture in attachments]
+                if digests != [item["sha256"] for item in plan["images"]]:
+                    return 0
+                if "attachments" not in state:
+                    state["attachments"] = attachments
+                    _atomic_write_json(path, record)
+
+                def authorized() -> bool:
+                    try:
+                        self._historical_image_source(record, plan)
+                    except (KeyError, OSError, ValueError):
+                        return False
+                    return True
+
+                phase = "answer_images.historical"
+                if not self._deliver(path, record, phase, "原图（按原文顺序）",
+                                     inbox=lambda: self._inbox(record, observation=observation),
+                                     authorization_check=authorized, finalize_source=False,
+                                     reply_placement="chat_root", image_attachments=attachments):
+                    return 0
+                media = record["deliveries"][phase]
+                sent = self._historical_image_bot_post(record, observation, media["attempt"]["message_ref"])
+                if not lark_markdown_readback_matches(text=media["text"], message=sent, image_keys=tuple(media["image_keys"])):
+                    return 0
+            except (KeyError, ValueError, OSError, http.client.HTTPException):
+                return 0
+            state.update(status="delivered")
+            state.pop("attachments", None)
+            _atomic_write_json(path, record)
+            return 1
+
     def _edit_progress(self, path: Path, record: dict[str, Any], text: str, *, inbox: Callable[[], Path], finalizing: bool = False) -> bool:
         text = _presentation_text(_private_answer_images(text)[0] if record["event"].get("chat_type") == "p2p" else text)
         progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
@@ -1641,11 +1801,17 @@ class LarkPrivateConversations:
         """The durable transport store is the queue; no in-memory admission."""
         paths = []
         recovery_candidate = self.core.context_recovery_observer()
-        now = datetime.now(timezone.utc).timestamp()
+        now = time.time()
+        planned_repairs = {item.name for item in (self.root / "historical-answer-images").glob("*.json")}
         for path, row, repairs in self._delivery_discovery.rows():
             if row["status"] != "delivered":
                 if not _answer_image_retry_waits(row, now):
                     paths.append(path)
+            elif row.get("historical_images_due_at") is not None and row["historical_images_due_at"] <= now:
+                paths.append(path)
+            elif (not row.get("historical_images_admitted") and path.name in planned_repairs
+                    and time.monotonic() >= self._historical_image_probe_at.get(path, 0)):
+                paths.append(path)
             elif (row.get("session_id") and row.get("turn_id")
                     and time.monotonic() >= self._context_recovery_probe_at.get(path, 0)):
                 # Only a discovery/backoff hint, never execution authority.
@@ -2099,6 +2265,13 @@ class LarkPrivateConversations:
         # Repair only this persisted source. Core still owns admission, recovery
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
+        historical_images = row.get("historical_answer_images")
+        if (row.get("status") == "delivered" and (
+                (historical_images or {}).get("status") == "pending"
+                or (historical_images is None and (self.root / "historical-answer-images" / path.name).is_file()))):
+            if historical_images is None:
+                self._historical_image_probe_at[path] = time.monotonic() + 60
+            return self._reconcile_historical_answer_images(path)
         if _answer_image_retry_waits(row, datetime.now(timezone.utc).timestamp()):
             return 0
         record_event_timing(row["profile"], row["event"]["message_id"], "reconciliation_started")
