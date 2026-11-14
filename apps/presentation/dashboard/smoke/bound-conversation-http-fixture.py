@@ -203,19 +203,17 @@ class SyntheticPrivateSource:
         hold_steward_discovery, resume_steward_discovery = threading.Event(), threading.Event()
 
         if self.steward:
-            core = bindings._core
+            recheck = bindings._recheck_local_bindings
 
-            def controlled_core(operation, params, **kwargs):
-                result = core(operation, params, **kwargs)
-                if (operation == "collaboration.conversation.local_sessions"
-                        and params.get("app_steward_entry") and hold_steward_discovery.is_set()):
+            def controlled_binding_recheck(observed):
+                if hold_steward_discovery.is_set():
                     hold_steward_discovery.clear()
                     print(json.dumps({"steward_discovery_held": True}), flush=True)
                     if not resume_steward_discovery.wait(15):
                         raise TimeoutError("steward discovery fixture was not released")
-                return result
+                recheck(observed)
 
-            bindings._core = controlled_core
+            bindings._recheck_local_bindings = controlled_binding_recheck
 
         def delayed_history(handler, selected_session):
             if selected_session == sid and slow_page.is_set():
