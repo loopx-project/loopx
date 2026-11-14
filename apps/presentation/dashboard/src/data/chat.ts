@@ -970,8 +970,53 @@ export type ChatSessionSnapshot = {
   };
 };
 
+const chatReplyContextSchema = z.object({
+  source_text: z.string(),
+  parent: z.object({message_id: z.string(), content: z.string(), complete: z.boolean()}).passthrough(),
+  thread: z.object({
+    omitted_message_count: z.number().nullish(),
+    messages: z.array(z.object({message_id: z.string(), content: z.string(), content_truncated: z.boolean(),
+      sender: z.object({kind: z.string()}).passthrough().nullish(), created_at: z.string().nullish()}).passthrough()),
+  }).passthrough().nullish(),
+}).passthrough();
+
+const chatCollaborationSchema = z.object({
+  schema_version: z.literal("collaboration_request_readback_v0").optional(),
+  request_id: z.string(), agent_id: z.string(), goal_id: z.string().nullish(),
+  request_revision: z.number().nullish(), decision_reason: z.string().nullish(),
+  brief: z.object({
+    purpose: z.string(), context: z.string(), constraints: z.array(z.string()),
+    inputs: z.array(z.object({ref: z.string(), description: z.string(), sha256: z.string().nullish()}).passthrough()),
+    acceptance: z.array(z.string()), return_requirement: z.string(),
+  }).passthrough(),
+  returns: z.array(z.object({phase: z.string(), status: z.string()}).passthrough()),
+}).passthrough();
+
+const chatVisibleMessagesSchema = z.array(z.object({
+  schema_version: z.literal("loopx_chat_message_v1").optional(),
+  message_id: z.string().min(1), turn_id: z.string().nullable(), role: z.string(),
+  text: z.string(), created_at: z.string(),
+  attachments: z.array(z.object({id: z.string(), name: z.string(), size: z.number(),
+    mime_type: z.string(), data_url: z.string()}).passthrough()).nullish(),
+  reply_context: chatReplyContextSchema.nullish(),
+  collaboration: chatCollaborationSchema.nullish(),
+  collaborations: z.array(chatCollaborationSchema).nullish(),
+  return_delivery: z.object({schema_version: z.literal("manager_return_delivery_status_v0"),
+    phase: z.enum(["decision", "conclusion"]), status: z.string(), request_revision: z.number().int().nonnegative().nullish(),
+    error: z.string().nullish(), verification: z.string().nullish(),
+    created_at: z.string().nullish(), delivered_at: z.string().nullish()}).passthrough().nullish(),
+}).passthrough());
+
+function requireValidChatMessages(messages: unknown): void {
+  if (!chatVisibleMessagesSchema.safeParse(messages).success) {
+    throw new Error("The original Session messages could not be verified.");
+  }
+}
+
 export async function fetchChatSession(sessionId: string, signal?: AbortSignal) {
-  return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
+  const snapshot = await requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
+  requireValidChatMessages(snapshot?.messages);
+  return snapshot;
 }
 
 export const chatQueueInputRequestSchema = z.discriminatedUnion("action", [
@@ -1128,9 +1173,12 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
     // page cannot silently lose the cursor contract and masquerade as complete.
     if (!Object.hasOwn(snapshot, "message_page")) {
       if (cursor !== null) throw new Error("The history page contract changed during read.");
+      const legacyMessages = turnId === undefined ? snapshot.messages : snapshot.messages.filter(row => row.turn_id === turnId);
+      requireValidChatMessages(legacyMessages);
       return {...snapshot, verifiedHistoryBasis: undefined,
-        messages: turnId === undefined ? snapshot.messages : snapshot.messages.filter(row => row.turn_id === turnId)};
+        messages: legacyMessages};
     }
+    requireValidChatMessages(snapshot.messages);
     const parsed = chatMessagePageSchema.safeParse(snapshot.message_page);
     if (!parsed.success) throw new Error("The original history page could not be verified.");
     const page = parsed.data, end = messages.length + snapshot.messages.length;
@@ -1193,6 +1241,7 @@ async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: C
     || !historyBasisMatches(proof.data.next, saved.messages.length + snapshot.messages.length)) {
     throw new Error("The original history suffix could not be verified.");
   }
+  requireValidChatMessages(snapshot.messages);
   const ids = new Set(saved.messages.map(message => message.message_id));
   for (const message of snapshot.messages) {
     if (!message || typeof message.message_id !== "string" || !message.message_id || ids.has(message.message_id)) {
