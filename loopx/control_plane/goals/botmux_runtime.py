@@ -1255,6 +1255,7 @@ def _status_botmux_runtime(
         pinned_trigger_id: str | None = _validated_private_id(stored_trigger_id, "trigger id")
     except ValueError:
         pinned_trigger_id = None
+    session_level_missing = False
     try:
         if pinned_trigger_id is None:
             result = {"state": BotmuxDispatchState.UNKNOWN.value}
@@ -1284,6 +1285,13 @@ def _status_botmux_runtime(
             or exc.payload.get("state") == "not_found"
         ):
             result = {"state": "not_found"}
+            echoed_trigger_id = str(exc.payload.get("triggerId") or "").strip()
+            if echoed_trigger_id:
+                result["triggerId"] = echoed_trigger_id
+            # A bare "this session is gone" names no turn, so it cannot be
+            # attributed to another one; a missing result that does name a turn
+            # is checked like any other response.
+            session_level_missing = not echoed_trigger_id
         else:
             return _operation_packet(
                 ok=False,
@@ -1338,7 +1346,7 @@ def _status_botmux_runtime(
     identity_unverified = pinned_trigger_id is None
     if (
         pinned_trigger_id is not None
-        and provider_state != BotmuxDispatchState.NOT_FOUND
+        and not session_level_missing
         and str(result.get("triggerId") or "").strip() != pinned_trigger_id
     ):
         # The provider answered for a different turn, or did not say which.

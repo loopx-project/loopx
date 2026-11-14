@@ -1512,3 +1512,54 @@ def test_status_without_a_stored_trigger_id_asks_the_provider_nothing(
 
     assert status["status"] == "unknown" and status["readback_verified"] is False
     assert calls == []
+
+
+def test_a_not_found_naming_another_turn_cannot_seal_this_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def wrong_turn_missing(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": True, "state": "not_found", "triggerId": "trigger-three",
+            "output": {"content": "someone else"},
+        }
+
+    for execute in (False, True):
+        status = status_botmux_runtime(
+            goal_id=GOAL_ID, binding_path=binding_path, execute=execute,
+            requester=wrong_turn_missing,
+        )
+        assert status["status"] == "unknown" and status["ok"] is False
+        assert status["details"]["output_available"] is False
+    assert _persisted_active_receipt(binding_path)["state"] == "unknown"
+
+    def own_completion(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": True, "state": "completed", "triggerId": "trigger-two",
+            "output": {"content": "mine"},
+        }
+
+    # The receipt is not sealed: this request's real completion still lands.
+    done = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=own_completion
+    )
+    assert done["status"] == "completed" and done["readback_verified"] is True
+    assert _persisted_active_receipt(binding_path)["state"] == "completed"
+
+
+def test_a_not_found_for_this_turn_is_accepted_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path, _base = _second_accepted_trigger(tmp_path, monkeypatch, "trigger-two")
+
+    def own_missing(**kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "state": "not_found", "triggerId": "trigger-two"}
+
+    status = status_botmux_runtime(
+        goal_id=GOAL_ID, binding_path=binding_path, execute=True, requester=own_missing
+    )
+
+    assert status["status"] == "not_found"
+    assert status["details"]["output_available"] is False
+    assert _persisted_active_receipt(binding_path)["state"] == "not_found"
