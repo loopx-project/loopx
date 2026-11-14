@@ -661,6 +661,13 @@ test("a later durable exact ACK settles only its original receipt-bound Turn", (
   assert.deepEqual(packet.semantic_delta, delta);
   assert.equal((packet.writeback_contract as JsonObject).preferred_input, "exact_historical_ack");
 
+  const pending = projectReplanSemantics({operation: "receipt_bound_obligation", ...request,
+    current_obligation: null, replay_phase: "settlement_pending"}).obligation as JsonObject;
+  const remaining = pending.settlement_action_packet as JsonObject;
+  assert.equal(remaining.required_outcome, "quota_spend_receipt");
+  assert.equal(remaining.semantic_delta, null);
+  assert.equal(remaining.successor_todo_id, null);
+
   for (const missingGuard of [{guard_scoped: false}, {goal_id: null}, {agent_id: null},
     {guard_recorded_at: null}, {guard_turn_instance_id: null}]) {
     const unbound = {...request, ...missingGuard};
@@ -794,6 +801,15 @@ test(`${recovery} restores only its exact admitted review and still owes Vision`
   assert.equal(Object.hasOwn(writeback.vision_authoring as JsonObject, "continuation_review"), false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: result}).accepted, false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: result, agent_vision: vision}).accepted, true);
+  // The same lifecycle evidence still exists after writeback. Reentry follows
+  // the verified settlement phase while leaving the next frontier unselected.
+  const pending = projectReplanSemantics({...request, replay_phase: "settlement_pending",
+    current_obligation: {obligation_id: "replan-2222222222222222"}}).obligation as JsonObject;
+  assert.equal(pending.obligation_id, id);
+  assert.deepEqual(pending.todo_actions, []);
+  const remaining = pending.settlement_action_packet as JsonObject;
+  assert.equal(remaining.decision, "settlement_pending");
+  assert.equal(remaining.required_outcome, "quota_spend_receipt");
   const historical = {...row, todo_id: "todo_historical", completion_turn_key: "historical-completion",
     completed_at: "2026-07-31T23:59:00Z", updated_at: "2026-07-31T23:59:01Z"};
   for (const items of [[historical, row], [row, historical]]) {

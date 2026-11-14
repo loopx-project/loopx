@@ -275,9 +275,13 @@ def test_original_lease_and_failed_validator_remain_required_before_accounting(
 @pytest.mark.parametrize("closeout_source", ["turn", "lifecycle"])
 def test_no_followup_transition_recovers_bound_review_through_writeback_and_single_debit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, historical_terminals: int,
-    closeout_source: str,
+    closeout_source: str, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    project, _, runtime, _, run, lease, marker, _, _ = _fixture(
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+    from loopx.control_plane.work_items import lifecycle_recovery
+    from loopx.entrypoint import main as cli_main
+
+    _, workspace, runtime, registry, run, lease, marker, _, _ = _fixture(
         tmp_path, monkeypatch, provider, historical_terminals=historical_terminals,
     )
     def call(*args: str, expected: int = 0):
@@ -303,6 +307,25 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
     turn = "turn-original-lifecycle-review"
     guard = ("quota", "should-run", "--runtime-profile", "generic_cli", "--goal-id", cli.GOAL_ID,
              "--agent-id", cli.AGENT_ID, "--turn-instance-id", turn,  *capabilities)
+    exercise_source_failure = historical_terminals == 0 and closeout_source == "lifecycle"
+
+    def reenter_with_unavailable_source(expected: int = 0):
+        project_semantics = lifecycle_recovery.project_replan_semantics
+
+        def read_semantics(params):
+            if params.get("operation") == "lifecycle_source":
+                raise EffectRuntimeRejected("Original lifecycle review source is unavailable")
+            return project_semantics(params)
+
+        with monkeypatch.context() as patch:
+            patch.chdir(workspace)
+            patch.setattr(lifecycle_recovery, "project_replan_semantics", read_semantics)
+            code = cli_main(["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime),
+                             *guard, "--context-delivery", "off"])
+        payload = json.loads(capsys.readouterr().out)
+        assert code == expected, payload
+        return payload
+
     admitted = call(*guard)
     identity = admitted["heartbeat_receipt"]["settlement_identity"]
     assert admitted["autonomous_replan_obligation"]["triggers"][0]["todo_id"] == cli.TODO_ID
@@ -319,6 +342,10 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
     assert recovered.get("selected_todo") is None
     assert recovered["replan_action_packet"]["settlement_only"] is True
     assert recovered["replan_action_packet"]["writeback_contract"]["preferred_input"] == "evidence_linked_vision_path"
+    if exercise_source_failure:
+        rejected = reenter_with_unavailable_source(expected=1)
+        assert "Original lifecycle review source is unavailable" in str(rejected)
+        assert "settlement_owed" not in rejected
     replan_binding = ("--agent-id", cli.AGENT_ID, "--replan-obligation-id", identity["replan_obligation_id"],
                       "--turn-instance-id", turn)
     spend = ("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *replan_binding,
@@ -343,10 +370,33 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
     assert refreshed["settlement_progress"]["state"] == "spend_required"
     pending = call(*guard)
     assert pending["heartbeat_receipt"]["settlement_identity"] == identity
-    assert pending["settlement_progress"]["state"] == "spend_required"
-    assert call(*spend)["appended"] is True
-    assert call(*spend)["appended"] is False
+    assert pending["settlement_progress"] == refreshed["settlement_progress"]
+    assert pending["replan_action_packet"]["required_outcome"] == "quota_spend_receipt"
+    assert pending["normal_delivery_allowed"] is False
+    assert pending.get("selected_todo") is None
+    if exercise_source_failure:
+        recovered_debit = reenter_with_unavailable_source()
+        assert recovered_debit["heartbeat_receipt"]["settlement_identity"] == identity
+        assert recovered_debit["settlement_owed"] == pending["settlement_owed"]
+        assert recovered_debit.get("selected_todo") is None
+        pending = recovered_debit
+    owed = pending["settlement_owed"]
+    assert owed["effect_id"] == identity["effect_id"]
+    assert owed["kind"] == "quota_spend"
+    assert cli._spend_run_count(runtime) == 1
+    projected_spend = cli._projected_cli_args(owed["command"], turn_instance_id=turn)
+    if exercise_source_failure:
+        foreign_spend = tuple("turn-without-original-writeback" if token == turn else token
+                              for token in projected_spend)
+        assert call(*foreign_spend, expected=1).get("appended") is not True
+        assert cli._spend_run_count(runtime) == 1
+    assert call(*projected_spend)["appended"] is True
+    assert call(*projected_spend)["appended"] is False
     assert call(*guard)["effective_action"] == "heartbeat_settled_skip"
+    if exercise_source_failure:
+        replayed = reenter_with_unavailable_source()
+        assert replayed["effective_action"] == "heartbeat_settled_skip"
+        assert "settlement_owed" not in replayed
     after = call("todo", "list", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)["todo"]
     for field in ("completed_at", "completion_turn_key", "completion_validation_sha256"):
         assert before[field] == after[field]
