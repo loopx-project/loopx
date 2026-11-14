@@ -135,6 +135,12 @@ PR to the remaining work. [Decision and exits](ledger/shared-goal-authority-stat
 
 ## Persistence route for steward scale (2026-09-16)
 
+[Multi-LoopX cloud collaboration](multi-loopx-agent-cloud-collaboration-v0.md)
+defines the cross-person product consumer of this authority/service boundary:
+scoped gateway/MCP access, portable evidence and human research readback through
+Live Team Workspace. Its proposal creates no second store and closes none of
+this RFC's provider, identity, budget or promotion gates.
+
 [Roadmap](loopx-overall-roadmap-v0.md) R5 reuses D1 projection, D2 real-backend/capacity/applicable ten-day soak and D3 fenced cutover. R6 connects the selected shared profile to authenticated local/cloud execution. R1–R3 can advance on supported profiles without waiting for PostgreSQL or whole-Goal default promotion.
 
 `e94759d88` adds [PostgreSQL service admission](../../reference/postgresql-authority-service-v0.md), with authentication/tenant verification injection and identity rotation. The [candidate remote task service](../../reference/remote-authority-task-service-v0.md) reuses that seam for TLS claim/progress/lease/read commands, server-owned scoped credentials, bounded pooling, incarnation pinning and receipt recovery. Its source-checkout tests use independent client processes and a restricted role on real PostgreSQL, including lost responses and service restart. This does not qualify deployed local/cloud hosts, shared budget ownership, Host supervision, App/CLI integration, failover, capacity/soak or promotion; these remain with the P lane and R6/D1–D3 owners. R7 must separately report registration, active executors and measured capacity. Directory, presence, a plan or one source read grants no shared authority. Existing fail-closed source, receipt/replay and rollback contracts remain.

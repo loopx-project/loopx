@@ -135,6 +135,13 @@ provides observation transport; optional model/runtime providers retain their
 adapters. Finance-specific metrics stay in the finance/research capability and
 arrive as audience-safe artifact/claim projections, never kernel rules.
 
+[Multi-LoopX cloud collaboration](multi-loopx-agent-cloud-collaboration-v0.md)
+owns the proposed cross-person gateway/access and portable-evidence journey.
+This workspace owns its human reading: conclusion, challenge/revision, exact
+source/version, independent check, actual adoption, gaps and next decision.
+Extend L1/L2 with that shared research case; a connection, message or source
+read cannot certify collaboration. Investment interpretation stays domain-owned.
+
 ```mermaid
 flowchart LR
   W[Existing work / Turn / peer / acceptance owners] --> P[Typed audience-scoped presentation projection]

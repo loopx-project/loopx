@@ -952,6 +952,7 @@ lifecycle。
 
 ### R6：本地与云端汇合
 
+- **跨个人产品路径：** [Multi-LoopX 云端协同](multi-loopx-agent-cloud-collaboration-v0.zh-CN.md) 通过限定网关/MCP 接入、单一选定共享权威和可跨设备版本化证据连接各人的本地 Agent。M2 将完整协作衔接团队工作区 L1/L2 的人类研究阅读；M1 是只读前置，M3 保留下述完整 G3/R6 资格。既有 provider/身份/意图修订 hold 继续适用。
 - **Owner：** shared-authority provider/service、session host adapter、collaboration；基础是已有 PostgreSQL admission/identity-rotation seam，不重写 store。
 - **交付：** 真正的认证传输、tenant/Goal/actor 权限、host identity 和 capability admission；跨主机 request/receipt/wake 只通过各 owner。处理断网、租约过期、旧 worker 回归、service restart/restore incarnation、ambiguous commit。
 - **退出：** 至少两个真实 host（含一个云端 worker）在隔离 tenant 上协作；错 tenant/actor、撤销与 split-brain 负例通过；共享预算与 admission 有明确 owner，不能声称本地 quota 就是分布式资源预留。

@@ -111,6 +111,11 @@ capability 或 provider。内置本地 Chat host 承载观测传输，可选 mod
 provider 保留各自 adapter。金融指标留在 finance/research capability，作为有
 受众边界的 artifact/claim 投影输入，不能变成 kernel 规则。
 
+[Multi-LoopX 云端协同](multi-loopx-agent-cloud-collaboration-v0.zh-CN.md)
+负责提议的跨个人网关/接入与可跨设备证据旅程。本工作区负责人类阅读：结论、
+质疑/修订、精确来源/版本、独立核验、真实采用、缺口与下一决策。用该共享
+研究案例扩展 L1/L2；连接、消息或来源读取不能证明协作。投研解释仍归领域负责人。
+
 ```mermaid
 flowchart LR
   W[既有 work / Turn / peer / acceptance owner] --> P[Typed 受众范围展示投影]

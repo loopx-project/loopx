@@ -118,6 +118,11 @@ SQLite 跨 provider 恢复复用逻辑归档。这不晋升 provider／默认值
 
 ## 管家规模化的持久化路线（2026-09-16）
 
+[Multi-LoopX 云端协同](multi-loopx-agent-cloud-collaboration-v0.zh-CN.md)
+定义本权威/服务边界的跨个人产品调用方：限定网关/MCP 接入、可跨设备证据及
+通过团队工作区实现的人类研究读回。该提案不建立第二套存储，也不关闭本 RFC
+的 provider、身份、预算或晋升门槛。
+
 [统一路线](loopx-overall-roadmap-v0.zh-CN.md) R5 复用本 RFC 的 D1 投影、D2 真实 backend/容量/适用十日 soak、D3 fenced cutover；R6 再把所选 shared profile 接入认证的本地/云端路径。R1–R3 可在已支持 profile 上前进，不等待 PostgreSQL 或整 Goal 默认晋升。
 
 `e94759d88` 已增加 [PostgreSQL service admission](../../reference/postgresql-authority-service-v0.zh-CN.md)，包含认证/tenant 验证注入与 identity rotation。[候选远程任务服务](../../reference/remote-authority-task-service-v0.md) 复用该边界，提供 TLS 认领、进度、租约与读取命令，以及服务端拥有的限定范围凭证、有界连接池、incarnation 绑定和回执恢复。源码入口测试使用独立客户端进程、真实 PostgreSQL 与受限数据库角色，覆盖响应丢失和服务重启。这不代表已通过本地／云端实机、共享预算所有权、Host 监督、App/CLI 接入、故障切换、容量／soak 或晋升资格；这些仍由 P lane 与 R6/D1–D3 owner 承接。R7 百 Agent 资格需独立报告注册数、活跃执行器和实测容量；目录、presence、管家计划或一次 source read 不授予 shared authority。既有 source-failure fail-closed、receipt/replay 和 rollback 合同保持。
