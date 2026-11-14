@@ -1296,6 +1296,15 @@ function sameHistoryRevision(current: ChatSessionSummary, read: ChatSessionSumma
     && current.status === read.status;
 }
 
+function hasPendingReturnDelivery(snapshot: ChatSessionSnapshot) {
+  const pending = (status: string) => status !== "delivered" && status !== "superseded";
+  return snapshot.messages.some(message =>
+    (message.return_delivery && pending(message.return_delivery.status))
+    || (message.collaborations ?? (message.collaboration ? [message.collaboration] : []))
+      .some(request => request.returns.some(reply => pending(reply.status)))
+  );
+}
+
 function historyTransportUnavailable(error: unknown) {
   if (!(error instanceof ChatApiError) || error.payload.error_code !== "chat_api_unavailable") return false;
   const status = error.payload.http_status;
@@ -1332,9 +1341,9 @@ export async function fetchChatHistory(options: {
   const pending = previous?.pendingBoundSnapshot;
   const current = listed.sessions[0];
   // This discovery happened after the retained read. An unchanged exact
-  // source and revision satisfy the pending check without fetching its pages.
+  // source and revision can qualify a retained read with no outstanding returns.
   if (!options.managed && pending && pending.bindingId === options.bound?.bindingId && current
-    && sameHistoryRevision(current, pending.snapshot.session)) {
+    && sameHistoryRevision(current, pending.snapshot.session) && !hasPendingReturnDelivery(pending.snapshot)) {
     known.set(current.session_id, pending.snapshot);
   }
   const pendingReads = new Map(previous?.pendingReads);
@@ -1342,8 +1351,11 @@ export async function fetchChatHistory(options: {
   // A failed historical read is not an empty transcript. Retrying only the
   // missing snapshots keeps this recovery read-only and bounds repeated work.
   const missing = listed.sessions.filter((session) => {
-    const saved = known.get(session.session_id)?.session;
-    return !saved || (exact && !sameHistoryRevision(session, saved));
+    const saved = known.get(session.session_id);
+    // Return receipts can be written after the answer text. The bound suffix
+    // proof checks the displayed prefix, including delivery state.
+    return !saved || (exact && !sameHistoryRevision(session, saved.session))
+      || (Boolean(options.bound) && hasPendingReturnDelivery(saved));
   });
   if (exact) for (const session of missing) known.delete(session.session_id);
   const results = await Promise.allSettled(missing.map(async (session) => {

@@ -242,6 +242,25 @@ class SyntheticPrivateSource:
                 elif command == "history-extra":
                     server.chat_store.append_message(sid, role="agent", text="A full new original result. " * 150)
                     result = {"history_rows": len(server.chat_store.messages(sid))}
+                elif command in {"history-return", "history-return-delivered"}:
+                    from loopx.capabilities.manager_context import _hash, _root, _write
+
+                    store = server.chat_store
+                    root = runtime.coordination_runtime_root
+                    request_id = "b" * 64
+                    reply_dir = _root(root) / "replies" / request_id
+                    message_id = f"handoff.{_hash([request_id, 'conclusion'])}"
+                    if command == "history-return":
+                        _write(_root(root) / "roundtrips" / f"{request_id}.json", {
+                            "request_id": request_id, "session_id": sid,
+                            "source_chat_runtime_root": str(store.root.parent),
+                        })
+                        _write(reply_dir / "conclusion.json", {"text": "Original delegated result."})
+                        store.append_message(sid, role="agent", text="Original delegated result.",
+                            origin="manager_followup", message_id=message_id)
+                    else:
+                        _write(reply_dir / "conclusion.delivery.json", {"status": "delivered"})
+                    result = {"messageId": message_id}
                 elif command == "history-rewrite":
                     journal = server.chat_store.sessions_root / sid / "messages.jsonl"
                     rows = [json.loads(line) for line in journal.read_text().splitlines()]

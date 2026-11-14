@@ -282,6 +282,28 @@ try {
     assert.ok(rewritten.messages.some(row => row.text === "Changed earlier original row 10"));
     assert.ok(!rewritten.messages.some(row => row.text === "Paged bound row 10"));
 
+    child.stdin.write("history-return\n");
+    const {messageId} = await next();
+    const queued = await fetchChatHistory(options, rewritten);
+    const returnStatus = (snapshot: typeof queued) => snapshot.messages
+      .find(row => row.message_id === messageId)?.return_delivery?.status;
+    assert.equal(returnStatus(queued), "queued");
+    calls.length = 0;
+    assert.equal(returnStatus(await fetchChatHistory(options, queued)), "queued");
+    assert.equal(readRequests().length, 1, "An unchanged pending return only needs the history proof");
+    child.stdin.write("history-return-delivered\n");
+    assert.equal((await next()).messageId, messageId);
+    calls.length = 0;
+    const delivered = await fetchChatHistory(options, queued);
+    assert.equal(delivered.sessions[0].transcript_revision, queued.sessions[0].transcript_revision);
+    assert.equal(returnStatus(delivered), "delivered", "A return can complete without rewriting the Chat transcript");
+    assert.equal(delivered.messages.length, queued.messages.length);
+    assert.equal(readRequests()[0].searchParams.has("known_history"), true);
+    assert.ok(calls.every(row => row.method === "GET"));
+    calls.length = 0;
+    assert.equal(returnStatus(await fetchChatHistory(options, delivered)), "delivered");
+    assert.equal(readRequests().length, 0, "A settled immutable transcript uses the compact discovery read again");
+
     child.stdin.write("history-extra\n");
     await next();
     globalThis.fetch = async (input, init) => {
@@ -292,7 +314,7 @@ try {
       }
       return response;
     };
-    await assert.rejects(() => fetchChatHistory(options, rewritten), "A revoked original binding cannot publish a suffix");
+    await assert.rejects(() => fetchChatHistory(options, delivered), "A revoked original binding cannot publish a suffix");
     globalThis.fetch = routedRead;
     child.stdin.write("recover\n");
     assert.equal((await next()).source_verified, true);
