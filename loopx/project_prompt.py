@@ -311,6 +311,7 @@ def render_heartbeat_prompt_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     agent_scope: str = "Codex CLI /goal visible TUI loop",
     body: str = "thin",
@@ -332,8 +333,11 @@ def render_heartbeat_prompt_command(
         if visible_goal_host
         else ""
     )
+    prefix = render_cli_command_prefix(
+        cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path
+    )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"{prefix} "
         f"heartbeat-prompt --{shell_arg(body)} "
         f"--goal-id {shell_arg(goal_id)}{agent_arg}{scope_arg}{capability_args}"
         f"{scheduler_args}{visible_goal_arg}" + (" --bootstrap" if bootstrap else "")
@@ -345,6 +349,7 @@ def render_heartbeat_prompt_json_command(
     *,
     cli_bin: str = "loopx",
     runtime_root: str | Path | None = None,
+    registry_path: str | Path | None = None,
     agent_id: str | None = None,
     agent_scope: str = "Codex CLI /goal visible TUI loop",
     body: str = "thin",
@@ -366,8 +371,11 @@ def render_heartbeat_prompt_json_command(
         if visible_goal_host
         else ""
     )
+    prefix = render_cli_command_prefix(
+        cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path
+    )
     return (
-        f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)} "
+        f"{prefix} "
         f"--format json heartbeat-prompt --{shell_arg(body)} "
         f"--goal-id {shell_arg(goal_id)}{agent_arg}{scope_arg}{capability_args}"
         f"{scheduler_args}{visible_goal_arg}" + (" --bootstrap" if bootstrap else "")
