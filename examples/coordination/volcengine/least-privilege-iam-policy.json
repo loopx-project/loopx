@@ -1,0 +1,19 @@
+{
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "rds_postgresql:DescribeDBInstances",
+        "rds_postgresql:DescribeDBInstanceDetail",
+        "rds_postgresql:DescribeDatabases",
+        "rds_postgresql:DescribeAccounts",
+        "vpc:DescribeVpcs",
+        "vpc:DescribeSubnets",
+        "vpc:DescribeSecurityGroups",
+        "ecs:DescribeInstances",
+        "ecs:DescribeInstanceStatus"
+      ],
+      "Resource": ["*"]
+    }
+  ]
+}
