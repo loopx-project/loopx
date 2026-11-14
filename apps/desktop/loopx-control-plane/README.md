@@ -14,9 +14,12 @@ desktop release workflow succeeds:
 
 On Apple Silicon macOS, the App opens its qualified local runtime first, then
 checks its current official channel and downloads a newer App in the background.
-It verifies the updater signature and prepares the archive locally. The next
-normal open verifies that archive again and installs it before starting services;
-ordinary background preparation never replaces or restarts an active workspace.
+It verifies the updater signature and prepares the archive locally. Ordinary
+opening never installs a cached App or restarts the workspace. Use the existing
+update panel or `loopx upgrade` to install and restart; those explicit operations
+verify the archive again before replacement. Background preparation cannot
+replace or restart an active workspace. This replaces the earlier next-open
+automatic installation policy on macOS so ordinary launches stay local and fast.
 Windows NSIS installs follow the signed-update journey on the main channel: the
 App checks on launch, verifies the minisign signature, runs the installer
 passively and restarts automatically. On Windows the stable channel, MSI
@@ -47,10 +50,10 @@ readback. A permission-restricted prepared installation stays on the verified
 current App; use the existing explicit update action for native authorization.
 The disposable cache is not an update authority: its signed bytes, channel,
 version order and sealed bundle version are checked again before replacement.
-Rejected cached signatures and verified-safe replacement failures keep local
-startup moving, with the failure retained in diagnostics. They do not display
-a stopped-startup state while services are connecting. An incomplete target,
-failed journal retirement or unknown installation failure still requires recovery.
+Rejected signatures and replacement failures remain visible on the explicit
+update transaction. An incomplete target, failed journal retirement or unknown
+installation failure still requires recovery. Ordinary opening does not enter
+that installation transaction.
 
 ## Updates And Recovery
 
@@ -124,8 +127,16 @@ restart a running workspace.
 校验失败，只展示可操作的原因与重试入口，不暴露传输地址或签名内部错误。
 无法分类的失败仍保留通用提示，失败不会被显示为已安装。
 
-Startup automatically uses the newest qualified local runtime it can establish.
-It compares package versions; equal versions with source revisions use ancestry
+Ordinary startup first reuses its last successful runtime when both existing
+local services are healthy and expose that exact qualified identity. Opening a
+workspace then requires no source-ancestry network check or service migration.
+A newer terminal CLI alone cannot force an account/provider handoff on launch.
+Explicit terminal upgrades still require their frozen target; developer pins
+and isolated endpoints keep their existing route. Failed starts do not overwrite
+the remembered successful runtime, and ephemeral developer pins are not saved.
+
+If that runtime is unavailable, startup discovers the newest qualified local
+runtime it can establish. It compares package versions; equal versions with source revisions use ancestry
 from the fixed official GitHub repository. Installation time and lexical SHA
 order never determine freshness. If the bounded check is offline, rate limited
 or revisions diverge, a saved discovery path follows the current default CLI
@@ -169,6 +180,10 @@ listener replacement. The loaded original manager supplies its explicit store
 route; the same accepted-work fence protects its queued and active Turns through
 restart. A private bootstrap does not need to match a desktop Python template.
 While work is pending the window explains the wait and retries automatically.
+Native-account pending work and missing/incompatible provider bindings retain
+Core's specific reason in the recovery view and diagnostics. A deferred handoff
+does not claim that services were changed or rolled back. Missing components
+remain an installation-owner repair; repeatedly reopening the App is not a fix.
 Unknown manager/store state grants no raw-kill fallback or second consumer.
 `loopx update activate --service chat --port 8767` retries this adoption without
 installing anything; its receipt is a restart request, not readiness proof.

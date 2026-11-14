@@ -279,7 +279,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
     try:
         body = checkpoint.capture_before_replan(env, receipt, "original heartbeat instructions")
         assert len(commands) == 1
-        source_path, view_path = wake / "checkpoint-start-guard.json", wake / "checkpoint-start-view.json"
+        source_path = wake / "checkpoint-start-guard.json"
         if context_delivery:
             assert "--prepared-capture-reference" in commands[0]
             argv = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
@@ -290,6 +290,11 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             capture_root = capture.parent
         else:
             capture_root = Path(commands[0][commands[0].index("--decision-output-root") + 1])
+            reader = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
+            view_path = Path(reader[reader.index("--capture-file") + 1])
+            assert view_path == capture_root / "checkpoint-start-view.json"
+            assert reader[reader.index("--capture-sha256") + 1] == hashlib.sha256(view_path.read_bytes()).hexdigest()
+            assert reader[reader.index("--max-page-output-bytes") + 1] == "8000"
         [captured] = capture_root.glob("decision-*/decision.json")
         raw = source_path.read_bytes()
         source, view = json.loads(raw), json.loads(view_path.read_bytes())
