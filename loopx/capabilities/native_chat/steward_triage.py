@@ -471,8 +471,10 @@ def build_portfolio_triage_projection(
         runs_index = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
         if focus == "all":
             try:
-                index_snapshot = load_index_snapshot(runs_index, include_artifact_status=False)
-            except (OSError, UnicodeError):
+                index_snapshot = load_index_snapshot(
+                    runs_index, include_artifact_status=False, skip_invalid_encoding=True,
+                )
+            except OSError:
                 unavailable_recent_progress.append(goal_id)
                 continue
             if index_snapshot.invalid_count:

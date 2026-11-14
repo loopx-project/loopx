@@ -376,10 +376,15 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
         assert not buttons(result)
         index_path = authority / "goals" / "demo-a" / "runs" / "index.jsonl"
         index_path.parent.mkdir(parents=True, exist_ok=True)
-        index_path.write_bytes(b'{"summary":"Partial final row \xe7\x9b\n')
+        index_path.write_bytes(
+            b'{"generated_at":"2026-01-01T00:00:00Z","summary":"Validated report export"}\n'
+            b'{"summary":"Partial final row \xe7\x9b\n'
+        )
         partial, _ = request("torn-history", "/triage all")
         assert "Decide whether to accept the prepared report" in json.dumps(partial, ensure_ascii=False)
         assert "近期进展暂未读全" in json.dumps(partial, ensure_ascii=False)
+        assert "Validated report export" in json.dumps(partial, ensure_ascii=False)
+        assert "Partial final row" not in json.dumps(partial, ensure_ascii=False)
         assert partial["header"]["template"] == "orange"
         index_path.unlink()
         with try_exclusive_file_lock(lock_path, operation="competing_listener") as lease:
