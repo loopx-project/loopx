@@ -1442,6 +1442,38 @@ fn automatic_app_update(app: &AppHandle) {
     if state.automatic_update_checked.swap(true, Ordering::AcqRel) {
         return;
     }
+    #[cfg(target_os = "macos")]
+    if let Some(request) = request.filter(|request| request.target.is_some()) {
+        let result = tauri::async_runtime::block_on(state.run_automatic_update(
+            channel,
+            async {
+                // Both no-update and replacement processes use this frozen
+                // candidate. A cache miss never falls back to network at boot.
+                let prepared = request.prepared_target(
+                    &app.package_info().version.to_string(),
+                    updater_public_key(app)?,
+                )?;
+                if prepared.is_none() {
+                    state.publish("up_to_date", json!({"channel":channel}));
+                }
+                Ok(prepared)
+            },
+            |prepared| async move {
+                let target = prepared.version;
+                let version = target.clone();
+                install_verified_app(app, target, move || {
+                    crate::macos_update::install_prepared(&version, &prepared.bytes)
+                })
+                .await?;
+                Ok(())
+            },
+            || app.restart(),
+        ));
+        if let Err(error) = result {
+            eprintln!("LoopX prepared terminal upgrade failed: {error}");
+        }
+        return;
+    }
     // A CLI-requested upgrade is an explicit operation, not an ordinary open.
     // Preserve its requested channel and exact service-ready return contract.
     let result: Result<Option<()>, String> =
@@ -1471,6 +1503,85 @@ fn automatic_app_update(app: &AppHandle) {
     }
     // An unavailable feed/signature never certifies freshness or prevents use
     // of the installed App. Diagnostics retain the failed check.
+}
+
+#[cfg(target_os = "macos")]
+async fn prepare_terminal_candidate(
+    update: Option<Update>,
+    current: &str,
+    channel: &str,
+    key: &str,
+    automatic_root: &std::path::Path,
+    request_root: &std::path::Path,
+) -> Result<String, String> {
+    let Some(update) = update else {
+        return Ok(current.into());
+    };
+    let cached = crate::prepared_update::load(automatic_root, current, channel, key)
+        .ok()
+        .flatten()
+        .filter(|cached| cached.version == update.version && cached.signature == update.signature);
+    let bytes = if let Some(cached) = cached {
+        cached.bytes
+    } else {
+        download_update(&update, |_, _| {}).await?
+    };
+    crate::prepared_update::save(
+        request_root,
+        channel,
+        &update.version,
+        &update.signature,
+        &bytes,
+    )?;
+    Ok(update.version)
+}
+
+// The installed App remains the signature/channel owner. This bounded helper
+// has no window, single-instance callback or service lifecycle: the CLI waits
+// for preparation before asking the existing window to quit.
+#[cfg(target_os = "macos")]
+pub fn prepare_terminal_upgrade(context: tauri::Context<tauri::Wry>) {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            app.set_activation_policy(tauri::ActivationPolicy::Prohibited);
+            let outcome = tauri::async_runtime::block_on(async {
+                let handle = app.handle();
+                let request = crate::upgrade_request::UpgradeRequest::from_args(
+                    &std::env::args().collect::<Vec<_>>(),
+                    handle
+                        .path()
+                        .app_local_data_dir()
+                        .map_err(|_| "update_unavailable")?,
+                    handle.package_info().version.to_string(),
+                    Value::Null,
+                )
+                .ok_or("invalid_update_action")?;
+                let channel = &request.channel;
+                let update =
+                    find_update(handle, channel, endpoint(channel)?, Duration::from_secs(30))
+                        .await?;
+                let target = prepare_terminal_candidate(
+                    update,
+                    &handle.package_info().version.to_string(),
+                    channel,
+                    updater_public_key(handle)?,
+                    &prepared_directory(handle)?,
+                    &request.preparation_directory(),
+                )
+                .await?;
+                Ok::<_, String>(json!({"ok":true,"channel":channel,"target":target}))
+            });
+            let code = if outcome.is_ok() { 0 } else { 1 };
+            println!(
+                "{}",
+                outcome.unwrap_or_else(|code| json!({"ok":false,"code":code}))
+            );
+            app.handle().exit(code);
+            Ok(())
+        })
+        .run(context)
+        .expect("native upgrade preparation");
 }
 
 pub fn start_background_update(app: &AppHandle) {
