@@ -1842,10 +1842,24 @@ export function delegationStateLabel(row: DelegationStateFacts, zh: boolean) {
   const label = DELEGATION_STATE_LABELS[delegationState(row)];
   return zh ? label.zh : label.en;
 }
-export function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
-  return requestJson<DelegationInventory>(`/api/chat/sessions/${sessionId}/loopx`, {
+const delegationInventorySchema = z.object({
+  ok: z.literal(true).optional(), schema_version: z.literal("loopx_delegation_inventory_v0").optional(),
+  items: z.array(z.object({record_id: z.string().min(1), operation_id: z.string().min(1).nullable(),
+    agent_id: z.string().optional(), todo_id: z.string().nullable().optional(), status: z.string().min(1),
+    worker_active: z.boolean().optional(), recovery_required: z.boolean().nullable(),
+    artifacts: z.array(delegationArtifactVersionSchema).optional(),
+    current_use: z.object({state: z.enum(["current", "unavailable"])}).optional()})),
+  has_more: z.boolean(), next_cursor: z.string().min(1).nullable(), page_readback_complete: z.boolean(),
+}).refine(page => page.has_more === (page.next_cursor !== null)
+  && (!page.page_readback_complete || page.items.every(row => row.status !== "unavailable")));
+export async function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
+  const inventory = await requestJson<unknown>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "operations", limit: 10, ...(cursor ? {cursor} : {})}),
   });
+  if (!delegationInventorySchema.safeParse(inventory).success) {
+    throw new Error("执行列表无法核验，请重新读取 / Execution inventory cannot be verified; retry");
+  }
+  return inventory as DelegationInventory;
 }
 export function inspectLoopXMember(sessionId: string, bindingId: string) {
   return requestJson<DelegationPreflight>(`/api/chat/sessions/${sessionId}/loopx`, {

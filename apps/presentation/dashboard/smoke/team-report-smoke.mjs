@@ -3,7 +3,7 @@ import {createElement} from "react";
 import {renderToStaticMarkup} from "react-dom/server";
 import {MarkdownText} from "../src/features/personal-workspace/markdown.tsx";
 import {TeamArtifactContent} from "../src/features/personal-workspace/team-artifact-content.tsx";
-import {adoptLoopXTeamWork, readLoopXTeamWork, revalidateLoopXTeamWork} from "../src/data/chat.ts";
+import {adoptLoopXTeamWork, fetchLoopXTeamWork, readLoopXTeamWork, revalidateLoopXTeamWork} from "../src/data/chat.ts";
 
 const text = '# Research\n\n| Measure | Value |\n|---|---:|\n| **Cash** | 75 |\n| Escaped \\| label | 25 |\n\n[Source](https://example.org/report)\n<script>window.pwned=true</script>\n[Unsafe](javascript:alert(1))\n![Tracking](https://example.org/pixel)';
 const artifact = {ref: "report.md", sha256: "a".repeat(64), text};
@@ -104,4 +104,21 @@ try {
     response = readback;
     assert.deepEqual(await read(), readback, `${name} retries keep the complete original readback`);
   }
+  operation = "operations";
+  const row = {record_id: "record", operation_id: "source", status: "accepted", recovery_required: false,
+    artifacts: [{ref: artifact.ref, sha256: artifact.sha256}]};
+  const page = {items: [row], has_more: true, next_cursor: "next", page_readback_complete: true, extension: "preserved"};
+  for (const invalid of [
+    {...page, page_readback_complete: "false"}, {...page, has_more: "false"}, {...page, items: "invalid"},
+    {...page, items: [{...row, recovery_required: "false"}]}, {...page, next_cursor: null},
+    {...page, items: [{...row, status: "unavailable", recovery_required: null}]},
+    {...page, schema_version: "unsupported"}, {...page, ok: false},
+  ]) {
+    response = invalid;
+    await assert.rejects(() => fetchLoopXTeamWork("session"), /cannot be verified/);
+  }
+  response = page;
+  assert.deepEqual(await fetchLoopXTeamWork("session"), page);
+  response = {...page, has_more: false, next_cursor: null};
+  assert.deepEqual(await fetchLoopXTeamWork("session", "next"), response, "A later page remains readable");
 } finally {globalThis.fetch = originalFetch;}
