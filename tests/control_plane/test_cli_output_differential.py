@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import sys
 
 import pytest
@@ -57,6 +58,39 @@ def test_pinned_reader_follows_a_powershell_command_with_literal_paths(tmp_path,
     body, calls, reader_bytes = read_pinned_cli_body(command)
     assert body.encode() == source.read_bytes() == raw
     assert calls > 1 and reader_bytes > len(raw)
+
+
+def test_pinned_reader_follows_a_relative_powershell_launcher(tmp_path, monkeypatch):
+    import hashlib
+    import os
+    from pathlib import Path
+
+    from loopx.command_invocation import loopx_cli_argv
+    from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
+    from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
+    if os.name != "nt" and shutil.which("pwsh") is None:
+        pytest.skip("Requires PowerShell 7")
+    repository = Path(__file__).resolve().parents[2]
+    monkeypatch.chdir(tmp_path)
+    launcher_arg = "./bin/loopx.ps1"
+    launcher = tmp_path / launcher_arg
+    launcher.parent.mkdir()
+    shutil.copyfile(repository / "scripts" / "loopx.ps1", launcher)
+    pointer = tmp_path / "release.json"
+    pointer.write_text(json.dumps({"release_root": str(repository), "python": sys.executable}), encoding="utf-8")
+    monkeypatch.setenv("LOOPX_CURRENT_RELEASE_FILE", str(pointer))
+    source = tmp_path / "owner's ‘saved capture’.json"
+    raw = json.dumps({"requirements": "完整的验收条件🙂" * 30}, ensure_ascii=False).encode("utf-8")
+    source.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    route = loopx_cli_argv(launcher_arg)
+    command = context_capture_read_command(source, digest, reader_argv=route,
+        page_bytes=256, max_page_output_bytes=4000)
+    assert command.startswith(launcher_arg + " '")
+
+    body, calls, reader_bytes = read_pinned_cli_body(command)
+    assert body.encode("utf-8") == raw and calls > 1 and reader_bytes > len(raw)
 
 
 def test_probe_process_failure_preserves_utf8_diagnostics(tmp_path):

@@ -16,17 +16,18 @@ import tempfile
 
 _POWERSHELL_READER_WORDS = re.compile(r"'(?:''|[^'])*'|[^'\s]+")
 _POWERSHELL_DOUBLED_QUOTE = re.compile(r"(['\u2018\u2019\u201a\u201b])\1")
+_DIRECT_POWERSHELL_READER = re.compile(r"^([A-Za-z0-9_./-]+) '")
 
 
 def _reader_argv(command: str) -> list[str]:
     """Decode the literal-only form of the generated read command into argv."""
+    direct = _DIRECT_POWERSHELL_READER.match(command)
     if not command.startswith("& ") and not (
-        os.name == "nt" and re.match(r"^[A-Za-z0-9_./-]+ '", command)
+        direct and (os.name == "nt" or direct[1].lower().endswith(".ps1"))
     ):
         return shlex.split(command)
-    # The current Windows renderer uses '& ' for a quoted executable and
-    # doubles single quotes inside PowerShell literals. POSIX shlex drops
-    # those doubled quotes. Older POSIX-form reader commands remain readable.
+    # The host renderer uses '& ' only for a quoted executable. It also
+    # selects PowerShell for .ps1 on POSIX. shlex drops its doubled quotes.
     literal_command = command.removeprefix("& ")
     words = _POWERSHELL_READER_WORDS.findall(literal_command)
     assert " ".join(words) == literal_command, "unexpected syntax in the generated reader command"

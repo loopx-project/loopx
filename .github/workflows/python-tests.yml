@@ -956,7 +956,7 @@ jobs:
           --basetemp "${{ runner.temp }}/lxb-${{ github.run_id }}-${{ github.run_attempt }}"
           tests/control_plane/test_cli_output_budget.py
           tests/control_plane/test_cli_output_differential.py
-          -k "stable_budget_fixture or long_path_budget or probe_process_failure_preserves_utf8_diagnostics"
+          -k "stable_budget_fixture or long_path_budget or probe_process_failure_preserves_utf8_diagnostics or pinned_reader_follows"
 
       - name: Qualify the native Windows CLI output differential
         timeout-minutes: 12
