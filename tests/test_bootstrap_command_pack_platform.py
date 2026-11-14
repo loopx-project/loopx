@@ -128,6 +128,9 @@ def test_activation_relative_runtime_uses_requested_project_not_environment(
 
     project, _, registry = _write_fixture(tmp_path / "requested")
     other_project, _, foreign_registry = _write_fixture(tmp_path / "foreign")
+    # A containing repo does not turn its separate project folders into
+    # linked worktrees. Exercise this with and without a runtime override.
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True, capture_output=True)
     runtime = project / "bound runtime"
     foreign_runtime = other_project / runtime.name
     for config, path in ((False, runtime), (True, foreign_runtime)):
@@ -154,6 +157,7 @@ def test_activation_relative_runtime_uses_requested_project_not_environment(
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=tmp_path,
         )
         assert refused.returncode != 0, refused.stdout
+        assert refused.stdout, refused.stderr
         refusal = json.loads(refused.stdout)
         assert refusal["ok"] is False
         assert "--registry" in refusal["error"] and "--project" in refusal["error"]

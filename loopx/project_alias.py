@@ -39,9 +39,9 @@ def _git_root(project: Path) -> Path | None:
     return _resolve_path(Path(value)) if value else None
 
 
-def _git_common_dir(project: Path) -> Path | None:
+def _git_common_dir(project: Path, *, require_worktree_root: bool = False) -> Path | None:
     root = _git_root(project)
-    if root is None:
+    if root is None or (require_worktree_root and root != _resolve_path(project)):
         return None
     result = _run_git(root, "rev-parse", "--git-common-dir")
     if result is None or result.returncode != 0:
@@ -99,8 +99,11 @@ def _same_path(left: Path | None, right: Path | None) -> bool:
 
 
 def projects_share_git_common_dir(project: Path, other: Path) -> bool:
-    """Recognize linked worktrees without treating another clone as the same project."""
-    return _same_path(_git_common_dir(project), _git_common_dir(other))
+    """Match linked worktree roots; a shared enclosing repository is insufficient."""
+    return _same_path(
+        _git_common_dir(project, require_worktree_root=True),
+        _git_common_dir(other, require_worktree_root=True),
+    )
 
 
 def resolve_canonical_project_alias(
