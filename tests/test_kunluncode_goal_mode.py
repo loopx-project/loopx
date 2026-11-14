@@ -90,6 +90,27 @@ def mock_goal_cli(monkeypatch):
     return install
 
 
+def _settlement_cli_receipt(
+    command: list[str], identity: SettlementIdentity, *, source: str,
+) -> str:
+    writeback = "refresh-state" in command
+    assert writeback or "spend-slot" in command
+    return json.dumps(
+        {
+            "ok": True,
+            "appended": True,
+            "settlement_identity": identity.as_dict(),
+            "settlement_result": {"failure": None},
+            "settlement_progress": {
+                "schema_version": "quota_settlement_progress_v0",
+                "state": "spend_required" if writeback else "settled",
+                "next_step": "quota_spend" if writeback else None,
+                "quota_spend_source": source,
+            },
+        }
+    )
+
+
 def test_goal_cli_mock_preserves_real_node_probe(mock_goal_cli):
     from loopx.control_plane import effect_runtime
 
@@ -184,14 +205,7 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
                     }
                 )
             else:
-                payload = json.dumps(
-                    {
-                        "ok": True,
-                        "appended": True,
-                        "settlement_identity": identity.as_dict(),
-                        "settlement_result": {"failure": None},
-                    }
-                )
+                payload = _settlement_cli_receipt(command, identity, source="heartbeat")
         return subprocess.CompletedProcess(command, 0, payload, "")
 
     mock_goal_cli(capture)
@@ -287,14 +301,7 @@ def test_fastmcp_complete_task_forwards_complete_task_lease_fence(
                     }
                 )
             else:
-                payload = json.dumps(
-                    {
-                        "ok": True,
-                        "appended": True,
-                        "settlement_identity": identity.as_dict(),
-                        "settlement_result": {"failure": None},
-                    }
-                )
+                payload = _settlement_cli_receipt(command, identity, source="heartbeat")
         return subprocess.CompletedProcess(command, 0, payload, "")
 
     mock_goal_cli(capture)
@@ -416,14 +423,7 @@ def test_complete_task_spends_bound_to_selected_todo_and_refreshes_state(
                 }
             )
         else:
-            payload = json.dumps(
-                {
-                    "ok": True,
-                    "appended": True,
-                    "settlement_identity": identity.as_dict(),
-                    "settlement_result": {"failure": None},
-                }
-            )
+            payload = _settlement_cli_receipt(command, identity, source="visible-goal")
         return subprocess.CompletedProcess(command, 0, payload, "")
 
     mock_goal_cli(capture)
@@ -472,7 +472,7 @@ def test_complete_task_spends_bound_to_selected_todo_and_refreshes_state(
         "spend-slot",
     ]
     assert spend[spend.index("--todo-id") + 1] == "todo_222222222222"
-    assert spend[spend.index("--source") + 1] == "heartbeat"
+    assert spend[spend.index("--source") + 1] == "visible-goal"
     assert spend[spend.index("--turn-instance-id") + 1] == (
         result["settlement_identity"]["turn_instance_id"]
     )
