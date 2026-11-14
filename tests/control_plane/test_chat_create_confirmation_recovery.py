@@ -8,7 +8,7 @@ from threading import Event
 import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
-from loopx import chat_actions
+from loopx.chat import todo_creation
 from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.chat_actions import ChatActionService
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
@@ -123,14 +123,14 @@ def test_duplicate_confirmation_keeps_the_running_owner(confirmation, monkeypatc
     service, _, runtime, _ = confirmation
     proposal_id = _preview(service, "todo.create", "concurrent")
     entered, resume = Event(), Event()
-    original_plan = chat_actions.plan_reviewed_todo_create
+    original_plan = todo_creation.plan_reviewed_todo_create
 
     def plan(**arguments):
         entered.set()
         assert resume.wait(15), "the duplicate confirmer did not return"
         return original_plan(**arguments)
 
-    monkeypatch.setattr(chat_actions, "plan_reviewed_todo_create", plan)
+    monkeypatch.setattr(todo_creation, "plan_reviewed_todo_create", plan)
     lost = _interrupt_after_create(service, monkeypatch, "todo.create")
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(service.apply, proposal_id)
