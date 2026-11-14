@@ -23,6 +23,7 @@ import {createHash} from "node:crypto";
 type Path = (string | number)[];
 export type PreparationScopeDetail = {path: Path; marker_path?: Path; instruction: string};
 type ReadSelection = {pointer: string; path: Path};
+type PreparationOpeningOrder = {insertBefore: string; defer: string};
 type ReusableReadField = {
   path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]; appendText?: true;
 };
@@ -766,7 +767,7 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
  * back through Python. Capture publication and native locking remain Host IO. */
 export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
     decisionFields: readonly string[], plan: JsonObject, exactBody: ReusableExactBody | undefined,
-    handoffMode: unknown): JsonObject {
+    handoffMode: unknown, openingOrder: PreparationOpeningOrder): JsonObject {
   if (request.include_initial_read_plan !== undefined)
     requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
@@ -781,7 +782,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const groups = observe || request.include_initial_read_plan === true
     ? initialContextReadGroups(required.context, decisionFields, handoffMode) : undefined;
   const initial = request.include_initial_read_plan === true && groups
-    ? initialContextReadPlan(required.context, groups, exactBody?.path) : undefined;
+    ? initialContextReadPlan(required.context, groups, openingOrder, exactBody?.path) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const observed = observe && pointers.length
     ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody, handoffMode), initial) : undefined;
@@ -843,7 +844,7 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
 export function initialContextReadPlan(context: JsonObject,
-    groups: ReturnType<typeof initialContextReadGroups>, scope?: Path): {
+    groups: ReturnType<typeof initialContextReadGroups>, openingOrder: PreparationOpeningOrder, scope?: Path): {
       initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
       replan_review?: JsonObject;
       ordinary_opening_rows?: number;
@@ -853,13 +854,13 @@ export function initialContextReadPlan(context: JsonObject,
   const readiness = groups.remaining.indexOf(preparation);
   if (readiness >= 0) {
     // Keep the original admission or refusal and read routes ahead of the
-    // work lane description. New pinned reads use this order; issued cursors
+    // optional opening field selected by the decision owner. Issued cursors
     // and explicit historical initial reads keep their original selections.
     groups.remaining.splice(readiness, 1);
-    const boundary = groups.opening.indexOf("/goal_boundary");
+    const boundary = groups.opening.indexOf(openingOrder.insertBefore);
     groups.opening.splice(boundary < 0 ? groups.opening.length : boundary, 0, preparation);
-    const lane = groups.opening.indexOf("/work_lane_contract");
-    if (lane >= 0) groups.remaining.unshift(...groups.opening.splice(lane, 1));
+    const deferred = groups.opening.indexOf(openingOrder.defer);
+    if (deferred >= 0) groups.remaining.unshift(...groups.opening.splice(deferred, 1));
   }
   const pointers = [...groups.opening, ...groups.remaining];
   if (!pointers.length) return {initial: false,
