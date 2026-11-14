@@ -266,9 +266,20 @@ function saturated() {
 const correction = {outcome_id: "outcome-0", storage_format: "records", requirements: [{id: "correction", description: "Preserve continuation and independently check the revised delivery."}],
   source: {ref: "owner:correction", summary: "An authorized additional acceptance condition"}};
 
-for (const provider of ["file", "sqlite"] as const) test(`${provider}: explicit record evolution retains a saturated Goal and subsequent adoption`, async t => {
+for (const provider of ["file", "sqlite", "postgresql"] as const) test(`${provider}: explicit record evolution retains a saturated Goal and subsequent adoption`,
+  {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
   const root = await mkdtemp(join(tmpdir(), "outcome-records-")); t.after(() => rm(root, {recursive: true, force: true}));
-  const open = () => provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
+  const pool = provider === "postgresql" ? new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2}) : null;
+  if (pool) t.after(() => pool.end());
+  const database = pool ? {connect: async () => {
+    const client = await pool.connect();
+    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
+      release: () => client.release()};
+  }} : null;
+  if (database) await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
+  const scope = {tenant_id: `outcome-records-${randomUUID()}`, goal_id: goal};
+  const open = () => database ? new PostgreSqlAuthorityStore(database, scope)
+    : provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
   const head = saturated(), original = structuredClone(head), store = open();
   await store.commitAuthority({operation_id: "seed", expected_provider_revision: null, next_projection: head, events: [], receipts: []});
   const seedRead = await inspectGoalAcceptance(store, goal);
@@ -320,6 +331,11 @@ for (const provider of ["file", "sqlite"] as const) test(`${provider}: explicit 
   const decoded = structuredClone(loaded.head);
   ((decoded.goal_outcomes as JsonObject).collections as unknown[]).pop();
   assert.throws(() => projectGoalOutcomes(decoded, goal, {}), /inventory digest mismatch/, "missing a non-first page fails closed");
+  const mistyped = structuredClone(loaded.head);
+  const collection = ((mistyped.goal_outcomes as JsonObject).collections as JsonObject[])[0];
+  collection.kind = [collection.kind];
+  assert.throws(() => projectGoalOutcomes(mistyped, goal, {}), /collection has no matching owner/,
+    "a mistyped collection kind cannot pass the inventory digest by coercion");
   assert.deepEqual(head, original, "migration never edits the captured source");
 });
 

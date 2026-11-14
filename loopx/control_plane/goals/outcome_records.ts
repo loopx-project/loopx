@@ -77,8 +77,10 @@ export function decodeOutcomeRecords(state: JsonObject): JsonObject {
     const row = canonicalAuthorityObject(value, "outcome collection");
     check(hasExactAuthorityKeys(row, ["outcome_id", "kind", "items"]) && bytes(row) <= PAGE_BYTES, "outcome collection has unsupported fields");
     const outcome = byId.get(row.outcome_id);
-    check(outcome && ["requirements", "sources", "todo_ids", "review"].includes(String(row.kind)), "outcome collection has no matching owner");
-    const target = row.kind === "review" ? (outcome.review as JsonObject | undefined)?.items : outcome[String(row.kind)];
+    const kind = row.kind;
+    check(outcome && typeof kind === "string" && ["requirements", "sources", "todo_ids", "review"].includes(kind),
+      "outcome collection has no matching owner");
+    const target = kind === "review" ? (outcome.review as JsonObject | undefined)?.items : outcome[kind];
     check(Array.isArray(target), "outcome collection has no matching declaration");
     target.push(...records([row.items]));
   }
