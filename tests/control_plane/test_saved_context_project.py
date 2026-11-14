@@ -1563,9 +1563,18 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
         assert not ({"content", "next_command", "navigation"} & rejected.keys())
         code, too_small = cli(*project, "--initial-read", "--max-page-output-bytes", "256")
         assert code and not too_small["ok"] and not ({"content", "next_command", "navigation"} & too_small.keys())
-        assert too_small["heartbeat_receipt"] == receipt and too_small["capture_sha256"] == digest
-        recovered = Path(too_small["recovery"]["path"]).read_bytes()
-        assert hashlib.sha256(recovered).hexdigest() == too_small["recovery"]["sha256"]
+        assert too_small["error_code"] == "quota_decision_transport_failed"
+        assert len(json.dumps(too_small, ensure_ascii=False, separators=(",", ":")).encode()) + len(os.linesep) <= 256
+        assert "without rerunning admission" in too_small["reason"]
+        assert original.read_bytes() == raw
+        assert finish(follow(navigation["first_read_command"]), limit=12000) == body
+
+        # Retry the original read with its normal budget and the same digest.
+        code, retry = cli(*project, "--initial-read")
+        assert code == 0 and finish(retry, limit=12000) == body
+        recovery = follow(retry["navigation"]["recovery"]["command"])
+        recovered = finish(recovery, limit=64000)
+        assert hashlib.sha256(recovered).hexdigest() == recovery["sha256"]
         view = json.loads(recovered)
         recipe = view["interaction_contract"]["cli_channel"]["selection_command"]
         # The recovery view may bind the same-Turn command's transport. All
