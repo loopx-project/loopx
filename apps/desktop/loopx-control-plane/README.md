@@ -14,9 +14,12 @@ desktop release workflow succeeds:
 
 On Apple Silicon macOS, the App opens its qualified local runtime first, then
 checks its current official channel and downloads a newer App in the background.
-It verifies the updater signature and prepares the archive locally. The next
-normal open verifies that archive again and installs it before starting services;
-ordinary background preparation never replaces or restarts an active workspace.
+It verifies the updater signature and prepares the archive locally. Ordinary
+opening never installs a cached App or restarts the workspace. Use the existing
+update panel or `loopx upgrade` to install and restart; those explicit operations
+verify the archive again before replacement. Background preparation cannot
+replace or restart an active workspace. This replaces the earlier next-open
+automatic installation policy on macOS so ordinary launches stay local and fast.
 Windows NSIS installs follow the signed-update journey on the main channel: the
 App checks on launch, verifies the minisign signature, runs the installer
 passively and restarts automatically. On Windows the stable channel, MSI
@@ -47,23 +50,49 @@ readback. A permission-restricted prepared installation stays on the verified
 current App; use the existing explicit update action for native authorization.
 The disposable cache is not an update authority: its signed bytes, channel,
 version order and sealed bundle version are checked again before replacement.
-Rejected cached signatures and verified-safe replacement failures keep local
-startup moving, with the failure retained in diagnostics. They do not display
-a stopped-startup state while services are connecting. An incomplete target,
-failed journal retirement or unknown installation failure still requires recovery.
+Rejected signatures and replacement failures remain visible on the explicit
+update transaction. An incomplete target, failed journal retirement or unknown
+installation failure still requires recovery. Ordinary opening does not enter
+that installation transaction.
 
 ## Updates And Recovery
 
 From a terminal, `loopx upgrade` coordinates the owning CLI installer and this
-App's signed updater, restarts the App and waits for native service readiness.
+App's signed updater. On writable macOS installations that advertise native
+preparation support, the CLI first runs the installed App's windowless updater.
+The existing workspace stays open while the native owner checks, downloads and
+verifies the signed archive. A matching verified background cache is reused.
+Preparation failure leaves the current window running. Only after preparation
+succeeds does the CLI quit/reopen the App and wait for qualified services.
+
+The handoff pins that prepared version in a request-scoped disposable cache.
+Restart verifies its bytes again and binds the version to the sealed App bundle;
+it never downloads or chases a moving channel feed. Missing, mismatched or corrupt
+bytes fail explicitly. The replacement process acknowledges the frozen target,
+then reports both service identities. A failed check cannot become success just
+because the workspace is healthy. Older Apps and administrator-protected install
+locations retain the existing interactive native update/authorization path until
+an App with preparation support is installed or the installation is writable.
+
 Archive users can select Main with `loopx upgrade --ref main`; `--dry-run` is
-read-only. The terminal passes only a bounded request id and an official channel
-to the App. A private request receipt contains versions, source revisions,
-update phase and the qualified service runtime identity; it contains no Goal
-content or credentials. An update check failure remains a failed terminal
-upgrade even when the workspace can still open. Normal launches without that
-request perform their network check after local services are ready; an explicit
-terminal upgrade retains its thirty-second interactive check budget.
+read-only. The terminal passes a bounded request id, official channel and prepared
+version, never an arbitrary download URL or installation path. Receipts contain
+versions, source revisions, phase and qualified runtime identity, without Goal
+content or credentials. Normal launch/background behavior is unchanged.
+
+macOS 可写安装目录下，`loopx upgrade` 先通过已安装 App 的无窗口原生更新器检查、
+下载并验签，保持原工作区可用；已有匹配的验签缓存会复用。准备成功后才退出、重开
+App，并核验服务身份。准备失败不关闭窗口。切换阶段固定本次版本、重新验签并核对
+密封包版本，不在启动时追逐更新源；缓存丢失、损坏或版本不符明确失败。旧 App 及
+需要管理员授权的目录保留原交互式升级路径。普通启动与后台更新行为不变。
+
+This separates usable-workspace time from transfer time, following the same
+preparation-before-restart principle visible in
+[VS Code's Downloaded/Ready and quit-and-install transitions](https://github.com/microsoft/vscode/blob/4ebcba98631cbacfbf469338653b5d98f9c392b1/src/vs/platform/update/electron-main/updateService.darwin.ts#L177)
+and [Zed's asynchronous download/install and restart-path preparation](https://github.com/zed-industries/zed/blob/48741fd17d0dec28be6ad664b0a06dc7202086be/crates/auto_update/src/auto_update.rs#L785).
+Their packaging differs from LoopX's independently owned CLI runtime; this does
+not combine package owners, remove integrity checks, or claim faster networks.
+
 The existing update panel shows the same native maintenance phases and recovery
 actions. Main is the latest complete signed build, which can lag Git HEAD.
 
@@ -98,8 +127,16 @@ restart a running workspace.
 校验失败，只展示可操作的原因与重试入口，不暴露传输地址或签名内部错误。
 无法分类的失败仍保留通用提示，失败不会被显示为已安装。
 
-Startup automatically uses the newest qualified local runtime it can establish.
-It compares package versions; equal versions with source revisions use ancestry
+Ordinary startup first reuses its last successful runtime when both existing
+local services are healthy and expose that exact qualified identity. Opening a
+workspace then requires no source-ancestry network check or service migration.
+A newer terminal CLI alone cannot force an account/provider handoff on launch.
+Explicit terminal upgrades still require their frozen target; developer pins
+and isolated endpoints keep their existing route. Failed starts do not overwrite
+the remembered successful runtime, and ephemeral developer pins are not saved.
+
+If that runtime is unavailable, startup discovers the newest qualified local
+runtime it can establish. It compares package versions; equal versions with source revisions use ancestry
 from the fixed official GitHub repository. Installation time and lexical SHA
 order never determine freshness. If the bounded check is offline, rate limited
 or revisions diverge, a saved discovery path follows the current default CLI
@@ -117,13 +154,15 @@ Chat readiness uses `/api/chat/readiness`: the loaded service's frozen runtime
 identity and HTTP readiness only. It does not enumerate models, credentials,
 Sessions or Goal state, and grants no work authority. Both native and browser
 launchers retain the original capabilities fallback for older services. The
-native probe keeps its 500 ms deadline, so slow metadata reads cannot multiply
-startup probes into more capability-discovery work. Capability availability and
-original-conversation authorization are still checked by their normal owners.
+native probe gives the entire request and any legacy fallback one 500 ms
+deadline. A listener sending fragments slowly cannot delay startup recovery
+past this probe's deadline. Capability availability and original-conversation
+authorization are still checked by their normal owners.
 
 Chat 就绪探针仅读取已加载服务的固定版本身份，不枚举模型、凭据、会话或 Goal，
 也不授予执行权限。原生与浏览器启动器保留旧服务的完整能力接口兼容路径；原生探针
-仍为 500 毫秒期限，不通过延长期限掩盖问题。能力是否可用、原会话是否获授权，仍由
+的完整请求与兼容回退共用 500 毫秒期限。缓慢分段的响应不会拖住单次探测后的启动恢复。
+能力是否可用、原会话是否获授权，仍由
 原入口单独实时核验。
 
 Opening the selected original conversation is a read-only discovery. It uses a
@@ -141,6 +180,10 @@ listener replacement. The loaded original manager supplies its explicit store
 route; the same accepted-work fence protects its queued and active Turns through
 restart. A private bootstrap does not need to match a desktop Python template.
 While work is pending the window explains the wait and retries automatically.
+Native-account pending work and missing/incompatible provider bindings retain
+Core's specific reason in the recovery view and diagnostics. A deferred handoff
+does not claim that services were changed or rolled back. Missing components
+remain an installation-owner repair; repeatedly reopening the App is not a fix.
 Unknown manager/store state grants no raw-kill fallback or second consumer.
 `loopx update activate --service chat --port 8767` retries this adoption without
 installing anything; its receipt is a restart request, not readiness proof.

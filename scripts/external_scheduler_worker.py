@@ -511,19 +511,29 @@ def _host_pending_path(state_path: Path) -> Path:
     return state_path.with_name(f"{state_path.name}.host-attempt")
 
 
+def _decode_host_pending(raw: str | bytes, *, exact: bool = False) -> bool | None:
+    """Read the Boolean witness; archived evidence requires its exact shape."""
+    try:
+        value = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or (exact and set(value) != {"pending"}):
+        return None
+    pending = value.get("pending")
+    return pending if isinstance(pending, bool) else None
+
+
 def _host_pending(state_path: Path) -> bool | None:
     """Independent local IO witness: absent/resolved, pending, or unreadable."""
     path = _host_pending_path(state_path)
     if path.is_symlink():
         return None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        return _decode_host_pending(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return False
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, UnicodeError):
         return None
-    pending = value.get("pending") if isinstance(value, dict) else None
-    return pending if isinstance(pending, bool) else None
 
 
 def _save_host_pending(state_path: Path, pending: bool) -> None:

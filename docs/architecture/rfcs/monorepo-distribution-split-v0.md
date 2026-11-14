@@ -3971,3 +3971,27 @@ R1/M3, real-host compaction/thread retention, progressive control, comparable
 complete costs, Standard/workspace delivery and original-Goal regression remain
 open. No default activation, host upgrade, release or frozen-budget change is
 implied by these protocol fixtures.
+
+### 2026-11-14 — Coordination loads terminal evidence on its selected route
+
+The local-authority runtime defers `ResearchTerminalEvidenceHost` until a valid
+terminal lifecycle request selects it. Ordinary coordination no longer loads
+that adapter and its research implementation dependencies. The existing typed
+terminal owner, registry witness, research qualification, writer locks and
+resource cleanup remain responsible for completion; no competing work schema
+or execution pipeline is introduced.
+
+A fresh-process fault injection makes the terminal adapter unavailable. The
+ordinary claim persists and replays its original receipt, malformed claims
+leave state unchanged, and a selected terminal request fails without a new
+receipt or state mutation. The retained base fails this same ordinary-claim
+probe. The source authority/terminal suite passes 93 cases. Applying the same
+patch to the exact C1 candidates in #8266 (`b15c443ee64d`) and #8484
+(`b7e4e01cc423`) passes 188 and 193 authority, context and recovery cases
+respectively; the latter also covers real SQLite admission.
+
+This is a loading and failure-isolation prerequisite, aligned with C1's existing
+owners. A valid terminal request still loads the adapter, including when its
+ordinary-Todo guard returns early. Complete workflow isolation, paired complete
+costs, real-host adoption, R1/M3 and C1 writer/consumer cutover remain open.
+These tests do not authorize C1 default promotion or establish model benefit.

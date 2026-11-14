@@ -281,7 +281,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                 assert delivered[0]["text"] == fixture["state"].read_text()
         else:
             assert "--decision-output-root" in commands[0]
-            view_path = wake / "checkpoint-start-view.json"
+            view_path, = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
             assert str(view_path) in body and str(source_path) not in body
             view = json.loads(view_path.read_bytes())
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN

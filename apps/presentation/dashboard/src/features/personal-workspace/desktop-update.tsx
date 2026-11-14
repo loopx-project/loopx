@@ -170,7 +170,7 @@ export function DesktopUpdate() {
         : (zh ? "Windows 稳定版与 MSI 安装需手动运行新的签名安装包；App 内自动更新目前只在 main 预览通道提供（NSIS）。" : "Windows stable and MSI installs update by running a newer signed installer; in-App automatic updates currently ship on the main preview channel (NSIS).");
     }
     if (platform === "macos") {
-      return zh ? "先打开本地版本，更新在后台准备，下次打开时生效。也可在此手动更新。" : "Open the local version first. Updates prepare in the background and apply on the next open. You can also update here.";
+      return zh ? "启动直接打开本地工作区，更新在后台准备。可在此更新并重启。" : "Open the local workspace immediately. Updates prepare in the background; update and restart here when ready.";
     }
     return zh ? "更新会跟随所选通道；请检查更新以确认本机是否有可用安装包。" : "Updates follow the selected channel; check for updates to see whether this machine has an installer.";
   };
@@ -181,7 +181,7 @@ export function DesktopUpdate() {
     runtime_required: phaseMessage(zh ? "请完成匹配组件安装，或检查 App 更新。" : "Install matching components or check for an App update.", zh ? "无法准备可用组件。可检查 App 更新；当前安装仍会保留。" : "Components are unavailable. Check for an App update; the current installation is kept."),
     connecting: zh ? "正在连接本地服务…" : "Connecting to local services…",
     checking: state.details?.background ? (zh ? "正在后台检查更新，当前版本可继续使用。" : "Checking in the background. Keep using this version.") : (zh ? "正在检查更新…" : "Checking for updates…"),
-    available: state.details?.prepared ? (zh ? "更新已下载并通过签名校验，下次打开时自动安装。" : "Update downloaded and signature verified. It installs on the next open.") : phaseMessage(zh ? "新版本已就绪，一次更新 App 与匹配的运行时。" : "Update the App and its matching runtime together.", zh ? "有新版本可用，可更新 App。" : "A new version is available; the App can be updated."),
+    available: state.details?.prepared ? (zh ? "更新已下载并通过签名校验，可更新并重启。" : "Update downloaded and signature verified. Update and restart when ready.") : phaseMessage(zh ? "新版本已就绪，一次更新 App 与匹配的运行时。" : "Update the App and its matching runtime together.", zh ? "有新版本可用，可更新 App。" : "A new version is available; the App can be updated."),
     up_to_date: zh ? "当前通道暂无更新。" : "No newer update on this channel.",
     downloading: state.details?.background ? (zh ? "正在后台下载并校验签名，当前版本可继续使用。" : "Downloading and verifying in the background. Keep using this version.") : (zh ? "正在下载并校验签名…" : "Downloading and verifying signature…"),
     installing_app: zh ? "正在安装 App，请保持窗口打开。" : "Installing the App. Keep this window open.",
