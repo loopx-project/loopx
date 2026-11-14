@@ -79,9 +79,13 @@ def core_python():
 def _command(python, arguments):
     # -I excludes PYTHONPATH and the current directory. No product import may
     # resolve to the parent test's editable source checkout.
-    return [python, "-I", "-c",
-            "import json,sys;from loopx.entrypoint import main;raise SystemExit(main(json.loads(sys.argv[1])))",
-            json.dumps(arguments)]
+    source = "import json,sys;from loopx.entrypoint import main;code=main(json.loads(sys.argv[1]));"
+    if any(arguments[index:index + 2] == ["turn", "run-once"] for index in range(len(arguments) - 1)):
+        # These task fixtures leave reward memory disabled. Check the executed
+        # CLI and replay rather than inferring their closure from helper tests.
+        source += ("assert 'loopx.capabilities.reward_memory.runtime_hooks' not in sys.modules;"
+                   "assert 'loopx.capabilities.reward_memory.read_authority' not in sys.modules;")
+    return [python, "-I", "-c", source + "raise SystemExit(code)", json.dumps(arguments)]
 
 
 def _environment(python, overrides=None):

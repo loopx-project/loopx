@@ -4062,3 +4062,198 @@ coercion but produced an inactive policy, silently skipping research evidence.
 The existing configuration owner now refuses this malformed shape before IO;
 documented scalar modes, defaults and errors retain their semantics. Real
 File/SQLite negative cases guard this boundary without changing valid activation.
+
+
+### 2026-11-14 — Policy observers recover the original signed source
+
+- **Baseline:** `main@8d7d234c6f55`; C1 #8266 at `c3cb8b2fe7bf`.
+- **Gap:** three current C1 guided-start and visible-Goal selection cases
+  rejected a required presentation as if it were the original signed decision.
+  The original capture passes both its physical digest and complete-contract
+  validation. Same-view Todo references and their read guidance change the
+  presentation body while retaining the original binding.
+- **Delta:** the existing test policy observer follows the presentation's
+  declared immutable capture and digest before comparing decision facts. It
+  reuses the physical capture reader; inline/off outputs without such a
+  reference retain their current behavior. No producer, decision, hash codec,
+  admission, settlement owner or default changes.
+- **Evidence:** the existing real guided-start/visible-Goal CLI cases pass on
+  the pinned C1 combination. The durable File/SQLite regression exercises the
+  shared typed projection and verifies original-source equality, its complete
+  binding, zero spend and rejection of changed or missing captured bytes, including a valid
+  replacement whose original binding differs. A
+  private matched observer comparison distinguishes the old and corrected
+  readers. Earlier failed and incomplete runs remain failed or incomplete.
+- **Remaining:** this repairs a consumer-qualification prerequisite. Complete
+  V1–V5/V10, R1/M3, current D2/D5 closure, actual Host/model context adoption,
+  progressive product control, comparable complete costs, C1 default cutover
+  and original-Goal regression remain open.
+
+### 2026-11-14 — Disabled Turn recall defers execution dependencies
+
+- **Baseline:** `main@4604f938b612`; C1 #8266 at `79d7ebc81fbc`.
+- **Gap:** independent Core File/SQLite Turn journals report recall disabled,
+  no context and zero provider calls, yet admission imports the recall execution
+  hook and read-authority implementation through the recall package.
+- **Delta:** the existing recall and checkpoint functions import those two
+  implementations when called. Experiment resolution, ingest reconciliation,
+  schema ownership, exported function identity, permissions and C1 composition
+  remain with their existing owners. No shared orchestration or default changes.
+- **Evidence:** the disabled helper cases and the actual installed CLI cases
+  fail on the baseline and pass on the repair. The capability regression covers
+  active recall, authority rejection, provider failure, deduplication and outcome
+  lifecycle. Independent Core installation, execution, interruption/recovery,
+  replay and context suites pass on main and the pinned C1 combination; runtime
+  bytes match their declared sources. Observed initial File/SQLite Turns load
+  514 rather than 516 Python modules, with 100 rather than 102 capability modules;
+  RPC counts remain 223/222, and replay remains 432/50 modules with 12 RPCs.
+  Four observed Node launches are two version probes and two instrumented
+  runtime/Host-bridge processes. This is a loading-boundary result; instrumented
+  elapsed times do not qualify latency or complete cost.
+- **Remaining:** built-in capability packaging and complete D2/D5 closure,
+  actual model/Host context adoption, progressive controls, comparable complete
+  costs, full V1–V5/V10, R1/M3 and C1 default cutover remain unqualified. The
+  process Host and native context events are synthetic fixtures.
+
+### 2026-11-14 — Current-model task result survives Core recovery
+
+- **Sources:** `main@83809355f84a` and C1 #8266 at `6a31d83497a6`,
+  each in a separate installed Core environment. The executed entrypoint,
+  Turn driver/executor, complete-source owner and recall entrypoints match
+  their declared source bytes.
+- **Observed outcome:** the current interactive model adopted each actual
+  generic Host request and used tools to produce JSON and readable Markdown
+  inventory reports from isolated synthetic input. An independent input-derived
+  Decimal oracle checks duplicate merging, zero stock, over-reservation, a
+  non-ASCII SKU, ordering, each group and the totals.
+- **Recovery:** after the model result reached the durable `typed_result`
+  phase, the owning CLI process was killed with SIGKILL. Both original Turns
+  resumed without another Host invocation, completed independent validation
+  and Todo readback, and retained exactly one debit after replay. On C1,
+  a damaged report was rejected with the Todo still open and zero debit;
+  restoring the checked report allowed the same Turn to finish.
+- **Owner boundary:** a private rendezvous adapter only transports the current
+  model's request/result. C1 and the existing Turn driver retain composition,
+  identity, admission, validation, capture, recovery and settlement. No new
+  execution pipeline, schema, product default or capability activation is added.
+- **Remaining:** this strengthens task-result recovery evidence. It does not
+  qualify an installed native model/App adapter, natural-language onboarding,
+  model retention through native compaction, progressive product controls,
+  complete D2/D5 closure, comparable full costs, V1–V5/V10, R1/M3 or C1 default
+  cutover. The model reused its report generator between the two checks;
+  these are not independent inference trials or an outcome/cost comparison.
+
+### 2026-11-15 — One confirmation for a complete conversational Goal draft
+
+- **Gap:** a complete draft skipped the form but still required a preview click
+  followed by drawer confirmation. The user could not see the resolved executor
+  and workspace until taking the first of those actions.
+- **Delta:** the Dashboard prepares a visible complete draft's existing typed action,
+  displays its server-resolved Agent and workspace, and offers one explicit
+  `Create and start` confirmation. Incomplete drafts and read-only views cannot
+  prepare creation; Edit and typed availability/stale/recovery gates remain.
+  Existing locale-scoped operation identities are read before preparation;
+  reload, language changes and repeated clicks retain the original operation.
+  The visible draft owns one confirmation/recovery entry; the canonical proposal
+  stays available when its draft is not loaded. Collapsed unseen history does
+  not initiate preparation.
+- **Evidence:** `goal-draft` covers preparation failure, no Goal writes before
+  confirmation, Edit/cancel, repeated clicks, reload, locale and narrow views.
+  `goal-draft-live` uses the real discovery and action store on isolated state
+  for resolved scope, lost-response readback, original-operation retry and
+  unavailable-Agent refusal. Its conversation is synthetic and its stub Agent
+  fails the first Turn; that failure is preserved rather than called success.
+- **Boundary:** this is a V4/R1 entry increment using the existing Goal draft,
+  typed review/apply and creation/recovery owners. It adds no shared schema,
+  authority grant, alternate execution pipeline or C1 composition owner.
+  Full task-artifact success through this entry, installed native App/model
+  adoption, compaction retention, complete D2/D5 closure, comparable total cost,
+  V1–V5/V10, R1/M3 and C1 default cutover remain unqualified.
+
+### 2026-11-15 — First-Goal reply adopted by the original governed Task
+
+- **Source:** `main@74ca883d5bd3`. The same source combines without conflict
+  with C1 #8266 at `2c099be41e68`; the isolated combined tree passes 287
+  native-session, work-context, first-read and Turn-settlement tests using
+  isolated state and synthetic provider/model fixtures. This does not approve
+  C1 or qualify its default cutover.
+- **Observed product path:** the real Chat discovery/action/store creates one
+  Goal and its initial Task from a synthetic reviewed request. The current
+  Host model reads the retained request and input through a temporary stdio
+  relay, produces an eight-group read-only report, and the real packaged Goal
+  conversation renders it. Independent CSV/Decimal checks verify groups and
+  totals. A real Chat restart preserves the original Session, reply and action;
+  retrying that action dispatches no new Chat Turn.
+- **Governed adoption:** the fixture caller declares an independent argv
+  validator through the existing Task owner, then the current model adopts
+  that original reply through the existing Core + SQLite + generic Host route.
+  It uses the same Goal, Agent and initial Task. SIGKILL after durable
+  `typed_result` resumes the original Turn without another Core Host invocation.
+  A damaged reply fails validation with the Task open and zero debit; restoring
+  the checked reply completes that Task with one debit, retained on replay.
+- **Remaining entry gap:** the first Chat request is still a read-only planning
+  conversation with a separate explicit LoopX-mode control. Its observed model
+  input is 24,372 UTF-8 bytes; this is one observation, not a cost comparison.
+  The fixture's explicit validation declaration and governed adoption are not
+  automatic product behavior. Reuse the registered managed-session, Task
+  validation/admission and C1 owners for that missing integration; do not infer
+  write authority or weaken independent validation to activate it.
+- **Boundary:** these source and transport checks strengthen first-result
+  readback and original-Task recovery evidence. They do not qualify one-goal
+  native onboarding, installed native App/model adoption, model compaction
+  retention, complete D2/D5 closure, comparable full costs, V1–V5/V10, R1/M3 or
+  C1 cutover. No runtime, schema, activation, permission or public evidence
+  policy changes; one-run relay/validator files remain private qualification
+  artifacts rather than a new shipped execution pipeline or CI fixture.
+
+### 2026-11-15 — First-Goal admission failure preserves creation and confirmed work
+
+- **Gap:** a failed first-Goal admission read or decision was converted into
+  permission to dispatch. Conversely, retrying a lost submit response could
+  apply a later admission failure or denial to already dispatched work.
+- **Delta:** the existing creation owner retains Goal, initial Tasks and
+  completion requirements before checking admission. An unverifiable admission
+  now returns a safe retryable action failure without opening a Session or
+  sending model work. Creation without an executable Host does not read work
+  admission. Recovery first reads the original Session/client operation through
+  the existing Task-start reader, verifies its request and first-Turn state,
+  and retains dispatched work without new admission. Queued work still requires
+  admission; foreign Sessions and terminal-before-start work remain refused.
+- **Evidence:** on `main@58cc5817e35e`, the real Chat HTTP/action/store path with
+  synthetic Codex protocol passes 36 creation-completion cases and 11 existing
+  Session/checkpoint recovery cases. Independent review identified two recovery
+  defects in the first candidate; their failing cases were retained and the
+  final candidate resolves both. The final runtime/test files also pass 22
+  selected File/SQLite and creation-only cases in an isolated combination with
+  C1 #8266 at `b8ac1ec5443b`, with exact source-byte readback. These are bounded
+  source and synthetic-Host checks, not current native-model qualification.
+- **Boundary:** this repairs V2/V4/R1 admission and recovery using existing
+  Session, Task and quota owners; it adds no shared vocabulary, authority grant,
+  validator installation or alternate C1 pipeline. Automatic original-Task
+  adoption, selected D2/D5 closure, native App/model and compaction retention,
+  progressive controls, comparable complete costs, full V1–V5/V10, R1/M3 and
+  C1 cutover remain unqualified. Preserve original requirements and earlier
+  negative evidence; run full original-goal regression before completion.
+
+### 2026-11-15 — Native Tasks consume existing owner Goal checks
+
+- **Gap:** a managed Native Task refused to execute with owner-configured Goal
+  acceptance alone, requiring a duplicate Task argv declaration.
+- **Delta:** the existing canonical Task validation plan now serves Native and
+  Delegation. Native reads current Goal scope and private Task declarations from
+  their existing owners, runs cumulative Goal and required Task checks, and
+  rechecks definition, work, claim, lifecycle and checker assets before and after
+  validation. Required declarations, applicable unbound/stale checks and changed
+  sources cannot fall back to a weaker check. Task argv keeps typed-result stdin
+  and the existing Turn receipt; legacy non-argv declarations retain refusal.
+- **Evidence:** the Goal-only refusal is reproduced on the prior Native consumer.
+  Shared TypeScript behavior matches the immutable baseline in 54 compatibility
+  vectors. Real isolated Chat/Core/canonical tests cover Goal-only and combined
+  execution, HTTP readback/replay, independent failures, corrupt declarations,
+  source changes before and after checks, and unrelated progress observations.
+- **Boundary:** this removes duplicate validation setup for already configured
+  Goal checks on V2/V4/R1. It does not install a trusted checker for a new natural
+  language Goal, authorize model/browser commands, or complete automatic first
+  Task adoption. Full V1–V5/V10, native-model/context retention, D2/D5 closure,
+  progressive controls, comparable complete costs, R1/M3 and C1 cutover remain
+  unqualified; preserve original acceptance and full-goal regression gates.

@@ -156,7 +156,35 @@ def test_disabled_retirement_context_does_not_select_inspector() -> None:
     """)
 
 
-@pytest.mark.parametrize("package", ["context_providers", "anti_entropy"])
+@pytest.mark.parametrize("configured", [False, True])
+def test_disabled_turn_recall_does_not_select_execution_helpers(configured: bool) -> None:
+    _run(f"""
+        import sys
+        from pathlib import Path
+        from loopx.capabilities.agent_turn_recall import runtime
+        calls = []
+        status = {{'status': 'disabled', 'automatic_recall': False}}
+        config = {{'automation': {{'automatic_ingest': False, 'automatic_recall': False}}}} if {configured!r} else None
+        def resolve(**kwargs):
+            calls.append(kwargs)
+            return status, config
+        runtime.resolve_reward_memory_experiment = resolve
+        result = runtime.run_configured_agent_turn_recall_fail_open(
+            registry_path=Path('fixture-registry.json'), goal_id='fixture-goal',
+            agent_id='fixture-agent', quota_decision={{}}, turn_instance_id='fixture-turn',
+            execute=True)
+        assert len(calls) == 1
+        assert result['status'] == ('explicitly_disabled' if {configured!r} else 'disabled')
+        assert result['context'] is None and result['provider_call_count'] == 0
+        assert result['quota_spend_performed'] is False
+        assert result['external_writes_performed'] is False
+        assert result['grants_new_action_authority'] is False
+        assert 'loopx.capabilities.reward_memory.runtime_hooks' not in sys.modules
+        assert 'loopx.capabilities.reward_memory.read_authority' not in sys.modules
+    """)
+
+
+@pytest.mark.parametrize("package", ["context_providers", "anti_entropy", "agent_turn_recall"])
 @pytest.mark.parametrize("mode", ["attribute", "from", "star"])
 def test_explicit_exports_remain_original_owner_objects(
     package: str, mode: str
@@ -179,9 +207,13 @@ def test_explicit_exports_remain_original_owner_objects(
             owner = importlib.import_module(name + '.factory')
             assert namespace['build_context_provider'] is owner.build_context_provider
             assert namespace['OpenVikingContextProvider'] is importlib.import_module(name + '.openviking').OpenVikingContextProvider
-        else:
+        elif {package!r} == 'anti_entropy':
             owner = importlib.import_module(name + '.agent_tool')
             assert namespace['anti_entropy_inspect'] is owner.anti_entropy_inspect
+        else:
+            owner = importlib.import_module(name + '.runtime')
+            assert namespace['run_configured_agent_turn_recall'] is owner.run_configured_agent_turn_recall
+            assert namespace['run_agent_turn_recall'] is importlib.import_module(name + '.core').run_agent_turn_recall
         try:
             getattr(module, 'missing_fixture_export')
         except AttributeError:

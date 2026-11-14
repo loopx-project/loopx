@@ -188,7 +188,10 @@ def capture_callback(
         raise ValueError("invalid Steward card reference")
     parent = _read_json(transport.root / f"{parent_ref}.json")
     stamp = parent.get("triage")
-    if not isinstance(stamp, dict) or parent["status"] != "delivered":
+    # A card can be visible as soon as Send returns an ID. Let the click use
+    # its own exact provider readback while the delivery worker verifies Send.
+    if (not isinstance(stamp, dict) or stamp.get("retired")
+            or parent["status"] not in {"captured", "delivered"} or not stamp.get("message_id")):
         raise ValueError("Steward card receipt is unavailable")
     if (
         parent["profile"] != profile or parent["event"]["chat_id"] != event["chat_id"]
