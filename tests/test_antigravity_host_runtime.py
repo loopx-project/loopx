@@ -277,16 +277,21 @@ assert host_runtime._admitted(argparse.Namespace()) is True
 
 
 @pytest.mark.parametrize("context_delivery", ["on", "off"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(
-    tmp_path, monkeypatch, context_delivery,
+    tmp_path, monkeypatch, context_delivery, provider,
 ):
     from examples.control_plane.quota_plan_fixtures import (
         SCOPED_AGENT_ID,
         write_cli_fixture,
     )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_delivery)
-    registry, runtime_root, _ = write_cli_fixture(tmp_path / "core", scoped_agents=True)
+    registry, runtime_root, _ = write_cli_fixture(
+        tmp_path / "core", scoped_agents=True, provider=provider,
+    )
     data = json.loads(registry.read_text())
     for goal in data["goals"]:
         if goal["id"] == "throttled-half":
@@ -299,14 +304,35 @@ def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(
         str(runtime_root),
         SCOPED_AGENT_ID,
     )
+    run = subprocess.run
+    observations = []
+
+    def observe_cli(*argv, **kwargs):
+        result = run(*argv, **kwargs)
+        observations.append(json.loads(result.stdout))
+        return result
+
+    monkeypatch.setattr(runtime.subprocess, "run", observe_cli)
+    monkeypatch.setattr(runtime, "_native_input", lambda *_: ("original-input", "IDLE", 5))
     for goal, expected in (
         ("full-speed", True),
         ("needs-operator", False),
         ("throttled-half", False),
     ):
         args.goal_id = goal
-        assert runtime._admitted(args) is expected
+        previous_count = len(observations)
+        response = runtime.stop_hook(args, event())
+        assert (response.get("decision") == "continue") is expected
+        if expected:
+            assert "heartbeat-prompt --thin" in response["reason"]
+        assert len(observations) == previous_count + 1
+        decision = observations[-1]
+        assert decision["should_run"] is expected
+        assert set(decision["interaction_contract"]) == {"agent_channel"}
+        assert "work_context" not in decision["interaction_contract"]["agent_channel"]
+        assert "heartbeat_receipt" not in decision
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == context_delivery
+    assert not (runtime_root / "context-delivery").exists()
 
 
 def test_hooks_migrate_only_an_unchanged_owned_legacy_entry(tmp_path):
