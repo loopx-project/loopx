@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 
 from control_plane.canonical_authority_fixture import initialize_canonical_authority
-from loopx.chat_action_store import ActionConflictError, ChatActionStore
+from loopx.chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from loopx.chat_actions import ChatActionService
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
@@ -245,6 +250,8 @@ def test_two_review_audiences_consume_one_team_plan_decision(tmp_path: Path) -> 
                 message_id="om_manager_card", chat_id="oc_manager"
             )["card_digest"],
             "confirmed_at": "2026-09-20T00:01:00Z",
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
         },
     )
     assert decided["status"] == "applying"
@@ -265,6 +272,8 @@ def test_two_review_audiences_consume_one_team_plan_decision(tmp_path: Path) -> 
                 message_id="om_goal_card", chat_id="oc_goal"
             )["card_digest"],
             "confirmed_at": "2026-09-20T00:01:01Z",
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
         },
     )
     assert replay["review_card"]["confirmation"]["event_id"] == "evt_manager"
@@ -311,6 +320,8 @@ def test_team_plan_cannot_be_decided_before_every_audience_is_delivered(
                 "state_fingerprint": preview["expected_state_fingerprint"],
                 "card_digest": manager_delivery["card_digest"],
                 "confirmed_at": "2026-09-20T00:01:00Z",
+                "actor_class": HUMAN_ACTOR_CLASS,
+                "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
             },
         )
 

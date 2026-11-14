@@ -12,7 +12,11 @@ import hashlib
 import json
 from pathlib import Path
 
-from loopx.chat_action_store import ChatActionStore
+from loopx.chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ChatActionStore,
+)
 from loopx.chat_actions import ChatActionService
 
 GOAL_ID = "goal-operation-fixture"
@@ -184,6 +188,8 @@ def confirmation(
         "confirmation_digest": str(operation["confirmation_digest"]),
         "card_digest": str(delivered["card_digest"]),
         "confirmed_at": datetime.now(timezone.utc).isoformat(),
+        "actor_class": HUMAN_ACTOR_CLASS,
+        "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
     }
 
 
