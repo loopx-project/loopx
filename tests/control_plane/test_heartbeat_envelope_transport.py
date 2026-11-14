@@ -1,4 +1,5 @@
 """Qualify the real worker -> renderer -> guard/selection/settlement boundary."""
+import base64
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import zlib
 from pathlib import Path
 
 import pytest
@@ -646,6 +648,7 @@ def test_antigravity_wake_defaults_to_complete_source_and_recovers_agent_spend(
     tmp_path, monkeypatch, provider, loader,
 ):
     from loopx.agy_goal_mode import build_antigravity_sidecar_template
+    from loopx.control_plane.scheduler.scheduler_hint import SCHEDULER_HOST_FACTS_CHUNK_FLAG
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_quota_settlement_cli import _configure_read_only_todo
 
@@ -662,6 +665,36 @@ def test_antigravity_wake_defaults_to_complete_source_and_recovers_agent_spend(
     rc, observation = _run_cli(registry, runtime, *gate[gate.index("quota"):], cwd=project, raw_guard=False)
     assert rc == 0 and observation[template["wake_when_json_field_true"]] is True, observation
     assert not {"contract_binding", "heartbeat_receipt", "first_read_command"} & observation.keys()
+    assert not (runtime / "context-delivery").exists()
+    rc, inline = _run_cli(
+        registry, runtime, *gate[gate.index("quota"):-1], "--context-delivery", "off",
+        cwd=project, raw_guard=False,
+    )
+    assert rc == 0 and inline["should_run"] == observation["should_run"], inline
+
+    def followup(argv):
+        args, chunks = [], []
+        values = iter(argv)
+        for token in values:
+            if token == SCHEDULER_HOST_FACTS_CHUNK_FLAG:
+                chunks.append(next(values))
+            else:
+                args.append(token)
+        assert chunks
+        encoded = "".join(chunks)
+        packet = json.loads(zlib.decompress(base64.b64decode(encoded + "=" * (-len(encoded) % 4))))
+        assert packet["host_facts"].pop("generated_at")
+        return args, packet
+
+    for field in template["stateful_backoff"].values():
+        actual, expected = observation, inline
+        for segment in field.split("."):
+            actual, expected = actual[segment], expected[segment]
+        if field.endswith(".cli_args"):
+            # A new observation timestamps its own transport, even with identical scheduler facts.
+            assert followup(actual) == followup(expected), field
+        else:
+            assert actual == expected, field
 
     if loader == "saved-alias-off":
         rc, prompt = _run_cli(
