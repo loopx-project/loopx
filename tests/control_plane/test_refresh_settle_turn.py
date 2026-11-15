@@ -338,6 +338,75 @@ def test_missing_spend_receipt_preserves_the_original_debit(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_exact_spend_and_refresh_reject_another_turns_debit_file(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    commands, identities = {}, {}
+    for turn in (TURN_ID, f"{TURN_ID}-second"):
+        binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                   "--todo-id", TODO_ID, "--turn-instance-id", turn]
+        rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+        assert rc == 0 and guard["should_run"], guard
+        identities[turn] = guard["heartbeat_receipt"]["settlement_identity"]
+        combined = ["refresh-state", *binding, "--classification", "verified_debit_identity",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+            "--settle-turn", "--settlement-receipt"]
+        spend = ["quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute", "--verbose"]
+        rc, settled = _run_cli(registry, runtime, *combined, cwd=project)
+        assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled
+        assert settled["settlement_identity"] == identities[turn]
+        commands[turn] = (combined, spend)
+
+    log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    index = log.parent / "runs" / "index.jsonl"
+    rows = [json.loads(line) for line in index.read_bytes().splitlines()]
+    target, sibling = (row for row in rows if row["classification"] == "quota_slot_spent")
+    assert target["settlement_identity"] == identities[TURN_ID]
+    assert sibling["settlement_identity"] == identities[f"{TURN_ID}-second"]
+    artifacts = [Path(row["json_path"]) for row in (target, sibling)]
+    original_artifacts = [path.read_bytes() for path in artifacts]
+    assert [(json.loads(data)["quota_event"]["slots"], json.loads(data)["quota_event"]["source"])
+            for data in original_artifacts] == [(1, "heartbeat"), (1, "heartbeat")]
+    original_index = index.read_bytes()
+    original_log = log.read_bytes()
+    target["json_path"] = sibling["json_path"]
+    index.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    redirected_index = index.read_bytes()
+
+    for receipt_kind in ("current", "legacy", "missing"):
+        if receipt_kind != "current":
+            retained = []
+            for line in original_log.splitlines():
+                row = json.loads(line)
+                if row["event_kind"] == "quota_spend" and row["run_id"] == TURN_ID:
+                    if receipt_kind == "missing":
+                        continue
+                    row["details"].pop("slots")
+                    row["details"].pop("source")
+                retained.append(row)
+            log.write_text("".join(json.dumps(row) + "\n" for row in retained), encoding="utf-8")
+        before = log.read_bytes()
+        for command in commands[TURN_ID]:
+            rc, rejected = _run_cli(registry, runtime, *command, cwd=project)
+            assert rc != 0 and not rejected["ok"], rejected
+            reason = (rejected.get("verbose_debug", {}).get("error")
+                      or rejected.get("error") or rejected.get("reason") or "")
+            assert "quota spend JSON artifact identity does not match its index row" in reason, rejected
+            assert rejected.get("settlement_progress", {}).get("state") != "settled", rejected
+            assert log.read_bytes() == before and index.read_bytes() == redirected_index
+            assert _spend_run_count(runtime) == 2
+
+    assert [path.read_bytes() for path in artifacts] == original_artifacts
+    index.write_bytes(original_index)
+    rc, recovered = _run_cli(registry, runtime, *commands[TURN_ID][0], cwd=project)
+    assert rc == 0 and recovered["settlement_progress"]["state"] == "settled", recovered
+    assert recovered["settlement_identity"] == identities[TURN_ID]
+    assert _spend_run_count(runtime) == 2 and index.read_bytes() == original_index
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)

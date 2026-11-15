@@ -1544,10 +1544,10 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
         await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id), true, matchedSpend);
       const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
       const receipt = spendReceiptTerms(matchedSpend.receipt);
-      // Only exact readback opens its matched debit artifact. Snapshot readers
-      // for history and guard discovery still reuse the bounded index.
-      const retained = matchedSpend.run !== null &&
-          (spendRequest !== null || receipt.slots !== undefined || receipt.source !== undefined)
+      // Only exact readback opens its matched debit artifact. Check its
+      // identity even when the receipt is missing or omits billing terms.
+      // Snapshot readers for history and guard discovery use the bounded index.
+      const retained = matchedSpend.run !== null
         ? await readQuotaSpendEventFromRun(join(request.runtime_root, "goals", request.goal_id, "runs"),
           matchedSpend.run, request.goal_id)
         : null;
