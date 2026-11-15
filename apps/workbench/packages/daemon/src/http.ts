@@ -28,6 +28,7 @@ import { MAX_FILE_BYTES, MAX_VIDEO_BYTES } from './videos.js';
 import type { VoiceService } from './voice-service.js';
 import { sendToolArtifact } from './borrowing-server.js';
 import { PetService } from './pets.js';
+import { corePath, proxyToCore } from './adapters/loopx/proxy.js';
 import { todoStages } from './todo-stage.js';
 import { teamMessage } from './teams.js';
 
@@ -315,6 +316,10 @@ export function createHttpServer(deps: HttpDeps): Server {
     const signedFileRoute = /^\/api\/threads\/[^/]+\/files\//.test(path);
     const signedDownloadRoute = /^\/api\/threads\/[^/]+\/download$/.test(path) && url.searchParams.has('sig');
     if (!trusted && !signedFileRoute && !signedDownloadRoute && !tokenMatches(bearer, token)) return sendJson(res, 401, { error: 'unauthorized' });
+
+    // LoopX core (goals, todos, steward, status): forwarded as is, behind this hub's own auth.
+    const core = corePath(path);
+    if (core !== null) return proxyToCore(req, res, core, url.search);
 
     const parts = path.split('/').filter(Boolean); // ['api', ...]
     /** Everything that would break if this instance disappeared from the registry. */
