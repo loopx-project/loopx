@@ -227,8 +227,9 @@ def register_quota_command(
         ),
     )
     turn_view.add_argument("--complete-turn", action="store_true",
-        help="For JSON quota should-run, explicitly consume the complete v1 Turn contract and its shared exact-Turn settlement. "
-             "Ordinary quota keeps its existing source and settlement. Context/Delta delivery remain independent.")
+        help="Use complete v1 JSON and request combined exact-Turn settlement. "
+             "Bound direct and generic CLI work already uses the complete source with separate writeback and spend. "
+             "Context and Delta delivery remain independent.")
     turn_view.add_argument("--host-todo-settlement", action="store_true", help=argparse.SUPPRESS)
     quota_parser.add_argument("--host-todo-admission", action="store_true", help=argparse.SUPPRESS)
     capture_group = quota_parser.add_mutually_exclusive_group()

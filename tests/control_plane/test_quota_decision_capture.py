@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -170,9 +171,15 @@ def test_large_refusal_diagnostics_remain_reachable_by_selected_read(tmp_path):
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize('profile_args', [
+    pytest.param((), id='direct'),
+    pytest.param(('--runtime-profile', 'generic_cli'), id='profile'),
+    pytest.param(('--host-surface', 'generic_cli', '--scheduler-owner', 'agent_cli_loop',
+                  '--execution-mode', 'interactive'), id='host-fields'),
+])
+def test_bound_cli_fallback_preserves_capture_and_settles_once(tmp_path, monkeypatch, provider, profile_args):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.quota.turn_envelope import quota_action_signature_document
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from tests.control_plane.canonical_authority_fixture import (
         initialize_canonical_authority, isolate_sqlite_runtime,
     )
@@ -191,30 +198,63 @@ def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, mo
     )
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
-            '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--runtime-profile', 'generic_cli',
-            '--available-capability', 'shell', '--available-capability', 'filesystem_read']
+            '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID,
+            '--available-capability', 'shell', '--available-capability', 'filesystem_read',
+            '--context-delivery', 'off', *profile_args]
     capture = tmp_path / 'original-decision'
-    code, ordinary = _run_cli(registry, runtime, *args, '--decision-output-dir', str(capture))
-    assert code == 0, ordinary
+    code, inline = _run_cli(registry, runtime, *args, '--decision-output-dir', str(capture), cwd=project)
+    assert code == 0, inline
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
+    assert_complete_turn_decision(full)
+    assert inline == full
     fallback = full['blocked_priority_fallback']
     assert full['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
-    assert ordinary['blocked_priority_fallback'] == fallback
-    assert 'schema_version' not in ordinary and 'contract_binding' not in full
-    assert 'blocked_priority_fallback' not in ordinary['heartbeat_recommendation']
-    assert ordinary['heartbeat_recommendation']['blocked_priority_fallback_ref'] == '$.blocked_priority_fallback'
-    assert ordinary['heartbeat_receipt'] == full['heartbeat_receipt']
-    assert ordinary['interaction_contract']['cli_channel']['settlement_plan'] == full[
-        'interaction_contract']['cli_channel']['settlement_plan']
-    # Raw source hashes distinguish renderings; every action dimension must match.
-    assert quota_action_signature_document(ordinary) == quota_action_signature_document(full)
-    before = _heartbeat_receipt_count(runtime, TURN_ID)
-    code, replay = _run_cli(registry, runtime, *args)
-    assert code == 0, replay
-    assert _heartbeat_receipt_count(runtime, TURN_ID) == before
+    assert full['selected_todo']['todo_id'] == TODO_ID
+    plan = full['interaction_contract']['cli_channel']['settlement_plan']
+    identity = full['heartbeat_receipt']['settlement_identity']
+    assert plan['identity'] == identity
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
+
+    command = ['quota', 'context-project', '--capture-file', str(saved),
+               '--capture-sha256', sha256(original_bytes).hexdigest(), '--goal-id', GOAL_ID,
+               '--turn-instance-id', TURN_ID, '--context-delivery', 'off', *profile_args]
+    code, refused = _run_cli(registry, runtime, *command, '--agent-id', 'unrelated-agent', cwd=project)
+    assert code == 1 and 'exact Goal, Agent and Turn' in refused['reason']
+    code, recovery = _run_cli(registry, runtime, *command, '--agent-id', AGENT_ID, cwd=project)
+    assert code == 0, recovery
+    env = {**os.environ, 'PATH': os.pathsep.join([str(Path(sys.executable).parent), os.environ['PATH']])}
+
+    def run_emitted(argv):
+        result = subprocess.run(argv, cwd=project, env=env, encoding='utf-8', capture_output=True, check=False)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    readback = bytearray()
+    reader = recovery['command']
+    while reader:
+        page = run_emitted(shlex.split(reader))
+        assert page['offset'] == len(readback), page
+        readback.extend(page['content'].encode())
+        reader = page.get('next_command')
+    assert readback == original_bytes
+
+    steps = {step['kind']: step for step in plan['ordered_steps']}
+    assert steps['quota_spend']['owner'] == 'agent'
+    substitutions = {'<validated_progress>': 'checked_fallback_capture',
+                     '<scale>': 'single_surface', '<outcome>': 'outcome_progress'}
+    writeback = [substitutions.get(word, word)
+                 for word in shlex.split(steps['durable_writeback']['command_template'])]
+    written = run_emitted([*writeback, '--no-global-sync', '--suppress-external-sinks'])
+    spend = shlex.split(written['settlement_owed']['command'])
+    assert spend[spend.index('--source') + 1] == 'heartbeat'
+    for appended in (True, False):
+        spent = run_emitted(spend)
+        assert spent['appended'] is appended, spent
+        assert spent['settlement_identity'] == identity
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == _spend_run_count(runtime) == 1
     assert saved.read_bytes() == original_bytes
 
 

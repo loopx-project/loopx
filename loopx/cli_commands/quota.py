@@ -339,7 +339,7 @@ def _prepare_quota_result_context(
     payload: dict[str, object], args: argparse.Namespace, *,
     context: QuotaCommandContext | None, registry_path: Path,
     heartbeat_turn_id: str | None, capture_directory: Path | None, reader_argv: list[str],
-    complete_source: bool, complete_cli_settlement: bool, preserve_profile_delivery: bool,
+    complete_source: bool, complete_cli_settlement: bool, preserve_bound_delivery: bool,
     activation: Mapping[str, Any],
     remember_result: Callable[[dict[str, object], str | None], None],
 ) -> tuple[dict[str, object], list[dict[str, Any]]]:
@@ -362,7 +362,7 @@ def _prepare_quota_result_context(
     if args.quota_command == "should-run" and context is not None:
         bind_capture_recovery_transport(payload, args, capture_directory=capture_directory,
             registry_path=registry_path, runtime_root=context.runtime_root,
-            preserve_profile_delivery=preserve_profile_delivery)
+            preserve_bound_delivery=preserve_bound_delivery)
     if capture_directory is not None and payload.get("replan_action_packet"):
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": reader_argv}
@@ -511,6 +511,7 @@ def _publish_quota_result(
     profile_source = False
     stateless_app_work_turn = False
     cli_work_source = False
+    direct_cli_source = False
     runtime_root = context.runtime_root if context is not None else None
     if not budgeted_spend:
         try:
@@ -523,31 +524,34 @@ def _publish_quota_result(
         native_context = activation["enabled"] and bool(
             getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
         )
-        # The scheduler profile selects the native work source. Display settings
-        # still select the transport and do not change settlement ownership.
+        # Both direct and profiled CLI work use the complete source. Host and
+        # display options still control transport and settlement independently.
         if args.quota_command == "should-run" and context is not None:
             from ..control_plane.scheduler.execution_context import (
                 SchedulerRuntimeProfile,
+                resolve_scheduler_execution_context,
                 scheduler_runtime_profile_for_execution_context,
             )
 
-            profile = scheduler_runtime_profile_for_execution_context(context.scheduler_context)
+            scheduler = resolve_scheduler_execution_context(context.scheduler_context)
+            profile = scheduler_runtime_profile_for_execution_context(scheduler)
             # Turnless App probes retain their observation route.
             stateless_app_work_turn = (
                 heartbeat_turn_id is not None
                 and profile in {SchedulerRuntimeProfile.TRAE_APP, SchedulerRuntimeProfile.ANTIGRAVITY_APP}
             )
-            cli_work_source = args.format == "json" and (
-                profile is SchedulerRuntimeProfile.CODEX_CLI_VISIBLE
-                or (
-                    heartbeat_turn_id is not None
-                    and args.agent_id is not None
-                    and (
-                        profile is SchedulerRuntimeProfile.KIRO_CLI_VISIBLE
-                        or (profile is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
-                            and getattr(args, "runtime_profile", None) == profile.value)
-                    )
-                )
+            bound_json = args.format == "json" and heartbeat_turn_id is not None and args.agent_id is not None
+            cli_work_source = (
+                (args.format == "json" and profile is SchedulerRuntimeProfile.CODEX_CLI_VISIBLE)
+                or (bound_json and (
+                    profile is SchedulerRuntimeProfile.KIRO_CLI_VISIBLE
+                    or (profile is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
+                        and getattr(args, "runtime_profile", None) == profile.value)
+                ))
+            )
+            direct_cli_source = bound_json and (
+                (profile or scheduler.default_settlement_profile)
+                is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
             )
             profile_source = (
                 profile is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT
@@ -557,7 +561,7 @@ def _publish_quota_result(
             if (profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE and heartbeat_turn_id is not None
                     and args.format == "json" and not getattr(args, "turn_envelope", False)):
                 complete_cli_settlement = True
-        complete_source = (complete_cli_settlement or profile_source
+        complete_source = (complete_cli_settlement or profile_source or direct_cli_source
             or any(getattr(args, name, None) for name in (
                 "turn_envelope", "decision_handoff_socket",
             )))
@@ -565,7 +569,7 @@ def _publish_quota_result(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
             complete_source=complete_source, complete_cli_settlement=complete_cli_settlement,
-            preserve_profile_delivery=(stateless_app_work_turn or cli_work_source)
+            preserve_bound_delivery=(stateless_app_work_turn or cli_work_source or direct_cli_source)
                 and not getattr(args, "complete_turn", False),
             activation=activation, remember_result=remember_result,
         )

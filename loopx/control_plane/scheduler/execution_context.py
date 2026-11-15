@@ -237,6 +237,9 @@ class SchedulerExecutionContextResolution:
     # Only the external Turn driver sets this in-process. A context supplied
     # to quota or recovered from its serialized projection cannot assert it.
     turn_driver_owned: bool = False
+    # A direct bound CLI can request the existing heartbeat plan without
+    # declaring a scheduler or changing the scheduler projection.
+    default_settlement_profile: SchedulerRuntimeProfile | None = None
 
     @property
     def ok(self) -> bool:

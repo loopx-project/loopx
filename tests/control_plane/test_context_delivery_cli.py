@@ -261,13 +261,12 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
     summary = guard["agent_todo_summary"]
     # The complete writer retains the original bounded source rows. It no
     # longer emits the legacy display projection as its canonical decision.
-    # App inline delivery can name an exact prefix of the original lane.
+    # Both bound hosts name the exact prefix of the original lane.
     literal_guard = deepcopy(guard)
     literal_summary = literal_guard["agent_todo_summary"]
-    if profile == "codex_app":
-        assert "backlog_items" not in summary
-        assert literal_summary.pop("backlog_items_ref") == "first_executable_items[0:2]"
-        literal_summary["backlog_items"] = summary["first_executable_items"][:2]
+    assert "backlog_items" not in summary
+    assert literal_summary.pop("backlog_items_ref") == "first_executable_items[0:2]"
+    literal_summary["backlog_items"] = summary["first_executable_items"][:2]
     rows = literal_summary["backlog_items"]
     assert [item["todo_id"] for item in rows] == [TODO_ID, "todo_work_1"]
     condition = rows[1]["resume_condition"]

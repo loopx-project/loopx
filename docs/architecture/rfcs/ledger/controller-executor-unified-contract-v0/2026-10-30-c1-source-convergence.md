@@ -3147,3 +3147,29 @@ the existing onboarding entry to adopt the complete source for new work.
 Handwritten raw CLI and the explicit bounded v0 route retain their
 compatibility surface. Model adoption and full cost require the original-quota
 single-session comparison.
+
+### Complete source for direct bound quota CLI work
+
+JSON `quota should-run` with an explicit Agent and Turn now uses the complete
+source even when the caller omits a scheduler profile or spells out the
+`generic_cli` host fields. The ordinary CLI uses the same settlement plan
+builder as the declared generic CLI. Its emitted writeback and heartbeat spend
+carry the receipt's original Todo and Turn and run as separate commands. A
+missing scheduler declaration still carries no scheduler authority. Explicit
+Off gives the complete source inline. Turnless ordinary reads and the
+explicit bounded v0 display keep their compatibility routes.
+
+Eight matched File and SQLite pairs compared the direct command with main
+`f3bdad238739`; the preceding C1 candidate `6cbc9a4aa56a` also served as a
+control. The harness supplied the original Turn at baseline closeout
+because the older response did not provide its bound plan. Both arms
+accepted the same synthetic result and appended one debit. The candidate
+read back the original captures and rejected a different Agent without
+another admission. Guard, full display read when referenced, writeback,
+spend and replay used the same number of calls. Against main, observed CLI
+stdout grew from 52.0 KB to 64.3 KB with default delivery and from
+44.0–44.1 KB to 55.8 KB with explicit Off. The display comparison excludes
+the separate recovery probe. The long-path explicit v0 budget and the
+existing complete diagnostic carrier both pass their original checks.
+Model outcomes, selective read costs and installed Host adoption still
+require qualification.
