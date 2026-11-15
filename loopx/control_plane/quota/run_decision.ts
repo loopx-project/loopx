@@ -20,6 +20,7 @@ interface RunFacts {
   automation_prompt_upgrade_required: boolean;
   replan_required: boolean;
   replan_applies: boolean;
+  replan_execution_pending: boolean;
   replan_settlement_pending: boolean;
   goal_health_ok: boolean;
   inbox_reply_due: boolean;
@@ -74,6 +75,8 @@ function decodeRunFacts(params: JsonObject): RunFacts {
     automation_prompt_upgrade_required: requireBoolean(params.automation_prompt_upgrade_required, "automation_prompt_upgrade_required"),
     replan_required: requireBoolean(params.replan_required, "replan_required"),
     replan_applies: requireBoolean(params.replan_applies, "replan_applies"),
+    replan_execution_pending: params.replan_execution_pending === undefined ? false
+      : requireBoolean(params.replan_execution_pending, "replan_execution_pending"),
     replan_settlement_pending: params.replan_settlement_pending === undefined ? false
       : requireBoolean(params.replan_settlement_pending, "replan_settlement_pending"),
     goal_health_ok: requireBoolean(params.goal_health_ok, "goal_health_ok"),
@@ -155,8 +158,9 @@ function applyGoalOverrides(facts: RunFacts, decision: RunDecision): void {
     && facts.goal_health_ok && !facts.workspace_guard && !facts.automation_prompt_upgrade_required;
   const quotaExhausted = facts.state === "throttled" || (facts.quota_allowed_slots !== null
     && facts.quota_spent_slots !== null && facts.quota_spent_slots >= facts.quota_allowed_slots);
-  decision.replan_decision_allowed = replanSelected && !quotaExhausted;
-  if (replanSelected && quotaExhausted) {
+  const budgetAllowsReplan = !quotaExhausted || facts.replan_execution_pending || facts.replan_settlement_pending;
+  decision.replan_decision_allowed = replanSelected && budgetAllowsReplan;
+  if (replanSelected && !budgetAllowsReplan) {
     clearExecutionLanes(decision);
     decision.should_run = false;
     decision.effective_action = EffectiveAction.THROTTLED_SKIP;

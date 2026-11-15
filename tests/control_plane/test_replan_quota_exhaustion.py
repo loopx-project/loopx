@@ -1,5 +1,7 @@
 """Fresh replan work needs remaining compute; settlement retains its own owner."""
+from datetime import datetime, timezone
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -94,6 +96,7 @@ def test_should_run_cli_uses_the_shared_admission(
         "--runtime-root", str(tmp_path / "runtime"), "--format", "json",
         "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
         "-H", "generic_cli", "-O", "agent_cli_loop", "-M", "interactive",
+        "--context-delivery", "off",
     ])
     assert code == 0
     packet = json.loads(capsys.readouterr().out)
@@ -135,3 +138,94 @@ def test_exhaustion_preserves_exact_owed_turn_recovery(tmp_path: Path):
     assert packet["unsettled_host_turn_recovery"]["prior_turn_instance_id"] == "prior-turn"
     assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
     assert packet["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_exhausted_window_preserves_only_the_admitted_replan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+):
+    from test_replan_successor_guard_reentry import (
+        AGENT as CLI_AGENT,
+        GOAL as CLI_GOAL,
+        TURN,
+        _add,
+        _fixture,
+        _guard,
+    )
+
+    call, _, index = _fixture(tmp_path, monkeypatch, provider)
+    registry = tmp_path / "registry.json"
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 1
+    registry.write_text(json.dumps(config))
+
+    original = _guard(call)
+    assert original["effective_action"] == "autonomous_replan_required"
+    identity = original["heartbeat_receipt"]["settlement_identity"]
+    assert original["quota"]["spent_slots"] == 0
+
+    # Another lane spends the remaining slot after the guard is committed.
+    # Seed an ordinary ledger entry and let the production CLI account for it.
+    timestamp = datetime.now(timezone.utc).isoformat()
+    spend = {
+        "classification": "quota_slot_spent", "generated_at": timestamp,
+        "goal_id": CLI_GOAL, "agent_id": "different-agent",
+        "quota_event": {"event_type": "quota_slot_spent", "slots": 1},
+    }
+    with index.open("a", encoding="utf-8") as ledger:
+        ledger.write(json.dumps(spend) + "\n")
+
+    fresh_turn = "turn-after-compute-exhaustion"
+    for _ in range(2):
+        fresh = _guard(call, fresh_turn)
+        assert (fresh["quota"]["allowed_slots"], fresh["quota"]["spent_slots"]) == (1, 1)
+        assert fresh["effective_action"] == "throttled_skip"
+        assert fresh["should_run"] is False
+        assert not fresh["interaction_contract"]["cli_channel"].get("settlement_plan")
+
+    replay = _guard(call, TURN)
+    assert (replay["quota"]["allowed_slots"], replay["quota"]["spent_slots"]) == (1, 1)
+    assert replay["heartbeat_receipt"]["event_id"] == original["heartbeat_receipt"]["event_id"]
+    assert replay["effective_action"] == "autonomous_replan_required"
+    assert replay["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert replay["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+
+    plan = call("turn", "plan", "--goal-id", CLI_GOAL, "--agent-id", CLI_AGENT,
+                "--turn-instance-id", TURN, "--host", "codex-cli")
+    assert plan["route"]["kind"] == "replan_required"
+
+    config["goals"][0]["quota"]["compute"] = 0
+    registry.write_text(json.dumps(config))
+    paused = _guard(call, TURN)
+    assert paused["should_run"] is False
+    assert paused["scheduler_hint"]["action"] == "stop_until_explicit_resume"
+    config["goals"][0]["quota"]["compute"] = 1
+    registry.write_text(json.dumps(config))
+
+    _add(call, identity["replan_obligation_id"])
+    recovered = _guard(call, TURN)
+    assert recovered["replan_action_packet"]["settlement_only"] is True
+    actions = recovered["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    refreshed = call(*shlex.split(actions[0])[1:], "--no-global-sync", "--suppress-external-sinks")
+    assert refreshed["settlement_progress"]["state"] == "spend_required"
+
+    pending = _guard(call, TURN)
+    cli = pending["interaction_contract"]["cli_channel"]
+    assert cli["settlement_plan"]["identity"] == identity
+    assert [step["kind"] for step in cli["settlement_plan"]["ordered_steps"]] == ["quota_spend"]
+    assert cli["next_cli_actions"] == [actions[1]]
+    debit = shlex.split(actions[1])[1:]
+    denied = call(*debit, expected_code=1)
+    assert denied["appended"] is False
+    assert denied["quota_rejection_action"] == "throttled_skip"
+
+    # The spend owner still enforces its existing policy. An owner increase
+    # restores the allowance, then the same owed debit can settle exactly once.
+    config["goals"][0]["quota"]["allowed_slots"] = 2
+    registry.write_text(json.dumps(config))
+    assert call(*debit)["appended"] is True
+    assert call(*debit)["appended"] is False
+    settled = _guard(call, TURN)
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["heartbeat_receipt"]["settlement_identity"] == identity
+    assert settled["should_run"] is False

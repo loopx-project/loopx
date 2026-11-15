@@ -265,6 +265,7 @@ def resolve_quota_run_decision(
     goal_frontier_projection: dict[str, Any] | None,
     task_orchestration_contract: dict[str, Any] | None,
     receipt_bound_replan_phase: ReceiptBoundReplayPhase | None = None,
+    receipt_bound_replan_execution_pending: bool = False,
 ) -> QuotaRunDecision:
     """Apply the ordered final guards for one quota run decision."""
 
@@ -299,6 +300,10 @@ def resolve_quota_run_decision(
         "automation_prompt_upgrade_required": automation_prompt_upgrade_required,
         "replan_required": replan_required,
         "replan_applies": bool(scope.get("applies")),
+        "replan_execution_pending": (
+            receipt_bound_replan_execution_pending
+            and (replan_obligation or {}).get("selection_binding") == "heartbeat_receipt"
+        ),
         "replan_settlement_pending": (
             receipt_bound_replan_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
             and (replan_obligation or {}).get("selection_binding") == "heartbeat_receipt"

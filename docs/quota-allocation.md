@@ -97,14 +97,20 @@ replan wakeup. A pending replan remains pending until rolling-window accounting
 restores allowance or the owner increases the existing compute budget. This
 also applies when a focus or external wait masks the exhausted window. Replan
 still precedes monitor quiet and lane waits while compute remains available.
-Owner Stop/zero-compute pauses and exact-identity owed settlement, including
-qualified no-debit closeouts, retain their existing owners and rules.
+Recovery of a positively admitted replan keeps its original Goal, Agent, Turn
+and obligation when the window later fills. Verified writeback still uses the
+original settlement plan, including qualified no-debit closeouts. If the
+spend owner rejects the debit because the window is full, retry that same
+settlement when allowance returns. Owner Stop and zero compute pause
+automatic execution.
 
 新的自主重规划与 Goal 共用算力窗口。`spent_slots >= allowed_slots` 时，额外额度为
 **零**；`quota should-run` 使用现有的 typed `throttled_skip`，不再为待处理的重规划
 唤醒模型。等待滚动窗口恢复额度，或 owner 提高已有算力预算后重新判断；focus 或
 外部等待不会豁免这一限制。有剩余额度时，重规划仍优先于 monitor quiet 和 lane wait。
-Owner Stop／零算力暂停、原身份欠账结算与合格的免扣额收尾保持原有规则。
+已有准入收据的重规划在额度用尽后仍按原 Goal、Agent、Turn 和义务恢复；已验证的
+写回沿原结算计划收尾，仍支持符合条件的免扣额收尾。扣额责任方因窗口已满拒绝扣额时，
+等额度恢复后重试同一笔结算。Owner Stop 和零算力暂停自动执行。
 
 The product and benchmark runners default to review after **6 settled effective
 work Turns** in both standard and fine-grained modes. This changes the previous
