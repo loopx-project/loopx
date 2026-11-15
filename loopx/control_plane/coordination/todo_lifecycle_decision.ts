@@ -388,6 +388,15 @@ function authority(request: LifecycleDecisionRequest):
   const retired = retiredHandoffModeRejection(request.handoff_mode);
   if (retired !== null) return result("rejected", retired);
   if (registered.length <= 1) {
+    // The exact linked user gate override is consulted before single-agent
+    // compatibility, matching the multi-agent branch below: a single-agent
+    // goal's user gate otherwise can never be resolved by an owner decision
+    // (the terminal CLI has no human owner actor), so the gate would be
+    // permanently stuck. The override still requires the exact decision scope
+    // link; it grants nothing beyond closing that one linked gate.
+    if (exactUserGateOverride(request)) {
+      return { mode: "exact_user_gate_decision_scope_override", ownershipGate: "not_required" };
+    }
     if (actor !== null) {
       const rejection = registeredTodoMutationRejection(todo, actor, registered);
       if (rejection !== null) return result("rejected", rejection);

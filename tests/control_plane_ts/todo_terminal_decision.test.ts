@@ -349,6 +349,65 @@ test("exact linked user gate decision scope does not invent Agent authority", ()
   assert.equal(mismatch.code, "actor_required");
 });
 
+test("single-agent goals consult the exact user gate override for owner decisions", () => {
+  const scope = {kind: "direction", granularity: "action", scope_key: "release"};
+  const gate = {
+    todo_id: "todo_gate",
+    status: "open",
+    role: "user",
+    task_class: "user_gate",
+    claimed_by: null,
+    excluded_agents: [],
+    bound_agent: "agent-a",
+    blocks_agent: null,
+    decision_scope: scope,
+    required_decision_scopes: [],
+    unblocks_todo_id: "todo_target",
+  };
+  const target = {
+    ...request().todo as object,
+    todo_id: "todo_target",
+    required_decision_scopes: [scope],
+  };
+  // Single registered agent: an owner decision (no agent actor) closing the
+  // exact linked gate must use the override instead of failing actor admission.
+  const accepted = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    todo: gate,
+    decision_target: target,
+    actor_agent_id: null,
+    decision_outcome: "approve",
+  }));
+  assert.equal(accepted.outcome, "apply");
+  assert.equal(accepted.authority_mode, "exact_user_gate_decision_scope_override");
+
+  // Without the exact scope link the override does not fire: the ownership
+  // facts still require an accountable actor.
+  const unlinked = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    todo: gate,
+    decision_target: { ...target, required_decision_scopes: [] },
+    actor_agent_id: null,
+    decision_outcome: "approve",
+  }));
+  assert.equal(unlinked.outcome, "rejected");
+  assert.equal(unlinked.code, "actor_required");
+
+  // Registered actor on the gate keeps working exactly as before.
+  const viaActor = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    todo: gate,
+    decision_target: target,
+    actor_agent_id: "agent-a",
+    decision_outcome: "approve",
+  }));
+  assert.equal(viaActor.outcome, "apply");
+  // The registered actor is admitted through single-agent compatibility; the
+  // override itself only fires when no agent actor is available.
+  assert.ok(["single_agent_compatibility", "exact_user_gate_decision_scope_override"]
+    .includes(viaActor.authority_mode as string));
+});
+
 test("hard-lease terminal transition releases the exact owned generation", () => {
   const lease = {
     present: true,
