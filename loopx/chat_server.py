@@ -1999,6 +1999,9 @@ def serve_chat(
     server.delegation_wake_service = DelegationWakeService(
         server.runtime_controller, goal_context=_wake_goal_context
     ).start()
+    # Resume only retained, explicitly confirmed creation requests through the
+    # existing Session queue. Its owner rechecks source, native work and gates.
+    server.runtime_controller.resume_creation_requests()
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
     print(f"Agent boundary: local adapters, project grant {project_workspace_grant}, approval policy never", flush=True)

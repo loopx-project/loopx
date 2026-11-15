@@ -1785,6 +1785,9 @@ class CodexChatAgentSession:
                 "approvalPolicy": "never",
                 **({"permissions": self.permissions_profile} if self.permissions_profile else {}),
                 **({"sandboxPolicy": sandbox_policy} if sandbox_policy is not None else {}),
+                **({"runtimeWorkspaceRoots": [str(self.work_dir.resolve())]}
+                   if _native_task and sandbox_policy is not None
+                   and sandbox_policy.get("type") == "workspaceWrite" else {}),
                 **(
                     {"outputSchema": output_schema} if output_schema is not None else {}
                 ),

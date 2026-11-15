@@ -292,11 +292,23 @@ class ManagedSessionTurn:
         if request.get("work_kind") == "scheduled_task":
             from .session_calendar_tasks import SessionCalendarTasks
             report["scheduled_task"] = SessionCalendarTasks(self.controller).admission(request)
+        creation = {}
+        if "creation_request" in request:
+            from .creation_queue import creation_request_facts
+            retained = request["creation_request"]
+            if not isinstance(retained, dict) or not isinstance(retained.get("creation_operation_id"), str):
+                raise ValueError("the original creation request is unavailable")
+            facts = creation_request_facts(self.controller, actor["session_id"],
+                proposal_id=retained["creation_operation_id"])
+            if facts is None:
+                raise ValueError("the original creation request source is unavailable")
+            creation = {"creation_proposal": facts["proposal"],
+                "current_original_task": facts["current_original_task"]}
         return ChatConversationBindings._core("collaboration.session.managed_turn.admit", {
             "session": session, "request": request, "turn": turn,
             "goal": StewardManagedMode(self.controller, None)._goal(actor["goal_id"]),
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
-            "monitor_todo": monitor, **report,
+            "monitor_todo": monitor, **report, **creation,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **StewardTurnHost(self.controller).report_quota_basis(request),
@@ -341,6 +353,10 @@ class ManagedSessionTurn:
             result["calendar_task_sources"] = SessionCalendarTasks(self.controller).source_options(session_id)
         return result
 
+    def creation_request(self, session_id: str) -> dict[str, Any] | None:
+        from .creation_queue import creation_request_facts, project_creation_request
+        return project_creation_request(creation_request_facts(self.controller, session_id))
+
     def _original_task_entry(self, session_id: str) -> dict[str, Any]:
         """Observe the existing creation/validation owners without any effects.
 
@@ -356,6 +372,15 @@ class ManagedSessionTurn:
         unavailable: dict[str, Any] = {"todo_id": None, "state": "unbound", "source": None,
             "canonical_done": False}
         try:
+            creation = self.creation_request(session_id)
+            if creation is not None:
+                request = self._request(session_id, creation["agent_id"], creation["operation_id"], creation["todo_id"])
+                request["creation_request"] = creation
+                retained_turn = self.store.turn_for_client(session_id, "managed." + creation["operation_id"])
+                unavailable.update(creation_request=creation, creation_turn=None)
+                if retained_turn is not None and retained_turn.get("loopx_request") != request:
+                    raise ValueError("the original creation operation belongs to another managed request")
+                unavailable["creation_turn"] = retained_turn
             self.admit(request)
             basis = inspect_goal_acceptance(registry_path=self.controller.registry_path,
                 runtime_root=str(self.controller.coordination_runtime_root), goal_id=actor["goal_id"],
@@ -371,18 +396,24 @@ class ManagedSessionTurn:
             # Return only the display observation; commands, pins and private
             # declarations stay with their existing owner.
             self.admit(request)
-            return {key: plan[key] for key in ("todo_id", "state", "source", "observation", "canonical_done")}
-        except (ValueError, ManagedTaskValidationUnavailable) as exc:
-            return {**unavailable, "reason": str(exc)}
+            return {**{key: plan[key] for key in ("todo_id", "state", "source", "observation", "canonical_done")},
+                **{key: unavailable[key] for key in ("creation_request", "creation_turn") if key in unavailable}}
+        except (OSError, ValueError, RuntimeError) as exc:
+            reason = ("the original task source is temporarily unavailable" if isinstance(exc, OSError)
+                else str(exc))
+            return {**unavailable, "reason": reason}
 
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,
                todo_id: str | None = None, monitor_deadline: str | None = None,
                report_window: dict[str, Any] | None = None,
-               scheduled_window: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
+               scheduled_window: dict[str, Any] | None = None,
+               _creation_request: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
         from ...attached_session import managed_session_goal_commit
         controller = self.controller
         with controller._session_adapter_lock(session_id):
             request = self._request(session_id, agent_id, operation_id, todo_id)
+            if _creation_request is not None:
+                request["creation_request"] = _creation_request
             if scheduled_window is not None:
                 if report_window is not None or monitor_deadline is not None or not todo_id:
                     raise ValueError("a calendar task requires its original finite Todo")
@@ -449,28 +480,109 @@ class ManagedSessionTurn:
                 registry_path=controller.registry_path, session_id=session_id)
             with commit():
                 admitted = self.admit(request, selection_recovery=selection_recovery)
+                if _creation_request is not None:
+                    self._validation_source(request, _creation_request["todo_id"])
+                    if not self._creation_allowance(request):
+                        raise ValueError("the original creation task has no current preparation admission")
                 accepted = self.store.accept_managed_turn(session_id, client_turn_id=client_id,
                     message="Advance the currently admitted native LoopX work.",
                     display_message="生成本期定时报告。" if report_window is not None else
                         "执行本期定时任务。" if scheduled_window is not None else
                         "检查当前 Goal 原生任务状态。" if monitor_deadline is not None else "推进一次 LoopX 任务。",
                     origin="native_loopx", loopx_execution=True, loopx_request=request)
-            try:
-                session = self.store.load_session(session_id)
-                if admitted["observation_only"]:
-                    from .steward_monitor import StewardObservationAdapter
-                    adapter = StewardObservationAdapter(session.get("upstream_thread_id"))
-                else:
-                    adapter = controller._ensure_adapter_locked(session, work_dir=Path(admitted["workspace_path"]),
-                        objective="Advance this Goal's authorized work.", accepted_turn_id=accepted.turn["turn_id"])
-                    if Path(adapter.session.work_dir).resolve() != Path(admitted["workspace_path"]).resolve():
-                        raise ValueError("the original managed conversation workspace changed")
-                controller._start_accepted_turn_worker(session_id=session_id, turn_id=accepted.turn["turn_id"],
-                    message=accepted.turn["message"], attachments=[], adapter=adapter, loopx_execution=True)
-            except Exception as exc:
-                controller._fail_queue_preparation(session_id, accepted.turn["turn_id"], exc)
-                raise
+            self._dispatch_accepted_turn(accepted.turn, admitted)
             return accepted.turn, accepted.created
+
+    def _dispatch_accepted_turn(self, turn: dict[str, Any], admitted: dict[str, Any]) -> None:
+        session_id = turn["session_id"]
+        request = turn.get("loopx_request") or {}
+        if "creation_request" in request:
+            from ...attached_session import managed_session_goal_commit
+            with managed_session_goal_commit(store=self.store, registry_path=self.controller.registry_path,
+                    session_id=session_id)():
+                admitted = self.admit(request, turn=turn)
+                self._validation_source(request, request["todo_id"])
+                if not self._creation_allowance(request):
+                    return  # Retain the accepted, unstarted operation for a fresh state signal.
+        try:
+            session = self.store.load_session(session_id)
+            if admitted["observation_only"]:
+                from .steward_monitor import StewardObservationAdapter
+                adapter = StewardObservationAdapter(session.get("upstream_thread_id"))
+            else:
+                adapter = self.controller._ensure_adapter_locked(session,
+                    work_dir=Path(admitted["workspace_path"]), objective="Advance this Goal's authorized work.",
+                    accepted_turn_id=turn["turn_id"])
+                if Path(adapter.session.work_dir).resolve() != Path(admitted["workspace_path"]).resolve():
+                    raise ValueError("the original managed conversation workspace changed")
+            self.controller._start_accepted_turn_worker(session_id=session_id, turn_id=turn["turn_id"],
+                message=turn["message"], attachments=[], adapter=adapter, loopx_execution=True)
+        except Exception as exc:
+            self.controller._fail_queue_preparation(session_id, turn["turn_id"], exc)
+            raise
+
+    def consume_creation_request(self, creation: dict[str, Any]) -> bool:
+        """Consume one saved request through the existing managed acceptance owner."""
+        from ...attached_session import managed_session_goal_commit
+        from .creation_queue import queued_turn_unstarted
+        session_id = creation["session_id"]
+        request = self._request(session_id, creation["agent_id"], creation["operation_id"], creation["todo_id"])
+        request["creation_request"] = creation
+        with self.controller._session_adapter_lock(session_id):
+            existing = self.store.turn_for_client(session_id, "managed." + creation["operation_id"])
+            if existing is not None:
+                if existing.get("loopx_request") != request:
+                    raise ValueError("the original creation operation belongs to another managed request")
+                if not queued_turn_unstarted(existing):
+                    return False  # Unknown, failed and completed operations are never re-executed.
+                with managed_session_goal_commit(store=self.store, registry_path=self.controller.registry_path,
+                        session_id=session_id)():
+                    admitted = self.admit(request, turn=existing)
+                    self._validation_source(request, creation["todo_id"])
+                    if not self._creation_allowance(request):
+                        return True
+                self._dispatch_accepted_turn(existing, admitted)
+                return True
+            self.admit(request)
+            self._validation_source(request, creation["todo_id"])
+            if not self._creation_allowance(request):
+                return True
+        self.submit(session_id, agent_id=creation["agent_id"], operation_id=creation["operation_id"],
+            todo_id=creation["todo_id"], _creation_request=creation)
+        return True
+
+    def _creation_allowance(self, request: dict[str, Any]) -> bool:
+        """Read the existing typed selected-work admission, without binding or effects.
+
+        Preparation may require the native owner to claim a lease. Its final
+        admission and launch guards still own execution after this observation.
+        """
+        from ...status import collect_status, AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
+        from ...control_plane.quota.live_decision import build_live_quota_should_run_decision
+        from ...control_plane.scheduler.execution_context import scheduler_execution_context_for_turn
+        from ...control_plane.work_items.action_selection_contract import current_action_selection_admission
+        from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+        actor = request["actor"]
+        root = self.controller.coordination_runtime_root
+        status = collect_status(registry_path=self.controller.registry_path,
+            runtime_root_override=str(root), limit=AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
+            goal_id=actor["goal_id"], agent_lane_id=actor["agent_id"],
+            available_capabilities=None, include_presentation_projections=False)
+        decision = build_live_quota_should_run_decision(status,
+            goal_id=actor["goal_id"], agent_id=actor["agent_id"], available_capabilities=None,
+            include_scheduler_detail=False, codex_app_current_rrule=None,
+            registry_path=self.controller.registry_path, runtime_root=root,
+            requested_action_todo_id=request["todo_id"], turn_instance_id=request["turn_instance_id"],
+            workspace_path=Path(actor["workspace_path"]),
+            goal_ref=capture_first_party_host_goal_ref(registry_path=self.controller.registry_path,
+                goal_id=actor["goal_id"]),
+            scheduler_execution_context=scheduler_execution_context_for_turn(
+                host="codex-app-server", execution_mode="isolated-headless"))
+        agent = (decision.get("interaction_contract") or {}).get("agent_channel") or {}
+        _, admitted = current_action_selection_admission(decision,
+            requested_todo_id=request["todo_id"], agent_must_attempt=agent.get("must_attempt") is True,
+            agent_delivery_allowed=agent.get("delivery_allowed"))
+        return admitted
 
     def _validation_source(self, request: dict[str, Any], todo_id: str) -> dict[str, Any]:
         from ...control_plane.effect_runtime import effect_runtime_result
