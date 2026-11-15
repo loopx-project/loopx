@@ -332,7 +332,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
           </select></label> : null}
         </div>
         {role === "project" && effectiveProjectGrant === "workspace_write" ? <p role="status">{zh ? "此 App 可按你的指令编辑选定工作区；不提高已直连 Agent 的原宿主权限。更改权限会建立新绑定和新会话，旧会话不会自动提升权限，已有 Agent 直连需重新授权。" : "This App may edit the selected workspace on your instruction; attached Agents retain their original host permissions. Changing access creates a new binding and Session. Existing Chat does not gain access and Agent targets require new authorization."}</p> : null}
-        <div className="personal-detail-actions"><button disabled={busy || settings === null || !apps.some(item => item.app_ref === app && item.ready) || !project || !executor || (audience === "group" && (loadingGroups || groupIds.length === 0 || groupIds.length > 16))} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" ? effectiveProjectGrant : "workspace_read", audience === "group" ? groupIds : undefined))} type="button">
+        <div className="personal-detail-actions"><button disabled={busy || !apps.some(item => item.app_ref === app && item.ready) || !project || !executor || (audience === "group" && (loadingGroups || groupIds.length === 0 || groupIds.length > 16))} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" ? effectiveProjectGrant : "workspace_read", audience === "group" ? groupIds : undefined))} type="button">
           {busy ? (zh ? "正在核验" : "Verifying") : (audience === "group" ? (zh ? "连接指定群话题" : "Connect selected group topics") : (zh ? "连接本人私聊" : "Connect owner private Chat"))}</button>
         </div>
       </div>
