@@ -738,6 +738,11 @@ Trae App 和 Antigravity App 已绑定 Turn 的心跳也采用经校验的完整
 的调度探测仍走观察入口。Trae App 在 File 和 SQLite 上用实际生成的启动指令验证了
 这条读取链路。真实 Trae App 会话采用和匹配模型成本对照仍待验证。
 
+Codex App SSH Goal 的运行配置会为已绑定 Turn 的 JSON 工作选择同一份完整来源。生成的
+guard 启动 Turn，选题和原生准备沿用该运行配置。已选 Todo 的共享结算计划沿原可见 Goal
+身份，写回后由运行时扣额一次。显式 off 以内联方式交付该来源。已有带 `--complete-turn` 的启动指令
+和已保存捕获的固定读取器继续受支持。
+
 显式 `--complete-turn` 和托管 handoff 在选题与原生 lease 准备中
 保留经校验的来源。尚未绑定 Turn 的可见 Goal，给出的绑定命令也保留
 `--complete-turn`。File 和 SQLite 的用例执行该命令，核对仅有一张原回执、绑定
@@ -751,6 +756,7 @@ Benchmark checkpoint 预检按自身调用选择普通或完整来源校验，�
 | --- | --- |
 | Codex App thin heartbeat 和引导启动 | 新决定不论是否使用原生交付，都调用已有 TypeScript 组合。原生 hook 在同一 Turn 恢复时固定预期的就绪版本。 |
 | 已绑定 Turn 的 Trae App 和 Antigravity App 心跳 | 共用 TypeScript 组合和无状态读取器。选题和恢复沿用原 Turn 与交付模式。调度和扣额仍由原有执行方负责。 |
+| 已绑定 Turn 的 Codex App SSH Goal | 生成的 guard、选题和原生准备按同一运行配置选择完整来源。恢复时核对原就绪捕获的版本。 |
 | 其他普通 quota 和 thin heartbeat | 保留现有紧凑决定与结算，直到实际调用方通过验收。已保存的未签名捕获沿原来源和固定引用恢复。 |
 | 显式 `--complete-turn` 和托管 handoff | 在选题和 lease 准备中保留经校验的完整来源。ready capture 丢失完整来源版本和绑定时，只允许回执诊断。 |
 | 显式 `--turn-envelope` | 渐进或差分开启时使用完整来源。两者都关闭且没有托管 handoff 时，仍展示同一次组合产生的有界 v0 兼容视图。 |

@@ -524,7 +524,7 @@ def execute_codex_execution_preparation(
         "--context-delivery", "on", "--codex-context-dir", str(context_directory), "--defer-context-presentation",
         "--todo-id", todo_id, "--turn-instance-id", turn_instance_id,
         "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
-        *(["--complete-turn"] if request.get("complete_turn") is True else []),
+        *(["--complete-turn"] if scenario == "codex_app_heartbeat" and request.get("complete_turn") is True else []),
     ]
     after = _run_json(
         guard,

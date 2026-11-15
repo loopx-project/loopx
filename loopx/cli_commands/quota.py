@@ -339,12 +339,13 @@ def _prepare_quota_result_context(
     payload: dict[str, object], args: argparse.Namespace, *,
     context: QuotaCommandContext | None, registry_path: Path,
     heartbeat_turn_id: str | None, capture_directory: Path | None, reader_argv: list[str],
-    complete_source: bool, preserve_app_delivery: bool, activation: Mapping[str, Any],
+    complete_source: bool, complete_cli_settlement: bool, preserve_app_delivery: bool,
+    activation: Mapping[str, Any],
     remember_result: Callable[[dict[str, object], str | None], None],
 ) -> tuple[dict[str, object], list[dict[str, Any]]]:
     """Stage optional context after the capture and settlement route is decided."""
     if args.quota_command == "should-run":
-        if getattr(args, "complete_turn", False) or getattr(args, "host_todo_settlement", False):
+        if complete_cli_settlement:
             payload = _project_native_cli_settlement(payload, explicit_complete=True)
         elif (args.format == "json" and capture_directory is not None and activation["progressive_enabled"]
                 and activation.get("scenario") == "codex_app_heartbeat"
@@ -505,6 +506,7 @@ def _publish_quota_result(
     activation = None
     native_context = False
     host_todo_settlement = getattr(args, "host_todo_settlement", False)
+    complete_cli_settlement = bool(host_todo_settlement or getattr(args, "complete_turn", False))
     complete_source = False
     app_source = False
     stateless_app_work_turn = False
@@ -520,7 +522,7 @@ def _publish_quota_result(
         native_context = activation["enabled"] and bool(
             getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
         )
-        # The scheduler profile selects the App's source. Display settings
+        # The scheduler profile selects the native work source. Display settings
         # still select the transport and do not change settlement ownership.
         if args.quota_command == "should-run" and context is not None:
             from ..control_plane.scheduler.execution_context import (
@@ -535,14 +537,17 @@ def _publish_quota_result(
                 and profile in {SchedulerRuntimeProfile.TRAE_APP, SchedulerRuntimeProfile.ANTIGRAVITY_APP}
             )
             app_source = profile is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT or stateless_app_work_turn
-        complete_source = (host_todo_settlement or app_source
+            if (profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE and heartbeat_turn_id is not None
+                    and args.format == "json" and not getattr(args, "turn_envelope", False)):
+                complete_cli_settlement = True
+        complete_source = (complete_cli_settlement or app_source
             or any(getattr(args, name, None) for name in (
-                "complete_turn", "turn_envelope", "decision_handoff_socket",
+                "turn_envelope", "decision_handoff_socket",
             )))
         payload, capability_context = _prepare_quota_result_context(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
-            complete_source=complete_source,
+            complete_source=complete_source, complete_cli_settlement=complete_cli_settlement,
             preserve_app_delivery=stateless_app_work_turn and not getattr(args, "complete_turn", False),
             activation=activation, remember_result=remember_result,
         )

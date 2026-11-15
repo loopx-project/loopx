@@ -4239,17 +4239,24 @@ def test_guided_app_selection_keeps_both_delivery_layers_off_without_capture_roo
     assert _heartbeat_receipt_count(runtime, turn) == 2
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     prompt = build_heartbeat_prompt(
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
         runtime_profile="codex_app_ssh_goal",
         thin=True,
+        context_delivery="off",
+        delta_delivery="off",
     )
     guard_command = prompt["quota_guard_command"].replace(
         shell_selected_global_registry().strip('"'),
@@ -4258,12 +4265,16 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
 
     assert "--begin-turn" in guard_command
     assert "--turn-instance-id" not in guard_command
+    assert "--complete-turn" not in shlex.split(guard_command)
+    assert "--context-delivery off" in guard_command and "--delta-delivery off" in guard_command
     first_rc, first = _run_generated_cli(
         guard_command,
         registry_path=registry_path,
     )
 
     assert first_rc == 0, first
+    assert_complete_turn_decision(first)
+    assert "context_delivery" not in first
     assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
     turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
     assert turn_instance_id.startswith("guided-start:")
@@ -4274,6 +4285,8 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     selection_command = f"{selection['route_prefix']} " + selection[
         "command_args_template"
     ].replace("{todo_id}", ALTERNATIVE_TODO_ID)
+    assert "--complete-turn" not in shlex.split(selection_command)
+    assert "--context-delivery off" in selection_command and "--delta-delivery off" in selection_command
 
     selected_rc, selected = _run_generated_cli(
         selection_command,
@@ -4281,6 +4294,7 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     )
 
     assert selected_rc == 0, selected
+    assert "context_delivery" not in selected
     assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
     assert (
@@ -4507,13 +4521,12 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
         "--turn-instance-id",
         turn_instance_id,
     )
-    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    cli = guard["interaction_contract"]["cli_channel"]
+    plan = cli["settlement_plan"]
     assert plan["identity"] == identity
-    assert "--source visible-goal" in next(
-        step["command_template"]
-        for step in plan["ordered_steps"]
-        if step["kind"] == "quota_spend"
-    )
+    assert cli["quota_spend_source"] == "visible-goal"
+    spend_step = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert spend_step["owner"] == "runtime"
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -5006,7 +5019,7 @@ def test_unbound_visible_goal_selection_binds_the_chosen_todo(
         assert "--decision-output-root" not in argv
     bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
     assert bound_rc == 0, bound
-    if complete:
+    if complete or profile == "codex_app_ssh_goal":
         assert_complete_turn_decision(bound)
     else:
         assert "schema_version" not in bound and "contract_binding" not in bound
@@ -7188,6 +7201,10 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
 def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     tmp_path: Path, provider: str,
 ) -> None:
+    from hashlib import sha256
+
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
 
@@ -7242,32 +7259,41 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert identity["binding_kind"] == "autonomous_replan"
     assert identity["replan_obligation_id"] == obligation_id
     assert identity["turn_instance_id"].startswith("guided-start:")
+    assert_complete_turn_decision(bound)
     cli_channel = bound["interaction_contract"]["cli_channel"]
-    assert cli_channel["settlement_identity"] == identity
-    assert cli_channel["settlement_read_ref"] == "$.replan_action_packet.writeback"
-    assert "settlement_plan" not in cli_channel
-    # Native admission defers the plan; consume its exact captured reader
-    # without another guard or a second guided-start Turn.
-    reader_argv = shlex.split(bound["replan_action_packet"]["writeback"])
+    assert cli_channel["quota_spend_source"] == "visible-goal"
+    capture = Path(bound["replan_read_path"])
     source_paths = (
         registry_path,
         project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
         runtime / "goals" / GOAL_ID / "runs/index.jsonl",
-        Path(reader_argv[reader_argv.index("--decision-file") + 1]),
+        capture,
     )
     original_files = {path: path.read_bytes() for path in source_paths}
-    reader = subprocess.run(
-        reader_argv,
-        cwd=REPO_ROOT,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
-        capture_output=True,
-        text=True,
-        timeout=60,
+    # Inline delivery uses the same signed source saved for recovery. Its
+    # replan plan must keep the obligation and the pre-writeback rules.
+    assert json.loads(original_files[capture]) == bound
+    contract = bound["replan_action_packet"]["writeback_contract"]
+    assert {"vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs"} <= set(contract["required_fields"])
+    assert contract["vision_authoring"]["path_delta"]["schema_version"] == "goal_path_delta_v0"
+    plan = cli_channel["settlement_plan"]
+    digest = sha256(original_files[capture]).hexdigest()
+    rc, projected = _run_cli(
+        registry_path, runtime, "quota", "context-project", "--runtime-profile", "codex_app_ssh_goal",
+        "--context-delivery", "off", "--delta-delivery", "off", "--capture-file", str(capture),
+        "--capture-sha256", digest, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", identity["turn_instance_id"],
     )
-    assert reader.returncode == 0, (reader.stdout, reader.stderr)
-    writeback = json.loads(reader.stdout)
-    assert writeback["obligation_id"] == obligation_id
-    plan = writeback["writeback"]["settlement_plan"]
+    assert rc == 0 and projected["capture_sha256"] == digest, projected
+    fields = {"/interaction_contract/cli_channel/settlement_plan": plan,
+              "/replan_action_packet/writeback_contract": contract}
+    reader = shlex.split(projected["command"])
+    reader += [argument for field in fields for argument in ("--select", field)]
+    completed = subprocess.run(reader, cwd=project, capture_output=True, text=True, timeout=60)
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    page = json.loads(completed.stdout)
+    assert page["eof"] is True and page["sha256"] == digest, page
+    assert {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]} == fields
     assert plan["identity"] == identity
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend",

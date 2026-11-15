@@ -1178,9 +1178,9 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                             additional = codex_execution_preparation_readback_context(request)
                         else:
                             # A resumed old pre-claim capture can still lead
-                            # to a newly composed App ready decision. Pin the
+                            # to a newly composed native ready decision. Pin the
                             # expected format of that new capture separately.
-                            if activation["scenario"] == "codex_app_heartbeat":
+                            if activation["scenario"] in {"codex_app_heartbeat", "codex_app_ssh_goal"}:
                                 request["complete_turn"] = True
                             capture = Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                             receipt = execute_codex_execution_preparation(

@@ -438,8 +438,8 @@ def build_heartbeat_prompt(
         complete_turn=complete_turn,
         codex_ssh_goal=codex_ssh_goal,
     )
-    # A saved SSH loader may still name the old display. New SSH guards use
-    # the complete source selected by the shared guard renderer.
+    # A saved SSH loader may still name the old display. New SSH work uses
+    # the complete source selected by the resolved runtime profile.
     turn_envelope = turn_envelope and not codex_ssh_goal
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:

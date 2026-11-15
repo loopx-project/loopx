@@ -1024,6 +1024,13 @@ spend. Turnless scheduler probes keep their observation route. For Trae App,
 the generated activation bootstrap and its reads are exercised over File and
 SQLite. Adoption in a live Trae App session and matched model costs remain open.
 
+The Codex App SSH Goal profile selects the same complete source for bound JSON
+work. Its generated guard starts the Turn and carries the profile through
+selection and native preparation. For selected Todo work, the common settlement
+plan uses the original visible-Goal identity and the runtime debits once after
+writeback. Explicit off delivers that source inline. Previously saved launchers with
+`--complete-turn` and the pinned readers for saved captures remain supported.
+
 Explicit `--complete-turn` and managed handoff keep the checked source
 through selection and native lease preparation. An unbound visible Goal also
 keeps `--complete-turn` in its emitted Turn-binding command. The File and SQLite
@@ -1043,6 +1050,7 @@ the capture's format fields.
 | --- | --- |
 | Codex App thin heartbeat and guided start | New decisions use the existing TypeScript composer with or without native delivery. The native hook pins the expected ready version for same-Turn recovery. |
 | Trae App and Antigravity App heartbeats with a bound Turn | Use the same TypeScript composer and stateless reader. Selection and recovery carry the original Turn and delivery mode. The scheduler and spend retain their existing owners. |
+| Bound Codex App SSH Goal | The profile selects the complete source through the generated guard, selection and native preparation. The saved ready version is pinned for recovery. |
 | Other ordinary quota and thin heartbeat | Keep the existing compact decision and settlement until their actual callers qualify. Saved unsigned captures retain their original source and pinned recovery. |
 | Explicit `--complete-turn` and managed handoff | Keep the checked complete source through selection and lease preparation. If a ready capture loses its complete version and binding, it offers receipt diagnosis only. |
 | Explicit `--turn-envelope` | Progressive or Delta uses the complete source. With both off and without a managed handoff, retain the bounded v0 compatibility display from the same composition. |

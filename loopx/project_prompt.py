@@ -210,7 +210,7 @@ def render_quota_guard_command(
         turn_arg = " --begin-turn"
     else:
         turn_arg = ""
-    source_arg = " --complete-turn" if complete_turn or ssh_goal else ""
+    source_arg = " --complete-turn" if complete_turn else ""
     registry_arg = (
         _render_global_registry_arg(runtime_root) if include_shared_registry and registry_path is None else ""
     )

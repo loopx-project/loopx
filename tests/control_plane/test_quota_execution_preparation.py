@@ -375,6 +375,7 @@ def test_model_claim_keeps_receipt_without_unrelated_projection_details(
 def test_native_hook_returns_readable_ready_source_and_original_claim(
     tmp_path, monkeypatch, provider, scenario, location, ambient, complete,
 ):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from loopx.control_plane.turn_driver import codex_context
 
     tmp_path = tmp_path.resolve()
@@ -399,12 +400,9 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
         todos=[original], context_delivery="on",
         goal_suffix="\n\n## Constraints\n\n" + "Preserve the complete Goal and its stop. 保留停止条件。\n" * 100)
     assert before["execution_preparation"]["state"] == "claim_required"
-    current_source = complete or scenario == "codex_app_heartbeat"
-    assert before.get("schema_version") == ("loopx_turn_envelope_v1" if current_source else None)
-    if current_source:
-        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-
-        assert_complete_turn_decision(before)
+    schema_version = before.get("schema_version")
+    assert schema_version == "loopx_turn_envelope_v1"
+    assert_complete_turn_decision(before)
     goal_text = (tmp_path / "state.md").read_text()
     digest = _present_saved_guard(tmp_path, native, capture, scenario, "preparation-turn")
     hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(tmp_path / "registry.json"),
@@ -438,9 +436,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     [published] = native.glob("prepared-*/ready/decision.json")
     published_source = json.loads(published.read_bytes())
     assert published_source.get("schema_version") == before.get("schema_version")
-    assert ("contract_binding" in published_source) is current_source
-    if current_source:
-        assert_complete_turn_decision(published_source)
+    assert_complete_turn_decision(published_source)
     if location == "root":
         assert list(root.iterdir()) == [native]
     read = shlex.split(ready["recovery"]["command"])
@@ -457,14 +453,13 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
-    assert plan["schema_version"] == (
-        "quota_settlement_plan_v2" if complete or scenario == "codex_app_heartbeat" else "quota_settlement_plan_v1"
-    )
-    if complete or scenario == "codex_app_heartbeat":
-        writeback, spend = [step for step in plan["ordered_steps"]
-                            if step["kind"] in {"durable_writeback", "quota_spend"}]
-        assert "--settle-turn --settlement-receipt" in writeback["command_template"]
-        assert spend["owner"] == "runtime" and "command_template" not in spend
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    writeback, spend = [step for step in plan["ordered_steps"]
+                        if step["kind"] in {"durable_writeback", "quota_spend"}]
+    assert "--settle-turn --settlement-receipt" in writeback["command_template"]
+    assert spend["owner"] == "runtime" and "command_template" not in spend
+    expected_source = "visible-goal" if scenario == "codex_app_ssh_goal" else "heartbeat"
+    assert selected["/interaction_contract/cli_channel"]["quota_spend_source"] == expected_source
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.
@@ -546,12 +541,14 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("replace_stage", ["guard", "record", "version", "downgrade"])
+@pytest.mark.parametrize("replace_stage,profile", [
+    (stage, "codex_app_heartbeat") for stage in ("guard", "record", "version", "downgrade")
+] + [("downgrade", "codex_app_ssh_goal")])
 def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
-    tmp_path, monkeypatch, capsys, provider, replace_stage,
+    tmp_path, monkeypatch, capsys, provider, replace_stage, profile,
 ):
     import io
-    from loopx.cli import main
+    from loopx.entrypoint import main
     from loopx.control_plane.turn_driver import codex_context
 
     tmp_path = tmp_path.resolve()
@@ -563,7 +560,8 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     event = {"session_id": session, "cwd": str(tmp_path), "hook_event_name": "SessionStart", "source": "startup"}
     assert codex_context.codex_context_hook(str(native), event) == {}
     original = tmp_path / "preparation"
-    _run(tmp_path, monkeypatch, provider, [], "--codex-app",
+    profile_args = ("--runtime-profile", profile)
+    _run(tmp_path, monkeypatch, provider, [], *profile_args,
         "--turn-instance-id", "prepared-turn", "--todo-id", TODO, "--codex-context-dir", str(native),
         "--decision-output-dir", str(original), context_delivery="on")
     from loopx.control_plane.turn_driver import codex_execution_preparation
@@ -579,7 +577,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     def observe_guard(command, **kwargs):
         prepared = "--prepared-capture-reference" in command
         if prepared:
-            assert "--complete-turn" in command
+            assert ("--complete-turn" in command) is (profile == "codex_app_heartbeat")
         result = run(command, **kwargs)
         if prepared:
             verified["writer"] = json.loads(result.stdout)
@@ -607,7 +605,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 
     monkeypatch.setattr(codex_context, "record_native_execution_preparation", replace_after_ready)
     command = ["--registry", str(tmp_path / "registry.json"), "--runtime-root", str(tmp_path / "runtime"),
-               "--format", "json", "quota", "context-hook", "--codex-app", "--context-delivery", "on",
+               "--format", "json", "quota", "context-hook", *profile_args, "--context-delivery", "on",
                "--codex-context-dir", str(native)]
     def hook(tool_response=None):
         data = json.dumps({**event, "hook_event_name": "PostToolUse",
