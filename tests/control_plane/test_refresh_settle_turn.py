@@ -228,7 +228,8 @@ def test_exact_spend_and_combined_replay_reject_disagreeing_billing_terms(tmp_pa
     receipt_log = log.read_text(encoding="utf-8")
     initial_index = index.read_bytes()
     for field, bad_value in ((None, None), ("slots", 2), ("source", "visible-goal"),
-                              ("missing", None), ("missing_artifact", None)):
+                              ("missing", None), ("legacy_empty", ""), ("legacy_empty", None),
+                              ("missing_artifact", None)):
         rows = [json.loads(line) for line in receipt_log.splitlines()]
         receipt, = (row for row in rows if row["event_kind"] == "quota_spend" and row["agent_id"] == AGENT_ID)
         details = receipt["details"]
@@ -237,6 +238,8 @@ def test_exact_spend_and_combined_replay_reject_disagreeing_billing_terms(tmp_pa
         if field == "missing":
             details.pop("slots")
             details.pop("source")
+        elif field == "legacy_empty":
+            details.update(slots=bad_value, source=bad_value)
         elif field == "missing_artifact":
             debit_record, = (record for line in initial_index.splitlines()
                              if (record := json.loads(line))["classification"] == "quota_slot_spent")
@@ -260,6 +263,59 @@ def test_exact_spend_and_combined_replay_reject_disagreeing_billing_terms(tmp_pa
             assert not replay.get("appended"), replay
             assert log.read_bytes() == before and index.read_bytes() == initial_index
             assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("repair_entry", ["spend", "refresh"])
+def test_missing_spend_receipt_preserves_the_original_debit(tmp_path, monkeypatch, provider, repair_entry):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    original = guard["heartbeat_receipt"]["settlement_identity"]
+    combined = ["refresh-state", *binding, "--classification", "verified_billing_repair",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+        "--settle-turn", "--settlement-receipt"]
+    debit = ["quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute"]
+    rc, settled = _run_cli(registry, runtime, *combined, cwd=project)
+    assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled
+
+    log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    index = log.parent / "runs" / "index.jsonl"
+    original_index = index.read_bytes()
+    debit_record, = (row for line in original_index.splitlines()
+                     if (row := json.loads(line))["classification"] == "quota_slot_spent")
+    artifact = Path(debit_record["json_path"])
+    original_artifact = artifact.read_bytes()
+    records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    receipt, = (row for row in records if row["event_kind"] == "quota_spend")
+    retained = [row for row in records if row is not receipt]
+    log.write_text("".join(json.dumps(row) + "\n" for row in retained), encoding="utf-8")
+
+    rc, repaired = _run_cli(registry, runtime, *(debit if repair_entry == "spend" else combined), cwd=project)
+    assert rc == 0 and repaired["ok"], repaired
+    assert repaired["settlement_progress"]["state"] == "settled", repaired
+    assert repaired["settlement_identity"]["effect_id"] == original["effect_id"]
+    assert not repaired.get("settlement_owed"), repaired
+    recovered_log = log.read_bytes()
+    after = [json.loads(line) for line in recovered_log.splitlines()]
+    assert [row for row in after if row["event_kind"] != "quota_spend"] == retained
+    recovered, = (row for row in after if row["event_kind"] == "quota_spend")
+    assert recovered["details"]["settlement_effect_id"] == original["effect_id"]
+    assert recovered["details"]["slots"] == receipt["details"]["slots"] == 1
+    assert recovered["details"]["source"] == receipt["details"]["source"] == "heartbeat"
+    for command in (debit, combined):
+        rc, replay = _run_cli(registry, runtime, *command, cwd=project)
+        assert rc == 0 and replay["ok"] and replay["idempotent_replay"], replay
+        assert replay["settlement_identity"]["effect_id"] == original["effect_id"]
+        assert not replay.get("appended") and not replay.get("settlement_owed"), replay
+    assert log.read_bytes() == recovered_log
+    assert index.read_bytes() == original_index and artifact.read_bytes() == original_artifact
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

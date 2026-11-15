@@ -1585,8 +1585,11 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
 
 function spendReceiptTerms(event: JsonObject | null): SpendTerms {
   const {slots, source} = event === null ? {} : details(event);
-  // Older rollout envelopes represent an omitted field with an empty string.
-  return {slots: slots === "" ? undefined : slots, source: source === "" ? undefined : source};
+  // Older rollout envelopes and repaired receipts can omit billing terms.
+  return {
+    slots: slots == null || slots === "" ? undefined : slots,
+    source: source == null || source === "" ? undefined : source,
+  };
 }
 
 function spendTermsConflict(ledger: SpendTerms, receipt: SpendTerms): string | null {
