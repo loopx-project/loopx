@@ -3446,3 +3446,87 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   complete-source、selected-work、准入、context 和结算 owner。安装包大小、模型
   采纳、完整 D2/D5 闭包、可比完整成本、R1/M3 与 C1 切换保持未验证。保留历史失败
   和原十项要求；完成前仍需完整原目标回归，随后才准备 EdgeBench。
+
+### 2026-11-15 — Core 资格验证前检查真实安装来源
+
+- **缺口：**Core 测试 fixture 只信任解释器环境变量；指向普通 editable checkout
+  也能通过执行测试，即使实际没有安装 standalone Core。
+- **增量：**每个 opt-in Core 资格用例在 Task 准备前检查版本一致、拒绝普通发行包
+  共装和 editable Core，并将实际导入包与 Core 安装记录对应。既有 identity 检查
+  通过该 fixture 共享，namespace、help、manifest 和 doctor 验证保留；未启用 opt-in
+  仍明确报告 skip。
+- **证据：**旧普通源码环境通过用例并派发十次 CLI。普通包、共装、source shadow、
+  缺失 `loopx/__init__.py` 的 RECORD 条目和 PEP660 editable 五种反例现在都在 fixture setup 阶段失败，Task／
+  CLI 派发为零。真实 Core wheel 通过 identity 及 File／SQLite 执行、回放和查看。
+  原 host、validator 和执行 oracle 均未改变。
+- **边界：**本次保护资格证据来源，不改变生产准入，也不认证 wheel 字节或模型
+  执行。固定源码／产物检查、真实模型采纳、完整 D2/D5 成本、R1/M3 和原十项要求
+  仍需分别验证；保留历史失败，完成前仍需完整原目标回归。
+
+### 2026-11-15 — 复用 staged Host 的最终来源检查
+
+- **缺口：**capture staging 后构造临时请求，在 `host_dispatch_context` 前紧接着
+  重复 `host_context`。完整组装仍有实际作用：frozen capture 的嵌套 plan 仍有
+  可变别名。
+- **增量：**公开请求 builder 与 staged dispatch 共享原 inspection、turn-key、
+  route guards、来源组装、可选 context、subagent 和 native-child metadata。
+  仅 staged complete-v1 plan 生成含 `work_contract`、不含 `turn_envelope` 的
+  Host-v1 请求时省去嵌套 `host_context`；原 carrier 转换和最终 dispatch 检查仍在
+  准入与发布之前。其它形状保留原 finish，不跨准入、发布或后续效果保留 checked
+  result。
+- **证据：**File／SQLite 基线与候选对照覆盖 42 个 guard、别名、carrier、数字／
+  文本、interval-wait 和 bridge 失败场景。精确 startup、transport permission、
+  offloaded snapshot 大小诊断保留原 carrier，发布与 ledger 效果为零。刻意丢弃
+  goal reference 能使独立值 oracle 失败。staged operation trace 少一次
+  `host_context`，仍保留一次 `host_dispatch_context`。候选及 `main@37a79decfe99`
+  与 C1 #8266 `638b7e3c23f0` 的干净组合分别构建真实 Core wheel，各通过 15 个
+  identity、执行／checkpoint、回放、journal 查看、进程丢失／stale lease 和无效
+  产物检查。C1 来源两 arm 使用同一 direct-complete-source planner API；先前
+  不兼容 keyword 的 setup 失败保留。上述检查使用 Python 3.13.5、Node 26.0.0，
+  wheel、RECORD、source 与 runtime 来源分别绑定。
+- **边界：**本次省去一次重复 bridge projection，不改变 typed source owner、默认
+  激活、capture 发布、恢复或结算边界。它不证明总延迟、完整成本或真实模型改善，
+  也不完成 D2/D5 闭包、R1/M3 或 C1 默认切换。保留历史失败和原十项要求；完成前
+  仍需完整原目标回归，随后才准备 EdgeBench。
+
+### 2026-11-15 — PR 等待观察在权限复查后加载
+
+- **缺口：**执行性 Turn 的组合在解析观察权限前导入 PR reconciler 及其 metadata／
+  content provider，即使 hook 不可用也会加载。provider 导入失败还会逃出可选
+  观察原有的故障边界。
+- **变化：**既有 producer 在 invocation-time capability 检查成功后，于原 provider
+  `try` 内导入 reconciler。注册和调用仍分别检查权限，保留撤销行为；没有新增
+  wrapper、缓存决策、激活 flag 或 policy owner。Python 仍承担稳定的 GitHub
+  provider／transport adapter；typed selection、权限、authority 和观察 cadence
+  继续由既有 owner 持有。
+- **证据：**独立进程的 blocked-provider 反例覆盖未授权、权限撤销、权限源不可用，
+  以及导入失败时读取／效果为 unknown。八类配对 hook 场景冻结时钟，比较确定性
+  返回、权限检查与 provider 调用；源码 File／SQLite 检查保留 provider 成功、失败、响应丢失、cadence
+  和完整源诊断。独立安装的两份 Core wheel 执行获权的 File／SQLite 观察和 canonical
+  Todo 回读，并覆盖执行、回放、进程丢失与非法 artifact。原 consumer 套件在两侧
+  保留四个一致的 setup 失败；独立的当前 carrier 协议 fixture 不替代这些记录。
+- **边界：**不可用观察不加载其 provider 闭包，获权观察保留既有行为。本次是有界
+  默认闭包增量；首次获权调用现在把 deferred import 纳入既有 `duration_ms` 观察
+  窗口，不证明真实计时等价或性能收益。它不完成 D2／D5、真实模型／上下文采用、完整成本改善、原十项验收
+  或 C1 切换。保留历史源码、失败和 seal；完成前仍需完整原目标回归，随后才准备
+  EdgeBench。
+
+### 2026-11-15 — 仅为请求的 capability editor 求 provider options
+
+- **缺口：**即使解析未启用的 periodic-report 订阅，也会构造全部 editor definitions，
+  查询未选中的 `codex_chat` profiles 和 steward options；无关 provider 不可用时
+  会阻断本次 metadata。
+- **增量：**现有 editor 仅为 `codex_chat` 查询原 profile owner，仅为 `codex_chat`
+  或 `steward_executor` 查询原 steward vocabulary helper。所选字段、scopes、
+  nullable options、helper 顺序与异常、配置 precedence 和 detached outputs 保留
+  原契约；unknown editor 仍只读，且不查询 provider。
+- **证据：**全部 20 个已注册 editor、unknown／empty 输入有完整基线与候选对照，
+  包括 nullable resolution 和 detached outputs。新进程中的 provider 不可用反例
+  及所选原 owner 的正反例通过。此前 `main@2b156284c4f4` 与 C1 #8266 snapshot
+  `1a3740cf9e6e` 仅 overlay editor 的 Core 证据保留在原范围内。重新资格化分别
+  从 `main@fef679d18192` 加入本 editor，以及它与当前 C1 `1a3740cf9e6e` 的无
+  冲突合并来源构建独立真实 Core wheel；均通过 metadata 检查及 File／SQLite
+  执行、回放和回读。
+- **边界：**本次收窄 metadata discovery，不改变安装的 capability 内容或 activation。
+  全 Settings 旅程、真实模型采纳、总成本、自然进程 drain、完整 D2/D5 闭包、
+  R1/M3、完整 C1 验收及其默认切换仍未资格化。

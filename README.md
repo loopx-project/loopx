@@ -6,9 +6,8 @@
 
 **Start with one goal. Keep long-running agent work verifiable.**
 
-Tell the Agent you already use what you want done. LoopX keeps the goal, work,
-needed decisions and verifiable results durable behind the scenes, so the next
-session can continue without making you learn LoopX internals first.<br>
+Tell the Agent you already use what you want done. LoopX preserves goals,
+progress, decisions and verifiable results so work can continue across sessions.<br>
 <sub>An open, harness-neutral control plane for 24/7 always-on agents across Codex, Claude Code, DeepSeek Harness and other runtimes—scaling from local SQLite workflows to multi-agent teams.</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)

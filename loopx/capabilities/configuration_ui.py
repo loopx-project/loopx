@@ -83,8 +83,15 @@ def capability_configuration_editor(
     # The steward namespace owns its closed vocabulary, so the editor offers the
     # same values instead of restating them: a form cannot submit an executor or
     # effort the owning namespace would reject.
-    steward_endpoints, steward_efforts = _steward_executor_editor_options()
-    from .native_chat.machine_defaults import codex_profile_options
+    steward_endpoints, steward_efforts = (
+        _steward_executor_editor_options()
+        if capability_id in ("codex_chat", "steward_executor") else ([], [])
+    )
+    codex_profiles: list[str] = []
+    if capability_id == "codex_chat":
+        from .native_chat.machine_defaults import codex_profile_options
+
+        codex_profiles = codex_profile_options()
     definitions: dict[str, dict[str, Any]] = {
         "context_delivery": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
@@ -100,7 +107,7 @@ def capability_configuration_editor(
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
             "fields": [
                 _field("codex_profile", "Codex configuration profile", "select", nullable=True,
-                       options=codex_profile_options(), description="Existing native account/configuration home; credentials are not copied."),
+                       options=codex_profiles, description="Existing native account/configuration home; credentials are not copied."),
                 _field("model", "Conversation model", "text", nullable=True,
                        description="For example gpt-6.1-sol. Blank inherits this Codex profile's default."),
                 _field("reasoning_effort", "Reasoning effort", "select", nullable=True,
