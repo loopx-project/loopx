@@ -284,6 +284,8 @@ deliver the verified original Run before repairing its receipt. File/SQLite
 failure controls cover progress, completion, terminal and successor Runs, plus
 interrupted first CLI delivery. Failure leaves no writeback receipt or debit;
 recovery preserves the original Run, invokes the Host once and debits once.
+Receipt repair retains committed replay semantics after Yardstick is disabled;
+the original delivery and settlement finish before the next Turn starts.
 The opted-in reader honors the verified successor history prefix during a
 wall-clock rollback while retaining the original work window and strict fallback
 for captures without a prefix. File/SQLite regressions cover both rejected early

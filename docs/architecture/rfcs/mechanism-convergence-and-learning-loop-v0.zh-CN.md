@@ -274,7 +274,9 @@ File/SQLite [公开 Turn 检查](../../../tests/control_plane/test_explore_settl
 `refresh-state` 的回执写入都先完成附件交付；普通及组合 refresh 恢复先交付已验证的
 原 Run，再修复回执。File/SQLite 故障对照覆盖 progress、completion、terminal 和
 successor Run，以及首次 CLI 交付中断。失败时不发写回回执、不扣额；恢复保持
-原 Run 不变，Host 调用一次且扣额一次。显式启用的读取模块在时钟
+原 Run 不变，Host 调用一次且扣额一次。
+关闭 Yardstick 后，回执修复仍保留已提交捕获的重放语义；先完成原交付和结算，
+再开始下一 Turn。显式启用的读取模块在时钟
 回拨时采用已验证的后继历史前缀，保留原工作窗口及缺少前缀时的严格退路。
 File/SQLite 回归覆盖拒绝提前扣额和保留原候选/finding 回读；这些是正确性边界，
 不证明模型采用或收益。

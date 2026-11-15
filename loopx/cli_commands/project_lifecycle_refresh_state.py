@@ -753,8 +753,12 @@ def handle_refresh_state_command(
         # Receipt repair carries the verified original Run, without appending
         # it again. Both receipt writers must finish its requested delivery
         # before recording proof that the original writeback can be settled.
+        # Preserve replay semantics when the original receipt is missing;
+        # disabling guidance must not turn its committed capture into new work.
         delivery = deliver_result_attachment(
-            payload={**payload, "appended": True}, registry_path=registry_path,
+            payload={**payload, "appended": True,
+                     "idempotent_replay": bool(payload.get("idempotent_replay") or settlement_receipt_repair)},
+            registry_path=registry_path,
             runtime_root=Path(payload["runtime_root"]),
             goal_id=args.goal_id, agent_id=args.agent_id,
             todo_id=args.todo_id, turn_instance_id=args.turn_instance_id,

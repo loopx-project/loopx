@@ -219,6 +219,8 @@ finishes in both `turn run-once` and `refresh-state`. The public quota CLI rejec
 a debit while that receipt is missing. Ordinary refresh and
 `refresh-state --settle-turn` recovery deliver the verified original Run before
 repairing its receipt; a failed attachment leaves the same recovery pending without a debit.
+Receipt repair preserves the original committed replay after Yardstick is disabled.
+Finish that delivery and settlement before starting the next Turn.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use

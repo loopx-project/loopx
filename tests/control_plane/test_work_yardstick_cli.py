@@ -1301,12 +1301,30 @@ def test_committed_pending_capture_recovers_after_disable_without_new_authority(
         patch.setattr(writer, "append_explore_result_events", unavailable)
         rc, failed = run_refresh(command)
     assert rc == 1 and failed["appended"] and failed["explore_result_delivery"]["primary_committed"]
-    run(project, runtime, path, "quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
-    # Work continues while the old graph delivery is pending. Its later exact
-    # replay must retain history without replacing this newer target.
+    rc, premature = _run_cli(path, runtime, "quota", "spend-slot", *binding(turn),
+        "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+    assert rc == 1 and not premature.get("quota_spent"), premature
+    assert _spend_run_count(runtime) == 0
+    assert "settlement_owed" not in failed and "quota_settlement_writeback" not in failed
+    config = json.loads(path.read_text())
+    config["goals"][0]["execution_profile"]["yardstick_enabled"] = False
+    path.write_text(json.dumps(config))
+    rc, repaired = _run_cli(path, runtime, *command, cwd=project)
+    assert rc == 0, repaired
+    assert repaired["receipt_repaired"] and repaired["explore_result_delivery"]["ok"]
+    assert repaired["explore_result_recorded_at"] == failed["explore_result_recorded_at"]
+    run(project, runtime, path, *_projected_cli_args(repaired["settlement_owed"]["command"], turn_instance_id=turn))
+    assert _spend_run_count(runtime) == 1
+    assert "work_yardsticks" not in context(runtime, path)["graph"]
+    config = json.loads(path.read_text())
+    config["goals"][0]["execution_profile"]["yardstick_enabled"] = True
+    path.write_text(json.dumps(config))
+    # The original Turn must finish recovery before the next one starts. Its
+    # later readback-only replay retains history without replacing a new target.
     newer_source = tmp_path / "newer.json"
     newer = attachment()
     newer["work_yardstick_decision"]["target"]["summary"] = "Use the updated current target"
+    newer["work_yardstick_decision"]["prior_finding_id"] = context(runtime, path)["graph"]["work_yardsticks"][0]["source_finding_id"]
     newer_source.write_text(json.dumps(newer))
     run(project, runtime, path, "quota", "should-run", "--codex-app", *binding("turn-newer"))
     wall_time = wall_time.replace(microsecond=100002)
@@ -1318,6 +1336,7 @@ def test_committed_pending_capture_recovers_after_disable_without_new_authority(
     path.write_text(json.dumps(config))
     recovered = run(project, runtime, path, *command)
     assert recovered["idempotent_replay"] and recovered["explore_result_delivery"]["ok"]
+    assert _spend_run_count(runtime) == 1
     assert recovered["explore_result_recorded_at"] == failed["explore_result_recorded_at"]
     assert parse_timestamp(recovered["explore_result_recorded_at"]) < parse_timestamp(latest["explore_result_recorded_at"])
     events = load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))
@@ -1432,12 +1451,23 @@ def test_pending_cited_decision_keeps_original_evidence_after_recovery(tmp_path,
         failed = json.loads(capsys.readouterr().out)
     assert rc == 1 and failed["appended"] and failed["explore_result_delivery"]["primary_committed"]
     assert ("explore_result_source_snapshot" in failed) is not legacy_source
-    run(project, runtime, path, *_projected_cli_args(failed["settlement_owed"]["command"], turn_instance_id=turn))
-    late = {**plain, "node_id": first["node_id"], "evidence_refs": refs[1:],
-        "measurements": [{**plain["measurements"][1], "value": 99}]}
-    retain("duplicate-during-attachment-outage", late)
+    rc, premature = _run_cli(path, runtime, "quota", "spend-slot", *binding(turn),
+        "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+    assert rc == 1 and not premature.get("quota_spent"), premature
+    assert _spend_run_count(runtime) == 1  # Only the earlier preview settled.
+    assert "settlement_owed" not in failed and "quota_settlement_writeback" not in failed
+    # A same-work finding can arrive during recovery without admitting or
+    # spending another Turn. It cannot replace the captured decision evidence.
+    late = tmp_path / "late-preview.json"
+    late.write_text(json.dumps([{**plain["measurements"][1], "value": 99}]))
+    run(project, runtime, path, "explore", "finding", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--finding-id", "late-preview", "--node", first["node_id"],
+        "--title", "Repeated preview during attachment recovery", "--measurements-json", str(late),
+        "--evidence-ref", refs[1])
     recovered = run(project, runtime, path, *command)
-    assert recovered["idempotent_replay"] and recovered["explore_result_delivery"]["ok"]
+    assert recovered["receipt_repaired"] and recovered["explore_result_delivery"]["ok"]
+    run(project, runtime, path, *_projected_cli_args(recovered["settlement_owed"]["command"], turn_instance_id=turn))
+    assert _spend_run_count(runtime) == 2
     cue = context(runtime, path)["graph"]["work_yardsticks"][0]
     comparison = cue["search_comparison"]
     print(json.dumps({"provider": provider, "comparison": comparison}), flush=True)
@@ -1485,7 +1515,7 @@ def test_pending_cited_decision_keeps_original_evidence_after_recovery(tmp_path,
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("decision_entry", ["finding", "refresh"])
-def test_delayed_committed_measurement_keeps_its_original_work_window(
+def test_replayed_committed_measurement_keeps_its_original_work_window(
         tmp_path, monkeypatch, capsys, provider, decision_entry):
     from loopx.cli import main
     import loopx.capabilities.explore.result_writeback as writer
@@ -1512,8 +1542,15 @@ def test_delayed_committed_measurement_keeps_its_original_work_window(
         code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *command])
         partial = json.loads(capsys.readouterr().out)
     assert code == 1 and partial["appended"] and partial["explore_result_delivery"]["primary_committed"]
-    run(project, runtime, registry, "quota", "spend-slot", *binding(turn), "--slots", "1",
-        "--source", "heartbeat", "--execute")
+    code, premature = _run_cli(registry, runtime, "quota", "spend-slot", *binding(turn),
+        "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+    assert code == 1 and not premature.get("quota_spent"), premature
+    assert _spend_run_count(runtime) == 0
+    assert "settlement_owed" not in partial and "quota_settlement_writeback" not in partial
+    recovered = run(project, runtime, registry, *command)
+    assert recovered["receipt_repaired"] and recovered["explore_result_delivery"]["ok"]
+    run(project, runtime, registry, *_projected_cli_args(recovered["settlement_owed"]["command"], turn_instance_id=turn))
+    assert _spend_run_count(runtime) == 1
     current = attachment()
     current["work_yardstick_decision"].update(proxy=None, counterevidence_refs=[])
     current["work_yardstick_decision"]["target"]["summary"] = "New target after the earlier primary"
@@ -1534,6 +1571,7 @@ def test_delayed_committed_measurement_keeps_its_original_work_window(
     assert before["search_comparison"]["goal"]["preferred_candidate_ref"] == "candidate:a"
     replay = run(project, runtime, registry, *command)
     assert replay["idempotent_replay"] and replay["explore_result_delivery"]["ok"]
+    assert _spend_run_count(runtime) == 1
     after = context(runtime, registry)["graph"]["work_yardsticks"][0]
     assert after["source_finding_id"] == before["source_finding_id"]
     assert after["search_comparison"] == before["search_comparison"]
