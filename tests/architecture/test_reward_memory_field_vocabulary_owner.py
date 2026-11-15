@@ -41,16 +41,20 @@ an independent ``re.compile(<same body>, re.IGNORECASE)`` importer that accepts
 uppercase, and a plain help/display string that merely quotes the body and is
 never compiled. So for these two the census (1) walks only
 ``capabilities/reward_memory`` -- the owner and its consumers, never an unrelated
-package; (2) counts only confirmable ``re.compile`` sites -- the callee must be
-the ``re`` module (or a tracked alias / ``from re import compile``), so an
-independent object's ``.compile()`` that renders help text is not a rule, and the
-body is read from the positional arg *or* the ``pattern=`` keyword so a real
+package; (2) counts only confirmable, *unshadowed* ``re.compile`` sites -- the
+callee must be the ``re`` module (or a module-level alias / ``from re import
+compile``) not rebound by a local parameter or assignment, so an independent
+object's ``.compile()`` that renders help text is not a rule, and the body is read
+from the positional arg *or* the ``pattern=`` keyword so a real
 ``re.compile(pattern=...)`` duplicate is not missed; and (3) compares the
-**compiled rule** ``(body, source_flags)``, so a flag-different compile is a
-different rule and is left alone. A true restatement -- a reward-memory module
-that re-compiles the identical flagless body instead of importing the owner -- is
-still caught, and the accept/reject behaviour is pinned through both modules' own
-validators below.
+**compiled rule** ``(body, flags)`` with ``re.UNICODE`` normalised away (it is the
+str-pattern default, so an explicit-Unicode compile equals a flagless one), while
+a genuinely different flag such as ``re.IGNORECASE`` is a different rule. Anything
+unresolved -- a shadowed binding, ``**opts`` flags, a non-literal body -- is left
+*unknown* and never reported, so only provably-equivalent copies are flagged. A
+true restatement -- a reward-memory module that re-compiles the identical body
+instead of importing the owner -- is still caught, and the accept/reject behaviour
+is pinned through both modules' own validators below.
 
 Neighbours this guard deliberately does not merge, each pinned below: the
 ``field_contracts`` table in ``reward_memory/architecture.py`` describes *which
@@ -296,12 +300,14 @@ def _flag_value(node: ast.expr) -> int | None:
 def _compile_flags(node: ast.Call) -> int | None:
     """Source-level flags of an ``re.compile`` call: 0 when none are written.
 
-    This is the flags argument *as written*, not the runtime ``Pattern.flags``
-    (which always carries ``re.UNICODE`` for a str pattern). The owner compiles
-    both matchers with no explicit flags, so a duplicate must also write none; an
-    unresolvable flag expression returns None and is treated as a different rule.
+    A ``**opts`` expansion can carry flags we cannot see, so it returns None
+    (unknown) rather than assuming 0; an unresolvable flag expression is also
+    None. The caller strips the default ``re.UNICODE`` before comparing, so an
+    explicit-Unicode compile is the same rule as a flagless one.
     """
 
+    if any(keyword.arg is None for keyword in node.keywords):
+        return None
     flag_node = node.args[1] if len(node.args) >= 2 else None
     for keyword in node.keywords:
         if keyword.arg == "flags":
@@ -311,18 +317,45 @@ def _compile_flags(node: ast.Call) -> int | None:
     return _flag_value(flag_node)
 
 
+def _locally_bound_names(tree: ast.AST) -> frozenset[str]:
+    """Names rebound in a local scope: params, assignments, nested imports, defs.
+
+    A module alias shadowed by any of these is not confirmably the ``re`` module
+    at the call site, so the census leaves it unknown. Module-level imports are
+    the binding source, not a shadow, and are excluded.
+    """
+
+    module_imports = {
+        id(node) for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
+    }
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)) and id(node) not in module_imports:
+            for alias in node.names:
+                bound.add(alias.asname or alias.name.split(".")[0])
+    return frozenset(bound)
+
+
 def _re_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
     """Names confirmably bound to the ``re`` module and to ``re.compile``.
 
-    ``re`` is recognised by its canonical stdlib name even in an isolated call
-    fragment with no import line; ``import re as rx`` adds ``rx`` and
-    ``from re import compile as c`` adds a direct ``c`` callee. Anything else --
-    ``renderer.compile``, a bare builtin ``compile`` -- is not confirmably ``re``.
+    Only module-level imports bind the module; ``re`` is recognised by its
+    canonical stdlib name even in an isolated fragment with no import line. A
+    name shadowed by a local binding -- e.g. a function parameter ``rx`` after
+    ``import re as rx`` -- is dropped, so a call through it is left unknown rather
+    than mistaken for the module. ``renderer.compile`` and a bare builtin
+    ``compile`` are never confirmably ``re``.
     """
 
     module_names = {"re"}
     compile_names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "re":
@@ -331,7 +364,11 @@ def _re_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
             for alias in node.names:
                 if alias.name == "compile":
                     compile_names.add(alias.asname or "compile")
-    return frozenset(module_names), frozenset(compile_names)
+    shadowed = _locally_bound_names(tree)
+    return (
+        frozenset(name for name in module_names if name not in shadowed),
+        frozenset(name for name in compile_names if name not in shadowed),
+    )
 
 
 def _is_re_compile(
@@ -367,29 +404,35 @@ def compiled_rule(
     module_names: frozenset[str] = frozenset({"re"}),
     compile_names: frozenset[str] = frozenset(),
 ) -> tuple[str, int | None] | None:
-    """Fold a confirmable ``re.compile(<literal>[, flags])`` to ``(body, source_flags)``.
+    """Fold a confirmable ``re.compile(<literal>[, flags])`` to ``(body, flags)``.
 
-    The callee must be ``re.compile`` (or a tracked alias / ``from re import
-    compile``), so an independent object's ``.compile()`` that merely renders help
-    text is not a rule. The body is read from the first positional arg *or* the
-    ``pattern=`` keyword, so a real ``re.compile(pattern=...)`` duplicate is not
-    missed. Unlike ``pattern_body`` this keeps the flags, so an ``re.IGNORECASE``
-    variant of the same body folds to a different rule and is not a duplicate.
+    The callee must be an unshadowed ``re.compile`` (or tracked alias / ``from re
+    import compile``), so an independent object's ``.compile()`` is not a rule.
+    The body is read from the positional arg or the ``pattern=`` keyword. Flags
+    are normalised by stripping ``re.UNICODE`` -- the default for a str pattern --
+    so an explicit ``re.UNICODE`` compile is the same rule as a flagless one, while
+    ``re.IGNORECASE`` is different. An unresolved binding, ``**opts`` flags, or a
+    non-literal body yields None and is left unknown, never reported.
     """
 
     if isinstance(node, ast.Call) and _is_re_compile(node, module_names, compile_names):
         body = _compile_body(node)
         if body is not None:
-            return (body, _compile_flags(node))
+            flags = _compile_flags(node)
+            if flags is not None:
+                flags &= ~re.UNICODE
+            return (body, flags)
     return None
 
 
 def scoped_matcher_sites(source: str, body: str) -> list[int]:
-    """Lines that compile exactly the owner's flagless rule ``(body, 0)``.
+    """Lines that compile exactly the owner's rule ``(body, 0)`` after normalising.
 
-    Confirmable ``re.compile`` only (an independent ``.compile()`` or a bare help
-    string is never counted), exact-body (a larger grammar that merely embeds the
-    body is a different rule), flag-aware, and covering the ``pattern=`` keyword.
+    Confirmable, unshadowed ``re.compile`` only (an independent ``.compile()``, a
+    shadowed alias, or a bare help string is never counted), exact-body (a larger
+    grammar that merely embeds the body is a different rule), and flag-aware:
+    ``re.UNICODE`` is the str default so it normalises away, ``**opts`` or any
+    unresolved flag is unknown, and a genuinely different flag is a different rule.
     """
 
     tree = ast.parse(source)
@@ -782,6 +825,21 @@ def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, 
         ("pattern keyword ignorecase is different", '_X = re.compile(pattern=r"__BODY__", flags=re.IGNORECASE)\n', 0),
         ("non-literal body is unknown", '_X = re.compile(some_var)\n', 0),
         ("non-literal pattern keyword is unknown", '_X = re.compile(pattern=some_var)\n', 0),
+        # P2 round 3: a shadowed binding is not confirmably the re module.
+        ("shadowed re alias is unknown", 'import re as rx\ndef f(rx):\n    return rx.compile(r"__BODY__")\n', 0),
+        ("shadowed canonical re is unknown", 'def f(re):\n    return re.compile(r"__BODY__")\n', 0),
+        ("locally rebound alias is unknown", 'import re as rx\nrx = object()\n_X = rx.compile(r"__BODY__")\n', 0),
+        ("alias shadowed anywhere is conservatively unknown", 'import re as rx\n_X = rx.compile(r"__BODY__")\ndef f(rx):\n    return rx.compile(r"__BODY__")\n', 0),
+        # P2 round 3: **opts can carry unseen flags -> unknown, never assumed 0.
+        ("expanded opts flags are unknown", '_X = re.compile(r"__BODY__", **opts)\n', 0),
+        ("expanded opts ignorecase is unknown", '_X = re.compile(r"__BODY__", **{"flags": re.IGNORECASE})\n', 0),
+        # P2 round 3: explicit re.UNICODE is the str default -> equal to flagless.
+        ("explicit unicode equals flagless", '_X = re.compile(r"__BODY__", re.UNICODE)\n', 1),
+        ("explicit unicode keyword equals flagless", '_X = re.compile(r"__BODY__", flags=re.UNICODE)\n', 1),
+        ("positional unicode equals flagless", '_X = re.compile(r"__BODY__", 32)\n', 1),
+        ("pattern keyword unicode equals flagless", '_X = re.compile(pattern=r"__BODY__", flags=re.UNICODE)\n', 1),
+        ("unicode plus ignorecase is different", '_X = re.compile(r"__BODY__", re.UNICODE | re.IGNORECASE)\n', 0),
+        ("ascii flag is a different rule", '_X = re.compile(r"__BODY__", re.ASCII)\n', 0),
     ],
     ids=[
         "renamed-restatement",
@@ -807,16 +865,29 @@ def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, 
         "pattern-keyword-ignorecase",
         "non-literal-body",
         "non-literal-pattern-keyword",
+        "shadowed-re-alias",
+        "shadowed-canonical-re",
+        "locally-rebound-alias",
+        "alias-shadowed-anywhere",
+        "expanded-opts-flags",
+        "expanded-opts-ignorecase",
+        "explicit-unicode-equals-flagless",
+        "explicit-unicode-keyword",
+        "positional-unicode",
+        "pattern-keyword-unicode",
+        "unicode-plus-ignorecase",
+        "ascii-flag",
     ],
 )
 def test_the_scoped_census_bites_a_restatement_and_leaves_the_neighbours(
     name: str, label: str, source: str, expected: int
 ) -> None:
     # The review counterexamples are the flag-different importer, the never-compiled
-    # help string, an independent object's .compile(), and a real re.compile(pattern=)
-    # duplicate. The first three must read as neighbours; a flagless recompilation of
-    # the identical body -- under a new name, via pattern=, or through an re alias --
-    # is caught.
+    # help string, an independent object's .compile(), a shadowed re alias, **opts
+    # carrying unseen flags, and a real re.compile(pattern=) duplicate. Only a
+    # provably-equivalent copy -- confirmable unshadowed re.compile, literal body,
+    # flags equal after stripping the str-default UNICODE -- is caught; everything
+    # unresolved or genuinely different is left alone.
     body = PATTERN_DECISIONS[name][0]
     sites = scoped_matcher_sites(source.replace("__BODY__", body), body)
     assert len(sites) == expected, label
@@ -905,3 +976,85 @@ def test_the_census_keys_on_real_re_compile_not_a_shared_method_name(
     rendered = IndependentRenderer().compile(body)
     assert isinstance(rendered, str)
     assert not hasattr(rendered, "fullmatch")
+
+
+@pytest.mark.parametrize("name", sorted(SCOPED_COMPILED_MATCHERS))
+def test_the_census_reports_only_provably_equivalent_copies_executed(
+    name: str, tmp_path, monkeypatch
+) -> None:
+    """The review's round-3 ask, executed in an isolated package: only provably
+    equivalent copies are reported. A flagless / explicit-UNICODE / ``pattern=``
+    recompilation of the owner body is the same rule and is caught; an independent
+    text renderer, a shadowed ``re`` alias, ``**opts`` carrying IGNORECASE, and an
+    explicit IGNORECASE compile are not provably equivalent and are left alone.
+    Running the compilers confirms the equal-flag copy matches the owner while the
+    others differ, and the shadowed alias really returns help text.
+    """
+
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(
+        globals(), "REWARD_MEMORY_ROOT", tmp_path / "loopx/capabilities/reward_memory"
+    )
+    body, owner_path, _owner_module, _consumers = PATTERN_DECISIONS[name]
+    pkg = tmp_path / "loopx/capabilities/reward_memory"
+    owner = tmp_path / owner_path
+    owner.parent.mkdir(parents=True, exist_ok=True)
+    owner.write_text(f'import re\n{name} = re.compile(r"{body}")\n')
+
+    def write(basename: str, source: str) -> str:
+        (pkg / basename).write_text(source, encoding="utf-8")
+        return f"loopx/capabilities/reward_memory/{basename}"
+
+    eq_flagless = write("eq_flagless.py", f'import re\n_X = re.compile(r"{body}")\n')
+    eq_unicode = write("eq_unicode.py", f'import re\n_X = re.compile(r"{body}", re.UNICODE)\n')
+    eq_pattern_kw = write("eq_pattern_kw.py", f'import re\n_X = re.compile(pattern=r"{body}")\n')
+    equivalent = {eq_flagless, eq_unicode, eq_pattern_kw}
+    write("ne_ignorecase.py", f'import re\n_X = re.compile(r"{body}", re.IGNORECASE)\n')
+    write(
+        "ne_opts.py",
+        "import re\n"
+        '_OPTS = {"flags": re.IGNORECASE}\n'
+        f'_X = re.compile(r"{body}", **_OPTS)\n',
+    )
+    write(
+        "ne_shadowed.py",
+        "import re as rx\n"
+        "def render(rx):\n"
+        f'    return rx.compile(r"{body}")\n',
+    )
+    write(
+        "ne_renderer.py",
+        "class Renderer:\n"
+        "    def compile(self, text):\n"
+        '        return f"help: match {text} to validate"\n'
+        "RENDERER = Renderer()\n"
+        f'_HELP = RENDERER.compile(r"{body}")\n',
+    )
+
+    findings = _reward_memory_matcher_scan()
+    reported = {offender.split(":")[0] for offender in findings[name]}
+    assert reported == equivalent, findings[name]
+
+    # Execute the compilers: explicit UNICODE is the str default (equal flags) and
+    # pattern= is the same rule, while IGNORECASE -- direct or via **opts -- differs.
+    owner_rule = re.compile(body)
+    assert re.compile(body, re.UNICODE).flags == owner_rule.flags
+    assert re.compile(pattern=body).flags == owner_rule.flags
+    assert re.compile(body, re.IGNORECASE).flags != owner_rule.flags
+    assert re.compile(body, **{"flags": re.IGNORECASE}).flags != owner_rule.flags
+    if name == "_MEMORY_REF_DIGEST_RE":
+        # The digest class is lowercase-only, so IGNORECASE genuinely widens it:
+        # the **opts copy accepts uppercase hex the owner rejects -- a different rule.
+        upper = "0123456789ABCDEF"
+        assert owner_rule.fullmatch(upper) is None
+        assert re.compile(body, **{"flags": re.IGNORECASE}).fullmatch(upper)
+
+    # The shadowed alias really is the renderer, not the module: it returns text.
+    class Renderer:
+        def compile(self, text):
+            return f"help: match {text} to validate"
+
+    def render(rx):
+        return rx.compile(body)
+
+    assert isinstance(render(Renderer()), str)
