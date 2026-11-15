@@ -501,7 +501,10 @@ def test_installed_core_goal_lifecycle_preserves_work_and_resumes_execution(core
         assert json.loads(_run(core_python, lease_argv, workspace).stdout)["lease"] == original_lease
         if state == "stopped":
             blocked = json.loads(_run(core_python, arguments, workspace, expected=1).stdout)
-            assert blocked["error_code"] == "goal_stopped"
+            assert blocked["ok"] is False, blocked
+            assert blocked["effects"]["host_invoked"] is False
+            assert blocked["effects"]["state_written"] is False
+            assert blocked["effects"]["quota_spent"] is False
         assert _spends(runtime) == 0
         assert not (workspace / "host-invocations").exists()
         assert not (workspace / "squares.json").exists()
