@@ -6,10 +6,13 @@ import {PostgreSqlAuthorityService} from "./postgresql_authority_service.ts";
 import type {PostgreSqlAuthorityDatabase} from "./postgresql_authority_store.ts";
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "./todo_update.ts";
+import {executeCoordinationTodoCreate} from "./todo_create.ts";
+import {executeCoordinationTodoTerminalLifecycle, type CoordinationTodoTerminalLifecycleInput} from "./todo_terminal_lifecycle.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "./task_lease_lifecycle.ts";
 import {leaseVersion, leaseEpoch} from "../work_items/task_lease_acquire.ts";
+import {TODO_DOMAIN_ITEM_SCHEMA} from "./coordination_state_contract.ts";
 import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
-import {decodeRemoteAuthorityRequest, remoteAuthorityOperationId, remoteAuthorityResponse,
+import {decodeRemoteAuthorityRequest, remoteAuthorityOperationId, remoteAuthorityResponse, remoteAuthoritySnapshotDigest,
   type RemoteAuthorityMode, type RemoteAuthorityRequest} from "./remote_authority_contract.ts";
 
 export type RemoteAuthorityAdmission =
@@ -68,6 +71,10 @@ function pinnedStore(store: AuthorityStore, identity: string, admission: JsonObj
       if (commit.operation_id !== operationId || commit.expected_provider_revision === null ||
           !matches(commit.expected_provider_revision)) return {status: "failed",
         reason_code: "remote_authority_commit_binding_invalid", reason: "Command does not match admitted authority"};
+      if (commit.next_projection.handoff_mode !== "hard_lease") return {
+        status: "failed", reason_code: "remote_authority_requires_hard_lease",
+        reason: "The committing authority must use hard leases",
+      };
       // Metadata shares the existing business receipt transaction; no second ledger.
       return store.commitAuthority({...commit, receipts: commit.receipts.map(receipt =>
         ({...receipt, remote_admission: admission}))});
@@ -75,12 +82,23 @@ function pinnedStore(store: AuthorityStore, identity: string, admission: JsonObj
   };
 }
 
+function projectReadTodo(todo: JsonObject, includePlanning: boolean): JsonObject {
+  const fields = ["todo_id", "status", "claimed_by", "note", ...(includePlanning ? ["role", "priority"] : [])];
+  const output = Object.fromEntries(fields.filter(field => Object.hasOwn(todo, field)).map(field => [field, todo[field]]));
+  if (Object.hasOwn(output, "note") && Buffer.byteLength(JSON.stringify(output.note)) > MAX_READ_NOTE_BYTES) {
+    delete output.note;
+    output.note_omitted = true;
+  }
+  return output;
+}
+
 /** Deliberately bounded response projection: no SQL errors, paths, arbitrary
  * canonical fields, workspace observations or provider credentials cross here. */
 function commandResult(result: JsonObject): JsonObject {
   const output: JsonObject = {};
   for (const key of ["status", "reason_code", "changed", "todo_id", "claimed_by", "operation_id",
-    "claim_operation_id", "provider_revision", "cursor", "handoff_mode", "released", "renewed", "missing"]) {
+    "claim_operation_id", "provider_revision", "cursor", "handoff_mode", "released", "renewed", "missing",
+    "completed", "completed_at", "completion_receipt_id"]) {
     if (Object.hasOwn(result, key)) output[key] = result[key];
   }
   if (result.lease && typeof result.lease === "object" && !Array.isArray(result.lease)) {
@@ -88,6 +106,18 @@ function commandResult(result: JsonObject): JsonObject {
     output.lease = {...Object.fromEntries(["goal_id", "todo_id", "owner", "idempotency_key", "status",
       "acquired_at", "updated_at", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]])),
       version: leaseVersion(lease), lease_epoch: leaseEpoch(lease)};
+  }
+  if (result.todo && typeof result.todo === "object" && !Array.isArray(result.todo)) {
+    const todo = result.todo as JsonObject;
+    output.todo = Object.fromEntries(["todo_id", "status", "role", "priority", "claimed_by", "note"].filter(k => k in todo).map(k => [k, todo[k]]));
+  }
+  for (const key of ["blocked_lifecycle_transition", "deferred_transition"]) {
+    const raw = result[key];
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      const transition = raw as JsonObject;
+      output[key] = Object.fromEntries(["kind", "lease_retirement", "execution_authority_granted"]
+        .filter(field => Object.hasOwn(transition, field)).map(field => [field, transition[field]]));
+    }
   }
   return output;
 }
@@ -101,7 +131,7 @@ export class RemoteAuthorityService {
     try { request = decodeRemoteAuthorityRequest(raw); }
     catch { return {status: "rejected", reason_code: "invalid_remote_authority_request"}; }
     const reply = (payload: JsonObject) => remoteAuthorityResponse(request, mode, payload);
-    if (mode !== "execute" && mode !== "recover" || mode === "recover" && request.operation === "read") {
+    if (mode !== "execute" && mode !== "recover" || mode === "recover" && (request.operation === "read" || request.operation === "snapshot")) {
       return reply({status: "rejected", reason_code: "invalid_remote_authority_mode"});
     }
     let admission: RemoteAuthorityAdmission;
@@ -125,7 +155,7 @@ export class RemoteAuthorityService {
     const store = pinnedStore(opened.store, request.store_identity, binding, operationId);
     let dispatched = false;
     try {
-      const previous = request.operation === "read" ? null : await store.readReceipt(operationId);
+      const previous = (request.operation === "read" || request.operation === "snapshot") ? null : await store.readReceipt(operationId);
       if (previous?.status === "found") {
         const original = previous.receipts[0];
         const recorded = original?.remote_admission as JsonObject | undefined;
@@ -150,16 +180,34 @@ export class RemoteAuthorityService {
       if (request.operation === "read") {
         const todo = index.todos.get(request.todo_id), lease = index.leases.get(request.todo_id);
         if (!todo) return reply({status: "missing"});
-        const projectedTodo = Object.fromEntries(["todo_id", "status", "claimed_by", "note"].filter(k => k in todo).map(k => [k, todo[k]]));
-        // Notes authored through other canonical routes can exceed the remote
-        // write limit. Preserve the small lease facts needed for renew/release.
-        if (Object.hasOwn(projectedTodo, "note") && Buffer.byteLength(JSON.stringify(projectedTodo.note)) > MAX_READ_NOTE_BYTES) {
-          delete projectedTodo.note; projectedTodo.note_omitted = true;
-        }
         return reply({status: "found", provider_revision: head.provider_revision,
-          todo: projectedTodo,
+          todo: projectReadTodo(todo, false),
           lease: lease ? {...Object.fromEntries(["owner", "status", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]])),
             version: leaseVersion(lease), lease_epoch: leaseEpoch(lease)} : null});
+      }
+      if (request.operation === "snapshot") {
+        const todos = index.todo_ids
+          .filter(id => !request.todo_id || id === request.todo_id)
+          .map(id => projectReadTodo(index.todos.get(id)!, true));
+        const leases = index.lease_todo_ids
+          .filter(id => !request.todo_id || id === request.todo_id)
+          .map(id => {
+            const l = index.leases.get(id)!;
+            return {
+              ...Object.fromEntries(["goal_id", "todo_id", "owner", "status", "expires_at"].filter(k => k in l).map(k => [k, l[k]])),
+              version: leaseVersion(l),
+              lease_epoch: leaseEpoch(l),
+            };
+          });
+        return reply({
+          status: "snapshot",
+          provider_revision: head.provider_revision,
+          store_identity: request.store_identity,
+          goal_id: request.goal_id,
+          receipt_sha256: remoteAuthoritySnapshotDigest(request, head.provider_revision, todos, leases),
+          todos,
+          leases,
+        });
       }
       if (head.head.handoff_mode !== "hard_lease") return reply({status: "rejected", reason_code: "remote_authority_requires_hard_lease"});
       const now = this.#dependencies.now?.() ?? new Date();
@@ -175,7 +223,69 @@ export class RemoteAuthorityService {
         operation_id: operationId, actor_agent_id: request.actor_id, expected_role: "agent", dry_run: false,
         claim_operation_id: remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id),
         patch: {note: request.note}, clear_fields: []});
-      else result = await executeCanonicalTaskLeaseLifecycle(store, {...common, operation: request.operation,
+      else if (request.operation === "complete") {
+        const claimOpId = remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id);
+        const input: CoordinationTodoTerminalLifecycleInput = {
+          goal_id: request.goal_id, todo_id: request.todo_id, command: "complete",
+          expected_role: "agent", actor_agent_id: request.actor_id,
+          registered_agents: admission.registered_agents, lifecycle_grants: [], authority_reason: null,
+          decision_outcome: null, operation_identity: {kind: "explicit", operation_id: operationId},
+          claim_operation_id: claimOpId, lease_idempotency_key: null, lease_expected_version: null,
+          allow_user_gate_auto_acquire: false, requested_no_followup: request.no_followup === true,
+          requested_completion_turn_key: null, requested_completion_identity_source: null,
+          linked_successor_todo_ids: [], successor_intents: [], note: request.note ?? null,
+          evidence: request.evidence, reason: null, clear_claim: true, validation_declaration: null,
+          validation_receipt: null, completion_policy_request: null, dry_run: false, now,
+        };
+        result = await executeCoordinationTodoTerminalLifecycle(store, input);
+        // Older complete requests implied no_followup. Use that intent only to
+        // replay an already committed receipt for the exact authenticated request.
+        if (previous?.status === "found" && request.no_followup === undefined &&
+            result.reason_code === "coordination_operation_identity_mismatch") {
+          result = await executeCoordinationTodoTerminalLifecycle(store, {...input, requested_no_followup: true});
+        }
+        if (result.status === "applied") result.completed = true;
+      } else if (request.operation === "block" || request.operation === "defer") {
+        const claimOpId = request.claim_request_id
+          ? remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id)
+          : undefined;
+        result = await executeCoordinationTodoUpdate(store, {
+          ...common, operation_id: operationId, actor_agent_id: request.actor_id,
+          expected_role: "agent", dry_run: false, ...(claimOpId ? {claim_operation_id: claimOpId} : {}),
+          patch: {...(request.note ? {note: request.note} : {})}, clear_fields: [],
+          planning_intent: {
+            status: request.operation === "block" ? "blocked" : "deferred",
+            reason: request.reason,
+            ...(request.resume_when ? {resume_when: request.resume_when} : {}),
+          },
+        });
+      } else if (request.operation === "todo_add") {
+        const todoRecord = {
+          schema_version: TODO_DOMAIN_ITEM_SCHEMA,
+          todo_id: request.todo_id,
+          role: request.role ?? "agent",
+          status: "open",
+          done: false,
+          text: request.text,
+          archive_state: "active",
+          ...(request.priority ? {priority: request.priority} : {}),
+          ...(request.task_class ? {task_class: request.task_class} : {}),
+          ...(request.action_kind ? {action_kind: request.action_kind} : {}),
+          ...(request.task_repository ? {task_repository: request.task_repository} : {}),
+          ...(request.required_write_scopes ? {required_write_scopes: [...request.required_write_scopes]} : {}),
+          ...(request.claimed_by ? {claimed_by: request.claimed_by} : {}),
+          ...(request.note ? {note: request.note} : {}),
+        };
+        result = await executeCoordinationTodoCreate(store, {
+          goal_id: request.goal_id, todo: todoRecord, actor_agent_id: request.actor_id,
+          registered_agents: admission.registered_agents, operation_id: operationId, dry_run: false, now,
+        });
+        // The create owner can return a different, semantically duplicate
+        // Todo. That is a valid local no-op but not proof of this requested id.
+        if (result.status === "no_change" && result.todo_id !== request.todo_id) {
+          result = {status: "failed", reason_code: "remote_authority_todo_id_not_created"};
+        }
+      } else result = await executeCanonicalTaskLeaseLifecycle(store, {...common, operation: request.operation,
         owner: request.actor_id, idempotency_key: request.idempotency_key, required_handoff_mode: "hard_lease",
         expected_version: request.expected_version, ttl_seconds: request.operation === "renew" ? request.ttl_seconds : null});
       return reply({status: "result", operation_id: operationId, result: commandResult(result)});
