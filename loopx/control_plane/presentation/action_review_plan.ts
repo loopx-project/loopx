@@ -549,8 +549,11 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const parameters = objectValue(proposal.normalized_parameters);
   const steps = objectValue(objectValue(proposal.checkpoint)?.steps);
   const createPlan = objectValue(steps?.todo_create_prepared);
+  const failure = objectValue(proposal.failure);
   const todoCreation = proposal.action_kind === "todo.create" || proposal.action_kind === "monitor.create";
-  const prohibitRegeneration = todoCreation && Boolean(createPlan || objectValue(steps?.todo_created));
+  const createAttemptFailed = proposal.status === "failed" && failure?.error_code === "canonical_action_failed";
+  const prohibitRegeneration = todoCreation && (createAttemptFailed || proposal.status === "applying"
+    || Object.hasOwn(steps ?? {}, "todo_create_prepared") || Object.hasOwn(steps ?? {}, "todo_created"));
   const creationProgress = goalCreationProgress(proposal);
   // Older already-dispatched creations retain their original semantics. A
   // failed write retries its original CAS even after a response was lost.
@@ -622,7 +625,7 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   }
   if (proposal.action_kind === "todo.create" && parameters?.start_execution === true
       && proposal.permission_classification === "durable_write" && identity.proposalId && identity.sourceFingerprint
-      && (proposal.status === "applying" || (proposal.status === "failed" && objectValue(proposal.failure)?.retry_safe === true))) {
+      && (proposal.status === "applying" || (proposal.status === "failed" && failure?.retry_safe === true))) {
     const created = objectValue(steps?.todo_created);
     const receipt = objectValue(created?.canonical_receipt);
     if (textValue(created?.todo_id) && created?.todo_id === receipt?.todo_id
@@ -631,16 +634,20 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       return {...finish({interaction: "review", canApply: true, reason: "task_start_retry"}), retryOriginal: true};
     }
   }
-  // A confirmation with a saved create plan may already have written. Only a
-  // complete plan for this exact proposal can offer native recovery on reload.
+  const preparedCreateMatches = createPlan?.operation_id === ("chat-create:" + identity.proposalId)
+    && createPlan.preview_id === identity.sourceFingerprint
+    && textValue(createPlan.source_identity) && textValue(createPlan.source_authority)
+    && textValue(createPlan.expected_provider_revision) && textValue(createPlan.expected_registry_sha256)
+    && textValue(createPlan.expected_store_identity);
+  // The server may fail before any checkpoint is saved. The same apply still
+  // owns the reviewed source and must revalidate it before the first write.
+  const interruptedBeforePlan = createAttemptFailed && failure?.retry_safe === true && proposal.checkpoint == null
+    && Array.isArray(proposal.available_transitions) && proposal.available_transitions.includes("apply");
   if (todoCreation && ["failed", "applying"].includes(String(proposal.status))
       && proposal.permission_classification === "durable_write"
+      && failure?.retry_safe !== false
       && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
-      && createPlan?.operation_id === ("chat-create:" + identity.proposalId)
-      && createPlan.preview_id === identity.sourceFingerprint
-      && textValue(createPlan.source_identity) && textValue(createPlan.source_authority)
-      && textValue(createPlan.expected_provider_revision) && textValue(createPlan.expected_registry_sha256)
-      && textValue(createPlan.expected_store_identity)) {
+      && (interruptedBeforePlan || preparedCreateMatches)) {
     return {...finish({interaction: "review", canApply: true, reason: "todo_creation_retry"}), retryOriginal: true};
   }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"
@@ -653,7 +660,6 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       || (proposal.action_kind === "monitor.update" && parameters?.operation === "stop")
       || (proposal.action_kind === "gate.resolve" && ["approve", "reject", "cancel"].includes(String(parameters?.decision))));
   if ((isCanonicalUpdate || isCanonicalTerminal) && (proposal.status === "applying" || proposal.status === "failed")) {
-    const failure = objectValue(proposal.failure);
     return {...finish({interaction: "review", canApply: true,
       reason: failure?.error_code === "canonical_update_projection_pending"
         ? "canonical_update_projection_pending" : "canonical_update_retry"}), retryOriginal: true};

@@ -954,7 +954,7 @@ const en = {
   "actionReview.canonical_update_retry": "The edit is not yet verified. Retry this operation to recover its result.",
   "actionReview.goal_creation_retry": "Goal initialization is incomplete. Retry the original creation; its recorded storage choice is preserved.",
   "actionReview.task_start_retry": "The Task was saved. Retry its original start to continue with that Task.",
-  "actionReview.todo_creation_retry": "Creation was confirmed. Retry this confirmation to recover its result.",
+  "actionReview.todo_creation_retry": "Confirmation submitted. Retry to recover the original result.",
   "drawer.todoCreationUnverified": "Refresh to check the original confirmation.",
   "drawer.todoCreationStale": "The source changed before creation. Start a new request if you still need it.",
   "actionReview.canonical_update_projection_pending": "The operation was committed; display delivery is pending. Retry this operation to restore the current view.",

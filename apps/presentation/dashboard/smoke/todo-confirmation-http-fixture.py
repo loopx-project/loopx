@@ -18,19 +18,22 @@ from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.control_plane.todos.mutation_api import add_goal_todo
 
 
-def main(provider):
+def main(provider, interrupted_step):
     with TemporaryDirectory(prefix="loopx-confirmation-fixture-") as directory, pytest.MonkeyPatch.context() as patch:
         scratch = Path(directory)
         isolate_sqlite_runtime(scratch, patch)
         registry, runtime, _ = promoted_create_fixture(scratch, provider=provider)
         lost = {}
+        interrupted = set()
         checkpoint = ChatActionStore.save_checkpoint
         for content in ("Review release checklist", "Verify documentation links", "Check failure handling"):
             add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent", text=content)
 
         def interrupt(self, proposal_id, *, step, receipt, **kwargs):
-            if step == "todo_created" and proposal_id not in lost:
-                lost[proposal_id] = receipt["canonical_receipt"]
+            if step == interrupted_step and proposal_id not in interrupted:
+                interrupted.add(proposal_id)
+                if step == "todo_created":
+                    lost[proposal_id] = receipt["canonical_receipt"]
                 raise OSError("test: first create checkpoint write interrupted")
             return checkpoint(self, proposal_id, step=step, receipt=receipt, **kwargs)
 
@@ -71,4 +74,4 @@ def main(provider):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[3])
