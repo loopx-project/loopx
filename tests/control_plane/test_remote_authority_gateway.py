@@ -30,8 +30,17 @@ def test_local_cli_ignores_disabled_and_other_goal_remote_binding(tmp_path, monk
         assert decision["ok"] is True
         return tuple(decision.get(key) for key in ("decision", "effective_action", "should_run", "reason"))
 
+    def read_local(goal):
+        decision = cli(
+            "quota", "should-run", "--runtime-profile", "outer_controller",
+            "--goal-id", goal, "--agent-id", SCOPED_AGENT_ID,
+        )
+        assert "remote_gateway" not in decision
+        return tuple(decision.get(key) for key in ("decision", "effective_action", "should_run"))
+
     local = read()
     assert local[:3] == ("skip", "throttled_skip", False), local
+    assert read_local("half-speed") == ("run", "normal_run", True)
     document = json.loads(registry.read_text())
     cfg = {"enabled": True, "endpoint": "https://127.0.0.1:1", "tenant_id": "other-synthetic-tenant",
            "actor_id": SCOPED_AGENT_ID, "store_identity": "postgresql:" + "a" * 32, "probe_todo_id": "todo_probe"}
@@ -42,6 +51,7 @@ def test_local_cli_ignores_disabled_and_other_goal_remote_binding(tmp_path, monk
             goal["remote_authority"] = cfg
     registry.write_text(json.dumps(document), encoding="utf-8")
     assert read() == local
+    assert read_local("half-speed") == ("run", "normal_run", True)
 
     other = cli("heartbeat-prompt", "--full", "--codex-app",
                 "--goal-id", "full-speed", "--agent-id", SCOPED_AGENT_ID)
