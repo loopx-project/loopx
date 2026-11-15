@@ -846,6 +846,7 @@ def build_loopx_bootstrap_command_pack(
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
     )
+    activation_registry = str(registry_path) if agent_type == "antigravity-app" else None
     thread_binding = resolve_thread_agent_binding(
         registry_goal,
         host_surface=host_surface,
@@ -890,6 +891,7 @@ def build_loopx_bootstrap_command_pack(
         goal_id=resolved_goal_id,
         cli_bin=cli_bin,
         runtime_root=command_runtime_root,
+        registry=activation_registry,
         identity_runtime_root=identity_runtime_root,
         agent_id=effective_agent_id,
         registered_agents=registered_agents,
@@ -923,6 +925,7 @@ def build_loopx_bootstrap_command_pack(
             resolved_goal_id,
             cli_bin=cli_bin,
             runtime_root=command_runtime_root,
+            registry_path=activation_registry,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             available_capabilities=available_capabilities,
             begin_turn=guided_start_begins_turn,
