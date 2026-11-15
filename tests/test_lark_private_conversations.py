@@ -2362,6 +2362,7 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
 def test_settings_health_reuses_core_correlation_but_observes_current_work(tmp_path, monkeypatch):
     from loopx.capabilities.native_chat import external_conversations
     from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_conversations
     from test_private_chat_backlog_projection import fixture_history
 
     store, core, transport, rows = fixture_history(tmp_path, count=2)
@@ -2381,19 +2382,29 @@ def test_settings_health_reuses_core_correlation_but_observes_current_work(tmp_p
     _atomic_write_json(partial_path, {**initial_partial, "deliveries": {
         "terminal": {"started": True, "verified": False}}})
     read_request = external_conversations._read_json
+    read_delivery = private_conversations._read_json
     request_reads = []
+    delivery_reads = []
 
     def observe(path):
         request_reads.append(path)
         return read_request(path)
 
+    def observe_delivery(path):
+        delivery_reads.append(path)
+        return read_delivery(path)
+
     monkeypatch.setattr(external_conversations, "_read_json", observe)
+    monkeypatch.setattr(private_conversations, "_read_json", observe_delivery)
     assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 1}
     assert set(request_reads) == {partial_request, completed_request}
+    assert set(delivery_reads) == {partial_path, completed_path}
     request_reads.clear()
+    delivery_reads.clear()
     assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 1}
     # Windows has no reliable ctime mutation stamp; its reader stays fresh.
     assert set(request_reads) == ({partial_request, completed_request} if sys.platform == "win32" else set())
+    assert set(delivery_reads) == ({partial_path, completed_path} if sys.platform == "win32" else set())
     request_reads.clear()
 
     # Independent native updates must not wait for the Lark receipt to change.
@@ -4608,7 +4619,7 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
 
 def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(ordinary, monkeypatch):  # noqa: F811
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
-    from loopx.control_plane import effect_runtime
+    from loopx.control_plane import chat_turn_acceptance, effect_runtime
 
     store, runtime, provider, transport = connect(ordinary)
     binding = transport._binding("notes-app")
@@ -4626,9 +4637,11 @@ def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(or
     original_turns = [store._turn_path(sid, turn["turn_id"]).read_bytes() for turn in [owed, authorized]]
     native_before = ordinary[4].read_bytes() if ordinary[4].exists() else None
     revision_reads = []
+    queue_selections = []
     observed = threading.local()
     fingerprint = effect_runtime._runtime_fingerprint
     stop_recoveries = ChatConversationBindings.stop_recoveries
+    select_queue = chat_turn_acceptance.queued_chat_turn_ids
 
     def counted_fingerprint():
         if getattr(observed, "stop_recovery", False):
@@ -4642,8 +4655,14 @@ def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(or
         finally:
             observed.stop_recovery = False
 
+    def read_queue(turns, *args, **kwargs):
+        if getattr(observed, "stop_recovery", False):
+            queue_selections.append(len(turns))
+        return select_queue(turns, *args, **kwargs)
+
     monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", counted_fingerprint)
     monkeypatch.setattr(ChatConversationBindings, "stop_recoveries", observed_stop_recoveries)
+    monkeypatch.setattr(chat_turn_acceptance, "queued_chat_turn_ids", read_queue)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
     server.lark_private_conversations = transport
@@ -4653,6 +4672,7 @@ def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(or
 
     def snapshot():
         revision_reads.clear()
+        queue_selections.clear()
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
             connection.request("GET", "/api/chat/lark/private-conversations")
@@ -4660,6 +4680,7 @@ def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(or
             assert response.status == 200
             result = json.loads(response.read())
             assert len(revision_reads) <= 1  # At most one source inventory, rather than one per Session.
+            assert len(queue_selections) == 1 and queue_selections[0] > 0
             return result
         finally:
             connection.close()

@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from functools import cached_property
 from itertools import tee
 from pathlib import Path
 from threading import Lock
@@ -289,6 +290,10 @@ class LarkPrivateConversations:
             apps.setdefault(app_id, app_id)
         return {profile: app_id for profile, app_id in apps.items() if APP_ID_PATTERN.fullmatch(app_id)}
 
+    @cached_property
+    def _health_delivery_discovery(self) -> FileChatDiscovery:
+        return FileChatDiscovery()
+
     @effect_runtime_request_scope()
     def health(self) -> dict[str, dict[str, int]]:
         health: dict[str, dict[str, int]] = {}
@@ -308,9 +313,27 @@ class LarkPrivateConversations:
                     count(row)
             completed.clear()
 
+        def health_fields(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+            if row["status"] != "delivered":
+                return None
+            deliveries = row.get("deliveries")
+            if not isinstance(deliveries, dict) or not all(
+                isinstance(phase, dict) for phase in deliveries.values()
+            ):
+                return None
+            # Settings uses only correlation and retry metadata. Never retain
+            # delivered bodies or use these fields for admission or sending.
+            fields = ("binding_id", "status", "request_ref", "source", "session_id", "turn_id")
+            return {key: row[key] for key in fields if key in row} | {
+                "deliveries": {key: {"started": bool(phase.get("started")), "verified": bool(phase.get("verified"))}
+                               for key, phase in deliveries.items()},
+            }
+
         def delivered_requests() -> Iterator[dict[str, Any]]:
-            for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
-                row = _read_json(path)
+            paths = [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]
+            for path, row in self._health_delivery_discovery.rows(
+                self.root, paths, read=_read_json, project=health_fields,
+            ):
                 health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
                 if row["status"] != "delivered" and triage.pending(row):
                     count(row)
