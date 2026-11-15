@@ -24,11 +24,6 @@ from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-from loopx.rollout_event_log import (
-    _append_rollout_event_line,
-    build_rollout_event,
-    rollout_event_log_path,
-)
 from loopx.status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
 
 
@@ -447,30 +442,6 @@ def test_scheduler_fail_current_rejects_missing_turn_receipt_without_state_write
     assert not state_path.exists()
 
 
-def _append_later_heartbeat_receipt(
-    runtime_root: Path,
-    *,
-    turn_instance_id: str,
-) -> None:
-    """Append a later committed receipt that supersedes earlier Turns."""
-
-    _append_rollout_event_line(
-        rollout_event_log_path(runtime_root, GOAL_ID),
-        build_rollout_event(
-            goal_id=GOAL_ID,
-            event_kind="quota_should_run",
-            agent_id=SCOPED_AGENT_ID,
-            run_id=turn_instance_id,
-            status="normal_run",
-            summary=(
-                "later heartbeat cycle supersedes earlier turns "
-                f"({turn_instance_id})"
-            ),
-            details={"ok": True, "should_run": True},
-        ),
-    )
-
-
 def _scheduler_state_files(runtime_root: Path) -> list[Path]:
     return [
         path
@@ -479,120 +450,77 @@ def _scheduler_state_files(runtime_root: Path) -> list[Path]:
     ]
 
 
-def test_scheduler_ack_current_rejects_superseded_turn_receipt_without_state_write(
-    tmp_path: Path,
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("operation", ["scheduler-ack-current", "scheduler-fail-current"])
+def test_scheduler_followup_gates_state_migration(
+    tmp_path: Path, provider: str, operation: str,
 ) -> None:
     registry_path, runtime_root, project = write_cli_fixture(
-        tmp_path / "fixture",
-        scoped_agents=True,
+        tmp_path / "fixture", scoped_agents=True, provider=provider,
     )
 
-    seeded_rc, seeded = run_json_cli_result(
-        "quota",
-        "should-run",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        SCOPED_AGENT_ID,
-        "--codex-app",
-        "--turn-instance-id",
-        "heartbeat-superseded-ack",
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        cwd=project,
-    )
-    assert seeded_rc == 0
-    assert seeded["ok"] is True
-    _append_later_heartbeat_receipt(
-        runtime_root,
-        turn_instance_id="heartbeat-newer-ack",
-    )
+    def call(command: str, turn: str, *flags: str):
+        return run_json_cli_result(
+            "quota", command, "--goal-id", GOAL_ID, "--agent-id", SCOPED_AGENT_ID,
+            "--codex-app", "--app-automation-current-rrule", "FREQ=MINUTELY;INTERVAL=5",
+            "--turn-instance-id", turn, *flags,
+            registry_path=registry_path, runtime_root=runtime_root, cwd=project,
+        )
 
-    returncode, payload = run_json_cli_result(
-        "quota",
-        "scheduler-ack-current",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        SCOPED_AGENT_ID,
-        "--codex-app",
-        "--turn-instance-id",
-        "heartbeat-superseded-ack",
-        "--execute",
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        cwd=project,
-    )
+    stale, current = "heartbeat-older", "heartbeat-current"
+    for turn in (stale, current):
+        rc, guard = call("should-run", turn)
+        assert rc == 0 and guard["ok"] is True
+        assert guard["heartbeat_receipt"]["turn_instance_id"] == turn
+    app = guard["scheduler_hint"]["app_automation"]
+    key = APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    flags = ["--state-key", key]
+    if operation == "scheduler-fail-current":
+        flags.extend(["--failed-rrule", app["recommended_rrule"]])
 
-    assert returncode == 1
-    assert payload["ok"] is False
-    assert payload["status"] == "heartbeat_receipt_stale"
-    assert payload["state"] == "blocked_receipt"
-    assert payload["error_code"] == ("SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE")
-    assert payload["write_performed"] is False
-    assert payload["scheduler_state_mutated"] is False
-    assert payload["quota_spend_performed"] is False
+    def reject_stale(*execution: str) -> None:
+        rc, payload = call(operation, stale, *flags, *execution)
+        assert rc == 1 and payload["ok"] is False
+        assert payload["status"] == "heartbeat_receipt_stale"
+        assert payload["state"] == "blocked_receipt"
+        assert payload["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
+        assert payload["write_performed"] is False
+        assert payload["scheduler_state_mutated"] is False
+        assert payload["quota_spend_performed"] is False
+
+    reject_stale("--execute")
     assert _scheduler_state_files(runtime_root) == []
 
-
-def test_scheduler_fail_current_rejects_superseded_turn_receipt_without_state_write(
-    tmp_path: Path,
-) -> None:
-    registry_path, runtime_root, project = write_cli_fixture(
-        tmp_path / "fixture",
-        scoped_agents=True,
+    canonical = scheduler_state_path(
+        runtime_root, goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID, state_key=key,
     )
-
-    seeded_rc, seeded = run_json_cli_result(
-        "quota",
-        "should-run",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        SCOPED_AGENT_ID,
-        "--codex-app",
-        "--turn-instance-id",
-        "heartbeat-superseded-fail",
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        cwd=project,
+    legacy = (
+        runtime_root / "goals" / GOAL_ID / "scheduler-state"
+        / SCOPED_AGENT_ID / "codex_app" / canonical.name
     )
-    assert seeded_rc == 0
-    assert seeded["ok"] is True
-    _append_later_heartbeat_receipt(
-        runtime_root,
-        turn_instance_id="heartbeat-newer-fail",
-    )
+    assert legacy != canonical
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps(build_scheduler_state(
+        goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID, state_key=key,
+        reset_token="earlier-upgrade", identity_signature="earlier-host",
+        progression_index=0, progression_minutes=[3, 10, 30],
+        last_applied_rrule="FREQ=MINUTELY;INTERVAL=5",
+        updated_at="2026-01-01T00:00:00Z",
+    )), encoding="utf-8")
+    original = legacy.read_bytes()
 
-    returncode, payload = run_json_cli_result(
-        "quota",
-        "scheduler-fail-current",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        SCOPED_AGENT_ID,
-        "--codex-app",
-        "--turn-instance-id",
-        "heartbeat-superseded-fail",
-        "--failed-rrule",
-        "FREQ=MINUTELY;INTERVAL=30",
-        "--state-key",
-        APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
-        "--execute",
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        cwd=project,
-    )
+    for execution in ([], ["--execute"]):
+        reject_stale(*execution)
+        assert legacy.read_bytes() == original
+        assert not canonical.exists()
+    rc, preview = call(operation, current, *flags)
+    assert rc == 0 and preview["ok"] is True
+    assert legacy.read_bytes() == original and not canonical.exists()
 
-    assert returncode == 1
-    assert payload["ok"] is False
-    assert payload["status"] == "heartbeat_receipt_stale"
-    assert payload["state"] == "blocked_receipt"
-    assert payload["error_code"] == ("SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE")
-    assert payload["write_performed"] is False
-    assert payload["scheduler_state_mutated"] is False
-    assert payload["quota_spend_performed"] is False
-    assert _scheduler_state_files(runtime_root) == []
+    rc, committed = call(operation, current, *flags, "--execute")
+    assert rc == 0 and committed["ok"] is True
+    assert committed["scheduler_state_mutated"] is True
+    assert canonical.exists() and not legacy.exists()
 
 
 def test_scheduler_ack_current_routes_the_newest_turn_receipt(
