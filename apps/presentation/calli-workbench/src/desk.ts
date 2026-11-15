@@ -78,6 +78,11 @@ export function laneOf(todo: DeskTodo, now = new Date()): Lane {
   return 'doing';
 }
 
+/** Days since the last activity; 0 when nothing carries a time, so no age is claimed. */
+function idleDaysOf(last: number, now: Date): number {
+  return last > 0 ? Math.max(0, Math.floor((now.getTime() - last) / DAY)) : 0;
+}
+
 function pile(todo: DeskTodo, children: DeskTodo[], now: Date): Pile {
   const due = todo.dueAt ? Date.parse(todo.dueAt) : NaN;
   return {
@@ -85,7 +90,7 @@ function pile(todo: DeskTodo, children: DeskTodo[], now: Date): Pile {
     children,
     lane: laneOf(todo, now),
     pinned: Boolean(todo.lane && LANES.includes(todo.lane)),
-    idleDays: Math.max(0, Math.floor((now.getTime() - pileActivity({ todo, children })) / DAY)),
+    idleDays: idleDaysOf(pileActivity({ todo, children }), now),
     cards: (todo.hasNote ? 1 : 0) + (children.length ? 1 : 0) + todo.threads.length + (todo.proposals?.length ?? 0) + (sourceLabel(todo.source) || todo.subscriptions?.length ? 1 : 0) + (todo.proactiveRunCount ? 1 : 0),
     dueSoon: Number.isFinite(due) && due < endOfDay(now),
     overdue: Number.isFinite(due) && due < now.getTime(),

@@ -6,10 +6,13 @@ import { formatDate, formatDateTime, t } from '../i18n';
 import { DialogSurface } from './Dialog';
 import { IconAgents, IconPin, IconSparkle, IconExternal, IconCheck, IconChevron, IconClose, IconFile, IconSideChat } from './icons';
 import { Popover } from './Popover';
+import { TriagePanel } from './TriagePanel';
+import type { TriageView } from '../loopx/types';
 
 interface Props {
   api: Api;
   todos: Todo[];
+  triage?: TriageView | null;
   loading: boolean;
   error: string;
   refreshKey: number;
@@ -26,7 +29,7 @@ const rotation = (id: string) => ({ '--desk-tilt': `${tilt(id)}deg` } as CSSProp
 
 /** The same plans, laid out as a personal desk. Only an open pile fetches its continuation note. */
 export function DeskPage(props: Props) {
-  const { api, todos, loading, error, refreshKey, onReload, onOpenThread } = props;
+  const { api, todos, triage = null, loading, error, refreshKey, onReload, onOpenThread } = props;
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 60_000); return () => clearInterval(timer); }, []);
   const desk = useMemo(() => buildDesk(todos, now), [todos, now]);
@@ -65,11 +68,12 @@ export function DeskPage(props: Props) {
   return <div className="desk-page">
     <header className="desk-header">
       <div><h1>{formatDate(now, { month: 'long', day: 'numeric', weekday: 'long' })}</h1>
-        {!loading && !error && <p className="desk-summary"><span className="desk-count-now">{t('desk.needsYou', desk.needsYou)}</span>{desk.stale > 0 && <span className="desk-meta-item"><span aria-hidden="true">·</span><span className="personal-warning">{t('desk.stale', desk.stale)}</span></span>}</p>}
+        {!loading && !error && <p className="desk-summary"><span className="desk-count-now">{t('desk.needsYou', triage ? triage.needsYou.length : desk.needsYou)}</span>{desk.stale > 0 && <span className="desk-meta-item"><span aria-hidden="true">·</span><span className="personal-warning">{t('desk.stale', desk.stale)}</span></span>}</p>}
       </div>
       <div className="desk-views">
         <div className="desk-segment" role="group" aria-label={t('desk.title')}>{ORDERS.map(value => <button key={value} aria-pressed={order === value} onClick={() => { setOrder(value); try { localStorage.setItem(ORDER_KEY, value); } catch { /* Keep the choice for this visit. */ } }}>{t(`desk.${value}`)}</button>)}</div></div>
     </header>
+    <TriagePanel triage={triage} onOpenThread={onOpenThread} />
     {loading ? <p className="desk-state" role="status">{t('common.loading')}</p> : error ? <p className="desk-state" role="alert">{t('desk.loadFailed')} <button className="ghost" onClick={onReload}>{t('common.retry')}</button></p> : <div className="desk-board">
       <><div className={`desk-top${desk.inbox.length ? ' has-inbox' : ''}`}>
         <WeekCard week={desk.week} done={desk.doneThisWeek} />

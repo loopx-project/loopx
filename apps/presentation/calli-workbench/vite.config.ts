@@ -1,10 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { readOnlyForward } from './readonly-forward.ts';
 
-// No proxy yet: nothing in this layer calls a LoopX service. The read-only
-// proxy arrives with the projections PR, together with its first caller.
+// No `server.proxy` / `preview.proxy`: every forward to the local LoopX services (status 8766, chat
+// 8767) happens inside readonly-forward.ts, which enumerates the GET/HEAD routes the workbench reads
+// and answers everything else locally, in dev and in preview alike.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [readOnlyForward(), react()],
   server: { host: '127.0.0.1', port: 5174 },
   preview: { host: '127.0.0.1', port: 4174 },
   optimizeDeps: { esbuildOptions: { target: 'es2022' } },

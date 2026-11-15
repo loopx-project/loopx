@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Api, type HostFailure, type HostInfo } from './api';
+import type { Api, HostFailure, HostInfo } from './api';
 import { t } from './i18n';
 
 const HOST_KEY = 'calli.host';
@@ -59,12 +59,11 @@ const HOSTS_POLL_MS = 10_000;
  * The hub's other machines, kept fresh. `loaded` is false until the hub has answered once: until
  * then nothing can be said about a machine, not even that it is gone.
  */
-export function useHosts(enabled: boolean): { hosts: HostInfo[]; loaded: boolean; reload: () => Promise<void> } {
+export function useHosts(api: Api): { hosts: HostInfo[]; loaded: boolean; reload: () => Promise<void> } {
   const [state, setState] = useState({ hosts: known, loaded: knownLoaded });
   const reload = useCallback(async () => {
-    if (!enabled) return;
     try {
-      const hosts = await new Api('').hosts();
+      const hosts = await api.hosts();
       const changed = !knownLoaded || JSON.stringify(hosts) !== JSON.stringify(known);
       known = hosts;
       knownLoaded = true;
@@ -72,7 +71,7 @@ export function useHosts(enabled: boolean): { hosts: HostInfo[]; loaded: boolean
     } catch {
       // A hub that cannot say keeps what the page last heard.
     }
-  }, [enabled]);
+  }, [api]);
 
   useEffect(() => {
     void reload();

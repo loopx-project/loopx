@@ -205,7 +205,7 @@ export function demoData(now = Date.now()): DemoData {
         '改动：',
         '',
         '- `src/theme.ts`：新增 `darkTokens`，`applyTheme` 接受用户的选择，没选时看系统设置。',
-        '- `src/pages/Settings.tsx`：加了分段选择器，选择存在 `localStorage`。',
+        '- `src/pages/Settings.tsx`：加了分段选择器，选择保存在本机浏览器。',
         '',
         '```ts',
         "applyTheme(document.documentElement, loadThemeChoice() ?? 'system');",

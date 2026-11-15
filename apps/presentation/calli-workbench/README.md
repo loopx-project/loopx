@@ -3,18 +3,45 @@
 The Calli web UI (React 18 / Vite 5), ported from the Calli repository
 (`packages/web`) into LoopX as a separate presentation
 surface, then stripped to the part M1 needs: the thread sidebar, the thread view,
-the launch bar and the desk. No change to `loopx/`.
+the launch bar and the desk. It is milestone M1 of the Calli workbench and
+session fabric RFC. No change to `loopx/`.
 
-## Data layer: pending replacement
+## Data layer
 
-The app currently runs on the fixture-backed `DemoApi` (`src/demo/`), which
-answers from made-up data and refuses every write. It reaches no service.
+`App.tsx` builds a `LoopxApi` (`src/loopx/LoopxApi.ts`), a read-only subclass of
+`Api`. Reads come from the LoopX adapter (`src/loopx/`): zod contracts for
+`/status.json` and `/api/chat`, mappers to the app's own types, a schema-version
+gate, and an SSE-to-polling stream. `Api.send()` is closed, so every write
+rejects with `ReadOnlyError`; `Api.readOnly` is what the UI reads to disable
+composing and write buttons. The base `Api` has no transport of its own, and
+`fetch` appears only under `src/loopx/`.
 
-`src/api.ts` is still the Calli daemon client and its method signatures are the
-interface the M1 adapter has to implement (`LoopxApi`, read-only). Until that
-lands, `npm run dev` shows the demo workspace. The dev server proxies nothing:
-the shell makes no network calls. The read-only proxy arrives with the
-projections PR, together with its first caller.
+`vite.config.ts` has no `server.proxy` or `preview.proxy`. All forwarding to the
+local LoopX services (status 8766, chat 8767) happens in `readonly-forward.ts`,
+one middleware used by both `vite` (5174) and `vite preview` (4174). It
+enumerates the routes the workbench reads, all GET/HEAD: `/status.json`,
+`/ssh-hosts`, `/api/chat/capabilities`, `/api/chat/endpoints`,
+`/api/chat/goals/contexts`, `/api/chat/sessions` and `/api/chat/sessions/<id>`
+(one plain segment). A request that matches no route is answered locally with
+404 and never leaves the page server; an enumerated route with another method
+gets 405. Targets can be overridden with `LOOPX_STATUS_BASE` / `LOOPX_CHAT_BASE`.
+`test/readonly-forward.test.ts` runs it against loopback fake upstreams and
+asserts they receive zero requests for every refused one.
+
+`?fixture=1` answers from `src/loopx/fixtures/status.demo.json` (a public-safe
+copy of the status example plus synthetic sessions) and makes no network
+request. An unsupported or malformed contract shows "update the local LoopX
+service" with a retry button instead of a blank page.
+
+`src/demo/` (`DemoApi`) is no longer used by the app; only `test/demo.test.ts`
+reaches it.
+
+## Checks
+
+```sh
+npm run smoke:projection      # fixture (zero fetch) and, if 8766 is up, live counts
+npm run check:no-second-state # src/ keeps only display-preference storage, no fetch outside src/loopx/
+```
 
 ## Layout
 
@@ -46,9 +73,10 @@ still carries the rules for those features.
 
 ## Other deviations from upstream
 
-- Dev port 5174 / preview 4174 (upstream 5173), and no Calli daemon proxy.
+- Dev port 5174 / preview 4174 (upstream 5173), and the read-only LoopX
+  forwarder above instead of the Calli daemon proxy.
 - `App.tsx` and `main.tsx` no longer take a token or connect dialog; the
-  workspace is the demo until the adapter lands.
+  workspace is `LoopxApi`.
 - The Composer accepts pictures only; mentions, videos and files, notes and
   takeover are gone.
 - The merged handover history is replaced by a plain `ThreadView`.
