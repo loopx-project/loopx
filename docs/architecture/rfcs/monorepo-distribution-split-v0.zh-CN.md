@@ -3446,3 +3446,19 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   complete-source、selected-work、准入、context 和结算 owner。安装包大小、模型
   采纳、完整 D2/D5 闭包、可比完整成本、R1/M3 与 C1 切换保持未验证。保留历史失败
   和原十项要求；完成前仍需完整原目标回归，随后才准备 EdgeBench。
+
+### 2026-11-15 — Core 资格验证前检查真实安装来源
+
+- **缺口：**Core 测试 fixture 只信任解释器环境变量；指向普通 editable checkout
+  也能通过执行测试，即使实际没有安装 standalone Core。
+- **增量：**每个 opt-in Core 资格用例在 Task 准备前检查版本一致、拒绝普通发行包
+  共装和 editable Core，并将实际导入包与 Core 安装记录对应。既有 identity 检查
+  通过该 fixture 共享，namespace、help、manifest 和 doctor 验证保留；未启用 opt-in
+  仍明确报告 skip。
+- **证据：**旧普通源码环境通过用例并派发十次 CLI。普通包、共装、source shadow、
+  缺失 `loopx/__init__.py` 的 RECORD 条目和 PEP660 editable 五种反例现在都在 fixture setup 阶段失败，Task／
+  CLI 派发为零。真实 Core wheel 通过 identity 及 File／SQLite 执行、回放和查看。
+  原 host、validator 和执行 oracle 均未改变。
+- **边界：**本次保护资格证据来源，不改变生产准入，也不认证 wheel 字节或模型
+  执行。固定源码／产物检查、真实模型采纳、完整 D2/D5 成本、R1/M3 和原十项要求
+  仍需分别验证；保留历史失败，完成前仍需完整原目标回归。
