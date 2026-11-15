@@ -3306,3 +3306,78 @@ R1/M3、C1 切换和原目标回归仍未完成资格验证。
   Goal 安装可信检查器，不授权模型或 browser 命令，也不完成首个 Task 自动采用。
   完整 V1–V5/V10、原生模型与 context 保留、D2/D5 闭包、渐进控制、可比完整成本、
   R1/M3 和 C1 切换仍未通过资格验证；原验收与完整目标回归门继续保留。
+
+### 2026-11-15 — 首个 Goal 保留原注册会话
+
+- **缺口：**默认 Codex Goal 创建打开了未分配的 Goal 会话。重入可能再开旧式
+  会话；打开响应丢失后可能选中后来创建的 Session，回执也未复核实际存储身份。
+- **增量：**既有 TypeScript presentation owner 为新的默认 Codex Session 选择
+  注册 Agent 身份。Chat owner 将打开操作绑定到原创建操作，只复用已发布的原
+  Session，并在派发和回执交付前核对实际 Goal、Agent、路由、生命周期及 workspace。
+  未知 reservation、无法确认或不明确的历史原会话会停止恢复。已有记录的旧式 Session、显式原生
+  token budget 和其他 endpoint 保留原路径。前端通过既有目录、Session 与历史
+  reader 进入原 Agent 会话；无效回执显示恢复入口，不另开会话。
+- **证据：**隔离的真实 Chat/Core/File/SQLite 测试覆盖有明确 owner 检查时采用原
+  Task、检查缺失或失败时拒绝、历史保留、并发打开已发布 Session、响应丢失、原
+  action 重放及身份变化。未改变的运行时兼容测试在不可变基线与候选均通过 106
+  项。presentation reducer 通过 27 项测试，56 组 base/head 向量保留所有非路由
+  字段。浏览器检查覆盖填充后的桌面／窄屏、reload、无效回执，以及一次重新连接
+  恢复原历史。
+- **可维护性：**Session 读回在既有 Chat Session 入口 owner 复用。Runtime
+  coordinator 因精确打开接口与早期身份门由 2,503 增至 2,524 行；reviewed ceiling 记录这一
+  有界增量，没有重复读回逻辑或新增执行管线。这不是延迟、默认闭包或完整成本资格。
+- **边界：**普通首消息及后续消息仍为普通只读 Chat。有明确检查的原 Task 使用
+  既有 Native owner；本次不自动提供可信检查器，也不自动采用每个回复。恢复证据
+  覆盖已发布 Session，不覆盖尚未记录的原生 thread-start 效果。真实原生尝试失败：
+  当前配置的模型不受所选账号支持。合成成功与 account-read readiness 不能覆盖
+  该负面结果。完整 V1–V5/V10、模型／context 保留、D2/D5 闭包、渐进控制、可比
+  完整成本、R1/M3 及 C1 切换仍未通过资格验证。原十项要求保留，完成前仍需完整
+  原目标回归。
+
+当前入口设计将原回复与消息输入保留在一起，重入沿记录的 Session，不选择另一条
+会话。下方桌面与窄屏参考图使用 packaged frontend、真实 SQLite/Chat owner 和
+合成回复，未验证的验收状态继续可见；它们说明展示边界，不构成模型或成果资格。
+
+![桌面的原 Goal 会话](assets/goal-entry-original-session-desktop.webp)
+
+![窄屏的原 Goal 会话](assets/goal-entry-original-session-narrow.webp)
+
+### 2026-11-15 — 准备既有检查并执行原已授权 Task
+
+- **缺口：**原注册会话能读取工作，但准备既有验收方案仍需进入旧协调模式；
+  前端也没有调用既有原生 Task endpoint 的入口。合成修复还暴露了另一处缺口：
+  原生工作继承会话的只读 prompt 和 sandbox，没有请求本次 Task 权限。
+- **增量：**新 managed Codex 会话仅提供既有 `prepare_check` action。Host
+  复核原 Session、活动 owner Turn、注册身份、生命周期和 workspace，并固定实际
+  已有检查器的源码。既有验收 owner 解析保留要求及原 Task；owner 采用检查与启动
+  Task 继续分开。既有主控件沿原 Session 启动该 Task，使用当前检查、lease 和额度；
+  响应丢失保留原 operation。空闲页面只读取一次，不新增持续空查。创建时显示用户
+  确认的目标，内部执行请求继续保留；恢复不改写历史已记录的展示消息。
+- **权限：**准备和采用检查都不授予写权限。既有原生 Session owner 仅将已经批准
+  的完整 workspace 边界映射到 host policy；缺少批准或只有更窄批准时保持只读。
+  此限定原生路径仍禁用网络和临时目录写入。后续普通 send 显式恢复只读，包括原生
+  发布结果未知之后以及直接调用者。Session 默认值和原生 thread 身份保留，旧 thread
+  不新增 dynamic tools。
+- **证据：**真实 HTTP/Chat/Core/File/SQLite 用例从仓库保留的六行为购物车检查器
+  准备方案，确认初始失败，再经独立的既有 owner workspace 批准执行原 Task。
+  修复产物通过未改变的独立检查。检查未确认、来源改变、错误产物和缺少写批准时，
+  Task 保持 open 且不扣额度。Packaged 桌面／窄屏旅程覆盖同一结果、原历史、重复
+  operation、普通追问和有界空闲读取。模型解释与编辑由脚本模拟，不构成真实模型
+  或 OS sandbox 资格验证。
+- **可维护性：**身份、验收、原生准入和结算仍由既有 owner 管理，并沿用 C1
+  composition。Prompt／input 适配放在原生 adapter，attached 附件拒绝归其 queue
+  owner。Runtime 和 Chat Agent 都保持在既有 reviewed ceiling 内。
+- **边界：**本次交付 V2/V4/R1 中“既有检查器、原已授权 Task”的路径，不从任意
+  自然语言推断验收，不提升新 Goal 的写权限，不支持 host 无法落实的窄写范围，也
+  不为不支持安全来源检查的 host 取得资格。原十项要求、真实 model/account 与
+  context 保留、D2/D5 闭包、渐进 Standard 旅程、可比完整成本、完整 V1–V5/V10、
+  R1/M3 和 C1 切换仍未闭合。完成前仍需完整原目标回归，随后才进入外部 benchmark
+  工作。
+
+下方当前设计参考使用 packaged frontend、真实 SQLite/Chat owner、明确的先行
+workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 Task 主控件；窄屏视图
+在同一会话显示经独立检查的结果。
+
+![桌面的原已检查 Task](assets/goal-entry-original-task-desktop.webp)
+
+![窄屏的原已检查 Task 结果](assets/goal-entry-original-task-narrow.webp)

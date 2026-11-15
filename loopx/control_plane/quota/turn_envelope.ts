@@ -1185,7 +1185,7 @@ function requiredReads(interaction: JsonObject, payload: JsonObject): JsonObject
   return result;
 }
 
-function boundary(payload: JsonObject): JsonObject {
+export function projectTurnBoundary(payload: JsonObject): JsonObject {
   const source = object(payload.goal_boundary);
   const result: JsonObject = {
     rule: scalarString(source.rule, "goal_boundary.rule", "stay_in_scope_or_stop"),
@@ -1531,7 +1531,7 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
     user,
     required_reads: requiredReads(interaction, payload),
     replan_action_packet: replanPacket,
-    boundary: boundary(payload),
+    boundary: projectTurnBoundary(payload),
     execution_policy: executionPolicy(payload),
     writeback: reads && deferSettlement ? deferredReplanWriteback(writeback) : writeback,
     scheduler: schedulerValue,

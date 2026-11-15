@@ -24,6 +24,7 @@ from .chat_manager import (
     steward_machine_defaults,
 )
 from .chat.coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
+from .chat.session_open import read_exact_original_session
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
 from .capabilities.native_chat.codex_adapter import (
     CodexAppServerAdapter, NativeHistoryRestoration, NativeWorkingContinuation, start_attachment_turn,
@@ -59,6 +60,7 @@ from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
 from .file_lock import (
     LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED,
     _lock_id, lock_holder_host_label, lock_holder_liveness, process_is_alive, try_exclusive_file_lock,
+    exclusive_cross_runtime_file_lock,
 )
 from .kiro_cli_goal_mode import (
     KIRO_CLI_BIN,
@@ -372,6 +374,8 @@ class ChatRuntimeController:
         manager_runtime: Mapping[str, Any] | None = None,
         project_coordination: bool = False,
         loopx_tools: bool = False,
+        check_preparation: bool = False,
+        managed_read_default: bool = False,
         executor_model: Mapping[str, str | None] | None = None,
         project_context: dict[str, str] | None = None,
         agent_config: dict[str, str] | None = None,
@@ -410,11 +414,9 @@ class ChatRuntimeController:
                 manager_runtime=manager_runtime, executor_model=executor_model,
                 agent_config=agent_config, execution_mode=execution_mode,
             )
-            native_context = {
-                "objective": self._session_objective(goal_id=goal_id, objective=objective,
-                    project_coordination=project_coordination and not execution_mode),
-                "runtime_profile": str(manager_profile["runtime_profile"]) if manager_profile else "restricted",
-            }
+            from .capabilities.native_chat.codex_adapter import native_runtime_context, start_runtime_adapter
+            native_context = native_runtime_context(self, goal_id=goal_id, objective=objective,
+                manager_profile=manager_profile, project_coordination=project_coordination, execution_mode=execution_mode)
         if agent_id == "antigravity":
             from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
             if execution_mode or project_context is not None or read_only_review:
@@ -431,11 +433,12 @@ class ChatRuntimeController:
                 hard_timeout_sec=self.hard_timeout_sec,
             )
         if agent_id == "codex":
-            from .capabilities.native_chat.codex_adapter import start_runtime_adapter
             return start_runtime_adapter(self, work_dir=work_dir, goal_id=goal_id, native_context=native_context,
                 manager_profile=manager_profile, model_config=model_config, history=history,
                 resume_thread_id=resume_thread_id, execution_mode=execution_mode, project_context=project_context,
                 project_coordination=project_coordination, loopx_tools=loopx_tools,
+                check_preparation=check_preparation,
+                managed_read_default=managed_read_default,
                 codex_home_override=codex_home_override, read_only_review=read_only_review,
                 metadata_review_context=metadata_review_context, answer_review_context=answer_review_context,
                 history_check=history_check, working_continuation=working_continuation)
@@ -521,6 +524,7 @@ class ChatRuntimeController:
         agent_goal_id: str | None = None,
         goal_instance_id: str | None = None,
         managed_agent_id: str | None = None,
+        session_id: str | None = None,
         manager_executor_allocation: Mapping[str, Any] | None = None,
         project_ref: str | None = None,
         conversation_binding_id: str | None = None,
@@ -541,6 +545,8 @@ class ChatRuntimeController:
                                           error_code="unsupported_configuration", gate=None)
         if mode not in {"resume_latest", "new"}:
             raise ValueError("mode must be resume_latest or new")
+        if session_id is not None and mode != "new":
+            raise ValueError("an exact Session opening requires mode=new")
         selected_channel = channel_id or f"goal.{goal_id}"
         project_context = None
         steward_context = None
@@ -593,9 +599,24 @@ class ChatRuntimeController:
                 goal_id = MANAGER_AGENT_GOAL_ID
         route_goal_id = "*" if is_manager_channel(selected_channel) else goal_id
         route_key = (route_goal_id, agent_id, selected_channel)
+        if session_id is not None:
+            if not isinstance(session_id, str) or session_id != session_id.strip() or session_id in {".", ".."}:
+                raise ValueError("session_id must retain its exact non-empty opaque identity")
+            session_id = _opaque_id(session_id, field="session_id")
+            if (project_context is not None or steward_context is not None or is_manager_channel(selected_channel)
+                    or goal_id is None or agent_goal_id is not None and agent_goal_id != goal_id
+                    or conversation_scope(selected_scope)["kind"] != "owner_goal"):
+                raise ValueError("an exact Session opening requires its original local Goal route")
         with self.lock:
             route_lock = self.session_open_locks.setdefault(route_key, threading.Lock())
-        with route_lock:
+        with route_lock, (exclusive_cross_runtime_file_lock(
+                self.store.root / "session-open-locks" / session_id, operation="open_original_goal_session")
+                if session_id is not None else nullcontext()):
+            if session_id is not None:
+                original = read_exact_original_session(self, session_id=session_id, selected_scope=selected_scope,
+                    agent_id=agent_id, work_dir=work_dir, requested_model=agent_model_id, requested_effort=agent_reasoning_effort)
+                if original is not None:
+                    return original, True
             latest = None
             if not is_manager_channel(selected_channel) and project_context is None:
                 exact_attached, strict_profile = select_current_attached_session(
@@ -618,7 +639,7 @@ class ChatRuntimeController:
                         error_code="source_session_managed_chat_unsupported",
                         gate=None,
                     )
-            if mode == "resume_latest":
+            if mode == "resume_latest" and session_id is None:
                 latest = self.store.latest_session(
                     goal_id=None if is_manager_channel(selected_channel) else goal_id,
                     agent_id=agent_id,
@@ -674,6 +695,8 @@ class ChatRuntimeController:
                 objective=objective,
                 execution_mode=selected_channel.startswith("task."),
                 project_coordination=conversation_scope(selected_scope)["kind"] == "owner_goal",
+                check_preparation=managed_agent_id is not None,
+                managed_read_default=managed_agent_id is not None,
                 manager_runtime=manager_runtime,
                 project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
@@ -686,6 +709,7 @@ class ChatRuntimeController:
                 require_managed_agent_session(self, selected_scope, work_dir)
                 observed_settings = self._observed_model_settings(adapter, agent_reasoning_effort, agent_model_id)
                 persisted = self.store.create_session(
+                    **({"session_id": session_id} if session_id is not None else {}),
                     goal_id=goal_id,
                     goal_instance_id=goal_instance_id,
                     **({"managed_agent_id": managed_agent_id, "managed_workspace_path": str(work_dir.resolve())} if managed_agent_id is not None else {}),
@@ -1020,6 +1044,7 @@ class ChatRuntimeController:
                 execution_mode=str(session.get("channel_id") or "").startswith("task."),
                 project_coordination=conversation_scope(session)["kind"] == "owner_goal",
                 loopx_tools=session.get("loopx_tools") is True,
+                managed_read_default=session.get("managed_agent_id") is not None,
                 executor_model=(alloc.manager_executor_model(model_allocation)
                     if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
@@ -1169,6 +1194,7 @@ class ChatRuntimeController:
         loopx_execution: bool = False,
         loopx_request: dict[str, object] | None = None,
         _goal_commit: ManagedSessionGoalCommit | None = None,
+        display_message: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         commit = _goal_commit or nullcontext
         session = self.store.load_session(session_id)
@@ -1189,16 +1215,9 @@ class ChatRuntimeController:
         if parse_native_goal_command(message) is not None:
             validate_goal_chat(session, attachments)
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
-            if attachments:
-                raise ValueError("attached host session queue does not yet accept attachments")
             return enqueue_attached_agent_turn(
-                store=self.store,
-                registry_path=self.registry_path,
-                session_id=session_id,
-                client_turn_id=client_turn_id,
-                message=message,
-                origin="web",
-            )
+                store=self.store, registry_path=self.registry_path, session_id=session_id,
+                client_turn_id=client_turn_id, message=message, origin="web", attachments=attachments)
         with self._session_adapter_lock(session_id):
             session = self.store.load_session(session_id)
             if session is None or session.get("status") == "closed":
@@ -1236,7 +1255,7 @@ class ChatRuntimeController:
                                 "wake": "成员结果已验收，继续推进 LoopX 模式。",
                             }.get(str((loopx_request or {}).get("operation")), "恢复 LoopX 模式。")
                             if loopx_execution
-                            else None
+                            else display_message
                         ),
                         loopx_execution=loopx_execution,
                         loopx_request=loopx_request,

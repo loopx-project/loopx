@@ -96,6 +96,9 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   /** Recorded creation effects, not evidence of a completed Goal or model Turn. */
   creationProgress?: GoalCreationProgress;
   creationOutcome?: GoalCreationOutcome;
+  /** New Session routing only. Recorded Sessions recover through creationProgress;
+   * this identity decision does not certify Task acceptance or execution. */
+  creationSession?: {managedAgentId: string};
   /** Accepted dispatch bound to its original Turn. It does not establish a result. */
   taskExecution?: { goalId: string; todoId: string; sessionId: string; turnId: string };
 };
@@ -541,12 +544,25 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const operationFrame = compileOperationReviewFrame(proposal, nowMs);
   const reviewCardFrame = compileReviewCardFrame(proposal);
   const decisionFrame = compileDecisionReviewFrame(proposal);
+  const parameters = objectValue(proposal.normalized_parameters);
   const creationProgress = goalCreationProgress(proposal);
   // Older already-dispatched creations retain their original semantics. A
   // failed write retries its original CAS even after a response was lost.
   const creationOutcome = creationProgress?.todoIds && (!creationProgress.sessionId && !creationProgress.firstTurn
       || creationProgress.completionBasis)
-    ? goalCreationOutcome(identity.proposalId, objectValue(proposal.normalized_parameters) ?? {}, creationProgress.todoIds) : undefined;
+    ? goalCreationOutcome(identity.proposalId, parameters ?? {}, creationProgress.todoIds) : undefined;
+  const creationSteps = objectValue(objectValue(proposal.checkpoint)?.steps);
+  // A persisted Session/Turn, including a malformed checkpoint, always owns
+  // recovery. Never infer a new managed identity from its old creation fields.
+  const creationSession = proposal.action_kind === "goal.create" && parameters?.agent_id === "codex"
+    && parameters.native_token_budget == null && proposal.status !== "applied"
+    && !creationProgress?.sessionId && !creationProgress?.firstTurn
+    && !Object.hasOwn(proposal, "first_turn_readback")
+    && (proposal.checkpoint == null || creationSteps !== null
+      && (Object.keys(creationSteps).length === 0 || creationProgress !== undefined))
+    && !Object.hasOwn(creationSteps ?? {}, "first_session_opened")
+    && !Object.hasOwn(creationSteps ?? {}, "first_turn_started")
+    ? {managedAgentId: "codex"} : undefined;
   const finish = (state: ActionReviewState): ActionReviewPlan => ({
     ...identity,
     ...state,
@@ -555,6 +571,7 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     ...(decisionFrame ? { decisionFrame } : {}),
     ...(creationProgress ? { creationProgress } : {}),
     ...(creationOutcome ? { creationOutcome } : {}),
+    ...(creationSession ? { creationSession } : {}),
   });
   const held = (
     interaction: "gated" | "refresh" | "repair" | "pending" | "completed" | "inactive",
@@ -589,7 +606,6 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     return taskExecution ? {...completed, taskExecution} : completed;
   }
   const basis = objectValue(proposal.canonical_update_basis);
-  const parameters = objectValue(proposal.normalized_parameters);
   // Recovery keeps the frozen workspace and committed effects. The server
   // revalidates their identity and reuses native Todo/Turn idempotency owners.
   if (proposal.action_kind === "goal.create" && ["failed", "applying"].includes(String(proposal.status))
