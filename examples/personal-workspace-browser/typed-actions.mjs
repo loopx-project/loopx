@@ -325,13 +325,16 @@ export const typedActionsScenario = {
       }
       const writesBeforeSelection = api.durableWriteCount;
       await drawer.getByRole("button", { name: /Workspace 1/ }).click();
-      await page.getByRole("button", { name: "创建 Goal 并开始首轮", exact: true }).waitFor({ state: "visible" });
+      const confirmCreate = drawer.getByRole("button", { name: "创建 Goal", exact: true });
+      await confirmCreate.waitFor({ state: "visible" });
       const regenerated = api.actionPreviews.at(-1);
       if (regenerated?.normalized_parameters.workspace_ref !== "workspace-fixture") {
         throw new Error(`Stored workspace selection did not regenerate the Goal preview: ${JSON.stringify(regenerated)}`);
       }
+      assert.equal(regenerated.normalized_parameters.start_execution ?? false, false,
+        "Regenerating a stored Goal preview preserves its creation-only scope");
       if (api.durableWriteCount !== writesBeforeSelection) throw new Error("Selecting a workspace applied without confirmation");
-      await page.getByRole("button", { name: "创建 Goal 并开始首轮", exact: true }).click();
+      await confirmCreate.click();
       await page.getByText("已应用，LoopX 状态将刷新。", { exact: true }).waitFor({ state: "visible" });
       if (!api.actionApplies.includes(regenerated.proposalId)) throw new Error("Confirmation did not apply the regenerated preview");
       if (api.durableWriteCount !== writesBeforeSelection + 1) throw new Error("Confirmation did not write exactly one Goal");
@@ -739,6 +742,8 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: "Create Goal and start first run", exact: true }).waitFor({ state: "visible" });
       const englishGoalPreview = api.actionPreviews.at(-1);
       if (englishGoalPreview?.action_kind !== "goal.create") throw new Error(`English Goal input did not create a Goal preview: ${JSON.stringify(englishGoalPreview)}`);
+      assert.equal(englishGoalPreview.normalized_parameters.start_execution, true,
+        "A fresh Codex Goal preview requests its original Task explicitly");
       if (englishGoalPreview.normalized_parameters.title !== "Prepare my weekly work review") throw new Error(`English Goal title drifted: ${JSON.stringify(englishGoalPreview.normalized_parameters)}`);
       if (englishGoalPreview.normalized_parameters.completion_criteria !== "List completed work, blockers, and next-week plans") throw new Error(`English completion criteria were not preserved: ${JSON.stringify(englishGoalPreview.normalized_parameters)}`);
       if (englishGoalPreview.normalized_parameters.execution_boundary !== "Read only; do not call external tools or modify repositories") throw new Error(`English execution boundary was not preserved: ${JSON.stringify(englishGoalPreview.normalized_parameters)}`);
@@ -841,6 +846,8 @@ export const typedActionsScenario = {
       if (goalPreview?.normalized_parameters.execution_boundary !== "不调用外部工具，不修改仓库") throw new Error(`Goal execution boundary was not preserved structurally: ${JSON.stringify(goalPreview?.normalized_parameters)}`);
       if (goalPreview?.normalized_parameters.permission !== "read_only") throw new Error(`Goal execution boundary did not remain read-only: ${JSON.stringify(goalPreview?.normalized_parameters)}`);
       if (JSON.stringify(goalPreview?.normalized_parameters.initial_todos).includes("推进首个可验证结果")) throw new Error(`Goal preview kept unrelated generic Todos: ${JSON.stringify(goalPreview?.normalized_parameters)}`);
+      assert.equal(goalPreview.normalized_parameters.start_execution, true,
+        "The confirmation for starting the first run requires a typed execution request");
       if (api.durableWriteCount !== writesBeforeGoalCreate) throw new Error("Goal preview wrote durable state before confirmation");
       pass(7, "Goal preview includes Goal, Agent, workspace, permissions, Todos, heartbeat, and stop condition fields.");
       await page.getByRole("button", { name: "创建 Goal 并开始首轮", exact: true }).click();
@@ -855,7 +862,7 @@ export const typedActionsScenario = {
         await fetch(`/api/actions/${proposalId}/apply`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
       }, goalPreview.proposalId);
       if (api.durableWriteCount !== writesBeforeGoalCreate + 1) throw new Error("Repeated proposal apply duplicated durable state");
-      pass(9, "A repeated apply request kept one durable resource and one first-turn resource key.");
+      pass(9, "Confirming and replaying the same creation preview writes one durable Goal.");
       await page.getByRole("button", { name: /关闭详情/ }).click();
       const actionReceiptClose = page.getByRole("button", { name: "关闭操作回执", exact: true });
       if (await actionReceiptClose.isVisible().catch(() => false)) await actionReceiptClose.click();
