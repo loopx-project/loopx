@@ -653,6 +653,7 @@ def render_thin_heartbeat_task_body(
     brief_prompt_command: str,
     thin_prompt_command: str,
     reward_memory_rule: str = REWARD_MEMORY_OUTCOME_COMPACT_RULE,
+    captured_short_view: bool = False,
 ) -> str:
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule,
@@ -670,6 +671,11 @@ def render_thin_heartbeat_task_body(
     policy_sections = "".join(
         f"\n\n{section}" for section in (reward_memory_rule, policy_tail) if section
     )
+    capture_read = (
+        "For a v0 view, use its action and required_reads. Follow detail_ref.full_decision for selection, "
+        "replan or missing details to read the original interaction_contract.\n"
+        if captured_short_view else ""
+    )
     return f"""Advance `{goal_id}` from {active_state}.
 
 {RUNTIME_EXECUTION_ROUTING_RULE}
@@ -677,7 +683,7 @@ def render_thin_heartbeat_task_body(
 {scope_sentence}
 
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
-Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops).
+{capture_read}Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops).
 For selection/replan or missing details, follow returned read/recovery instructions with original capture/identity; never re-admit.
 Honor explicit full reads; keep capture/handoff flags on selection/same-Turn repair.
 {HEARTBEAT_TURN_BOOTSTRAP_RULE}

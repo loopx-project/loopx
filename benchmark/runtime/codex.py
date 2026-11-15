@@ -44,15 +44,10 @@ class Execution:
             object.__setattr__(self, "context_delivery", "on" if self.mode == "heartbeat" else "off")
         if self.context_delivery not in ("off", "on") or (self.context_delivery != "off" and self.mode != "heartbeat"):
             raise ValueError("context_delivery supports only off or on with heartbeat execution")
-        if type(self.turn_envelope) is not bool:
-            raise ValueError("turn_envelope must be a boolean")
-        if self.turn_envelope:
-            raise ValueError(
-                "--turn-envelope is retired for new benchmark work. Use the complete Turn default "
-                "or --complete-turn. Reproduce a legacy display with its pinned runner and LoopX revision."
-            )
-        if type(self.complete_turn) is not bool or (self.complete_turn and self.mode != "heartbeat"):
-            raise ValueError("complete_turn requires heartbeat execution")
+        if type(self.turn_envelope) is not bool or (self.turn_envelope and self.mode != "heartbeat"):
+            raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
+        if type(self.complete_turn) is not bool or (self.complete_turn and (self.mode != "heartbeat" or self.turn_envelope)):
+            raise ValueError("complete_turn requires heartbeat execution without turn_envelope")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:
@@ -95,7 +90,9 @@ class Execution:
 
 
 def turn_envelope_receipt(execution: Execution) -> dict:
-    """Record the current heartbeat contract, independently of delivered input."""
+    """Record the requested heartbeat view, independently of delivered input."""
+    if execution.turn_envelope:
+        return {"turn_envelope": True, "turn_envelope_source": "explicit"}
     if execution.mode == "heartbeat":
         return {"complete_turn": True, "complete_turn_source": "explicit" if execution.complete_turn else "default"}
     return {}

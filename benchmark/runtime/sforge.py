@@ -420,6 +420,7 @@ class SForgeWorker(CodexAgent):
                 turn_timeout_sec=None,
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
+                **({"turn_envelope": True} if self.execution.turn_envelope else {}),
                 **({"complete_turn": True} if self.execution.complete_turn else {}),
                 context_delivery=self.context_delivery,
                 **({"execution_observation": self.execution_observation}

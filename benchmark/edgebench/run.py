@@ -126,7 +126,7 @@ def main(argv=None):
                         help="Opt-in private binding for native terminal proof, consumed by the controller")
     turn_view = parser.add_mutually_exclusive_group()
     turn_view.add_argument("--turn-envelope", action="store_true",
-                        help="Retired legacy display. Use the complete Turn default for new work or pinned sources for historical reproduction")
+                        help="Explicit compatibility view for heartbeat workers. The original capture uses the complete Turn contract")
     turn_view.add_argument("--complete-turn", action="store_true",
                         help="Explicitly select the complete v1 Turn contract, already the default for heartbeat workers")
     parser.add_argument("--context-delivery", choices=("off", "on"),
@@ -462,6 +462,7 @@ def main(argv=None):
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          validation_command=execution.validation_command,
+                         **({"turn_envelope": True} if args.turn_envelope else {}),
                          **({"complete_turn": True} if args.complete_turn else {}),
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}

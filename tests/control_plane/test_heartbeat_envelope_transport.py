@@ -151,7 +151,7 @@ def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp
     assert host_bootstrap_binding(historical + "\nAdded instruction.") is None
 
 
-def test_capture_preserves_dispatcher_and_legacy_option_selects_complete_turn(tmp_path):
+def test_capture_preserves_dispatcher_and_explicit_generic_cli_view(tmp_path):
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="generic_cli",
                 turn_instance_id=TURN_ID, thin=True)
     assert build_heartbeat_prompt(**args) == build_heartbeat_prompt(**args, decision_output_root=None)
@@ -164,12 +164,13 @@ def test_capture_preserves_dispatcher_and_legacy_option_selects_complete_turn(tm
     with pytest.raises(ValueError, match='capture root'):
         build_heartbeat_prompt(**args, turn_envelope=True)
     payload = build_heartbeat_prompt(**args, decision_output_root=tmp_path, turn_envelope=True)
-    assert payload == build_heartbeat_prompt(**args, decision_output_root=tmp_path, complete_turn=True)
     assert payload['interface_budget']['within_budget'], payload['interface_budget']
-    assert '--complete-turn --decision-output-root' in payload['quota_guard_command']
+    assert '--complete-turn' not in payload['quota_guard_command']
+    assert payload['quota_guard_command'] == captured['quota_guard_command'] + ' --turn-envelope'
     assert_original_read_and_recovery_duties(payload['task_body'])
+    assert 'detail_ref.full_decision' in payload['task_body']
     assert '--decision-output-root' in payload['thin_prompt_command']
-    assert '--complete-turn' in payload['thin_prompt_command']
+    assert '--turn-envelope' in payload['thin_prompt_command']
     # The captured allowance must neither leak into ordinary thin nor disable
     # overflow diagnostics, including when Reward Memory is absent.
     no_memory = dict(args, reward_memory_enabled=False)
@@ -270,9 +271,9 @@ def test_bound_captured_prompt_fits_budget_without_reward_memory(
         assert 'goal_acceptance' in body  # Retain the complete outcome guidance too.
 
 
-@pytest.mark.parametrize('mode', ['plain', 'native-goal', 'loopx-goal', 'turn', 'heartbeat'])
-def test_worker_rejects_retired_envelope(mode):
-    with pytest.raises(ValueError, match='--turn-envelope is retired'):
+@pytest.mark.parametrize('mode', ['plain', 'native-goal', 'loopx-goal', 'turn'])
+def test_worker_rejects_envelope_outside_a_heartbeat(mode):
+    with pytest.raises(ValueError, match='turn_envelope requires heartbeat'):
         Execution(mode=mode, turn_envelope=True)
 
 
@@ -312,7 +313,7 @@ def private_handoff(request):
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('entry', ['default-worker', 'explicit-worker', 'legacy-heartbeat-option'])
+@pytest.mark.parametrize('entry', ['default-worker', 'explicit-worker', 'short-view-worker'])
 @pytest.mark.parametrize('private_handoff', [False, True], indirect=True)
 @pytest.mark.parametrize('context_delivery', [False, True])
 def test_real_worker_generated_guard_selection_reentry_and_settle_once(
@@ -335,12 +336,14 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     logs = tmp_path / 'wake logs'
     (logs / TURN_ID).mkdir(parents=True)
     root = logs / TURN_ID / 'decisions'
-    explicit = entry != 'default-worker'
+    explicit = entry == 'explicit-worker'
+    short_view = entry == 'short-view-worker'
     env = dict(os.environ, PYTHONPATH=str(REPO_ROOT),
                LOOPX_CLI=str(Path(sys.executable).parent / 'loopx'),
                LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                LOOPX_PROJECT=str(project), LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
-               LOOPX_WAKE_LOG_DIR=str(logs), LOOPX_COMPLETE_TURN='1' if explicit else '0')
+               LOOPX_WAKE_LOG_DIR=str(logs), LOOPX_COMPLETE_TURN='1' if explicit else '0',
+               LOOPX_TURN_ENVELOPE='1' if short_view else '0')
     if context_delivery:
         # No native proof in this CLI fixture: composed capture must still
         # save a full baseline and preserve reentry and settlement.
@@ -353,28 +356,14 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     else:
         env['LOOPX_CONTEXT_DELIVERY'] = 'off'
         monkeypatch.setenv('LOOPX_CONTEXT_DELIVERY', 'off')
-    if entry == 'legacy-heartbeat-option':
-        root.mkdir(mode=0o700)
-        options = ['heartbeat-prompt', '--thin', '--runtime-profile', 'generic_cli',
-                   '--cli-bin', env['LOOPX_CLI'], '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
-                   '--turn-instance-id', TURN_ID, '--turn-envelope', '--decision-output-root', str(root),
-                   '--context-delivery', env['LOOPX_CONTEXT_DELIVERY']]
-        if context_delivery:
-            options += ['--codex-context-dir', env['LOOPX_CODEX_CONTEXT_DIR']]
-        if private_handoff is not None:
-            options += ['--decision-handoff-socket', private_handoff]
-        rc, prompt = _run_cli(registry, runtime, *options, cwd=project)
-        assert rc == 0, prompt
-        body = prompt['task_body']
-    else:
-        body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=private_handoff)
+    body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=private_handoff)
     # Execute the renderer's actual guard, preserving its route and flags.
     block = body.split('```sh\n', 1)[1].split('```', 1)[0]
     guard = next(line for line in block.splitlines() if 'quota should-run' in line)
     guard = guard.replace('${LOOPX_TURN:?}', TURN_ID)
     argv = shlex.split(guard)
-    assert argv.count("--complete-turn") == 1
-    assert "--turn-envelope" not in argv
+    assert argv.count("--complete-turn") == int(not short_view)
+    assert argv.count("--turn-envelope") == int(short_view)
     assert argv[argv.index("--context-delivery") + 1] == ("on" if context_delivery else "off")
     result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True)
     first = json.loads(result.stdout)
@@ -417,15 +406,18 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     first = complete_page(first)
     if context_delivery:
         assert reader_contracts, 'The worker must actually receive the delegated reader obligations'
-    captured = explicit or private_handoff is not None or context_delivery
+    captured = explicit or short_view or private_handoff is not None or context_delivery
+    schema = 'loopx_turn_envelope_v0' if short_view and not context_delivery else 'loopx_turn_envelope_v1'
     if captured:
         captures = list(root.glob('*/decision.json'))
         assert len(captures) == 1
         full = json.loads(captures[0].read_text())
         assert_complete_turn_decision(full)
-        assert first['schema_version'] == 'loopx_turn_envelope_v1'
-        assert first['interaction_contract'] == full['interaction_contract']
-        assert 'action_signature' not in first and 'quota' in first
+        assert first['schema_version'] == schema
+        assert_original_contract_view(first, full)
+        if schema == 'loopx_turn_envelope_v1':
+            assert first['interaction_contract'] == full['interaction_contract']
+            assert 'action_signature' not in first and 'quota' in first
         receipts = _heartbeat_receipt_count(runtime, TURN_ID)
         readback = read_original_capture(captures[0], registry=registry, runtime=runtime)
         assert json.loads(readback) == full
@@ -437,6 +429,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     selection = full['interaction_contract']['cli_channel']['selection_command']
     command = selection['route_prefix'] + ' ' + selection['command_args_template'].replace(
         '{todo_id}', ALTERNATIVE_TODO_ID)
+    assert ('--turn-envelope' in shlex.split(command)) is short_view
     rc, selected = _run_generated_cli(command, registry_path=registry)
     assert rc == 0, selected
     selected = complete_page(selected)
@@ -446,9 +439,11 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert json.loads(captures[0].read_text()) == full
         selected_full = json.loads(next(p for p in paths if p != captures[0]).read_text())
         assert_complete_turn_decision(selected_full)
-        assert selected['schema_version'] == 'loopx_turn_envelope_v1'
-        assert selected['interaction_contract'] == selected_full['interaction_contract']
-        assert 'action_signature' not in selected
+        assert selected['schema_version'] == schema
+        assert_original_contract_view(selected, selected_full)
+        if schema == 'loopx_turn_envelope_v1':
+            assert selected['interaction_contract'] == selected_full['interaction_contract']
+            assert 'action_signature' not in selected
     else:
         selected_full = selected
         assert_complete_turn_decision(selected_full)

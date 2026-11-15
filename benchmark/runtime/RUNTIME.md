@@ -174,12 +174,12 @@ a complete-mode binding cannot verify a pending command that uses
 `--complete-turn`. Historical ordinary and envelope guards remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
 
-New heartbeat work and preflight use the same complete C1 guard with context
-delivery on or off. A wake allocates a capture directory for an explicit complete
-request, context delivery, or a checkpoint handoff. The worker and trial
-receipts record whether C1 was selected explicitly or by default. Current
-workers reject the retired `--turn-envelope`
-option and its saved environment flag before a new wake. For an original
+New heartbeat work and preflight capture the complete C1 contract with context
+delivery on or off. Explicit `--turn-envelope` selects the bounded v0 view when
+delivery is off. The view links to that original complete capture. With delivery
+on the native reader presents the verified capture. Explicit view requests,
+context delivery, and checkpoint handoffs allocate a capture directory. The
+worker and trial receipts preserve the requested view. For a historical
 short-view control, keep the recorded product and runner revisions. Preflight
 and live handoff require the signed source before selecting a replan point.
 Native checkpoint recovery reads legacy originals with their recorded mode,

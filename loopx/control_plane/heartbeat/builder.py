@@ -182,6 +182,7 @@ def _heartbeat_prompt_commands(
     context_delivery: str | None,
     delta_delivery: str | None = None,
     complete_turn: bool = False,
+    turn_envelope: bool = False,
 ) -> dict[str, str | None]:
     quota_guard_command = render_quota_guard_command(
         goal_id,
@@ -297,6 +298,8 @@ def _heartbeat_prompt_commands(
         capture_arg += " --context-delivery " + shlex.quote(context_delivery)
     if delta_delivery == "off" or (context_delivery == "off" and delta_delivery == "auto"):
         capture_arg += " --delta-delivery " + shlex.quote(delta_delivery)
+    if turn_envelope:
+        capture_arg += " --turn-envelope"
     if capture_arg:
         for key in ("quota_guard_command", "task_body_quota_guard_command"):
             commands[key] = str(commands[key]) + capture_arg
@@ -436,9 +439,13 @@ def build_heartbeat_prompt(
         complete_turn=complete_turn,
         codex_ssh_goal=codex_ssh_goal,
     )
-    # Saved loaders can request the retired display. Preserve their validated
-    # capture routes and render the complete guard. SSH already selects it.
-    complete_turn = complete_turn or (turn_envelope and not codex_ssh_goal)
+    # A bound generic CLI caller can explicitly select the compatibility view.
+    # Saved loaders on other routes keep their complete guard and original capture.
+    short_view = (
+        turn_envelope and normalized_turn_instance_id is not None and not native_goal_host
+        and runtime_profile == SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value
+    )
+    complete_turn = complete_turn or (turn_envelope and not short_view and not codex_ssh_goal)
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:
         normalized_agent_scopes = explicit_agent_scopes
@@ -531,6 +538,7 @@ def build_heartbeat_prompt(
         context_delivery=context_delivery,
         delta_delivery=delta_delivery,
         complete_turn=complete_turn,
+        turn_envelope=short_view,
     )
     cli_preflight = render_cli_preflight(cli_bin=cli_bin)
     task_body_renderer = _select_task_body_renderer(
@@ -566,6 +574,7 @@ def build_heartbeat_prompt(
         compact_prompt_command=str(commands["compact_prompt_command"]),
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
+        **({"captured_short_view": True} if short_view else {}),
         **({"captured_context": True} if native_goal_host and effective_context_delivery == "on" else {}),
         **reward_memory_rule_kwargs,
     )
@@ -652,7 +661,7 @@ def build_heartbeat_prompt(
             brief=brief,
             thin=thin,
             native_goal_host=native_goal_host,
-            explicit_captured_turn=complete_turn and decision_output_root is not None,
+            explicit_captured_turn=(complete_turn or short_view) and decision_output_root is not None,
         ),
         "task_body": task_body,
     }

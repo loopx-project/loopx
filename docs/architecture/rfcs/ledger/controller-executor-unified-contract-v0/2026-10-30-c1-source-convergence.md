@@ -3173,3 +3173,29 @@ the separate recovery probe. The long-path explicit v0 budget and the
 existing complete diagnostic carrier both pass their original checks.
 Model outcomes, selective read costs and installed Host adoption still
 require qualification.
+
+### Preserve the explicit EdgeBench short-view control
+
+The same heartbeat adapter configuration accepts `--turn-envelope` on
+main `f3bdad238739`, and C1 `efa342224084` rejects it before the first
+wake. The EdgeBench runner now carries that explicit choice through SForge,
+Harbor, wake receipts and checkpoint preflight. A bound `generic_cli`
+heartbeat preserves the flag through selection reentry. Explicit Off uses
+the existing v0 projection and links to the original complete v1 capture.
+With delivery enabled, the native reader presents that same source. The
+complete default retains its original settlement route.
+
+The File and SQLite tests exercised live renderer, selection, private
+handoff and checkpoint preflight with both delivery settings. They verify
+the original claim and signed capture, recover it from the actual emitted
+reference, settle the original identity once and reject incompatible view
+choices before launch. An isolated standard wheel passed the 24-case
+worker matrix. The external worker cancellation regression now consumes a
+real scheduler observation, then launches and reaps a detached fixture
+process and reads back its cancellation receipt with zero quota debit.
+
+Historical comparisons remain pinned to their original runner and LoopX
+revisions. Retire this explicit compatibility view after the named caller's
+replacement and rollback qualify. The synthetic operations leave installed
+Host adoption and matched single-session model outcomes and complete costs
+open.

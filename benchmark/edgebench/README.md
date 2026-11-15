@@ -1005,25 +1005,28 @@ review, proposal adoption and task gains require trajectory evidence.
 
 ## Complete Turn contract
 
-New `heartbeat-resume` and `heartbeat-explore` runs use the complete v1
-decision (C1) with the original ready claim, receipt and single-command
+The default for `heartbeat-resume` and `heartbeat-explore` is the complete
+v1 decision (C1) with the original ready claim, receipt and single-command
 settlement. `--complete-turn` records an explicit selection in the worker
 and runtime receipts. `--context-delivery off` disables native context
 delivery while keeping the same decision contract.
 
-Current runners reject `--turn-envelope` before trial registration. Reproduce a
-historical short-view control with its recorded runner and LoopX revisions.
-Historical checkpoint recovery verifies the original command and reads the
-same captured source. To compare C1 with the original quota path, use a pinned
-pre-C1 runner and LoopX revision for the baseline. Match the task, scorer, model
+Heartbeat workers still accept explicit `--turn-envelope`. With context delivery
+off, it presents the bounded v0 view and links to the complete C1 capture.
+With context delivery on, the native reader presents that same capture. Pin the
+recorded runner and LoopX revisions for a historical short-view control.
+Checkpoint recovery verifies the original command and reads its captured
+source. To compare C1 with the original quota path, pin a pre-C1 runner and
+LoopX revision for the baseline. Match the task, scorer, model
 and budget in both arms. Verify actual delivery in native tool output and
 recovery reads alongside the wake receipts. See the
 [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
 for source readback and recovery.
 
-新 heartbeat 统一使用 C1 完整契约，关闭上下文交付时仍用同一份契约。
-当前 runner 在登记新试验前拒绝 `--turn-envelope`。重跑旧短包对照时固定原
-runner 与 LoopX 版本，历史 checkpoint 按原命令和同一捕获恢复。与原 quota
+新 heartbeat 统一使用 C1 完整契约。显式 `--turn-envelope` 在关闭上下文交付时
+输出有界 v0 短视图，并链接完整 C1 捕获。开启上下文交付时由原生 reader
+呈现该捕获。重跑旧短包对照时固定原 runner 与 LoopX 版本，历史 checkpoint
+按原命令和同一捕获恢复。与原 quota
 比较时固定 pre-C1 基线版本，并匹配题目、评估器、模型和预算。实际交付须核对
 原生工具输出和恢复读取。
 

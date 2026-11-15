@@ -24,6 +24,7 @@ from loopx.hosts.research_checkpoint import (
     research_participants, select_checkpoint_replan, verify_research_participants,
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
+from .codex import explicit_turn_display
 
 
 def normalize_checkpoint_request_path(value: str) -> str:
@@ -221,12 +222,13 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     guard_path = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
     # The selector and model both use this wake's signed original CLI guard.
     capture_root = Path(tempfile.mkdtemp(prefix="checkpoint-start-", dir=guard_path.parent))
+    display = explicit_turn_display(env)
     command = [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
                "--runtime-root", env["LOOPX_RUNTIME_ROOT"], "quota", "should-run",
                "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write",
-               "--complete-turn"]
+               "--turn-envelope" if display.turn_envelope else "--complete-turn"]
     native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
     if native_context:
         # The native reader selects full/delta after SessionStart. Ask the
@@ -284,8 +286,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         view = guard_run.stdout
         atomic_write_state_text(view_path, view, private=True)
         reader = bounded_read(view_path, view.encode("utf-8"))
-        reading = ("Read the complete saved CLI view before work, then follow its interaction_contract "
-            "and replan review/writeback reads when present.\n```sh\n" + reader + "\n```\n"
+        reading = ("Read the saved CLI view before work. Follow the required reads and settlement plan. "
+            "Use the original capture for selection, replan or omitted details.\n```sh\n" + reader + "\n```\n"
             + CONTEXT_CAPTURE_PAGE_GUIDANCE + " ")
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +

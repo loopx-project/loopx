@@ -173,8 +173,8 @@ def register_heartbeat_control_commands(
     turn_view.add_argument(
         "--turn-envelope",
         action="store_true",
-        help="Compatibility spelling for saved heartbeat loaders. Generates a complete Turn guard. "
-             "Requires --decision-output-root. New loaders use --complete-turn.",
+        help="Select the compatibility view on a bound generic_cli heartbeat. Requires --decision-output-root. "
+             "Saved loaders on other routes generate a complete Turn guard.",
     )
     turn_view.add_argument("--complete-turn", action="store_true",
         help="Use complete v1 Turn context on a thin heartbeat guard. Codex SSH Goal already uses this source.")

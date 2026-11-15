@@ -449,9 +449,16 @@ time.sleep(60)
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX scheduler cancellation")
 def test_scheduler_cancel_reaps_detached_worker_host_and_keeps_receipt(tmp_path):
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, _initialize_fixture_authority, _spend_run_count, _write_fixture,
+    )
+
     env = worker_env(tmp_path)
     source = Path(__file__).resolve().parents[2]
     env["PYTHONPATH"] = str(source)
+    env["LOOPX_PYTHON"] = sys.executable
+    project, runtime, registry = _write_fixture(tmp_path / "scheduler")
+    _initialize_fixture_authority(project, runtime)
     Path(env["CODEX_BIN"]).write_text(
         f"#!{sys.executable}\n"
         "import os,pathlib,signal,time\n"
@@ -460,40 +467,19 @@ def test_scheduler_cancel_reaps_detached_worker_host_and_keeps_receipt(tmp_path)
         "pathlib.Path('pid').write_text(str(os.getpid()))\n"
         "time.sleep(60)\n"
     )
-    cli = tmp_path / "quota"
-    payload = {
-        "should_run": True,
-        "effective_action": "run_now",
-        "scheduler_hint": {
-            "action": "run_now",
-            "cadence_class": "active_work",
-            "reason": "fixture",
-            "reset_policy": {"reset_token": "fixture"},
-            "cold_path_detail": {
-                "local_scheduler": {
-                    "recommended_interval_minutes": 1,
-                    "example_progression_minutes": [1],
-                    "unchanged_poll_limit": None,
-                    "after_limit": "continue",
-                }
-            },
-        },
-    }
-    cli.write_text(f"#!{sys.executable}\nprint({json.dumps(payload)!r})\n")
-    cli.chmod(0o755)
     command = [
         sys.executable,
         str(source / "scripts/external_scheduler_worker.py"),
         "--cli-bin",
-        str(cli),
+        str(source / "scripts/loopx"),
         "--registry",
-        str(tmp_path / "registry.json"),
+        str(registry),
         "--runtime-root",
-        str(tmp_path / "runtime"),
+        str(runtime),
         "--goal-id",
-        "fixture",
+        GOAL_ID,
         "--agent-id",
-        "fixture",
+        AGENT_ID,
         "--state-file",
         str(tmp_path / "scheduler.json"),
         "--wake-cmd",
@@ -520,6 +506,7 @@ def test_scheduler_cancel_reaps_detached_worker_host_and_keeps_receipt(tmp_path)
         )
         assert receipt["error_kind"] == "KeyboardInterrupt"
         assert not receipt["ok"]
+        assert _spend_run_count(runtime) == 0
     finally:
         if process.poll() is None:
             process.kill()
@@ -1002,11 +989,11 @@ def test_wake_receipt_preserves_complete_contract_with_context_off(tmp_path, mon
 
 
 @pytest.mark.parametrize("delivery", ["off", "on"])
-def test_worker_refuses_retired_display_before_wake(tmp_path, monkeypatch, delivery):
+def test_worker_rejects_conflicting_display_before_wake(tmp_path, monkeypatch, delivery):
     from benchmark.tests.test_resume_sessions import resume_env
     env = resume_env(tmp_path, monkeypatch)
-    env.update(LOOPX_CONTEXT_DELIVERY=delivery, LOOPX_TURN_ENVELOPE="1")
-    with pytest.raises(ValueError, match="--turn-envelope is retired.*pinned runner"):
+    env.update(LOOPX_CONTEXT_DELIVERY=delivery, LOOPX_TURN_ENVELOPE="1", LOOPX_COMPLETE_TURN="1")
+    with pytest.raises(ValueError, match="complete_turn requires heartbeat execution without turn_envelope"):
         run_once(env)
     assert not Path(env["LOOPX_WAKE_LOG_DIR"]).exists()
 
