@@ -192,6 +192,35 @@ original server commit is provably later than that decision and their canonical
 log position follows its original prefix. A delayed old delivery, tied time or
 unknown time does not become new work evidence. Original results and explicitly
 cited, verified prefix history remain available.
+The detail read also connects confirmed `execution_observation` records to the
+current or explicitly preceding decision through `previous_decision_followthrough`.
+An ordinary result can omit `work_yardstick_decision`, including when it has no
+quantitative measurements; the existing choice remains current. A later choice
+keeps the preceding execution's original finding reference. Attribution requires
+the same Goal/Agent/Todo, question and tested input, plus the original commit and
+visible work window. Foreign, tentative, stale and late-visible records cannot
+become that choice's execution. This reuses existing findings and readback;
+the association does not independently verify method adoption or benefit.
+A verified successor history prefix determines whether prior execution was
+already visible even when the successor clock moves backward. Captures without
+that prefix retain the strict timestamp bound; later delivery stays excluded.
+Ordinary `turn run-once` accepts the same inline `explore_result` inside the
+Host's existing `agent_vision_json`. It retains one decoded Vision packet,
+then uses the original attachment parser and delivery owner. A failed delivery
+leaves quota unspent and recovers from the original Run on the same Turn;
+completed replay repeats neither Host work, finding ingestion nor quota spend.
+Off mode with an omitted attachment creates no finding; supplied invalid or
+disabled attachments reject before Todo completion and primary writeback. The
+completion path uses the same capability preflight before lifecycle effects;
+the primary writer still checks it again at commit. An omitted attachment adds
+no capability preflight, and recovery retains already committed completion.
+The quota writeback receipt is published only after requested attachment delivery
+finishes in both `turn run-once` and `refresh-state`. The public quota CLI rejects
+a debit while that receipt is missing. Ordinary refresh and
+`refresh-state --settle-turn` recovery deliver the verified original Run before
+repairing its receipt; a failed attachment leaves the same recovery pending without a debit.
+Receipt repair preserves the original committed replay after Yardstick is disabled.
+Finish that delivery and settlement before starting the next Turn.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use

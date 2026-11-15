@@ -281,8 +281,8 @@ def _run_generated_cli(
     return result.returncode, read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
 
-def _spend_run_count(runtime: Path) -> int:
-    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+def _spend_run_count(runtime: Path, *, goal_id: str = GOAL_ID) -> int:
+    index_path = runtime / "goals" / goal_id / "runs" / "index.jsonl"
     if not index_path.exists():
         return 0
     return sum(

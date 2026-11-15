@@ -53,6 +53,13 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         assert code == 0, packet
         return packet
 
+    def read_stage(command):
+        argv = shlex.split(command)
+        assert argv[:3] == [sys.executable, "-m", "loopx.entrypoint"]
+        assert argv[3:8] == ["--format", "json", "quota", "replan-view", "--decision-file"]
+        result = subprocess.run(argv, cwd=project, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
     cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--execution-replan-after-turns", "1",
         "--execution-stride-strategy", strategy, "--explore-graph-enabled", "--execute")
     if handoff_mode == "hard_lease":
@@ -171,7 +178,15 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     selection = review["interaction_contract"]["cli_channel"]["selection_command"]
     review = execute(selection["route_prefix"] + " "
         + selection["command_args_template"].format(todo_id=fixture.TODO_ID))
-    control = review["replan_action_packet"].get("stride_control")
+    # The ordinary selection route delivers staged readers. Follow their
+    # captured review/evidence/writer rather than expecting the raw guard shape.
+    reviewed = read_stage(review["replan_action_packet"]["review"])
+    writer = read_stage(reviewed["next"]["writeback"])
+    assert writer["context_id"] == reviewed["context_id"]
+    review_plan = writer["writeback"]["settlement_plan"]
+    assert review_plan["identity"] == review["heartbeat_receipt"]["settlement_identity"]
+    assert fixture._spend_run_count(runtime) == 1  # Reading does not settle.
+    control = writer.get("stride_control")
     packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "active", "vision_patch": patch,
         "todo_delta": ["retain:" + fixture.TODO_ID], "path_delta": {"outcome": "continue",
             "prior_assumption": "A feasible candidate may still leave useful optimization work.",
@@ -182,7 +197,8 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         assert control is None
     else:
         assert control
-        finding = next(row for row in control["explore_basis"]["finding_refs"]
+        explore = read_stage(reviewed["capabilities"]["explore"]["read_action"])["explore_basis"]
+        finding = next(row for row in explore["finding_refs"]
             if row.get("execution_observation", {}).get("candidate_sha256") == observed["candidate_sha256"])
         decision = control["minimal_example"]
         decision.update(action="switch", next_probe={"scope": "Compare the permitted direct route.",
@@ -190,11 +206,10 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
             "adoption_criterion": "Same graph, valid endpoints and a lower actual route cost.",
             "cost_bound": "One local process and existing settlement; no new evaluation authority.",
             "minimum_evidence": "Exact route bytes and evaluator output."})
-        decision["explore_review"] = {"revision": control["explore_basis"]["revision"], "disposition": "used",
+        decision["explore_review"] = {"revision": explore["revision"], "disposition": "used",
             "considered_refs": [finding["finding_id"]], "reason": "The measured feasible candidate leaves the direct edge untested."}
         packet["stride_decision"] = decision
     vision.write_text(json.dumps(packet))
-    review_plan = review["interaction_contract"]["cli_channel"]["settlement_plan"]
     acknowledged = execute(review_plan["ordered_steps"][1]["command_template"]
         + " --agent-vision-json " + shlex.quote(str(vision)) + " --no-global-sync --suppress-external-sinks",
         validated_progress="route_comparison_decided", scale="implementation", outcome="outcome_progress")
