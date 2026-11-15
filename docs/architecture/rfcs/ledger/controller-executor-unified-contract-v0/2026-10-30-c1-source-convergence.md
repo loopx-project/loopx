@@ -3012,3 +3012,38 @@ Visible Codex CLI JSON follows the complete source through the generated
 Turn-binding command, including when complete output is implicit. The generic
 quota control retains its compact response. The tests use isolated synthetic
 Hosts. Installed Hosts and model outcomes require separate acceptance.
+
+### Bound generic CLI heartbeat
+
+DSH launches a generated thin heartbeat for an explicit Agent and Turn under
+`generic_cli`. That JSON route now composes its current capture through the
+same complete-source owner as Codex. The bound route exits the ordinary
+unversioned quota writer and compactor. Selection and settlement recovery use
+the existing transport binding and Agent-owned heartbeat spend. Explicit Off
+stays active through selection and the original Turn's recovery. Unbound
+probes and the explicit EdgeBench v0 comparison still have live callers.
+Original-version capture readers serve pinned historical work.
+
+The same synthetic work was exercised through main `f7e3f427197b`, the prior
+C1 head `6415e3607502`, and the changed product code `0057a1dbd129`. Each arm
+ran three times per delivery setting and backend. The eight measured CLI
+operations cover thin bootstrap, choice, binding, same-capture required
+readback, writeback, recovery of the owed debit, spend and replay. All 36 runs
+produced the same independently checked fixture artifact, two receipts for
+initial admission and selection on the same Turn, and one debit.
+
+| Delivery / backend | Main stdout median (B) | Prior C1 (B) | Current (B) |
+| --- | ---: | ---: | ---: |
+| On / File | 48,950 | 48,819 | 48,644 |
+| On / SQLite | 48,998 | 48,867 | 48,692 |
+| Off / File | 127,838 | 127,707 | 126,327 |
+| Off / SQLite | 127,926 | 127,795 | 126,377 |
+
+Main's unedited Off selection omitted both delivery flags and resumed
+progressive delivery. Its File and SQLite totals were 73,710 and 73,758 bytes.
+For the Off comparison above, the probe restored both Off flags on baseline
+selection and recovery. The candidate's generated command already carried
+them. End-to-end CLI time moved in both directions across the four cases.
+The fixture counts CLI outputs and calls and exercises same-capture recovery.
+RPC and filesystem IO totals, actual model decisions, model costs and adoption
+in an installed DSH or App session require further evidence.
