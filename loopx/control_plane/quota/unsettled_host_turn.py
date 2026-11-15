@@ -348,16 +348,12 @@ def apply_unsettled_host_turn_recovery_if_required(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
     goal_ref: Mapping[str, Any] | None = None,
+    owner_action_id: str | None = None,
 ) -> bool:
     """Preempt ordinary selection when the preceding host Turn lacks closeout."""
 
     if quota_item_is_paused(payload):
         return False
-
-    from ...agent_registry import load_goal_from_registry
-
-    goal = load_goal_from_registry(registry_path, goal_id) or {}
-    activation = goal.get("activation") or {}
 
     verdict = _unsettled_host_turn_recovery(
         registry_path=registry_path,
@@ -366,8 +362,7 @@ def apply_unsettled_host_turn_recovery_if_required(
         agent_id=agent_id,
         current_turn_instance_id=current_turn_instance_id,
         goal_ref=goal_ref,
-        owner_action_id=(activation.get("updated_at")
-                         if activation.get("actor_kind") == "owner" else None),
+        owner_action_id=owner_action_id,
     )
     if verdict is None:
         return False

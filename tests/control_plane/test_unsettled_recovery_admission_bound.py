@@ -88,3 +88,65 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
         if reset == "writeback":
             assert debt["missing_receipts"] == ["quota_spend_receipt"]
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("intermediate_guard", [False, True])
+def test_owner_resume_survives_controller_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, intermediate_guard: bool,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    lifecycle = ("goal-lifecycle", "--goal-id", GOAL_ID)
+
+    rc, original = _run_cli(registry, runtime, *guard,
+                            "--turn-instance-id", "owed-original", "--todo-id", TODO_ID)
+    assert rc == 0 and original["heartbeat_receipt"]["closeout_required"], original
+    effect_id = original["heartbeat_receipt"]["settlement_identity"]["effect_id"]
+    for attempt in range(3):
+        rc, admitted = _run_cli(registry, runtime, *guard,
+                                "--turn-instance-id", f"recovery-{attempt}")
+        assert rc == 0 and admitted["should_run"] is True, admitted
+    rc, limited = _run_cli(registry, runtime, *guard, "--turn-instance-id", "limited")
+    assert rc == 0 and limited["should_run"] is False, limited
+
+    registry_before_preview = registry.read_bytes()
+    rc, preview = _run_cli(registry, runtime, *lifecycle, "--operation", "stop",
+                          "--actor-kind", "owner")
+    assert rc == 0 and preview["dry_run"] is True and preview["written"] is False, preview
+    assert registry.read_bytes() == registry_before_preview
+
+    for actor in ("owner", "controller"):
+        for operation in ("stop", "resume"):
+            rc, transition = _run_cli(registry, runtime, *lifecycle, "--operation", operation,
+                                      "--actor-kind", actor, "--execute")
+            assert rc == 0 and transition["written"] is True, transition
+        if actor == "owner" and intermediate_guard:
+            rc, interim = _run_cli(registry, runtime, *guard, "--turn-instance-id", "interim")
+            assert rc == 0 and interim["should_run"] is True, interim
+            assert interim["unsettled_host_turn_recovery"]["admissions_without_progress"] == 0
+
+    rc, after = _run_cli(registry, runtime, *guard, "--turn-instance-id", "after-controller")
+    assert rc == 0 and after["should_run"] is True, {
+        "should_run": after.get("should_run"),
+        "debt_state": (after.get("unsettled_host_turn_recovery") or {}).get("state"),
+        "admissions_without_progress": (after.get("unsettled_host_turn_recovery") or {}).get(
+            "admissions_without_progress"),
+    }
+    debt = after["unsettled_host_turn_recovery"]
+    assert debt["admissions_without_progress"] == int(intermediate_guard)
+    assert debt["prior_turn_instance_id"] == "owed-original"
+    assert debt["settlement_effect_id"] == effect_id
+
+    rc, replay = _run_cli(registry, runtime, *guard, "--turn-instance-id", "after-controller")
+    assert rc == 0 and replay["should_run"] is True, replay
+    assert replay["heartbeat_receipt"]["event_id"] == after["heartbeat_receipt"]["event_id"]
+
+    rc, noop = _run_cli(registry, runtime, *lifecycle, "--operation", "resume",
+                        "--actor-kind", "owner", "--execute")
+    assert rc == 0 and noop["written"] is False, noop
+    rc, next_guard = _run_cli(registry, runtime, *guard, "--turn-instance-id", "after-noop")
+    assert rc == 0 and next_guard["should_run"] is True, next_guard
+    assert next_guard["unsettled_host_turn_recovery"]["admissions_without_progress"] == 1 + int(intermediate_guard)
+    assert _spend_run_count(runtime) == 0

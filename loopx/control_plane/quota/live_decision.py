@@ -10,6 +10,7 @@ from ...quota import build_quota_should_run
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ..agent_context import project_agent_context, project_goal_agent_context
 from ..runtime.time import now_utc_iso
+from ..goals.activation import goal_owner_resume_id
 from ..goals.goal_frontier.fallback_source import live_fallback_authority_items
 from ..capability_hooks import (
     InteractionProjectionHookRegistration,
@@ -921,6 +922,7 @@ def build_live_quota_should_run_decision(
             available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
             goal_ref=goal_ref,
+            owner_action_id=goal_owner_resume_id(registered_goal),
         )
     if recovery_todo_id := _receipt_bound_recovery_todo(
         payload, receipt_bound_todo_id, agent_id=agent_id, turn_instance_id=turn_instance_id,
@@ -1059,6 +1061,7 @@ def _build_remote_authority_wait_decision(
             agent_id=agent_id, current_turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
             goal_ref=goal_ref,
+            owner_action_id=goal_owner_resume_id(configured_goal),
         ):
             return payload
 
