@@ -179,6 +179,43 @@ export class LoopxService implements LoopxHooks {
     } catch (err) { return this.fail(err); }
   }
 
+  /**
+   * A new conversation on a Goal that already exists. The core must know the Goal and have it active.
+   * The conversation works in the directory an earlier conversation of this Goal used; a Goal made
+   * elsewhere (the dashboard) has none yet, so the caller names the directory (`cwd`), which has to be
+   * allowed here. The core does not expose a Goal's registered root to read, so that case is trusted.
+   */
+  async join(input: any) {
+    const manager = this.manager;
+    if (!manager) throw new HttpError(503, 'loopx adapter is not attached');
+    const goalId = asText(input.goalId, 'goalId', 200);
+    const earlier = this.bindings.threadsOf(goalId).map((id) => this.bindings.get(id)!).at(-1);
+    const { goalAgentId, permission } = this.pick(input.agent, input.permission ?? earlier?.permission ?? (this.deps.adapters.get(input.agent)?.id === 'codex' ? 'workspace_auto' : 'read_only'));
+    let state: GoalState;
+    try { state = await this.states.get(goalId, true); }
+    catch (err) { throw new HttpError(404, err instanceof Error && err.message === 'goal_not_found' ? 'LoopX 核心里没有这个 Goal' : `读不到这个 Goal：${err instanceof Error ? err.message : err}`, { code: 'goal_not_found' }); }
+    if (state.activation && state.activation !== 'active') throw new HttpError(409, `这个 Goal 当前不是活跃状态（${state.activation}）`, { code: 'goal_not_active' });
+    let workspace = earlier?.workspace;
+    if (!workspace) {
+      const raw = asText(input.cwd, 'cwd', 1000);
+      try { workspace = realpathSync(raw); if (!statSync(workspace).isDirectory()) throw new Error('not a directory'); } catch { throw new HttpError(400, 'cwd does not exist'); }
+      if (!isWithinWorkdirs(workspace, this.deps.dirs.all())) throw new HttpError(400, 'cwd is not in the allowed workdirs');
+    }
+    try {
+      const thread = await manager.createThread({
+        agent: input.agent, cwd: workspace, title: state.title !== goalId ? state.title : goalId, permissionMode: 'ask',
+        ...(typeof input.model === 'string' && input.model ? { model: input.model } : {}),
+        ...(typeof input.effort === 'string' && input.effort ? { effort: input.effort } : {}),
+      });
+      this.bindings.set(thread.id, { goalId, goalAgentId, managedAgentId: earlier?.managedAgentId ?? null, goalInstanceId: earlier?.goalInstanceId ?? null, workspace, permission });
+      manager.announceLoopx(thread.id);
+      manager.autoHandover.setOverride(thread.id, false);
+      const text = typeof input.text === 'string' && input.text.trim() ? input.text.trim() : '';
+      const started = text ? await manager.startTurn(thread.id, { text, fromUser: true } as never) : null;
+      return { threadId: thread.id, goalId, workspace, permission, ...(started && 'turnId' in started ? { turnId: started.turnId } : {}) };
+    } catch (err) { return this.fail(err); }
+  }
+
   async goal(threadId: string, refresh: boolean) {
     const binding = this.bindings.get(threadId);
     if (!binding) throw new HttpError(404, 'not a LoopX Goal conversation');
@@ -203,6 +240,7 @@ export class LoopxService implements LoopxHooks {
     }
     if (path === '/api/loopx/launch/preview' && method === 'POST') { send(res, 200, await this.preview(await body(req))); return true; }
     if (path === '/api/loopx/launch/apply' && method === 'POST') { send(res, 200, await this.apply(await body(req))); return true; }
+    if (path === '/api/loopx/launch/join' && method === 'POST') { send(res, 200, await this.join(await body(req))); return true; }
     const goal = /^\/api\/loopx\/goal\/([^/]+)$/.exec(path);
     if (goal && method === 'GET') { send(res, 200, await this.goal(decodeURIComponent(goal[1]), url.searchParams.get('refresh') === '1')); return true; }
     return false;
