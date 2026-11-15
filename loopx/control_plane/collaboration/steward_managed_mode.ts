@@ -1,8 +1,9 @@
-/** Source-bound preparation of one native execution identity for a steward.
+/** Source-bound managed Session identity and native host policy.
  *
- * This owner prepares/binds identity only. Goal bootstrap, Agent registration,
- * scheduling and model execution retain their existing owners. In particular,
- * a prepared identity never advertises a running monitor or an enabled host.
+ * Identity preparation grants no execution. Host policy maps only the original
+ * already-admitted Task and existing approval. Goal bootstrap, registration,
+ * scheduling and execution retain their owners; a prepared identity never
+ * advertises a running monitor or enabled host.
  */
 import { createHash } from "node:crypto";
 import type { JsonObject } from "../runtime_decode.ts";
@@ -731,4 +732,33 @@ export function bindStewardManagedActor(params: JsonObject): JsonObject {
   return normalizeStewardManagedActor({schema_version: STEWARD_MANAGED_ACTOR_SCHEMA,
     goal_id: current.goalId, goal_instance_id: goal.goal_instance_id, agent_id: AGENT_ID,
     session_id: current.sessionId, source_ref: current.source, creation_operation_id: current.creation});
+}
+
+/** Adapt a current, already admitted native Task to the host's existing
+ * sandbox vocabulary. A Task selection or check confirmation grants no writes.
+ * This bounded adapter supports an existing whole-workspace write approval;
+ * narrower approvals remain read-only until the host can enforce them.
+ */
+export function canonicalNativeTaskSandboxPolicy(params: JsonObject): JsonObject {
+  const actor = requireJsonObject(params.actor, "original native Task actor");
+  const authority = requireJsonObject(params.authority, "admitted Task authority");
+  const validation = requireJsonObject(params.validation, "current Task validation plan");
+  const identity = requireJsonObject(authority._work_identity, "checked original work identity");
+  const preparation = requireJsonObject(authority.execution_preparation, "original Task execution preparation");
+  if (!(params.host === "codex-app-server" && actor.schema_version === "loopx_managed_session_actor_v0"
+    && typeof actor.workspace_path === "string" && actor.workspace_path.length > 0
+    && identity.goal_id === actor.goal_id && identity.agent_id === actor.agent_id
+    && identity.todo_id === validation.todo_id && preparation.todo_id === validation.todo_id
+    && preparation.agent_id === actor.agent_id && preparation.state === "ready"
+    && preparation.delivery_allowed === true && authority.should_run === true
+    && authority.normal_delivery_allowed === true && validation.state === "ready")) {
+    throw new EffectRuntimeRequestError("native host policy requires the original admitted Task, validation and execution lease");
+  }
+  const boundary = requireJsonObject(authority.goal_boundary, "original Goal boundary");
+  const approval = boundary.checkpointed_boundary_authority;
+  const writable = approval && typeof approval === "object" && !Array.isArray(approval)
+    && approval.schema_version === "checkpointed_boundary_authority_v0"
+    && Array.isArray(approval.active_write_scope) && approval.active_write_scope.includes("**");
+  return writable ? {type: "workspaceWrite", writableRoots: [actor.workspace_path], networkAccess: false,
+    excludeTmpdirEnvVar: true, excludeSlashTmp: true} : {type: "readOnly", networkAccess: false};
 }

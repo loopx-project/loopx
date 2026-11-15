@@ -304,7 +304,8 @@ class ManagedSessionTurn:
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
-                operation_id: str | None = None, include_calendar_task_sources: bool = False) -> dict[str, Any]:
+                operation_id: str | None = None, include_calendar_task_sources: bool = False,
+                include_original_task: bool = False) -> dict[str, Any]:
         session = self.store.load_session(session_id)
         if not session:
             raise KeyError("chat session was not found")
@@ -322,6 +323,10 @@ class ManagedSessionTurn:
             result["available"] = True
         except ValueError as exc:
             result["reason"] = str(exc)
+        if include_original_task:
+            if agent_id is not None and agent_id != session.get("managed_agent_id"):
+                raise ValueError("select the original registered Agent for Task entry")
+            result["task"] = self._original_task_entry(session_id)
         if session.get("managed_agent_id"):
             from .steward_reports import ManagedSessionReports
             from .session_calendar_tasks import SessionCalendarTasks
@@ -335,6 +340,40 @@ class ManagedSessionTurn:
             from .session_calendar_tasks import SessionCalendarTasks
             result["calendar_task_sources"] = SessionCalendarTasks(self.controller).source_options(session_id)
         return result
+
+    def _original_task_entry(self, session_id: str) -> dict[str, Any]:
+        """Observe the existing creation/validation owners without any effects.
+
+        The returned plan does not claim a Task or authorize a model. Native
+        submit still rechecks current admission and every validation source.
+        """
+        from ...control_plane.effect_runtime import effect_runtime_result
+        from ...control_plane.goals.acceptance import inspect_goal_acceptance
+
+        session = self.store.load_session(session_id) or {}
+        request = self._request(session_id, session.get("managed_agent_id") or "", "original-task-preview")
+        actor = request["actor"]
+        unavailable: dict[str, Any] = {"todo_id": None, "state": "unbound", "source": None,
+            "canonical_done": False}
+        try:
+            self.admit(request)
+            basis = inspect_goal_acceptance(registry_path=self.controller.registry_path,
+                runtime_root=str(self.controller.coordination_runtime_root), goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], validation_workspace_path=Path(actor["workspace_path"]))
+            selected = effect_runtime_result("goal.task.creation_selection", {"basis": basis})
+            if selected["todo_id"] is None:
+                return {**unavailable, "reason": selected["reason"]}
+            todo_id = selected["todo_id"]
+            unavailable["todo_id"] = todo_id
+            request["todo_id"] = todo_id
+            self.admit(request)
+            plan = self._validation_source(request, todo_id)["plan"]
+            # Return only the display observation; commands, pins and private
+            # declarations stay with their existing owner.
+            self.admit(request)
+            return {key: plan[key] for key in ("todo_id", "state", "source", "observation", "canonical_done")}
+        except (ValueError, ManagedTaskValidationUnavailable) as exc:
+            return {**unavailable, "reason": str(exc)}
 
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,
                todo_id: str | None = None, monitor_deadline: str | None = None,

@@ -14,6 +14,26 @@ function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
 }
 
+/** A display selection from retained creation work, never a newest/first Todo
+ * heuristic or an execution grant. The host must qualify the selected Todo's
+ * current validation through canonicalTaskValidationPlan before advertising it.
+ */
+export function originalCreationTaskSelection(params: JsonObject): JsonObject {
+  const basis = requireJsonObject(params.basis, "current Goal acceptance basis");
+  requireThat(basis.status === "loaded" && typeof basis.provider_revision === "string"
+    && basis.provider_revision.length > 0, "current Goal acceptance basis required");
+  const contract = requireJsonObject(basis.goal_acceptance_contract, "current Goal acceptance projection");
+  const outcomes = contract.outcome_requirements;
+  if (!outcomes || typeof outcomes !== "object" || Array.isArray(outcomes)
+      || !Array.isArray(outcomes.outcomes)) return {todo_id: null, reason: "original_task_unavailable"};
+  const original = outcomes.outcomes.filter(row => row && typeof row === "object"
+    && !Array.isArray(row) && row.id === "goal-creation");
+  if (original.length !== 1 || !Array.isArray(original[0].todo_ids)
+      || original[0].todo_ids.length !== 1 || typeof original[0].todo_ids[0] !== "string"
+      || !original[0].todo_ids[0]) return {todo_id: null, reason: "original_task_unavailable"};
+  return {todo_id: original[0].todo_ids[0], reason: null};
+}
+
 /** An explicit null requirement means owner-resolved out-of-scope/disabled
  * checks. Missing, unbound or stale owner acceptance must never fall back to a
  * Todo-only declaration. Required Todo checks remain cumulative with Goal checks. */

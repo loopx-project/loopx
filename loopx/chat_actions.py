@@ -844,7 +844,7 @@ class ChatActionService(
                 "Goal projection did not retain the selected Agent binding"
             )
         from functools import partial
-        from .chat.session_open import read_goal_creation_session, recover_goal_creation_session, require_regular_session_paths
+        from .chat.session_open import read_goal_creation_session, recover_goal_creation_session, require_regular_session_paths, goal_creation_display_message
 
         read_original_session = partial(read_goal_creation_session,
             self.store, self.chat_store or getattr(self.runtime_controller, "store", None),
@@ -991,6 +991,8 @@ class ChatActionService(
                 message=first_turn_message,
                 work_dir=project,
                 objective=objective,
+                **({"display_message": goal_creation_display_message(turn_store, session_id=session_id,
+                    client_turn_id=f"goal-start-{proposal_id}", objective=objective)} if expected_managed_agent else {}),
             )
             require_first_turn_readback(first_turn)
             turn_result = {
