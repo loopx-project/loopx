@@ -133,6 +133,16 @@ interface ResultBundle extends JsonObject {
   payload: JsonObject;
 }
 
+interface MatchedSpendRecords {
+  run: JsonObject | null;
+  receipt: JsonObject | null;
+}
+
+interface SpendTerms {
+  slots: unknown;
+  source: unknown;
+}
+
 type SettlementProgressState = "identity_required" | "writeback_required" |
   "writeback_receipt_required" | "spend_required" | "spend_receipt_required" | "settled";
 
@@ -1212,6 +1222,7 @@ function readQuotaSettlementFromRequest(
   request: ReadbackRequest,
   snapshot: QuotaSettlementReadbackSnapshot,
   nameOwedPriorTurn = true,
+  matchedSpend?: MatchedSpendRecords,
 ): JsonObject {
   if (
     snapshot.runtimeRoot !== request.runtime_root ||
@@ -1298,6 +1309,10 @@ function readQuotaSettlementFromRequest(
     identity,
   );
   const spendEvent = findStepEvent(events, identity, "quota_spend");
+  if (matchedSpend) {
+    matchedSpend.run = spendRun;
+    matchedSpend.receipt = spendEvent;
+  }
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
   const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
@@ -1520,9 +1535,23 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
   return await withOwner(
     request.owner,
     async () => {
+      const matchedSpend: MatchedSpendRecords = {run: null, receipt: null};
       const result = readQuotaSettlementFromRequest(request,
-        await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id));
+        await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id), true, matchedSpend);
       const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
+      const receipt = spendReceiptTerms(matchedSpend.receipt);
+      // Only exact readback opens its matched debit artifact. Snapshot readers
+      // for history and guard discovery still reuse the bounded index.
+      const retained = matchedSpend.run !== null &&
+          (spendRequest !== null || receipt.slots !== undefined || receipt.source !== undefined)
+        ? await readQuotaSpendEventFromRun(join(request.runtime_root, "goals", request.goal_id, "runs"),
+          matchedSpend.run, request.goal_id)
+        : null;
+      const ledger = {slots: retained?.slots ?? undefined, source: retained?.source ?? undefined};
+      const conflict = spendTermsConflict(ledger, receipt);
+      if (conflict !== null && spendRequest === null) {
+        throw new EffectRuntimeRequestError(conflict, "malformed_settlement_state");
+      }
       if (identity && request.refresh_retry &&
           jsonObject(result.refresh_recovery)?.decision !== "reject" &&
           isTurnScopedSettlementOutcome(request.refresh_retry.delivery_outcome,
@@ -1538,39 +1567,54 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
       // only its receipts and whether a spend Run already needs receipt repair.
       const settlement = requireJsonObject(result.settlement, "quota settlement bundle");
       const outcome = requireJsonObject(settlement.result, "quota settlement result");
-      const spendRun = jsonObject(result.spend_run);
-      const spendRejection = spendRequest && identity
-        ? await originalSpendRejection(request, result, spendRequest, spendRun)
-        : null;
+      const rejection = conflict === null
+        ? spendRequest && identity ? originalSpendRejection(result, spendRequest, ledger, receipt) : null
+        : rejectedSpend(conflict);
       return {
         schema_version: result.schema_version,
         found: true,
         identity: result.identity,
         settlement: {...settlement, result: {...outcome, value: null}},
         progress: result.progress,
-        spend_run_present: spendRun !== null,
-        ...(spendRejection === null ? {} : {spend_request_rejection: bundle(spendRejection)}),
+        spend_run_present: matchedSpend.run !== null,
+        ...(rejection === null ? {} : {spend_request_rejection: bundle(rejection)}),
       };
     },
   );
 }
 
-async function originalSpendRejection(
-  request: ReadbackRequest, readback: JsonObject, proposed: JsonObject,
-  spendRun: JsonObject | null,
-): Promise<SettlementResult<JsonObject> | null> {
+function spendReceiptTerms(event: JsonObject | null): SpendTerms {
+  const {slots, source} = event === null ? {} : details(event);
+  // Older rollout envelopes represent an omitted field with an empty string.
+  return {slots: slots === "" ? undefined : slots, source: source === "" ? undefined : source};
+}
+
+function spendTermsConflict(ledger: SpendTerms, receipt: SpendTerms): string | null {
+  for (const field of ["slots", "source"] as const) {
+    if (ledger[field] !== undefined && receipt[field] !== undefined && ledger[field] !== receipt[field]) {
+      return `the recorded debit and quota spend receipt disagree on ${field}`;
+    }
+  }
+  return null;
+}
+
+function rejectedSpend(reason: string): SettlementResult<JsonObject> {
+  return settlementFailed({kind: "quota_spend_rejected", step_kind: "quota_spend", reason});
+}
+
+function originalSpendRejection(
+  readback: JsonObject, proposed: JsonObject,
+  ledger: SpendTerms, receipt: SpendTerms,
+): SettlementResult<JsonObject> | null {
   const progress = requireJsonObject(readback.progress, "quota settlement progress");
   const guard = jsonObject(readback.heartbeat_receipt);
   const authorizedSource = guard ? details(guard).quota_spend_source : null;
   // Older ledgers can have a rollout receipt but no readable artifact. Keep
   // their receipt facts available and never repair an already mismatched debit.
   const spendEvent = jsonObject(readback.spend_event);
-  const receipt = spendEvent ? details(spendEvent) : {};
-  const retained = spendRun === null ? null : await readQuotaSpendEventFromRun(
-    join(request.runtime_root, "goals", request.goal_id, "runs"), spendRun, request.goal_id,
-  );
-  const recordedSlots = retained?.slots ?? (receipt.slots === "" ? undefined : receipt.slots);
-  const recordedSource = retained?.source ?? (receipt.source === "" ? undefined : receipt.source);
+  const spendRun = jsonObject(readback.spend_run);
+  const recordedSlots = ledger.slots ?? receipt.slots;
+  const recordedSource = ledger.source ?? receipt.source;
   const fallbackSource = recordedSource === "heartbeat" || recordedSource === "visible-goal"
     ? recordedSource : progress.quota_spend_source;
   const replaySource = progress.state === "settled" && progress.closeout_kind == null && spendRun !== null
@@ -1579,10 +1623,7 @@ async function originalSpendRejection(
   // First debit and receipt repair must match admission. A fully receipted
   // replay must match the existing debit and cannot append another charge.
   if (proposed.slots !== 1 || proposed.source !== source) {
-    return settlementFailed({
-      kind: "quota_spend_rejected", step_kind: "quota_spend",
-      reason: `original Turn settlement requires --slots 1 --source ${String(source)}`,
-    });
+    return rejectedSpend(`original Turn settlement requires --slots 1 --source ${String(source)}`);
   }
   const slotsConflict = recordedSlots !== undefined && recordedSlots !== proposed.slots;
   const sourceConflict = recordedSource !== undefined && recordedSource !== source;
@@ -1590,10 +1631,7 @@ async function originalSpendRejection(
   // debit needs the original charge facts before we can certify its receipt.
   const unverifiableRepair = spendRun !== null && spendEvent === null &&
     (recordedSlots === undefined || recordedSource === undefined);
-  return slotsConflict || sourceConflict || unverifiableRepair ? settlementFailed({
-    kind: "quota_spend_rejected", step_kind: "quota_spend",
-    reason: unverifiableRepair
+  return slotsConflict || sourceConflict || unverifiableRepair ? rejectedSpend(unverifiableRepair
       ? "the recorded debit has no verifiable billing terms for receipt repair"
-      : "the recorded debit differs from the original Turn settlement plan",
-  }) : null;
+      : "the recorded debit differs from the original Turn settlement plan") : null;
 }
