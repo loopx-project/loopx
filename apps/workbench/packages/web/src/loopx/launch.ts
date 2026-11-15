@@ -1,5 +1,5 @@
 /** The daemon's LoopX Goal routes (`/api/loopx/...`): who can hold a Goal, launching one, and its bar. */
-import { localeTag } from '../i18n';
+import { localeTag, t } from '../i18n';
 
 export type GoalPermission = 'read_only' | 'workspace_auto';
 
@@ -75,18 +75,17 @@ export function defaultGoalPermission(cap: GoalAgentCapability | undefined): Goa
   return cap?.permissions.find((p) => p.available && p.isDefault)?.id ?? cap?.permissions.find((p) => p.available)?.id ?? 'read_only';
 }
 
-const ZH = localeTag().toLowerCase().startsWith('zh');
-/** Short copy for this adapter; the hub's own i18n tables stay free of it. */
-export const lx = (zh: string, en: string) => (ZH ? zh : en);
+/** Read when rendered, so a language switch applies at once. */
+export const permissionCopy = (p: GoalPermission): { label: string; hint: string } =>
+  p === 'read_only' ? { label: t('loopx.goal.perm.read_only'), hint: t('loopx.goal.perm.read_only.hint') }
+    : { label: t('loopx.goal.perm.workspace_auto'), hint: t('loopx.goal.perm.workspace_auto.hint') };
 
-export const PERMISSION_COPY: Record<GoalPermission, { label: string; hint: string }> = {
-  read_only: { label: lx('只读', 'Read only'), hint: lx('可以读项目，不能写任何文件；没人盯着也安全', 'Can read the project, cannot write; safe unattended') },
-  workspace_auto: { label: lx('工作区内自动', 'Auto in workspace'), hint: lx('只能写这个目录，由沙箱强制；没人盯着也能继续跑', 'Writes only this directory, enforced by the sandbox; keeps going unattended') },
-};
-
-/** The core's status words, as the sidebar and the work page show them, kept short for the bar. */
-export const STATUS_WORDS: Record<string, string> = {
-  connected_without_run: lx('已关联，待执行', 'Connected, awaiting work'),
-  active_state_agent_todo: lx('有待推进的任务', 'Work to continue'),
-  state_refreshed: lx('状态已刷新', 'State refreshed'),
-};
+/** The core's status words for the bar; a status the hub has no word for shows as the core said it. */
+export function statusWord(status: string): string {
+  switch (status) {
+    case 'connected_without_run': return t('loopx.goal.status.connected_without_run');
+    case 'active_state_agent_todo': return t('loopx.goal.status.active_state_agent_todo');
+    case 'state_refreshed': return t('loopx.goal.status.state_refreshed');
+    default: return status;
+  }
+}

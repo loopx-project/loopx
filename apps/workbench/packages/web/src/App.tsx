@@ -94,7 +94,7 @@ import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
 import { needsYouGoalIds } from './loopx/status';
 import { ActivityPage } from './components/ActivityPage';
 import { GoalBar, GoalConfirm, GoalPermissionPicker, LoopxToggle } from './components/LoopxGoal';
-import { defaultGoalPermission, fetchGoalCapabilities, goalOf, lx, type GoalAgentCapability, type GoalPermission } from './loopx/launch';
+import { defaultGoalPermission, fetchGoalCapabilities, goalOf, type GoalAgentCapability, type GoalPermission } from './loopx/launch';
 import { ExtensionsPage } from './components/ExtensionsPage';
 import { VoiceOrb, VoiceControls } from './components/VoiceOrb';
 import { useVoiceSession } from './voice-session';
@@ -2023,7 +2023,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       let id = selectedId;
       // A Goal is reviewed by the LoopX core before it exists; the draft stays in the box until it is created or backed out of.
       if (!id && draftLoopx && !draftTeam) {
-        if (images.length || videos.length) throw new Error(lx('LoopX Goal 暂不支持带图片或视频发起', 'A Goal cannot be started with images or videos yet'));
+        if (images.length || videos.length) throw new Error(t('loopx.goal.noMedia'));
         return await new Promise<void>((resolve, reject) => setPendingGoal({ text, resolve, reject }));
       }
       if (!id && draftTeam) {
