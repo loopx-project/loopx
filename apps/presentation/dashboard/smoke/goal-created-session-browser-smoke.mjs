@@ -102,6 +102,7 @@ try {
       await enter.click();
       await page.waitForURL(url => url.searchParams.get("goalId") === goalId);
       const routed = new URL(page.url());
+      assert.equal(routed.searchParams.get("statusUrl"), "/status.json", "Goal navigation retains the selected source");
       if (scenario === "legacy") {
         assert.equal(routed.searchParams.get("workAgent"), null);
         assert.equal(routed.searchParams.get("workSession"), null);

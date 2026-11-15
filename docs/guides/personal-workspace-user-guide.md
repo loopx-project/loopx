@@ -123,6 +123,13 @@ proves that its host is active or that its result passes acceptance.
 
 若原任务缺少可信的独立检查，对话保留等待原因。核对并确认已有检查方案后，先前
 确认的任务请求会在同一对话继续执行；确认检查本身不会新授予文件修改权限。
+「等待」表示请求已保留、尚未开始执行；只有实际运行时显示「正在推进」。进入
+新 Goal 会保留原会话和当前来源地址，重新加载沿用该地址读取结果。
+
+![桌面原任务等待检查](../assets/personal-workspace/goal-creation-pending-desktop.webp)
+
+![窄屏同一原任务等待检查](../assets/personal-workspace/goal-creation-pending-narrow.webp)
+
 结果应包含原任务状态、产物及检查结果。检查失败时原任务保持未完成，沿页面的
 「继续任务」处理剩余工作；重新打开页面或重试创建不会重放已有执行。
 若创建时额度暂不可用，原 Goal 和任务已经保留，这次创建会保持可重试。额度恢复
@@ -135,14 +142,17 @@ or subdirectory approval. The first reply and ordinary follow-up messages remain
 read-only. Missing independent checks leave the original request waiting. Review
 and confirm the existing check plan; the previously confirmed task then continues
 in the same conversation when its allowance is ready. Check confirmation grants
-no new write permission. Inspect the original task, artifact and check result;
+no new write permission. **Waiting** means the retained request has not started;
+**Working** appears only while the Task runs. Opening the new Goal retains its
+original conversation and source address; reload reads back through that address.
+Inspect the original task, artifact and check result;
 after failure, use **Continue Task** for remaining work. Reloading or retrying
 creation preserves the original execution.
 If initial allowance is held, the Goal and task stay retained and the creation
 remains retryable. Once allowance is ready, retry the original creation with
 its retained requirements and permission choice instead of creating another Goal.
 
-这两张当前使用图展示打包 UI 和真实本地后端；示例中的模型回答与文件编辑由脚本
+这些当前使用图展示打包 UI 和真实本地后端；示例中的模型回答与文件编辑由脚本
 提供，用于说明确认范围，不代表真实模型、安装版或完整目标已经通过验收。
 These current guide images show the packaged UI with a real local backend and
 scripted model replies/editing. They explain the confirmation scope and do not

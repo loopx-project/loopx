@@ -3399,6 +3399,7 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   队列重读期间原操作结束，也不会遗留已排队的普通追问。已保存请求的当前 Task
   准入受阻时保留等待；准备和派发重读既有 typed admission，之后仍由原生 launch
   guard 判断是否执行，预检不替代最终授权。
+  Task 视图区分等待和实际运行，并保留既有 Goal 导航返回的来源地址。
 - **证据：**packaged UI、真实 Chat/Core/SQLite 与脚本原生协议把原购物车 Task
   执行到未改变的六行为 oracle 通过；保留只读失败和被拒绝的完成声明，再经既有
   Continue 控件推进剩余工作。创建 replay／reload 不增加 Task 派发或批准。桌面／

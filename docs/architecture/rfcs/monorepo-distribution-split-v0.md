@@ -4385,6 +4385,8 @@ view shows its independently checked result in the same conversation.
   request whose current Task admission is held stays pending; preparation and
   dispatch re-read the existing typed admission, and the native launch guard
   still decides execution after that observation.
+  The Task view distinguishes waiting from actual running and retains the
+  source address returned by the existing Goal navigation.
 - **Evidence:** the packaged UI with real Chat/Core/SQLite and scripted native
   protocol completes the original cart Task against its unchanged six-behavior
   oracle, retains readonly failure and rejected completion, and resumes remaining

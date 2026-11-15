@@ -377,7 +377,9 @@ for (const scenario of [
       ]),
     ], {encoding: "utf8", timeout: 60_000});
     assert.equal(result.status, 0, result.stderr);
-    const observed = JSON.parse(result.stdout.trim().split("\n").at(-1));
+    const observation = result.stdout.trim().split("\n").at(-1);
+    assert.ok(observation, "the shadow probe must return its observation");
+    const observed = JSON.parse(observation);
     assert.equal(observed.status === "failed" ? observed.reason_code : observed.status, scenario.expected);
     const passes = scenario.expected === "applied" ? 2 : 1;
     assert.equal(observed.lstatCalls, 2 * passes);
