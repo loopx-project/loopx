@@ -5298,7 +5298,8 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
         runtime.close()
 
 
-def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(ordinary, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("progressive_read", [False, True])
+def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(ordinary, monkeypatch, progressive_read):  # noqa: F811
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.control_plane import chat_turn_acceptance, effect_runtime
 
@@ -5350,13 +5351,16 @@ def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(or
     server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    path = "/api/chat/lark/private-conversations"
+    if progressive_read:
+        path += f"?view=diagnostics&revision={transport.bindings.read()['revision']}"
 
     def snapshot():
         revision_reads.clear()
         queue_selections.clear()
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
-            connection.request("GET", "/api/chat/lark/private-conversations")
+            connection.request("GET", path)
             response = connection.getresponse()
             assert response.status == 200
             result = json.loads(response.read())
@@ -6729,6 +6733,80 @@ def test_http_authorization_read_does_not_wait_for_bot_health_or_delivery_histor
     finally:
         server.shutdown()
         server.server_close()
+        runtime.close()
+
+
+def test_http_settings_load_while_delivery_is_slow_and_reject_revoked_diagnostics(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    store, runtime, provider, transport = connect(ordinary)
+    bindings = transport.bindings
+    before = bindings.read()
+    revision = before["revision"]
+    removed = before["bindings"][0]["binding_id"]
+    sessions = store.list_sessions()
+    entered, release = threading.Event(), threading.Event()
+    health = transport.health
+
+    def slow_health():
+        entered.set()
+        assert release.wait(10)
+        return health()
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(query):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET", "/api/chat/lark/private-conversations" + query)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    detail_url = f"?view=diagnostics&revision={revision}"
+    try:
+        assert read("?view=diagnostics")[0] == 400
+        assert read(f"{detail_url}&revision={revision}")[0] == 400
+        legacy_status, legacy = read("")
+        status, diagnostics = read(detail_url)
+        assert legacy_status == status == 200
+        assert legacy["stop_recoveries"] == diagnostics["stop_recoveries"]
+        monkeypatch.setattr(transport, "health", slow_health)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            delayed = executor.submit(read, detail_url)
+            try:
+                assert entered.wait(5)
+                status, settings = read("?view=settings")
+                assert status == 200 and not delayed.done()
+                assert settings["revision"] == revision
+                assert settings["app_steward_binding_id"] == legacy["app_steward_binding_id"]
+                assert "stop_recoveries" not in settings
+                assert all("pending_count" not in row and "agent_candidates" not in row for row in settings["connections"])
+                combined = [{**row, **details} for row, details in zip(
+                    settings["connections"], diagnostics["connections"], strict=True)]
+                assert combined == legacy["connections"]
+
+                bindings.disconnect(removed, expected_revision=revision)
+                status, after = read("?view=settings")
+                assert status == 200 and after["revision"] > revision
+                assert removed not in {row["binding_id"] for row in after["connections"]}
+                assert read(detail_url)[0] == 409  # A stale caller never waits for the scan.
+            finally:
+                release.set()
+            status, late = delayed.result(timeout=12)
+            assert status == 409 and "connections" not in late
+        assert store.list_sessions() == sessions
+        assert not provider.writes
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
         runtime.close()
 
 

@@ -33,61 +33,101 @@ class PrivateConversationRequestMixin:
         return status if isinstance(status, str) and status in ("starting", "listening", "retrying", "stopped", "standby", "inactive") else "unknown"
 
     def _private_conversations(self) -> None:
+        args = parse_qs(urlsplit(getattr(self, "path", "")).query, keep_blank_values=True)
+        view = args.get("view") if getattr(self, "command", "GET") == "GET" else None
+        if view is not None and view not in (["authorization"], ["settings"], ["diagnostics"]):
+            self._send_error("Unknown private conversation view", status=400)
+            return
+
         bindings = self.server.runtime_controller.project_contexts.conversation_bindings
         current = bindings.read()
-        titles = {row["project_ref"]: Path(row["workspace_path"]).name
-                  for row in self.server.runtime_controller.project_contexts.available()}
-        # Source adapters revalidate this projection before publication. They
-        # need current grants, not listener probes or historical delivery scans.
-        # This read grants nothing; the caller retains its own identity, Turn,
-        # revocation, publication fence and compare-and-swap checks.
-        view = parse_qs(urlsplit(getattr(self, "path", "")).query, keep_blank_values=True).get("view")
-        if view is not None:
-            if view != ["authorization"]:
-                self._send_error("Unknown private conversation view", status=400)
+        revision = current["revision"]
+        diagnostic_read = view == ["diagnostics"]
+        if diagnostic_read:
+            requested = args.get("revision", [])
+            if len(requested) != 1 or not requested[0].isascii() or not requested[0].isdecimal():
+                self._send_error("A binding revision is required for private conversation diagnostics", status=400)
                 return
-            if bindings.read() != current:
+            if requested != [str(revision)]:
                 self._send_error("Conversation bindings changed during the read", status=409)
                 return
-            self._send_json({"ok": True, "revision": current["revision"], "connections": [
-                {"binding_id": row["binding_id"], "app_ref": row["transport_ref"],
-                 "context_kind": row["context_kind"], "project_ref": row["project_ref"],
-                 "context_available": row["project_ref"] in titles,
-                 "executor_endpoint_id": row["executor_endpoint_id"], "grant": row["grant"],
-                 "audience": row.get("audience", "owner")}
-                for row in current["bindings"]]})
+        titles = {row["project_ref"]: Path(row["workspace_path"]).name
+                  for row in self.server.runtime_controller.project_contexts.available()}
+
+        def changed() -> bool:
+            if view is not None and bindings.read() != current:
+                self._send_error("Conversation bindings changed during the read", status=409)
+                return True
+            return False
+
+        def send(payload: dict[str, Any]) -> None:
+            if not changed():
+                self._send_json({"ok": True, "revision": revision, **payload})
+
+        def grant(row: dict[str, Any]) -> dict[str, Any]:
+            return {"binding_id": row["binding_id"], "app_ref": row["transport_ref"],
+                    "context_kind": row["context_kind"], "project_ref": row["project_ref"],
+                    "context_available": row["project_ref"] in titles,
+                    "executor_endpoint_id": row["executor_endpoint_id"], "grant": row["grant"],
+                    "audience": row.get("audience", "owner")}
+
+        # Source adapters receive a current projection for their own checks.
+        if view == ["authorization"]:
+            send({"connections": [grant(row) for row in current["bindings"]]})
             return
+
+        def settings(row: dict[str, Any]) -> dict[str, Any]:
+            return {**grant(row), "project_title": titles.get(row["project_ref"], "Unavailable workspace"),
+                    "group_count": len(row.get("group_refs", [])),
+                    "goal_count": len(bindings.goal_scope_ids(row)),
+                    "goal_scope": row.get("goal_scope", "selected") if row["context_kind"] == "steward" else None,
+                    "agent_targets": row.get("agent_targets", [])}
+
+        selection = {"app_steward_binding_id": current.get("app_steward_binding_id")}
+        if view == ["settings"]:
+            send({**selection, "connections": [settings(row) for row in current["bindings"]]})
+            return
+
         health = self.server.lark_goal_topic_runtime.health_snapshot()
         composed = getattr(self.server, "conversation_transports", None)
         lark_profiles = set(health) - set(composed.transports if composed is not None else {})
         deliveries = self.server.lark_private_conversations.health()
-        self._send_json({"ok": True, "revision": current["revision"],
-            "app_steward_binding_id": current.get("app_steward_binding_id"), "connections": [
-            {"binding_id": row["binding_id"], "app_ref": row["transport_ref"], "context_kind": row["context_kind"],
-             "project_ref": row["project_ref"], "context_available": row["project_ref"] in titles, "project_title": titles.get(row["project_ref"], "Unavailable workspace"),
-             "executor_endpoint_id": row["executor_endpoint_id"], "grant": row["grant"],
-             "audience": row.get("audience", "owner"), "group_count": len(row.get("group_refs", [])),
-             "goal_count": len(bindings.goal_scope_ids(row)),
-             "goal_scope": row.get("goal_scope", "selected") if row["context_kind"] == "steward" else None,
-             "agent_candidates": [{key: item.get(key) for key in ["session_id", "goal_id", "agent_id", "executor_endpoint_id"]}
-                for item in bindings.agent_candidates(row["binding_id"])],
-             "agent_targets": row.get("agent_targets", []),
-             "listener_status": self._private_listener_status(row["transport_ref"], health),
-             **({"ingress": self.server.lark_private_conversations.ingress.health(row["binding_id"])}
-                if row.get("audience", "owner") == "owner"
-                and row["transport_ref"] in lark_profiles
-                and hasattr(self.server.lark_private_conversations, "ingress") else {}),
-             **({"owner_attention": self.server.lark_private_conversations.owner_attention.health(row["binding_id"])}
-                if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner" else {}),
-             **({"managed_steward": self.server.lark_private_conversations.managed_steward.health(row["binding_id"])}
-                if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner"
-                and (row["executor_endpoint_id"] == "codex" or row.get("managed_actor"))
-                and hasattr(self.server.lark_private_conversations, "managed_steward") else {}),
-             **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
-            for row in current["bindings"]],
+        if diagnostic_read and changed():
+            return
+
+        def diagnostics(row: dict[str, Any]) -> dict[str, Any]:
+            transport = self.server.lark_private_conversations
+            binding_id = row["binding_id"]
+            owner = row.get("audience", "owner") == "owner"
+            steward = owner and row["context_kind"] == "steward"
+            return {"binding_id": binding_id,
+                    "agent_candidates": [{key: item.get(key) for key in ["session_id", "goal_id", "agent_id", "executor_endpoint_id"]}
+                                         for item in bindings.agent_candidates(binding_id)],
+                    "listener_status": self._private_listener_status(row["transport_ref"], health),
+                    **({"ingress": transport.ingress.health(binding_id)}
+                       if owner and row["transport_ref"] in lark_profiles and hasattr(transport, "ingress") else {}),
+                    **({"owner_attention": transport.owner_attention.health(binding_id)} if steward else {}),
+                    **({"managed_steward": transport.managed_steward.health(binding_id)}
+                       if steward and (row["executor_endpoint_id"] == "codex" or row.get("managed_actor"))
+                       and hasattr(transport, "managed_steward") else {}),
+                    **deliveries.get(binding_id, {"pending_count": 0, "recovery_count": 0})}
+
+        try:
+            rows = [diagnostics(row) if diagnostic_read else {**settings(row), **diagnostics(row)}
+                    for row in current["bindings"]]
+        except StopIteration:
+            # Agent candidate discovery can lose the binding to a concurrent
+            # revocation after the delivery scan.
+            if diagnostic_read and changed():
+                return
+            raise
+        payload = {
+            "connections": rows,
             "stop_recoveries": [{**row,
                 "project_title": titles.get(row["project_ref"], "Unavailable workspace")}
-                for row in bindings.stop_recoveries(current)]})
+                for row in bindings.stop_recoveries(current)],
+        }
+        send(payload if diagnostic_read else {**selection, **payload})
 
     def _app_steward(self) -> None:
         from .conversation_identity import LarkOwnerIdentityUnavailable
