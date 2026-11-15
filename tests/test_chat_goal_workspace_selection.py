@@ -521,3 +521,75 @@ def test_available_first_agent_retains_its_real_eligibility_refusal(tmp_path, re
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_goal_create_without_a_session_returns_the_managed_agent_address(tmp_path, monkeypatch):
+    # A caller that owns its own conversation layer (Workbench) opens the first
+    # thread itself: open_session=false creates the Goal, binds the Agent and
+    # todos, but opens no Session and sends no first Turn. The receipt still
+    # carries the managed Agent address the caller needs to attach its thread.
+    import http.client
+    import runpy
+    import threading
+    from pathlib import Path
+
+    from loopx import paths
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.chat_actions import goal_workspace_ref
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    monkeypatch.setattr(paths, "select_default_runtime_root", lambda: tmp_path / "implicit-default")
+    selected = tmp_path / "selected-runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    registry = project / ".loopx" / "registry.json"
+    fixture = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/loopx-chat-actions-smoke.py"))
+    sessions = ChatSessionStore(selected)
+    controller = fixture["FakeRuntimeController"](sessions)
+    controller.project_contexts = ChatProjectContexts([project])
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root, server.runtime_root_override = registry, selected, str(selected)
+    server.action_store = ChatActionStore(selected / "chat/actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=registry,
+        chat_store=sessions, runtime_controller=controller, workspace_roots=[project],
+        runtime_root_override=str(selected))
+    server.chat_store, server.runtime_controller, server.verbose = sessions, controller, False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+        try:
+            connection.request("POST", path, json.dumps(body or {}), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def create(**extra):
+        return {"action_kind": "goal.create", "summary": "Create a Goal", "idempotency_key": "no-session",
+                "context": {"kind": "manager", "goal_id": None},
+                "normalized_parameters": {"goal_id": "goal-nosession", "title": "No session", "objective": "Start here",
+                                          "agent_id": "codex", "workspace_ref": goal_workspace_ref(project), **extra}}
+
+    try:
+        status, refused = request("/api/actions/preview", create(open_session="no"))
+        assert status == 400, refused
+        status, previewed = request("/api/actions/preview", create(open_session=False))
+        assert status == 201, previewed
+        assert previewed["proposal"]["normalized_parameters"]["open_session"] is False
+        status, applied = request(f"/api/actions/{previewed['proposal']['proposal_id']}/apply", {})
+        assert status in {200, 202}, applied
+        assert applied["turn"] is None
+        resources = applied["proposal"]["receipt"]["resource_ids"]
+        assert resources["goal_id"] == "goal-nosession" and resources["agent_id"] == "codex"
+        assert "session_id" not in resources and "turn_id" not in resources
+        assert resources["managed_agent_id"] and resources["channel_id"] == f"agent.{resources['managed_agent_id']}"
+        assert "goal_instance_id" in resources
+        assert [goal["id"] for goal in json.loads(registry.read_text())["goals"]] == ["goal-nosession"]
+        assert sessions.list_sessions() == [] if hasattr(sessions, "list_sessions") else True
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
