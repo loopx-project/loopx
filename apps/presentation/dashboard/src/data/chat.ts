@@ -1697,6 +1697,59 @@ export async function steerChatTurn(sessionId: string, turnId: string, message: 
   return receipt;
 }
 
+const managedTaskTurnSchema = z.object({
+  session_id: z.string().min(1), turn_id: z.string().min(1), client_turn_id: z.string().min(1), status: z.string().min(1),
+  origin: z.literal("native_loopx"), loopx_execution: z.literal(true),
+  loopx_request: z.object({operation: z.literal("native_turn"), todo_id: z.string().min(1),
+    actor: z.object({goal_id: z.string().min(1), agent_id: z.string().min(1), session_id: z.string().min(1)})}),
+}).passthrough();
+const managedTaskEntrySchema = z.object({ok: z.literal(true), session_id: z.string().min(1),
+  managed_agent_id: z.string().nullable(), registered_agents: z.array(z.string()), available: z.boolean(), reason: z.string().optional(),
+  task: z.discriminatedUnion("state", [
+    z.object({todo_id: z.string().min(1), state: z.literal("ready"), source: z.string().min(1), canonical_done: z.boolean(),
+      observation: z.object({check_count: z.number().int().nonnegative(), pinned_file_count: z.number().int().nonnegative(),
+        basis_sha256: z.string().min(1)}), reason: z.string().optional()}),
+    z.object({todo_id: z.string().nullable(), state: z.literal("unbound"), source: z.null(), canonical_done: z.literal(false), reason: z.string().optional()}),
+  ]), turn: managedTaskTurnSchema.nullable(),
+});
+export type ManagedTaskEntry = z.infer<typeof managedTaskEntrySchema>;
+export type ManagedTaskTurn = z.infer<typeof managedTaskTurnSchema>;
+
+function verifyManagedTaskTurn(turn: ManagedTaskTurn, target: ManagedConversationTarget, operationId: string, todoId?: string) {
+  const actor = turn.loopx_request.actor;
+  if (turn.session_id !== target.sessionId || turn.client_turn_id !== `managed.${operationId}`
+    || actor.session_id !== target.sessionId || actor.goal_id !== target.goalId || actor.agent_id !== target.agentId
+    || todoId !== undefined && turn.loopx_request.todo_id !== todoId) throw new Error("The original Task Turn identity changed.");
+}
+
+/** Read the Core-selected original Task; preparation and check adoption grant no launch. */
+export async function fetchManagedTaskEntry(target: ManagedConversationTarget, options: {operationId?: string; todoId?: string; signal?: AbortSignal} = {}) {
+  await resolveManagedChatSession(target, options.signal);
+  const query = new URLSearchParams({original_task: "true", agent_id: target.agentId});
+  if (options.operationId !== undefined) query.set("operation_id", options.operationId);
+  const result = managedTaskEntrySchema.parse(await requestJson<unknown>(
+    `/api/chat/sessions/${encodeURIComponent(target.sessionId)}/native-turn?${query}`, {signal: options.signal}));
+  if (result.session_id !== target.sessionId || result.managed_agent_id !== target.agentId || !result.registered_agents.includes(target.agentId)) {
+    throw new Error("The original Task entry is unavailable from this Agent.");
+  }
+  if (result.turn) {
+    if (!options.operationId) throw new Error("The Task read returned an unrelated operation.");
+    verifyManagedTaskTurn(result.turn, target, options.operationId, options.todoId);
+  }
+  return result;
+}
+
+/** Only an explicit owner operation calls the existing native Task admission. */
+export async function startManagedTaskTurn(target: ManagedConversationTarget, todoId: string, operationId: string, signal?: AbortSignal) {
+  await resolveManagedChatSession(target, signal);
+  const result = z.object({ok: z.literal(true), session_id: z.string(), turn: managedTaskTurnSchema, created: z.boolean()}).parse(
+    await requestJson<unknown>(`/api/chat/sessions/${encodeURIComponent(target.sessionId)}/native-turn`, {method: "POST", signal,
+      body: JSON.stringify({agent_id: target.agentId, operation_id: operationId, todo_id: todoId})}));
+  if (result.session_id !== target.sessionId) throw new Error("The original Task Session changed during launch.");
+  verifyManagedTaskTurn(result.turn, target, operationId, todoId);
+  return result;
+}
+
 export type LoopXModeSnapshot = {
   ok: true; session_id: string; enabled: boolean; active_turn_id: string | null; conversation_busy: boolean;
   settings: Partial<LoopXModeSettings> & { execution_config?: string };

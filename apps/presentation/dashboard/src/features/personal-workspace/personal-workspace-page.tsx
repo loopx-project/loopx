@@ -7,6 +7,7 @@ import {hasConfiguredGoalChecks} from "../../data/goal-acceptance-observation";
 import {useDeliveryReview} from "./delivery-review-state";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
 import { goalCreateRequest, goalCreationAgentId, goalDraftReady } from "./goal-create-request";
+import { goalCreatedManagedSession } from "./goal-created-session";
 import { completedActionFeedback, todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, legacySteeringRequests, restoreLegacySteeringRequest } from "./steering-recovery";
 import { conversationInputKey, useConversationInputState } from "./use-conversation-input-state";
@@ -45,6 +46,7 @@ import {
   type LarkGoalConnection,
   type ManagerChannelBinding,
   type ManagerRuntimeSessionReadback,
+  type ManagedConversationTarget,
   type TypedActionProposal, agentBackendLabel } from "../../data/chat";
 import { useTypedActionReadback, useTypedActionProposalReadback } from "../../data/use-typed-action-readback";
 
@@ -714,6 +716,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
     todoOperation: proposal.action_kind === "todo.update" && typeof proposal.normalized_parameters.operation === "string"
       ? proposal.normalized_parameters.operation : undefined,
     reviewPlan,
+    createdManagedSession: goalCreatedManagedSession(proposal),
     fields: proposal.action_kind === "operation.execute"
       ? operationProposalFields(proposal, reviewPlan, t)
       : proposal.action_kind === "team.plan"
@@ -1761,6 +1764,7 @@ export function PersonalWorkspacePage({
         || compileActionReviewPlan(proposal).retryOriginal === true
         || (proposal.action_kind === "team.plan" && proposal.status === "applied")
         || (proposal.action_kind === "todo.create" && proposal.status === "applied")
+        || goalCreatedManagedSession(proposal) !== undefined
         // Terminal operations replace cached gated cards, including in an
         // already-open drawer. They never authorize local execution.
         || proposal.action_kind === "operation.execute")
@@ -2255,8 +2259,8 @@ export function PersonalWorkspacePage({
       setActiveSessionRun(run);
       setSelection(null);
     },
-    onOpenGoal: (goalId) => {
-      selectGoal(goalId);
+    onOpenGoal: (goalId, managedSession) => {
+      selectGoal(goalId, managedSession ? "chat" : "overview", managedSession);
       void reconcileStatus([goalId]);
     },
     onOpenGoalView: (tab) => {
@@ -2387,13 +2391,13 @@ export function PersonalWorkspacePage({
     onOpenOutput: drawerCallbacks.onOpenOutput,
   } : drawerCallbacks;
 
-  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = "overview") {
+  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = "overview", managedSession?: ManagedConversationTarget) {
     setLocalGoalId(goalId);
     setActiveSessionRun(null);
     setSelection(null);
     setLocalView(view);
     setMobileSidebarOpen(false);
-    callbacks.onSelectGoal?.(goalId, view);
+    callbacks.onSelectGoal?.(goalId, view, managedSession);
   }
 
   function openAttention(item: WorkspaceAttention) {
@@ -2988,7 +2992,9 @@ export function PersonalWorkspacePage({
             : !runtimeSourceUnavailable && selectedGoal?.loadState === "loading" && selectedGoalTab === "overview" ? <GoalVitalsSkeleton /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
           </div>
-            {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
+            {selectedGoalId && selectedGoalTab === "chat" && (!agentWorkActive || managedWorkActive) && !readOnly && selectedAgentId === "codex" && (managedWorkActive ? callbacks.onObserveConversationQueue : callbacks.onStartLoopX) ? <GoalLoopXMode
+              managed={managedWorkActive && workspaceConversations?.managed ? {target: workspaceConversations.managed.target,
+                onObserve: async () => {await callbacks.onObserveConversationQueue!(conversationKey, workspaceConversations.managed!.target.sessionId);}} : undefined}
               onPrepare={() => callbacks.onPrepareLoopX!(selectedAgentId, selectedGoalId)}
               key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
               onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
@@ -3046,6 +3052,7 @@ export function PersonalWorkspacePage({
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}
                     sessionId={selectedWorkSessionId} onSession={(id, replace) => callbacks.onSelectWorkSession?.(id, replace)}
+                    onRetryManagedSession={workspaceConversations?.managed?.retry}
                     onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}>
                     {workspaceConversations?.managed?.error ? <p role="alert">{workspaceConversations.managed.error} <button type="button" onClick={workspaceConversations.managed.retry}>{t("history.retry")}</button></p> : null}
                     <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly} items={visibleTimelineItems.filter(item => item.kind === "message")} onSelect={setSelection} selectedGoal={selectedGoal}

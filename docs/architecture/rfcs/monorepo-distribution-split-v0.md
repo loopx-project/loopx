@@ -4205,3 +4205,158 @@ File/SQLite negative cases guard this boundary without changing valid activation
   C1 cutover. No runtime, schema, activation, permission or public evidence
   policy changes; one-run relay/validator files remain private qualification
   artifacts rather than a new shipped execution pipeline or CI fixture.
+
+### 2026-11-15 — First-Goal admission failure preserves creation and confirmed work
+
+- **Gap:** a failed first-Goal admission read or decision was converted into
+  permission to dispatch. Conversely, retrying a lost submit response could
+  apply a later admission failure or denial to already dispatched work.
+- **Delta:** the existing creation owner retains Goal, initial Tasks and
+  completion requirements before checking admission. An unverifiable admission
+  now returns a safe retryable action failure without opening a Session or
+  sending model work. Creation without an executable Host does not read work
+  admission. Recovery first reads the original Session/client operation through
+  the existing Task-start reader, verifies its request and first-Turn state,
+  and retains dispatched work without new admission. Queued work still requires
+  admission; foreign Sessions and terminal-before-start work remain refused.
+- **Evidence:** on `main@58cc5817e35e`, the real Chat HTTP/action/store path with
+  synthetic Codex protocol passes 36 creation-completion cases and 11 existing
+  Session/checkpoint recovery cases. Independent review identified two recovery
+  defects in the first candidate; their failing cases were retained and the
+  final candidate resolves both. The final runtime/test files also pass 22
+  selected File/SQLite and creation-only cases in an isolated combination with
+  C1 #8266 at `b8ac1ec5443b`, with exact source-byte readback. These are bounded
+  source and synthetic-Host checks, not current native-model qualification.
+- **Boundary:** this repairs V2/V4/R1 admission and recovery using existing
+  Session, Task and quota owners; it adds no shared vocabulary, authority grant,
+  validator installation or alternate C1 pipeline. Automatic original-Task
+  adoption, selected D2/D5 closure, native App/model and compaction retention,
+  progressive controls, comparable complete costs, full V1–V5/V10, R1/M3 and
+  C1 cutover remain unqualified. Preserve original requirements and earlier
+  negative evidence; run full original-goal regression before completion.
+
+### 2026-11-15 — Native Tasks consume existing owner Goal checks
+
+- **Gap:** a managed Native Task refused to execute with owner-configured Goal
+  acceptance alone, requiring a duplicate Task argv declaration.
+- **Delta:** the existing canonical Task validation plan now serves Native and
+  Delegation. Native reads current Goal scope and private Task declarations from
+  their existing owners, runs cumulative Goal and required Task checks, and
+  rechecks definition, work, claim, lifecycle and checker assets before and after
+  validation. Required declarations, applicable unbound/stale checks and changed
+  sources cannot fall back to a weaker check. Task argv keeps typed-result stdin
+  and the existing Turn receipt; legacy non-argv declarations retain refusal.
+- **Evidence:** the Goal-only refusal is reproduced on the prior Native consumer.
+  Shared TypeScript behavior matches the immutable baseline in 54 compatibility
+  vectors. Real isolated Chat/Core/canonical tests cover Goal-only and combined
+  execution, HTTP readback/replay, independent failures, corrupt declarations,
+  source changes before and after checks, and unrelated progress observations.
+- **Boundary:** this removes duplicate validation setup for already configured
+  Goal checks on V2/V4/R1. It does not install a trusted checker for a new natural
+  language Goal, authorize model/browser commands, or complete automatic first
+  Task adoption. Full V1–V5/V10, native-model/context retention, D2/D5 closure,
+  progressive controls, comparable complete costs, R1/M3 and C1 cutover remain
+  unqualified; preserve original acceptance and full-goal regression gates.
+
+### 2026-11-15 — First Goal retains its original registered conversation
+
+- **Gap:** default Codex Goal creation opened an unassigned Goal conversation.
+  Re-entry could open another legacy conversation; a lost opening response
+  could select a later Session, and the receipt did not re-read stored identity.
+- **Delta:** the existing TypeScript presentation owner selects the registered
+  Agent identity for a new default Codex Session. The Chat owner binds opening
+  to the original creation operation, reuses only that published Session and
+  rechecks the actual Goal, Agent, route, lifetime and workspace before dispatch
+  and receipt delivery. Unknown reservations and unidentified or ambiguous
+  historical originals hold recovery. Existing recorded legacy Sessions, explicit native token budgets and
+  other endpoints retain their paths. The frontend enters the original Agent
+  conversation through existing directory, Session and history readers; invalid
+  receipts expose recovery instead of opening another conversation.
+- **Evidence:** isolated real Chat/Core/File/SQLite tests exercise original-Task
+  adoption with explicit owner checks, missing/failed-check refusal, retained
+  history, concurrent published-Session opening, lost responses, original-action
+  replay and changed identities. The unchanged runtime compatibility corpus
+  passes 106 cases on both the immutable base and candidate. The presentation
+  reducer passes its 27-case suite and preserves all non-routing fields in
+  56 base/head vectors. Browser checks cover populated desktop/narrow views,
+  reload, invalid receipts and one reconnect restoring original history.
+- **Maintainability:** Session readback is shared in the existing Chat Session
+  entry owner. The Runtime coordinator grows from 2,503 to 2,524 lines for the
+  exact opening seam and early identity fence; its reviewed ceiling records that bounded change rather
+  than duplicating readback or adding another execution pipeline. This is no
+  latency, default-closure or complete-cost qualification.
+- **Boundary:** ordinary first and subsequent messages remain ordinary read-only
+  Chat. An explicitly checked original Task uses the existing Native owner;
+  this does not automatically provide a trusted checker or adopt every reply.
+  Recovery evidence covers published Sessions, not an unrecorded native
+  thread-start effect. A real native attempt failed: its configured model is
+  unsupported by the selected account. Synthetic success and account-read
+  readiness do not override that negative result. Full V1–V5/V10, model/context
+  retention, D2/D5 closure, progressive controls, comparable complete costs,
+  R1/M3 and C1 cutover remain unqualified. Preserve the original ten requirements
+  and run full original-goal regression before completion.
+
+The current entry design keeps the original reply and message input together.
+Re-entry follows the recorded Session rather than selecting a new conversation.
+These desktop and narrow references show the packaged frontend with its real
+SQLite/Chat owners and synthetic replies; the unverified acceptance remains
+visible. They illustrate the presentation boundary, not model or outcome
+qualification.
+
+![Original Goal conversation on desktop](assets/goal-entry-original-session-desktop.webp)
+
+![Original Goal conversation at a narrow viewport](assets/goal-entry-original-session-narrow.webp)
+
+### 2026-11-15 — Prepare existing checks and execute the original authorized Task
+
+- **Gap:** the original registered conversation could read work but could not
+  prepare its existing acceptance proposal without entering legacy coordinator
+  mode. Its frontend also lacked a caller for the existing native Task endpoint.
+  A scripted repair exposed an additional gap: native work inherited the
+  conversation's read-only prompt and sandbox without requesting Task permissions.
+- **Delta:** new managed Codex conversations advertise only the existing
+  `prepare_check` action. The host rechecks the original Session, active owner
+  Turn, registration, lifetime and workspace, and pins the actual existing
+  checker source. The existing acceptance owner resolves retained requirements
+  and the original Task. Owner check adoption remains separate from Task launch.
+  The existing primary control starts that Task in the original Session, using
+  its current checks, lease and allowance; lost replies retain the same operation.
+  An idle page reads once instead of adding continuous empty polling. Creation
+  shows the confirmed objective while retaining the internal execution request;
+  recorded historical display messages remain unchanged on recovery.
+- **Authority:** check preparation and adoption grant no writes. The existing
+  native Session owner maps an already approved whole-workspace boundary to the
+  host policy; absent or narrower approval remains read-only. Network and
+  temporary-directory writes remain disabled on this bounded native path.
+  Subsequent ordinary sends explicitly restore read-only policy, including after
+  uncertain native publication and direct callers. Session defaults and native
+  thread identity are preserved; older threads receive no new dynamic tools.
+- **Evidence:** real HTTP/Chat/Core/File/SQLite cases prepare a repository's
+  unchanged six-behavior cart checker, confirm its initial failure, then execute
+  the original Task after a separate existing owner workspace approval. The
+  repaired artifact passes those independent checks. Unconfirmed checks, changed
+  source, wrong output and missing write approval preserve an open Task without
+  debit. Packaged desktop/narrow journeys cover the same result, original history,
+  repeated operations, ordinary follow-up and bounded idle reads. Models and
+  editing are scripted; this does not qualify live-model or OS sandbox behavior.
+- **Maintainability:** identity, acceptance, native admission and settlement
+  retain their existing owners, including C1 composition. Prompt/input adaptation
+  stays in the native adapter; attached attachment refusal moves to its queue
+  owner. Runtime and Chat Agent stay within their existing reviewed ceilings.
+- **Boundary:** this delivers an existing-checker, already-authorized original
+  Task path for V2/V4/R1. It does not infer arbitrary validation from natural
+  language, promote a new Goal's write authority, support unenforceable narrow
+  write scopes, or qualify unsupported source-inspection hosts. The original ten
+  requirements, live model/account and context retention, D2/D5 closure,
+  progressive Standard journeys, comparable complete costs, full V1–V5/V10,
+  R1/M3 and C1 cutover remain open. Full original-goal regression still precedes
+  completion and the subsequent external benchmark work.
+
+These current design references show the packaged frontend with real SQLite and
+Chat owners, an explicit prior workspace approval and scripted model work. The
+desktop view exposes the original Task control after check adoption; the narrow
+view shows its independently checked result in the same conversation.
+
+![Original checked Task on desktop](assets/goal-entry-original-task-desktop.webp)
+
+![Original checked Task result at a narrow viewport](assets/goal-entry-original-task-narrow.webp)
