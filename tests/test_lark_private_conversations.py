@@ -1296,7 +1296,7 @@ def test_private_completed_answer_returns_image_bytes_instead_of_a_remote_placeh
     "edit_on_upload_source_read", "edit_on_next_upload_source_read", "edit_on_send_preview", "edit_on_send_source_read",
     "edit_reply_after_upload_intent", "edit_source_on_final_pair_read", "edit_source_on_dispatch_lock",
     "foreign_sender", "changed_bytes", "stop", "unknown_send", "upload_denied", "upload_scope_then_granted",
-    "upload_scope_with_conflicting_stdout", "upload_cli_missing", "upload_ack_missing",
+    "upload_scope_with_conflicting_stdout", "upload_cli_missing", "upload_cli_fd_limit", "upload_ack_missing",
     "closed_on_source_controls_read",
     "unlisted_redirect", "unlisted_cached_redirect"])
 def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary, monkeypatch, source_https, fault):  # noqa: F811
@@ -1305,6 +1305,7 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
     from test_chat_image_attachments import PNG_BYTES
     from test_lark_app_image_projection import ImageIO
 
+    resource = pytest.importorskip("resource") if fault == "upload_cli_fd_limit" else None
     store, runtime, provider, transport = connect(ordinary)
     fake = ordinary[5]
     origin = "https://source.example/article"
@@ -1383,12 +1384,35 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         return result
 
     runner = provider_io
-    upload_faults = {"upload_cli_missing", "upload_ack_missing"}
+    launch_faults = {"upload_cli_missing", "upload_cli_fd_limit"}
+    upload_faults = launch_faults | {"upload_ack_missing"}
     if fault in upload_faults:
         from loopx.extensions.lark.cli_resolution import LarkCliResolution, build_lark_command_runner
 
         native_runner = build_lark_command_runner(LarkCliResolution(sys.executable, True, "fixture", None, None))
         missing_executable = str(fake.with_name("missing-lark-cli"))
+        if resource is not None:
+            import errno
+            import subprocess
+
+            popen = subprocess.Popen
+
+            def spawn(command, *args, **kwargs):
+                if command != [sys.executable, "-c", "pass"] or executable_restored:
+                    return popen(command, *args, **kwargs)
+                # Exhaust descriptors only at real Popen pipe creation,
+                # after the source check and durable upload marker.
+                limits = resource.getrlimit(resource.RLIMIT_NOFILE)
+                try:
+                    resource.setrlimit(resource.RLIMIT_NOFILE, (0, limits[1]))
+                    return popen(command, *args, **kwargs)
+                except OSError as exc:
+                    assert exc.errno == errno.EMFILE
+                    raise
+                finally:
+                    resource.setrlimit(resource.RLIMIT_NOFILE, limits)
+
+            monkeypatch.setattr(subprocess, "Popen", spawn)
 
         def guarded_provider(args, cwd=None, timeout=None, *, dispatch_guard=None):
             if dispatch_guard is not None:
@@ -1541,7 +1565,7 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
             executable_restored = True
             io.unknown_upload = False
             worker = restart()
-            recovered = fault == "upload_cli_missing"
+            recovered = fault in launch_faults
             assert worker.reconcile_request(path) == int(recovered)
             post_state = json.loads(path.read_text())
             assert post_state["historical_answer_images"]["status"] == ("delivered" if recovered else "pending")

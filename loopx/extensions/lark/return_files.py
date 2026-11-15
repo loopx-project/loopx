@@ -104,23 +104,29 @@ def _restore_unstarted_upload(cache, saved):
 
 @contextmanager
 def _authorize_upload_dispatch(guard, source_check, cache, saved, *, guards_spawn):
-    with ExitStack() as authority:
-        try:
-            authority.enter_context(guard(source_check))
-        except (KeyError, OSError, ValueError) as exc:
+    unstarted = False
+    try:
+        with ExitStack() as authority:
+            try:
+                authority.enter_context(guard(source_check))
+            except (KeyError, OSError, ValueError) as exc:
+                unstarted = True
+                raise ValueError("original upload authority unavailable") from exc
+            try:
+                yield
+            except OSError as exc:
+                # The native guard surrounds Popen only. EMFILE during pipe
+                # setup or exec leaves no CLI running. A synchronous runner
+                # can instead raise the same error after a provider write.
+                unstarted = guards_spawn and exc.errno in (
+                    errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.EPERM, errno.ENOEXEC, errno.EMFILE,
+                )
+                raise
+    finally:
+        # The resource lock is still held. Release the authority handles
+        # first so restoring a previous rejection can open its temp file.
+        if unstarted:
             _restore_unstarted_upload(cache, saved)
-            raise ValueError("original upload authority unavailable") from exc
-        try:
-            yield
-        except OSError as exc:
-            # The native runner keeps the guard around Popen and waits for
-            # the CLI response outside it. A synchronous runner can raise
-            # the same error after issuing a provider write.
-            if guards_spawn and exc.errno in (
-                errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.EPERM, errno.ENOEXEC,
-            ):
-                _restore_unstarted_upload(cache, saved)
-            raise
 
 
 def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, resource,
