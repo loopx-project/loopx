@@ -3575,3 +3575,20 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   current-C1 实际组合；不证明完整 process／network 闭包、自然进程
   drain、实测 overhead 或完整成本收益、真实模型采用、完整 D2/D5、R1/M3、
   Goal 完成或 C1 默认切换。保留既有 checkpoints、失败、预算和验收要求。
+
+
+### 2026-11-16 — 独立发行包的生命周期命令到达原 owner
+
+- **缺口：**独立 Core 已包含原 Goal activation 实现，但 selected CLI loading
+  未选入 `goal-lifecycle`。支持的 stop／resume 请求在到达 owner 前，落入有意
+  省略的完整 CLI。
+- **增量：**仅选入既有命令、registrar 与 handler。Actor、source identity、
+  expected fingerprint、preview、partial-write 读回与错误继续由原 activation
+  service 和 typed state owner 持有。无关命令及顶层 help 保持 lazy loading；
+  App 与消息控制继续使用既有 owner。
+- **源码证据：**仅加载命令 owner 的 help、完整 parser 对照、源码 stop／resume、
+  anonymous 与 stale-fingerprint 拒绝回归，保护 V2/V3 入口可达性及普通 CLI
+  parity。计划 activation 的时间戳独立校验，不在不同调用之间比较相等。
+- **边界：**本次是源码接线修复。Installed Core 与组合资格、被中断原 Task 的
+  恢复、完整 context／closure、真实模型、成本、完整 R1/M3 及 C1 cutover 仍是
+  独立验收。

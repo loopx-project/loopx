@@ -4619,3 +4619,23 @@ view shows its independently checked result in the same conversation.
   overhead or complete-cost benefit, actual-model adoption, full D2/D5,
   R1/M3, Goal completion or C1 default cutover. Preserve earlier checkpoints,
   failures, budgets and acceptance requirements.
+
+
+### 2026-11-16 — Standalone lifecycle commands reach the existing owner
+
+- **Gap:** standalone Core bundled the existing Goal activation implementation
+  but omitted `goal-lifecycle` from selected CLI loading. A supported stop/resume
+  request fell through to the intentionally absent full CLI before reaching its
+  owner.
+- **Delta:** select only the existing command, registrar and handler. Actor,
+  source identity, expected fingerprint, preview, partial-write readback and
+  errors remain on the original activation service and typed state owner.
+  Unrelated commands and top-level help retain lazy loading; App and messaging
+  controls retain their existing owner.
+- **Source evidence:** owner-only command help, complete-parser comparison,
+  source stop/resume and anonymous/stale-fingerprint refusal regressions protect
+  V2/V3 reachability and ordinary CLI parity. Planned activation timestamps are
+  validated independently rather than compared across separate invocations.
+- **Boundary:** this is a source wiring repair. Installed Core and composition
+  qualification, interrupted original-Task recovery, complete context/closure,
+  actual models, costs, full R1/M3 and C1 cutover remain separate acceptance.
