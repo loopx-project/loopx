@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import textwrap
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 
@@ -11,6 +13,10 @@ from loopx.configure_goal import configure_goal
 from loopx.control_plane.turn_driver import codex_cli, codex_operation_host
 from loopx.global_registry import sync_project_registry_to_global
 from tests.control_plane.test_codex_operation_launch import _bindings, _cli, _fixture
+from tests.control_plane.host_process_fixture import (
+    WAIT_FOR_FIXTURE_LEASE_RELEASE,
+    expect_lease_release_after_dispatch,
+)
 from tests.test_loopx_turn_codex_cli import _fake_codex
 
 
@@ -154,7 +160,7 @@ def test_native_launch_rechecks_same_todo_after_planning(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("change", ["unchanged", "text", "renew_lease", "replace_lease"])
+@pytest.mark.parametrize("change", ["unchanged", "text", "renew_lease", "replace_lease", "release_during_dispatch"])
 def test_stdio_retry_checks_original_task_before_launch(tmp_path, monkeypatch, provider, change):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
@@ -166,7 +172,7 @@ def test_stdio_retry_checks_original_task_before_launch(tmp_path, monkeypatch, p
     project, runtime, workspace, registry = fixture._write_fixture(tmp_path, turn_count=2)
     state = project / ".codex/goals" / fixture.GOAL_ID / "ACTIVE_GOAL_STATE.md"
     todos = parse_active_state_todos(state.read_text(), state_path=state, item_limit=None)
-    uses_lease = change in {"renew_lease", "replace_lease"}
+    uses_lease = change in {"renew_lease", "replace_lease", "release_during_dispatch"}
     initialize_canonical_authority(runtime, fixture.GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID,
             handoff_mode="hard_lease" if uses_lease else "soft_claim",
@@ -183,6 +189,7 @@ def run_dsh_turn(**options):
     marker.write_text("1" if first else "2")
     if first:
         raise TimeoutError("Fixture failed before producing a result")
+{textwrap.indent(WAIT_FOR_FIXTURE_LEASE_RELEASE, "    ")}
     (workspace / {fixture.MARKER_NAME!r}).write_text({fixture._marker_value(1)!r})
     return json.dumps({{"result_kind": "validated_progress", "classification": "checked_work",
         "summary": "The original work passed independent validation.", "next_action": "Continue.",
@@ -232,7 +239,13 @@ def run_dsh_turn(**options):
         replacement = lease("acquire", "replacement-attempt", released["version"], "--ttl-seconds", "300")
         assert replacement["lease_epoch"] > original["lease_epoch"]
     recovery = [*argv, "--resume-turn-key", first["resume_turn_key"]]
-    code, result = fixture._run_cli([*recovery, "--retry-failed-turn"])
+    dispatch = nullcontext()
+    if change == "release_during_dispatch":
+        dispatch = expect_lease_release_after_dispatch(monkeypatch, operation="turn_external_host_launch",
+            registry=registry, runtime=runtime, goal_id=fixture.GOAL_ID, todo_id=fixture.TODO_ID,
+            lease=original, dispatch_marker=marker)
+    with dispatch:
+        code, result = fixture._run_cli([*recovery, "--retry-failed-turn"])
     refused = change in {"text", "replace_lease"}
     if refused:
         assert code == 1 and result["error_code"] == "current_turn_work_changed", result

@@ -11,11 +11,12 @@ from ...configuration_transaction import configuration_payload_revision
 from ...file_lock import (
     cross_runtime_lock_witness,
     exclusive_cross_runtime_file_lock,
+    exclusive_mutation_file_lock,
 )
 from .. import compact_control_plane_policy
 from ..agents.runtime_model import agent_runtime_model_for_goal
 from ..agents.work_mode import agent_work_mode_for_goal
-from ..coordination.shadow_management import runtime_artifact_lock_target
+from ..coordination.shadow_management import runtime_artifact_lock_target, shadow_maintenance_lock_target
 from ..effect_runtime import (
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
@@ -351,6 +352,7 @@ class FirstPartyHostGoalAdmission:
     launch_decision_reader: Callable[[Path], Mapping[str, Any]] | None = None
     legacy_running_authority_sha256: str | None = None
     agent_id: str | None = None
+    launch_work_runtime_root: Path | None = None
 
     @classmethod
     def for_plan(
@@ -444,7 +446,7 @@ class FirstPartyHostGoalAdmission:
         return self.source_profile
 
     def with_launch_decision(
-        self, reader: Callable[[Path], Mapping[str, Any]],
+        self, reader: Callable[[Path], Mapping[str, Any]], *, work_runtime_root: Path | None = None,
     ) -> FirstPartyHostGoalAdmission:
         """Bind a legacy Turn's existing read-only quota owner to launch.
 
@@ -460,6 +462,7 @@ class FirstPartyHostGoalAdmission:
             return self
         return replace(
             self, launch_decision_reader=reader,
+            launch_work_runtime_root=work_runtime_root,
             legacy_source_admission=(self.legacy_source_admission.with_launch_decision(reader)
                 if self.legacy_source_admission is not None else None),
         )
@@ -556,7 +559,7 @@ class FirstPartyHostGoalAdmission:
 
     @contextmanager
     def launch_lifetime(self, *, operation: str) -> Iterator[None]:
-        """Recheck the original launch authority under its existing writer lock.
+        """Keep the original Goal and bound work current through dispatch.
 
         Legacy registries have no exact Goal instance identity. Their original
         byte witness can reject stale admission without promoting an alias to
@@ -564,16 +567,29 @@ class FirstPartyHostGoalAdmission:
         Turn binding supplies its full current admission check. This lifecycle
         witness alone does not certify quota/health. Hold only through dispatch.
         """
+        work_root = self.launch_work_runtime_root
         guard = (
             self.current_lifetime(operation=operation)
             if self.source_profile
-            else self._legacy_lifetime(operation=operation, launch=True)
+            else self._legacy_lifetime(operation=operation, launch=True,
+                                       registry_lock_timeout=0.0 if work_root is not None else None)
         )
         with ExitStack() as scope:
             try:
+                if work_root is not None:
+                    # Canonical Todo and lease writers share this marker. Hold
+                    # it from the live decision until the transport dispatches.
+                    scope.enter_context(exclusive_mutation_file_lock(
+                        shadow_maintenance_lock_target(work_root, self.goal_id),
+                        operation=operation,
+                    ))
                 scope.enter_context(guard)
             except FirstPartyHostRuntimeRejected as exc:
                 raise FirstPartyHostLaunchRejected(exc.code) from exc
+            except OSError as exc:
+                if work_root is None:
+                    raise
+                raise FirstPartyHostLaunchRejected("goal_authority_unavailable") from exc
             yield
 
     def require_running(self, *, operation: str) -> None:
@@ -589,17 +605,22 @@ class FirstPartyHostGoalAdmission:
             raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
 
     @contextmanager
-    def _legacy_lifetime(self, *, operation: str, launch: bool) -> Iterator[None]:
+    def _legacy_lifetime(
+        self, *, operation: str, launch: bool, registry_lock_timeout: float | None = None,
+    ) -> Iterator[None]:
         with ExitStack() as scope:
             if self.legacy_source_admission is not None:
                 # Activation writes source then global projection under these
                 # same locks. A failed mirror sync must not hide a source stop.
                 scope.enter_context(self.legacy_source_admission._legacy_lifetime(
-                    operation=operation, launch=launch,
+                    operation=operation, launch=launch, registry_lock_timeout=registry_lock_timeout,
                 ))
             try:
+                # Registry administration can already hold this lock before
+                # requesting the canonical marker. Never wait in that inverse
+                # order when the bound work guard already holds the marker.
                 transaction = scope.enter_context(project_registry_transaction(
-                    self.registry_path, operation=operation,
+                    self.registry_path, operation=operation, timeout_seconds=registry_lock_timeout,
                 ))
             except (OSError, TypeError, ValueError) as exc:
                 raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc

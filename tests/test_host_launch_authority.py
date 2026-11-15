@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -30,6 +31,10 @@ from loopx.control_plane.turn_driver import codex_cli, codex_operation_host
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from loopx.control_plane.turn_driver import host_process_transport
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.host_process_fixture import (
+    WAIT_FOR_FIXTURE_LEASE_RELEASE,
+    expect_lease_release_after_dispatch,
+)
 from tests.control_plane.test_effect_turn_live_quota_decision import (
     _material_review_urgency,
     _turn_start_dispatch,
@@ -194,7 +199,8 @@ def _host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation_tools: bool
             f"pathlib.Path({str(native_start)!r}).write_text('started')", 1,
         ).replace(
             'elif method == "turn/start":', 'elif method == "turn/start":\n'
-            f"        pathlib.Path({str(turn_start)!r}).write_text('started')", 1,
+            f"        pathlib.Path({str(turn_start)!r}).write_text('started')\n"
+            + textwrap.indent(WAIT_FOR_FIXTURE_LEASE_RELEASE.rstrip(), "        "), 1,
         ))
         executable.chmod(0o700)
     else:
@@ -202,6 +208,8 @@ def _host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation_tools: bool
         executable.write_text(executable.read_text().replace(
             "args = sys.argv[1:]",
             f"pathlib.Path({str(native_start)!r}).write_text('started')\nargs = sys.argv[1:]", 1,
+        ).replace(
+            "turn_key = re.search", WAIT_FOR_FIXTURE_LEASE_RELEASE + "\nturn_key = re.search", 1,
         ))
         monkeypatch.setenv("FAKE_CODEX_LOG", str(turn_start))
     arguments = ["--codex-bin", str(executable)]
@@ -352,7 +360,7 @@ def test_first_normal_turn_with_declared_state_needs_no_global_registry(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("operation_tools", [False, True])
-@pytest.mark.parametrize("change", ["renew", "replace"])
+@pytest.mark.parametrize("change", ["renew", "replace", "release_during_dispatch"])
 def test_actual_launch_preserves_original_task_lease_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, operation_tools: bool, change: str,
 ):
@@ -368,6 +376,16 @@ def test_actual_launch_preserves_original_task_lease_generation(
         return payload["lease"]
 
     original = lease("acquire", "first-generation", 0, "--ttl-seconds", "300")
+    if change == "release_during_dispatch":
+        operation = "codex_operation_turn_start" if operation_tools else "codex_cli_host_launch"
+        with expect_lease_release_after_dispatch(monkeypatch, operation=operation,
+            registry=registry, runtime=runtime, goal_id=GOAL, todo_id="todo_fixture0001",
+            lease=original, dispatch_marker=turn_start,
+        ):
+            code, result = _run(registry, runtime, project, host_arguments)
+        assert native_start.exists() and turn_start.exists(), result
+        assert code == 0 and result["status"] == ("stopped" if operation_tools else "committed"), result
+        return
     owner = codex_operation_host if operation_tools else codex_cli
     prepare_input = owner.prepare_codex_cli_input
     changes = []
@@ -405,6 +423,36 @@ def test_actual_launch_preserves_original_task_lease_generation(
     else:
         assert code == 0 and result["status"] == ("stopped" if operation_tools else "committed"), result
         assert native_start.exists() and turn_start.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_busy_registry_refuses_bound_dispatch_and_retains_original_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    arguments, native_start, turn_start = _host(tmp_path, monkeypatch, False)
+    original = FirstPartyHostGoalAdmission.launch_lifetime
+
+    @contextlib.contextmanager
+    def hold_registry(admission, *, operation):
+        registry_writer = (project_registry_transaction(registry, operation="synthetic_registry_writer")
+                           if operation == "codex_cli_host_launch" else contextlib.nullcontext())
+        with registry_writer, original(admission, operation=operation):
+            yield
+
+    with monkeypatch.context() as patch:
+        patch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", hold_registry)
+        code, result = _run(registry, runtime, project, arguments)
+    assert code == 1 and result["error_code"] == "goal_authority_unavailable", result
+    assert result["host_failure"]["kind"] == "contract_rejected", result
+    assert not result["effects"]["host_invoked"] and not native_start.exists() and not turn_start.exists()
+    _assert_no_settlement(runtime, result)
+
+    code, retry = _run(registry, runtime, project, arguments, resume_key=result["resume_turn_key"])
+    assert code == 0 and retry["status"] == "committed", retry
+    assert retry["resume_turn_key"] == result["resume_turn_key"] and turn_start.exists()
+    assert retry["effects"]["quota_spent"] is True, retry
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

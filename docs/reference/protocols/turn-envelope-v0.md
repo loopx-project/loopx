@@ -646,9 +646,12 @@ current complete contract must still match the original task body, required
 write scopes and required capabilities. Work under a hard lease must also keep
 the original lease's idempotency key. Renewing that lease or updating progress
 notes preserves the binding. A mismatch returns `current_turn_work_changed`
-before dispatching the model. For stdio,
-the shared process supervisor holds the launch guard through spawn. The
-journal records the refused attempt and its original capture remains readable.
+before dispatching the model. For a bound Todo, Host launch holds the canonical
+Todo and lease writers' lock from the current decision through process spawn
+or publication of the in-process `turn/start` request. Lease writers can
+proceed once dispatch returns. If the current registry is busy while the
+canonical lock is held, the launch fails closed without waiting on the registry.
+The journal records the refused attempt and its original capture remains readable.
 Use a fresh eligible Turn for the changed task. Keep original captures and
 receipts for readback. Reading detail does not invoke quota or spend a slot. Current source
 admission, cancellation, workspace/lease and mutation checks retain their

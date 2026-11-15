@@ -3006,6 +3006,15 @@ lease rejects the initial dispatch and explicit retry before model work or
 settlement. The stdio adapter also refuses to spawn on a retry after replacement.
 Renewal permits dispatch on each of those paths.
 
+The current check and dispatch share the canonical Todo and lease writers'
+lock. For the ordinary Codex CLI, the operation Host and the external stdio
+retry, an independent lease release must wait if it arrives after the current
+check and before the process spawn or `turn/start` handoff. Release can finish
+while Host work is running. These races exercise the real File and SQLite
+owners with a synthetic Host. A registry lock held by another operation
+refuses dispatch before sending the request and leaves the original attempt
+available for retry.
+
 File/SQLite cases exercise unchanged retries, capability and task changes,
 recovery in the original session, historical formats, and subprocess stdin.
 Visible Codex CLI JSON follows the complete source through the generated
