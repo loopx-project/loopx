@@ -503,6 +503,34 @@ test("first user-gate link requires one consistent decision scope without consum
   }
 });
 
+test("first user-gate link rejects a target that declares another prerequisite without consuming retry", async () => {
+  const {store, request} = await boundUserAction({task_class: "user_gate", blocks_agent: "agent-a"});
+  const head = await store.loadAuthority();
+  if (head.status !== "loaded") assert.fail("missing fixture");
+  const records = [...head.head.todos as Record<string, unknown>[],
+    todo({todo_id: "todo_gate_b", role: "user", task_class: "user_gate", claimed_by: null, bound_agent: "agent-a",
+      blocks_agent: "agent-a", created_by: "agent-a"}),
+    todo({todo_id: "todo_waits_a", status: "blocked", resume_when: "todo_done:todo_a"}),
+    todo({todo_id: "todo_waits_b", status: "blocked", resume_when: "todo_done:todo_gate_b"}),
+  ].sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
+  await store.commitAuthority({operation_id: "seed-prerequisites", expected_provider_revision: head.provider_revision,
+    events: [], receipts: [], next_projection: {...head.head, todos: records,
+      todo_read_model: coordinationTodoReadModel(records, TODO_DOMAIN_READ_RECORD_SCHEMA)}});
+  const before = await store.loadAuthority();
+  if (before.status !== "loaded") assert.fail("missing fixture");
+  const edit = {...request, expected_provider_revision: before.provider_revision, patch: {note: "Link gate A"}};
+  for (const dry_run of [true, false]) {
+    const rejected = await executeCoordinationTodoUpdate(store, {...edit, dry_run,
+      planning_intent: {unblocks_todo_id: "todo_waits_b"}});
+    assert.equal(rejected.reason_code, "user_gate_link_target_invalid", JSON.stringify(rejected));
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(edit.operation_id)).status, "missing");
+  }
+  const valid = {...edit, planning_intent: {unblocks_todo_id: "todo_waits_a"}};
+  assert.equal((await executeCoordinationTodoUpdate(store, valid)).status, "applied");
+  assert.equal((await executeCoordinationTodoUpdate(store, valid)).status, "replayed");
+});
+
 test("user-gate linking cannot retarget, approve, bypass binding or consume execution proof", async () => {
   const cases: {facts?: Record<string, unknown>; input?: Partial<CoordinationTodoUpdateInput>; leases?: Record<string, unknown>[]}[] = [
     {input: {actor_agent_id: "agent-b"}}, {input: {actor_agent_id: null}},

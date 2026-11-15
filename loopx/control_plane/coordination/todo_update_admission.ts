@@ -6,6 +6,7 @@ import {leaseRepositoryRejection, ownerAdministrativeRepositoryRejection} from "
 import {isExploreReferenceAppend} from "../todos/field_update.ts";
 import {isInactiveUserCompletionTarget} from "../todos/user_completion.ts";
 import {decisionScopeRelation} from "../todos/decision_scope.ts";
+import {todoResumeDependencyId} from "../todos/resume_condition.ts";
 import {acceptanceRestoration} from "./todo_acceptance_restoration.ts";
 import {monitorMutationRejection} from "./todo_monitor_cycle.ts";
 import type {JsonObject} from "../effect_program.ts";
@@ -253,6 +254,13 @@ export function todoUpdateAdmissionRejection(
         if (relation === null ? awaitsScopedDecision : relation.state !== "gate_covers_action") {
           return reject("user_gate_link_target_invalid",
             "Initial gate link requires a target whose required decision scopes are covered by this gate's decision scope, or neither side to declare one");
+        }
+        // A target that already declares another Todo as its exact prerequisite waits
+        // for that one; this gate cannot become its dependency by being linked first.
+        const prerequisite = todoResumeDependencyId(target.resume_when);
+        if (prerequisite !== null && prerequisite !== input.todo_id) {
+          return reject("user_gate_link_target_invalid",
+            "Initial gate link requires a target that does not already declare another Todo as its resume prerequisite");
         }
       }
     } catch (error) {

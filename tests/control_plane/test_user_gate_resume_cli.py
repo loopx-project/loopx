@@ -21,7 +21,7 @@ def tmp_path(tmp_path_factory):
 @pytest.mark.parametrize("invalid_target", [
     "missing", "user", "other_goal", "other_lane", "unclaimed",
     "completed", "cancelled", "archived", "superseded", "deferred",
-    "other_scope", "no_scope",
+    "other_scope", "no_scope", "other_prerequisite",
 ])
 def test_gate_first_link_rejects_invalid_target_without_consuming_link(
     tmp_path, monkeypatch, provider, dry_run, invalid_target,
@@ -60,6 +60,14 @@ def test_gate_first_link_rejects_invalid_target_without_consuming_link(
         other = ("--required-decision-scope", "resource:action:inventory_file") if invalid_target == "other_scope" else ()
         invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
             "--claimed-by", "agent-a", *other, "--text", "Same-lane work outside this decision")["todo_id"]
+    elif invalid_target == "other_prerequisite":
+        # Same lane and same decision scope, but it already declares another gate as its prerequisite.
+        other_gate = cli("todo", "add", "--role", "user", "--task-class", "user_gate", "--agent-id", "agent-a",
+            "--decision-scope", "resource:action:prices_file", "--text", "Provide the second price list")
+        invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
+            "--claimed-by", "agent-a", "--status", "blocked",
+            "--required-decision-scope", "resource:action:prices_file",
+            "--resume-when", f"todo_done:{other_gate['todo_id']}", "--text", "Use the second price list")["todo_id"]
     elif invalid_target in {"completed", "cancelled", "archived", "superseded", "deferred"}:
         invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
             "--claimed-by", "agent-a", "--text", "Previous work outside this decision")["todo_id"]
