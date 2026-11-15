@@ -169,7 +169,8 @@ def _vision_review_request(index):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_nested_only_turn_work_survives_quota_and_history_readback(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("outer_goal", [True, False], ids=["explicit-goal", "index-goal"])
+def test_nested_only_turn_work_survives_quota_and_history_readback(tmp_path, monkeypatch, provider, outer_goal):
     from test_replan_successor_guard_reentry import _fixture, _guard, AGENT, GOAL
 
     call, _, index = _fixture(tmp_path, monkeypatch, provider)
@@ -179,8 +180,11 @@ def test_nested_only_turn_work_survives_quota_and_history_readback(tmp_path, mon
     work["delivery_outcome"] = "outcome_progress"
     work.pop("progress_observation")
     work.pop("turn_instance_id")
+    if not outer_goal:
+        work.pop("goal_id")
     conflicted = {**work, "turn_instance_id": "turn-unrelated"}
-    _append_runs(index, decision, work, conflicted, trigger)
+    foreign = {**work, "goal_id": "other-goal", "health_check": "Work from a different Goal."}
+    _append_runs(index, decision, work, conflicted, foreign, trigger)
     before = index.read_bytes()
 
     obligation = _guard(call, "turn-nested-history")["autonomous_replan_obligation"]
@@ -194,6 +198,7 @@ def test_nested_only_turn_work_survives_quota_and_history_readback(tmp_path, mon
     historical = {key: value for key, value in work.items() if key != "settlement_identity"}
     context = project_replan_context(goal_id=GOAL, agent_id=AGENT, runs=[historical])
     old_ref = context["evidence"][0]["evidence_ref"]
+    assert work_ref != old_ref
     for ref in (work_ref, old_ref):
         evidence = call("history", "--goal-id", GOAL, "--agent-id", AGENT, "--evidence-ref", ref)["evidence"]
         assert evidence["evidence_ref"] == ref
@@ -202,7 +207,13 @@ def test_nested_only_turn_work_survives_quota_and_history_readback(tmp_path, mon
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_foreign_decision_effect_cannot_consume_work_in_quota(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("identity_case", [
+    "decision-effect", "missing-schema", "unknown-schema", "malformed-identity", "non-todo-binding", "legacy-null",
+    "v1-todo", "v1-conflicting-binding-id",
+])
+def test_settlement_identity_controls_work_attribution_in_quota(tmp_path, monkeypatch, provider, identity_case):
+    from loopx.control_plane.effect_program import SettlementIdentity
+
     from test_replan_successor_guard_reentry import _fixture, _guard, AGENT, GOAL
 
     call, _, index = _fixture(tmp_path, monkeypatch, provider)
@@ -220,27 +231,68 @@ def test_foreign_decision_effect_cannot_consume_work_in_quota(tmp_path, monkeypa
     subsequent.pop("progress_observation")
     subsequent["delivery_outcome"] = "outcome_progress"
 
-    # Establish the decision reference using an otherwise identical valid row.
-    # The effect lives in the private source facts and never changes that ref.
     control = project_replan_context(goal_id=GOAL, agent_id=AGENT,
         runs=[original, work, later_decision, subsequent], history_newest_first=False)
     control_follow = control["decision_followthrough"]
-    valid_reference = control_follow["previous_decision"]["evidence_ref"]
     assert control_follow["work_result_use"]["recorded_followthrough_count"] == 1
-    later_decision["settlement_identity"] = {**later_decision["settlement_identity"],
-        "effect_id": f"other-goal:{AGENT}:todo-a:turn-latest"}
+
+    if identity_case == "decision-effect":
+        # The effect is a private source fact and does not change the decision reference.
+        reference = control_follow["previous_decision"]["evidence_ref"]
+        later_decision["settlement_identity"] = {**later_decision["settlement_identity"],
+            "effect_id": f"other-goal:{AGENT}:todo-a:turn-latest"}
+    else:
+        # Resolve work with no usable Todo identity through the historical display-based reference.
+        legacy = {key: value for key, value in subsequent.items() if key != "settlement_identity"}
+        reference = project_replan_context(goal_id=GOAL, agent_id=AGENT, runs=[legacy])["evidence"][0]["evidence_ref"]
+        identity = {**subsequent["settlement_identity"], "effect_id": f"other-goal:{AGENT}:todo-b:turn-b"}
+        if identity_case == "missing-schema":
+            identity.pop("schema_version")
+        elif identity_case == "unknown-schema":
+            identity["schema_version"] = "unsupported"
+        elif identity_case == "malformed-identity":
+            identity = identity["effect_id"]
+        elif identity_case == "non-todo-binding":
+            identity = SettlementIdentity(GOAL, AGENT, None, "turn-b", replan_obligation_id="replan-other").as_dict()
+        elif identity_case in {"v1-todo", "v1-conflicting-binding-id"}:
+            identity = {**subsequent["settlement_identity"], "schema_version": "quota_settlement_identity_v1",
+                "binding_kind": "todo", "binding_id": "todo-b" if identity_case == "v1-todo" else "other-todo"}
+        else:
+            identity = None
+        subsequent["settlement_identity"] = identity
     _append_runs(index, later_decision, subsequent, trigger)
     before = index.read_bytes()
 
-    obligation = _guard(call, "turn-foreign-decision")["autonomous_replan_obligation"]
+    obligation = _guard(call, "turn-conflicting-settlement")["autonomous_replan_obligation"]
     follow = obligation["replan_context"]["decision_followthrough"]
-    assert follow["previous_decision"]["turn_instance_id"] == "turn-old"
-    assert follow["work_result_use"]["recorded_followthrough_count"] == 0
-    assert [result["evidence_ref"] for result in follow["work_result_use"]["unresolved"]] == [pending_ref]
+    assert follow["previous_decision"]["turn_instance_id"] == (
+        "turn-old" if identity_case == "decision-effect" else "turn-latest"
+    )
+    accepted = identity_case in {"legacy-null", "v1-todo"}
+    assert follow.get("ordinary_work", {}).get("recorded_count", 0) == (
+        1 if accepted or identity_case == "decision-effect" else 0
+    )
+    use = follow["work_result_use"]
+    assert use["recorded_followthrough_count"] == int(accepted)
+    if accepted:
+        link = use["recorded_followthrough"][0]
+        assert link["result_evidence_ref"] == pending_ref
+        followup_ref = link["work_evidence_ref"]
+        assert (followup_ref == reference) == (identity_case == "legacy-null")
+        assert [result["evidence_ref"] for result in use["unresolved"]] == [followup_ref]
+        credited = call("history", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--evidence-ref", followup_ref)["evidence"]
+        assert credited["evidence_ref"] == followup_ref
+    else:
+        assert [result["evidence_ref"] for result in use["unresolved"]] == [pending_ref]
     historical = call("history", "--goal-id", GOAL, "--agent-id", AGENT,
-        "--evidence-ref", valid_reference)["evidence"]
-    assert historical["evidence_ref"] == valid_reference
-    assert historical["turn_instance_id"] == "turn-latest"
+        "--evidence-ref", reference)["evidence"]
+    assert historical["evidence_ref"] == reference
+    if identity_case == "decision-effect":
+        assert historical["turn_instance_id"] == "turn-latest"
+    else:
+        assert historical["todo_id"] == "todo-b"
+        assert historical["health_check"] == subsequent["health_check"]
     assert index.read_bytes() == before
 
 

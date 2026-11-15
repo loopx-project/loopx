@@ -88,8 +88,12 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
             # Transport facts, not a Python eligibility decision. Complete-text
             # digests prevent a shared display prefix from erasing distinct tails.
             # This private wire metadata is excluded from public reference identity.
-            source: dict[str, Any] = {key: run.get(key) for key in (
-                "goal_id", "agent_id", "todo_id", "turn_instance_id")}
+            source: dict[str, Any] = {
+                "goal_id": run_goal,
+                "agent_id": run_agent,
+                "todo_id": run.get("todo_id"),
+                "turn_instance_id": run.get("turn_instance_id"),
+            }
             # Facts only: the typed replan owner qualifies the prior decision
             # and orders subsequent observations. Do not classify research
             # progress or infer adoption from prose in this transport codec.
@@ -110,10 +114,16 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
                 source["replan_obligation_id"] = run.get("replan_obligation_id")
             for key, fields in (("settlement_identity", (
                 "schema_version", "goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id",
-                *(("binding_kind", "binding_id", "replan_obligation_id") if include_decisions else ()))),
+                "binding_kind", "binding_id", "replan_obligation_id", "request_subject")),
                 ("quota_spend_commit", ("schema_version", "effect_id"))):
                 value = run.get(key)
-                source[key] = {field: value.get(field) for field in fields} if isinstance(value, Mapping) else None
+                if isinstance(value, Mapping):
+                    source[key] = {field: value[field] for field in fields if field in value}
+                elif key == "settlement_identity" and value is not None:
+                    # Preserve the presence of a malformed identity without forwarding its contents.
+                    source[key] = {}
+                else:
+                    source[key] = None
             for key in ("recommended_action", "health_check", "delivery_outcome"):
                 value = run.get(key)
                 source[key + "_digest"] = hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) else None

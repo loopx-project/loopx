@@ -1,6 +1,6 @@
 /** Bounded evidence for the existing replan boundary; no settlement authority. */
 import {createHash} from "node:crypto";
-import {settlementIdentityPayload, SETTLEMENT_IDENTITY_SCHEMA_VERSION,
+import {settlementIdentityFromPlan, settlementIdentityPayload, SETTLEMENT_IDENTITY_SCHEMA_VERSION,
   SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION, type JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
@@ -47,7 +47,9 @@ function sameSourceDigest(left: JsonObject, right: JsonObject, field: string): b
 function recordedTodoIdentity(row: JsonObject): string[] | null {
   const source = objectOrNull(row._source_facts);
   const identity = objectOrNull(source?.settlement_identity);
-  if (!source || identity?.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION) return null;
+  if (!source || !identity ||
+      (identity.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION &&
+       (identity.schema_version !== SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION || identity.binding_kind !== "todo"))) return null;
   const keys = ["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id"];
   if (keys.some(key => typeof identity[key] !== "string" || !identity[key])) return null;
   if (keys.slice(0, 3).some(key => identity[key] !== source[key] || identity[key] !== row[key]) ||
@@ -57,14 +59,16 @@ function recordedTodoIdentity(row: JsonObject): string[] | null {
 
 function hasConflictingTodoSettlement(row: JsonObject): boolean {
   const source = objectOrNull(row._source_facts);
-  const identity = objectOrNull(source?.settlement_identity);
-  if (identity?.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION ||
-      !(row.todo_id || source?.todo_id || identity.todo_id)) return false;
-  const recorded = recordedTodoIdentity(row);
-  if (!recorded) return true;
-  const [goal_id, agent_id, todo_id, turn_instance_id, effect_id] = recorded;
-  const expected = settlementIdentityPayload({goal_id, agent_id, todo_id, turn_instance_id});
-  return expected.todo_id !== todo_id || expected.effect_id !== effect_id;
+  const declared = source?.settlement_identity;
+  if (declared == null) return false;
+  const identity = objectOrNull(declared);
+  if (identity?.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION &&
+      identity?.schema_version !== SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION) return true;
+  if (!(row.todo_id || source?.todo_id || identity.todo_id)) return false;
+  if (!recordedTodoIdentity(row)) return true;
+  const decoded = settlementIdentityFromPlan({settlement_plan: {identity}});
+  return !!decoded.failure || decoded.value.binding_kind !== "todo" ||
+    decoded.value.todo_id !== identity.todo_id || decoded.value.effect_id !== identity.effect_id;
 }
 
 function accountingMatchKey(row: JsonObject): string | null {
