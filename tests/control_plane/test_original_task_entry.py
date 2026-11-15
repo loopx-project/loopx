@@ -70,6 +70,7 @@ def cart_host(environment, monkeypatch):
         f'        mode = __import__("pathlib").Path({str(project / "execute-native")!r}).read_text()\n'
         '        if mode == "valid":\n'
         f'            assert request["params"].get("sandboxPolicy") == {{"type": "workspaceWrite", "writableRoots": [{str(project.resolve())!r}], "networkAccess": False, "excludeTmpdirEnvVar": True, "excludeSlashTmp": True}}\n'
+        f'            assert request["params"].get("runtimeWorkspaceRoots") == [{str(project.resolve())!r}]\n'
         f'            path = __import__("pathlib").Path({str(project / "cart.py")!r})\n'
         '            cart = path.read_text().replace("    if subtotal > 10_000:", "    if not prices or subtotal >= 10_000:")\n'
         '            path.write_text(cart)\n'
@@ -202,6 +203,10 @@ def test_original_http_task_reuses_requested_checker_and_session(environment, ca
     assert len(native_calls) == (1 if mode in {"valid", "failed", "read-only"} else 0)
     if native_calls:
         assert native_calls[0]["params"]["sandboxPolicy"]["type"] == ("readOnly" if mode == "read-only" else "workspaceWrite")
+        if mode == "read-only":
+            assert "runtimeWorkspaceRoots" not in native_calls[0]["params"]
+        else:
+            assert native_calls[0]["params"]["runtimeWorkspaceRoots"] == [str(project.resolve())]
     assert controller.adapters[sid].session.sandbox == "read-only"
     assert controller.adapters[sid].session.execution_mode is False
     assert not any(row.get("method") == "thread/start" for row in calls)

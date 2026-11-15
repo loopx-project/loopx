@@ -301,6 +301,7 @@ class ChatRuntimeController:
         self.session_queue_workers: set[str] = set()
         self.session_queue_threads: dict[str, threading.Thread] = {}
         self.session_queue_wakeups: set[str] = set()
+        self.original_task_action_store = None
         self.closed = threading.Event()
         from .chat_loopx_mode import ChatLoopXMode
         self.loopx_mode = ChatLoopXMode(self)
@@ -1553,6 +1554,7 @@ class ChatRuntimeController:
                 return
             if session_id in self.session_queue_workers:
                 self.session_queue_wakeups.add(session_id)
+                self.turn_release_wakeup.notify()
                 return
             worker = threading.Thread(
                 target=self._drain_session_queue,
@@ -1567,123 +1569,13 @@ class ChatRuntimeController:
             self.session_queue_threads[session_id] = worker
             worker.start()
 
-    def _drain_session_queue(
-        self,
-        *,
-        session_id: str,
-        work_dir: Path,
-        objective: str,
-    ) -> None:
-        try:
-            while not self.closed.is_set():
-                session = self.store.load_session(session_id)
-                if (
-                    self.closed.is_set()
-                    or session is None
-                    or session.get("status") == "closed"
-                    or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED
-                ):
-                    return
-                turn = None
-                active_turn_id = str(session.get("active_turn_id") or "")
-                if active_turn_id:
-                    try:
-                        self.recover_exited_turn(session_id, active_turn_id)
-                    except OSError:
-                        # Storage can still be unavailable. Retry only the
-                        # non-executing lifecycle repair, never the old input.
-                        self.closed.wait(0.25)
-                        continue
-                    active = self.store.load_turn(session_id, active_turn_id)
-                    if (active and active.get("status") == "queued" and "_acceptance" not in active
-                            and active.get("started_at") is None and active.get("upstream_turn_id") is None
-                            and active.get("delta_count") == 0):
-                        # A crash can leave the queue claim before native
-                        # dispatch. Keep that exact claim and pass through the
-                        # normal preparation and execution fences below.
-                        turn = active
-                    else:
-                        with self.lock:
-                            attached = self.adapters.get(session_id)
-                        if attached is None or not attached.healthcheck():
-                            try:
-                                self._ensure_adapter(
-                                    session,
-                                    work_dir=work_dir,
-                                    objective=objective,
-                                )
-                            except Exception as exc:
-                                self._fail_queue_preparation(session_id, active_turn_id, exc)
-                            else:
-                                continue
-                        active = self.store.load_turn(session_id, active_turn_id)
-                        if active and active.get("status") not in TERMINAL_TURN_STATES:
-                            self.closed.wait(0.05)
-                            continue
-                        self.store.release_active_turn(session_id, active_turn_id)
-                refreshed = self.store.load_session(session_id)
-                if refreshed is None:
-                    return
-                with self.lock:
-                    self.session_queue_wakeups.discard(session_id)
-                if turn is None:
-                    turn = self.store.claim_next_queued_turn(session_id)
-                if turn is None:
-                    with self.lock:
-                        if session_id in self.session_queue_wakeups:
-                            continue
-                        worker = self.session_queue_threads.get(session_id)
-                        if worker is threading.current_thread():
-                            self.session_queue_workers.discard(session_id)
-                            self.session_queue_threads.pop(session_id, None)
-                    return
-                turn_id = str(turn["turn_id"])
-                try:
-                    if turn.get("origin") == "peer" or "collaboration_request" in turn:
-                        from .capabilities.native_chat.conversation_bindings import OriginalConversationRequests
-                        OriginalConversationRequests(self).validate_turn(session_id, turn)
-                    # An empty queue needs no provider preparation. Claim real
-                    # work first, keeping the existing enqueue/retirement fence
-                    # above and the Turn's execution/stop checks below.
-                    current = self.store.load_session(session_id)
-                    if current is None or current.get("active_turn_id") != turn_id:
-                        return
-                    adapter = self._ensure_adapter(
-                        current,
-                        work_dir=work_dir,
-                        objective=objective,
-                    )
-                    if (self.store.load_session(session_id) or {}).get("active_turn_id") != turn_id:
-                        return
-                except Exception as exc:
-                    # The claimed request still owns a terminal outcome when
-                    # workspace preparation or adapter restoration fails.
-                    self._fail_queue_preparation(session_id, turn_id, exc)
-                    continue
-                done_event = threading.Event()
-                with self.lock:
-                    self.turn_done_events[(session_id, turn_id)] = done_event
-                try:
-                    self._run_turn(
-                        session_id=session_id,
-                        turn_id=turn_id,
-                        message=str(turn.get("message") or ""),
-                        attachments=turn.get("attachments") or [],
-                        adapter=adapter,
-                        done_event=done_event,
-                    )
-                except OSError:
-                    # _run_turn has released its execution fence/done event.
-                    # A failed error checkpoint must not kill this queue worker;
-                    # the next iteration reconciles the original durable state.
-                    self.closed.wait(0.25)
-        finally:
-            with self.lock:
-                worker = self.session_queue_threads.get(session_id)
-                if worker is threading.current_thread():
-                    self.session_queue_workers.discard(session_id)
-                    self.session_queue_threads.pop(session_id, None)
-                    self.session_queue_wakeups.discard(session_id)
+    def resume_creation_requests(self) -> None:
+        from .capabilities.native_chat.creation_queue import resume_creation_requests
+        resume_creation_requests(self)
+
+    def _drain_session_queue(self, *, session_id: str, work_dir: Path, objective: str) -> None:
+        from .capabilities.native_chat.session_queue import drain_session_queue
+        drain_session_queue(self, session_id=session_id, work_dir=work_dir, objective=objective)
 
     def _fail_queue_preparation(
         self, session_id: str, turn_id: str, error: Exception,
@@ -2503,6 +2395,7 @@ class ChatRuntimeController:
 
     def close(self) -> None:
         self.closed.set()
+        self.turn_release_wakeup.notify()
         with self.lock:
             adapters = list(self.adapters.values())
             event_buffers = list(self.turn_event_buffers.values())
