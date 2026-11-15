@@ -540,10 +540,13 @@ def _publish_quota_result(
             cli_work_source = args.format == "json" and (
                 profile is SchedulerRuntimeProfile.CODEX_CLI_VISIBLE
                 or (
-                    profile is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
-                    and getattr(args, "runtime_profile", None) == profile.value
-                    and heartbeat_turn_id is not None
+                    heartbeat_turn_id is not None
                     and args.agent_id is not None
+                    and (
+                        profile is SchedulerRuntimeProfile.KIRO_CLI_VISIBLE
+                        or (profile is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
+                            and getattr(args, "runtime_profile", None) == profile.value)
+                    )
                 )
             )
             profile_source = (

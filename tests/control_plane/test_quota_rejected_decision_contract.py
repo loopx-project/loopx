@@ -33,7 +33,7 @@ from test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli", "kiro_cli", None])
 @pytest.mark.parametrize("rejection", ["missing", "capability", "reentry"])
 def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
     tmp_path, monkeypatch, provider, profile, rejection
@@ -63,11 +63,11 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--runtime-profile",
-        profile,
         "--turn-instance-id",
         turn,
     ]
+    if profile is not None:
+        args.extend(["--runtime-profile", profile])
     original = None
     if rejection == "reentry":
         rc, original = _run_cli(registry, runtime, *args, cwd=project)
@@ -134,7 +134,7 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
             assert denied["detail_ref"]["captured_decision"]["path"] == str(capture / "decision.json")
             denied = captured
         assert denied["error_code"] == "quota_action_selection_rejected"
-        ordinary_source = source == "ordinary" and profile == "generic_cli"
+        ordinary_source = source == "ordinary" and profile is None
         if ordinary_source:
             assert "schema_version" not in captured and "contract_binding" not in captured
             assert "schema_version" not in denied and "contract_binding" not in denied

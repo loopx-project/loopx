@@ -3090,3 +3090,33 @@ complete readback, loader, guard and original-capture pages together changed
 from 71.7–71.9 KB to 42.9–43.0 KB across the two backends. Every arm kept one
 heartbeat receipt and the same settlement identity. Model outcomes, selective
 read costs and actual installed adoption still need qualification.
+
+### Kiro CLI thin heartbeat uses the complete Turn source
+
+The generated Kiro activation enters the shared complete-source composer for
+JSON work with an Agent and Turn. Explicit Off puts the full decision inline.
+The visible-Goal writeback, recovery and spend retain the original Todo and
+Turn. The turnless probe keeps its compact observation. Kiro's MCP tool already
+uses the complete composer.
+
+Against the preceding candidate `3f527c468b2f`, three pairs per backend and
+delivery setting exercised the generated activation, bound guard, presentation
+readback, verified fixture result, writeback, debit and replay. The original
+Kiro captures produced by the preceding revision recovered on both backends.
+Recovery refused a mismatched Agent and settled the original Turn once. The
+CLI stdout medians include full recovery when the guard returns a reference.
+
+| Delivery / backend | Prior candidate (B) | Current (B) |
+| --- | ---: | ---: |
+| Default / File | 70,190 | 71,182 |
+| Default / SQLite | 70,252 | 71,244 |
+| Off / File | 61,578 | 61,142 |
+| Off / SQLite | 61,640 | 61,204 |
+
+A separate direct raw Off trial substituted inline complete output for the
+bounded v0 view. On the same fixture, JSON grew from 23.1 KB to 48.4–48.5 KB,
+and Markdown grew from 2.4 KB to 48.2 KB. This explicit route retains its
+bounded writer until its callers have a qualified replacement. Historical
+decoders serve unsettled original records during the supported recovery window.
+The original-quota model outcome and full-cost comparison and live Kiro
+session adoption require separate validation.

@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -4722,37 +4723,91 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
         ("opencode", "heartbeat"),
     ),
 )
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("explicit_off", [False, True], ids=["default-delivery", "delivery-off"])
 def test_host_runtime_profile_selects_spend_source_through_real_settlement(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     agent_type: str,
     expected_source: str,
+    provider: str,
+    explicit_off: bool,
 ) -> None:
-    from loopx.host_loop_activation import scheduler_command_binding_for_agent_type
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from loopx.host_loop_activation import build_host_loop_activation_packet, scheduler_command_binding_for_agent_type
 
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
-    runtime_profile = scheduler_command_binding_for_agent_type(agent_type)[
-        "runtime_profile"
-    ]
-    _initialize_fixture_authority(project, runtime)
-    prompt = build_heartbeat_prompt(
-        goal_id=GOAL_ID,
-        agent_id=AGENT_ID,
-        runtime_profile=runtime_profile,
-        thin=True,
+    runtime_profile = scheduler_command_binding_for_agent_type(agent_type)["runtime_profile"]
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    packet = build_host_loop_activation_packet(
+        agent_type=agent_type, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        registry=str(registry_path), runtime_root=str(runtime), registered_agents=[AGENT_ID],
+        available_capabilities=["shell", "filesystem_read"],
     )
+    # The installed Core may emit its own Python module launcher. Execute the
+    # generated argv in the package under test for both installation shapes.
+    environment = {**os.environ,
+                   "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.environ["PATH"]))}
+
+    def run_generated(command, *extra):
+        return subprocess.run([*shlex.split(command), *extra], cwd=project, env=environment,
+                              capture_output=True, text=True, check=False)
+
+    activation = packet["activation_input_command"]
+    if explicit_off:
+        activation += " --context-delivery off --delta-delivery off"
+    launched = run_generated(activation)
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    prompt = json.loads(launched.stdout)
+    assert prompt["ok"] is True, prompt
     turn_instance_id = f"{agent_type}-iteration-1"
     # The thin body tells the agent to mint LOOPX_TURN per iteration.
-    guard_command = (
-        prompt["quota_guard_command"]
-        .replace(shell_selected_global_registry().strip('"'), str(registry_path))
-        .replace('"${LOOPX_TURN:?}"', turn_instance_id)
-    )
+    guard_command, = (line for line in prompt["task_body"].splitlines()
+                      if " --format json quota should-run " in line)
+    guard_command = guard_command.replace('"${LOOPX_TURN:?}"', turn_instance_id)
     assert f"--runtime-profile {runtime_profile}" in guard_command
-    guard_rc, guard = _run_generated_cli(guard_command, registry_path=registry_path)
-    assert guard_rc == 0, guard
+    assert "--complete-turn" not in guard_command and "--turn-envelope" not in guard_command
+    if explicit_off:
+        assert "--context-delivery off" in guard_command and "--delta-delivery off" in guard_command
+    capture = tmp_path / "original-decision"
+    observed = run_generated(guard_command, "--decision-output-dir", str(capture))
+    assert observed.returncode == 0, observed.stdout + observed.stderr
+    guard = read_cli_policy_payload(observed.stdout, returncode=observed.returncode)
+    if explicit_off:
+        assert json.loads(observed.stdout) == guard
+    assert_complete_turn_decision(guard)
+    original = (capture / "decision.json").read_bytes()
+    assert json.loads(original) == guard
+    assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert guard["selected_todo"]["todo_id"] == TODO_ID
+    assert "context_delivery" not in guard
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
-    assert plan["identity"]["turn_instance_id"] == turn_instance_id
+    assert plan["identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+    assert plan["identity"]["todo_id"] == TODO_ID and plan["identity"]["turn_instance_id"] == turn_instance_id
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+    assert _spend_run_count(runtime) == 0
+
+    digest = sha256(original).hexdigest()
+    read_rc, recorded = _run_cli(registry_path, runtime, "quota", "context-project",
+        "--capture-file", str(capture / "decision.json"), "--capture-sha256", digest,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn_instance_id,
+        "--runtime-profile", runtime_profile, "--context-delivery", "off", "--delta-delivery", "off", cwd=project)
+    assert read_rc == 0, recorded
+    assert recorded["mode"] == "full" and recorded["capture_sha256"] == digest
+    reader = recorded["command"]
+    readback = bytearray()
+    while True:
+        result = run_generated(reader)
+        assert result.returncode == 0, result.stdout + result.stderr
+        page = json.loads(result.stdout)
+        assert page["sha256"] == digest and page["offset"] == len(readback)
+        readback.extend(page["content"].encode())
+        if page["eof"]:
+            break
+        reader = page["next_command"]
+    assert readback == original
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -4778,11 +4833,20 @@ def test_host_runtime_profile_selects_spend_source_through_real_settlement(
     assert refresh_rc == 0, refresh
     command = refresh["settlement_owed"]["command"]
     assert f"--source {expected_source}" in command
-    spend_rc, spend = _run_cli(registry_path, runtime, *shlex.split(command)[1:])
-    assert spend_rc == 0, spend
+    paid = run_generated(command)
+    assert paid.returncode == 0, paid.stdout + paid.stderr
+    spend = json.loads(paid.stdout)
     assert spend["turn_instance_id"] == turn_instance_id
     assert spend["settlement_identity"] == plan["identity"]
+    assert spend["appended"] is True
+    repeated = run_generated(command)
+    assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+    retry = json.loads(repeated.stdout)
+    assert retry["appended"] is False
+    assert retry["settlement_identity"] == plan["identity"]
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
     assert _spend_run_count(runtime) == 1
+    assert (capture / "decision.json").read_bytes() == original
 
 
 def test_todo_guard_defers_replan_obligation_created_after_admission(
