@@ -1388,6 +1388,8 @@ observed replies, not successful mutations or proved unnecessary recovery.
 Only literal simple shell argv, Python `-m loopx`, `-m loopx.cli` or
 `-m loopx.entrypoint`, and an exact
 single literal `const/await tools.exec_command/text` wrapper are recognized.
+For the quota guard, the parser can resolve a literal Turn assignment on the
+preceding line. It accepts both UTC Turn IDs and the benchmark worker's IDs.
 Compound shell, arbitrary JavaScript, indirect commands, continuation tools and
 file reads remain unassigned. Non-text content is counted as unmeasured parts.
 The byte share covers the recorded component only: injected LoopX instructions
