@@ -38,7 +38,11 @@ from .command_validation import (
     normalize_reward_memory_reflection_validation,
     reward_memory_reflection_digest,
 )
-from ..quota.turn_envelope import turn_plan_host_source
+from ..quota.turn_envelope import (
+    COMPLETE_TURN_HOST_REQUEST_SCHEMA,
+    captured_turn_host_input,
+    turn_plan_host_source,
+)
 from .driver import (
     COMPLETE_TURN_PLAN_SCHEMA_VERSION,
     selected_turn_todo, turn_host_lineage,
@@ -156,6 +160,10 @@ JournalPersist = Callable[[Mapping[str, Any]], None]
 
 def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     """Deliver the plan's original source; decode saved v0 plans as recorded."""
+    return _complete_loopx_turn_host_request(_assemble_loopx_turn_host_request(plan))
+
+
+def _assemble_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     boundary = plan.get("boundary")
     if isinstance(boundary, Mapping) and boundary.get("inspection_only") is True:
         raise ValueError("LoopX Turn CLI inspection requires the explicit run-once execution surface")
@@ -197,11 +205,29 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
 
     if configured_native_child_limit(request) is not None:
         request["turn_instance_id"] = transaction.get("turn_instance_id") or turn_key
+    return request
+
+
+def _complete_loopx_turn_host_request(request: dict[str, Any]) -> dict[str, Any]:
     if "work_contract" in request:
         from .host_candidate import complete_host_input
 
         return complete_host_input(request)
     return request
+
+
+def _build_staged_dispatch_request(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Assemble staged input for the immediate mandatory dispatch check."""
+    request = _assemble_loopx_turn_host_request(plan)
+    if (plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
+            and request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA
+            and "work_contract" in request and "turn_envelope" not in request):
+        # All assembly guards and projections still run on the staged aliases.
+        # This carrier's existing conversion only copies the top-level mapping;
+        # host_context returns no facts used by it. The caller checks this exact
+        # source with host_dispatch_context before admission or publication.
+        return captured_turn_host_input(request)
+    return _complete_loopx_turn_host_request(request)
 
 
 def _bounded_public_text(
@@ -1706,7 +1732,7 @@ def run_loopx_turn_once(
             # must not put otherwise eligible work into an interval wait.
             # Saved typed results retain their original finalization path.
             complete_turn_host_source(
-                build_loopx_turn_host_request(capture.plan) if capture is not None else request,
+                _build_staged_dispatch_request(capture.plan) if capture is not None else request,
                 operation="host_dispatch_context",
             )
         admission = None

@@ -4473,3 +4473,35 @@ view shows its independently checked result in the same conversation.
   Pinned-source/artifact checks, actual-model adoption, complete D2/D5 costs,
   R1/M3 and the original ten requirements remain separate. Preserve earlier
   failures and run full original-goal regression before completion.
+
+### 2026-11-15 — Reuse the final staged Host source check
+
+- **Gap:** the temporary request built after capture staging repeated
+  `host_context` immediately before `host_dispatch_context`. Its complete
+  assembly still matters: frozen captures retain mutable nested plan aliases.
+- **Delta:** the public request builder and staged dispatch share the original
+  inspection, turn-key and route guards, source assembly, optional context,
+  subagent and native-child metadata. Only a staged complete-v1 plan producing
+  a Host-v1 request with `work_contract` and no `turn_envelope` omits the nested
+  `host_context`; the existing carrier conversion and final dispatch check stay
+  before admission and publication. Other shapes retain the original finish.
+  No checked result is retained across admission, publication or later effects.
+- **Evidence:** matched File/SQLite source checks cover 42 guard, alias, carrier,
+  numeric/text, interval-wait and bridge-failure cases on the baseline and
+  candidate. Exact startup, transport-permission and offloaded-snapshot-size
+  diagnostics preserve the original carrier and zero publication/ledger effects.
+  A deliberately dropped goal reference fails the independent value oracle.
+  The staged operation trace removes one `host_context` and retains one
+  `host_dispatch_context`. Separate true Core wheels pass 15 identity,
+  execution/checkpoint, replay, journal inspection, process-loss/stale-lease and
+  invalid-artifact checks each on the candidate and the clean `main@37a79decfe99`
+  plus C1 #8266 at `638b7e3c23f0` composition. The C1 source comparison uses its
+  direct-complete-source planner API on both arms; the earlier incompatible
+  keyword setup failure is preserved. These checks use Python 3.13.5 and Node
+  26.0.0; wheel, RECORD, source and runtime origins are independently bound.
+- **Boundary:** this avoids one redundant bridge projection, without changing
+  the typed source owner, default activation, capture publication, recovery or
+  settlement boundaries. It does not establish total latency, complete-cost or
+  actual-model improvements, full D2/D5 closure, R1/M3 or C1 default cutover.
+  Preserve prior failures and the original ten requirements; full original-goal
+  regression still precedes completion and EdgeBench preparation.
