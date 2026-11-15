@@ -3252,7 +3252,7 @@ export async function connectPrivateConversation(appRef: string, projectRef: str
   }));
 }
 export async function disconnectPrivateConversation(bindingId: string, revision: number) {
-  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+  return z.object({ok: z.literal(true)}).parse(await requestJson<unknown>("/api/chat/lark/private-conversations?response=minimal", {
     method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision}),
   }));
 }

@@ -6747,6 +6747,7 @@ def test_http_settings_load_while_delivery_is_slow_and_reject_revoked_diagnostic
     sessions = store.list_sessions()
     entered, release = threading.Event(), threading.Event()
     health = transport.health
+    refreshes = []
 
     def slow_health():
         entered.set()
@@ -6756,14 +6757,17 @@ def test_http_settings_load_while_delivery_is_slow_and_reject_revoked_diagnostic
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
     server.lark_private_conversations = transport
-    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
+    server.lark_goal_topic_runtime = SimpleNamespace(
+        health_snapshot=lambda: {}, refresh=lambda: refreshes.append(True), close=lambda: None)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def read(query):
+    def read(query, *, method="GET", body=None):
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
-            connection.request("GET", "/api/chat/lark/private-conversations" + query)
+            connection.request(method, "/api/chat/lark/private-conversations" + query,
+                               body=json.dumps(body) if body is not None else None,
+                               headers={"Content-Type": "application/json"} if body is not None else {})
             response = connection.getresponse()
             return response.status, json.loads(response.read())
         finally:
@@ -6778,7 +6782,7 @@ def test_http_settings_load_while_delivery_is_slow_and_reject_revoked_diagnostic
         assert legacy_status == status == 200
         assert legacy["stop_recoveries"] == diagnostics["stop_recoveries"]
         monkeypatch.setattr(transport, "health", slow_health)
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             delayed = executor.submit(read, detail_url)
             try:
                 assert entered.wait(5)
@@ -6792,15 +6796,27 @@ def test_http_settings_load_while_delivery_is_slow_and_reject_revoked_diagnostic
                     settings["connections"], diagnostics["connections"], strict=True)]
                 assert combined == legacy["connections"]
 
-                bindings.disconnect(removed, expected_revision=revision)
+                body = {"binding_id": removed, "revision": revision}
+                mutation = executor.submit(read, "?response=minimal", method="DELETE", body=body)
+                assert mutation.result(timeout=4) == (200, {"ok": True})
+                assert not delayed.done()
                 status, after = read("?view=settings")
                 assert status == 200 and after["revision"] > revision
                 assert removed not in {row["binding_id"] for row in after["connections"]}
                 assert read(detail_url)[0] == 409  # A stale caller never waits for the scan.
+                assert read("?response=minimal", method="DELETE", body=body)[0] == 400
             finally:
                 release.set()
             status, late = delayed.result(timeout=12)
             assert status == 409 and "connections" not in late
+        remaining, = after["connections"]
+        body = {"binding_id": remaining["binding_id"], "revision": after["revision"]}
+        invalid_status, _ = read("?response=minimal&response=legacy", method="DELETE", body=body)
+        assert invalid_status == 400 and read("?view=settings")[1] == after
+        status, legacy_disconnect = read("", method="DELETE", body=body)
+        assert status == 200 and legacy_disconnect["revision"] > after["revision"]
+        assert legacy_disconnect["connections"] == [] and "stop_recoveries" in legacy_disconnect
+        assert refreshes == [True, True]
         assert store.list_sessions() == sessions
         assert not provider.writes
     finally:

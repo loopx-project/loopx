@@ -229,6 +229,9 @@ class PrivateConversationRequestMixin:
 
     def _private_conversation_disconnect(self) -> None:
         try:
+            response = parse_qs(urlsplit(getattr(self, "path", "")).query, keep_blank_values=True).get("response")
+            if response is not None and response != ["minimal"]:
+                raise ValueError("Unknown private conversation disconnect response")
             body = self._read_json()
             if set(body) != {"binding_id", "revision"}:
                 raise ValueError("disconnect the exact current binding revision")
@@ -237,6 +240,11 @@ class PrivateConversationRequestMixin:
             self.server.lark_goal_topic_runtime.refresh()
         except (ValueError, OSError, KeyError) as exc:
             self._send_error(str(exc), status=400)
+            return
+        if response == ["minimal"]:
+            # The caller reads the new settings separately. A diagnostics scan
+            # must not hold the acknowledgement of an already verified revoke.
+            self._send_json({"ok": True})
             return
         self._private_conversations()
 
