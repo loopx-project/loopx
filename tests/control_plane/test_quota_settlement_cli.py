@@ -8975,3 +8975,78 @@ def test_exact_later_ack_executes_original_todo_settlement_commands(
     rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
         "--todo-id", SELECTED_REPLAN_TODO_ID)
     assert rc == 0 and todo["todo"]["status"] == "open", todo
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("order", ["after", "before", "time_after_log_before", "time_before_log_after"])
+def test_same_second_historical_ack_requires_writeback_after_admission(
+    tmp_path: Path, provider: str, order: str,
+) -> None:
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    original_turn = "turn-historical-same-second"
+    admitted = _bind_selected_replan_guard(registry, runtime, project, original_turn)
+    obligation = admitted["replan_action_packet"]["obligation_id"]
+    recorded_at = admitted["heartbeat_receipt"]["recorded_at"]
+    recorded = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+    later_turn = "later-accepted-same-second"
+    time_after = order in {"after", "time_after_log_before"}
+    written = recorded + timedelta(microseconds=1 if time_after else -1)
+    written_at = written.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    event = build_rollout_event(
+        goal_id=GOAL_ID, event_kind="refresh_state", agent_id=AGENT_ID, run_id=later_turn,
+        status="appended", summary="accepted same-second historical review",
+        recorded_at=written_at, details={
+            "command": "refresh-state", "autonomous_replan_recorded": True,
+            "replan_obligation_id": obligation,
+        },
+    )
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    admission_index = next(index for index, item in enumerate(events)
+        if item.get("event_kind") == "quota_should_run" and item.get("run_id") == original_turn
+        and item.get("recorded_at") == recorded_at)
+    log_after = order in {"after", "time_before_log_after"}
+    events.insert(len(events) if log_after else admission_index, event)
+    log_path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run = {"goal_id": GOAL_ID, "agent_id": AGENT_ID, "turn_instance_id": later_turn,
+        "generated_at": recorded.replace(microsecond=0).astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "classification": "bounded_replan_progress",
+        "autonomous_replan_ack": {"schema_version": "autonomous_replan_ack_v0", "recorded": True,
+            "source": "refresh_state", "semantic_delta": {"schema_version": "replan_semantic_delta_v0",
+                "accepted": True, "obligation_id": obligation,
+                "outcomes": ["fresh_vision_path_outcome"], "satisfying_outcomes": ["fresh_vision_path_outcome"]}}}
+    source = runs_dir / "later-accepted-same-second.json"
+    source.write_text(json.dumps(run), encoding="utf-8")
+    markdown = source.with_suffix(".md")
+    markdown.write_text("# Accepted same-second historical review\n", encoding="utf-8")
+    with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({**run, "json_path": str(source), "markdown_path": str(markdown)}) + "\n")
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
+        "--todo-id", SELECTED_REPLAN_TODO_ID)
+    rc, recovery = _run_cli(registry, runtime, *guard_args)
+    decision = (recovery.get("replan_action_packet") or {}).get("decision")
+    if order != "after":
+        assert decision != "historical_ack_recorded", {
+            "rc": rc, "decision": decision, "error": recovery.get("error"),
+            "error_code": recovery.get("error_code"),
+        }
+        assert _spend_run_count(runtime) == 0
+        return
+    assert rc == 0, recovery
+    assert decision == "historical_ack_recorded", recovery.get("replan_action_packet")
+    actions = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    writeback = next(command for command in actions if "refresh-state" in command)
+    spend = next(command for command in actions if "spend-slot" in command)
+    before = _spend_run_count(runtime)
+    rc, written_payload = _run_generated_cli(writeback, registry_path=registry)
+    assert rc == 0 and written_payload["ok"] is True and written_payload["appended"] is True, written_payload
+    assert _spend_run_count(runtime) == before
+    rc, spent = _run_generated_cli(spend, registry_path=registry)
+    assert rc == 0 and spent["ok"] is True, spent
+    assert _spend_run_count(runtime) == before + 1

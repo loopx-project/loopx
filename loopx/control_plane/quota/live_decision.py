@@ -759,7 +759,10 @@ def build_live_quota_should_run_decision(
     ):
         from ..work_items.autonomous_replan_ack import load_receipt_replan_ack_candidates
         decision_status_payload["receipt_bound_replan_ack_candidates"] = load_receipt_replan_ack_candidates(
-            runtime_root, goal_id=goal_id, agent_id=agent_id, obligation_id=receipt_bound_replan_obligation_id)
+            runtime_root, goal_id=goal_id, agent_id=agent_id,
+            obligation_id=receipt_bound_replan_obligation_id,
+            guard_recorded_at=receipt_bound_guard_fields["receipt_bound_guard_recorded_at"],
+            guard_turn_instance_id=receipt_bound_guard_fields["receipt_bound_guard_turn_instance_id"])
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
     )

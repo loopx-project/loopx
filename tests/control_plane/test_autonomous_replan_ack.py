@@ -8,6 +8,7 @@ from loopx.control_plane.goals.goal_vision import normalize_goal_vision_packet
 from loopx.control_plane.work_items.autonomous_replan_ack import (
     AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW,
     AUTONOMOUS_REPLAN_ACK_RECOVERY_CANDIDATE_LIMIT,
+    attach_historical_ack_writeback_order,
     autonomous_replan_ack_candidates_for_obligation,
     compact_autonomous_replan_ack,
     latest_autonomous_replan_ack_for_projection,
@@ -325,3 +326,36 @@ def test_long_chain_trigger_checkpoint_survives_ack_compaction() -> None:
     assert compact["semantic_delta"]["trigger_checkpoints"] == [
         {"kind": "long_todo_chain", "frontier_revision": frontier_revision}
     ]
+
+
+def test_same_second_candidate_keeps_only_the_bound_original_writeback_order() -> None:
+    turn = "guided-start:later"
+    admission = {"event_kind": "quota_should_run", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "run_id": "guided-start:original", "recorded_at": "2026-08-01T00:00:01.500000Z"}
+    early = {"event_kind": "refresh_state", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "run_id": turn, "recorded_at": "2026-08-01T00:00:01.100000Z", "details": {
+            "autonomous_replan_recorded": True, "replan_obligation_id": LONG_CHAIN_OBLIGATION_ID}}
+    other_goal = {"event_kind": "refresh_state", "goal_id": "other-goal", "agent_id": AGENT_ID,
+        "run_id": turn, "recorded_at": "2026-08-01T00:00:01.900000Z", "details": {
+            "autonomous_replan_recorded": True, "replan_obligation_id": LONG_CHAIN_OBLIGATION_ID}}
+    before = {"turn_instance_id": turn, "generated_at": "2026-08-01T00:00:01Z"}
+    attach_historical_ack_writeback_order(
+        [before], [early, other_goal, admission], goal_id=GOAL_ID, agent_id=AGENT_ID,
+        obligation_id=LONG_CHAIN_OBLIGATION_ID,
+        guard_recorded_at="2026-08-01T00:00:01.500000Z",
+        guard_turn_instance_id="guided-start:original",
+    )
+    assert before["writeback_recorded_at"] == "2026-08-01T00:00:01.100000Z"
+    assert before["writeback_follows_admission"] is False
+    assert before["writeback_goal_id"] == GOAL_ID
+    assert before["writeback_turn_instance_id"] == turn
+    assert before["writeback_obligation_id"] == LONG_CHAIN_OBLIGATION_ID
+    after = {"turn_instance_id": turn}
+    attach_historical_ack_writeback_order(
+        [after], [admission, early], goal_id=GOAL_ID, agent_id=AGENT_ID,
+        obligation_id=LONG_CHAIN_OBLIGATION_ID,
+        guard_recorded_at="2026-08-01T00:00:01.500000Z",
+        guard_turn_instance_id="guided-start:original",
+    )
+    assert after["writeback_recorded_at"] == "2026-08-01T00:00:01.100000Z"
+    assert after["writeback_follows_admission"] is True

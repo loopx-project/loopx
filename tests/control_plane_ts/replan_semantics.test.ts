@@ -674,24 +674,42 @@ test("a later durable exact ACK settles only its original receipt-bound Turn", (
     rejected({...request, ...missingGuard});
   }
 
-  // Compact generated_at is the whole-second run clock. A stamp in the
-  // admission second is post-admission when guard_recorded_at is that same
-  // whole second, or a fraction inside it (.500Z / .123456Z), including the
-  // offset form of that instant. The later Turn keeps its own turn id.
+  // The whole-second run clock cannot order two writes inside the admission
+  // second. A bound refresh_state event whose recorded time and log position
+  // are both after admission can. The later Turn keeps its own turn id.
+  const boundWriteback = (generated_at: string, writeback_recorded_at: string, follows = true) => ({
+    historical_ack: {...historicalAck, generated_at, writeback_recorded_at,
+      writeback_follows_admission: follows, writeback_goal_id: goal, writeback_agent_id: agent,
+      writeback_turn_instance_id: laterTurn, writeback_obligation_id: id},
+  });
   for (const guard_recorded_at of [
     "2026-08-01T00:00:01Z", "2026-08-01T00:00:01.500Z", "2026-08-01T00:00:01.123456Z",
   ]) {
     for (const generated_at of ["2026-08-01T00:00:01Z", "2026-08-01T08:00:01+08:00"]) {
       settled({...request, guard_recorded_at, transition_candidates: [
+        boundWriteback(generated_at, "2026-08-01T00:00:01.900000Z")]});
+      rejected({...request, guard_recorded_at, transition_candidates: [
         {historical_ack: {...historicalAck, generated_at}}]});
     }
   }
-  // A fractional ACK earlier in the admission second is not the truncated run
-  // clock, and the previous whole second is still before admission.
   const fractionalAdmission = {...request, guard_recorded_at: "2026-08-01T00:00:01.500Z"};
+  const sameSecondAck = boundWriteback("2026-08-01T00:00:01Z", "2026-08-01T00:00:01.900000Z");
+  rejected({...fractionalAdmission, transition_candidates: [
+    boundWriteback("2026-08-01T00:00:01Z", "2026-08-01T00:00:01.100Z")]});
+  rejected({...fractionalAdmission, transition_candidates: [
+    boundWriteback("2026-08-01T00:00:01Z", "2026-08-01T00:00:01.900000Z", false)]});
+  for (const broken of [
+    {writeback_goal_id: "goal-b"}, {writeback_agent_id: "peer"},
+    {writeback_turn_instance_id: guardTurn}, {writeback_obligation_id: "replan-2222222222222222"},
+  ]) {
+    rejected({...fractionalAdmission, transition_candidates: [
+      {historical_ack: {...sameSecondAck.historical_ack, ...broken}}]});
+  }
+  // A fractional ACK earlier in the admission second, and a previous whole
+  // second, stay pending even when a later event is attached.
   for (const generated_at of ["2026-08-01T00:00:01.100Z", "2026-08-01T00:00:00Z"]) {
     rejected({...fractionalAdmission, transition_candidates: [
-      {historical_ack: {...historicalAck, generated_at}}]});
+      boundWriteback(generated_at, "2026-08-01T00:00:01.900000Z")]});
   }
 
   const invalid = [

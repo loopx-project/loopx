@@ -24,6 +24,7 @@ from ..todos.quota_summary import (
 )
 from ..todos.succession_warning import todo_succession_gap_items
 from .autonomous_replan_ack import (
+    attach_historical_ack_writeback_order,
     autonomous_replan_ack_candidates_for_obligation,
     latest_monitor_replan_frontier_identity,
     watch_lane_continuation_todo_ids,
@@ -294,9 +295,24 @@ def qualify_replan_writeback(
             ]
         }
     }
-    status_payload["receipt_bound_replan_ack_candidates"] = autonomous_replan_ack_candidates_for_obligation(
+    historical_ack_candidates = autonomous_replan_ack_candidates_for_obligation(
         newest_first_runs, goal_id=goal_id, agent_id=safe_agent_id,
         obligation_id=guard_semantic_replan_obligation_id if guard_scoped else None)
+    runtime_root_text = str((replan_source_route or {}).get("runtime_root") or "").strip()
+    if runtime_root_text and guard_scoped and guard_semantic_replan_obligation_id:
+        from pathlib import Path
+
+        from ...rollout_event_log import load_rollout_events, rollout_event_log_path
+
+        attach_historical_ack_writeback_order(
+            historical_ack_candidates,
+            load_rollout_events(rollout_event_log_path(Path(runtime_root_text), goal_id)),
+            goal_id=goal_id, agent_id=safe_agent_id,
+            obligation_id=guard_semantic_replan_obligation_id,
+            guard_recorded_at=receipt_bound_guard_recorded_at,
+            guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+        )
+    status_payload["receipt_bound_replan_ack_candidates"] = historical_ack_candidates
     if capability_evidence is not None:
         status_payload["bounded_research_frontier"] = capability_evidence.frontier
     context = build_goal_frontier_projection_context_from_status(
