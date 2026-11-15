@@ -921,18 +921,21 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
             assert code == 0 and result["ok"], result
             return result
 
+        def read_selection(command_line):
+            command = shlex.split(command_line)
+            selected = bytearray()
+            while True:
+                page = read(*command[command.index("quota"):])
+                assert page["offset"] == len(selected)
+                selected.extend(page["content"].encode())
+                if page["eof"]:
+                    assert len(selected) == page["total_bytes"]
+                    break
+                command = shlex.split(page["next_command"])
+            return {row["pointer"]: row["value"] for row in json.loads(selected)["selections"]}
+
         navigation = read(*args)
-        command = shlex.split(navigation["first_read_command"])
-        selected = bytearray()
-        while True:
-            page = read(*command[command.index("quota"):])
-            assert page["offset"] == len(selected)
-            selected.extend(page["content"].encode())
-            if page["eof"]:
-                assert len(selected) == page["total_bytes"]
-                break
-            command = shlex.split(page["next_command"])
-        values = {row["pointer"]: row["value"] for row in json.loads(selected)["selections"]}
+        values = read_selection(navigation["first_read_command"])
         boundary = packet["goal_boundary"]
         assert boundary["write_scope"] == scopes and boundary["requires_parent_approval"] == ["publish"]
         assert values["/heartbeat_receipt"] == packet["heartbeat_receipt"]
@@ -953,7 +956,13 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
                 assert plain["mode"] == "full" and plain["recovery"]["sha256"] == hashlib.sha256(raw).hexdigest()
                 assert plain["recovery"]["path"] == str(source)
         else:
-            assert values["/goal_boundary"] == boundary
+            remaining = read_selection(navigation["remaining_read_command"])
+            values.update(remaining)
+            assert {
+                pointer.removeprefix("/goal_boundary/"): value
+                for pointer, value in values.items()
+                if pointer.startswith("/goal_boundary/")
+            } == boundary
         assert source.read_bytes() == raw and not registry.exists()
 
     if multiple_candidates:
