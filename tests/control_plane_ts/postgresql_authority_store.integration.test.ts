@@ -693,10 +693,17 @@ if (database && installed) {
       events: [], receipts: [], next_projection: synthetic,
     })).status, "applied");
     const seed = {runtimeRoot: root, goalId, tenantId: firstTenant, localStore: source,
+      outputPath: join(root, "seed.json"),
       storeIdentity: STORE_IDENTITY, targetDatabase: runtimeDatabase, execute: true};
     const genesis = await exportLocalToPgGenesisSeed(seed);
     assert.equal(genesis.status, "seeded", genesis.reason);
-    assert.equal((await exportLocalToPgGenesisSeed(seed)).provider_revision, genesis.provider_revision);
+    const originalSeedReceipt = await first.readReceipt(genesis.operation_id);
+    assert.equal(originalSeedReceipt.status, "found");
+    const retried = await exportLocalToPgGenesisSeed(seed);
+    assert.equal(retried.status, "seeded", retried.reason);
+    assert.equal(retried.provider_revision, genesis.provider_revision);
+    assert.equal(retried.seed_digest, genesis.seed_digest);
+    assert.deepEqual(await first.readReceipt(genesis.operation_id), originalSeedReceipt);
     assert.equal((await exportLocalToPgGenesisSeed({...seed, storeIdentity: `postgresql:${"d".repeat(32)}`})).status, "failed");
     assert.equal((await second.commitAuthority(commit(null, "operation-b", 1, 1))).status, "applied");
     assert.equal((await second.readReceipt("operation-b")).status, "found");
@@ -781,31 +788,73 @@ if (database && installed) {
     });
   });
 
-  test("PostgreSQL scans a mixed retained history and rejects corruption before the requested cursor", async t => {
-    await installed;
+  test("PostgreSQL v0 upgrade preserves restricted history access and rejects corrupt prefixes", async t => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const name = `upgrade_${suffix}`;
+    const role = `worker_${suffix}`;
+    const grantRole = `journal_${suffix}`;
+    const url = new URL(connectionString!);
+    url.pathname = `/${name}`;
+    const legacy = new Pool({connectionString: url.href});
+    await pool!.query(`CREATE DATABASE ${name}`);
+    t.after(async () => {
+      await legacy.end();
+      await pool!.query(`DROP DATABASE ${name} WITH (FORCE)`);
+      await pool!.query(`DROP ROLE IF EXISTS ${quotedRole(role)}, ${quotedRole(grantRole)}`);
+    });
+    await legacy.query(POSTGRESQL_AUTHORITY_STORE_SCHEMA_SQL);
+    // Restore the released v0 shape in the disposable database. There are no
+    // v1 rows or checkpoints at this point.
+    await legacy.query(`
+      DROP TABLE loopx_control_plane.authority_checkpoints;
+      ALTER TABLE loopx_control_plane.authority_commits
+        DROP COLUMN delta, DROP COLUMN projection_digest, ALTER COLUMN projection SET NOT NULL;
+      INSERT INTO loopx_control_plane.authority_store_metadata (schema_version, store_identity)
+        VALUES ('loopx_postgresql_authority_store_v0', '${STORE_IDENTITY}');
+      CREATE ROLE ${quotedRole(grantRole)} NOLOGIN;
+      CREATE ROLE ${quotedRole(role)} NOLOGIN;
+      GRANT ${quotedRole(grantRole)} TO ${quotedRole(role)};
+      GRANT USAGE ON SCHEMA loopx_control_plane TO ${quotedRole(role)};
+      GRANT SELECT ON loopx_control_plane.authority_store_metadata TO ${quotedRole(role)};
+      GRANT SELECT, INSERT, UPDATE ON loopx_control_plane.authority_heads TO ${quotedRole(role)};
+      GRANT SELECT, INSERT ON loopx_control_plane.authority_commits TO ${quotedRole(grantRole)};
+      GRANT SELECT, INSERT ON loopx_control_plane.authority_events,
+        loopx_control_plane.authority_receipts TO ${quotedRole(role)};
+    `);
     const tenantId = `tenant-${randomUUID()}`;
     const goalId = `goal-${randomUUID()}`;
-    t.after(() => cleanScope(tenantId, goalId));
-    const store = new PostgreSqlAuthorityStore(database!, {tenant_id: tenantId, goal_id: goalId});
+    const store = new PostgreSqlAuthorityStore(databaseForRuntimeRole(legacy, role), {tenant_id: tenantId, goal_id: goalId});
     const projection = (counter: number) => ({goal_id: goalId, counter});
     const scope = [tenantId, goalId];
-    // Full-projection rows use the released schema's insert shape. Do not
-    // synthesize missing deltas or rewrite these historical records in setup.
-    await pool!.query(
+    await legacy.query(
       `INSERT INTO loopx_control_plane.authority_heads (tenant_id, goal_id, provider_revision, cursor, head)
        VALUES ($1, $2, 2, 2, $3)`, [...scope, projection(2)]);
     for (const cursor of [1, 2]) {
-      await pool!.query(
+      await legacy.query(
         `INSERT INTO loopx_control_plane.authority_commits
            (tenant_id, goal_id, cursor, provider_revision, operation_id, projection)
          VALUES ($1, $2, $3, $3, $4, $5)`, [...scope, cursor, `legacy-${cursor}`, projection(cursor)]);
     }
-    await pool!.query(
+    await legacy.query(
       `INSERT INTO loopx_control_plane.authority_receipts (tenant_id, goal_id, cursor, receipt_index, receipt)
        VALUES ($1, $2, 2, 0, $3)`, [...scope, {before_upgrade: true}]);
+    const upgraded = await setupPostgreSqlAuthoritySchemaAndRole(databaseFromPool(legacy), {storeIdentity: STORE_IDENTITY});
+    assert.equal(upgraded.status, "installed", upgraded.reason);
     const original = await store.readReceipt("legacy-2");
     assert.equal(original.status, "found");
-    assert.equal((await setupPostgreSqlAuthoritySchemaAndRole(database!, {storeIdentity: STORE_IDENTITY})).status, "installed");
+    if (original.status !== "found") assert.fail(JSON.stringify(original));
+    assert.equal(original.cursor, "2");
+    assert.equal(original.provider_revision, `${STORE_IDENTITY}:2`);
+    assert.deepEqual(original.receipts, [{before_upgrade: true}]);
+    await queryAsRuntimeRole(legacy, role, async (client) => {
+      const result = await client.query(`
+        SELECT
+          has_table_privilege('loopx_control_plane.authority_checkpoints', 'SELECT') AS can_read,
+          has_table_privilege('loopx_control_plane.authority_checkpoints', 'INSERT') AS can_append,
+          has_table_privilege('loopx_control_plane.authority_checkpoints', 'UPDATE,DELETE') AS can_mutate
+      `);
+      assert.deepEqual(result.rows, [{can_read: true, can_append: true, can_mutate: false}]);
+    });
     let revision = `${STORE_IDENTITY}:2`;
     for (const cursor of [3, 4, 5]) {
       const result = await store.commitAuthority({operation_id: `new-${cursor}`,
@@ -820,13 +869,13 @@ if (database && installed) {
     assert.deepEqual(page.transactions.map(row => row.projection), [2, 3, 4].map(projection));
 
     const tamper = {schema_version: "authority_state_delta_v0", operations: [{op: "set", path: ["counter"], value: 999}]};
-    await pool!.query(
+    await legacy.query(
       `UPDATE loopx_control_plane.authority_commits SET delta=$3
        WHERE tenant_id=$1 AND goal_id=$2 AND cursor=3`, [...scope, tamper]);
     const corrupt = await store.scanCommitted("3", 1);
     assert.equal(corrupt.status, "failed");
     assert.match("reason" in corrupt ? corrupt.reason : "", /digest mismatch/);
-    await pool!.query(
+    await legacy.query(
       "DELETE FROM loopx_control_plane.authority_commits WHERE tenant_id=$1 AND goal_id=$2 AND cursor=3", scope);
     const missing = await store.scanCommitted("3", 1);
     assert.equal(missing.status, "failed");

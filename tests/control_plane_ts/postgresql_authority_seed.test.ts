@@ -128,6 +128,7 @@ test("scanForbiddenPrivacyTokens fails closed on sensitive credentials", () => {
 
 test("setupPostgreSqlAuthoritySchemaAndRole installs DDL, RLS, and restricted role", async () => {
   const executedStatements: string[] = [];
+  let connects = 0;
   const storeId = "postgresql:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const connection: PostgreSqlAuthorityConnection = {
     query: async (sql: string, params?: readonly unknown[]) => {
@@ -144,7 +145,10 @@ test("setupPostgreSqlAuthoritySchemaAndRole installs DDL, RLS, and restricted ro
   };
 
   const database: PostgreSqlAuthorityDatabase = {
-    connect: async () => connection,
+    connect: async () => {
+      connects += 1;
+      return connection;
+    },
   };
 
   const result = await setupPostgreSqlAuthoritySchemaAndRole(database, {
@@ -155,6 +159,7 @@ test("setupPostgreSqlAuthoritySchemaAndRole installs DDL, RLS, and restricted ro
   assert.equal(result.status, "installed");
   assert.equal(result.store_identity, "postgresql:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   assert.equal(result.runtime_role, "loopx_runtime_worker");
+  assert.equal(connects, 1);
 
   // Verify key DDL statements were executed
   assert.ok(executedStatements.some(s => s.includes("CREATE SCHEMA IF NOT EXISTS loopx_control_plane")));
@@ -162,7 +167,9 @@ test("setupPostgreSqlAuthoritySchemaAndRole installs DDL, RLS, and restricted ro
   assert.ok(executedStatements.some(s => s.includes("CREATE TABLE IF NOT EXISTS loopx_control_plane.authority_commits")));
   assert.ok(executedStatements.some(s => s.includes("CREATE ROLE \"loopx_runtime_worker\"")));
   assert.ok(executedStatements.some(s => s.includes("GRANT USAGE ON SCHEMA loopx_control_plane TO \"loopx_runtime_worker\"")));
-  assert.ok(executedStatements.some(s => s.includes("GRANT SELECT, INSERT ON\n             loopx_control_plane.authority_checkpoints")));
+  const grants = executedStatements.findIndex(s =>
+    /GRANT SELECT, INSERT ON\s+loopx_control_plane\.authority_checkpoints/.test(s));
+  assert.ok(grants > executedStatements.indexOf("BEGIN") && grants < executedStatements.indexOf("COMMIT"));
 });
 
 test("exportLocalToPgGenesisSeed exports sanitized cursor=1 genesis seed JSON", async () => {

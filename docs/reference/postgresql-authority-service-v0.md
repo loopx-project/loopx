@@ -58,19 +58,26 @@ receipts remain tied to the original transaction.
 
 Only an administrator runs `loopx postgres setup --execute`. When upgrading
 v0, pass that database's existing `--store-identity`. Setup preserves full
-projection rows and updates the format marker under the same lock used by
-writers and identity rotation. Old workers deliberately refuse v1; reverting a
-binary alone cannot read a v1 journal. Keep a verified pre-upgrade backup and
-quiesce old callers before the upgrade. Recover to an isolated database and
-verify its journal and receipts before any separate activation decision.
+projection rows and carries forward the journal's table-level `SELECT` and
+`INSERT` grants to checkpoints, including grants through group roles. Setup
+applies any explicit `--runtime-role` provisioning in the same transaction as
+the format change under the lock used by writers and identity rotation. For
+deployments with custom column-level privileges, provision the runtime role
+explicitly. An already initialized v1 store can also use its existing identity
+and `--runtime-role` to provision access. Keep a verified pre-upgrade backup and
+quiesce old callers before upgrading. Verify historical reads and a new
+checkpoint append with the restricted runtime credentials in an isolated
+restore before activation. A rollback to v0 requires the verified v0 backup.
 
 Use `loopx postgres local-to-pg-seed --goal-id <synthetic-goal>` to preview
 a sanitized File or SQLite head at cursor 1. Preview never opens the target.
-`--output` optionally writes a new private file and will not overwrite an
-existing file. With `--execute`, use a provisioned restricted connection via
+`--output` optionally creates a private file or reuses an identical regular
+file. Existing different content and symbolic links cause the command to fail
+before connecting to the target. With `--execute`, use a provisioned restricted connection via
 `LOOPX_POSTGRES_URL` and optionally pin it with `--store-identity`. The seed
 command neither installs a schema nor changes roles. It writes only to an empty
-target Goal; repeating the same intent recovers its original receipt. Private
+target Goal. Repeating the same seed command, including the same `--output`,
+recovers its original receipt. Private
 direction declarations and their dependent usage evidence are omitted together
 if the declaration cannot be retained. Review the synthetic input before use:
 the privacy filter looks for known private records and tokens, and cannot

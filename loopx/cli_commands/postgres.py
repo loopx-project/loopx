@@ -38,7 +38,7 @@ def register_postgres_commands(
     )
     setup_parser.add_argument(
         "--runtime-role",
-        help="Optional restricted runtime role to assemble with least privileges.",
+        help="Optional runtime role to provision within the schema transaction.",
     )
     setup_parser.add_argument(
         "--execute",
@@ -70,7 +70,7 @@ def register_postgres_commands(
         seed_parser.add_argument(
             "--output",
             type=Path,
-            help="Optional file path to write the sanitized genesis seed JSON.",
+            help="Optional file to create or reuse if it contains the identical seed JSON.",
         )
         seed_parser.add_argument(
             "--execute",
@@ -143,7 +143,7 @@ def handle_postgres_command(
         resolved_root = str(resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path))
 
         database_url = args.database_url or os.environ.get("LOOPX_POSTGRES_URL", "")
-        output_path = str(args.output.expanduser().resolve()) if args.output else None
+        output_path = str(args.output.expanduser().absolute()) if args.output else None
 
         request = {
             "runtimeRoot": resolved_root,

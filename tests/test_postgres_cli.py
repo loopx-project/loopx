@@ -114,30 +114,16 @@ def test_postgres_local_to_pg_seed_export(tmp_path):
     )
 
     output_seed = tmp_path / "genesis_seed.json"
-    process = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "loopx.entrypoint",
-            "--registry",
-            str(registry),
-            "--format",
-            "json",
-            "postgres",
-            "local-to-pg-seed",
-            "--goal-id",
-            goal,
-            "--tenant-id",
-            "tenant-alpha",
-            "--output",
-            str(output_seed),
-        ],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        timeout=45,
-        check=False,
-    )
+    command = [
+        sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--format", "json", "postgres", "local-to-pg-seed", "--goal-id", goal,
+        "--tenant-id", "tenant-alpha", "--output", str(output_seed),
+    ]
+
+    def export():
+        return subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=45, check=False)
+
+    process = export()
     assert process.returncode == 0, process.stderr
     payload = json.loads(process.stdout)
     assert payload["status"] == "exported"
@@ -155,3 +141,28 @@ def test_postgres_local_to_pg_seed_export(tmp_path):
     assert "ou_1234567890abcdef1234567890" not in raw_str
     assert "oc_abcdef1234567890abcdef12345678" not in raw_str
     assert "/Users/test/Developer" not in raw_str
+
+    original = output_seed.read_bytes()
+    inode = output_seed.stat().st_ino
+    repeated = export()
+    assert repeated.returncode == 0, repeated.stderr
+    assert json.loads(repeated.stdout)["seed_digest"] == payload["seed_digest"]
+    assert output_seed.stat().st_ino == inode
+    assert output_seed.read_bytes() == original
+
+    different = original.replace(b"tenant-alpha", b"tenant-other", 1)
+    assert different != original and len(different) == len(original)
+    output_seed.write_bytes(different)
+    refused = export()
+    assert refused.returncode == 1
+    assert "identical regular file" in json.loads(refused.stdout)["reason"]
+    assert output_seed.read_bytes() == different
+
+    alternative = tmp_path / "seed_target.json"
+    alternative.write_bytes(original)
+    output_seed.unlink()
+    output_seed.symlink_to(alternative)
+    symlink = export()
+    assert symlink.returncode == 1
+    assert output_seed.is_symlink()
+    assert alternative.read_bytes() == original

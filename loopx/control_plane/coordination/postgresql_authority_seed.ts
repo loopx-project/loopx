@@ -12,7 +12,9 @@
  *    - Fail-closed if any privacy/credential pattern remains.
  */
 import { randomBytes, randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { link, lstat, open, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
 import {
   canonicalAuthorityObject,
@@ -21,6 +23,7 @@ import {
   requireAuthorityStoreId,
 } from "./authority_store_codec.ts";
 import {
+  POSTGRESQL_RUNTIME_ROLE_PATTERN,
   POSTGRESQL_SCHEMA_VERSION,
   POSTGRESQL_STORE_IDENTITY_PATTERN,
   installPostgreSqlAuthorityStoreSchema,
@@ -28,6 +31,7 @@ import {
   type PostgreSqlAuthorityDatabase,
   type PostgreSqlAuthorityConnection,
 } from "./postgresql_authority_store.ts";
+import { syncAuthorityDirectory } from "./file_authority_store.ts";
 import { openLocalAuthorityStoreHandle } from "./local_authority_provider.ts";
 
 export const PG_GENESIS_SEED_SCHEMA_VERSION = "loopx_pg_genesis_seed_v0";
@@ -392,7 +396,7 @@ export async function setupPostgreSqlAuthoritySchemaAndRole(
   }
 
   const role = options.runtimeRole?.trim();
-  if (role !== undefined && !/^[a-z][a-z0-9_]{1,62}$/.test(role)) {
+  if (role !== undefined && !POSTGRESQL_RUNTIME_ROLE_PATTERN.test(role)) {
     return {
       status: "failed",
       schema_version: POSTGRESQL_SCHEMA_VERSION,
@@ -414,43 +418,7 @@ export async function setupPostgreSqlAuthoritySchemaAndRole(
   }
 
   try {
-    await installPostgreSqlAuthorityStoreSchema(
-      resolved.database,
-      storeIdentity,
-    );
-
-    if (role !== undefined) {
-      const connection = await resolved.database.connect();
-      try {
-        await connection.query(
-          `DO $$
-           BEGIN
-             IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role}') THEN
-               CREATE ROLE "${role}" NOLOGIN;
-             END IF;
-           END
-           $$;`,
-        );
-        await connection.query(
-          `GRANT USAGE ON SCHEMA loopx_control_plane TO "${role}";`,
-        );
-        await connection.query(
-          `GRANT SELECT ON loopx_control_plane.authority_store_metadata TO "${role}";`,
-        );
-        await connection.query(
-          `GRANT SELECT, INSERT, UPDATE ON loopx_control_plane.authority_heads TO "${role}";`,
-        );
-        await connection.query(
-          `GRANT SELECT, INSERT ON
-             loopx_control_plane.authority_checkpoints,
-             loopx_control_plane.authority_commits,
-             loopx_control_plane.authority_events,
-             loopx_control_plane.authority_receipts TO "${role}";`,
-        );
-      } finally {
-        await connection.release();
-      }
-    }
+    await installPostgreSqlAuthorityStoreSchema(resolved.database, storeIdentity, role);
 
     return {
       status: "installed",
@@ -496,6 +464,66 @@ export interface LocalToPgSeedExportResult {
   output_path?: string;
   reason?: string;
   seed_payload?: JsonObject;
+}
+
+class GenesisSeedOutputConflict extends Error {
+  constructor() {
+    super("Genesis seed output must be absent or an identical regular file");
+  }
+}
+
+async function existingSeedMatches(path: string, expected: Buffer): Promise<boolean> {
+  let declared;
+  try {
+    declared = await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  if (!declared.isFile() || declared.size !== expected.length) throw new GenesisSeedOutputConflict();
+  const file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.dev !== declared.dev || stat.ino !== declared.ino) throw new GenesisSeedOutputConflict();
+    let offset = 0;
+    for await (const part of file.createReadStream({autoClose: false})) {
+      if (!part.equals(expected.subarray(offset, offset + part.length))) {
+        throw new GenesisSeedOutputConflict();
+      }
+      offset += part.length;
+    }
+    if (offset !== expected.length) throw new GenesisSeedOutputConflict();
+    return true;
+  } finally {
+    await file.close();
+  }
+}
+
+async function writeSeedOutput(path: string, bytes: Buffer): Promise<void> {
+  const directory = dirname(path);
+  if (!await existingSeedMatches(path, bytes)) {
+    // Publish a complete private file without replacing a concurrent writer's
+    // output. A concurrent replay may reuse the winner's identical bytes.
+    const temporary = join(directory, `.loopx-seed-${randomUUID()}.partial`);
+    const file = await open(temporary, "wx", 0o600);
+    try {
+      try {
+        await file.writeFile(bytes);
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      try {
+        await link(temporary, path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST" ||
+            !await existingSeedMatches(path, bytes)) throw error;
+      }
+    } finally {
+      await unlink(temporary);
+    }
+  }
+  await syncAuthorityDirectory(directory);
 }
 
 /**
@@ -549,9 +577,7 @@ export async function exportLocalToPgGenesisSeed(
       output_path: options.outputPath, seed_payload: seedPayload,
     };
     if (options.outputPath) {
-      await writeFile(options.outputPath, JSON.stringify(seedPayload, null, 2), {
-        encoding: "utf8", mode: 0o600, flag: "wx",
-      });
+      await writeSeedOutput(options.outputPath, Buffer.from(JSON.stringify(seedPayload, null, 2)));
     }
     // Export never opens the target or installs anything in either store.
     if (!options.execute) return {...exported, status: "exported"};
@@ -613,6 +639,7 @@ export async function exportLocalToPgGenesisSeed(
       await resolved.close();
     }
   } catch (error) {
-    return failed(error instanceof GenesisPrivacyBoundaryViolation ? error.message : "Genesis seed could not be prepared or written");
+    return failed(error instanceof GenesisPrivacyBoundaryViolation || error instanceof GenesisSeedOutputConflict
+      ? error.message : "Genesis seed could not be prepared or written");
   }
 }

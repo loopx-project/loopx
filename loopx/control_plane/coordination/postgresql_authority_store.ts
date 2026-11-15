@@ -35,6 +35,7 @@ const POSTGRESQL_PROVIDER_REVISION_PATTERN = /^postgresql:([0-9a-f]{32}):([1-9]\
 const POSTGRESQL_STORE_IDENTITY_LOCK_KEY = "5522768808912313929";
 const FULL_PROJECTION_SCHEMA_VERSION = "loopx_postgresql_authority_store_v0";
 export const POSTGRESQL_SCHEMA_VERSION = "loopx_postgresql_authority_store_v1";
+export const POSTGRESQL_RUNTIME_ROLE_PATTERN = /^[a-z][a-z0-9_]{1,62}$/;
 export const DEFAULT_POSTGRESQL_MAX_COMMIT_BYTES = 16 * 1024 * 1024;
 
 /**
@@ -413,17 +414,22 @@ async function lockStoreIdentityTransaction(
 }
 
 /**
- * Administrative schema installation. Call this only from the authenticated
- * service deployment path with a newly minted database-incarnation identity.
+ * Administrative schema installation and provisioning under one transaction.
+ * A new store uses a new identity. A format upgrade binds the current identity
+ * and keeps the existing journal access available through the checkpoint table.
  */
 export async function installPostgreSqlAuthorityStoreSchema(
   database: PostgreSqlAuthorityDatabase,
   storeIdentity: string,
+  runtimeRole?: string,
 ): Promise<void> {
   if (!POSTGRESQL_STORE_IDENTITY_PATTERN.test(storeIdentity)) {
     throw new AuthorityStoreProtocolError(
       "PostgreSQL store identity must match postgresql:<32 lowercase hex>",
     );
+  }
+  if (runtimeRole !== undefined && !POSTGRESQL_RUNTIME_ROLE_PATTERN.test(runtimeRole)) {
+    throw new AuthorityStoreProtocolError("runtime role must be a valid lowercase SQL identifier");
   }
   const connection = await database.connect();
   let commitStarted = false;
@@ -467,12 +473,54 @@ export async function installPostgreSqlAuthorityStoreSchema(
       if (releasedLayout?.attnotnull !== true) {
         throw new AuthorityStoreProtocolError("PostgreSQL v0 journal layout is not the released full-projection format");
       }
+      // The checkpoint is part of the same append-only journal. Preserve
+      // table grants, including group grants, without copying history
+      // mutation privileges or grant options.
+      await connection.query(`
+        DO $migration$
+        DECLARE journal_grant record;
+        BEGIN
+          FOR journal_grant IN
+            SELECT DISTINCT acl.grantee, acl.privilege_type
+            FROM pg_catalog.pg_class AS journal
+            CROSS JOIN LATERAL pg_catalog.aclexplode(journal.relacl) AS acl
+            WHERE journal.oid = 'loopx_control_plane.authority_commits'::regclass
+              AND acl.privilege_type IN ('SELECT', 'INSERT')
+          LOOP
+            EXECUTE pg_catalog.format(
+              'GRANT %s ON loopx_control_plane.authority_checkpoints TO %s',
+              journal_grant.privilege_type,
+              CASE WHEN journal_grant.grantee = 0 THEN 'PUBLIC'
+                ELSE pg_catalog.quote_ident(pg_catalog.pg_get_userbyid(journal_grant.grantee))
+              END
+            );
+          END LOOP;
+        END
+        $migration$;`);
     }
     await connection.query(
       `ALTER TABLE loopx_control_plane.authority_commits ADD COLUMN IF NOT EXISTS delta jsonb;
        ALTER TABLE loopx_control_plane.authority_commits ADD COLUMN IF NOT EXISTS projection_digest text;
        ALTER TABLE loopx_control_plane.authority_commits ALTER COLUMN projection DROP NOT NULL;`,
     );
+    if (runtimeRole !== undefined) {
+      await connection.query(`
+        DO $role$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${runtimeRole}') THEN
+            CREATE ROLE "${runtimeRole}" NOLOGIN;
+          END IF;
+        END
+        $role$;
+        GRANT USAGE ON SCHEMA loopx_control_plane TO "${runtimeRole}";
+        GRANT SELECT ON loopx_control_plane.authority_store_metadata TO "${runtimeRole}";
+        GRANT SELECT, INSERT, UPDATE ON loopx_control_plane.authority_heads TO "${runtimeRole}";
+        GRANT SELECT, INSERT ON
+          loopx_control_plane.authority_checkpoints,
+          loopx_control_plane.authority_commits,
+          loopx_control_plane.authority_events,
+          loopx_control_plane.authority_receipts TO "${runtimeRole}";`);
+    }
     if (metadata.schema_version === FULL_PROJECTION_SCHEMA_VERSION) {
       await connection.query(
         "UPDATE loopx_control_plane.authority_store_metadata SET schema_version = $1 WHERE singleton = TRUE",
