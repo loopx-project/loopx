@@ -34,6 +34,11 @@ case "${1:-start}" in
       CALLI_HANDOVER_SOCKET CALLI_HANDOVER_KEY CALLI_TODO_SOCKET CALLI_TODO_KEY \
       RAH_WEB_DIR RAH_TOKEN RAH_AGENTS_JSON RAH_HUB_URL RAH_HUB_TOKEN RAH_BIN_DIR \
       LIMI_SOCKET LIMI_KEY LIMI_TOOLS_KEY
+    # LoopX Goal conversations: the core (Python chat server) is reached over HTTP, status is read through the CLI.
+    REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+    LOOCHAT_LOOPX_CORE_URL="${LOOCHAT_LOOPX_CORE_URL:-http://127.0.0.1:8792}" \
+    LOOCHAT_LOOPX_CMD="${LOOCHAT_LOOPX_CMD:-python3 -m loopx.cli}" LOOCHAT_LOOPX_CWD="${LOOCHAT_LOOPX_CWD:-$REPO_ROOT}" \
+    LOOCHAT_LOOPX_REGISTRY="${LOOCHAT_LOOPX_REGISTRY:-$HOME/.loopx/registry.global.json}" \
     LOOCHAT_ENV_FILE="$ENVF" LOOCHAT_HOST=0.0.0.0 LOOCHAT_PORT="$PORT" LOOCHAT_PREVIEW_PORT=$((PORT+1)) \
     LOOCHAT_DATA_DIR="$STATE/data" LOOCHAT_SOCKET="$STATE/daemon.sock" \
     LOOCHAT_WORKDIRS="${WORKBENCH_WORKDIRS:-/home/liuhuadong.hans/code,/tmp}" \
