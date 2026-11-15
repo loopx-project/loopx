@@ -3413,3 +3413,18 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   真实 model/context 连续性、D2/D5 闭包、渐进 Standard 旅程、可比完整成本、完整
   V1–V5/V10、R1/M3 和 C1 切换保持 open。完成前仍需完整原目标回归，随后才准备
   EdgeBench。
+
+### 2026-11-15 — 在显式材料操作中才加载库存 provider
+
+- **缺口：**读取静态内容配置描述时会导入 Material Lifecycle 库存包，在没有请求
+  材料操作前便加载 apply、intake、ranking 和 revision owner。
+- **增量：**既有 reference adapter 仅在调用 `inspect_reference_materials` 时加载
+  该 provider；配置描述、内容 search/capture/draft、TypeScript reference owner
+  和既有 Python 库存 owner 继续使用原契约。
+- **证据：**以 `main@35c5efbd4b90` 为基线，新进程返回完全相同的配置描述，
+  LoopX 导入图由 108 降至 88 个模块，不再加载 18 个材料模块和两个 project-skill
+  模块。`configure-goal --help` 的输出和 39 个模块保持一致。显式库存操作继续
+  使用原始材料字节、验证和私有产物边界。
+- **边界：**本次减少配置加载，不减少安装包大小或 execute/replay 的导入。
+  复用 C1 的既有组合和 owner；完整 D2/D5 闭包、真实模型采纳、可比完整成本、
+  R1/M3、C1 切换及完整原目标回归仍未完成。
