@@ -56,10 +56,14 @@ def _receipt_bound_guard_fields(
     guard = getattr(readback, "semantic_replan_guard", None)
     receipt = getattr(readback, "heartbeat_receipt", None) or {}
     identity = readback.identity.value if readback is not None else None
+    guard_scoped = bool(
+        obligation_id and isinstance(guard, Mapping) and guard.get("scope") == "turn_guard"
+        and guard.get("selected_obligation_id") == obligation_id
+    )
     return {
-        "receipt_bound_replan_guard_scoped": bool(
-            obligation_id and isinstance(guard, Mapping) and guard.get("scope") == "turn_guard"
-            and guard.get("selected_obligation_id") == obligation_id
+        "receipt_bound_replan_guard_scoped": guard_scoped,
+        "receipt_bound_replan_execution_pending": bool(
+            guard_scoped and readback and readback.replan_execution_pending
         ),
         "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
         "receipt_bound_guard_turn_instance_id": identity.turn_instance_id if identity is not None else None,
