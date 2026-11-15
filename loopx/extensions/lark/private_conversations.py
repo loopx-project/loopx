@@ -31,6 +31,7 @@ from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_c
 from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, normalize_chat_image_attachments
 from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.effect_runtime import effect_runtime_request_scope
 from ...file_lock import exclusive_file_lock
 from ...presentation.markdown import markdown_scalar
@@ -1534,13 +1535,13 @@ class LarkPrivateConversations:
             raise ValueError("invalid original image repair fields")
         if (not isinstance(plan["message_id"], str) or not LARK_MESSAGE_ID_PATTERN.fullmatch(plan["message_id"])
                 or not isinstance(plan["answer_sha256"], str)
-                or not re.fullmatch(r"[a-f0-9]{64}", plan["answer_sha256"])
+                or not BARE_SHA256_PATTERN.fullmatch(plan["answer_sha256"])
                 or not isinstance(plan["images"], list) or not 1 <= len(plan["images"]) <= CHAT_IMAGE_MAX_COUNT):
             raise ValueError("invalid original image repair target")
         images = []
         for image in plan["images"]:
             if (not isinstance(image, dict) or set(image) != {"url", "sha256"}
-                    or not isinstance(image["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", image["sha256"])
+                    or not isinstance(image["sha256"], str) or not BARE_SHA256_PATTERN.fullmatch(image["sha256"])
                     or not isinstance(image["url"], str)):
                 raise ValueError("each original image requires a URL and its SHA-256")
             images.append({"url": public_url(image["url"]), "sha256": image["sha256"]})
