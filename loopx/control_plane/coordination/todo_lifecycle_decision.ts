@@ -477,6 +477,19 @@ function terminalFence(
         ? {...lease, active: false, status: "released"} : null,
     });
   }
+  // An owner decision on an exact linked user gate has no agent actor to hold
+  // an execution lease: the gate records a decision, it does not execute work,
+  // so there is no holder to acquire for and no lineage to release. Only the
+  // actorless exact-scope override is admitted this way; a registered actor
+  // keeps the ordinary lease requirement below, and an active holder or an
+  // explicitly supplied fence is never bypassed.
+  if (request.command === "complete" && authorityMode === "exact_user_gate_decision_scope_override" &&
+      request.todo.role === "user" && request.todo.task_class === "user_gate" &&
+      request.actor_agent_id === null && !timeActive && !explicitFence) {
+    return result("apply", "terminal_fence_not_required", {
+      authority_mode: authorityMode, lease_fence: "not_required",
+    });
+  }
   // Deferred work cannot acquire a lease. Superseding a retired wait is a
   // terminal lifecycle edit, not execution, and the provider CAS retires any
   // expired lease lineage together with the Todo transition.

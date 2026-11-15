@@ -777,6 +777,36 @@ def test_exact_user_gate_completion_preserves_execution_fence(
         assert result["decision_scope_resolution"]["state"] == "resolved"
 
 
+@pytest.mark.parametrize("mode", ["soft_claim", "hard_lease"])
+def test_owner_closes_exact_user_gate_without_an_agent_actor(
+    tmp_path, canonical_workspace, mode
+):
+    """The owner who is not registered as an agent can still close the gate.
+
+    A single-agent goal has no second agent to act for the owner, and the
+    terminal CLI has no human owner actor. The exact linked gate is a decision
+    record rather than execution, so an actorless owner decision needs no
+    execution lease on either handoff mode.
+    """
+    registry, state = canonical_workspace(tmp_path, handoff_mode=mode)
+    target, gate = _add_exact_user_gate_pair(registry)
+    result = _terminal(
+        registry,
+        gate["todo_id"],
+        role="user",
+        decision_outcome="approve",
+        agent_id=None,
+    )
+    assert (
+        result["mutation_authority"]["authority_mode"]
+        == "exact_user_gate_decision_scope_override"
+    )
+    assert result["task_lease_fence"]["lease_fence"] == "not_required"
+    assert _agent_todo(state, gate["todo_id"])["status"] == "done"
+    assert not _agent_todo(state, target["todo_id"]).get("required_decision_scopes")
+    assert result["decision_scope_resolution"]["state"] == "resolved"
+
+
 def test_bound_user_action_completes_without_gate_or_execution_claim(
     tmp_path, canonical_workspace
 ):

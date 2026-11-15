@@ -393,7 +393,9 @@ test("single-agent goals consult the exact user gate override for owner decision
   assert.equal(unlinked.outcome, "rejected");
   assert.equal(unlinked.code, "actor_required");
 
-  // Registered actor on the gate keeps working exactly as before.
+  // A registered actor on the same gate is admitted through the same override,
+  // which is consulted first, so the audit mode is the override and not
+  // single-agent compatibility.
   const viaActor = evaluateCoordinationTodoTerminalDecision(request({
     registered_agents: ["agent-a"],
     todo: gate,
@@ -402,10 +404,57 @@ test("single-agent goals consult the exact user gate override for owner decision
     decision_outcome: "approve",
   }));
   assert.equal(viaActor.outcome, "apply");
-  // The registered actor is admitted through single-agent compatibility; the
-  // override itself only fires when no agent actor is available.
-  assert.ok(["single_agent_compatibility", "exact_user_gate_decision_scope_override"]
-    .includes(viaActor.authority_mode as string));
+  assert.equal(viaActor.authority_mode, "exact_user_gate_decision_scope_override");
+});
+
+test("actorless owner gate decisions do not require an execution lease", () => {
+  const scope = {kind: "direction", granularity: "action", scope_key: "release"};
+  const gate = {
+    todo_id: "todo_gate",
+    status: "open",
+    role: "user",
+    task_class: "user_gate",
+    claimed_by: null,
+    excluded_agents: [],
+    bound_agent: null,
+    blocks_agent: "agent-a",
+    decision_scope: scope,
+    required_decision_scopes: [],
+    unblocks_todo_id: "todo_target",
+  };
+  const target = {
+    ...request().todo as object,
+    todo_id: "todo_target",
+    required_decision_scopes: [scope],
+  };
+  // A hard-lease goal has no agent actor to hold a lease for an owner decision:
+  // the gate records a decision, it does not execute work.
+  const owner = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    handoff_mode: "hard_lease",
+    todo: gate,
+    decision_target: target,
+    actor_agent_id: null,
+    decision_outcome: "approve",
+  }));
+  assert.equal(owner.outcome, "apply");
+  assert.equal(owner.authority_mode, "exact_user_gate_decision_scope_override");
+  assert.equal(owner.lease_fence, "not_required");
+  assert.equal(owner.next_lease, null);
+
+  // A registered actor keeps the ordinary lease requirement: the owner
+  // exception never widens an agent's execution admission.
+  const actor = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    handoff_mode: "hard_lease",
+    todo: gate,
+    decision_target: target,
+    actor_agent_id: "agent-a",
+    decision_outcome: "approve",
+  }));
+  assert.equal(actor.outcome, "rejected");
+  assert.equal(actor.code, "handoff_mode_requires_lease");
+  assert.equal(actor.lease_fence, "required");
 });
 
 test("hard-lease terminal transition releases the exact owned generation", () => {
