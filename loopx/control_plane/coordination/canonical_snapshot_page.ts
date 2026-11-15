@@ -64,7 +64,7 @@ function decodePosition(value: unknown): Position | null {
 /** Exported for provider conformance, using the same store contract as the
  * shipped local entrypoint. No test-only pagination implementation is used. */
 export async function readCanonicalSnapshotFromStore(value: unknown, store: AuthorityStore,
-  completeBytes = 0): Promise<JsonObject> {
+  completeBytes = 0, retainedInspection = false): Promise<JsonObject> {
   const input = requireJsonObject(value, "canonical snapshot request");
   const leaseOnly = Object.hasOwn(input, "lease_todo_ids");
   check(hasExactAuthorityKeys(input, ["schema_version", "runtime_root", "goal_id", "include_leases", "projection_readback", "after",
@@ -103,7 +103,7 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
   "canonical_snapshot_changed", "canonical snapshot changed; restart the complete read, never append a newer page");
   let collection: ReturnType<typeof canonicalTodoCollection>;
   try {
-    collection = canonicalTodoCollection(head.head, goal, input.include_leases);
+    collection = canonicalTodoCollection(head.head, goal, input.include_leases, retainedInspection);
   } catch (error) {
     // The request is already decoded. A rejected persisted contract belongs to
     // the reader/authority boundary, not to the caller's request arguments.
@@ -175,14 +175,15 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
 /** Read-only RPC owner. A failed page never supplies a partial success or a
  * legacy fallback; the client must discard any earlier pages of that read. */
 export async function readCanonicalSnapshotPage(value: unknown,
-  dependencies: LocalAuthorityProviderDependencies = {}, completeBytes = 0): Promise<JsonObject> {
+  dependencies: LocalAuthorityProviderDependencies = {}, completeBytes = 0,
+  retainedInspection = false): Promise<JsonObject> {
   try {
     const input = requireJsonObject(value, "canonical snapshot request");
     const root = requireLocalAuthorityRuntimeRoot(input.runtime_root);
     const goal = requireAuthorityStoreId(input.goal_id, "goal id");
     await requireCanonicalAuthority(root, goal, "todo_snapshot");
     const store = await openRuntimeAuthorityStore(root, goal, dependencies, {existingOnly: true});
-    return await readCanonicalSnapshotFromStore(input, store, completeBytes);
+    return await readCanonicalSnapshotFromStore(input, store, completeBytes, retainedInspection);
   } catch (error) {
     return {schema_version: CANONICAL_SNAPSHOT_PAGE_RESULT, status: "failed",
       reason_code: error instanceof SnapshotReadError ? error.code : "canonical_snapshot_request_invalid",
@@ -195,6 +196,6 @@ export async function readCanonicalSnapshotPage(value: unknown,
 /** Same canonical contract, opting into the existing same-UID file transport.
  * Too-large collections keep bounded pages; failures never supply partial rows. */
 export async function readCanonicalSnapshot(value: unknown,
-  dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
-  return readCanonicalSnapshotPage(value, dependencies, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+  dependencies: LocalAuthorityProviderDependencies = {}, retainedInspection = false): Promise<JsonObject> {
+  return readCanonicalSnapshotPage(value, dependencies, CANONICAL_SNAPSHOT_LOCAL_BYTES, retainedInspection);
 }

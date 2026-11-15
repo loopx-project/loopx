@@ -15,6 +15,10 @@ import {
   TODO_DOMAIN_RECORD_CONTRACT,
   TODO_CANONICAL_READ_RECORD_FIELDS,
   TODO_CANONICAL_READ_RECORD_SCHEMA,
+  TODO_CANONICAL_REQUIRED_READ_FIELDS,
+  TODO_ITEM_SCHEMA,
+  TODO_DOMAIN_ITEM_SCHEMA,
+  canonicalCoordinationRecord,
 } from "./coordination_state_contract.ts";
 import {canonicalTodoRecord} from "./todo_presentation.ts";
 
@@ -122,6 +126,44 @@ function historicalTodoContracts(
   return contracts;
 }
 
+// Frozen retained declaration, not an extension of the executable contract.
+// Inspection preserves these fields without assigning their old execution rules.
+const RETAINED_TODO_FIELDS = Object.freeze((
+  "index done text schema_version todo_id role status priority title archive_state " +
+  "source_section task_class action_kind task_domain capability_binding_ref " +
+  "task_repository pr_number pr_events continuation_policy removed_continuation_policy " +
+  "required_write_scopes required_capabilities needs target_capabilities " +
+  "explore_result_node_refs decision_scope required_decision_scopes decision_outcome " +
+  "decision_amendment_operation_id decision_scope_outcomes claimed_by created_by " +
+  "last_actor_agent_id bound_agent goal_bound blocks_agent excluded_agents global_gate " +
+  "unblocks_todo_id unblocks_todo_ids depends_on_todo_ids resume_when " +
+  "resume_monitor_generation resume_condition resume_ready no_followup successor_todo_ids " +
+  "completion_continuation completion_recovery completion_receipt_id retirement_receipt_id " +
+  "restored_from_todo_id restoration_receipt_id legacy_terminal_resolution replan_obligation_id " +
+  "target_key cadence next_due_at expires_at watch_only last_checked_at result_hash " +
+  "consecutive_no_change material_change material_change_generation max_no_change_before_replan " +
+  "monitor_effect_id note note_history review_round_history review_gate_paused review_epoch_id " +
+  "review_unresolved_findings next_action validation skip_reason evidence evidence_corrections " +
+  "latest_evidence reason completed_at completion_turn_key completion_result updated_at " +
+  "superseded_by completion_validation_required completion_validation_sha256 " +
+  "completion_validation_display completion_validation_revision " +
+  "completion_validation_revision_history handoff_note"
+).split(" "));
+const RETAINED_DOMAIN_FIELDS = Object.freeze(
+  RETAINED_TODO_FIELDS.filter(field => field !== "index" && field !== "source_section"),
+);
+const RETAINED_TODO_DECLARATION = canonicalAuthorityBytes(RETAINED_TODO_FIELDS);
+const RETAINED_DOMAIN_DECLARATION = canonicalAuthorityBytes(RETAINED_DOMAIN_FIELDS);
+
+/** Exact recognition only; this predicate never grants execution authority. */
+export function retainedTodoReadFields(readModel: JsonObject): readonly string[] | undefined {
+  const domain = readModel.schema_version === TODO_DOMAIN_READ_RECORD_SCHEMA;
+  if (!domain && readModel.schema_version !== TODO_CANONICAL_READ_RECORD_SCHEMA) return undefined;
+  return canonicalAuthorityBytes(readModel.contract_fields).equals(
+    domain ? RETAINED_DOMAIN_DECLARATION : RETAINED_TODO_DECLARATION,
+  ) ? domain ? RETAINED_DOMAIN_FIELDS : RETAINED_TODO_FIELDS : undefined;
+}
+
 function sortedIds(values: Iterable<string>): string[] {
   return [...values].sort(authorityUnicodeCompare);
 }
@@ -187,6 +229,7 @@ export function validateCoordinationTodoReadModel(
 function validateIndexedTodoReadModel(
   value: JsonObject,
   index: CoordinationTodoProjectionIndex,
+  retainedInspection = false,
 ): JsonObject {
   const records = index.todo_ids.map((todoId) => index.todos.get(todoId)!);
   // Identity indexing already validates/copies every record and rejects duplicate
@@ -219,15 +262,33 @@ function validateIndexedTodoReadModel(
   const currentContract = declaredFields.equals(canonicalAuthorityBytes(fields));
   const historicalContract = currentContract ? undefined : historicalTodoContracts(fields)
     .find((contract) => declaredFields.equals(canonicalAuthorityBytes(contract.fields)));
-  if (!currentContract && historicalContract === undefined) {
+  const retainedFields = retainedInspection ? retainedTodoReadFields(readModel) : undefined;
+  if (!currentContract && historicalContract === undefined && retainedFields === undefined) {
     throw new AuthorityStoreProtocolError("coordination Todo read-model field contract mismatch");
   }
   if (historicalContract !== undefined &&
       records.some((record) => [...historicalContract.absentFields].some((field) => field in record))) {
     throw new AuthorityStoreProtocolError("coordination Todo record exceeds its historical field contract");
   }
+  const currentFields = retainedFields === undefined ? null : new Set<string>(fields);
   for (const [recordIndex, record] of records.entries()) {
-    canonicalTodoRecord(record, `coordination Todo read record ${recordIndex}`);
+    const label = `coordination Todo read record ${recordIndex}`;
+    if (retainedFields === undefined) {
+      canonicalTodoRecord(record, label);
+    } else {
+      canonicalCoordinationRecord(record, {
+        fields: retainedFields,
+        required_fields: domain ? TODO_DOMAIN_RECORD_CONTRACT.required_fields : TODO_CANONICAL_REQUIRED_READ_FIELDS,
+      }, label);
+      if (record.schema_version !== (domain ? TODO_DOMAIN_ITEM_SCHEMA : TODO_ITEM_SCHEMA)) {
+        throw new AuthorityStoreProtocolError(`${label} has unsupported Todo schema`);
+      }
+      // Reuse required-value semantics without teaching the execution decoder
+      // about retired fields. The original indexed record remains untouched.
+      canonicalTodoRecord(Object.fromEntries(
+        Object.entries(record).filter(([field]) => currentFields!.has(field)),
+      ), label);
+    }
   }
   return readModel;
 }
@@ -346,10 +407,12 @@ export class CoordinationProjectionRead {
   private coordination: CoordinationProjectionIndex | undefined;
   private readonly head: JsonObject;
   private readonly goalId: string;
+  private readonly retainedInspection: boolean;
 
-  constructor(head: JsonObject, goalId: string) {
+  constructor(head: JsonObject, goalId: string, retainedInspection = false) {
     this.head = head;
     this.goalId = goalId;
+    this.retainedInspection = retainedInspection;
   }
 
   get todoIndex(): CoordinationTodoProjectionIndex {
@@ -361,7 +424,7 @@ export class CoordinationProjectionRead {
   }
 
   validateTodoReadModel(): JsonObject {
-    return validateIndexedTodoReadModel(this.head, this.todoIndex);
+    return validateIndexedTodoReadModel(this.head, this.todoIndex, this.retainedInspection);
   }
 }
 

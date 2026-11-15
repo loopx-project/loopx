@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import { canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import {
   indexCoordinationProjection,
+  CoordinationProjectionRead,
   indexCoordinationProjectionTodos,
   coordinationTodoReadModel,
   validateCoordinationTodoReadModel,
@@ -25,6 +26,14 @@ import {
   TODO_DOMAIN_READ_RECORD_SCHEMA,
   TODO_DOMAIN_RECORD_CONTRACT,
 } from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
+import {readTodo, TODO_READ_REQUEST} from "../../loopx/control_plane/todos/read_projection.ts";
+import {
+  readCanonicalTodoProjection, readCanonicalQuotaProjection, readExecutionPreparationSource,
+} from "../../loopx/control_plane/todos/read_transaction.ts";
+import {
+  readCanonicalSnapshot, CANONICAL_SNAPSHOT_PAGE_REQUEST,
+} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
+import {openLocalAuthorityStore} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 
 test("native provider Todo creation and archival need no Markdown address", async () => {
   const root = await mkdtemp(join(tmpdir(), "loopx-domain-todo-"));
@@ -557,5 +566,188 @@ for (const native of [false, true]) {
     assert.throws(() => validateCoordinationTodoReadModel(head, "foreign-goal"), /goal mismatch/);
     assert.deepEqual(validateCoordinationTodoReadModel({...head, todos: [],
       todo_read_model: coordinationTodoReadModel([], schema)}, head.goal_id), coordinationTodoReadModel([], schema));
+  });
+}
+
+// Independent retained declaration. Never derive this fixture from the decoder
+// or today's executable manifest: inspection must preserve the older vocabulary.
+const retainedInspectionFields = (
+  "index done text schema_version todo_id role status priority title archive_state " +
+  "source_section task_class action_kind task_domain capability_binding_ref " +
+  "task_repository pr_number pr_events continuation_policy removed_continuation_policy " +
+  "required_write_scopes required_capabilities needs target_capabilities " +
+  "explore_result_node_refs decision_scope required_decision_scopes decision_outcome " +
+  "decision_amendment_operation_id decision_scope_outcomes claimed_by created_by " +
+  "last_actor_agent_id bound_agent goal_bound blocks_agent excluded_agents global_gate " +
+  "unblocks_todo_id unblocks_todo_ids depends_on_todo_ids resume_when " +
+  "resume_monitor_generation resume_condition resume_ready no_followup successor_todo_ids " +
+  "completion_continuation completion_recovery completion_receipt_id retirement_receipt_id " +
+  "restored_from_todo_id restoration_receipt_id legacy_terminal_resolution replan_obligation_id " +
+  "target_key cadence next_due_at expires_at watch_only last_checked_at result_hash " +
+  "consecutive_no_change material_change material_change_generation max_no_change_before_replan " +
+  "monitor_effect_id note note_history review_round_history review_gate_paused review_epoch_id " +
+  "review_unresolved_findings next_action validation skip_reason evidence evidence_corrections " +
+  "latest_evidence reason completed_at completion_turn_key completion_result updated_at " +
+  "superseded_by completion_validation_required completion_validation_sha256 " +
+  "completion_validation_display completion_validation_revision " +
+  "completion_validation_revision_history handoff_note"
+).split(" ");
+
+function retainedInspectionHead(native: boolean) {
+  const todos: JsonObject[] = [
+    {
+      schema_version: native ? "todo_domain_record_v0" : "todo_item_v0",
+      todo_id: "todo_archive", role: "agent", status: "done", done: true,
+      text: "Retain the accepted evidence.", archive_state: "archive", no_followup: true,
+      completion_receipt_id: "synthetic-completion", retirement_receipt_id: "synthetic-retirement",
+      evidence_corrections: [{reason: "Synthetic correction", evidence: "Corrected evidence"}],
+      ...(native ? {} : {source_section: "Completed Work Archive", index: 7}),
+    },
+    {
+      schema_version: native ? "todo_domain_record_v0" : "todo_item_v0",
+      todo_id: "todo_pending", role: "agent", status: "open", done: false,
+      text: "Preserve dependencies and paused review.", archive_state: "active",
+      task_class: "advancement_task", claimed_by: "agent-a",
+      depends_on_todo_ids: ["todo_archive"], review_gate_paused: true,
+      review_epoch_id: "synthetic-review", note_history: [{note: "Await independent review"}],
+      ...(native ? {} : {source_section: "Agent Todo", index: 11}),
+    },
+  ];
+  return {
+    goal_id: "retained-inspection", handoff_mode: "soft_claim", todos, leases: [],
+    todo_read_model: {
+      schema_version: native ? "loopx_todo_domain_read_record_v0" : "loopx_todo_canonical_read_record_v0",
+      contract_fields: retainedInspectionFields.filter(field =>
+        !native || (field !== "index" && field !== "source_section")),
+      todo_count: 2, records_sha256: canonicalAuthoritySha256(todos),
+    },
+  };
+}
+
+for (const native of [false, true]) {
+  test(`retained ${native ? "domain" : "canonical"} inspection admits only the exact intact contract`, () => {
+    const head = retainedInspectionHead(native);
+    const before = structuredClone(head);
+    const inspect = (candidate: JsonObject) =>
+      new CoordinationProjectionRead(candidate, head.goal_id, true).validateTodoReadModel();
+    assert.deepEqual(inspect(head), head.todo_read_model);
+    assert.throws(() => new CoordinationProjectionRead(head, head.goal_id).validateTodoReadModel(),
+      /field contract mismatch/);
+    assert.throws(() => validateCoordinationTodoReadModel(head, head.goal_id), /field contract mismatch/);
+
+    const fields = head.todo_read_model.contract_fields;
+    for (const malformed of [
+      null, "not-a-declaration", [...fields, null],
+      [...fields, "unknown_obligation"], [...fields].reverse(),
+      [...fields, fields[0]], fields.slice(0, -1),
+    ]) {
+      assert.throws(() => inspect({...head,
+        todo_read_model: {...head.todo_read_model, contract_fields: malformed}}),
+      /field contract mismatch/);
+    }
+    assert.throws(() => inspect({...head,
+      todo_read_model: {...head.todo_read_model, schema_version: "unknown_read_record_v0"}}),
+    /schema mismatch/);
+    assert.throws(() => inspect({...head,
+      todo_read_model: {...head.todo_read_model, records_sha256: "0".repeat(64)}}), /digest mismatch/);
+    assert.throws(() => inspect({...head,
+      todo_read_model: {...head.todo_read_model, todo_count: 1}}), /count mismatch/);
+
+    // A correct digest cannot legalize an undeclared field or missing requirement.
+    for (const field of ["unknown_obligation", "material_change_scope", ...(native ? ["source_section"] : [])]) {
+      const todos = head.todos.map(todo => ({...todo, [field]: "not declared here"}));
+      assert.throws(() => inspect({...head, todos,
+        todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256(todos)}}),
+      /unversioned fields/);
+    }
+    for (const invalid of [
+      (todo: JsonObject) => { delete todo.text; },
+      (todo: JsonObject) => { todo.done = "false"; },
+      (todo: JsonObject) => { todo.schema_version = native ? "todo_item_v0" : "todo_domain_record_v0"; },
+    ]) {
+      const todos = structuredClone(head.todos);
+      invalid(todos[1]!);
+      assert.throws(() => inspect({...head, todos,
+        todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256(todos)}}),
+      /required fields|required semantics|unsupported Todo schema/);
+    }
+    const reordered = [...head.todos].reverse();
+    assert.throws(() => inspect({...head, todos: reordered,
+      todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256(reordered)}}),
+    /deterministic todo_id order/);
+    const duplicate = [head.todos[0]!, head.todos[0]!];
+    assert.throws(() => inspect({...head, todos: duplicate,
+      todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256(duplicate)}}),
+    /duplicate todo ids/);
+    assert.deepEqual(head, before, "all inspections, including refusals, preserve their source");
+
+    const currentTodo = {
+      schema_version: native ? "todo_domain_record_v0" : "todo_item_v0",
+      todo_id: "todo_current", role: "agent", status: "open", done: false,
+      text: "Current work stays readable.", archive_state: "active",
+      ...(native ? {} : {source_section: "Agent Todo"}),
+    };
+    const current = {...head, todos: [currentTodo],
+      todo_read_model: coordinationTodoReadModel([currentTodo], head.todo_read_model.schema_version)};
+    assert.deepEqual(inspect(current), current.todo_read_model);
+    assert.deepEqual(validateCoordinationTodoReadModel(current, current.goal_id), current.todo_read_model);
+  });
+
+  test(`retained ${native ? "domain" : "canonical"} list detail does not admit execution-facing reads`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "loopx-retained-inspection-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const head = retainedInspectionHead(native);
+    await engageCanonicalRoute(root, head.goal_id);
+    const state = join(root, "synthetic-state.md");
+    await writeFile(state, "# Synthetic inspection only\n");
+    const store = await openLocalAuthorityStore(root, head.goal_id);
+    const seeded = await store.commitAuthority({
+      expected_provider_revision: null, operation_id: "retained-seed",
+      events: [], next_projection: head, receipts: [],
+    });
+    assert.equal(seeded.status, "applied");
+    const before = await store.loadAuthority();
+    const receipt = await store.readReceipt("retained-seed");
+    const now = "2026-01-01T00:00:00Z";
+    const source = {runtime_root: root, goal_id: head.goal_id};
+    const common = {schema_version: TODO_READ_REQUEST, source,
+      observed_at: Date.parse(now) / 1000, evaluated_at: now};
+    for (const expected of head.todos) {
+      const result = await readTodo({...common, kind: "query", query: {
+        goal_id: head.goal_id, todo_id: expected.todo_id, read_scope: "active",
+        state_file: state, project: root,
+      }}, now);
+      const payload = result.payload as JsonObject;
+      assert.ok(payload, JSON.stringify(result));
+      assert.equal(payload.read_only, true);
+      const detail = payload.todo as JsonObject;
+      for (const [key, value] of Object.entries(expected)) assert.deepEqual(detail[key], value, key);
+      // Restored presentation fields are not an executable replacement.
+      assert.throws(() => prepareCoordinationProjectionCommit({
+        goal_id: head.goal_id, operation_id: "must-not-commit",
+        expected_provider_revision: "synthetic-unused-revision", projection: head,
+        mutations: [{kind: "todo_upsert", todo: {...detail, note: "not authorized"}}],
+      }), /field contract mismatch/);
+    }
+    const preparation = await readExecutionPreparationSource({...common, todo_id: "todo_pending"});
+    assert.equal(preparation.execution_preparation_source, null);
+    const summaryRead = {...common, kind: "canonical_fields"};
+    const summary = await readCanonicalTodoProjection(summaryRead);
+    assert.equal((summary.canonical as JsonObject).status, "failed");
+    assert.equal((summary.canonical as JsonObject).reason_code, "canonical_snapshot_projection_invalid");
+    const quota = await readCanonicalQuotaProjection({requests: [{
+      summary_request: {source_reference: {read: summaryRead, expected_source: {}}},
+    }]});
+    assert.equal((quota.canonical as JsonObject).status, "failed");
+    assert.equal((quota.canonical as JsonObject).reason_code, "canonical_snapshot_projection_invalid");
+    const snapshot = await readCanonicalSnapshot({
+      schema_version: CANONICAL_SNAPSHOT_PAGE_REQUEST, ...source,
+      include_leases: false, projection_readback: null, after: null,
+    });
+    assert.equal(snapshot.status, "failed");
+    assert.equal(snapshot.reason_code, "canonical_snapshot_projection_invalid");
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.deepEqual(await store.readReceipt("retained-seed"), receipt);
+    assert.equal(await readFile(state, "utf8"), "# Synthetic inspection only\n");
   });
 }

@@ -210,9 +210,9 @@ def test_todo_help_does_not_load_mutation_owners():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-# Public 1.3.1 coordination_state_contract_v0.json, release 20261112T094058Z.
-# Keep the released declaration literal: deriving it from the current contract
-# would let a removed historical obligation disappear from this regression.
+# Exact retained coordination_state_contract_v0 declaration; inspection only.
+# Keep it literal: deriving it from the current contract would let a removed
+# historical obligation disappear from this regression.
 _RELEASE_131_TODO_FIELDS = (
     "index done text schema_version todo_id role status priority title archive_state "
     "source_section task_class action_kind task_domain capability_binding_ref "

@@ -16,6 +16,7 @@ import {canonicalAuthoritySha256, canonicalAuthorityJson} from "../coordination/
 import {decodeTodoReadSource} from "./read_codec.ts";
 import {projectTodoQuotaPlanning} from "./quota_selection.ts";
 import type {LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
+import {retainedTodoReadFields} from "../coordination/coordination_projection.ts";
 
 const includesArchivedRows = (query: JsonObject): boolean =>
   query.read_scope === "completed_history" || query.include_archived === true;
@@ -30,7 +31,11 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
     !Array.isArray(contractFields) || !contractFields.length || new Set(contractFields).size !== contractFields.length ||
     contractFields.some(key => typeof key !== "string" || !/^[a-z][a-z0-9_]*$/.test(key))
   )) throw new EffectRuntimeRequestError("Todo contract fields require a read-only canonical summary");
-  const canonical = await collectCanonicalTodoSource(source, dependencies);
+  // Only a list query opts into retained inspection. Quota, execution
+  // preparation and query-free summaries keep the strict execution contract.
+  const canonical = await collectCanonicalTodoSource(
+    source, dependencies, input.query != null && input.read_pipeline === undefined,
+  );
   if (canonical.status !== "loaded") return {schema_version: TODO_READ_RESULT, canonical};
   const todos = canonical.todos;
   const guards = canonical.goal_acceptance_work_guards ?? {};
@@ -195,13 +200,14 @@ export async function readCanonicalQuotaProjection(input: JsonObject, dependenci
   return {schema_version: TODO_READ_RESULT, quota_wires: wires};
 }
 
-async function collectCanonicalTodoSource(source: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+async function collectCanonicalTodoSource(source: JsonObject,
+  dependencies: LocalAuthorityProviderDependencies = {}, retainedInspection = false): Promise<JsonObject> {
   const todos: unknown[] = [], leases: unknown[] = [], guards: JsonObject = {};
   let after: unknown = null, first: JsonObject | null = null;
   do {
     const page = await readCanonicalSnapshot({schema_version: LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA,
       runtime_root: source.runtime_root, goal_id: source.goal_id, include_leases: source.include_leases === true,
-      projection_readback: source.projection_readback ?? null, after}, dependencies);
+      projection_readback: source.projection_readback ?? null, after}, dependencies, retainedInspection);
     if (page.status !== "page") return {
       ...page, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA};
     if (first === null) first = page;
@@ -314,6 +320,11 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
       (row.archive_state ?? "active") === (item.archive_state ?? "active"));
     if (matching.length !== 1) throw new Error("Todo detail cannot recover an unambiguous full source body");
     item.text = String(matching[0]!.text ?? "");
+    if (retainedTodoReadFields(requireJsonObject(canonical.todo_read_model, "Todo read model")) !== undefined) {
+      // Exact inspection returns the preserved source fields, not today's
+      // lossy presentation vocabulary or a converted executable Todo.
+      Object.assign(item, matching[0]);
+    }
   }
   const matchedCount = todos.length;
   const hot = !fullText && !includeArchived && query.agent_id && query.limit == null &&
