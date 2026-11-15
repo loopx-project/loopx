@@ -82,20 +82,29 @@ def _workspace_file(workspace: Path, ref: str, *, required: bool) -> str | None:
     opens keep a replaced parent from redirecting a source read outside the
     original workspace; source digests are host observations, not verdicts.
     """
-    if os.open not in os.supports_dir_fd or not all(hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")):
+    directory_only = getattr(os, "O_DIRECTORY", None)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if (
+        os.open not in os.supports_dir_fd
+        or directory_only is None
+        or no_follow is None
+        or nonblock is None
+    ):
         raise ValueError("this host cannot safely inspect workspace checker sources")
     if (not isinstance(ref, str) or not ref or "\\" in ref or "\0" in ref
             or ref.startswith("/") or any(part in {"", ".", ".."} for part in ref.split("/"))):
         raise ValueError("checker files must remain relative to the original workspace")
     descriptors = []
     try:
-        parent = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        directory_flags = os.O_RDONLY | directory_only | no_follow
+        parent = os.open(workspace, directory_flags)
         descriptors.append(parent)
         parts = ref.split("/")
         for part in parts[:-1]:
-            parent = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            parent = os.open(part, directory_flags, dir_fd=parent)
             descriptors.append(parent)
-        source = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        source = os.open(parts[-1], os.O_RDONLY | no_follow | nonblock, dir_fd=parent)
         descriptors.append(source)
         if not stat.S_ISREG(os.fstat(source).st_mode):
             raise ValueError("checker sources and present artifacts must be regular files")
