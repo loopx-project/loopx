@@ -4537,3 +4537,27 @@ view shows its independently checked result in the same conversation.
   improvement, original-ten acceptance or C1 cutover. Preserve prior sources,
   failures and seals; full original-goal regression still precedes completion
   and EdgeBench preparation.
+
+### 2026-11-15 — Resolve provider options for the requested capability editor
+
+- **Gap:** resolving even a disabled periodic-report subscription constructed
+  every editor definition and queried unselected `codex_chat` profile and
+  steward options. Unavailable unrelated providers could block its metadata.
+- **Delta:** the existing editor queries the original profile owner only for
+  `codex_chat`, and the original steward vocabulary helper only for
+  `codex_chat` or `steward_executor`. Selected fields, scopes, nullable options,
+  helper ordering/errors, configuration precedence and detached outputs retain
+  their contracts; unknown editors remain read-only without provider discovery.
+- **Evidence:** all 20 registered editor definitions and unknown/empty inputs
+  have complete baseline/candidate comparisons, including nullable resolution
+  and detached outputs. Fresh unavailable-provider counterexamples and selected
+  owner positive/negative checks pass. Earlier Core evidence from
+  `main@2b156284c4f4` and C1 #8266 snapshot `1a3740cf9e6e` plus only an editor
+  overlay is preserved within that original scope. Requalification builds
+  separate installed Core wheels from `main@fef679d18192` plus this editor and
+  its conflict-free merge with current C1 `1a3740cf9e6e`; both pass metadata
+  checks and File/SQLite execution, replay and readback.
+- **Boundary:** this narrows metadata discovery, not installed capability
+  contents or activation. Full Settings journeys, actual-model adoption, total
+  cost, natural process drain, complete D2/D5 closure, R1/M3, full C1 acceptance
+  and its default cutover remain unqualified.

@@ -3510,3 +3510,23 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   窗口，不证明真实计时等价或性能收益。它不完成 D2／D5、真实模型／上下文采用、完整成本改善、原十项验收
   或 C1 切换。保留历史源码、失败和 seal；完成前仍需完整原目标回归，随后才准备
   EdgeBench。
+
+### 2026-11-15 — 仅为请求的 capability editor 求 provider options
+
+- **缺口：**即使解析未启用的 periodic-report 订阅，也会构造全部 editor definitions，
+  查询未选中的 `codex_chat` profiles 和 steward options；无关 provider 不可用时
+  会阻断本次 metadata。
+- **增量：**现有 editor 仅为 `codex_chat` 查询原 profile owner，仅为 `codex_chat`
+  或 `steward_executor` 查询原 steward vocabulary helper。所选字段、scopes、
+  nullable options、helper 顺序与异常、配置 precedence 和 detached outputs 保留
+  原契约；unknown editor 仍只读，且不查询 provider。
+- **证据：**全部 20 个已注册 editor、unknown／empty 输入有完整基线与候选对照，
+  包括 nullable resolution 和 detached outputs。新进程中的 provider 不可用反例
+  及所选原 owner 的正反例通过。此前 `main@2b156284c4f4` 与 C1 #8266 snapshot
+  `1a3740cf9e6e` 仅 overlay editor 的 Core 证据保留在原范围内。重新资格化分别
+  从 `main@fef679d18192` 加入本 editor，以及它与当前 C1 `1a3740cf9e6e` 的无
+  冲突合并来源构建独立真实 Core wheel；均通过 metadata 检查及 File／SQLite
+  执行、回放和回读。
+- **边界：**本次收窄 metadata discovery，不改变安装的 capability 内容或 activation。
+  全 Settings 旅程、真实模型采纳、总成本、自然进程 drain、完整 D2/D5 闭包、
+  R1/M3、完整 C1 验收及其默认切换仍未资格化。
