@@ -10,12 +10,15 @@ adds no new import edge and cannot introduce a cycle. Every site now references
 the single owner and the restated name is retired.
 
 Blocking checks are bound to the two known consumers' membership decisions:
-an ``in`` / ``not in`` comparand stating the folded set inline, or through a
-name the same module restates. A binding alone decides nothing -- display
-columns assigned to a local tuple and expanded into the report keep every
-observable output identical -- so ordinary assignments and unknown uses stay
-with the whole-tree folded-value census as advisory output, never a failure
-(semantic-vocabulary-convergence-v0: equal value is not proof of one concept).
+an ``in`` / ``not in`` comparand stating the folded set inline, or a name whose
+lexical binding -- resolved from the innermost enclosing scope outward -- is
+such a literal. Scope matters: two functions may reuse one spelling, one for
+display columns and one for the owner object, and only the binding visible at
+the decision counts. A binding alone decides nothing, and a name whose
+provenance cannot be resolved locally (an import, a parameter) is not evidence,
+so both stay with the whole-tree folded-value census as advisory output, never
+a failure (semantic-vocabulary-convergence-v0: equal value is not proof of one
+concept).
 
 Behavioural parity runs through the owner's own ``source_freshness_row`` gate
 and the real ``_source_coverage`` report, so a migration that silently changed
@@ -102,39 +105,173 @@ def _status_literal_sites(source: str) -> list[int]:
     ]
 
 
+class _Scope:
+    """One lexical scope: the module, a function, or a class body."""
+
+    def __init__(self, node: ast.AST, parent: "_Scope | None") -> None:
+        self.node = node
+        self.parent = parent
+        self.bindings: dict[str, ast.expr | None] = {}
+
+
+def _membership_sites(tree: ast.Module) -> list[tuple[ast.Compare, _Scope]]:
+    """Every ``in`` / ``not in`` comparison paired with its enclosing scope."""
+
+    found: list[tuple[ast.Compare, _Scope]] = []
+
+    def record(expr: ast.AST | None, scope: _Scope) -> None:
+        if expr is None:
+            return
+        for node in ast.walk(expr):
+            if isinstance(node, ast.Compare):
+                found.append((node, scope))
+
+    def bind(target: ast.expr, scope: _Scope, value: ast.expr | None = None) -> None:
+        if isinstance(target, ast.Name):
+            scope.bindings[target.id] = value
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                bind(element, scope)
+        elif isinstance(target, ast.Starred):
+            bind(target.value, scope)
+
+    def visit(body: list[ast.stmt], scope: _Scope) -> None:
+        for stmt in body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                scope.bindings[stmt.name] = None
+                # A class body is not a closure scope for the functions it
+                # defines, so skip it when building the lexical chain.
+                parent = scope
+                while isinstance(parent.node, ast.ClassDef):
+                    parent = parent.parent
+                inner = _Scope(stmt, parent)
+                for arg in (
+                    *stmt.args.posonlyargs,
+                    *stmt.args.args,
+                    *stmt.args.kwonlyargs,
+                    stmt.args.vararg,
+                    stmt.args.kwarg,
+                ):
+                    if arg is not None:
+                        inner.bindings[arg.arg] = None
+                for expr in (*stmt.decorator_list, *stmt.args.defaults):
+                    record(expr, scope)
+                for expr in stmt.args.kw_defaults:
+                    record(expr, scope)
+                visit(stmt.body, inner)
+            elif isinstance(stmt, ast.ClassDef):
+                scope.bindings[stmt.name] = None
+                inner = _Scope(stmt, scope)
+                for expr in (*stmt.decorator_list, *stmt.bases):
+                    record(expr, scope)
+                for keyword in stmt.keywords:
+                    record(keyword.value, scope)
+                visit(stmt.body, inner)
+            elif isinstance(stmt, ast.Assign):
+                record(stmt.value, scope)
+                for target in stmt.targets:
+                    bind(target, scope, stmt.value if isinstance(target, ast.Name) else None)
+            elif isinstance(stmt, ast.AnnAssign):
+                record(stmt.value, scope)
+                bind(stmt.target, scope, stmt.value if isinstance(stmt.target, ast.Name) else None)
+            elif isinstance(stmt, ast.AugAssign):
+                record(stmt.value, scope)
+                if isinstance(stmt.target, ast.Name) and stmt.target.id not in scope.bindings:
+                    scope.bindings[stmt.target.id] = None
+            elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+                record(stmt.iter, scope)
+                bind(stmt.target, scope)
+                visit(stmt.body, scope)
+                visit(stmt.orelse, scope)
+            elif isinstance(stmt, ast.While):
+                record(stmt.test, scope)
+                visit(stmt.body, scope)
+                visit(stmt.orelse, scope)
+            elif isinstance(stmt, ast.If):
+                record(stmt.test, scope)
+                visit(stmt.body, scope)
+                visit(stmt.orelse, scope)
+            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                for item in stmt.items:
+                    record(item.context_expr, scope)
+                    if item.optional_vars is not None:
+                        bind(item.optional_vars, scope)
+                visit(stmt.body, scope)
+            elif isinstance(stmt, ast.Try):
+                visit(stmt.body, scope)
+                for handler in stmt.handlers:
+                    record(handler.type, scope)
+                    if handler.name:
+                        scope.bindings[handler.name] = None
+                    visit(handler.body, scope)
+                visit(stmt.orelse, scope)
+                visit(stmt.finalbody, scope)
+            elif isinstance(stmt, ast.Match):
+                record(stmt.subject, scope)
+                for case in stmt.cases:
+                    record(case.guard, scope)
+                    visit(case.body, scope)
+            elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                for alias in stmt.names:
+                    scope.bindings[alias.asname or alias.name.split(".")[0]] = None
+            else:
+                for child in ast.iter_child_nodes(stmt):
+                    if isinstance(child, ast.expr):
+                        record(child, scope)
+
+    module = _Scope(tree, None)
+    visit(tree.body, module)
+    return found
+
+
+def _binds_success_literal(name: str, scope: _Scope | None) -> bool:
+    """Whether ``name`` resolves, lexically, to a SUCCESS-folding literal.
+
+    The innermost enclosing scope wins, so two functions may reuse one spelling
+    for different things and only the binding visible at the decision counts.
+    Imports, parameters, and anything else without a literal binding anywhere
+    up the chain are unknown provenance: never a hard finding.
+    """
+
+    seen: set[tuple[str, int]] = set()
+    for _ in range(8):
+        holder = scope
+        while holder is not None and name not in holder.bindings:
+            holder = holder.parent
+        if holder is None or (name, id(holder)) in seen:
+            return False
+        seen.add((name, id(holder)))
+        value = holder.bindings[name]
+        if value is None:
+            return False
+        if _members(value) == SUCCESS:
+            return True
+        if not isinstance(value, ast.Name):
+            return False
+        name, scope = value.id, holder
+    return False
+
+
 def _decision_slot_sites(source: str) -> list[int]:
     """SUCCESS restatements in status-decision slots, counted once.
 
     A decision slot is an ``in`` / ``not in`` membership comparand: either a
-    collection literal folding to SUCCESS, or a name this module binds to such
-    a literal. Bindings alone (display columns), iteration order, and any
-    other use decide nothing and are left to the advisory census.
+    collection literal folding to SUCCESS, or a name whose lexical binding is
+    such a literal. Bindings alone (display columns), iteration order, and
+    memberships over names of unknown provenance decide nothing and are left
+    to the advisory census.
     """
 
-    tree = ast.parse(source)
-    wrapped = _wrapped_inner_ids(tree)
-    restated: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets, value = node.targets, node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets, value = [node.target], node.value
-        else:
-            continue
-        if id(value) not in wrapped and _members(value) == SUCCESS:
-            restated.update(
-                target.id for target in targets if isinstance(target, ast.Name)
-            )
     sites: list[int] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Compare):
-            continue
-        for op, comparand in zip(node.ops, node.comparators):
+    for compare, scope in _membership_sites(ast.parse(source)):
+        for op, comparand in zip(compare.ops, compare.comparators):
             if not isinstance(op, (ast.In, ast.NotIn)):
                 continue
-            if id(comparand) not in wrapped and _members(comparand) == SUCCESS:
+            if _members(comparand) == SUCCESS:
                 sites.append(comparand.lineno)
-            elif isinstance(comparand, ast.Name) and comparand.id in restated:
+            elif isinstance(comparand, ast.Name) and _binds_success_literal(
+                comparand.id, scope
+            ):
                 sites.append(comparand.lineno)
     return sorted(sites)
 
@@ -310,9 +447,9 @@ def test_successful_read_consumers_keep_observable_semantics() -> None:
 
 
 def test_same_value_without_same_slot_remains_advisory() -> None:
-    # The reviewer counterexamples: both report layouts fold to SUCCESS
-    # inside display data, so the advisory census sees them -- but they
-    # decide nothing, so the hard check stays silent.
+    # The reviewer counterexamples: each folds to SUCCESS somewhere in display
+    # data, so the advisory census sees the literal -- but no decision is on a
+    # restated set, so the hard check stays silent.
     starred_report = (
         'for status in (*("completed", "no_change"), "failed", "unavailable"):\n'
         "    pass\n"
@@ -326,6 +463,28 @@ def test_same_value_without_same_slot_remains_advisory() -> None:
     )
     assert _status_literal_sites(named_columns) == [1]
     assert _decision_slot_sites(named_columns) == []
+    # One spelling, two functions, two roles: the report keeps display columns
+    # in a local ``statuses`` while freshness aliases the owner under the same
+    # name. Resolution is per scope, so neither site is a restatement.
+    shared_spelling = (
+        "def report():\n"
+        '    statuses = ("completed", "no_change")\n'
+        '    return (*statuses, "failed", "unavailable")\n'
+        "\n"
+        "def fresh(attempt):\n"
+        "    statuses = _SUCCESS_STATUSES\n"
+        "    return attempt in statuses\n"
+    )
+    assert _status_literal_sites(shared_spelling) == [2]
+    assert _decision_slot_sites(shared_spelling) == []
+    # A parameter shadows any outer binding of the same spelling: unknown
+    # provenance at the decision, so it stays advisory.
+    shadowed_parameter = (
+        '_statuses = ("completed", "no_change")\n'
+        "def f(_statuses):\n"
+        "    return status in _statuses\n"
+    )
+    assert _decision_slot_sites(shadowed_parameter) == []
 
 
 # --- the census bites every restatement form; the hard check bites decisions only -------
@@ -346,9 +505,16 @@ POISON_CORPUS = (
     ("the starred report regrouping is advisory only", 'for status in (*("completed", "no_change"), "failed", "unavailable"):\n    pass\n', 1, 0),
     ("named display columns are advisory only", 'success_columns = ("completed", "no_change")\nfor status in (*success_columns, "failed", "unavailable"):\n    pass\n', 1, 0),
     ("iterating the success pair for display is advisory only", 'for status in ("completed", "no_change"):\n    pass\n', 1, 0),
+    ("a function-local literal is still a restatement", 'def f(status):\n    _R = ("completed", "no_change")\n    return status in _R\n', 1, 1),
+    ("a local alias of a restated literal is still caught", '_ANY = ("completed", "no_change")\ndef f(status):\n    _R = _ANY\n    return status in _R\n', 1, 1),
+    ("a closure sees the module restatement", '_ANY = ("completed", "no_change")\ndef outer():\n    def inner(status):\n        return status in _ANY\n', 1, 1),
     ("importing the owner is not a restatement", "from .m import _SUCCESS_STATUSES\n", 0, 0),
     ("alias rebind is not a restatement", "_READ_SUCCESS_STATUSES = _SUCCESS_STATUSES\n", 0, 0),
     ("deciding through an alias of the owner is legal", "_ALIAS = _SUCCESS_STATUSES\ndef f(status):\n    return status in _ALIAS\n", 0, 0),
+    ("a local alias of the owner is not a restatement", 'from .freshness import _SUCCESS_STATUSES\ndef f(status):\n    statuses = _SUCCESS_STATUSES\n    return status in statuses\n', 0, 0),
+    ("an attribute of the owner is not a restatement", 'import freshness\ndef f(status):\n    return status in freshness._SUCCESS_STATUSES\n', 0, 0),
+    ("two functions share one spelling for different roles", 'def report():\n    statuses = ("completed", "no_change")\n    return (*statuses, "failed", "unavailable")\n\ndef fresh(attempt):\n    statuses = _SUCCESS_STATUSES\n    return attempt in statuses\n', 1, 0),
+    ("a parameter shadows a module restatement", 'X = ("completed", "no_change")\ndef f(X):\n    return status in X\n', 1, 0),
     ("the full scan vocabulary is not this set", '_SCAN = {"completed", "failed", "no_change", "unavailable"}\n', 0, 0),
     ("the ordered report tuple is not this set", 'X = ("completed", "no_change", "failed", "unavailable")\n', 0, 0),
     ("a superset is not this set", 'X = {"completed", "no_change", "failed"}\n', 0, 0),
