@@ -291,21 +291,63 @@ def _admission_event_index(
     return found
 
 
+def _binding_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _source_run(
+    runs: list[dict[str, Any]] | None, *, turn_instance_id: str, obligation_id: str,
+) -> dict[str, Any]:
+    for run in runs or []:
+        if _binding_text(run.get("turn_instance_id")) != turn_instance_id:
+            continue
+        ack = run.get("autonomous_replan_ack")
+        delta = ack.get("semantic_delta") if isinstance(ack, dict) else None
+        if isinstance(delta, dict) and _binding_text(delta.get("obligation_id")) == obligation_id:
+            return run
+    return {}
+
+
+def _todo_receipt_matches(event: dict[str, Any], run: dict[str, Any]) -> bool:
+    """A Todo-bound refresh stores the obligation on the semantic delta.
+
+    The rollout event leaves replan_obligation_id empty and carries the Todo
+    settlement receipt. Historical events may omit that receipt too. A present
+    identity on both sides must still be the same receipt.
+    """
+
+    details = _event_details(event)
+    identity = run.get("settlement_identity")
+    identity = identity if isinstance(identity, dict) else {}
+    event_effect = _binding_text(details.get("settlement_effect_id"))
+    run_effect = _binding_text(identity.get("effect_id"))
+    if event_effect and run_effect and event_effect != run_effect:
+        return False
+    event_todo = _binding_text(event.get("todo_id"))
+    run_todo = _binding_text(run.get("todo_id") or identity.get("todo_id"))
+    if event_todo and run_todo and event_todo != run_todo:
+        return False
+    return True
+
+
 def _original_writeback_event_index(
-    events: list[dict[str, Any]], *, goal_id: str, agent_id: str,
-    obligation_id: str, turn_instance_id: str,
+    events: list[dict[str, Any]], runs: list[dict[str, Any]] | None, *,
+    goal_id: str, agent_id: str, obligation_id: str, turn_instance_id: str,
 ) -> int | None:
     if not turn_instance_id or not obligation_id:
         return None
+    run = _source_run(runs, turn_instance_id=turn_instance_id, obligation_id=obligation_id)
     for index, event in enumerate(events):
         details = _event_details(event)
+        event_obligation = _binding_text(details.get("replan_obligation_id"))
         if (
             event.get("event_kind") == "refresh_state"
             and event.get("goal_id") == goal_id
             and event.get("agent_id") == agent_id
-            and event.get("run_id") == turn_instance_id
+            and _binding_text(event.get("run_id")) == turn_instance_id
             and details.get("autonomous_replan_recorded") is True
-            and str(details.get("replan_obligation_id") or "").strip() == obligation_id
+            and (not event_obligation or event_obligation == obligation_id)
+            and _todo_receipt_matches(event, run)
         ):
             return index
     return None
@@ -315,6 +357,7 @@ def attach_historical_ack_writeback_order(
     candidates: list[dict[str, Any]], events: list[dict[str, Any]], *,
     goal_id: str, agent_id: str, obligation_id: str,
     guard_recorded_at: str | None, guard_turn_instance_id: str | None,
+    runs: list[dict[str, Any]] | None = None,
 ) -> None:
     """Copy the original refresh event order onto matching ACK candidates.
 
@@ -328,9 +371,10 @@ def attach_historical_ack_writeback_order(
         recorded_at=str(guard_recorded_at or "").strip(),
     )
     for candidate in candidates:
+        turn_instance_id = _binding_text(candidate.get("turn_instance_id"))
         evidence_index = _original_writeback_event_index(
-            events, goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id,
-            turn_instance_id=str(candidate.get("turn_instance_id") or "").strip(),
+            events, runs, goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id,
+            turn_instance_id=turn_instance_id,
         )
         if evidence_index is None:
             continue
@@ -345,26 +389,49 @@ def attach_historical_ack_writeback_order(
         )
 
 
+def historical_ack_candidates_with_writeback_order(
+    newest_first_runs: list[dict[str, Any]] | None, *,
+    goal_id: str, agent_id: str, obligation_id: str | None,
+    guard_scoped: bool = True, runtime_root: Path | str | None = None,
+    source_route: Any = None,
+    guard_recorded_at: str | None = None, guard_turn_instance_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Project obligation candidates and attach their original writeback order."""
+    from ...rollout_event_log import load_rollout_events, rollout_event_log_path
+
+    selected = _binding_text(obligation_id) if guard_scoped else ""
+    candidates = autonomous_replan_ack_candidates_for_obligation(
+        newest_first_runs, goal_id=goal_id, agent_id=agent_id, obligation_id=selected or None)
+    route = source_route if isinstance(source_route, dict) else {}
+    root_text = runtime_root or route.get("runtime_root")
+    root = Path(str(root_text)) if root_text else None
+    if root is None or not selected:
+        return candidates
+    attach_historical_ack_writeback_order(
+        candidates, load_rollout_events(rollout_event_log_path(root, goal_id)),
+        goal_id=goal_id, agent_id=agent_id, obligation_id=selected,
+        guard_recorded_at=guard_recorded_at, guard_turn_instance_id=guard_turn_instance_id,
+        runs=newest_first_runs,
+    )
+    return candidates
+
+
 def load_receipt_replan_ack_candidates(
     runtime_root: Path, *, goal_id: str, agent_id: str, obligation_id: str,
     guard_recorded_at: str | None = None, guard_turn_instance_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Read exact recovery candidates without widening ordinary status history."""
     from ...history import load_index
-    from ...rollout_event_log import load_rollout_events, rollout_event_log_path
     from ..runtime.time import chronology_key
 
     runs, _ = load_index(runtime_root / "goals" / goal_id / "runs" / "index.jsonl")
     newest_first = [run for _, run in sorted(enumerate(runs),
         key=lambda item: (*chronology_key(item[1].get("generated_at")), item[0]), reverse=True)]
-    candidates = autonomous_replan_ack_candidates_for_obligation(newest_first,
-        goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id)
-    attach_historical_ack_writeback_order(
-        candidates, load_rollout_events(rollout_event_log_path(runtime_root, goal_id)),
-        goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id,
-        guard_recorded_at=guard_recorded_at, guard_turn_instance_id=guard_turn_instance_id,
+    return historical_ack_candidates_with_writeback_order(
+        newest_first, goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id,
+        runtime_root=runtime_root, guard_recorded_at=guard_recorded_at,
+        guard_turn_instance_id=guard_turn_instance_id,
     )
-    return candidates
 
 
 def latest_blocked_successor_frontier_identity(

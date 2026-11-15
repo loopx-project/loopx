@@ -328,34 +328,41 @@ def test_long_chain_trigger_checkpoint_survives_ack_compaction() -> None:
     ]
 
 
-def test_same_second_candidate_keeps_only_the_bound_original_writeback_order() -> None:
+def test_same_second_candidate_keeps_the_todo_bound_writeback_order() -> None:
     turn = "guided-start:later"
+    run = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "turn_instance_id": turn,
+        "todo_id": "todo-original",
+        "settlement_identity": {"todo_id": "todo-original", "effect_id": "effect-later"},
+        "autonomous_replan_ack": {"semantic_delta": {"obligation_id": LONG_CHAIN_OBLIGATION_ID}},
+    }
     admission = {"event_kind": "quota_should_run", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
         "run_id": "guided-start:original", "recorded_at": "2026-08-01T00:00:01.500000Z"}
-    early = {"event_kind": "refresh_state", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+    # A Todo-bound refresh leaves the obligation field empty. The semantic
+    # delta and the Todo receipt identify the writeback.
+    todo_event = {"event_kind": "refresh_state", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "run_id": turn, "todo_id": "todo-original", "recorded_at": "2026-08-01T00:00:01.900000Z",
+        "details": {"autonomous_replan_recorded": True, "replan_obligation_id": None,
+            "settlement_effect_id": "effect-later"}}
+    other_obligation = {"event_kind": "refresh_state", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
         "run_id": turn, "recorded_at": "2026-08-01T00:00:01.100000Z", "details": {
-            "autonomous_replan_recorded": True, "replan_obligation_id": LONG_CHAIN_OBLIGATION_ID}}
-    other_goal = {"event_kind": "refresh_state", "goal_id": "other-goal", "agent_id": AGENT_ID,
-        "run_id": turn, "recorded_at": "2026-08-01T00:00:01.900000Z", "details": {
-            "autonomous_replan_recorded": True, "replan_obligation_id": LONG_CHAIN_OBLIGATION_ID}}
-    before = {"turn_instance_id": turn, "generated_at": "2026-08-01T00:00:01Z"}
+            "autonomous_replan_recorded": True, "replan_obligation_id": "replan-ffffffffffffffff"}}
+    candidate = {"turn_instance_id": turn, "generated_at": "2026-08-01T00:00:01Z"}
     attach_historical_ack_writeback_order(
-        [before], [early, other_goal, admission], goal_id=GOAL_ID, agent_id=AGENT_ID,
+        [candidate], [other_obligation, admission, todo_event], goal_id=GOAL_ID, agent_id=AGENT_ID,
         obligation_id=LONG_CHAIN_OBLIGATION_ID,
-        guard_recorded_at="2026-08-01T00:00:01.500000Z",
-        guard_turn_instance_id="guided-start:original",
+        guard_recorded_at=admission["recorded_at"], guard_turn_instance_id="guided-start:original",
+        runs=[run],
     )
-    assert before["writeback_recorded_at"] == "2026-08-01T00:00:01.100000Z"
-    assert before["writeback_follows_admission"] is False
-    assert before["writeback_goal_id"] == GOAL_ID
-    assert before["writeback_turn_instance_id"] == turn
-    assert before["writeback_obligation_id"] == LONG_CHAIN_OBLIGATION_ID
-    after = {"turn_instance_id": turn}
+    assert candidate["writeback_recorded_at"] == "2026-08-01T00:00:01.900000Z"
+    assert candidate["writeback_follows_admission"] is True
+    assert candidate["writeback_obligation_id"] == LONG_CHAIN_OBLIGATION_ID
+    mismatched = {"turn_instance_id": turn}
+    mismatched_event = {**todo_event, "details": {**todo_event["details"], "settlement_effect_id": "effect-other"}}
     attach_historical_ack_writeback_order(
-        [after], [admission, early], goal_id=GOAL_ID, agent_id=AGENT_ID,
+        [mismatched], [admission, mismatched_event], goal_id=GOAL_ID, agent_id=AGENT_ID,
         obligation_id=LONG_CHAIN_OBLIGATION_ID,
-        guard_recorded_at="2026-08-01T00:00:01.500000Z",
-        guard_turn_instance_id="guided-start:original",
+        guard_recorded_at=admission["recorded_at"], guard_turn_instance_id="guided-start:original",
+        runs=[run],
     )
-    assert after["writeback_recorded_at"] == "2026-08-01T00:00:01.100000Z"
-    assert after["writeback_follows_admission"] is True
+    assert "writeback_recorded_at" not in mismatched

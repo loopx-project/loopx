@@ -9074,40 +9074,63 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     recorded_at = admitted["heartbeat_receipt"]["recorded_at"]
     recorded = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
     later_turn = "later-accepted-same-second"
-    time_after = order in {"after", "time_after_log_before"}
-    written = recorded + timedelta(microseconds=1 if time_after else -1)
-    written_at = written.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-    event = build_rollout_event(
-        goal_id=GOAL_ID, event_kind="refresh_state", agent_id=AGENT_ID, run_id=later_turn,
-        status="appended", summary="accepted same-second historical review",
-        recorded_at=written_at, details={
-            "command": "refresh-state", "autonomous_replan_recorded": True,
-            "replan_obligation_id": obligation,
+    later_admitted = _bind_selected_replan_guard(registry, runtime, project, later_turn)
+    assert later_admitted["replan_action_packet"]["obligation_id"] == obligation
+    vision = project / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
+        "todo_delta": [f"retain:{SELECTED_REPLAN_TODO_ID}"],
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Fixture work needs a verified next route.",
+            "observed_reality": "A fixture check supports continuing the existing work.",
+            "retained": ["Original requirements and the existing Todo."],
+            "evidence_refs": ["evidence:fixture-check"],
         },
+    }), encoding="utf-8")
+    rc, refreshed = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-instance-id", later_turn,
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(project),
+        "--delivery-boundary", "semantic_closeout", "--agent-vision-json", str(vision),
+        "--autonomous-replan-recorded", "--repair-delta-kind", "goal_vision_patch",
+        "--no-global-sync", "--suppress-external-sinks",
     )
+    assert rc == 0 and refreshed["appended"] is True, refreshed
+    assert refreshed["autonomous_replan_ack"]["semantic_delta"]["obligation_id"] == obligation
+    same_second = recorded.replace(microsecond=0).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    matched_runs = [row for row in rows if row.get("turn_instance_id") == later_turn]
+    assert matched_runs
+    for row in matched_runs:
+        row["generated_at"] = same_second
+        source = Path(row["json_path"])
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload["generated_at"] = same_second
+        source.write_text(json.dumps(payload), encoding="utf-8")
+    index_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    time_after = order in {"after", "time_after_log_before"}
+    written_at = (recorded + timedelta(microseconds=1 if time_after else -1)).astimezone(
+        timezone.utc).isoformat().replace("+00:00", "Z")
     log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    event = next(item for item in events
+        if item.get("event_kind") == "refresh_state" and item.get("run_id") == later_turn)
+    assert not str((event.get("details") or {}).get("replan_obligation_id") or "").strip()
+    assert event["details"]["autonomous_replan_recorded"] is True
+    assert event.get("todo_id") == SELECTED_REPLAN_TODO_ID
+    events.remove(event)
+    event["recorded_at"] = written_at
     admission_index = next(index for index, item in enumerate(events)
         if item.get("event_kind") == "quota_should_run" and item.get("run_id") == original_turn
         and item.get("recorded_at") == recorded_at)
     log_after = order in {"after", "time_before_log_after"}
     events.insert(len(events) if log_after else admission_index, event)
     log_path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
-    runs_dir = runtime / "goals" / GOAL_ID / "runs"
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    run = {"goal_id": GOAL_ID, "agent_id": AGENT_ID, "turn_instance_id": later_turn,
-        "generated_at": recorded.replace(microsecond=0).astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "classification": "bounded_replan_progress",
-        "autonomous_replan_ack": {"schema_version": "autonomous_replan_ack_v0", "recorded": True,
-            "source": "refresh_state", "semantic_delta": {"schema_version": "replan_semantic_delta_v0",
-                "accepted": True, "obligation_id": obligation,
-                "outcomes": ["fresh_vision_path_outcome"], "satisfying_outcomes": ["fresh_vision_path_outcome"]}}}
-    source = runs_dir / "later-accepted-same-second.json"
-    source.write_text(json.dumps(run), encoding="utf-8")
-    markdown = source.with_suffix(".md")
-    markdown.write_text("# Accepted same-second historical review\n", encoding="utf-8")
-    with (runs_dir / "index.jsonl").open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({**run, "json_path": str(source), "markdown_path": str(markdown)}) + "\n")
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
         "--todo-id", SELECTED_REPLAN_TODO_ID)
