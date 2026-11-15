@@ -574,6 +574,14 @@ must include matched baseline/head real-provider outcomes, rejection sensitivity
 and packaged recovery. Adoption reduces the parent's diff only after the slice
 lands on main and main is integrated into the parent; opening a PR does not.
 
+Current v1 Host dispatch, model input and session-lineage reads validate the
+complete source and capture header directly. The same TypeScript rules still
+check selection, choose the primary action and interpret checkpointed write
+approval. Codex and the structured Host renderers keep the captured material
+references in the final input. The historical executor projection still proves
+transitional v0/v1 pairs and supports recorded recovery. Plan and effect
+consumers that still use that projection have separate retirement conditions.
+
 For each normal, selection, replan, wait, recovery and capability-off fixture,
 check independently authored obligations at **three boundaries**: composed
 contract, reconstructed delivery, and final model input plus required material
