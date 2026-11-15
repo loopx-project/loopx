@@ -55,13 +55,19 @@ import type {
  */
 
 type ApprovalsReviewer = 'user' | 'auto_review';
+/** Permission levels only a LoopX Goal conversation uses; never offered in the picker. */
+type LoopxPolicy = 'loopx_read_only' | 'loopx_workspace_auto';
 
 /** One hub permission level, as the sandbox, approval policy and native reviewer Codex exposes. */
-const CODEX_MODES: Record<PermissionMode, { sandbox: string; approvalPolicy: string; approvalsReviewer: ApprovalsReviewer }> = {
+const CODEX_MODES: Record<PermissionMode | LoopxPolicy, { sandbox: string; approvalPolicy: string; approvalsReviewer: ApprovalsReviewer }> = {
   // Codex's own three modes: Read Only, Auto, Full Access.
   ask: { sandbox: 'read-only', approvalPolicy: 'on-request', approvalsReviewer: 'user' },
   auto_edit: { sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' },
   full_access: { sandbox: 'danger-full-access', approvalPolicy: 'never', approvalsReviewer: 'user' },
+  // A LoopX Goal conversation never asks: the sandbox is the whole boundary (read-only, or the Goal's
+  // own directory), so what it does not allow is refused rather than put to the person.
+  loopx_read_only: { sandbox: 'read-only', approvalPolicy: 'never', approvalsReviewer: 'user' },
+  loopx_workspace_auto: { sandbox: 'workspace-write', approvalPolicy: 'never', approvalsReviewer: 'user' },
 };
 
 /** Metadata shared by the index and a single-thread read; never hydrate turns for a title. */
@@ -944,7 +950,7 @@ class CodexSession implements AgentSession {
     return true;
   }
 
-  async setPermissionMode(mode: PermissionMode): Promise<void> {
+  async setPermissionMode(mode: PermissionMode | LoopxPolicy): Promise<void> {
     const codex = CODEX_MODES[mode];
     this.overrides.approvalPolicy = codex.approvalPolicy;
     this.overrides.approvalsReviewer = codex.approvalsReviewer;

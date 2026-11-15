@@ -28,6 +28,7 @@ import { VoiceService } from './voice-service.js';
 import { displayForDesktop, PersonalBrowser } from './personal-browser.js';
 import { WorkerReports } from './worker-reports.js';
 import { LarkEvents } from './channels/lark-events.js';
+import { LoopxService } from './adapters/loopx/service.js';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -113,6 +114,10 @@ async function main(): Promise<void> {
   // The session list scans once here (it asks the manager for the allowed directories) and then
   // only when a request finds it stale; the meter keeps its own timer, files only. Stopped in
   // shutdown with everything else.
+  // LoopX Goal conversations: bindings, the core client and the Goal context; ordinary threads never touch it.
+  const loopx = new LoopxService({ dataDir: config.dataDir, adapters, dirs });
+  loopx.attach(manager);
+  manager.loopx = loopx;
   localSessions.start();
   machineUsage?.start();
   manager.recoverInterrupted();
@@ -184,7 +189,7 @@ async function main(): Promise<void> {
   // Previews are served on a port of their own: the iframe needs an origin separate from the app
   // (see preview.ts). One port past the app's is the default; LOOCHAT_PREVIEW_PORT picks another.
   const previewPort = Number(process.env.LOOCHAT_PREVIEW_PORT) || config.port + 1;
-  const server = createHttpServer({ manager, push, feishu, registry, terminals, desktop, hosts, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, token: config.token, webDir: config.webDir, version: VERSION, previewPort });
+  const server = createHttpServer({ manager, loopx, push, feishu, registry, terminals, desktop, hosts, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, token: config.token, webDir: config.webDir, version: VERSION, previewPort });
   // Same requests, other origin: preview frames load from here so their pages cannot reach the
   // app, while their own CSS and scripts load same-origin. Without the port, previews say so.
   const preview = createHttpServer({ manager, registry, terminals, hosts, scheduler, extensions, token: config.token, webDir: null, version: VERSION, previewPort });
@@ -193,7 +198,7 @@ async function main(): Promise<void> {
   });
   preview.listen(previewPort, config.host, () => console.log(`previews on http://${config.host}:${previewPort}`));
   // The same API on a socket only this user can open: how a hub on another machine reaches this one.
-  const local = config.socket ? createHttpServer({ manager, push, feishu, registry, terminals, desktop, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, trusted: true, token: config.token, webDir: null, version: VERSION }) : null;
+  const local = config.socket ? createHttpServer({ manager, loopx, push, feishu, registry, terminals, desktop, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, trusted: true, token: config.token, webDir: null, version: VERSION }) : null;
   let ownsSocket = false;
   if (local && config.socket) {
     listenPrivate(local, config.socket)

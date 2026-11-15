@@ -29,10 +29,12 @@ import type { VoiceService } from './voice-service.js';
 import { sendToolArtifact } from './borrowing-server.js';
 import { PetService } from './pets.js';
 import { corePath, proxyToCore } from './adapters/loopx/proxy.js';
+import type { LoopxService } from './adapters/loopx/service.js';
 import { todoStages } from './todo-stage.js';
 import { teamMessage } from './teams.js';
 
 export interface HttpDeps {
+  loopx?: LoopxService;
   push?: PushService;
   feishu?: FeishuChat;
   manager: ThreadManager;
@@ -320,6 +322,7 @@ export function createHttpServer(deps: HttpDeps): Server {
     // LoopX core (goals, todos, steward, status): forwarded as is, behind this hub's own auth.
     const core = corePath(path);
     if (core !== null) return proxyToCore(req, res, core, url.search);
+    if (path.startsWith('/api/loopx/') && deps.loopx && await deps.loopx.handle(req, res, path, url)) return;
 
     const parts = path.split('/').filter(Boolean); // ['api', ...]
     /** Everything that would break if this instance disappeared from the registry. */

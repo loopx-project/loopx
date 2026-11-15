@@ -18,6 +18,7 @@ import type { SystemPrompt, WorkMode } from './adapters/types.js';
 import { diagnosticFailure } from './adapters/diagnostics.js';
 import { turnAnswer, type CoordinationManager, type CoordinationSetup } from './coordination.js';
 import { Injections, type InjectionGate } from './injections.js';
+import type { LoopxHooks } from './adapters/loopx/service.js';
 import { parseProgress, progressInstructions, PROGRESS_STAGES, type ProgressStage } from './progress-report.js';
 import { habitsPath, isEditableArticle, isWritingStage, newestArticle, noteFile, saveArticle, writingInstructions, type WritingState } from './writing.js';
 import { randomUUID } from 'node:crypto';
@@ -125,6 +126,8 @@ export type ThreadView = Omit<ThreadRecord, 'worktree' | 'handover' | 'writing'>
   autoHandover?: AutoHandoverView;
   /** `doing`, on a member: its latest task while it works, the opening of its answer once it has returned. */
   coordination?: { retired?: boolean; rootId: string; children: number; paused: boolean; doing?: string; team?: { name: string; status: import('./teams.js').TaskStatus; role: string; error?: string } };
+  /** Set when this is a LoopX Goal conversation: which Goal it belongs to and the permission it runs under. */
+  loopx?: import('./adapters/loopx/binding.js').LoopxBinding | null;
   /** Working in the hub's scratch area: a thread that is in no project. */
   scratch: boolean;
   /** The project directory no longer exists, e.g. a temporary checkout removed after a run. */
@@ -422,6 +425,9 @@ export class ThreadManager {
     else this.quotaResume.drop(id);
     return { ...this.autoHandover.view(id), resume: this.quotaResume.view(id) };
   }
+
+  /** The LoopX Goal adapter, when one is attached: a thread it binds is a Goal conversation, every other is ordinary. */
+  loopx: LoopxHooks | null = null;
 
   /** The skills every agent instance on this machine can reach. Read-mostly, by the skills page. */
   readonly skills: SkillsManager;
@@ -1302,7 +1308,12 @@ export class ThreadManager {
     } : null;
     const failed = thread.status === 'error' ? this.store.lastTurnFailure(thread.id) : null;
     const failure = failed ? { code: failed.code, message: failed.message.slice(0, 500), at: failed.at } : null;
-    return { ...thread, failure, writing: thread.writing ? { ...thread.writing, habits: habitsPath() } : null, handover: thread.handover ? { ...thread.handover, mode: this.store.handoverMode(thread)!, automatic: thread.handover.mode === 'continue', sourceMoved: this.store.handoverSourceMoved(thread)! } : null, autoHandover: { ...this.autoHandover.view(thread.id), resume: this.quotaResume.view(thread.id) }, worktree, resumeCommand, cwdReal, waiting, waitingReason, queued, modelQueue, terminalActivity, scratch, projectGone, runningSince, coordination: this.coordination?.metadata(thread.id) };
+    return { ...thread, failure, writing: thread.writing ? { ...thread.writing, habits: habitsPath() } : null, handover: thread.handover ? { ...thread.handover, mode: this.store.handoverMode(thread)!, automatic: thread.handover.mode === 'continue', sourceMoved: this.store.handoverSourceMoved(thread)! } : null, autoHandover: { ...this.autoHandover.view(thread.id), resume: this.quotaResume.view(thread.id) }, worktree, resumeCommand, cwdReal, waiting, waitingReason, queued, modelQueue, terminalActivity, scratch, projectGone, runningSince, coordination: this.coordination?.metadata(thread.id), loopx: this.loopx?.binding(thread.id) ?? null };
+  }
+
+  /** A thread was just bound to a Goal: tell the pages. */
+  announceLoopx(id: string): void {
+    if (this.store.getThread(id)) this.emitThreadEvent(id, null, 'thread.updated', {});
   }
 
   /**
@@ -1765,6 +1776,7 @@ export class ThreadManager {
       patch.workMode = mode;
     }
     if (updates.permissionMode !== undefined) {
+      if (this.loopx?.binding(id)) throw new HttpError(400, 'LoopX Goal 会话的权限在创建时确定；要换档位请新建会话');
       const mode = this.validatePermissionMode(thread.agent, updates.permissionMode);
       patch.permissionMode = mode;
       // A live session switches now; otherwise the next session starts with the new level.
@@ -1951,6 +1963,13 @@ export class ThreadManager {
       throw new HttpError(400, `unsupported effort for ${model ?? agent}: ${effort}`);
     }
     return effort as EffortLevel;
+  }
+
+  /** A Goal conversation runs under the Goal's own permission, not one of the three levels; codex enforces it with its sandbox. */
+  private sessionPermission(thread: ThreadRecord, adapter: AgentAdapter): PermissionMode {
+    const goal = this.loopx?.binding(thread.id);
+    if (goal && adapter.id === 'codex') return `loopx_${goal.permission}` as PermissionMode;
+    return thread.permissionMode as PermissionMode;
   }
 
   /** Checks a permission level against what the thread's agent supports. */
@@ -2569,7 +2588,8 @@ export class ThreadManager {
     const personalHuman = this.personal.router.status().threadId === threadId && input.fromUser === true
       && !delivery && !input.scheduled && !input.review && !input.proactive && !input.autoContinuation;
     const context = personalHuman && !slashCommand ? await this.personal.router.context(threadId) : null;
-    const promptText = (context?.text ?? '') + text + this.attachments.videoNote(threadId, storedVideos);
+    const goalContext = !slashCommand && rawText && !bare ? await this.loopx?.context(threadId) ?? '' : '';
+    const promptText = (context?.text ?? '') + goalContext + text + this.attachments.videoNote(threadId, storedVideos);
     // Internal callers may attach protocol context. Only the person's words (or a channel
     // summary) belong in the conversation, its queue, and later replay/continuation views.
     const displayText = delivery?.displayText ?? input.displayText ?? originalText.split('\n\n[指定协作对象]')[0];
@@ -3334,7 +3354,7 @@ export class ThreadManager {
         this.store.updateThread(thread.id, { agentSessionId: id });
         this.emitThreadEvent(thread.id, null, 'thread.updated', {});
       },
-      permissionMode: thread.permissionMode as PermissionMode,
+      permissionMode: this.sessionPermission(thread, adapter),
       speed: thread.speed,
       workMode: thread.workMode ?? 'execute',
       onGoal: (goal) => this.applyGoal(thread.id, goal),
@@ -3525,6 +3545,9 @@ export class ThreadManager {
         const run = this.running.get(threadId);
         const native = [...(this.nativeTurns.get(threadId)?.values() ?? [])].includes(turnId);
         if (this.approvalTurns.get(turnId) !== threadId || run?.cancelRequested || (run?.turnId !== turnId && !native)) return Promise.resolve({ cancelled: true });
+        // A Goal conversation never asks the person: what its sandbox does not allow is simply refused.
+        const refused = this.loopx?.refuse(threadId, req);
+        if (refused) return Promise.resolve(refused);
         const approvalId = randomUUID();
         return new Promise<ApprovalDecision>((resolve) => {
           this.approvals.set(approvalId, {
