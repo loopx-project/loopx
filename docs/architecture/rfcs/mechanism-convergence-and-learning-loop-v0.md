@@ -277,6 +277,15 @@ by that preflight leave it open without primary writeback or debit. These checks
 native model adoption, complete-budget benefit, other backend qualification
 and integration of the in-flight execution proposals remain open.
 
+The same source checkpoint also rejects public quota CLI spending while a
+requested Turn attachment is pending: its writeback receipt follows successful
+delivery, and recovery delivers the original Run before repairing that receipt.
+The opted-in reader honors the verified successor history prefix during a
+wall-clock rollback while retaining the original work window and strict fallback
+for captures without a prefix. File/SQLite regressions cover both rejected early
+spend and retained candidate/finding readback; these are correctness boundaries,
+not evidence of model adoption or benefit.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

@@ -107,6 +107,13 @@ test("method feedback excludes foreign, unconfirmed, stale and late-visible exec
     source_snapshot: {event_count: 3, event_ids_sha256: "b".repeat(64)}}};
   const afterRead = {...delayed, recorded_order: 4};
   assert.deepEqual(project([finding, result, captured, afterRead]).previous_decision_followthrough, expected);
+  const rollback = {...captured, last_updated_at: "2026-01-01T00:00:01.5Z"};
+  const lateHistorical = {...afterRead, last_updated_at: "2026-01-01T00:00:01.25Z"};
+  assert.deepEqual(project([finding, result, rollback, lateHistorical]).previous_decision_followthrough, expected,
+    "The verified successor prefix retains execution despite its wall-clock rollback");
+  const legacy = {...rollback, work_yardstick: next.work_yardstick};
+  assert.equal(project([finding, result, legacy]).previous_decision_followthrough, undefined,
+    "Without a verified prefix, historical records retain the strict timestamp bound");
   assert.equal(projectWorkYardstickCue({...binding, enabled: false, findings: [finding, result]}), null);
 });
 

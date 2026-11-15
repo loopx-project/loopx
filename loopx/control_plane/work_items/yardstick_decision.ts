@@ -225,10 +225,13 @@ function workYardstickFollowthrough(findings: JsonObject[], source: JsonObject, 
         || !committedInWorkWindow(row, startOrder, decisionTime)) continue;
       // A preceding choice cannot adopt evidence first visible after its
       // successor, even if that evidence was originally committed earlier.
+      // A verified successor prefix owns this visibility bound when its
+      // clock rolls back; legacy captures still use the strict time bound.
       if (choice !== source && (endTime === null || !Number.isSafeInteger(source.recorded_order)
         || Number(row.recorded_order) > Number(source.recorded_order)
         || row !== source && current.source_snapshot !== undefined && !recordedBefore(row, current.source_snapshot.event_count)
-        || parseTodoTimestampMicros(String(row.last_updated_at))! > endTime)) continue;
+        || current.source_snapshot === undefined
+          && parseTodoTimestampMicros(String(row.last_updated_at))! > endTime)) continue;
       if (!result || newestFindingFirst(row, result) < 0) result = row;
     }
     if (!result) continue;

@@ -201,6 +201,9 @@ the same Goal/Agent/Todo, question and tested input, plus the original commit an
 visible work window. Foreign, tentative, stale and late-visible records cannot
 become that choice's execution. This reuses existing findings and readback;
 the association does not independently verify method adoption or benefit.
+A verified successor history prefix determines whether prior execution was
+already visible even when the successor clock moves backward. Captures without
+that prefix retain the strict timestamp bound; later delivery stays excluded.
 Ordinary `turn run-once` accepts the same inline `explore_result` inside the
 Host's existing `agent_vision_json`. It retains one decoded Vision packet,
 then uses the original attachment parser and delivery owner. A failed delivery
@@ -211,6 +214,9 @@ disabled attachments reject before Todo completion and primary writeback. The
 completion path uses the same capability preflight before lifecycle effects;
 the primary writer still checks it again at commit. An omitted attachment adds
 no capability preflight, and recovery retains already committed completion.
+The quota writeback receipt is published only after requested attachment delivery
+finishes. The public quota CLI rejects a debit while that receipt is missing;
+recovery delivers from the original Run before repairing the receipt.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use

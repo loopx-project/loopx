@@ -330,6 +330,17 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
     original_bytes = original.read_bytes()
     assert json.loads(original_bytes)["explore_result"]["evidence_refs"] == ["result:original-attachment"]
     assert not explore_result_log_path(runtime, "loopx-turn-fixture").exists()
+    # The public quota entrypoint must observe the same pending delivery as
+    # the Turn driver, rather than treating its primary Run as settled.
+    from tests.control_plane.test_quota_settlement_cli import _run_cli
+    identity = json.loads(original_bytes)["settlement_identity"]
+    spend_rc, premature = _run_cli(registry, runtime, "quota", "spend-slot",
+        "--goal-id", identity["goal_id"], "--agent-id", identity["agent_id"],
+        "--todo-id", identity["todo_id"], "--turn-instance-id", identity["turn_instance_id"],
+        "--source", "heartbeat", "--slots", "1", "--execute", cwd=workspace)
+    assert spend_rc != 0 and not premature.get("appended"), premature
+    assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 0
+    assert original.read_bytes() == original_bytes
     available = True
     output = io.StringIO()
     with contextlib.redirect_stdout(output):

@@ -345,14 +345,20 @@ def execute_turn_run_once(
                 or refresh.get("idempotent_replay")
                 or refresh.get("receipt_repair_required")
             ):
-                append_settlement_event(
-                    refresh,
-                    event_kind="refresh_state",
-                    status="appended",
-                    details={"command": "turn run-once"},
-                )
-                refresh = finish_explore_delivery(refresh)
+                # Receipt repair returns the verified original Run without
+                # appending it again. Its committed payload can deliver the
+                # requested attachment before repairing the quota receipt.
+                refresh = finish_explore_delivery({**refresh, "appended": True})
                 if refresh.get("ok") is True:
+                    # The shared quota owner treats this receipt as proof of
+                    # completed writeback. Keep it absent while a requested
+                    # attachment is still pending, even though the Run exists.
+                    append_settlement_event(
+                        refresh,
+                        event_kind="refresh_state",
+                        status="appended",
+                        details={"command": "turn run-once"},
+                    )
                     # Turn callbacks acknowledge committed data, including
                     # the original primary record returned on receipt repair.
                     return {**refresh, "appended": True}

@@ -1205,7 +1205,7 @@ def test_work_yardstick_successor_remains_current_after_clock_rollback(tmp_path,
 
     project, runtime, path = setup(tmp_path, provider=provider)
     source = tmp_path / "finding.json"
-    wall_time = datetime.now(timezone.utc).replace(microsecond=100002)
+    wall_time = datetime.now(timezone.utc).replace(microsecond=100000)
 
     class AttachmentClock(datetime):
         @classmethod
@@ -1229,15 +1229,34 @@ def test_work_yardstick_successor_remains_current_after_clock_rollback(tmp_path,
     first = record("before-clock-change", attachment())
     run(project, runtime, path, "quota", "spend-slot", *binding("before-clock-change"),
         "--slots", "1", "--source", "heartbeat", "--execute")
+    artifact = project / "verified-candidate.json"
+    artifact.write_text(json.dumps({"correct": True, "accepted_score": 8}, sort_keys=True))
+    assert json.loads(artifact.read_bytes())["correct"]
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    observed = attachment()
+    observed.pop("work_yardstick_decision")
+    observed.update(node_id=first["explore_result_delivery"]["node_id"], evidence_refs=["result:direct"])
+    observed["execution_observation"] = dict(schema_version="explore_execution_observation_v0",
+        candidate_sha256=digest, input_revision="inputs-v1", planned_method_id="method:direct", executed_method_id="method:direct",
+        change_reason=None, elapsed_seconds=None, limit_seconds=None, search_iterations=1, stop_reason="verified",
+        evidence_refs=["result:direct"], result_ref="result:direct", result_candidate_sha256=digest, exit_code=0)
+    wall_time = wall_time.replace(microsecond=100002)
+    execution = record("execution-before-clock-change", observed)
+    before = context(runtime, path)["graph"]["work_yardsticks"][0]["previous_decision_followthrough"]
+    assert before["result_finding_id"] == execution["explore_result_delivery"]["finding_id"]
+    assert before["candidate_sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    run(project, runtime, path, "quota", "spend-slot", *binding("execution-before-clock-change"),
+        "--slots", "1", "--source", "heartbeat", "--execute")
     changed = attachment()
     changed["work_yardstick_decision"]["prior_finding_id"] = first["explore_result_delivery"]["finding_id"]
     changed["work_yardstick_decision"]["target"]["summary"] = "Follow the validated successor"
     wall_time = wall_time.replace(microsecond=100001)
     second = record("after-clock-change", changed)
-    assert second["explore_result_recorded_at"] < first["explore_result_recorded_at"]
+    assert second["explore_result_recorded_at"] < execution["explore_result_recorded_at"]
     cue = context(runtime, path)["graph"]["work_yardsticks"][0]
     assert cue["source_finding_id"] == second["explore_result_delivery"]["finding_id"]
     assert cue["target"]["summary"] == "Follow the validated successor"
+    assert cue["previous_decision_followthrough"] == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
