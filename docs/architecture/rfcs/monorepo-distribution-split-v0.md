@@ -4451,3 +4451,25 @@ view shows its independently checked result in the same conversation.
   complete D2/D5 closure, comparable full costs, R1/M3 and C1 cutover remain
   unqualified. Preserve prior failures and the original ten requirements; full
   original-goal regression still precedes completion and EdgeBench preparation.
+
+### 2026-11-15 — Require installed Core provenance before qualification
+
+- **Gap:** the Core test fixture trusted its interpreter environment variable;
+  selecting an ordinary editable checkout could pass an execution test even
+  though no standalone Core was installed.
+- **Delta:** every opt-in Core qualification now checks version agreement,
+  rejects an ordinary co-install or editable Core, and matches the actual
+  imported package to its recorded Core installation before Task preparation.
+  Existing identity checks are shared through that fixture; namespace, help,
+  manifest and doctor coverage remain. No opt-in still reports an explicit skip.
+- **Evidence:** the old ordinary-checkout case passed and dispatched ten CLI
+  calls. Ordinary, co-installed, source-shadowed, missing `loopx/__init__.py`
+  RECORD entry and PEP660 editable counterexamples now fail fixture setup before
+  any Task/CLI dispatch.
+  A true Core wheel passes identity plus File/SQLite execution, replay and
+  inspection. Original host, validator and execution oracles are unchanged.
+- **Boundary:** this protects qualification provenance; it neither changes
+  production admission nor authenticates wheel bytes or model execution.
+  Pinned-source/artifact checks, actual-model adoption, complete D2/D5 costs,
+  R1/M3 and the original ten requirements remain separate. Preserve earlier
+  failures and run full original-goal regression before completion.

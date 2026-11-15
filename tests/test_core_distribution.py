@@ -67,12 +67,36 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
 
 
 @pytest.fixture
-def core_python():
+def core_python(tmp_path):
     value = os.environ.get("LOOPX_CORE_TEST_PYTHON")
     if not value:
         pytest.skip("set LOOPX_CORE_TEST_PYTHON to a clean installed core environment")
     executable = Path(value).absolute()
     assert executable.is_file(), executable
+    # Every selected qualification caller must use the installed Core owner,
+    # including when the separate identity test was not selected.
+    script = '''import importlib.metadata as m,json,loopx
+from pathlib import Path
+installed=m.distribution('loopx-core')
+assert installed.version==loopx.__version__
+try:m.distribution('loopx')
+except m.PackageNotFoundError:pass
+else:raise AssertionError('the ordinary distribution must not be installed')
+direct_url=json.loads(installed.read_text('direct_url.json') or '{}')
+assert not direct_url.get('dir_info',{}).get('editable',False),'editable Core is not installed qualification'
+recorded=next((entry for entry in installed.files or () if entry.as_posix()=='loopx/__init__.py'),None)
+assert recorded is not None,'the installed Core RECORD must own loopx/__init__.py'
+package=Path(loopx.__file__).resolve()
+record_path=Path(installed.locate_file(recorded)).resolve()
+assert record_path==package,('imported namespace is not owned by installed Core',str(package),str(record_path))
+assert package.is_relative_to(Path(installed.locate_file('')).resolve()),'Core namespace resolves outside its installed location'
+'''
+    probe = subprocess.run([str(executable), "-I", "-c", script], cwd=tmp_path,
+        env=_environment(str(executable)), capture_output=True, text=True, timeout=30)
+    assert probe.returncode == 0, (
+        "LOOPX_CORE_TEST_PYTHON must select a clean installed loopx-core distribution",
+        probe.stdout, probe.stderr,
+    )
     return str(executable)
 
 
@@ -104,12 +128,8 @@ def _run(python, arguments, cwd, *, environment=None, expected=0):
 
 
 def test_installed_core_identity_help_and_unavailable_workspace(core_python, tmp_path):
-    script = '''import importlib.metadata as m,importlib.util as u,json,loopx
+    script = '''import importlib.util as u,json,loopx
 from pathlib import Path
-assert m.version('loopx-core')==loopx.__version__
-try:m.distribution('loopx')
-except m.PackageNotFoundError:pass
-else:raise AssertionError('the ordinary distribution must not be installed')
 for name in ('loopx.cli','loopx.chat','loopx.web','loopx.canary'):assert u.find_spec(name) is None,name
 from loopx.release_manifest import _distribution_runtime_fingerprint
 assert _distribution_runtime_fingerprint() is not None
