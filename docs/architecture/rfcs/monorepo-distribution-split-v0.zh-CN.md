@@ -3341,3 +3341,43 @@ R1/M3、C1 切换和原目标回归仍未完成资格验证。
 ![桌面的原 Goal 会话](assets/goal-entry-original-session-desktop.webp)
 
 ![窄屏的原 Goal 会话](assets/goal-entry-original-session-narrow.webp)
+
+### 2026-11-15 — 准备既有检查并执行原已授权 Task
+
+- **缺口：**原注册会话能读取工作，但准备既有验收方案仍需进入旧协调模式；
+  前端也没有调用既有原生 Task endpoint 的入口。合成修复还暴露了另一处缺口：
+  原生工作继承会话的只读 prompt 和 sandbox，没有请求本次 Task 权限。
+- **增量：**新 managed Codex 会话仅提供既有 `prepare_check` action。Host
+  复核原 Session、活动 owner Turn、注册身份、生命周期和 workspace，并固定实际
+  已有检查器的源码。既有验收 owner 解析保留要求及原 Task；owner 采用检查与启动
+  Task 继续分开。既有主控件沿原 Session 启动该 Task，使用当前检查、lease 和额度；
+  响应丢失保留原 operation。空闲页面只读取一次，不新增持续空查。创建时显示用户
+  确认的目标，内部执行请求继续保留；恢复不改写历史已记录的展示消息。
+- **权限：**准备和采用检查都不授予写权限。既有原生 Session owner 仅将已经批准
+  的完整 workspace 边界映射到 host policy；缺少批准或只有更窄批准时保持只读。
+  此限定原生路径仍禁用网络和临时目录写入。后续普通 send 显式恢复只读，包括原生
+  发布结果未知之后以及直接调用者。Session 默认值和原生 thread 身份保留，旧 thread
+  不新增 dynamic tools。
+- **证据：**真实 HTTP/Chat/Core/File/SQLite 用例从仓库保留的六行为购物车检查器
+  准备方案，确认初始失败，再经独立的既有 owner workspace 批准执行原 Task。
+  修复产物通过未改变的独立检查。检查未确认、来源改变、错误产物和缺少写批准时，
+  Task 保持 open 且不扣额度。Packaged 桌面／窄屏旅程覆盖同一结果、原历史、重复
+  operation、普通追问和有界空闲读取。模型解释与编辑由脚本模拟，不构成真实模型
+  或 OS sandbox 资格验证。
+- **可维护性：**身份、验收、原生准入和结算仍由既有 owner 管理，并沿用 C1
+  composition。Prompt／input 适配放在原生 adapter，attached 附件拒绝归其 queue
+  owner。Runtime 和 Chat Agent 都保持在既有 reviewed ceiling 内。
+- **边界：**本次交付 V2/V4/R1 中“既有检查器、原已授权 Task”的路径，不从任意
+  自然语言推断验收，不提升新 Goal 的写权限，不支持 host 无法落实的窄写范围，也
+  不为不支持安全来源检查的 host 取得资格。原十项要求、真实 model/account 与
+  context 保留、D2/D5 闭包、渐进 Standard 旅程、可比完整成本、完整 V1–V5/V10、
+  R1/M3 和 C1 切换仍未闭合。完成前仍需完整原目标回归，随后才进入外部 benchmark
+  工作。
+
+下方当前设计参考使用 packaged frontend、真实 SQLite/Chat owner、明确的先行
+workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 Task 主控件；窄屏视图
+在同一会话显示经独立检查的结果。
+
+![桌面的原已检查 Task](assets/goal-entry-original-task-desktop.webp)
+
+![窄屏的原已检查 Task 结果](assets/goal-entry-original-task-narrow.webp)

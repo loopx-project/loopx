@@ -222,3 +222,19 @@ def open_chat_session(
         agent_model_id=agent_model_id or None,
         **({"agent_reasoning_effort": agent_reasoning_effort} if agent_reasoning_effort is not None else {}),
     )
+
+
+def goal_creation_display_message(store: ChatSessionStore, *, session_id: str, client_turn_id: str, objective: str) -> str:
+    """Show confirmed intent on creation; preserve the original display on retry.
+
+    The execution request remains unchanged. An old recorded message is never
+    rewritten using the Goal's later objective or a new presentation default.
+    """
+    turn = store.turn_for_client(session_id, client_turn_id)
+    if turn is None:
+        return objective
+    messages = [row for row in store.messages(session_id, strict=True)
+        if row.get("turn_id") == turn["turn_id"] and row.get("role") == "user"]
+    if len(messages) != 1 or not isinstance(messages[0].get("text"), str):
+        raise ValueError("The original first Turn display is unavailable; restore its recorded message")
+    return messages[0]["text"]
