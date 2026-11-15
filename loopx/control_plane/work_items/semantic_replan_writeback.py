@@ -327,6 +327,7 @@ def qualify_replan_writeback(
         goal_status=str((registry_goal or {}).get("status") or "active"),
         receipt_bound_replan_obligation_id=(guard_semantic_replan_obligation_id if guard_scoped else None),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_history_runs=list(newest_first_runs or []) if guard_scoped else None,
         agent_profile=(
             cast(dict[str, Any], cast(dict[str, Any], agent_identity).get("agent_profile"))
             if isinstance(cast(dict[str, Any], agent_identity).get("agent_profile"), dict)

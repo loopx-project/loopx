@@ -488,15 +488,23 @@ def _turn_scoped_cli_settlement_context(
     receipt = payload.get("heartbeat_receipt")
     replan_packet = payload.get("replan_action_packet")
     replan_settlement_only = isinstance(replan_packet, Mapping) and replan_packet.get("settlement_only") is True
-    if (replan_settlement_only and isinstance(receipt, Mapping)
+    semantic_replan_obligation_id = replan_obligation_id_from_packet(replan_packet)
+    receipt_identity = None
+    if (semantic_replan_obligation_id is not None and isinstance(receipt, Mapping)
             and receipt.get("settlement_identity") is not None):
         identity = SettlementIdentity.from_runtime_payload(receipt["settlement_identity"])
         if (identity.goal_id, identity.agent_id, identity.turn_instance_id) != (goal_id, agent_id, turn_instance_id):
             raise ValueError("receipt settlement projection does not match the original Goal/Agent/Turn")
+        guard = normalize_todo_replan_obligation_id(receipt.get("semantic_replan_obligation_id"))
+        if ("semantic_replan_obligation_id" in receipt and guard != semantic_replan_obligation_id) or (
+            identity.todo_id is not None and not replan_settlement_only and guard != semantic_replan_obligation_id
+        ) or (identity.replan_obligation_id is not None
+            and identity.replan_obligation_id != semantic_replan_obligation_id):
+            raise ValueError("receipt settlement projection does not match the original semantic guard")
+        if selected_todo_id is not None and selected_todo_id != identity.todo_id:
+            raise ValueError("receipt settlement projection cannot replace the original Todo binding")
+        receipt_identity = identity
         selected_todo_id = identity.todo_id
-    semantic_replan_obligation_id = replan_obligation_id_from_packet(
-        payload.get("replan_action_packet")
-    )
     replan_settlement_contract = None
     todo_id = selected_todo_id
     replan_obligation_id = None
@@ -547,6 +555,8 @@ def _turn_scoped_cli_settlement_context(
     )
     if plan is None:
         return None, replan_settlement_contract
+    if receipt_identity is not None and plan.identity.effect_id != receipt_identity.effect_id:
+        raise ValueError("receipt settlement projection changed the original effect identity")
     cli_plan = plan.as_dict()
     owed = payload.get("settlement_owed")
     if (replan_settlement_only and isinstance(owed, Mapping)

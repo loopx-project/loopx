@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from ..goals.goal_frontier.fallback_source import FallbackTodoSource
 
 from ...materials import goal_state_path
+from ...history import load_index
 
 from ...quota import (
     AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
@@ -260,6 +261,15 @@ def _prepare_quota_replan_context(
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Project the current frontier and contextualize its receipt-bound review."""
+    history_runs = None
+    runtime = status_payload.get("runtime_root")
+    if (receipt_bound_replan_guard_scoped and receipt_bound_replan_obligation_id
+            and receipt_bound_replay_phase is ReceiptBoundReplayPhase.OPEN
+            and isinstance(runtime, str) and Path(runtime).is_absolute()):
+        # A compact status window has already folded checkpoint supplements.
+        # Recovery needs the same full canonical source as write qualification.
+        history_runs, _ = load_index(
+            Path(runtime) / "goals" / safe_goal_id / "runs" / "index.jsonl")
     goal_frontier_context = build_goal_frontier_projection_context_from_status(
         replan_explore_reader=replan_explore_reader,
         goal_id=safe_goal_id,
@@ -279,6 +289,7 @@ def _prepare_quota_replan_context(
         agent_profile=_quota_agent_profile(agent_identity),
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_history_runs=history_runs,
     )
     replan_obligation = (
         None

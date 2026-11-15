@@ -103,14 +103,32 @@ def _project_receipt_replan_settlement(
     goal_ref: Mapping[str, Any] | None,
 ) -> None:
     """Project closeout from the original readback, never the current selection."""
-    if not readback or not _original_replan_settlement_required(payload, readback):
+    if not readback:
         return
-    attach_settlement_progress(payload, readback, registry_path=registry_path,
-        runtime_root=runtime_root, goal_ref=goal_ref)
+    closeout_required = _original_replan_settlement_required(payload, readback)
     identity = readback.identity.value
+    guard = getattr(readback, "semantic_replan_guard", None)
+    semantic_id = replan_obligation_id_from_packet(payload.get("replan_action_packet"))
+    open_todo_review = (
+        readback.replay_phase is ReceiptBoundReplayPhase.OPEN
+        and identity is not None and identity.todo_id is not None
+        and readback.heartbeat_receipt is not None
+        and isinstance(guard, Mapping) and guard.get("scope") == "turn_guard"
+        and semantic_id is not None and guard.get("selected_obligation_id") == semantic_id
+        and payload.get("should_run") is True
+        and payload.get("effective_action") == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
+    )
+    if not closeout_required and not open_todo_review:
+        return
+    if closeout_required:
+        attach_settlement_progress(payload, readback, registry_path=registry_path,
+            runtime_root=runtime_root, goal_ref=goal_ref)
     if identity is None:
         raise ValueError("original replan settlement identity is unavailable")
-    payload["heartbeat_receipt"] = {**(readback.heartbeat_receipt or {}), "settlement_identity": identity.as_dict()}
+    receipt = {**(readback.heartbeat_receipt or {}), "settlement_identity": identity.as_dict()}
+    if isinstance(guard, Mapping) and guard.get("scope") == "turn_guard":
+        receipt.setdefault("semantic_replan_obligation_id", guard.get("selected_obligation_id"))
+    payload["heartbeat_receipt"] = receipt
     payload["interaction_contract"] = build_interaction_contract(payload,
         available_capabilities=available_capabilities, scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id, registry_path=str(registry_path), runtime_root=str(runtime_root))
