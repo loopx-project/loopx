@@ -308,26 +308,69 @@ def _source_run(
     return {}
 
 
-def _todo_receipt_matches(event: dict[str, Any], run: dict[str, Any]) -> bool:
-    """A Todo-bound refresh stores the obligation on the semantic delta.
+def _expected_todo_receipt(
+    run: dict[str, Any], events: list[dict[str, Any]], *,
+    goal_id: str, agent_id: str, turn_instance_id: str,
+) -> tuple[str, str]:
+    """Todo settlement identity for this ACK, filled from its heartbeat receipt.
 
-    The rollout event leaves replan_obligation_id empty and carries the Todo
-    settlement receipt. Historical events may omit that receipt too. A present
-    identity on both sides must still be the same receipt.
+    A historical index can omit the Todo and effect. The turn's existing
+    quota receipt still has that exact identity. An empty side is not a match.
     """
 
-    details = _event_details(event)
     identity = run.get("settlement_identity")
     identity = identity if isinstance(identity, dict) else {}
-    event_effect = _binding_text(details.get("settlement_effect_id"))
-    run_effect = _binding_text(identity.get("effect_id"))
-    if event_effect and run_effect and event_effect != run_effect:
+    todo = _binding_text(run.get("todo_id") or identity.get("todo_id"))
+    effect = _binding_text(identity.get("effect_id"))
+    if todo and effect:
+        return todo, effect
+    for event in events:
+        if (
+            event.get("event_kind") != "quota_should_run"
+            or event.get("goal_id") != goal_id
+            or event.get("agent_id") != agent_id
+            or _binding_text(event.get("run_id")) != turn_instance_id
+        ):
+            continue
+        details = _event_details(event)
+        todo = todo or _binding_text(event.get("todo_id") or details.get("todo_id"))
+        effect = effect or _binding_text(details.get("settlement_effect_id"))
+    return todo, effect
+
+
+def _writeback_event_is_bound(
+    event: dict[str, Any], run: dict[str, Any], events: list[dict[str, Any]], *,
+    goal_id: str, agent_id: str, obligation_id: str, turn_instance_id: str,
+) -> bool:
+    """Require one positive identity shared with the accepted ACK.
+
+    The event obligation must equal the semantic delta, or its Todo and effect
+    must equal the ACK receipt. Missing fields do not count as agreement.
+    """
+
+    if (
+        event.get("event_kind") != "refresh_state"
+        or event.get("goal_id") != goal_id
+        or event.get("agent_id") != agent_id
+        or _binding_text(event.get("run_id")) != turn_instance_id
+    ):
         return False
+    details = _event_details(event)
+    if details.get("autonomous_replan_recorded") is not True:
+        return False
+    event_obligation = _binding_text(details.get("replan_obligation_id"))
+    if event_obligation:
+        return event_obligation == obligation_id
     event_todo = _binding_text(event.get("todo_id"))
-    run_todo = _binding_text(run.get("todo_id") or identity.get("todo_id"))
-    if event_todo and run_todo and event_todo != run_todo:
+    event_effect = _binding_text(details.get("settlement_effect_id"))
+    if not event_todo or not event_effect:
         return False
-    return True
+    expected_todo, expected_effect = _expected_todo_receipt(
+        run, events, goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn_instance_id)
+    return bool(
+        expected_todo and expected_effect
+        and event_todo == expected_todo and event_effect == expected_effect
+    )
 
 
 def _original_writeback_event_index(
@@ -338,16 +381,9 @@ def _original_writeback_event_index(
         return None
     run = _source_run(runs, turn_instance_id=turn_instance_id, obligation_id=obligation_id)
     for index, event in enumerate(events):
-        details = _event_details(event)
-        event_obligation = _binding_text(details.get("replan_obligation_id"))
-        if (
-            event.get("event_kind") == "refresh_state"
-            and event.get("goal_id") == goal_id
-            and event.get("agent_id") == agent_id
-            and _binding_text(event.get("run_id")) == turn_instance_id
-            and details.get("autonomous_replan_recorded") is True
-            and (not event_obligation or event_obligation == obligation_id)
-            and _todo_receipt_matches(event, run)
+        if _writeback_event_is_bound(
+            event, run, events, goal_id=goal_id, agent_id=agent_id,
+            obligation_id=obligation_id, turn_instance_id=turn_instance_id,
         ):
             return index
     return None

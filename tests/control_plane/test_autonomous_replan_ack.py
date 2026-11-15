@@ -366,3 +366,38 @@ def test_same_second_candidate_keeps_the_todo_bound_writeback_order() -> None:
         runs=[run],
     )
     assert "writeback_recorded_at" not in mismatched
+    sparse_run = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "turn_instance_id": turn,
+        "autonomous_replan_ack": {"semantic_delta": {"obligation_id": LONG_CHAIN_OBLIGATION_ID}},
+    }
+    later_receipt = {"event_kind": "quota_should_run", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "run_id": turn, "todo_id": "todo-original", "recorded_at": "2026-08-01T00:00:01.200000Z",
+        "details": {"settlement_effect_id": "effect-later", "todo_id": "todo-original"}}
+    filled = {"turn_instance_id": turn}
+    attach_historical_ack_writeback_order(
+        [filled], [admission, later_receipt, todo_event], goal_id=GOAL_ID, agent_id=AGENT_ID,
+        obligation_id=LONG_CHAIN_OBLIGATION_ID,
+        guard_recorded_at=admission["recorded_at"], guard_turn_instance_id="guided-start:original",
+        runs=[sparse_run],
+    )
+    assert filled["writeback_recorded_at"] == todo_event["recorded_at"]
+    foreign = {"turn_instance_id": turn}
+    foreign_event = {**todo_event, "todo_id": "todo-other",
+        "details": {**todo_event["details"], "settlement_effect_id": "effect-other"}}
+    attach_historical_ack_writeback_order(
+        [foreign], [admission, later_receipt, foreign_event], goal_id=GOAL_ID, agent_id=AGENT_ID,
+        obligation_id=LONG_CHAIN_OBLIGATION_ID,
+        guard_recorded_at=admission["recorded_at"], guard_turn_instance_id="guided-start:original",
+        runs=[sparse_run],
+    )
+    assert "writeback_recorded_at" not in foreign
+    blank = {"turn_instance_id": turn}
+    blank_event = {**todo_event, "todo_id": "", "details": {
+        "autonomous_replan_recorded": True, "replan_obligation_id": None, "settlement_effect_id": None}}
+    attach_historical_ack_writeback_order(
+        [blank], [admission, later_receipt, blank_event], goal_id=GOAL_ID, agent_id=AGENT_ID,
+        obligation_id=LONG_CHAIN_OBLIGATION_ID,
+        guard_recorded_at=admission["recorded_at"], guard_turn_instance_id="guided-start:original",
+        runs=[sparse_run],
+    )
+    assert "writeback_recorded_at" not in blank

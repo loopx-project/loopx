@@ -9060,7 +9060,10 @@ def test_exact_later_ack_executes_original_todo_settlement_commands(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("order", ["after", "before", "time_after_log_before", "time_before_log_after"])
+@pytest.mark.parametrize("order", [
+    "after", "before", "time_after_log_before", "time_before_log_after",
+    "receipt_fill", "foreign_todo", "blank_identity",
+])
 def test_same_second_historical_ack_requires_writeback_after_admission(
     tmp_path: Path, provider: str, order: str,
 ) -> None:
@@ -9106,14 +9109,21 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     matched_runs = [row for row in rows if row.get("turn_instance_id") == later_turn]
     assert matched_runs
+    sparse_index = order in {"receipt_fill", "foreign_todo", "blank_identity"}
     for row in matched_runs:
         row["generated_at"] = same_second
         source = Path(row["json_path"])
         payload = json.loads(source.read_text(encoding="utf-8"))
         payload["generated_at"] = same_second
+        if sparse_index:
+            for record in (row, payload):
+                record.pop("todo_id", None)
+                record.pop("settlement_identity", None)
         source.write_text(json.dumps(payload), encoding="utf-8")
     index_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-    time_after = order in {"after", "time_after_log_before"}
+    time_after = order in {
+        "after", "time_after_log_before", "receipt_fill", "foreign_todo", "blank_identity",
+    }
     written_at = (recorded + timedelta(microseconds=1 if time_after else -1)).astimezone(
         timezone.utc).isoformat().replace("+00:00", "Z")
     log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
@@ -9125,10 +9135,19 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     assert event.get("todo_id") == SELECTED_REPLAN_TODO_ID
     events.remove(event)
     event["recorded_at"] = written_at
+    if order == "foreign_todo":
+        event["todo_id"] = "todo_other_binding"
+        event["details"]["settlement_effect_id"] = "effect-other"
+    if order == "blank_identity":
+        event.pop("todo_id", None)
+        event["details"]["settlement_effect_id"] = None
+        event["details"]["replan_obligation_id"] = None
     admission_index = next(index for index, item in enumerate(events)
         if item.get("event_kind") == "quota_should_run" and item.get("run_id") == original_turn
         and item.get("recorded_at") == recorded_at)
-    log_after = order in {"after", "time_before_log_after"}
+    log_after = order in {
+        "after", "time_before_log_after", "receipt_fill", "foreign_todo", "blank_identity",
+    }
     events.insert(len(events) if log_after else admission_index, event)
     log_path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -9136,7 +9155,7 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
         "--todo-id", SELECTED_REPLAN_TODO_ID)
     rc, recovery = _run_cli(registry, runtime, *guard_args)
     decision = (recovery.get("replan_action_packet") or {}).get("decision")
-    if order != "after":
+    if order not in {"after", "receipt_fill"}:
         assert decision != "historical_ack_recorded", {
             "rc": rc, "decision": decision, "error": recovery.get("error"),
             "error_code": recovery.get("error_code"),
