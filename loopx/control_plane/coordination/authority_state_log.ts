@@ -206,7 +206,7 @@ export class AuthorityStateReplay {
     this.#state = canonicalAuthorityObject(projection, "authority replay state");
   }
 
-  apply(delta: AuthorityStateDelta): void {
+  apply(delta: unknown): void {
     let next = this.#state;
     // Decode before applying and publish only after the whole batch succeeds.
     // A rejected suffix cannot leave a half-applied replay frontier.

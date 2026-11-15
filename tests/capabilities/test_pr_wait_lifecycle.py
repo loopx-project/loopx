@@ -249,21 +249,19 @@ def test_app_lark_context_backend_reads_shared_facts_without_polling(tmp_path, m
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_lost_observation_response_refreshes_cached_readiness(tmp_path, monkeypatch, provider):
-    from loopx.capabilities.issue_fix import pr_wait_hook
-
     registry, runtime, _, todo_id, argv = _native_wait_turn(tmp_path, monkeypatch, provider)
     # Capture the old pending projection before permission is configured.
     _invoke_guard(argv, "capture-pending", "--write-projection-cache")
     _declare_observation(registry)
     monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", lambda *a, **kw: {
         "url": "https://github.com/owner/repo/pull/42", "state": "MERGED", "mergedAt": "2026-10-01T01:12:00Z"})
-    original = pr_wait_hook.reconcile_pr_wait_dependencies
+    original = pr_wait_reconcile.reconcile_pr_wait_dependencies
 
     def response_lost(**kwargs):
         original(**kwargs)
         raise OSError("response lost after local commit")
 
-    monkeypatch.setattr(pr_wait_hook, "reconcile_pr_wait_dependencies", response_lost)
+    monkeypatch.setattr(pr_wait_reconcile, "reconcile_pr_wait_dependencies", response_lost)
     result = _invoke_guard(argv, "lost-response", "--use-projection-cache")
     readback = _observation(result)
     assert readback["external_read_count"] is None and readback["state_written"] is None
@@ -291,8 +289,6 @@ def test_unavailable_permission_source_never_contacts_provider(tmp_path, monkeyp
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_full_source_selection_is_independent_of_bounded_hook_diagnostics(tmp_path, monkeypatch, provider):
-    from loopx.capabilities.issue_fix import pr_wait_hook
-
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     lines = tuple(line for number in range(1, 501) for line in (
         f"- [ ] [P2] Continue dependency {number}.",
@@ -301,7 +297,7 @@ def test_full_source_selection_is_independent_of_bounded_hook_diagnostics(tmp_pa
     _, runtime, registry = _write_live_fixture(tmp_path, provider=provider, extra_agent_todo_lines=lines)
     _declare_observation(registry)
     calls, full_results = [], []
-    original = pr_wait_hook.reconcile_pr_wait_dependencies
+    original = pr_wait_reconcile.reconcile_pr_wait_dependencies
 
     def capture(**kwargs):
         result = original(**kwargs)
@@ -312,7 +308,7 @@ def test_full_source_selection_is_independent_of_bounded_hook_diagnostics(tmp_pa
         calls.append(reference)
         return {"url": f"https://github.com/{reference['repo']}/pull/{reference['number']}", "state": "OPEN"}
 
-    monkeypatch.setattr(pr_wait_hook, "reconcile_pr_wait_dependencies", capture)
+    monkeypatch.setattr(pr_wait_reconcile, "reconcile_pr_wait_dependencies", capture)
     monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fetch)
     dispatch = extend_turn_start_dispatch({}, registry_path=registry, runtime_root=runtime,
         goal_id="loopx-turn-fixture", agent_id="codex-fixture", available=None)

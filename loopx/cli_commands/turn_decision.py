@@ -358,6 +358,7 @@ def current_turn_host_launch_decision(
     args: argparse.Namespace, *, registry_path: Path, runtime_root: Path,
     identity: SettlementIdentity,
     planned_effective_action: object,
+    planned_selected_work_basis: str | None,
     scheduler_execution_context: Mapping[str, Any],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
@@ -416,7 +417,7 @@ def current_turn_host_launch_decision(
     plan = build_loopx_turn_plan(
         current_contract, host=args.host, execution_mode=args.execution_mode,
         scheduler_owner=args.scheduler_owner, turn_instance_id=identity.turn_instance_id,
-        goal_ref=goal_ref,
+        goal_ref=goal_ref, include_selected_work_basis=planned_selected_work_basis is not None,
     )
     route = plan["route"]
     if route.get("would_invoke_host") is not True:
@@ -425,6 +426,8 @@ def current_turn_host_launch_decision(
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
     if (identity.replan_obligation_id or identity.request_subject is not None) and plan["transaction"]["settlement_plan"]["identity"] != identity.as_dict():
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
+    if planned_selected_work_basis is not None and plan.get("_selected_work_basis") != planned_selected_work_basis:
+        raise FirstPartyHostRuntimeRejected("current_turn_work_changed")
     return launch
 
 

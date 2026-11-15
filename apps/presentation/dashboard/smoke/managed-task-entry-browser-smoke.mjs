@@ -22,6 +22,9 @@ const native = (operationId, status = "queued") => ({session_id: session.session
   client_turn_id: `managed.${operationId}`, status, origin: "native_loopx", loopx_execution: true,
   loopx_request: {operation: "native_turn", todo_id: ready.todo_id,
     actor: {goal_id: session.goal_id, agent_id: "codex", session_id: session.session_id}}});
+const creation = {creation_operation_id: "owner-reviewed-creation", operation_id: "goal-create-owner-reviewed-creation",
+  goal_id: session.goal_id, goal_instance_id: session.goal_instance_id, agent_id: session.managed_agent_id,
+  session_id: session.session_id, todo_id: ready.todo_id, permission: "workspace_write_on_confirmation", write_scope: ["**"]};
 let browser;
 async function probe(initial = {}) {
   const page = await browser.newPage();
@@ -87,6 +90,67 @@ try {
     await p.button.click();
     await p.page.waitForFunction(() => document.querySelector("button.goal-loopx-primary")?.disabled);
     assert.deepEqual(p.writes, [], "A stale ready viewport cannot launch against changed current checks");
+    await p.finish();
+  }
+  {
+    const p = await probe({task: {...unbound, creation_request: creation, creation_turn: null}, available: false});
+    await p.button.waitFor();
+    assert.equal(await p.button.isDisabled(), true, "Creation already authorized the original request; no second launch control");
+    await p.section.getByRole("status").filter({hasText: "waiting for checks"}).waitFor();
+    assert.deepEqual(p.writes, [], "Reading pending creation never submits a native request");
+    p.state.task = {...ready, reason: "The current allowance is unavailable", creation_request: creation, creation_turn: null};
+    await p.poll();
+    await p.section.getByRole("status").filter({hasText: "The current allowance is unavailable"}).waitFor();
+    await p.section.getByRole("status").filter({hasText: "waiting to run"}).waitFor();
+    assert.deepEqual(p.writes, [], "The backend reason describes held admission without another launch");
+    p.state.task = {...ready, creation_request: creation, creation_turn: null}; p.state.available = true;
+    await p.poll(); assert.equal(await p.button.isDisabled(), true, "Ready checks let the queue consume prior approval without UI launch");
+    await p.page.evaluate(key => sessionStorage.removeItem(key), storageKey);
+    await p.page.reload(); await p.button.waitFor();
+    assert.equal(await p.button.isDisabled(), true, "Reload discovers the server request without browser storage");
+    p.state.task.creation_turn = native(creation.operation_id, "running"); await p.poll();
+    assert.equal(await p.section.locator('[data-active="true"]').count(), 1);
+    assert.ok(Number(await p.page.getByLabel("History observations").textContent()) >= 1, "Existing history owner observes the original creation Turn");
+    p.state.task.creation_turn = native(creation.operation_id, "failed"); await p.poll();
+    assert.equal(await p.button.isDisabled(), false); assert.equal(await p.button.textContent(), "Continue Task");
+    const terminalReads = p.reads.length;
+    await p.page.clock.fastForward(16000); await p.page.clock.runFor(30);
+    assert.equal(p.reads.length, terminalReads, "Creation terminal stops polling"); assert.deepEqual(p.writes, []);
+    await p.button.click();
+    await p.page.waitForFunction(() => document.querySelector(".goal-loopx-mode-status")?.textContent.includes("waiting to run"));
+    assert.equal(p.writes.length, 1); assert.notEqual(p.writes[0].operation_id, creation.operation_id,
+      "A later explicit repair uses the existing Continue operation");
+    await p.finish();
+  }
+  {
+    const p = await probe({task: {...unbound, todo_id: null, reason: "The original conversation is busy",
+      creation_request: creation, creation_turn: native(creation.operation_id, "starting")}, available: false});
+    await p.button.waitFor();
+    assert.equal(await p.button.isDisabled(), true);
+    await p.section.getByRole("status").filter({hasText: "waiting to run"}).waitFor();
+    assert.equal(await p.section.getByRole("alert").count(), 0,
+      "Unavailable current Task selection does not hide the independently bound original request and Turn");
+    assert.deepEqual(p.writes, []); await p.finish();
+  }
+  for (const mutation of ["operation", "goal", "lifetime", "agent", "session", "todo", "turn", "missing-projection"]) {
+    const request = {...creation}, task = {...ready, creation_request: request, creation_turn: native(creation.operation_id)};
+    if (mutation === "operation") request.creation_operation_id = "other-creation";
+    if (mutation === "goal") request.goal_id = "other-goal";
+    if (mutation === "lifetime") request.goal_instance_id = "other-lifetime";
+    if (mutation === "agent") request.agent_id = "other-agent";
+    if (mutation === "session") request.session_id = "other-session";
+    if (mutation === "todo") request.todo_id = "other-task";
+    if (mutation === "turn") task.creation_turn.client_turn_id = "managed.other-operation";
+    if (mutation === "missing-projection") delete task.creation_turn;
+    const p = await probe({task});
+    await p.section.getByRole("alert").waitFor();
+    assert.equal(await p.button.textContent(), "Refresh"); assert.deepEqual(p.writes, []);
+    await p.page.clock.fastForward(16000); await p.page.clock.runFor(30);
+    assert.deepEqual(p.writes, [], `${mutation}: unverifiable server identity cannot authorize launch`);
+    p.state.task = {...ready, creation_request: creation, creation_turn: null};
+    await p.button.click();
+    await p.section.getByRole("status").filter({hasText: "waiting to run"}).waitFor();
+    assert.deepEqual(p.writes, [], "Recovery rereads the existing server request");
     await p.finish();
   }
   {

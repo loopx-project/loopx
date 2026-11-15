@@ -823,7 +823,7 @@ class StewardTurnHost:
                     from ...control_plane.effect_runtime import effect_runtime_result
                     policy = effect_runtime_result("collaboration.session.managed_turn.sandbox_policy", {
                         "host": request["host"], "actor": actor, "authority": authority,
-                        "validation": managed_turn.validation_basis["plan"]})
+                        "validation": managed_turn.validation_basis["plan"], "task_lease": managed_lease})
                     response = adapter.start_native_task_turn(prompt, event_sink, policy)
                 else:
                     response = adapter.start_turn(prompt, event_sink)

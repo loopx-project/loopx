@@ -177,7 +177,8 @@ for (const inputKind of ["boolean", "number", "select", "string_list"]) {
 }
 assert.match(tasks, /t\("tasks\.convertToTask"\)/, "Tasks offer an explicit preview-first bridge from a reply to task management");
 assert.match(page, /t\("home\.taskCount"/, "Home cards expose durable activity when a new Goal has Todos but no run timestamp yet");
-assert.match(page, /t\("proposal\.primary\.goalCreate"\)/, "Goal creation names the localized immediate first-turn effect");
+assert.match(page, /t\(reviewPlan\.creationExecution \? "proposal\.primary\.goalCreate" : "proposal\.primary\.goalCreateOnly"\)/,
+  "Goal creation describes starting only when the canonical plan has explicit execution intent");
 assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated proposals are grouped into a compact summary");
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
 assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
@@ -396,6 +397,14 @@ for (const contextGoalId of [null, "existing-research-goal"]) {
   assert.equal(request.context.goal_id, contextGoalId);
   assert.equal(request.normalizedParameters.goal_id, "goal-new-research");
   assert.notEqual(request.normalizedParameters.goal_id, contextGoalId);
+  assert.equal(Object.hasOwn(request.normalizedParameters, "start_execution"), false,
+    "Existing builder callers never infer execution intent from Create and start wording");
+}
+for (const permission of ["read_only", "workspace_write_on_confirmation"]) {
+  const fresh = goalCreateRequest({objective: "Repair the cart", completion: "Six checks pass", boundary: "Selected workspace",
+    agentId: "codex", permission, contextGoalId: null, startExecution: true}, key => key);
+  assert.equal(fresh.normalizedParameters.start_execution, true);
+  assert.equal(fresh.normalizedParameters.permission, permission, "Fresh execution preserves the explicit existing permission choice");
 }
 const explicitWorkspace = goalCreateRequest({
   objective: "Inspect the second project", completion: "A checked report", boundary: "Read only",

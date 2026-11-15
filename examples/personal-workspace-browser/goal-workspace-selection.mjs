@@ -91,10 +91,18 @@ runpy.run_path(sys.argv[0], run_name="__main__")
       assert.equal(await page.getByText(backend.second, {exact: false}).count(), 0);
       assert.equal(JSON.parse(await readFile(backend.registry, "utf8")).goals.length, 2, "Preview created a Goal");
       const confirm = page.getByRole("button", {name: /创建 Goal.*开始首轮/});
+      const confirmation = page.waitForResponse((response) =>
+        response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/apply"));
       await confirm.click();
-      await page.waitForFunction(() => document.body.innerText.includes("进入新 Goal"));
+      assert.ok((await confirmation).ok(), JSON.stringify(applied[0]));
       assert.equal(applied.length, 1);
-      assert.equal(applied[0].proposal.receipt.projection_verified, true);
+      const receipt = applied[0].proposal.receipt;
+      assert.equal(receipt.projection_verified, true);
+      assert.equal(receipt.original_task_request.todo_id, receipt.resource_ids.todo_ids[0]);
+      assert.equal(receipt.original_task_request.session_id, receipt.resource_ids.session_id);
+      assert.equal(receipt.original_task_request.permission, "read_only");
+      assert.deepEqual(receipt.original_task_request.write_scope, []);
+      await page.getByRole("button", {name: "进入新 Goal", exact: true}).waitFor();
       const goalId = requests.at(-1).normalized_parameters.goal_id;
       const registry = JSON.parse(await readFile(backend.registry, "utf8"));
       const created = registry.goals.find(goal => goal.id === goalId);

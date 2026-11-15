@@ -36,6 +36,11 @@ function readTaskAttempt(key: string): TaskAttempt | null {
     || attempt.status !== undefined && (typeof attempt.status !== "string" || !attempt.status)) throw new Error("Unreadable original Task request");
   return attempt as TaskAttempt;
 }
+function observedTaskTurn(read: ManagedTaskEntry | null, attempt: TaskAttempt | null): ManagedTaskTurn | null {
+  if (!read) return null;
+  const creation = read.task.creation_request;
+  return read.turn ?? (creation && creation.operation_id === attempt?.operationId ? read.task.creation_turn ?? null : null);
+}
 
 function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["managed"]>) {
   const zh = useWorkspaceI18n().locale === "zh-CN";
@@ -92,10 +97,14 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
         const result = await fetchManagedTaskEntry(target, {operationId: current?.operationId, todoId: current?.todoId,
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)])});
         if (controller.signal.aborted || generation !== revision.current) return;
-        if (current?.turnId && result.turn?.turn_id !== current.turnId) throw new Error("The original Task Turn is unavailable");
-        needsReadback = Boolean(current && (!result.turn || !terminalTaskTurn(result.turn.status)));
+        const creation = result.task.creation_request;
+        const original = current ?? (creation ? {operationId: creation.operation_id, todoId: creation.todo_id} : null);
+        if (!current && original) retain(original);
+        const turn = observedTaskTurn(result, original);
+        if (original?.turnId && turn?.turn_id !== original.turnId) throw new Error("The original Task Turn is unavailable");
+        needsReadback = Boolean(original && (!turn || !terminalTaskTurn(turn.status)));
         setRead(result); setError("");
-        if (result.turn) await accept(result.turn);
+        if (turn) await accept(turn);
       } catch {
         if (!controller.signal.aborted && generation === revision.current) {
           if (!storageRead) {needsReadback = false; setRetained(previous => ({...previous, unreadable: true}));}
@@ -111,8 +120,12 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
 
   const ready = read?.available === true && read.task.state === "ready" && read.task.canonical_done === false
     && read.task.observation.check_count > 0 && !retained.unreadable;
-  const waiting = Boolean(read?.turn && !terminalTaskTurn(read.turn.status));
-  const running = read?.turn?.status === "running";
+  const creation = read?.task.creation_request;
+  const originalCreation = creation && creation.operation_id === attempt?.operationId ? creation : undefined;
+  const turn = observedTaskTurn(read, attempt);
+  const creationPending = Boolean(originalCreation && !turn);
+  const waiting = creationPending || Boolean(turn && !terminalTaskTurn(turn.status));
+  const running = turn?.status === "running";
   async function start() {
     if (flight.current || !ready || waiting || retained.unreadable) return;
     flight.current = true; revision.current++; setBusy(true); setError("");
@@ -127,11 +140,19 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
         todoId: prior?.todoId, signal: AbortSignal.timeout(8000)});
       if (!live.current) return;
       setRead(current);
-      if (prior?.turnId && current.turn?.turn_id !== prior.turnId) throw new Error("The original Task Turn is unavailable");
-      if (current.turn && !terminalTaskTurn(current.turn.status)) {await accept(current.turn); return;}
+      const creation = current.task.creation_request;
+      if (!prior && creation) {
+        retain({operationId: creation.operation_id, todoId: creation.todo_id});
+        if (current.task.creation_turn) await accept(current.task.creation_turn);
+        return;
+      }
+      const turn = observedTaskTurn(current, prior);
+      if (prior?.turnId && turn?.turn_id !== prior.turnId) throw new Error("The original Task Turn is unavailable");
+      if (creation && creation.operation_id === prior?.operationId && !turn) return;
+      if (turn && !terminalTaskTurn(turn.status)) {await accept(turn); return;}
       if (!current.available || current.task.state !== "ready" || current.task.canonical_done || current.task.observation.check_count < 1
         || prior && current.task.todo_id !== prior.todoId) throw new Error("Original Task source changed");
-      const next = prior && !current.turn ? prior : {operationId: `task.${crypto.randomUUID()}`, todoId: current.task.todo_id};
+      const next = prior && !turn ? prior : {operationId: `task.${crypto.randomUUID()}`, todoId: current.task.todo_id};
       retain(next);
       const accepted = await startManagedTaskTurn(target, next.todoId, next.operationId, AbortSignal.timeout(15000));
       if (live.current) await accept(accepted.turn);
@@ -143,12 +164,14 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
     }
   }
   const confirmed = read?.task.state === "ready" && read.task.observation.check_count > 0;
-  if (confirmed || retained.unreadable || attempt) shown.current = true;
+  if (confirmed || retained.unreadable || attempt || read?.task.creation_request || error) shown.current = true;
   if (!shown.current) return null;
   return <section className="goal-loopx-mode" aria-label={zh ? "当前任务" : "Current Task"}>
     <div className="goal-loopx-mode-bar">
       <span className="goal-loopx-mode-status" data-active={running || undefined} role="status"><i aria-hidden/>
-        {running ? (zh ? "正在推进当前任务" : "Working on the current Task") : waiting ? (zh ? "已提交，等待执行" : "Submitted; waiting to run") : read?.task.state === "ready" && read.task.canonical_done
+        {running ? (zh ? "正在推进当前任务" : "Working on the current Task")
+          : creationPending && read?.task.state === "unbound" ? (zh ? "已提交，等待检查就绪" : "Submitted; waiting for checks")
+          : waiting ? (zh ? "已提交，等待执行" : "Submitted; waiting to run") : read?.task.state === "ready" && read.task.canonical_done
           ? (zh ? "当前任务已完成" : "Current Task completed") : (zh ? "当前任务" : "Current Task")}
       </span>
       <div className="goal-loopx-mode-actions">
@@ -159,12 +182,14 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
         <button type="button" className="goal-loopx-primary" disabled={busy || waiting || !ready && !error}
           onClick={() => error ? setRefresh(value => value + 1) : void start()}>
           <Play size={14}/>{error ? (zh ? "重新读取" : "Refresh") : busy ? (zh ? "正在提交…" : "Submitting…")
-            : waiting ? (zh ? "正在推进" : "Working") : attempt ? (zh ? "继续当前任务" : "Continue Task") : (zh ? "开始当前任务" : "Start Task")}
+            : running ? (zh ? "正在推进" : "Working") : waiting ? (zh ? "等待" : "Waiting")
+            : attempt ? (zh ? "继续当前任务" : "Continue Task") : (zh ? "开始当前任务" : "Start Task")}
         </button>
       </div>
     </div>
     {error ? <p className="personal-composer-error" role="alert">{error}</p> : null}
-    {read && !ready && !waiting && !read.task.canonical_done ? <p role="status">{zh ? "当前任务暂不能执行，请读取检查或原会话状态。" : "The Task cannot run yet. Read its checks or original conversation state."}</p> : null}
+    {read && !ready && (!waiting || creationPending && read.task.state === "ready") && !read.task.canonical_done
+      ? <p role="status">{read.task.reason || read.reason || (zh ? "当前任务暂不能执行，请读取检查或原会话状态。" : "The Task cannot run yet. Read its checks or original conversation state.")}</p> : null}
   </section>;
 }
 

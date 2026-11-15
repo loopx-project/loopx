@@ -70,6 +70,26 @@ def test_github_diff_transport_failure_recovers_canonical_source_in_same_budget(
                for _, _, _, _, headers in state["attempts"])
 
 
+def test_github_diff_recovery_honors_exact_source_scope_before_dns(github_diff_transport):
+    state = github_diff_transport
+    original = "https://github.com/example/project/pull/42.diff"
+    with pytest.raises(ValueError, match="public source URL not authorized"):
+        reader.fetch(original, deadline=110.0, allowed_urls={original})
+    assert state["dns"] == ["github.com"]
+    assert [attempt[0] for attempt in state["attempts"]] == ["github.com", "github.com"]
+    assert len(state["closed"]) == 2
+
+
+def test_public_url_scope_rejects_initial_destination_before_dns(monkeypatch):
+    def resolve(host):
+        pytest.fail(f"unapproved destination resolved: {host}")
+
+    monkeypatch.setattr(reader, "public_addresses", resolve)
+    with pytest.raises(ValueError, match="public source URL not authorized"):
+        reader.fetch("https://source.example/unlisted.png", deadline=time.monotonic() + 10,
+                     allowed_urls={"https://source.example/listed.png"})
+
+
 @pytest.mark.parametrize("host", ["github.com", "patch-diff.githubusercontent.com"])
 def test_github_diff_recovery_rejects_mixed_dns_before_connection(github_diff_transport, host):
     state = github_diff_transport

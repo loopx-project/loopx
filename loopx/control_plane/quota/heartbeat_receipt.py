@@ -17,6 +17,7 @@ from .error_codes import HeartbeatReceiptIdentityConflictError
 from .settlement_workspace_causality import (
     delivery_workspace_causality_from_event_details,
 )
+from .spend_sources import TURN_SCOPED_SLOT_SPEND_SOURCES
 
 HEARTBEAT_RECEIPT_SCHEMA_VERSION = "heartbeat_quota_receipt_v0"
 
@@ -204,6 +205,7 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_guard_scoped: bool,
     semantic_replan_obligation_id: str | None,
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
+    quota_spend_source: str | None = None,
     goal_ref: Mapping[str, object] | None = None,
     before_bind: Callable[[], None] | None = None,
 ) -> dict[str, object]:
@@ -224,6 +226,8 @@ def ensure_turn_heartbeat_settlement_receipt(
     ):
         raise ValueError("Turn semantic replan obligation id is malformed")
 
+    if quota_spend_source is not None and quota_spend_source not in TURN_SCOPED_SLOT_SPEND_SOURCES:
+        raise ValueError("Turn quota spend source must be heartbeat or visible-goal")
     log_path = rollout_event_log_path(runtime_root, identity.goal_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_cross_runtime_file_lock(
@@ -247,6 +251,15 @@ def ensure_turn_heartbeat_settlement_receipt(
         if observed is not None and observed != expected:
             raise HeartbeatReceiptIdentityConflictError(
                 "Turn heartbeat receipt belongs to another settlement identity"
+            )
+        previous_details = effective.get("details") if effective is not None else None
+        previous_source = (
+            previous_details.get("quota_spend_source")
+            if observed is not None and isinstance(previous_details, Mapping) else None
+        )
+        if previous_source is not None and quota_spend_source not in (None, previous_source):
+            raise HeartbeatReceiptIdentityConflictError(
+                "Turn heartbeat receipt belongs to another quota spend source"
             )
         if before_bind is not None:
             # The existing cross-runtime binding lock serializes the competing
@@ -311,6 +324,8 @@ def ensure_turn_heartbeat_settlement_receipt(
                 details["semantic_replan_capability_id"] = semantic_replan_capability_guard["capability_id"]
                 details["semantic_replan_gap_id"] = semantic_replan_capability_guard["gap_id"]
                 details["semantic_replan_frontier_revision"] = semantic_replan_capability_guard["frontier_revision"]
+        if (source := previous_source or quota_spend_source) is not None:
+            details["quota_spend_source"] = source
         source_event_id = (
             str(effective.get("event_id") or "").strip()
             if effective is not None

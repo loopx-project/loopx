@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { WorkspaceActionPreview } from "./personal-workspace-model";
 import {goalDraftReady} from "./goal-create-request";
+import {GoalCreationExecution} from "./goal-creation-execution";
 import { useWorkspaceI18n } from "./i18n";
 import "./goal-draft-card.css";
 
@@ -85,6 +86,7 @@ export function GoalDraftCard({ draft, draftId, preparationContext = "", onRevie
     ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || (zh ? "待补充" : "Not specified")}</dd></div>)}</dl>
     {proposal ? <dl>{proposal.fields.filter(field => field.key === "agent_id" || field.key === "workspace_ref")
       .map(field => <div key={field.key}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl> : null}
+    {proposal?.reviewPlan?.creationExecution ? <GoalCreationExecution execution={proposal.reviewPlan.creationExecution}/> : null}
     {draft.question ? <p>{draft.question}</p> : null}
     {onSuggest && draft.options.length ? <div className="personal-goal-draft-options">
       {draft.options.map(option => <button type="button" key={option} onClick={() => onSuggest(option)}>{option}</button>)}
@@ -100,7 +102,8 @@ export function GoalDraftCard({ draft, draftId, preparationContext = "", onRevie
         {preparesCreation ? <button type="button" disabled={busy || preparing || created} onClick={() => void create()}>
           {created ? (zh ? "已创建" : "Created") : busy || preparing ? (zh ? "正在准备…" : "Preparing…")
             : !proposal ? (zh ? "重新准备" : "Retry preparation") : proposal.reviewPlan?.canApply ? proposal.status === "error" ? (zh ? "重试创建" : "Retry creation")
-              : (zh ? "创建并开始" : "Create and start") : (zh ? "查看并处理" : "Review and resolve")}
+              : proposal.reviewPlan.creationExecution ? (zh ? "创建并开始" : "Create and start") : (zh ? "创建" : "Create")
+                : (zh ? "查看并处理" : "Review and resolve")}
         </button> : <button type="button" disabled={busy} onClick={() => void review()}>{busy ? (zh ? "正在准备…" : "Preparing…") : ready ? (zh ? "预览创建" : "Preview creation") : (zh ? "补充目标" : "Refine goal")}</button>}
       </> : null}
     </footer>

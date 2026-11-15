@@ -96,16 +96,13 @@ def test_no_module_exceeds_its_bare_posix_flag_ceiling() -> None:
     observed = observed_ceiling()
 
     exceeded = {
-        path: {"ceiling": ceiling.get(path, 0), "observed": uses}
+        path: [f"{line}: {what}" for line, what in uses]
         for path, uses in observed.items()
         if len(uses) > ceiling.get(path, 0)
     }
     assert not exceeded, (
         "bare POSIX-only os flags grew: "
-        + json.dumps(
-            {path: [f"{line}: {what}" for line, what in uses] for path, uses in exceeded.items()},
-            indent=2,
-        )
+        + json.dumps(exceeded, indent=2)
         + ". Read the flag with `getattr(os, \"<flag>\", 0)` the way the peer, completion "
         "and decision-capture readers do, so a host without it refuses or degrades on its "
         "own terms instead of raising AttributeError first. Raising a ceiling in "

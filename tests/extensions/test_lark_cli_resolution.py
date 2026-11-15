@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from loopx.extensions.lark.cli_resolution import (
     LarkCliResolution,
     build_lark_command_runner,
     resolve_lark_cli,
+    run_lark_command_with_dispatch_guard,
 )
 
 
@@ -190,6 +192,53 @@ def test_runner_injects_target_command_parent_ahead_of_global_resolution(
         "/usr/bin",
         "/bin",
     ]
+
+
+def test_guarded_cli_spawns_inside_authority_and_waits_outside(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    real_popen = subprocess.Popen
+    states = []
+    held = False
+
+    @contextmanager
+    def guard():
+        nonlocal held
+        held = True
+        try:
+            yield
+        finally:
+            held = False
+
+    class ObservedProcess:
+        def __init__(self, *args, **kwargs):
+            states.append(("spawn", held))
+            self.process = real_popen(*args, **kwargs)
+
+        def __enter__(self):
+            self.process.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.process.__exit__(*args)
+
+        @property
+        def returncode(self):
+            return self.process.returncode
+
+        def communicate(self, *, timeout):
+            states.append(("wait", held))
+            return self.process.communicate(timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "Popen", ObservedProcess)
+    resolution = LarkCliResolution(sys.executable, True, "fixture", None, None)
+    runner = build_lark_command_runner(resolution)
+    result = run_lark_command_with_dispatch_guard(
+        runner, [sys.executable, "-c", "print('result')"], tmp_path, 5, guard,
+    )
+    assert result["returncode"] == 0 and result["stdout"] == "result\n"
+    assert states == [("spawn", True), ("wait", False)]
 
 
 def test_resolver_source_preserves_public_boundary_contract() -> None:

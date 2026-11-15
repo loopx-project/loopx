@@ -171,6 +171,7 @@ def antigravity_app_activation(
     goal_id: str = "<goal-id>",
     agent_id: str | None = None,
     runtime_root: str | None = None,
+    registry: str | None = None,
 ) -> dict[str, Any]:
     return skill_facade_cli_activation(
         commands,
@@ -183,6 +184,7 @@ def antigravity_app_activation(
             goal_id=goal_id,
             agent_id=agent_id,
             runtime_root=runtime_root,
+            registry=registry,
             cli_bin=cli_bin,
         ),
     )

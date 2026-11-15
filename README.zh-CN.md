@@ -6,8 +6,8 @@
 
 **从一个目标开始，让长程 Agent 工作可验证。**
 
-告诉你已经在用的 Agent 想完成什么。LoopX 在幕后持久保留目标、
-工作、审批与证据，让下一轮会话可以继续，而不要求你先学会 LoopX 内部机制。<br>
+告诉你已经在用的 Agent 想完成什么。LoopX 保存目标、进展、决策与可验证成果，
+让工作在不同会话间持续推进。<br>
 <sub>面向 7×24 常驻在线 Agent 的开源、Harness 中立控制面——连接 Codex、Claude Code、DeepSeek Harness 等运行时，从个人本地 SQLite 平滑延伸到多 Agent 团队协作。</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
@@ -173,6 +173,10 @@ LoopX 把这套**开源、Harness 中立**的控制面直接做成可运行基�
 把长程目标收进同一个 local-first 工作区。Goal、待关注事项、对话、任务、
 文件、定时计划与恢复状态跨天数、跨重启、跨 harness 保持持久。重新打开项目时，
 可以检查上一轮的状态与证据，再继续下一项允许执行的工作。
+
+新建默认 Codex Goal 时，先核对任务和工作区权限，再确认**创建 Goal 并开始首轮**。
+原任务在独立检查和额度就绪后沿原对话继续执行，普通消息保持只读。
+等待、结果核对和恢复见[工作区指南](docs/guides/personal-workspace-user-guide.md#在原对话执行已检查的任务--run-the-checked-original-task)。
 
 LoopX 将这些长程控制状态汇入 Personal Workspace。你可以在一个页面中：
 

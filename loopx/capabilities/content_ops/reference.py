@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from ...control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeStartupError, effect_runtime_result
-from ..material_lifecycle.inventory import build_material_store_inventory
 
 
 def content_reference_operation(operation: str, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -28,6 +27,8 @@ def content_reference_operation(operation: str, request: Mapping[str, Any]) -> d
 
 def inspect_reference_materials(*, library_path: Path, goal_id: str, store_id: str, observed_at: str) -> dict[str, Any]:
     """Inventory the original bytes; never infer lifecycle state or claim a backup."""
+    from ..material_lifecycle.inventory import build_material_store_inventory
+
     source = library_path.read_bytes()
     library = json.loads(source)
     projection = content_reference_operation("search", {"library": library})

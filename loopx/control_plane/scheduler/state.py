@@ -252,6 +252,7 @@ def _store_result(
     agent_id: str,
     surface: str,
     state_key: str,
+    migrate_legacy: bool | None = None,
 ) -> Mapping[str, Any]:
     params: dict[str, Any] = {
         "schema_version": SCHEDULER_STATE_STORE_REQUEST_SCHEMA,
@@ -265,6 +266,8 @@ def _store_result(
     }
     if state is not None:
         params["state"] = state
+    if migrate_legacy is not None:
+        params["migrate_legacy"] = migrate_legacy
     try:
         result = effect_runtime_result(f"scheduler.state.{operation}", params)
     except EffectRuntimeRejected as exc:
@@ -287,6 +290,7 @@ def load_scheduler_state(
     surface: str = CODEX_APP_SURFACE,
     state_key: str = CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
     read_observer: SchedulerStateReadObserver | None = None,
+    migrate_legacy: bool | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id:
         return None
@@ -298,6 +302,7 @@ def load_scheduler_state(
         agent_id=agent_id,
         surface=surface,
         state_key=state_key,
+        migrate_legacy=migrate_legacy,
     )
     state = result.get("state")
     if state is not None and not isinstance(state, dict):
@@ -317,6 +322,8 @@ def load_app_automation_scheduler_state(
     surface: str,
     read_observer: SchedulerStateReadObserver | None = None,
 ) -> dict[str, Any] | None:
+    # Hint reconstruction may precede a preview or receipt rejection.
+    # Legacy migration belongs to the authorized native commit under lock.
     current = load_scheduler_state(
         runtime_root,
         goal_id=goal_id,
@@ -324,6 +331,7 @@ def load_app_automation_scheduler_state(
         surface=surface,
         state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
         read_observer=read_observer,
+        migrate_legacy=False,
     )
     if current is not None or surface != CODEX_APP_SURFACE:
         return current
@@ -337,6 +345,7 @@ def load_app_automation_scheduler_state(
         surface=surface,
         state_key=LEGACY_CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
         read_observer=read_observer,
+        migrate_legacy=False,
     )
 
 
