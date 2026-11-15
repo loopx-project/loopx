@@ -292,6 +292,19 @@ for captures without a prefix. File/SQLite regressions cover both rejected early
 spend and retained candidate/finding readback; these are correctness boundaries,
 not evidence of model adoption or benefit.
 
+The existing [released-feedback consumer](../../../tests/control_plane/test_material_feedback_checkpoint.py)
+now follows the ordinary selection route's captured review, Explore evidence
+and writeback readers instead of expecting raw guard fields. The same
+File/SQLite checks cover Stride off/enabled, soft claims/hard leases and
+historical feedback as context. They retain the independently checked cost-two
+route, use released evidence for a prospective comparison, execute a cost-one
+route and reject terminal closeout without the original completion validation.
+Readers preserve the original settlement identity and perform no debit. The
+unchanged runtime at the pinned base and author/composition sources supports
+this path; the obsolete test consumer failed before its reader migration.
+This is scripted local execution and caller qualification. Actual model
+adoption, calibration, matched-budget and cross-task benefit remain unproven.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

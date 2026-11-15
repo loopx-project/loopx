@@ -281,6 +281,16 @@ successor Run，以及首次 CLI 交付中断。失败时不发写回回执、�
 File/SQLite 回归覆盖拒绝提前扣额和保留原候选/finding 回读；这些是正确性边界，
 不证明模型采用或收益。
 
+既有[已释放反馈消费者](../../../tests/control_plane/test_material_feedback_checkpoint.py)
+现沿普通选择入口返回的 captured review、Explore 证据和 writeback reader，
+不再期待 raw guard 字段。同一 File/SQLite 检查覆盖 Stride 关闭/启用、
+soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成本二路线，
+根据已释放证据记录前瞻比较，实际执行成本一路线，并在原完成验证缺失时
+拒绝终态收口。Reader 保持原结算身份且不扣额。固定基线与作者/组合源码中
+未变的 runtime 已支持该路径；迁移 reader 前失败的是过时测试消费者。
+这取得脚本式本地执行与调用方资格；实际模型采用、校准、同预算与跨任务
+收益仍未证明。
+
 首个任务须确有反馈或方法选择需求。已有链完整时直接复用；有缺口时由真实消费者证明并修复，不为配合示例制造失败。运行实验、训练模型和发布过程各沿原权限，本文不占用其他 lane 配额或预设 PR 数。
 
 ## 12. 待确认的关键选择
