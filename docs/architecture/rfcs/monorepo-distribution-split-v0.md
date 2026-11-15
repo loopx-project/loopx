@@ -4582,9 +4582,18 @@ view shows its independently checked result in the same conversation.
   tests. Eight permitted environment cases retain 48 complete observation
   requests and Host error behavior under fixed fixture/clocks; this payload
   comparison captures dispatch locally, alongside the real transport tests.
-- **Boundary:** this qualifies source automatic-observation isolation only.
-  Updated installed Core and current-C1 qualification remain pending. It does
-  not establish whole process/network closure, natural process drain, measured
+- **Installed scope:** fresh, non-editable only-Core installations of the
+  candidate and its actual composition with C1 #8266 at
+  `1a3740cf9e6ebad337f17967452693a9050edc81` each pass the same three real
+  selected `version`-CLI opt-out cases with zero observer children and unchanged
+  business JSON and fixture state. Each also passes 22 metadata cases and three
+  original Core correctness cases using real File/SQLite authority, retaining
+  31 raw CLI command records. The cold metadata scope is one fresh process containing 20
+  unselected IDs per composition; it is not 20 cold processes. Product payloads
+  are independently bound through source, wheel, RECORD and installed files.
+- **Boundary:** this qualifies the tested source and installed-Core automatic
+  observer isolation, including the current-C1 composition. It does not
+  establish whole process/network closure, natural process drain, measured
   overhead or complete-cost benefit, actual-model adoption, full D2/D5,
   R1/M3, Goal completion or C1 default cutover. Preserve earlier checkpoints,
   failures, budgets and acceptance requirements.

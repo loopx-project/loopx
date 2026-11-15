@@ -3547,7 +3547,14 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   107 个 Python、55 个 TypeScript 测试。固定 fixture／clocks 的八个允许环境
   场景保留 48 个完整 observation request 与 Host 错误行为；该 payload 对照
   在本地捕获 dispatch，并与真实 transport 测试并列，范围不同。
-- **边界：**本次仅资格化源码 automatic-observation 隔离。更新后的 installed
-  Core 与 current-C1 资格仍待完成；不证明完整 process／network 闭包、自然进程
+- **安装范围：**候选及其与 C1 #8266 当前
+  `1a3740cf9e6ebad337f17967452693a9050edc81` 的实际组合，各自全新 non-editable
+  only-Core 安装通过相同三个真实 selected `version` CLI opt-out 场景，observer
+  子进程为零，业务 JSON 与 fixture state 保持不变。每个组合还通过 22 个 metadata
+  场景及三个使用真实 File／SQLite authority 的原 Core 正确性场景，并保留 31 份
+  raw CLI command 记录。冷 metadata 范围是每个组合一个 fresh process 内含 20 个未选 ID，不能算作
+  20 次冷进程。product payload 经 source、wheel、RECORD 与安装文件独立绑定。
+- **边界：**本次资格化已测试的源码与 installed-Core 自动 observer 隔离，包括
+  current-C1 实际组合；不证明完整 process／network 闭包、自然进程
   drain、实测 overhead 或完整成本收益、真实模型采用、完整 D2/D5、R1/M3、
   Goal 完成或 C1 默认切换。保留既有 checkpoints、失败、预算和验收要求。
