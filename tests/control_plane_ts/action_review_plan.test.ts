@@ -46,6 +46,31 @@ test("an interrupted Task start retries only its original saved Task", () => {
   }
 });
 
+test("a failed create without a plan can retry only the original review", () => {
+  const proposal = {proposal_id: "confirmed", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    status: "failed", permission_classification: "durable_write", normalized_parameters: {goal_id: "report"},
+    available_transitions: ["apply"], checkpoint: null,
+    failure: {error_code: "canonical_action_failed", retry_safe: true}};
+  for (const action_kind of ["todo.create", "monitor.create"]) {
+    const plan = compileActionReviewPlan({...proposal, action_kind});
+    assert.equal(plan.proposalId, "confirmed");
+    assert.equal(plan.sourceFingerprint, "reviewed");
+    assert.equal(plan.retryOriginal, true);
+    assert.equal(plan.prohibitRegeneration, true);
+  }
+  for (const change of [
+    {status: "gated"}, {status: "stale"}, {proposal_id: ""}, {expected_state_fingerprint: ""},
+    {normalized_parameters: {}}, {permission_classification: "protected"}, {available_transitions: []},
+    {failure: {...proposal.failure, retry_safe: false}},
+    {failure: {...proposal.failure, error_code: "invalid_canonical_transition"}},
+    {checkpoint: {steps: {todo_create_prepared: {operation_id: "chat-create:another-proposal"}}}},
+    {checkpoint: {steps: {todo_created: null}}},
+  ]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+  assert.equal(compileActionReviewPlan({...proposal, status: "stale"}).prohibitRegeneration, undefined);
+});
+
 test("confirmed Task dispatch resolves only to the receipt's own execution Turn", () => {
   const resources = {goal_id: "repair", todo_id: "todo-first", session_id: "session-first", turn_id: "turn-first"};
   const canonical = {goal_id: "repair", todo_id: "todo-first", preview_id: "reviewed", status: "applied"};

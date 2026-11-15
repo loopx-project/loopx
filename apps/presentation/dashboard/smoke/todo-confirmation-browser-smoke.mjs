@@ -74,12 +74,21 @@ async function verifyPendingDisplay({page, post, origin, width, provider, snapsh
   await card(later.title).click();
   const retry = page.getByRole("dialog").getByRole("button", {name: /^(Retry original operation|重试原操作)$/});
   await retry.waitFor();
-  await post(fixture, {hold: false, drop_reply: later.id, hold_list: true, hold_detail: width === 1200});
-  const interrupted = page.waitForEvent("requestfailed", {
-    predicate: request => request.method() === "POST" && request.url().endsWith(later.path + "/apply"),
-  });
+  // Replace the upstream reply after apply ran. File finishes display, while
+  // SQLite keeps it pending. Both temporarily lose the two readback routes.
+  await post(fixture, {hold: provider === "sqlite", gateway_reply: later.id, hold_list: true, hold_detail: true});
+  const gateway = page.waitForResponse(response => response.url().endsWith(later.path + "/apply"));
+  const unavailable = [later.path, "/api/actions"].map(path => page.waitForResponse(response =>
+    response.request().method() === "GET" && new URL(response.url()).pathname === path && response.status() === 503));
   await retry.click();
-  await interrupted;
+  const [reply] = await Promise.all([gateway, ...unavailable]);
+  assert.equal(reply.status(), 502);
+  assert.match(reply.headers()["content-type"], /^text\/html\b/);
+  await retry.waitFor();
+  assert.ok(await retry.isEnabled());
+  assert.equal(await page.getByRole("dialog").getByRole("button", {name: /regenerate|重新生成/i}).count(), 0);
+  await page.screenshot({path: resolve(output, provider + "-" + width + "-gateway-recovery.png")});
+  await post(fixture, {hold: false, hold_list: false, hold_detail: false});
   function checkReceipt(proposal, operation) {
     assert.equal(proposal.proposal_id, operation.id);
     assert.equal(proposal.receipt.receipt_id, operation.receipt);
@@ -94,33 +103,42 @@ async function verifyPendingDisplay({page, post, origin, width, provider, snapsh
     checkReceipt((await response.json()).proposal, operation);
     await page.keyboard.press("Escape");
   }
-  if (width === 1200) {
-    await retry.waitFor();
-    assert.equal(await page.getByRole("dialog").getByRole("button", {name: /regenerate|重新生成/i}).count(), 0);
-    await post(fixture, {hold_list: false, hold_detail: false});
-    await recover(later);
+  const observed = (await (await fetch(origin + later.path)).json()).proposal;
+  if (provider === "sqlite") {
+    assert.equal(observed.failure.error_code, "canonical_create_projection_pending");
+    assert.equal(observed.checkpoint.steps.todo_created.canonical_receipt.receipt_id, later.receipt);
   } else {
-    await page.getByRole("dialog").getByRole("button", {name: /^(View updated Goal|查看更新后的 Goal)$/}).waitFor();
-    const exact = await fetch(origin + later.path);
-    checkReceipt((await exact.json()).proposal, later);
-    await post(fixture, {hold_list: false});
-    await page.keyboard.press("Escape");
+    checkReceipt(observed, later);
   }
+  await recover(later);
   await goalTab(page, /^(Overview|概览)$/);
   await overview.getByRole("button", {name: earlier.title, exact: true}).click();
-  await recover(earlier);
+  // A connection drop with the list unavailable still uses exact readback.
+  await post(fixture, {drop_reply: earlier.id, hold_list: true});
+  const disconnected = page.waitForEvent("requestfailed", {
+    predicate: request => request.method() === "POST" && request.url().endsWith(earlier.path + "/apply"),
+  });
+  await retry.click();
+  await disconnected;
+  await page.getByRole("dialog").getByRole("button", {name: /^(View updated Goal|查看更新后的 Goal)$/}).waitFor();
+  const exact = await fetch(origin + earlier.path);
+  checkReceipt((await exact.json()).proposal, earlier);
+  await post(fixture, {hold_list: false});
+  await page.keyboard.press("Escape");
   await overview.waitFor({state: "hidden"});
   assert.deepEqual(await snapshot(), committed);
-  console.log(provider + " " + width + "px: two pending displays survive reload and independent receipt recovery");
+  console.log(provider + " " + width + "px: HTML 502 and two failed reads keep the original retry; both receipts recovered");
 }
 
-async function verify(provider) {
+async function verify(provider, interruptedStep) {
   const child = spawn(resolveTestPython({repoRoot: root}),
-    ["-u", fileURLToPath(new URL("todo-confirmation-http-fixture.py", import.meta.url)), provider, assetDir],
+    ["-u", fileURLToPath(new URL("todo-confirmation-http-fixture.py", import.meta.url)), provider, assetDir, interruptedStep],
     {cwd: root, stdio: ["ignore", "pipe", "inherit"]});
   const exited = once(child, "exit");
   const lines = createInterface({input: child.stdout})[Symbol.asyncIterator]();
   let timer;
+  const beforeWrite = interruptedStep === "todo_create_prepared";
+  const capturePrefix = provider + "-" + interruptedStep;
   try {
     const origin = await Promise.race([
       (async () => {
@@ -168,37 +186,57 @@ async function verify(provider) {
         const initial = await snapshot();
         const injected = page.waitForResponse(response => response.url().endsWith(path + "/apply"));
         await drawer.getByRole("button", {name: /^(Confirm and apply|确认并应用)$/}).click();
-        assert.equal((await injected).status(), 424);
-        const committed = await snapshot();
-        const lost = committed.lost[id];
-        assert.ok(lost?.receipt_id && committed.ids.includes(lost.todo_id));
-        assert.equal(committed.ids.length, initial.ids.length + 1);
-        assert.notEqual(committed.provider_revision, initial.provider_revision);
+        const failure = await injected;
+        assert.equal(failure.status(), 424);
+        const failed = (await failure.json()).proposal;
+        assert.equal(failed.proposal_id, id);
+        assert.equal(failed.failure.error_code, "canonical_action_failed");
+        assert.equal(failed.failure.retry_safe, true);
+        const interrupted = await snapshot();
+        const lost = interrupted.lost[id];
+        if (beforeWrite) {
+          assert.equal(failed.checkpoint, null);
+          assert.deepEqual(interrupted, initial);
+        } else {
+          assert.ok(lost?.receipt_id && interrupted.ids.includes(lost.todo_id));
+          assert.equal(interrupted.ids.length, initial.ids.length + 1);
+          assert.notEqual(interrupted.provider_revision, initial.provider_revision);
+        }
         const retry = drawer.getByRole("button", {name: /^(Retry original operation|重试原操作)$/});
-        await retry.waitFor();
-        assert.deepEqual(await post(path + "/regenerate").then(([code, value]) => [code, value.error_code]), [409, "action_conflict"]);
-        assert.deepEqual(await post(path + "/cancel").then(([code, value]) => [code, value.error_code]), [409, "action_conflict"]);
+        for (const alternative of ["cancel", "defer", "reject", "regenerate"]) {
+          const [code, value] = await post(path + "/" + alternative);
+          assert.deepEqual([code, value.error_code], [409, "action_conflict"], alternative);
+        }
         await page.reload();
         await openConfirmation();
         await retry.waitFor();
         assert.equal(await drawer.getByRole("button", {name: /regenerate|重新生成/i}).count(), 0);
-        await page.screenshot({path: resolve(output, provider + "-" + width + "-recovery.png")});
+        await page.screenshot({path: resolve(output, capturePrefix + "-" + width + "-recovery.png")});
         const recoveredResponse = page.waitForResponse(response => response.url().endsWith(path + "/apply"));
         await retry.click();
         const response = await recoveredResponse;
         assert.equal(response.status(), 200);
         const {proposal} = await response.json();
         assert.equal(proposal.proposal_id, id);
-        assert.equal(proposal.receipt.receipt_id, lost.receipt_id);
-        assert.equal(proposal.receipt.resource_ids.todo_id, lost.todo_id);
         assert.equal(proposal.receipt.outcome, "todo_added");
-        assert.deepEqual(await snapshot(), committed);
+        const recovered = await snapshot();
+        if (beforeWrite) {
+          const todoId = proposal.receipt.resource_ids.todo_id;
+          assert.ok(todoId && proposal.receipt.receipt_id);
+          assert.deepEqual(recovered.ids, [...initial.ids, todoId].sort());
+          assert.notEqual(recovered.provider_revision, initial.provider_revision);
+        } else {
+          assert.equal(proposal.receipt.receipt_id, lost.receipt_id);
+          assert.equal(proposal.receipt.resource_ids.todo_id, lost.todo_id);
+          assert.deepEqual(recovered, interrupted);
+        }
         assert.deepEqual(attempted, [path + "/apply", path + "/apply"]);
         await drawer.getByRole("button", {name: /^(View updated Goal|查看更新后的 Goal)$/}).waitFor();
-        await page.screenshot({path: resolve(output, provider + "-" + width + "-result.png")});
-        console.log(provider + " " + width + "px: original proposal, Todo and receipt; one write across reload");
-        await verifyPendingDisplay({page, post, origin, width, provider, snapshot});
+        await page.screenshot({path: resolve(output, capturePrefix + "-" + width + "-result.png")});
+        console.log(provider + " " + width + "px: " + interruptedStep + "; original proposal and one Todo write across reload");
+        if (!beforeWrite) await verifyPendingDisplay({page, post, origin, width, provider, snapshot});
       } catch (error) {
+        await page.screenshot({path: resolve(output, capturePrefix + "-" + width + "-failure.png")});
         error.message += "\n" + (await page.locator("body").innerText()).slice(0, 1000);
         throw error;
       } finally { await page.close(); }
@@ -226,7 +264,9 @@ async function verify(provider) {
 
 try {
   await mkdir(output, {recursive: true});
-  for (const provider of ["file", "sqlite"]) await verify(provider);
+  for (const interruptedStep of ["todo_created", "todo_create_prepared"]) {
+    for (const provider of ["file", "sqlite"]) await verify(provider, interruptedStep);
+  }
 } finally {
   await browser.close();
 }

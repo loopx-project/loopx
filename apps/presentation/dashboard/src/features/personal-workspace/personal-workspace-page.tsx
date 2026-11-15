@@ -2237,13 +2237,14 @@ export function PersonalWorkspacePage({
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
         return reconciled;
       }
+      const httpStatus = error instanceof ChatApiError ? error.payload.http_status : undefined;
       const interruptedResponse = error instanceof ChatApiError && error.payload.error_code === "chat_api_unavailable"
-        && (error.payload.http_status === undefined
-          || (typeof error.payload.http_status === "number" && error.payload.http_status < 400));
+        && (httpStatus === undefined || (typeof httpStatus === "number"
+          && (httpStatus < 400 || (httpStatus >= 500 && httpStatus < 600))));
       if (!stored && !stale && !readbackMismatch && interruptedResponse
           && isTodoCreation && proposal.reviewPlan?.reason === "canonical_create_projection_pending") {
-        // A transport failure cannot erase an already observed commitment or
-        // authorize another proposal. The original apply rechecks authority.
+        // A lost response or gateway 5xx without a typed result cannot erase
+        // an observed commitment. The original apply rechecks its authority.
         setProposals(current => ({ ...current, [proposal.previewId]: proposal }));
         if (options.presentation !== "inline") selectReceipt(proposal);
         setActionFeedback(t("actionReview.readback_unverified"));
@@ -3015,7 +3016,9 @@ export function PersonalWorkspacePage({
             : !runtimeSourceUnavailable && selectedGoal?.loadState === "loading" && selectedGoalTab === "overview" ? <GoalVitalsSkeleton /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
           </div>
-            {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
+            {selectedGoalId && selectedGoalTab === "chat" && (!agentWorkActive || managedWorkActive) && !readOnly && selectedAgentId === "codex" && (managedWorkActive ? callbacks.onObserveConversationQueue : callbacks.onStartLoopX) ? <GoalLoopXMode
+              managed={managedWorkActive && workspaceConversations?.managed ? {target: workspaceConversations.managed.target,
+                onObserve: async () => {await callbacks.onObserveConversationQueue!(conversationKey, workspaceConversations.managed!.target.sessionId);}} : undefined}
               onPrepare={() => callbacks.onPrepareLoopX!(selectedAgentId, selectedGoalId)}
               key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
               onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}

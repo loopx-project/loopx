@@ -20,21 +20,24 @@ from loopx.control_plane.todos.mutation_api import add_goal_todo
 from loopx.control_plane.todos import provider_projection
 
 
-def main(provider):
+def main(provider, interrupted_step):
     with TemporaryDirectory(prefix="loopx-confirmation-fixture-") as directory, pytest.MonkeyPatch.context() as patch:
         scratch = Path(directory)
         isolate_sqlite_runtime(scratch, patch)
         registry, runtime, _ = promoted_create_fixture(scratch, provider=provider)
         lost = {}
-        display = {"hold": False, "drop_reply": None, "hold_list": False, "hold_detail": False}
+        interrupted = set()
+        display = {"hold": False, "drop_reply": None, "gateway_reply": None, "hold_list": False, "hold_detail": False}
         write_state = provider_projection.atomic_write_state_text
         checkpoint = ChatActionStore.save_checkpoint
         for content in ("Review release checklist", "Verify documentation links", "Check failure handling"):
             add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent", text=content)
 
         def interrupt(self, proposal_id, *, step, receipt, **kwargs):
-            if step == "todo_created" and proposal_id not in lost and not display["hold"]:
-                lost[proposal_id] = receipt["canonical_receipt"]
+            if step == interrupted_step and proposal_id not in interrupted and not display["hold"]:
+                interrupted.add(proposal_id)
+                if step == "todo_created":
+                    lost[proposal_id] = receipt["canonical_receipt"]
                 raise OSError("test: first create checkpoint write interrupted")
             return checkpoint(self, proposal_id, step=step, receipt=receipt, **kwargs)
 
@@ -77,6 +80,16 @@ def main(provider):
                                  "lost": lost})
 
             def _send_json(self, payload, *, status=200):
+                gateway = display["gateway_reply"]
+                if gateway and self.path == f"/api/actions/{gateway}/apply":
+                    display["gateway_reply"] = None
+                    body = b"<html><title>Bad Gateway</title></html>"
+                    self.send_response(502)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 operation = display["drop_reply"]
                 if operation and self.path == f"/api/actions/{operation}/apply":
                     display["drop_reply"] = None
@@ -104,4 +117,4 @@ def main(provider):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[3])
