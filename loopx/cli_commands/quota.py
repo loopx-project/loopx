@@ -607,11 +607,14 @@ def _publish_quota_result(
                 ) if isinstance(payload.get("interaction_contract"), Mapping) else payload)
                 print_payload(observation, args.format, _quota_renderer(args))
                 return 0 if observation.get("ok") is True else 1
+            inline_diagnostic_source = profile_source or (
+                direct_cli_source and not getattr(args, "complete_turn", False)
+            )
             payload, raw_envelope, legacy_view = compose_quota_cli_source(
                 payload, args, activation, compose=_export("compose_turn_decision"),
                 scheduler_context=context.scheduler_context if context is not None else None,
                 capture_directory=capture_directory, capability_context=capability_context,
-                share_inline_diagnostics=(profile_source and not context_delivery_enabled
+                share_inline_diagnostics=(inline_diagnostic_source and not context_delivery_enabled
                     and not activation["progressive_enabled"]),
             )
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:

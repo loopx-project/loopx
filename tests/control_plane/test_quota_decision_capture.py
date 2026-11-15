@@ -209,6 +209,7 @@ def test_bound_cli_fallback_preserves_capture_and_settles_once(tmp_path, monkeyp
     full = json.loads(original_bytes)
     assert_complete_turn_decision(full)
     assert inline == full
+    assert full['projection_envelope']['schema_version'] == 'loopx_projection_envelope_v2'
     fallback = full['blocked_priority_fallback']
     assert full['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
     assert full['selected_todo']['todo_id'] == TODO_ID

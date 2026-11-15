@@ -3199,3 +3199,27 @@ revisions. Retire this explicit compatibility view after the named caller's
 replacement and rollback qualify. The synthetic operations leave installed
 Host adoption and matched single-session model outcomes and complete costs
 open.
+
+### Share diagnostics in direct inline quota delivery
+
+Ordinary bound generic CLI JSON now uses the existing compact projection rows and
+Todo summary references when the complete decision is delivered inline
+with context delivery disabled. Validation reconstructs source rows at
+the original serving time and restores literal Todo lanes in their original
+order. The complete capture holds the task, boundaries, and original
+settlement plan.
+
+Against `f8d0eb588c7e`, matched File and SQLite fixture runs reduced
+explicit Off stdout per normal Turn from 55.7–55.8 KB to 54.3–54.4 KB.
+The comparison includes guard, writeback, debit, and debit replay. Both
+versions recovered the original capture, refused a mismatched Agent, and
+debited once. A modified compact capture failed the complete source
+integrity check even with its file digest recomputed. An initial replan
+without a selected Todo used 47.4 KB before and 45.5 KB after, with the same
+Turn and no debit. Same-source reconstruction of small and multi-Agent
+decisions matched all diagnostic facts after decoding the signed capture.
+
+With default delivery, full stdout including the reference read remained
+64.0–64.1 KB, against 51.7–51.8 KB on main `f3bdad238739` for this
+normal-work fixture. Actual selective reads and matched model outcomes and
+costs remain part of the default-adoption qualification.
