@@ -1406,7 +1406,7 @@ class ChatRequestHandler(
         ) or None
         status = _compact_text((query.get("status") or [""])[0], limit=80) or None
         try:
-            proposals = self.server.action_store.list(
+            proposals = self.server.action_service.list_proposals(
                 goal_id=goal_id,
                 context_kind=context_kind,
                 status=status,
@@ -1523,18 +1523,23 @@ class ChatRequestHandler(
             return
         except Exception:
             try:
-                self.server.action_store.mark_failed(
+                proposal = self.server.action_store.mark_failed(
                     proposal_id,
                     error_code="canonical_action_failed",
                     message="Canonical LoopX service did not complete the transition.",
                 )
-            except (ActionConflictError, KeyError, ValueError):
-                pass
-            self._send_error(
-                "Typed action could not be applied through its canonical LoopX service.",
-                status=424,
-                error_code="canonical_action_failed",
-            )
+            except (ActionConflictError, KeyError, ValueError, OSError):
+                proposal = None
+            payload = {
+                "ok": False,
+                "error": "Typed action could not be applied through its canonical LoopX service.",
+                "error_code": "canonical_action_failed",
+            }
+            if proposal and proposal.get("action_kind") in {"todo.create", "monitor.create"}:
+                # Present the original confirmation's durable facts, including
+                # when the first write succeeded and this acknowledgement failed.
+                payload["proposal"] = proposal
+            self._send_json(payload, status=424)
             return
         proposal = result["proposal"]
         if proposal.get("status") == "stale":

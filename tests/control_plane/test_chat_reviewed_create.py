@@ -254,8 +254,8 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
     connection = HTTPConnection(*server.server_address, timeout=40)
     checkpoint = store.save_checkpoint
 
-    def write_checkpoint(proposal_id, *, step, receipt):
-        saved = checkpoint(proposal_id, step=step, receipt=receipt)
+    def write_checkpoint(proposal_id, *, step, receipt, **kwargs):
+        saved = checkpoint(proposal_id, step=step, receipt=receipt, **kwargs)
         if step == "todo_created":
             raise OSError("Interrupted after creating the Todo and before assigning it")
         return saved
@@ -321,7 +321,9 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
                 original_root.rename(replacement_root)
                 saved_root.rename(original_root)
             assert read(original_root) == original and read(replacement_root) == replacement
-            assert store.load(proposal_id)["checkpoint"]["steps"] == {"todo_created": created}
+            saved_steps = store.load(proposal_id)["checkpoint"]["steps"]
+            assert set(saved_steps) == {"todo_create_prepared", "todo_created"}
+            assert saved_steps["todo_created"] == created
             directory.write_text(original_directory)
             original_registry.write_text(original_registration)
         if change == "directory_during_assignment":

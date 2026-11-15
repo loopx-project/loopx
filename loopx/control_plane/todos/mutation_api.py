@@ -78,6 +78,7 @@ def add_goal_todo(
     expected_provider_revision: str | None = None,
     expected_registry_sha256: str | None = None,
     routing_registry_witness: dict[str, str] | None = None,
+    expected_store_identity: str | None = None,
 ) -> dict[str, Any]:
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if role not in TODO_SECTION_HEADINGS:
@@ -153,6 +154,7 @@ def add_goal_todo(
         expected_provider_revision=expected_provider_revision,
         expected_registry_sha256=expected_registry_sha256,
         routing_registry_witness=routing_registry_witness,
+        expected_store_identity=expected_store_identity,
         registry_path=registry_path,
         runtime_root=shadow_runtime_root,
         goal_id=goal_id,

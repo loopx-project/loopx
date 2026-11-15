@@ -143,11 +143,11 @@ def test_concurrent_task_confirmation_preserves_the_inflight_owner(task_start, m
     entered, proceed = Event(), Event()
     save = actions.save_checkpoint
 
-    def pause(proposal_id, *, step, receipt):
+    def pause(proposal_id, *, step, receipt, **kwargs):
         if step == "task_session_opened" and not entered.is_set():
             entered.set()
             assert proceed.wait(15), "the first confirmation did not resume"
-        return save(proposal_id, step=step, receipt=receipt)
+        return save(proposal_id, step=step, receipt=receipt, **kwargs)
 
     monkeypatch.setattr(actions, "save_checkpoint", pause)
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -179,8 +179,8 @@ def test_task_start_recovers_after_unrelated_todo_write(task_start, monkeypatch)
     path = f"/api/actions/{proposal_id}/apply"
     save = actions.save_checkpoint
 
-    def interrupt(proposal_id, *, step, receipt):
-        stored = save(proposal_id, step=step, receipt=receipt)
+    def interrupt(proposal_id, *, step, receipt, **kwargs):
+        stored = save(proposal_id, step=step, receipt=receipt, **kwargs)
         if step == "todo_created":
             raise OSError("Interrupted before the managed claim")
         return stored
@@ -219,10 +219,10 @@ def test_task_session_is_pinned_before_its_checkpoint(task_start, monkeypatch, c
     path = f"/api/actions/{proposal_id}/apply"
     save = actions.save_checkpoint
 
-    def interrupt(proposal_id, *, step, receipt):
+    def interrupt(proposal_id, *, step, receipt, **kwargs):
         if step == "task_session_opened":
             raise OSError("Session persisted before the confirmation checkpoint")
-        return save(proposal_id, step=step, receipt=receipt)
+        return save(proposal_id, step=step, receipt=receipt, **kwargs)
 
     with monkeypatch.context() as faults:
         faults.setattr(actions, "save_checkpoint", interrupt)
@@ -284,7 +284,7 @@ def test_task_retry_respects_original_turn_and_current_authority(task_start, mon
 
     save = actions.save_checkpoint
 
-    def after_completion(proposal_id, *, step, receipt):
+    def after_completion(proposal_id, *, step, receipt, **kwargs):
         if step == "task_session_opened" and interruption.startswith("legacy"):
             # Old confirmations admitted a Turn without this checkpoint.
             return actions.load(proposal_id)
@@ -292,7 +292,7 @@ def test_task_retry_respects_original_turn_and_current_authority(task_start, mon
             lost.update(receipt)
             assert controller.wait_for_turn(**receipt, timeout_sec=10)["status"] == "completed"
             raise OSError("Turn completed before the confirmation checkpoint")
-        return save(proposal_id, step=step, receipt=receipt)
+        return save(proposal_id, step=step, receipt=receipt, **kwargs)
 
     with monkeypatch.context() as faults:
         if interruption.startswith("accepted"):
