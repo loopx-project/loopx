@@ -390,6 +390,7 @@ def current_turn_host_launch_decision(
         turn_instance_id=identity.turn_instance_id,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         workspace_path=Path(args.project).expanduser().resolve(), goal_ref=goal_ref,
+        include_launch_lease_deadline=True,
         interaction_projection_hooks=(periodic_report_pending_intent_interaction_hook(
             registry_path=registry_path, runtime_root=runtime_root,
             goal_id=identity.goal_id, agent_id=identity.agent_id,

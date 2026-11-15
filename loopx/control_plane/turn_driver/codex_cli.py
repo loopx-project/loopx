@@ -823,7 +823,7 @@ def _run_codex_exec(
     timeout_seconds: float | None,
     on_stdout: Callable[[str], None],
     on_stderr: Callable[[str], None],
-    launch_guard: Callable[[], AbstractContextManager[None]],
+    launch_guard: Callable[[], AbstractContextManager[int | None]],
     check_running: Callable[[], None] | None,
 ) -> dict[str, Any]:
     try:

@@ -878,7 +878,7 @@ def _run_host(
     argv: Sequence[str],
     project: Path,
     timeout_seconds: float | None,
-    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
 ) -> dict[str, Any]:
     # Dispatch has checked the source and its internal effect adapter before
     # journal/cadence admission. External stdin gets the same single complete
@@ -1016,7 +1016,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
-    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    host_launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -1586,7 +1586,7 @@ def run_loopx_turn_once(
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
-    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    host_launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
 ) -> dict[str, Any]:
     argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
     transaction_plan = (

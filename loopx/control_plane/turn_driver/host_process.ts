@@ -55,8 +55,9 @@ function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signa
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
 }
 
-/** Optional caller hooks: record the spawned group, or keep stdin open for framed input. */
+/** Caller hooks for admission, spawn observation and framed input. */
 export type HostProcessHooks = {
+  beforeSpawn?: () => void;
   spawned?: (item: HostProcessSpawned) => Promise<void>;
   openInput?: (write: (text: string) => Promise<void>) => void;
 };
@@ -64,10 +65,11 @@ export type HostProcessHooks = {
 export async function runHostProcess(request: HostProcessRequest,
   output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal,
   terminationGraceMs = HOST_PROCESS_TERMINATE_GRACE_MS,
-  {spawned, openInput}: HostProcessHooks = {}): Promise<HostProcessResult> {
+  {beforeSpawn, spawned, openInput}: HostProcessHooks = {}): Promise<HostProcessResult> {
   const base: HostProcessResult = {kind: "result", outcome: "spawn_failed", returncode: null, signal: null,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
+  beforeSpawn?.();
   if (signal?.aborted) return {...base, outcome: "cancelled"};
   const child = spawn(request.argv[0], request.argv.slice(1), {cwd: request.cwd,
     stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true});

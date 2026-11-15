@@ -58,7 +58,7 @@ print(json.dumps(result))
     @contextmanager
     def contend(admission, *, operation: str):
         nonlocal child
-        with original(admission, operation=operation):
+        with original(admission, operation=operation) as expires_at_ms:
             if operation == dispatch_operation:
                 assert child is None
                 assert (dispatch_marker.read_bytes() if dispatch_marker.exists() else None) == initial
@@ -74,7 +74,7 @@ print(json.dumps(result))
                     pass
                 else:
                     pytest.fail(f"lease release crossed the dispatch guard: {output}")
-            yield
+            yield expires_at_ms
 
     dispatch_operation = operation
     try:
@@ -91,6 +91,35 @@ print(json.dumps(result))
         if child is not None and child.poll() is None:
             child.kill()
             child.communicate(timeout=5)
+
+
+@contextmanager
+def expect_lease_expiry_during_dispatch(monkeypatch, *, operation, observed_lease):
+    """Let an unchanged canonical lease expire after the actual launch read."""
+    from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+    from loopx.control_plane.work_items.task_lease import lease_expires_at, lease_is_active
+
+    original = FirstPartyHostGoalAdmission.launch_lifetime
+    crossed = []
+
+    @contextmanager
+    def pause(admission, *, operation):
+        with original(admission, operation=operation) as expires_at_ms:
+            if operation == dispatch_operation:
+                lease = observed_lease()
+                assert lease_is_active(lease), lease
+                expires_at = lease_expires_at(lease)
+                assert expires_at is not None
+                while lease_is_active(lease):
+                    time.sleep(min(0.02, max(0, expires_at.timestamp() - time.time())))
+                crossed.append(lease["idempotency_key"])
+            yield expires_at_ms
+
+    dispatch_operation = operation
+    with monkeypatch.context() as patch:
+        patch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", pause)
+        yield
+    assert len(crossed) == 1, "expected one admitted dispatch to cross the lease deadline"
 
 
 def assert_host_task_context(model_input, source):

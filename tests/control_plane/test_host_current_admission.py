@@ -15,6 +15,7 @@ from loopx.global_registry import sync_project_registry_to_global
 from tests.control_plane.test_codex_operation_launch import _bindings, _cli, _fixture
 from tests.control_plane.host_process_fixture import (
     WAIT_FOR_FIXTURE_LEASE_RELEASE,
+    expect_lease_expiry_during_dispatch,
     expect_lease_release_after_dispatch,
 )
 from tests.test_loopx_turn_codex_cli import _fake_codex
@@ -160,7 +161,8 @@ def test_native_launch_rechecks_same_todo_after_planning(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("change", ["unchanged", "text", "renew_lease", "replace_lease", "release_during_dispatch"])
+@pytest.mark.parametrize("change", ["unchanged", "text", "renew_lease", "replace_lease",
+                                    "release_during_dispatch", "expire_during_dispatch"])
 def test_stdio_retry_checks_original_task_before_launch(tmp_path, monkeypatch, provider, change):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
@@ -172,7 +174,7 @@ def test_stdio_retry_checks_original_task_before_launch(tmp_path, monkeypatch, p
     project, runtime, workspace, registry = fixture._write_fixture(tmp_path, turn_count=2)
     state = project / ".codex/goals" / fixture.GOAL_ID / "ACTIVE_GOAL_STATE.md"
     todos = parse_active_state_todos(state.read_text(), state_path=state, item_limit=None)
-    uses_lease = change in {"renew_lease", "replace_lease", "release_during_dispatch"}
+    uses_lease = change in {"renew_lease", "replace_lease", "release_during_dispatch", "expire_during_dispatch"}
     initialize_canonical_authority(runtime, fixture.GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID,
             handoff_mode="hard_lease" if uses_lease else "soft_claim",
@@ -244,11 +246,19 @@ def run_dsh_turn(**options):
         dispatch = expect_lease_release_after_dispatch(monkeypatch, operation="turn_external_host_launch",
             registry=registry, runtime=runtime, goal_id=fixture.GOAL_ID, todo_id=fixture.TODO_ID,
             lease=original, dispatch_marker=marker)
+    elif change == "expire_during_dispatch":
+        renewed = lease("renew", original["idempotency_key"], original["version"], "--ttl-seconds", "8")
+        assert renewed["lease_epoch"] == original["lease_epoch"]
+        dispatch = expect_lease_expiry_during_dispatch(monkeypatch, operation="turn_external_host_launch",
+                                                      observed_lease=lambda: renewed)
     with dispatch:
         code, result = fixture._run_cli([*recovery, "--retry-failed-turn"])
-    refused = change in {"text", "replace_lease"}
+    refused = change in {"text", "replace_lease", "expire_during_dispatch"}
     if refused:
-        assert code == 1 and result["error_code"] == "current_turn_work_changed", result
+        expected = "goal_launch_not_allowed" if change == "expire_during_dispatch" else "current_turn_work_changed"
+        assert code == 1 and result.get("error_code") == expected, (
+            code, result.get("status"), result.get("error_code"), result.get("effects"),
+        )
         assert result["host_failure"]["kind"] == "contract_rejected", result
         assert not any(result["effects"].values())
     else:

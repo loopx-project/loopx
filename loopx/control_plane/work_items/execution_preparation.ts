@@ -1,6 +1,7 @@
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {HANDOFF_MODE_RETIRED_REASON, retiredHandoffModeRejection} from "../coordination/handoff_mode_policy.ts";
 import type {JsonObject} from "../effect_program.ts";
+import {parseIsoTimestamp} from "../runtime_timestamp.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {
   optionalNonEmptyString,
@@ -36,8 +37,14 @@ function leaseFact(value: unknown, label: string): JsonObject {
     }
     proof = {idempotency_key: key, expected_version: version};
   }
+  const expiresAt = optionalNonEmptyString(lease.expires_at, `${label}.expires_at`);
+  const deadline = expiresAt === null ? null : parseIsoTimestamp(expiresAt);
+  if (expiresAt !== null && deadline === null) {
+    throw new EffectRuntimeRequestError(`${label}.expires_at must be a valid ISO timestamp`);
+  }
   return {status, active, ...(owner === null ? {} : {owner}),
-    ...(proof === undefined ? {} : {lease_proof: proof})};
+    ...(proof === undefined ? {} : {lease_proof: proof}),
+    ...(deadline === null ? {} : {lease_expires_at_ms: deadline.valueOf()})};
 }
 
 function claimAction(goalId: string, todoId: string, agentId: string): JsonObject {
@@ -128,7 +135,9 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
       reason_code: "matching_active_task_lease",
       // Capture the admitted generation once. Recovery must not borrow a
       // replacement lease after the original Host result was produced.
-      ...(active[0].lease_proof === undefined ? {} : {lease_proof: active[0].lease_proof})};
+      ...(active[0].lease_proof === undefined ? {} : {lease_proof: active[0].lease_proof}),
+      // Only the live Host launch read requests the same row's deadline.
+      ...(active[0].lease_expires_at_ms === undefined ? {} : {lease_expires_at_ms: active[0].lease_expires_at_ms})};
   }
 
   const prior = leases[0];

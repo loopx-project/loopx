@@ -33,6 +33,7 @@ from loopx.control_plane.turn_driver import host_process_transport
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.host_process_fixture import (
     WAIT_FOR_FIXTURE_LEASE_RELEASE,
+    expect_lease_expiry_during_dispatch,
     expect_lease_release_after_dispatch,
 )
 from tests.control_plane.test_effect_turn_live_quota_decision import (
@@ -360,7 +361,7 @@ def test_first_normal_turn_with_declared_state_needs_no_global_registry(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("operation_tools", [False, True])
-@pytest.mark.parametrize("change", ["renew", "replace", "release_during_dispatch"])
+@pytest.mark.parametrize("change", ["renew", "replace", "release_during_dispatch", "expire_during_dispatch"])
 def test_actual_launch_preserves_original_task_lease_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, operation_tools: bool, change: str,
 ):
@@ -391,9 +392,10 @@ def test_actual_launch_preserves_original_task_lease_generation(
     changes = []
 
     def change_lease_before_dispatch(request):
-        if change == "renew":
+        if change in {"renew", "expire_during_dispatch"}:
+            ttl = "8" if change == "expire_during_dispatch" else "600"
             current = lease("renew", original["idempotency_key"], original["version"],
-                            "--ttl-seconds", "600")
+                            "--ttl-seconds", ttl)
             assert current["lease_epoch"] == original["lease_epoch"]
         else:
             released = lease("release", original["idempotency_key"], original["version"])
@@ -404,10 +406,16 @@ def test_actual_launch_preserves_original_task_lease_generation(
         return prepare_input(request)
 
     monkeypatch.setattr(owner, "prepare_codex_cli_input", change_lease_before_dispatch)
-    code, result = _run(registry, runtime, project, host_arguments)
+    if change == "expire_during_dispatch":
+        operation = "codex_operation_turn_start" if operation_tools else "codex_cli_host_launch"
+        with expect_lease_expiry_during_dispatch(monkeypatch, operation=operation, observed_lease=lambda: changes[0]):
+            code, result = _run(registry, runtime, project, host_arguments)
+    else:
+        code, result = _run(registry, runtime, project, host_arguments)
     assert len(changes) == 1, result
-    if change == "replace":
-        assert code == 1 and result.get("error_code") == "current_turn_work_changed", (
+    if change in {"replace", "expire_during_dispatch"}:
+        expected = "current_turn_work_changed" if change == "replace" else "goal_launch_not_allowed"
+        assert code == 1 and result.get("error_code") == expected, (
             code, result.get("status"), result.get("error_code"), result.get("effects"),
         )
         assert result["host_failure"]["kind"] == "contract_rejected"
@@ -416,7 +424,7 @@ def test_actual_launch_preserves_original_task_lease_generation(
         _assert_no_settlement(runtime, result)
         monkeypatch.setattr(owner, "prepare_codex_cli_input", prepare_input)
         code, retry = _run(registry, runtime, project, host_arguments, resume_key=result["resume_turn_key"])
-        assert code == 1 and retry.get("error_code") == "current_turn_work_changed", retry
+        assert code == 1 and retry.get("error_code") == expected, retry
         assert retry["resume_turn_key"] == result["resume_turn_key"]
         assert retry["effects"]["host_invoked"] is False and not turn_start.exists()
         _assert_no_settlement(runtime, retry)

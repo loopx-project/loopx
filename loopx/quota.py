@@ -1087,6 +1087,7 @@ def build_quota_should_run(
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
+    include_launch_lease_deadline: bool = False,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
@@ -1132,6 +1133,7 @@ def build_quota_should_run(
         goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
         replan_explore_reader=read_explore_context,
+        include_launch_lease_deadline=include_launch_lease_deadline,
     )
 
 

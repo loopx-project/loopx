@@ -306,7 +306,7 @@ def run_host_process(
     on_stderr: Callable[[str], None] | None = None,
     delegated_lease: dict[str, Any] | None = None,
     environment: dict[str, str] | None = None,
-    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
     check_running: Callable[[], None] | None = None,
     interrupt_before_terminate: bool = False,
 ) -> dict[str, Any]:
@@ -370,7 +370,9 @@ def run_host_process(
             if windows_job is not None:
                 windows_job.assign(proc)
             if launch_guard is not None:
-                launch_scope.enter_context(launch_guard())
+                expires_at_ms = launch_scope.enter_context(launch_guard())
+                if expires_at_ms is not None:
+                    request["launch_lease_expires_at_ms"] = expires_at_ms
             record = _begin_host_process_record(record_path, record_value=record_value,
                 supervises=supervises, supervision=supervision, bridge_pid=proc.pid)
             if record is not None and windows_job is not None:
@@ -417,6 +419,10 @@ def run_host_process(
                     launch_scope.close()
                 elif kind == "not_launched" and guarded is not None:
                     guarded.not_launched = True
+                    if event.get("reason") == "goal_launch_not_allowed":
+                        from ..goals.first_party_host_admission import FirstPartyHostLaunchRejected
+
+                        raise FirstPartyHostLaunchRejected("goal_launch_not_allowed")
                     raise TimeoutError("managed Host bridge launch deadline expired")
                 else:
                     raise RuntimeError("Invalid managed Host process observation")
