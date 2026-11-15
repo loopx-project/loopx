@@ -1,4 +1,5 @@
 import type { JsonObject } from "../effect_program.ts";
+import { createHash } from "node:crypto";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
@@ -36,6 +37,16 @@ const ACCEPTANCE_HOLD_TRIGGERS = new Set(["goal_acceptance_stale", "goal_accepta
 // A vision gap dominates the ordinary outcome gap's discharge policy, so the
 // same scalar receipt can retain a mixed review after its work links change.
 const SCALAR_REVIEW_KINDS = new Set(["goal_outcome_uncovered", "vision_acceptance_gap"]);
+const RECONSTRUCTIBLE_REVIEW_KINDS = new Set([...SCALAR_REVIEW_KINDS, "periodic_review_due"]);
+export const AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID = "autonomous_replan_default_v0";
+export const AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION =
+  "stop only the affected path when required access, destructive git, production actions, " +
+  "or owner-only decisions exceed existing user authority. Keep authorized private reads " +
+  "within their storage and publication boundaries; do not expose credentials or disclose " +
+  "private material beyond that authority. Continue independent authorized replan work " +
+  "while honoring explicit stops";
+export const AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION =
+  "stop this replan path until a compatible reader validates its digest-bound review guard";
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
 export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
@@ -75,6 +86,18 @@ function strings(value: unknown): string[] {
 function triggerKinds(obligation: JsonObject): string[] {
   const triggers = Array.isArray(obligation.triggers) ? obligation.triggers : [];
   return triggers.map(trigger => String(object(trigger).kind ?? "").trim());
+}
+function receiptReviewKind(obligation: JsonObject): string | null {
+  const kinds = triggerKinds(obligation);
+  if (!kinds.length) return null;
+  if (kinds.every(kind => SCALAR_REVIEW_KINDS.has(kind))) {
+    return kinds.includes("vision_acceptance_gap")
+      ? "vision_acceptance_gap" : "goal_outcome_uncovered";
+  }
+  // A single current review can be revalidated by its kind and complete stop
+  // contract without pretending that an old context is current. Mixed duties
+  // retain their source-specific recovery instead of collapsing to one label.
+  return kinds.length === 1 ? kinds[0] : null;
 }
 function isExternalReview(obligation: JsonObject): boolean {
   return triggerKinds(obligation).some(kind => EXTERNAL_REVIEW_TRIGGERS.has(kind));
@@ -389,6 +412,44 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   // writeback. The exact receipt retains its typed kind, never raw task prose
   // or an old decision context. Other duties keep their canonical owners.
   const review = object(request.receipt_review);
+  const reviewKind = typeof review.kind === "string" ? review.kind : "";
+  const reviewStop = typeof review.stop_condition === "string"
+    ? review.stop_condition : null;
+  const reviewDigest = typeof review.stop_condition_sha256 === "string"
+    ? review.stop_condition_sha256 : "";
+  const reviewContractId = typeof review.stop_contract_id === "string"
+    ? review.stop_contract_id : "";
+  const reviewContractStop = reviewContractId === AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID &&
+      BARE_SHA256_PATTERN.test(reviewDigest) &&
+      createHash("sha256").update(AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, "utf8").digest("hex") === reviewDigest
+    ? AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION : null;
+  const currentReviewKind = current === null ? null : receiptReviewKind(current);
+  const currentStop = current === null || typeof current.stop_condition !== "string"
+    ? null : current.stop_condition;
+  if (request.guard_scoped && current !== null && currentReviewKind === reviewKind &&
+      currentStop !== null && (currentStop === reviewStop ||
+        (BARE_SHA256_PATTERN.test(reviewDigest) &&
+          createHash("sha256").update(currentStop, "utf8").digest("hex") === reviewDigest)) &&
+      current.schema_version === "autonomous_replan_obligation_v0" && current.required === true &&
+      typeof request.agent_id === "string" && request.agent_id.trim() &&
+      current.agent_id === request.agent_id && current.resolution_mode == null &&
+      current.capability_guard == null) {
+    // The frontier regenerated the review identity while its kind and complete
+    // stop contract stayed unchanged.  Preserve the receipt's settlement id,
+    // but retain the current obligation and context so recovery never claims
+    // that an old context snapshot is still current.
+    const rebound: JsonObject = {...current, obligation_id: selected,
+      selection_binding: "heartbeat_receipt"};
+    if (current.obligation_id !== selected) {
+      // The current context and its delivery receipt were derived under the
+      // regenerated frontier id.  Returning them under the old settlement id
+      // would create an internally inconsistent packet.  The quota context
+      // owner reattaches a fresh context from current status after this typed
+      // identity projection; no historical context snapshot is replayed.
+      delete rebound.replan_context;
+    }
+    return {obligation: rebound};
+  }
   if (request.guard_scoped && SCALAR_REVIEW_KINDS.has(String(review.kind)) &&
       typeof review.stop_condition === "string" && review.stop_condition.trim() && review.stop_condition.length <= 240 &&
       typeof request.agent_id === "string" && request.agent_id.trim()) {
@@ -396,6 +457,14 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       required: true, obligation_id: selected, agent_id: request.agent_id,
       stop_condition: review.stop_condition,
       triggers: [{kind: review.kind}], selection_binding: "heartbeat_receipt"}};
+  }
+  if (request.guard_scoped && current === null &&
+      RECONSTRUCTIBLE_REVIEW_KINDS.has(reviewKind) && reviewContractStop !== null &&
+      typeof request.agent_id === "string" && request.agent_id.trim()) {
+    return {obligation: {schema_version: "autonomous_replan_obligation_v0",
+      required: true, obligation_id: selected, agent_id: request.agent_id,
+      stop_condition: reviewContractStop,
+      triggers: [{kind: reviewKind}], selection_binding: "heartbeat_receipt"}};
   }
   throw new EffectRuntimeRequestError(
     "heartbeat receipt settlement identity conflicts with the current autonomous replan obligation",
@@ -547,24 +616,22 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation === "receipt_bound_obligation") return preserveReceiptBoundObligation(request);
   const obligation = requireJsonObject(request.obligation, "obligation");
   if (request.operation === "receipt_review_source") {
-    const kinds = triggerKinds(obligation);
     const triggers = Array.isArray(obligation.triggers) ? obligation.triggers : [];
-    // Plain vision/outcome reviews share a scalar receipt source. Other mixed,
-    // restricted, lifecycle and capability obligations must retain their
+    const kind = receiptReviewKind(obligation);
+    // A simple review stores only its kind and complete stop contract. Other
+    // mixed, restricted, lifecycle and capability obligations must retain
     // source-specific evidence and discharge rules through their own owners.
     return {review_source: obligation.schema_version === "autonomous_replan_obligation_v0" &&
-      obligation.required === true && kinds.length > 0 &&
+      obligation.required === true && kind !== null &&
       obligation.trigger_count === triggers.length &&
       typeof request.agent_id === "string" && request.agent_id.trim() &&
       obligation.agent_id === request.agent_id &&
-      kinds.every(kind => SCALAR_REVIEW_KINDS.has(kind)) &&
       obligation.resolution_mode == null && obligation.capability_guard == null &&
       strings(obligation.satisfying_semantic_outcomes).length === 0 &&
       obligation.progress_baseline == null && obligation.progress_window == null &&
       triggers.every(trigger => object(trigger).progress_baseline == null && object(trigger).progress_window == null) &&
-      typeof obligation.stop_condition === "string" && obligation.stop_condition.trim() && obligation.stop_condition.length <= 240
-      ? {kind: kinds.includes("vision_acceptance_gap") ? "vision_acceptance_gap" : "goal_outcome_uncovered",
-        stop_condition: obligation.stop_condition} : null};
+      typeof obligation.stop_condition === "string" && obligation.stop_condition.trim()
+      ? {kind, stop_condition: obligation.stop_condition} : null};
   }
   if (request.operation === "transition_eligibility") {
     return {allowed: !requiresStrideDecision(obligation, request.stride_strategy)};
