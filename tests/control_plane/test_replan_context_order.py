@@ -9,14 +9,15 @@ import pytest
 
 from loopx.control_plane.work_items.progress_observation import build_replan_context
 from loopx.control_plane.work_items.replan_context_codec import project_replan_context
+from loopx.history import append_run_index_record, reserve_unique_run_paths
 from test_replan_context_evidence import _settled_pair
 
 
-def _rows():
+def _rows(*, goal_id="evidence-goal", agent_id="agent-a"):
     def decision(turn, timestamp):
-        work, _ = _settled_pair(turn_instance_id=turn)
+        work, _ = _settled_pair(goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn)
         return {**work, "generated_at": timestamp,
-            "agent_vision": {"schema_version": "goal_vision_replan_contract_v0", "agent_id": "agent-a",
+            "agent_vision": {"schema_version": "goal_vision_replan_contract_v0", "agent_id": agent_id,
                 "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "replan",
                     "prior_assumption": "The current route could explain the gap.",
                     "observed_reality": "The gap remains unexplained.", "changed": ["Compare another route."],
@@ -27,7 +28,7 @@ def _rows():
 
     older = decision("turn-old", "2026-08-18T03:00:00Z")
     latest = decision("turn-latest", "2026-08-18T01:00:00Z")
-    work, _ = _settled_pair(turn_instance_id="turn-probe")
+    work, _ = _settled_pair(goal_id=goal_id, agent_id=agent_id, turn_instance_id="turn-probe")
     later = {**work, "generated_at": "2026-08-18T00:00:00Z",
         "progress_observation": {**work["progress_observation"], "surface_id": "surface-probe"}}
     return [older, latest, later]
@@ -147,6 +148,99 @@ def test_same_second_work_references_resolve_through_the_history_cli(tmp_path):
         result = json.loads(cli.stdout)
         assert result["evidence"]["evidence_ref"] == ref
         assert result["evidence"]["health_check"] == work["health_check"]
+    assert index.read_bytes() == before
+
+
+def _append_runs(index, *rows):
+    for row in rows:
+        artifact, report = reserve_unique_run_paths(index.parent, row["generated_at"])
+        record = {**row, "json_path": str(artifact), "markdown_path": str(report)}
+        artifact.write_text(json.dumps(record), encoding="utf-8")
+        append_run_index_record(index, record)
+
+
+def _vision_review_request(index):
+    source = json.loads(index.read_text(encoding="utf-8").splitlines()[-1])
+    # Request a fresh vision review after the observed decisions and work.
+    # This triggers the ordinary quota projection without claiming work itself.
+    return {key: source[key] for key in ("agent_id", "agent_vision")} | {
+        "generated_at": "2026-08-18T09:00:00Z", "classification": "vision_review_requested",
+    }
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_nested_only_turn_work_survives_quota_and_history_readback(tmp_path, monkeypatch, provider):
+    from test_replan_successor_guard_reentry import _fixture, _guard, AGENT, GOAL
+
+    call, _, index = _fixture(tmp_path, monkeypatch, provider)
+    trigger = _vision_review_request(index)
+    _, decision, work = _rows(goal_id=GOAL, agent_id=AGENT)
+    decision["agent_vision"]["todo_delta"] = ["retain:todo-a"]
+    work["delivery_outcome"] = "outcome_progress"
+    work.pop("progress_observation")
+    work.pop("turn_instance_id")
+    conflicted = {**work, "turn_instance_id": "turn-unrelated"}
+    _append_runs(index, decision, work, conflicted, trigger)
+    before = index.read_bytes()
+
+    obligation = _guard(call, "turn-nested-history")["autonomous_replan_obligation"]
+    follow = obligation["replan_context"]["decision_followthrough"]
+    ordinary = follow["ordinary_work"]
+    assert ordinary["recorded_count"] == 1
+    assert follow["work_result_use"]["unresolved_count"] == 1
+    work_ref = ordinary["evidence"][0]["evidence_ref"]
+    assert follow["work_result_use"]["unresolved"][0]["evidence_ref"] == work_ref
+    # References from the original display-based format must also resolve.
+    historical = {key: value for key, value in work.items() if key != "settlement_identity"}
+    context = project_replan_context(goal_id=GOAL, agent_id=AGENT, runs=[historical])
+    old_ref = context["evidence"][0]["evidence_ref"]
+    for ref in (work_ref, old_ref):
+        evidence = call("history", "--goal-id", GOAL, "--agent-id", AGENT, "--evidence-ref", ref)["evidence"]
+        assert evidence["evidence_ref"] == ref
+        assert evidence["health_check"] == work["health_check"]
+    assert index.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_foreign_decision_effect_cannot_consume_work_in_quota(tmp_path, monkeypatch, provider):
+    from test_replan_successor_guard_reentry import _fixture, _guard, AGENT, GOAL
+
+    call, _, index = _fixture(tmp_path, monkeypatch, provider)
+    trigger = _vision_review_request(index)
+    original, later_decision, work = _rows(goal_id=GOAL, agent_id=AGENT)
+    original["agent_vision"]["todo_delta"] = ["retain:todo-a"]
+    later_decision["agent_vision"]["todo_delta"] = ["retain:todo-b"]
+    work["delivery_outcome"] = "outcome_progress"
+    work.pop("progress_observation")
+    _append_runs(index, original, work, trigger)
+    first = _guard(call, "turn-result-baseline")["autonomous_replan_obligation"]
+    pending_ref = first["replan_context"]["decision_followthrough"]["work_result_use"]["unresolved"][0]["evidence_ref"]
+    later_decision["agent_vision"]["path_delta"]["evidence_refs"] = [pending_ref]
+    subsequent, _ = _settled_pair(goal_id=GOAL, agent_id=AGENT, todo_id="todo-b", turn_instance_id="turn-b")
+    subsequent.pop("progress_observation")
+    subsequent["delivery_outcome"] = "outcome_progress"
+
+    # Establish the decision reference using an otherwise identical valid row.
+    # The effect lives in the private source facts and never changes that ref.
+    control = project_replan_context(goal_id=GOAL, agent_id=AGENT,
+        runs=[original, work, later_decision, subsequent], history_newest_first=False)
+    control_follow = control["decision_followthrough"]
+    valid_reference = control_follow["previous_decision"]["evidence_ref"]
+    assert control_follow["work_result_use"]["recorded_followthrough_count"] == 1
+    later_decision["settlement_identity"] = {**later_decision["settlement_identity"],
+        "effect_id": f"other-goal:{AGENT}:todo-a:turn-latest"}
+    _append_runs(index, later_decision, subsequent, trigger)
+    before = index.read_bytes()
+
+    obligation = _guard(call, "turn-foreign-decision")["autonomous_replan_obligation"]
+    follow = obligation["replan_context"]["decision_followthrough"]
+    assert follow["previous_decision"]["turn_instance_id"] == "turn-old"
+    assert follow["work_result_use"]["recorded_followthrough_count"] == 0
+    assert [result["evidence_ref"] for result in follow["work_result_use"]["unresolved"]] == [pending_ref]
+    historical = call("history", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--evidence-ref", valid_reference)["evidence"]
+    assert historical["evidence_ref"] == valid_reference
+    assert historical["turn_instance_id"] == "turn-latest"
     assert index.read_bytes() == before
 
 

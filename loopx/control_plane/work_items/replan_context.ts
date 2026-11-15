@@ -50,8 +50,8 @@ function recordedTodoIdentity(row: JsonObject): string[] | null {
   if (!source || identity?.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION) return null;
   const keys = ["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id"];
   if (keys.some(key => typeof identity[key] !== "string" || !identity[key])) return null;
-  if (keys.slice(0, 4).some(key => identity[key] !== source[key]) ||
-      keys.slice(0, 3).some(key => identity[key] !== row[key])) return null;
+  if (keys.slice(0, 3).some(key => identity[key] !== source[key] || identity[key] !== row[key]) ||
+      (source.turn_instance_id != null && identity.turn_instance_id !== source.turn_instance_id)) return null;
   return keys.map(key => String(identity[key]));
 }
 
@@ -145,17 +145,16 @@ export function projectCoreGoal(value: unknown): JsonObject {
     })};
 }
 
-/** Qualify recorded bindings using the settlement owner, without settling work.
- * Keep historical Todo evidence eligible under its existing read contract.
- */
-function decisionBindingMatches(row: JsonObject, source: JsonObject, delta: JsonObject | null): boolean {
+/** Recognize the historical decision shape used by existing references. */
+function recordedDecisionBindingMatches(row: JsonObject, source: JsonObject, delta: JsonObject | null): boolean {
   const identity = objectOrNull(source.settlement_identity);
-  if (!identity || identity.turn_instance_id !== source.turn_instance_id ||
-      typeof identity.turn_instance_id !== "string" || !ID.test(identity.turn_instance_id)) return false;
+  if (!identity || typeof identity.turn_instance_id !== "string" || !ID.test(identity.turn_instance_id)) return false;
   if (identity.schema_version === SETTLEMENT_IDENTITY_SCHEMA_VERSION) {
-    return ["goal_id", "agent_id", "todo_id"].every(key => identity[key] === row[key]);
+    return (source.turn_instance_id == null || identity.turn_instance_id === source.turn_instance_id) &&
+      ["goal_id", "agent_id", "todo_id"].every(key => identity[key] === row[key]);
   }
   if (identity.schema_version !== SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION ||
+      identity.turn_instance_id !== source.turn_instance_id ||
       typeof row.goal_id !== "string" || typeof row.agent_id !== "string" ||
       [row.todo_id, source.todo_id, identity.todo_id].some(value => value != null && value !== "") ||
       ["goal_id", "agent_id"].some(key => source[key] !== row[key]) ||
@@ -166,12 +165,12 @@ function decisionBindingMatches(row: JsonObject, source: JsonObject, delta: Json
   return Object.entries(expected).every(([key, value]) => identity[key] === value);
 }
 
-function acceptedDecisionSource(row: JsonObject): boolean {
+function recordedDecisionSource(row: JsonObject): boolean {
   const source = objectOrNull(row._source_facts);
   const vision = objectOrNull(source?.agent_vision);
   const ack = objectOrNull(source?.autonomous_replan_ack);
   const delta = objectOrNull(ack?.semantic_delta);
-  return !!source && decisionBindingMatches(row, source, delta) &&
+  return !!source && recordedDecisionBindingMatches(row, source, delta) &&
     !objectOrNull(source.quota_spend_commit) &&
     vision?.schema_version === "goal_vision_replan_contract_v0" && vision.agent_id === row.agent_id &&
     (vision.goal_id == null || vision.goal_id === row.goal_id) &&
@@ -180,8 +179,13 @@ function acceptedDecisionSource(row: JsonObject): boolean {
     Array.isArray(delta.satisfying_outcomes) && delta.satisfying_outcomes.includes("fresh_vision_path_outcome");
 }
 
+function acceptedDecisionSource(row: JsonObject): boolean {
+  // History can resolve a recorded decision whose effect is ineligible for a new review.
+  return recordedDecisionSource(row) && !hasConflictingTodoSettlement(row);
+}
+
 function recordedDecision(row: JsonObject): JsonObject | null {
-  if (!acceptedDecisionSource(row)) return null;
+  if (!recordedDecisionSource(row)) return null;
   const source = objectOrNull(row._source_facts)!;
   let path: JsonObject | null;
   try {
@@ -195,9 +199,10 @@ function recordedDecision(row: JsonObject): JsonObject | null {
   let stride: JsonObject | null;
   try { stride = normalizeRecordedStrideDecision(objectOrNull(source.agent_vision)?.stride_decision); }
   catch { return null; }
-  const autonomous = objectOrNull(source.settlement_identity)?.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION;
+  const identity = objectOrNull(source.settlement_identity)!;
+  const autonomous = identity.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION;
   const decision = {history_evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
-    generated_at: row.generated_at, todo_id: autonomous ? null : row.todo_id, turn_instance_id: source.turn_instance_id,
+    generated_at: row.generated_at, todo_id: autonomous ? null : row.todo_id, turn_instance_id: identity.turn_instance_id,
     ...(autonomous ? {replan_obligation_id: source.replan_obligation_id} : {}),
     goal_ref: ref ? {goal_id: ref.goal_id, goal_instance_id: ref.goal_instance_id} : null,
     path_delta: path, ...(stride ? {stride_decision: stride} : {})};
@@ -359,7 +364,7 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
   const scoped = orderedDecisionRows(rows, goalFacts);
   const previous = scoped.find(acceptedDecisionSource);
   if (!previous) return null;
-  // Do not fall back to an older decision when the latest basis is corrupt.
+  // An accepted binding with unreadable decision content makes its basis unavailable.
   const decision = recordedDecision(previous);
   if (!decision) return null;
   const source = objectOrNull(previous._source_facts)!;

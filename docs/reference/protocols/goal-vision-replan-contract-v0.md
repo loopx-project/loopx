@@ -342,13 +342,18 @@ decision reference; existing history reference identities are unchanged.
 
 When a Todo record carries a settlement identity, its effect must match the
 recorded Goal, Agent, Todo and Turn before it can count as work or support a
-claim about a later result. Conflicting records remain readable at their
-existing history references. Records from before settlement identities were
-recorded retain their historical fallback.
+claim about a later result. The same check qualifies a Todo-bound decision
+before it can consume earlier work. The settlement identity supplies the Turn
+for older rows with no outer Turn field. A supplied outer Turn must agree.
+Conflicting records, including their existing decision references, remain
+readable in history. Records from before settlement identities were recorded
+retain their historical fallback.
 
 Todo 记录带有结算身份时，effect 必须与记录中的 Goal、Agent、Todo 和 Turn 一致，
-才能计为工作或支持后续结果的判断。身份冲突的记录仍可用原引用查询；引入结算身份前
-的历史记录保留原有兼容行为。
+才能计为工作或支持后续结果的判断。绑定 Todo 的复盘决定也须通过同一身份核对，才可
+将前一份成果标为已接续。旧记录没有外层 Turn 时，从结算身份取得 Turn。已有外层
+Turn 时两处必须一致。身份冲突的记录和已发出的决定引用仍可通过历史查询。引入结算
+身份前的记录保留原有兼容行为。
 
 Details are bounded to six distinct progress fingerprints with the full recorded
 count, omitted count, source completeness and missing-order count. These are
