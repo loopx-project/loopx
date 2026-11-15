@@ -3226,16 +3226,23 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           // A document, not a conversation: starts at the top, like the other pages.
           <div key="goal" className="scroller">
             <GoalWorkPage
+              token={token}
               goalId={goalPath}
               goals={loopxStatus?.goals ?? []}
+              goalsLoaded={!loopxRead.loading}
               attention={loopxStatus?.attention ?? []}
               failure={loopxRead.failure}
               onRetry={() => void 0}
+              onChanged={() => loopxRead.reload()}
+              threads={threads}
+              onOpenThread={openThreadById}
+              defaultAgent={draftAgent || agents[0]?.id || 'codex'}
             />
           </div>
         ) : onSteward ? (
           <div key="steward" className="scroller">
             <StewardPage
+              token={token}
               goals={loopxStatus?.goals ?? []}
               attention={loopxStatus?.attention ?? []}
               failure={loopxRead.failure}

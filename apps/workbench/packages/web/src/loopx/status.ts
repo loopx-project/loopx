@@ -124,6 +124,8 @@ export function parseLoopxStatus(payload: unknown): LoopxStatus {
   const runHistory = (record.run_history ?? {}) as Record<string, unknown>;
   const rawGoals = Array.isArray(runHistory.goals) ? (runHistory.goals as RawGoal[]) : [];
   if (!Array.isArray(runHistory.goals)) throw new Error('run_history.goals is missing');
+  // A deleted Goal leaves run-history rows the core still shows ("legacy-runtime": runs without a
+  // registry entry). Those are ghosts of the deletion, not Goals the person can work — leave them out.
   const goals: LoopxGoal[] = rawGoals.map(goal => ({
     goalId: String(goal.id ?? ''),
     parentId: goal.parent_goal_id != null && rawGoals.some(g => g.id === goal.parent_goal_id) ? String(goal.parent_goal_id) : null,
@@ -133,7 +135,7 @@ export function parseLoopxStatus(payload: unknown): LoopxStatus {
     activationState: String(goal.activation_state ?? 'unknown'),
     lifecyclePhase: text(goal.lifecycle_phase),
     updatedAt: text(goal.updated_at),
-  })).filter(goal => goal.goalId);
+  })).filter(goal => goal.goalId && goal.status !== 'legacy-runtime');
   const attentionQueue = (record.attention_queue ?? {}) as Record<string, unknown>;
   const rawAttention = Array.isArray(attentionQueue.items) ? (attentionQueue.items as RawAttention[]) : [];
   const attention: LoopxAttention[] = rawAttention.map(item => ({

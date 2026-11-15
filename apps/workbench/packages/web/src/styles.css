@@ -15429,3 +15429,167 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .steward-row:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); }
 .steward-row strong { font-size: 14px; }
 .steward-row small { color: var(--faint); font-size: 12px; }
+
+/* ── Batch B: the steward conversation, the Goal tabs, lifecycle and todo rows ── */
+
+.steward-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.steward-messages {
+  max-height: min(52vh, 480px);
+  min-height: 160px;
+  overflow-y: auto;
+  padding: 12px;
+  border-radius: var(--radius, 10px);
+  background: var(--well, rgba(31, 30, 28, 0.04));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.steward-row-msg { display: flex; }
+.steward-row-msg.user { justify-content: flex-end; }
+.steward-row-msg .bubble {
+  max-width: 86%;
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.steward-row-msg.user .bubble { background: var(--accent-soft); }
+.steward-row-msg.agent .bubble { background: var(--bg); border: 1px solid var(--line, rgba(31, 30, 28, 0.12)); }
+.steward-row-msg.streaming .bubble { opacity: 0.92; }
+
+.steward-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--faint);
+  font-size: 12px;
+}
+.steward-steps li::before { content: '· '; }
+
+.steward-turn-bar { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
+.steward-stopping { color: var(--faint); font-size: 12px; }
+.steward-stop {
+  padding: 6px 14px;
+  border: 1px solid var(--line, rgba(31, 30, 28, 0.12));
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--danger);
+  font-size: 13px;
+  cursor: pointer;
+}
+.steward-stop:disabled { color: var(--faint); cursor: default; }
+
+.steward-composer { display: flex; gap: 8px; align-items: flex-end; }
+.steward-composer textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 160px;
+  resize: none;
+  padding: 10px 12px;
+  border: 1px solid var(--line, rgba(31, 30, 28, 0.12));
+  border-radius: var(--radius, 10px);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+}
+.steward-composer button {
+  padding: 10px 16px;
+  border: 0;
+  border-radius: var(--radius, 10px);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 14px;
+  cursor: pointer;
+}
+.steward-composer button:disabled { opacity: 0.5; cursor: default; }
+
+.goal-masthead-actions { margin-left: auto; }
+
+.goal-tabs {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+  margin-top: 10px;
+  border-bottom: 1px solid var(--line, rgba(31, 30, 28, 0.12));
+}
+.goal-tabs button {
+  padding: 6px 12px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--faint);
+  font-size: 13px;
+  cursor: pointer;
+}
+.goal-tabs button.active { color: inherit; border-bottom-color: var(--accent); font-weight: 600; }
+
+.goal-todos { margin: 4px 0 0; padding: 0; list-style: none; }
+.goal-todos li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 0;
+  font-size: 14px;
+}
+.goal-todo-state { flex: none; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--faint); transform: translateY(-1px); }
+.goal-todos li.open .goal-todo-state { border-color: var(--accent); }
+.goal-todos li.done .goal-todo-state { background: var(--faint); }
+.goal-todos li.done .goal-todo-text { color: var(--faint); text-decoration: line-through; }
+.goal-todos-more { margin: 4px 0 0; color: var(--faint); font-size: 12px; }
+
+.goal-threads { display: flex; flex-direction: column; }
+.goal-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin: 6px 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--radius, 10px);
+  background: var(--well, rgba(31, 30, 28, 0.04));
+  text-align: left;
+  cursor: pointer;
+}
+.goal-thread:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); }
+.goal-thread.is-running .goal-thread-status { color: var(--accent); }
+.goal-thread-title { font-size: 14px; }
+.goal-thread-status { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-thread-new {
+  align-self: flex-start;
+  margin: 6px 0;
+  padding: 8px 14px;
+  border: 1px solid var(--line, rgba(31, 30, 28, 0.12));
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.goal-lifecycle-confirm { max-width: 420px; }
+.goal-lifecycle-summary { margin: 0 0 8px; font-size: 14px; }
+.goal-lifecycle-evidence { margin: 0 0 8px; padding-left: 18px; color: var(--faint); font-size: 12px; }
+.goal-lifecycle-warning { margin: 0; color: var(--danger); font-size: 13px; }
+
+.sidebar-goals-stopped { margin-top: 2px; padding-top: 2px; }
+.sidebar-goals-stopped-head { color: var(--faint); }
+.sidebar-goals-stopped-head .sidebar-goal-title::after { content: ' ▸'; font-size: 10px; }
+.sidebar-goals-stopped-head[aria-expanded='true'] .sidebar-goal-title::after { content: ' ▾'; }
+
+@media (max-width: 640px) {
+  .goal-vitals { flex-wrap: wrap; }
+  .goal-vital { flex: 1 1 40%; }
+  .steward-messages { max-height: 44vh; }
+  .steward-row-msg .bubble { max-width: 92%; }
+  .goal-tabs { overflow-x: auto; }
+}

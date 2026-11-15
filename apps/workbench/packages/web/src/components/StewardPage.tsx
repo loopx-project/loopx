@@ -1,16 +1,17 @@
 import { t } from '../i18n';
-import type { LoopxAttention, LoopxGoal } from '../loopx/status';
-import { failureLabel } from './GoalWorkPage';
+import { StewardConversation } from './StewardConversation';
+import type { LoopxAttention, LoopxGoal, LoopxStatusFailure } from '../loopx/status';
 
 /**
- * The LoopX steward page, in the place Calli's assistant home used to be. The conversation itself
- * lives in the Python manager service; batch A shows the brief from the status projection and the
- * honest state until the manager conversation view is wired.
+ * The LoopX steward page, in the place Calli's assistant home used to be: the manager's own
+ * conversation on top, the brief (what waits on the person, what is running) below it. Both read
+ * the same core the sidebar does.
  */
-export function StewardPage({ goals, attention, failure, onOpenGoal }: {
+export function StewardPage({ token, goals, attention, failure, onOpenGoal }: {
+  token: string | undefined;
   goals: LoopxGoal[];
   attention: LoopxAttention[];
-  failure: Parameters<typeof failureLabel>[0];
+  failure: LoopxStatusFailure | null;
   onOpenGoal: (goalId: string) => void;
 }) {
   const waitingOnUser = attention.filter(item =>
@@ -18,10 +19,7 @@ export function StewardPage({ goals, attention, failure, onOpenGoal }: {
   const active = goals.filter(goal => goal.activationState === 'active');
   return <div className="steward-page">
     <header className="steward-head"><h1>{t('loopx.steward')}</h1></header>
-    {failure ? <p role="alert" className="goal-failure">{failureLabel(failure)}</p> : null}
-    <section className="steward-conversation" aria-label={t('loopx.stewardConversation')}>
-      <p className="steward-hint">{t('loopx.stewardHint')}</p>
-    </section>
+    <StewardConversation token={token} failure={failure} />
     <section className="steward-brief" aria-label={t('loopx.stewardBrief')}>
       <h2>{t('loopx.needsYou')}</h2>
       {waitingOnUser.length ? waitingOnUser.map(item => {
