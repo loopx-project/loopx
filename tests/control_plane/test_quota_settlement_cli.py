@@ -4490,8 +4490,13 @@ def test_unclaimed_candidate_does_not_create_an_unsettled_work_obligation(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_codex_cli_saved_goal_bootstrap_uses_complete_source_and_keeps_agent_spend(
-    tmp_path: Path, provider: str,
+@pytest.mark.parametrize(("profile", "delivery", "spend_source"), [
+    ("codex_cli", "off", "visible-goal"),
+    ("generic_cli", "on", "heartbeat"),
+    ("generic_cli", "off", "heartbeat"),
+])
+def test_visible_cli_goal_prompt_keeps_source_and_agent_spend(
+    tmp_path: Path, provider: str, profile: str, delivery: str, spend_source: str,
 ) -> None:
     from hashlib import sha256
 
@@ -4503,28 +4508,51 @@ def test_codex_cli_saved_goal_bootstrap_uses_complete_source_and_keeps_agent_spe
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
-    rc, bootstrap = _run_cli(
-        registry_path, runtime, "heartbeat-prompt", "--thin", "--bootstrap",
-        "--runtime-profile", "codex_cli", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--context-delivery", "off", "--delta-delivery", "off", cwd=project,
+    prompt_args = (
+        ("--bootstrap",) if profile == "codex_cli" else ("--turn-instance-id", TURN_ID)
     )
-    assert rc == 0, bootstrap
-    loader = bootstrap["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0]
-    assert "--complete-turn" not in shlex.split(loader)
-    rc, prompt = _run_generated_cli(loader, registry_path=registry_path, cwd=project)
+    rc, prompt = _run_cli(
+        registry_path, runtime, "heartbeat-prompt", "--thin", *prompt_args,
+        "--runtime-profile", profile, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--context-delivery", delivery, "--delta-delivery", "off", cwd=project,
+    )
     assert rc == 0, prompt
-    guard = prompt["quota_guard_command"]
+    if profile == "codex_cli":
+        loader = prompt["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0]
+        assert "--complete-turn" not in shlex.split(loader)
+        rc, prompt = _run_generated_cli(loader, registry_path=registry_path, cwd=project)
+        assert rc == 0, prompt
+        guard = prompt["quota_guard_command"]
+    else:
+        shell_block = prompt["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0]
+        assert f"LOOPX_TURN={TURN_ID}" in shell_block
+        guard = next(line for line in shell_block.splitlines() if " quota should-run " in line)
+        guard = guard.replace('"${LOOPX_TURN:?}"', TURN_ID)
     assert not {"--complete-turn", "--turn-envelope", "--begin-turn"} & set(shlex.split(guard))
+    if profile == "generic_cli":
+        assert f"--turn-instance-id {TURN_ID}" in guard
+        rc, unbound = _run_generated_cli(
+            guard.replace(f" --turn-instance-id {TURN_ID}", ""),
+            registry_path=registry_path, cwd=project,
+        )
+        assert rc == 0 and "contract_binding" not in unbound, unbound
+        assert not unbound.get("heartbeat_receipt")
 
     rc, preview = _run_generated_cli(guard, registry_path=registry_path, cwd=project)
     assert rc == 0, preview
     assert_complete_turn_decision(preview)
-    assert not preview.get("heartbeat_receipt")
+    if profile == "generic_cli":
+        assert preview["heartbeat_receipt"]["turn_instance_id"] == TURN_ID
+        assert preview["heartbeat_receipt"]["status"] == "committed"
+        assert "settlement_identity" not in preview["heartbeat_receipt"]
+    else:
+        assert not preview.get("heartbeat_receipt")
     cli = preview["interaction_contract"]["cli_channel"]
     assert cli["spend_allowed_now"] is False
     assert cli["selection_required"] is True
+    legacy_guard = guard.replace("--context-delivery on", "--context-delivery off")
     rc, compatibility = _run_generated_cli(
-        guard + " --turn-envelope", registry_path=registry_path, cwd=project,
+        legacy_guard + " --turn-envelope", registry_path=registry_path, cwd=project,
     )
     assert rc == 0, compatibility
     assert compatibility["schema_version"] == TURN_ENVELOPE_SCHEMA_VERSION
@@ -4535,7 +4563,7 @@ def test_codex_cli_saved_goal_bootstrap_uses_complete_source_and_keeps_agent_spe
     ).replace("<unique-work-iteration-id-reuse-on-retry>", TURN_ID)
     argv = shlex.split(selection_guard)
     assert not {"--complete-turn", "--turn-envelope"} & set(argv)
-    assert argv[argv.index("--context-delivery") + 1] == "off"
+    assert argv[argv.index("--context-delivery") + 1] == delivery
     assert argv[argv.index("--delta-delivery") + 1] == "off"
     capture_dir = tmp_path / "bound-capture"
     rc, bound = _run_generated_cli(
@@ -4544,13 +4572,19 @@ def test_codex_cli_saved_goal_bootstrap_uses_complete_source_and_keeps_agent_spe
     )
     assert rc == 0, bound
     assert_complete_turn_decision(bound)
-    assert "context_delivery" not in bound
+    if delivery == "off":
+        assert "context_delivery" not in bound
     assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    expected_guard_rows = 1
+    if profile == "generic_cli":
+        # The selected work upgrades the unbound receipt under the same Turn.
+        assert bound["heartbeat_receipt"]["status"] == "upgraded"
+        expected_guard_rows = 2
     identity = bound["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == ALTERNATIVE_TODO_ID
     assert identity["turn_instance_id"] == TURN_ID
     cli = bound["interaction_contract"]["cli_channel"]
-    assert cli["quota_spend_source"] == "visible-goal"
+    assert cli["quota_spend_source"] == spend_source
     plan = cli["settlement_plan"]
     assert plan["identity"] == identity
     assert [step["owner"] for step in plan["ordered_steps"] if step["kind"] == "quota_spend"] == ["agent"]
@@ -4568,7 +4602,7 @@ def test_codex_cli_saved_goal_bootstrap_uses_complete_source_and_keeps_agent_spe
         "--capture-sha256", "0" * 64, cwd=project,
     )
     assert rc == 1 and wrong_digest["ok"] is False, wrong_digest
-    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == expected_guard_rows
     assert _spend_run_count(runtime) == 0
 
     writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
@@ -4592,16 +4626,18 @@ def test_codex_cli_saved_goal_bootstrap_uses_complete_source_and_keeps_agent_spe
     assert recovery["normal_delivery_allowed"] is False
     assert recovery["unsettled_host_turn_recovery"]["repair"] == "quota_spend"
     assert recovery["heartbeat_receipt"]["settlement_identity"] == identity
-    assert "context_delivery" not in recovery
+    if delivery == "off":
+        assert "context_delivery" not in recovery
     [spend_command] = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
-    assert "--source visible-goal" in spend_command
+    assert f"--source {spend_source}" in spend_command
     for appended in (True, False):
         rc, settled = _run_generated_cli(spend_command, registry_path=registry_path, cwd=project)
         assert rc == 0, settled
         assert settled["settlement_identity"] == identity
         assert settled["appended"] is appended
     assert capture.read_bytes() == original
-    assert _heartbeat_receipt_count(runtime, TURN_ID) == _spend_run_count(runtime) == 1
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == expected_guard_rows
+    assert _spend_run_count(runtime) == 1
 
 
 def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(

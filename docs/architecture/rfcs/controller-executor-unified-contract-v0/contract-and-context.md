@@ -1058,9 +1058,10 @@ the capture's format fields.
 | Trae App and Antigravity App heartbeats with a bound Turn | Use the same TypeScript composer and stateless reader. Selection and recovery carry the original Turn and delivery mode. The scheduler and spend retain their existing owners. |
 | Bound Codex App SSH Goal | The profile selects the complete source through the generated guard, selection and native preparation. The saved ready version is pinned for recovery. |
 | Codex CLI `/goal` JSON | The profile selects the complete source from the initial guard through selection and recovery. The Agent owns writeback and spend. |
+| Turn-bound generic CLI JSON, including DSH | An explicit `generic_cli` profile, Agent and Turn select the complete source. The generated heartbeat guard, Todo selection and recovery carry the original Turn, delivery settings and agent-owned heartbeat spend. Explicit Off delivers the complete source inline and carries Off through selection and settlement recovery. Scheduler-only probes use their observation route. |
 | Other ordinary quota and thin heartbeat | Keep the existing compact decision and settlement until their actual callers qualify. Saved unsigned captures retain their original source and pinned recovery. |
 | Explicit `--complete-turn` and managed handoff | Keep the checked complete source through selection and lease preparation. If a ready capture loses its complete version and binding, it offers receipt diagnosis only. |
-| Explicit `--turn-envelope` | Progressive or Delta uses the complete source. With both off and without a managed handoff, retain the bounded v0 compatibility display from the same composition. |
+| Explicit `--turn-envelope` | Progressive or Delta uses the complete source. With both off and without a managed handoff, retain the bounded v0 compatibility display from the same composition. EdgeBench uses that view as an explicit comparison condition. |
 | Recorded v0 captures, plans and requests | Keep their pinned integrity/recovery reader until outstanding admitted work and the supported recovery window are reconciled. An invalid new source cannot select this fallback. |
 
 In the earlier default-cutover comparison, a first reference

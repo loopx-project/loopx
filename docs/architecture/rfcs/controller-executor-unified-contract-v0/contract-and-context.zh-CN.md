@@ -762,9 +762,10 @@ Benchmark checkpoint 预检按自身调用选择普通或完整来源校验，�
 | 已绑定 Turn 的 Trae App 和 Antigravity App 心跳 | 共用 TypeScript 组合和无状态读取器。选题和恢复沿用原 Turn 与交付模式。调度和扣额仍由原有执行方负责。 |
 | 已绑定 Turn 的 Codex App SSH Goal | 生成的 guard、选题和原生准备按同一运行配置选择完整来源。恢复时核对原就绪捕获的版本。 |
 | Codex CLI `/goal` JSON | 从初次 guard 到选题和恢复，均由运行配置选择完整来源。写回和扣额由 Agent 执行。 |
+| 绑定 Turn 的通用 CLI JSON，含 DSH | 显式 `generic_cli` 配置及 Agent、Turn 身份选择完整来源。生成的心跳 guard、Todo 选题和恢复保留原 Turn、交付设置及 Agent 负责的心跳扣额。显式关闭时以内联方式交付完整来源，选题和结算恢复继续关闭交付。只读取调度判断的入口沿用观测路径。 |
 | 其他普通 quota 和 thin heartbeat | 保留现有紧凑决定与结算，直到实际调用方通过验收。已保存的未签名捕获沿原来源和固定引用恢复。 |
 | 显式 `--complete-turn` 和托管 handoff | 在选题和 lease 准备中保留经校验的完整来源。ready capture 丢失完整来源版本和绑定时，只允许回执诊断。 |
-| 显式 `--turn-envelope` | 渐进或差分开启时使用完整来源。两者都关闭且没有托管 handoff 时，仍展示同一次组合产生的有界 v0 兼容视图。 |
+| 显式 `--turn-envelope` | 渐进或差分开启时使用完整来源。两者都关闭且没有托管 handoff 时，仍展示同一次组合产生的有界 v0 兼容视图。EdgeBench 将此视图用作显式对照条件。 |
 | 已记录的 v0 capture、plan 与 request | 保留原版本完整性／恢复 reader，直到未结准入工作及受支持恢复窗口核清。无效新来源不能选择该回退。 |
 
 在早期默认切换对照中，首个引用可以更小，但必要 reader 响应仍可能

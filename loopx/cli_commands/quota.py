@@ -510,7 +510,7 @@ def _publish_quota_result(
     complete_source = False
     profile_source = False
     stateless_app_work_turn = False
-    codex_cli_source = False
+    cli_work_source = False
     runtime_root = context.runtime_root if context is not None else None
     if not budgeted_spend:
         try:
@@ -537,11 +537,19 @@ def _publish_quota_result(
                 heartbeat_turn_id is not None
                 and profile in {SchedulerRuntimeProfile.TRAE_APP, SchedulerRuntimeProfile.ANTIGRAVITY_APP}
             )
-            codex_cli_source = profile is SchedulerRuntimeProfile.CODEX_CLI_VISIBLE and args.format == "json"
+            cli_work_source = args.format == "json" and (
+                profile is SchedulerRuntimeProfile.CODEX_CLI_VISIBLE
+                or (
+                    profile is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
+                    and getattr(args, "runtime_profile", None) == profile.value
+                    and heartbeat_turn_id is not None
+                    and args.agent_id is not None
+                )
+            )
             profile_source = (
                 profile is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT
                 or stateless_app_work_turn
-                or codex_cli_source
+                or cli_work_source
             )
             if (profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE and heartbeat_turn_id is not None
                     and args.format == "json" and not getattr(args, "turn_envelope", False)):
@@ -554,7 +562,7 @@ def _publish_quota_result(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
             complete_source=complete_source, complete_cli_settlement=complete_cli_settlement,
-            preserve_profile_delivery=(stateless_app_work_turn or codex_cli_source)
+            preserve_profile_delivery=(stateless_app_work_turn or cli_work_source)
                 and not getattr(args, "complete_turn", False),
             activation=activation, remember_result=remember_result,
         )
