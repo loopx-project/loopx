@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/store.js';
 
 function open() {
-  const root = mkdtempSync(join(tmpdir(), 'calli-search-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-search-'));
   const store = new Store(root);
   const create = (id: string, title = id) => store.createThread({ id, cwd: '/project', agent: 'test', title, permissionMode: 'auto_edit', model: null, effort: null });
   /** A turn as it is really logged: the answer in pieces, with work in between. */

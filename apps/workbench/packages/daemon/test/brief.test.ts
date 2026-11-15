@@ -40,8 +40,8 @@ async function until<T>(check: () => T | null | undefined | false, timeoutMs = 1
 }
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-brief-data-'));
-  workdir = realpathSync(mkdtempSync(join(tmpdir(), 'calli-brief-work-')));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-brief-data-'));
+  workdir = realpathSync(mkdtempSync(join(tmpdir(), 'loochat-brief-work-')));
   const adapters = new Map<string, AgentAdapter>([['claude', new ClaudeAcpAdapter([process.execPath, join(here, 'fixtures', 'fake-acp.mjs')])]]);
   store = new Store(dataDir);
   manager = new ThreadManager(store, adapters, new Workdirs([workdir], join(dataDir, 'workdirs.json'), join(dataDir, 'scratch')), new AttachmentStore(dataDir));

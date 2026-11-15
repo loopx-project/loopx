@@ -31,11 +31,11 @@ function collecting() {
 }
 
 function setup(t: { after(fn: () => unknown): void }, base: string[] = [], env: Record<string, string> = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-doubao-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-doubao-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const log = join(dir, 'calls.jsonl');
   const bin = createFakeDoubaoRuntime(join(dir, 'native'));
-  const adapter = new DoubaoAdapter([...command, ...base], { CALLI_DOUBAO_RUNTIME: join(dir, 'native'), FAKE_DOUBAO_LOG: log, FAKE_DOUBAO_MARKER: 'instance-one', CALLI_DOUBAO_STREAM: '', ...env });
+  const adapter = new DoubaoAdapter([...command, ...base], { LOOCHAT_DOUBAO_RUNTIME: join(dir, 'native'), FAKE_DOUBAO_LOG: log, FAKE_DOUBAO_MARKER: 'instance-one', LOOCHAT_DOUBAO_STREAM: '', ...env });
   const calls = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
   return { dir, log, bin, adapter, calls };
 }
@@ -81,7 +81,7 @@ test('Doubao argv preserves opaque prompt text and maps safe and full-access per
 test('Doubao lazily announces a native id and later -p processes resume it with instance environment', async t => {
   const h = setup(t, ['--model', 'configured', '--effort', 'low']);
   const ids: string[] = [];
-  const session = await h.adapter.start({ cwd: h.dir, onSessionId: id => ids.push(id), coordinationEnv: { CALLI_TEAM_SOCKET: '/fixture/socket', CALLI_TEAM_KEY: 'fixture-key', CALLI_BIN_DIR: h.dir } });
+  const session = await h.adapter.start({ cwd: h.dir, onSessionId: id => ids.push(id), coordinationEnv: { LOOCHAT_TEAM_SOCKET: '/fixture/socket', LOOCHAT_TEAM_KEY: 'fixture-key', LOOCHAT_BIN_DIR: h.dir } });
   t.after(() => session.close());
   assert.equal(session.agentSessionId, '');
   assert.deepEqual(h.calls(), [], 'starting a handle does not create a native conversation');
@@ -224,13 +224,13 @@ test('Doubao terminal commands preserve wrapper and account paths but do not sta
 });
 
 test('Doubao configuration has a PATH default and an executable override', () => {
-  assert.deepEqual(loadConfig({ CALLI_TOKEN: 'test-token-0123456789' }).doubaoCommand, ['doubao']);
-  assert.deepEqual(loadConfig({ CALLI_TOKEN: 'test-token-0123456789', CALLI_DOUBAO_BIN: '/opt/doubao' }).doubaoCommand, ['/opt/doubao']);
+  assert.deepEqual(loadConfig({ LOOCHAT_TOKEN: 'test-token-0123456789' }).doubaoCommand, ['doubao']);
+  assert.deepEqual(loadConfig({ LOOCHAT_TOKEN: 'test-token-0123456789', LOOCHAT_DOUBAO_BIN: '/opt/doubao' }).doubaoCommand, ['/opt/doubao']);
 });
 
 async function apiSetup(t: { after(fn: () => unknown): void }) {
   const h = setup(t);
-  const registry = new AgentRegistry([{ id: 'doubao', adapter: 'doubao', command, env: { FAKE_DOUBAO_LOG: h.log, CALLI_DOUBAO_RUNTIME: join(h.dir, 'native') } }], null);
+  const registry = new AgentRegistry([{ id: 'doubao', adapter: 'doubao', command, env: { FAKE_DOUBAO_LOG: h.log, LOOCHAT_DOUBAO_RUNTIME: join(h.dir, 'native') } }], null);
   const store = new Store(h.dir);
   let manager = new ThreadManager(store, registry.adapters, [h.dir], new AttachmentStore(h.dir));
   let server = createHttpServer({ manager, registry, token: 'test-token', webDir: null, version: 'test' });

@@ -190,7 +190,7 @@ export class ZcodeAdapter implements AgentAdapter {
   async available(): Promise<boolean> { return commandExists(this.command[0]); }
   fetchQuota() { return fetchZcodeQuota(this.env); }
   commands() { return Promise.resolve(COMMANDS); }
-  // Native terminal sessions do not inherit calli's runtime preferences.
+  // Native terminal sessions do not inherit loochat's runtime preferences.
   resumeCommand(id: string): string { return `zcode --resume ${quoteArg(id)}`; }
   async models(refresh = false): Promise<ModelOption[]> {
     if (refresh) this.cachedModels = null;

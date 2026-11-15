@@ -27,11 +27,11 @@ function seed(dataDir, threadId) {
 }
 
 test('token activity shows a year of days, tells unknown from empty, and reads a day on hover, tap and keys', { timeout: 150000 }, async () => {
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'pi', adapter: 'pi', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-pi.mjs')] },
     { id: 'pi-2', label: '空闲 pi', adapter: 'pi', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-pi.mjs')] },
   ] }) });
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   if (shots) mkdirSync(shots, { recursive: true });
   let browser;
   try {

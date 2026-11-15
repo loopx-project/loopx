@@ -152,7 +152,7 @@ export class TraexAcpAdapter extends AcpAdapter {
     // Inline image bytes remain readable and do not leave an invalid CDN reference in history.
     // The copy-in staging folder of importSession follows CODEX_HOME; point it at TRAE's own home.
     this.execution = new CodexAppServerAdapter([...this.cli, 'app-server'],
-      env.CALLI_TRAEX_HOME ? { ...env, CODEX_HOME: env.CALLI_TRAEX_HOME } : env, 'TRAE CLI', true);
+      env.LOOCHAT_TRAEX_HOME ? { ...env, CODEX_HOME: env.LOOCHAT_TRAEX_HOME } : env, 'TRAE CLI', true);
   }
 
   override diagnose() { return cliDiagnostic(this.cli, this.env, 'app-server / ACP 1'); }
@@ -221,7 +221,7 @@ export class TraexAcpAdapter extends AcpAdapter {
   }
 
   async sessionLocation(agentSessionId: string | null, cwd: string) {
-    const configDir = configDirectory(this.env, 'CALLI_TRAEX_HOME', ['.trae', 'cli'], cwd);
+    const configDir = configDirectory(this.env, 'LOOCHAT_TRAEX_HOME', ['.trae', 'cli'], cwd);
     const sessionPath = await findSessionFile(join(configDir, 'sessions'), agentSessionId, 3, (name, id) => name.startsWith('rollout-') && name.endsWith(`-${id}.jsonl`));
     return { configDir, sessionPath };
   }
@@ -244,7 +244,7 @@ export class TraexAcpAdapter extends AcpAdapter {
    */
   artifactDirs(agentSessionId: string): string[] {
     if (!/^[0-9a-f-]{8,64}$/i.test(agentSessionId)) return [];
-    const home = this.env.CALLI_TRAEX_HOME || process.env.CALLI_TRAEX_HOME || join(homedir(), '.trae', 'cli');
+    const home = this.env.LOOCHAT_TRAEX_HOME || process.env.LOOCHAT_TRAEX_HOME || join(homedir(), '.trae', 'cli');
     const sessions = join(home, 'sessions');
     try {
       const years = readdirSync(sessions).filter((d) => /^\d{4}$/.test(d));

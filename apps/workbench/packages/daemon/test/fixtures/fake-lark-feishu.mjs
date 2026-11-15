@@ -5,18 +5,18 @@ import { createHash } from 'node:crypto';
 const args = process.argv.slice(2);
 const config = () => JSON.parse(readFileSync(process.env.FAKE_LARK_CONFIG, 'utf8'));
 // Creation names a new profile; selecting that profile before it exists would fail.
-const creating = args.join(' ') === 'config init --new --name calli';
+const creating = args.join(' ') === 'config init --new --name loochat';
 const command = creating ? args : args.slice(2);
 const loggingIn = command.join(' ') === 'auth login --domain im';
 const streaming = command[0] === 'event' || command[0] === 'config' || loggingIn;
 const input = streaming ? '' : readFileSync(0, 'utf8');
 const calls = () => readFileSync(process.env.FAKE_LARK_LOG, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
-appendFileSync(process.env.FAKE_LARK_LOG, JSON.stringify({ args, input, pid: process.pid, credentials: Object.keys(process.env).filter(key => key.startsWith('CALLI_')) }) + '\n');
+appendFileSync(process.env.FAKE_LARK_LOG, JSON.stringify({ args, input, pid: process.pid, credentials: Object.keys(process.env).filter(key => key.startsWith('LOOCHAT_')) }) + '\n');
 const output = value => process.stdout.write(JSON.stringify(value) + '\n');
 const fail = () => { process.stderr.write('untrusted CLI diagnostics must not leak\n'); process.exitCode = 1; };
 const c = config();
-if (!creating && (args[0] !== '--profile' || args[1] !== 'calli')) {
-  process.stderr.write('expected --profile calli before command\n'); process.exitCode = 2;
+if (!creating && (args[0] !== '--profile' || args[1] !== 'loochat')) {
+  process.stderr.write('expected --profile loochat before command\n'); process.exitCode = 2;
 } else if (command[0] === 'auth' && command[1] === 'status') {
   if (c.authFail) fail();
   else if (c.authTimeout) setTimeout(() => process.exit(0), 30_000);
@@ -36,8 +36,8 @@ if (!creating && (args[0] !== '--profile' || args[1] !== 'calli')) {
   if (c.loginWait) {
     const timer = setInterval(() => { if (config().loginFinish) { clearInterval(timer); finish(); } }, 20);
   } else setTimeout(finish, c.loginDelayMs ?? 250);
-} else if (command.join(' ') === 'config init --new --name calli') {
-  process.stdout.write('Open https://example.invalid/authorize?fixture=calli to create the bot.\n');
+} else if (command.join(' ') === 'config init --new --name loochat') {
+  process.stdout.write('Open https://example.invalid/authorize?fixture=loochat to create the bot.\n');
   const finish = () => {
     const latest = config();
     if (latest.setupExit) { fail(); return; }

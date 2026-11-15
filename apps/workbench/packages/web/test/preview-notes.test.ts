@@ -11,7 +11,7 @@ test('external previews cannot use the authenticated app origin or URL credentia
 
 test('malformed and oversized postMessage picks are rejected before opening the editor', () => {
   assert.equal(isPreviewPick(null), false);
-  assert.equal(isPreviewPick({ type: 'calli-preview:picked', target: {} }), false);
+  assert.equal(isPreviewPick({ type: 'loochat-preview:picked', target: {} }), false);
   const pick = { target: { selector: '#status', text: 'devbox', html: '<span/>', rect: { x: 0, y: 0, width: 10, height: 10 } }, context: { title: '', url: '', theme: '', variant: '', revision: '', viewport: { width: 390, height: 844 } } };
   assert.equal(isPreviewPick(pick), true);
   assert.equal(isPreviewPick({ ...pick, target: { ...pick.target, html: 'x'.repeat(6001) } }), false);

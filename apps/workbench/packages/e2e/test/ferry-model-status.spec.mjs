@@ -9,7 +9,7 @@ import { modelGateway } from '../../daemon/test/fixtures/model-gateway.mjs';
 
 test('Ferry picker shows observed queues and safely degrades without a cache across themes and sizes', { timeout: 120_000 }, async () => {
   // Every provider is a fake: opening or selecting a model must not run real inference.
-  const home = mkdtempSync(join(tmpdir(), 'calli-ferry-ui-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-ferry-ui-'));
   const gateway = await modelGateway();
   let daemon, browser;
   try {
@@ -44,13 +44,13 @@ test('Ferry picker shows observed queues and safely degrades without a cache acr
       .filter(name => /^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_CONFIG_DIR$|FERRY_HOME$|XDG_DATA_HOME$)/.test(name)).map(name => [name, '']));
     daemon = await startDaemon({
       ...cleanEnv, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CODEX_HOME: join(home, '.codex'), FERRY_HOME: ferryHome,
-      CALLI_CODEX_BIN: fakeCodex, CALLI_CLAUDE_QUOTA_BIN: join(fixtures, 'fake-claude-usage.sh'),
-      CALLI_TRAEX_BIN: 'fake-claude', FAKE_TRAEX_MODELS_FILE: statusFile, FAKE_TRAEX_MODELS_FAIL: '0',
+      LOOCHAT_CODEX_BIN: fakeCodex, LOOCHAT_CLAUDE_QUOTA_BIN: join(fixtures, 'fake-claude-usage.sh'),
+      LOOCHAT_TRAEX_BIN: 'fake-claude', FAKE_TRAEX_MODELS_FILE: statusFile, FAKE_TRAEX_MODELS_FAIL: '0',
       ANTHROPIC_BASE_URL: gateway.url, ANTHROPIC_MODEL: 'claude-gpt-6-1-sol',
       CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
     });
     browser = await launchBrowser();
-    const shots = process.env.CALLI_FERRY_SHOTS;
+    const shots = process.env.LOOCHAT_FERRY_SHOTS;
     if (shots) mkdirSync(shots, { recursive: true });
     for (const phone of [false, true]) for (const theme of ['light', 'dark']) {
       seed(184);

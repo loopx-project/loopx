@@ -8,7 +8,7 @@ import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 const svg = (fill, label) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 300"><rect width="480" height="300" rx="16" fill="${fill}"/><text x="28" y="52" fill="#888" font-size="28">${label}</text></svg>`;
 
 test('an answer\'s pictures sit right after the passage that names them, desktop and phone, light and dark', async () => {
-  const artifacts = mkdtempSync(join(tmpdir(), 'calli-answer-images-'));
+  const artifacts = mkdtempSync(join(tmpdir(), 'loochat-answer-images-'));
   let daemon, browser;
   try {
     daemon = await startDaemon();
@@ -46,10 +46,10 @@ test('an answer\'s pictures sit right after the passage that names them, desktop
         const order = await answer.evaluate(el => [...el.querySelectorAll('.file-image, p')].map(n => n.matches('.file-image') ? 'image' : n.textContent.includes('看完') ? 'end' : 'text'));
         const end = order.indexOf('end');
         assert.deepEqual(order.slice(end - 2, end + 1), ['image', 'image', 'end']);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
           await answer.scrollIntoViewIfNeeded();
-          await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `answer-images-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+          await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `answer-images-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }

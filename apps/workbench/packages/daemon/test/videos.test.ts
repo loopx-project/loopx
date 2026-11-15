@@ -17,7 +17,7 @@ test('video signatures accept MP4, MOV and WebM but not images disguised as vide
 });
 
 test('video streaming preserves bytes, cleans interrupted uploads, and enforces size limits', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-video-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-video-'));
   const base = join(dir, 'upload');
   try {
     const info = await storeVideo(base, (async function* () { yield mp4.subarray(0, 3); yield mp4.subarray(3); })(), '../录屏.mp4');

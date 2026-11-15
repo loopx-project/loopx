@@ -18,7 +18,7 @@ test('a running conversation leans toward the middle of a wide screen; a new thr
     await post(`/api/threads/${thread.id}/turns`, { text: 'run a streamed command' });
     for (let i = 0; i < 100 && (await (await api(daemon, `/api/threads/${thread.id}`)).json()).status !== 'idle'; i++) await new Promise((r) => setTimeout(r, 100));
     browser = await launchBrowser();
-    const shots = process.env.CALLI_E2E_SHOTS_DIR;
+    const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
     if (shots) mkdirSync(shots, { recursive: true });
 
     for (const colorScheme of ['light', 'dark']) {

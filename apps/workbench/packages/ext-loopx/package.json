@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
-  "description": "Optional LoopX work source for Calli",
+  "description": "Optional LoopX work source for LooChat",
   "files": [
     "manifest.json",
     "src/*.mjs",

@@ -14,8 +14,8 @@ export class HandoverReader {
     if (!this.store.getThread(id)?.handover) return undefined;
     let key = this.credentials.get(id);
     if (!key) { key = randomUUID(); this.credentials.set(id, key); }
-    return { CALLI_HANDOVER_SOCKET: this.socket, CALLI_HANDOVER_KEY: key,
-      CALLI_BIN_DIR: resolve(dirname(fileURLToPath(import.meta.url)), '../bin') };
+    return { LOOCHAT_HANDOVER_SOCKET: this.socket, LOOCHAT_HANDOVER_KEY: key,
+      LOOCHAT_BIN_DIR: resolve(dirname(fileURLToPath(import.meta.url)), '../bin') };
   }
 
   private chain(id: string): ThreadRecord[] {
@@ -40,7 +40,7 @@ export class HandoverReader {
     }
     if (input.op !== 'history') throw new HttpError(403, 'handover credentials are read-only');
     if (typeof input.target !== 'string' || !chain.some(t => t.id === input.target)) throw new HttpError(403, 'thread outside handover chain');
-    return readHistory(this.manager, input.target, input, 'calli history');
+    return readHistory(this.manager, input.target, input, 'loochat history');
   }
 }
 

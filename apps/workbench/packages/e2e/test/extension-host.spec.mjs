@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { linkDaemon, startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
 let root, hub, remote, browser, machine, localThread, remoteThread;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 const json = async (daemon, path, method = 'GET', body) => {
   const response = await api(daemon, path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   assert.ok(response.ok, `${path}: ${response.status} ${response.ok ? '' : await response.text()}`);
@@ -29,9 +29,9 @@ async function boardPage(options = {}) {
   return page;
 }
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-extension-host-'));
+  root = mkdtempSync(join(tmpdir(), 'loochat-extension-host-'));
   const remoteHome = join(root, 'remote-home'); mkdirSync(remoteHome);
-  remote = await startDaemon({ CALLI_SOCKET: join(remoteHome, '.local/state/calli/daemon.sock') });
+  remote = await startDaemon({ LOOCHAT_SOCKET: join(remoteHome, '.local/state/loochat/daemon.sock') });
   hub = await startDaemon({ FAKE_PERSONAL_BOARD_LINKS: '1' });
   console.log(`Temporary hubs: ${hub.pid}, ${remote.pid}`);
   machine = await linkDaemon(hub, remote);

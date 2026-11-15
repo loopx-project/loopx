@@ -2,7 +2,7 @@ import { replaceMessageTail, type StoredEvent } from './events.js';
 
 /**
  * Handing a thread's task to another agent: the successor gets a brief that points at the source —
- * `calli handover` and `calli history` read it inside the hub — plus a few lines of where things
+ * `loochat handover` and `loochat history` read it inside the hub — plus a few lines of where things
  * stood, either written by the outgoing agent while it still could, or assembled by the hub from
  * the event log, which holds every turn, tool call and diff anyway.
  */
@@ -78,7 +78,7 @@ function logFacts(events: StoredEvent[]) {
 }
 
 /**
- * The short handover for a successor the hub starts itself. It can read the source with `calli`,
+ * The short handover for a successor the hub starts itself. It can read the source with `loochat`,
  * so it gets where to look and how, plus a few lines of where things stood, not a retelling.
  */
 export function handoverBrief(info: {
@@ -94,12 +94,12 @@ export function handoverBrief(info: {
   return [
     '# 接手',
     '',
-    `你接手 ${info.from} 在 hub 线程 ${info.threadId} 里的任务，看不到原对话。需要时自己读（找不到 calli 就用 "$CALLI_BIN_DIR/calli"）：`,
-    '- `calli handover`：来源会话信息',
-    `- \`calli history ${info.threadId}\`：按轮读问答和工具调用，按返回的 command 翻页`,
+    `你接手 ${info.from} 在 hub 线程 ${info.threadId} 里的任务，看不到原对话。需要时自己读（找不到 loochat 就用 "$LOOCHAT_BIN_DIR/loochat"）：`,
+    '- `loochat handover`：来源会话信息',
+    `- \`loochat history ${info.threadId}\`：按轮读问答和工具调用，按返回的 command 翻页`,
     '',
     `工作目录 ${place}。沿用它和未提交的改动，先用 git status、git diff 对齐现状再继续。`,
-    ...(info.lead ? ['', '你现在是本次协作的主控：成员的结果会投给你，用 `calli status` 查看成员和未交回的任务。'] : []),
+    ...(info.lead ? ['', '你现在是本次协作的主控：成员的结果会投给你，用 `loochat status` 查看成员和未交回的任务。'] : []),
   ].join('\n');
 }
 
@@ -120,7 +120,7 @@ export function handoverPreview(text: string, limit = 160): string {
   return trunc(body, limit);
 }
 
-/** A few lines of where the thread stood, for the brief handover. The rest is in `calli history`. */
+/** A few lines of where the thread stood, for the brief handover. The rest is in `loochat history`. */
 export function synthesizeBrief(events: StoredEvent[]): string {
   const { asks, lastFailed, lastAnswer, why, plan, files } = logFacts(events);
   // A failed last ask is carried over word for word after the brief; it is not repeated here.

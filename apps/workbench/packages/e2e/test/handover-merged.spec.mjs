@@ -5,7 +5,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
-const shots = '/tmp/calli-handover-merged-shots';
+const shots = '/tmp/loochat-handover-merged-shots';
 const chainDialog = async page => {
   await page.getByLabel('这个线程的更多操作').click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();

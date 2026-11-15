@@ -97,7 +97,7 @@ test('48-hour reason, multiple stale waits, and associated conversation activity
 });
 
 function scheduleFixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-brief-')); const store = new Store(dir);
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-brief-')); const store = new Store(dir);
   let quiet = { start: '23:00', end: '08:00' };
   const schedule = new PersonalBriefSchedule(store, () => quiet);
   const sent: unknown[] = [];

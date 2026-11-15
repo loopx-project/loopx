@@ -31,7 +31,7 @@ const manifest = (id: string, extra: Partial<ExtensionManifest> = {}): Extension
 });
 
 function mockHost(catalog: ExtensionManifest[], capabilityResolver?: () => readonly ProviderCapabilitySnapshot[] | null | undefined) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-ext-deps-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-deps-'));
   const store = new Store(dir);
   const manager = new ThreadManager(store, new Map(), [dir], new AttachmentStore(dir));
   const extensions = new ExtensionHost({

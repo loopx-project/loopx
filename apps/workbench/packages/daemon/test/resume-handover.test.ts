@@ -14,14 +14,14 @@ import type { AgentAdapter } from '../src/adapters/types.js';
 import { createHttpServer } from '../src/http.js';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
-process.env.CALLI_CLAUDE_QUOTA_BIN = join(fixtures, 'fake-claude-usage.sh');
+process.env.LOOCHAT_CLAUDE_QUOTA_BIN = join(fixtures, 'fake-claude-usage.sh');
 const wait = async (check: () => unknown, timeout = 8000) => {
   const end = Date.now() + timeout;
   while (!check()) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 10)); }
 };
 
 test('a Claude transcript is copied into another account under a new id, the original untouched', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-import-session-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-import-session-'));
   try {
     const project = join(root, 'one', 'projects', '-work-app');
     mkdirSync(project, { recursive: true });
@@ -45,7 +45,7 @@ test('a Claude transcript is copied into another account under a new id, the ori
 });
 
 test('two fake Codex instances hand the rollout itself over, staged and forked by path', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-resume-handover-codex-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-resume-handover-codex-'));
   const homes = { codex: join(dir, 'home-one'), codex2: join(dir, 'home-two') };
   const adapters = new Map<string, AgentAdapter>();
   for (const [id, home] of Object.entries(homes)) {
@@ -83,7 +83,7 @@ test('two fake Codex instances hand the rollout itself over, staged and forked b
 });
 
 async function setup(method?: 'resume' | 'summary') {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-resume-handover-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-resume-handover-'));
   mkdirSync(join(dir, 'account-two'));
   const store = new Store(dir);
   const loads = join(dir, 'loads.log');

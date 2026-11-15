@@ -17,7 +17,7 @@ const git = (cwd, ...args) => {
 };
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-install-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-install-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const home = join(dir, 'home');
   const state = join(dir, 'state');
@@ -27,22 +27,22 @@ function fixture(t) {
   copyFileSync(join(fakes, 'restart.sh'), join(source, 'scripts/restart.sh'));
   git(source, 'init', '-q', '-b', 'main');
   git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '.');
-  git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'calli');
+  git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'loochat');
   const env = {
     PATH: `${fakes}:${process.env.PATH}`, HOME: home, USER: process.env.USER ?? 'user', SHELL: '/bin/bash',
-    CALLI_REPO: `file://${source}`, CALLI_FAKE_STATE: state,
+    LOOCHAT_REPO: `file://${source}`, LOOCHAT_FAKE_STATE: state,
   };
   const run = (...args) => spawnSync('bash', [join(repo, 'install.sh'), ...args], { env, encoding: 'utf8' });
   const read = (name) => existsSync(join(state, name)) ? readFileSync(join(state, name), 'utf8') : '';
   const paths = {
-    app: join(home, '.local/share/calli'),
-    env: join(home, '.config/calli/.env'),
+    app: join(home, '.local/share/loochat'),
+    env: join(home, '.config/loochat/.env'),
     unit: join(home, '.config/systemd/user/calli.service'),
   };
   return { run, read, state, home, paths };
 }
 
-const token = (file) => readFileSync(file, 'utf8').match(/^CALLI_TOKEN=(.*)$/m)?.[1];
+const token = (file) => readFileSync(file, 'utf8').match(/^LOOCHAT_TOKEN=(.*)$/m)?.[1];
 
 test('a first install builds, writes the settings, starts the service and prints address and token', (t) => {
   const { run, read, home, paths } = fixture(t);
@@ -50,12 +50,12 @@ test('a first install builds, writes the settings, starts the service and prints
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const env = readFileSync(paths.env, 'utf8');
   assert.match(token(paths.env), /^[0-9a-f]{48}$/);
-  assert.match(env, new RegExp(`^CALLI_DATA_DIR=${home}/.local/state/calli/data$`, 'm'));
-  assert.match(env, new RegExp(`^CALLI_WORKDIRS=${home}$`, 'm'));
+  assert.match(env, new RegExp(`^LOOCHAT_DATA_DIR=${home}/.local/state/loochat/data$`, 'm'));
+  assert.match(env, new RegExp(`^LOOCHAT_WORKDIRS=${home}$`, 'm'));
   assert.deepEqual(read('npm.log').trim().split('\n'), ['install --no-audit --no-fund', 'run build']);
   assert.match(readFileSync(paths.unit, 'utf8'), new RegExp(`^WorkingDirectory=${paths.app}$`, 'm'));
-  assert.match(read('systemctl.log'), /restart calli/);
-  assert.match(r.stdout, /Calli is running: http:\/\/127\.0\.0\.1:8787\//);
+  assert.match(read('systemctl.log'), /restart loochat/);
+  assert.match(r.stdout, /LooChat is running: http:\/\/127\.0\.0\.1:8787\//);
   assert.match(r.stdout, new RegExp(`Token: ${token(paths.env)}`));
 });
 
@@ -84,12 +84,12 @@ test('a dry run changes nothing', (t) => {
 test('a service that runs another checkout is left alone', (t) => {
   const { run, paths } = fixture(t);
   mkdirSync(dirname(paths.unit), { recursive: true });
-  writeFileSync(paths.unit, '[Service]\nWorkingDirectory=/elsewhere/calli\n');
+  writeFileSync(paths.unit, '[Service]\nWorkingDirectory=/elsewhere/loochat\n');
   const r = run();
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /already runs \/elsewhere\/calli; it was not changed/);
-  assert.match(readFileSync(paths.unit, 'utf8'), /WorkingDirectory=\/elsewhere\/calli/);
-  assert.match(r.stdout, /To start Calli:/);
+  assert.match(r.stdout, /already runs \/elsewhere\/loochat; it was not changed/);
+  assert.match(readFileSync(paths.unit, 'utf8'), /WorkingDirectory=\/elsewhere\/loochat/);
+  assert.match(r.stdout, /To start LooChat:/);
 });
 
 test('without systemd it says how to start by hand', (t) => {
@@ -98,7 +98,7 @@ test('without systemd it says how to start by hand', (t) => {
   const r = run();
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /No systemd user session/);
-  assert.match(r.stdout, /CALLI_ENV_FILE=.*npm start -w @calli\/daemon/);
+  assert.match(r.stdout, /LOOCHAT_ENV_FILE=.*npm start -w @loochat\/daemon/);
 });
 
 test('a failed dependency install names the build tools to get', (t) => {

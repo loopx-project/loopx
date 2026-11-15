@@ -17,7 +17,7 @@ import { Workdirs } from '../src/workdirs.js';
 // read back from the agent session, and the one-time migration of old logs.
 
 function storeFixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-tool-out-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-tool-out-'));
   const store = new Store(dir);
   store.createThread({ id: 'thread', agent: 'stub', cwd: dir, title: 'thread', agentSessionId: 'sess-1', permissionMode: 'default', model: null, effort: null });
   const add = (turn: string | null, type: EventType, data: Record<string, unknown>) => store.appendEvent('thread', turn, type, data);
@@ -131,8 +131,8 @@ test('the migration collapses old logs once and a rerun changes nothing', async 
 });
 
 function managerFixture(adapter: AgentAdapter) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-tool-mgr-'));
-  const workdir = mkdtempSync(join(tmpdir(), 'calli-tool-work-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-tool-mgr-'));
+  const workdir = mkdtempSync(join(tmpdir(), 'loochat-tool-work-'));
   const store = new Store(dataDir);
   const manager = new ThreadManager(store, new Map([['stub', adapter]]), new Workdirs([workdir], join(dataDir, 'workdirs.json'), join(dataDir, 'scratch')), new AttachmentStore(dataDir));
   return { manager, store, workdir, close: () => { store.close(); rmSync(dataDir, { recursive: true, force: true }); rmSync(workdir, { recursive: true, force: true }); } };

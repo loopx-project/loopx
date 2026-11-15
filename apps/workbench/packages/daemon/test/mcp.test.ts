@@ -66,9 +66,9 @@ model = "o4-mini"
 `;
 
 before(async () => {
-  home = mkdtempSync(join(tmpdir(), 'calli-mcp-home-'));
-  workdir = mkdtempSync(join(tmpdir(), 'calli-mcp-work-'));
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-mcp-data-'));
+  home = mkdtempSync(join(tmpdir(), 'loochat-mcp-home-'));
+  workdir = mkdtempSync(join(tmpdir(), 'loochat-mcp-work-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-mcp-data-'));
 
   writeFileSync(
     join(home, '.claude.json'),
@@ -248,7 +248,7 @@ test('registry entries: notes and manual servers, saved, listed, and deleted', a
 });
 
 test('toml edge cases: quoted names, booleans and numbers, inline tables, fresh files', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-mcp-toml-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-mcp-toml-'));
   try {
     const path = join(dir, 'config.toml');
     writeFileSync(path, `[mcp_servers."my-server"]\ncommand = 'lit-string'\nargs = [ "a", 'b' ]\nready = true\ncount = 42\nprice = 1.5\n\n[mcp_servers."my-server"]\ncount = 7\n\n[mcp_servers.other]\nenv = { A = "x", B = "y" }\n`);

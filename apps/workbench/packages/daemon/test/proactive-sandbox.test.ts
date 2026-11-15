@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { ProactiveSandbox } from '../src/proactive-sandbox.js';
 
 // A machine with no git identity and no settings of its own: the hub must not lean on either.
-const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'calli-test-proactive-')));
+const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'loochat-test-proactive-')));
 writeFileSync(join(scratch, 'gitconfig'), '');
 process.env.GIT_CONFIG_GLOBAL = join(scratch, 'gitconfig');
 process.env.GIT_CONFIG_NOSYSTEM = '1';
@@ -35,7 +35,7 @@ function repo(initial = 'main'): string {
 function commitIn(root: string, file: string, content: string, matterId: string): string {
   writeFileSync(join(root, file), content);
   git(root, 'add', '.');
-  git(root, 'commit', '--quiet', '-m', `work on ${file}\n\nCalli-Proactive: ${matterId}`);
+  git(root, 'commit', '--quiet', '-m', `work on ${file}\n\nLooChat-Proactive: ${matterId}`);
   return git(root, 'rev-parse', 'HEAD');
 }
 
@@ -52,9 +52,9 @@ const ancestor = (cwd: string, of: string, it: string): boolean => {
 test('prepare opens a worktree on its own branch from the default branch, and reuses what is there', async () => {
   const dir = repo();
   const tree = await sandbox.prepare(dir, 'm-1');
-  assert.equal(tree.branch, 'calli/proactive/m-1');
-  assert.equal(tree.root, join(dir, '.worktrees', 'calli-proactive-m-1'));
-  assert.equal(git(tree.root, 'symbolic-ref', '--short', 'HEAD'), 'calli/proactive/m-1');
+  assert.equal(tree.branch, 'loochat/proactive/m-1');
+  assert.equal(tree.root, join(dir, '.worktrees', 'loochat-proactive-m-1'));
+  assert.equal(git(tree.root, 'symbolic-ref', '--short', 'HEAD'), 'loochat/proactive/m-1');
   assert.equal(git(tree.root, 'rev-parse', 'HEAD'), git(dir, 'rev-parse', 'main'));
   assert.equal(git(dir, 'status', '--porcelain'), '', 'the worktrees stay out of git status');
 
@@ -63,13 +63,13 @@ test('prepare opens a worktree on its own branch from the default branch, and re
   writeFileSync(join(dir, 'README.md'), 'hello, moved on\n');
   git(dir, 'commit', '--quiet', '-am', 'default branch moves on');
   assert.deepEqual(await sandbox.prepare(dir, 'm-1'), tree);
-  assert.equal(git(tree.root, 'rev-parse', 'HEAD'), git(dir, 'rev-parse', 'calli/proactive/m-1'));
+  assert.equal(git(tree.root, 'rev-parse', 'HEAD'), git(dir, 'rev-parse', 'loochat/proactive/m-1'));
 
   // A worktree lost by hand is hung back onto the branch it had, commits included.
   rmSync(tree.root, { recursive: true, force: true });
   const again = await sandbox.prepare(dir, 'm-1');
   assert.equal(again.root, tree.root);
-  assert.equal(git(again.root, 'rev-parse', 'HEAD'), git(dir, 'rev-parse', 'calli/proactive/m-1'));
+  assert.equal(git(again.root, 'rev-parse', 'HEAD'), git(dir, 'rev-parse', 'loochat/proactive/m-1'));
 
   // After a discard a run starts over from the default branch.
   await sandbox.discard(dir, 'm-1');
@@ -90,7 +90,7 @@ test('prepare refuses an empty repository and a bare one', async () => {
 
 test('prepare refuses a slot that is taken and a matter id that is not safe', async () => {
   const dir = repo();
-  const slot = join(dir, '.worktrees', 'calli-proactive-m-9');
+  const slot = join(dir, '.worktrees', 'loochat-proactive-m-9');
   mkdirSync(slot, { recursive: true });
   writeFileSync(join(slot, 'precious.txt'), 'not ours to touch\n');
   await assert.rejects(sandbox.prepare(dir, 'm-9'), /已存在/);
@@ -101,7 +101,7 @@ test('prepare refuses a slot that is taken and a matter id that is not safe', as
 test('prepare refuses a branch already checked out elsewhere', async () => {
   const dir = repo();
   const other = join(scratch, `other-checkout-${++made}`);
-  git(dir, 'worktree', 'add', '--quiet', '-b', 'calli/proactive/m-1', other, 'main');
+  git(dir, 'worktree', 'add', '--quiet', '-b', 'loochat/proactive/m-1', other, 'main');
   await assert.rejects(sandbox.prepare(dir, 'm-1'), /已在别处检出/);
 });
 
@@ -168,16 +168,16 @@ test('merge folds the branch back with the trailer, and only from a clean defaul
   assert.equal(parents.length, 2, 'the merge is a true merge, not a fast-forward');
   assert.equal(parents[1], branchTip);
   const lines = git(dir, 'log', '-1', '--format=%B').split('\n').filter(l => l.trim());
-  assert.equal(lines[0], 'Merge sandbox branch calli/proactive/m-3');
-  assert.equal(lines[lines.length - 1], 'Calli-Proactive: m-3', 'the trailer is the last line, on its own');
+  assert.equal(lines[0], 'Merge sandbox branch loochat/proactive/m-3');
+  assert.equal(lines[lines.length - 1], 'LooChat-Proactive: m-3', 'the trailer is the last line, on its own');
 
   // Merging again does nothing: the branch holds nothing new beyond the default branch.
   await assert.rejects(sandbox.merge(dir, 'm-3'), /无东西可合入/);
 
   // The branch survives the merge; cleaning it up is discard's job.
   assert.equal(existsSync(tree.root), true);
-  assert.equal(git(tree.root, 'symbolic-ref', '--short', 'HEAD'), 'calli/proactive/m-3');
-  assert.match(git(dir, 'branch', '--list', 'calli/proactive/m-3'), /calli\/proactive\/m-3/);
+  assert.equal(git(tree.root, 'symbolic-ref', '--short', 'HEAD'), 'loochat/proactive/m-3');
+  assert.match(git(dir, 'branch', '--list', 'loochat/proactive/m-3'), /loochat\/proactive\/m-3/);
 });
 
 test('discard removes the worktree and the branch, and is happy when they are gone', async () => {
@@ -186,7 +186,7 @@ test('discard removes the worktree and the branch, and is happy when they are go
   writeFileSync(join(tree.root, 'wip.md'), 'unfinished\n'); // even uncommitted work goes
   await sandbox.discard(dir, 'm-4');
   assert.equal(existsSync(tree.root), false);
-  assert.equal(git(dir, 'branch', '--list', 'calli/*'), '');
+  assert.equal(git(dir, 'branch', '--list', 'loochat/*'), '');
   assert.equal(git(dir, 'worktree', 'list').split('\n').length, 1);
 
   await sandbox.discard(dir, 'm-4'); // gone means gone, and twice is fine
@@ -251,7 +251,7 @@ test('revert works on a machine with no git identity at all, committing as the h
     const { commits } = await sandbox.revert(dir, 'm-7');
     assert.deepEqual(commits, [sha]);
     assert.equal(existsSync(join(dir, 'note.md')), false);
-    assert.equal(git(dir, 'log', '-1', '--format=%an'), 'calli', 'the undo commit is made as the hub');
+    assert.equal(git(dir, 'log', '-1', '--format=%an'), 'loochat', 'the undo commit is made as the hub');
   } finally {
     for (const [name, value] of saved) if (value !== undefined) process.env[name] = value;
   }
@@ -263,7 +263,7 @@ test('a conflicting revert is rolled back whole', async () => {
   const tree = await sandbox.prepare(dir, 'm-6');
   writeFileSync(join(tree.root, 'README.md'), 'from the sandbox\n');
   git(tree.root, 'add', '.');
-  git(tree.root, 'commit', '--quiet', '-m', 'rewrite readme\n\nCalli-Proactive: m-6');
+  git(tree.root, 'commit', '--quiet', '-m', 'rewrite readme\n\nLooChat-Proactive: m-6');
   const sandboxCommit = git(tree.root, 'rev-parse', 'HEAD');
   await sandbox.merge(dir, 'm-6');
 

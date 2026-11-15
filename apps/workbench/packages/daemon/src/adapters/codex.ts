@@ -1386,7 +1386,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     );
 
     try {
-      await peer.request('initialize', { clientInfo: { name: 'calli', title: 'Calli', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+      await peer.request('initialize', { clientInfo: { name: 'loochat', title: 'LoopX', version: '0.1.0' }, capabilities: { experimentalApi: true } });
       peer.notify('initialized', {});
 
       const mode = opts.permissionMode ? CODEX_MODES[opts.permissionMode] : null;
@@ -1453,7 +1453,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const run = async () => {
-        await peer.request('initialize', { clientInfo: { name: 'calli', title: 'Calli', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+        await peer.request('initialize', { clientInfo: { name: 'loochat', title: 'LoopX', version: '0.1.0' }, capabilities: { experimentalApi: true } });
         peer.notify('initialized', {});
         return job(peer);
       };

@@ -23,7 +23,7 @@ const manifest: ExtensionManifest = {
 };
 
 async function fixture(t: TestContext, supported = true) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-voice-http-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-voice-http-'));
   const store = new Store(dir);
   const manager = new ThreadManager(store, new Map(), [dir], new AttachmentStore(dir));
   const extensions = new ExtensionHost({ store: store.extensions, source: manager, catalog: [manifest] });
@@ -59,7 +59,7 @@ async function fixture(t: TestContext, supported = true) {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const request = (path: string, method = 'GET', body?: unknown, ownerId = owner, auth = 'test-token') => fetch(base + '/api/' + path, {
-    method, headers: { authorization: `Bearer ${auth}`, 'content-type': 'application/json', 'x-calli-voice-owner': ownerId },
+    method, headers: { authorization: `Bearer ${auth}`, 'content-type': 'application/json', 'x-loochat-voice-owner': ownerId },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const install = () => request('extensions/voice/install', 'POST', { granted: ['voice.control'] });
@@ -96,7 +96,7 @@ test('voice HTTP requires explicit installation, owner header and an existing bo
   assert.equal(h.transports.length, 0);
 });
 
-test('a page loaded before the rename to Calli still names its owner in the old header', async t => {
+test('a page loaded before the rename to LoopX still names its owner in the old header', async t => {
   const h = await fixture(t);
   await h.install();
   const opened = await fetch(h.base + '/api/voice', {

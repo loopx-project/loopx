@@ -56,7 +56,7 @@ async function serve(dir: string, catalog: ExtensionManifest[]) {
 }
 
 test('extensions install, toggle and uninstall over the API, and the state outlives a restart', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-ext-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-'));
   const catalog = [manifest('board'), manifest('probe', { permissions: ['events.summary', 'notify'] })];
   try {
     let hub = await serve(dir, catalog);
@@ -126,7 +126,7 @@ test('extensions install, toggle and uninstall over the API, and the state outli
 });
 
 test('a grant made for fewer permissions does not switch on a version that asks for more', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-ext-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-'));
   try {
     let hub = await serve(dir, [manifest('probe')]);
     assert.equal((await hub.api('/api/extensions/probe/install', 'POST', { granted: ['events.summary'] })).status, 200);
@@ -147,7 +147,7 @@ test('the built-in catalog is read from the extension packages, and a broken man
   assert.ok(catalog.some((m) => m.id === 'board' && m.permissions.includes('events.summary')), 'packages/ext-board/manifest.json');
   assert.ok(builtinManifestPaths().every((p) => p.endsWith('manifest.json')));
 
-  const dir = mkdtempSync(join(tmpdir(), 'calli-ext-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-'));
   try {
     writeFileSync(join(dir, 'good.json'), JSON.stringify(manifest('good')));
     writeFileSync(join(dir, 'bad.json'), '{ not json');
@@ -200,7 +200,7 @@ function probe(id: string, extra: Partial<ExtensionManifest> = {}) {
 }
 
 async function bus(opts: { queueLimit?: number } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-ext-bus-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-bus-'));
   const store = new Store(dir);
   const threads = new Map([['t1', view('t1')]]);
   const { source, emit } = fakeSource(threads);
@@ -346,7 +346,7 @@ for (const [name, previous, current] of [
   ['removing all', ['events.summary'], []],
 ] as const) {
   test(`changed grants require confirmation after ${name} permissions`, async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'calli-ext-grants-'));
+    const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-grants-'));
     const store = new Store(dir);
     const { source } = fakeSource(new Map([['t1', view('t1')]]));
     store.extensions.install('probe', '1.0.0', [...previous]);
@@ -374,7 +374,7 @@ test('thread.created distinguishes imported history from a new thread', async ()
 });
 
 test('board upgrades defer only assistant.ask, preserve enablement, and grant it explicitly', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-board-upgrade-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-board-upgrade-'));
   const old = manifest('board', { permissions: ['events.summary', 'progress.report', 'worksource.read'] });
   const next = { ...old, version: '2.0.0', permissions: [...old.permissions, 'assistant.ask' as const] };
   let hub = await serve(dir, [old]);
@@ -399,7 +399,7 @@ test('board upgrades defer only assistant.ask, preserve enablement, and grant it
 });
 
 test('deferred assistant access neither authorizes the call nor waives other permission changes', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-board-permissions-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-board-permissions-'));
   const store = new Store(dir);
   const old = manifest('board', { permissions: ['events.summary', 'progress.report'] });
   const next = { ...old, permissions: [...old.permissions, 'assistant.ask' as const] };

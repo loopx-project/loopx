@@ -56,7 +56,7 @@ test('attentionOf puts waits first, then unread results, failures named as such'
 });
 
 test('a turn a restart cut off reads as interrupted', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-lifecycle-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-lifecycle-'));
   const store = new Store(dir);
   try {
     store.createThread({ id: 't1', agent: 'pi', cwd: dir, title: 'x', permissionMode: 'auto_edit', model: null, effort: null });

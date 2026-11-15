@@ -9,7 +9,7 @@ const now = 1_793_800_000_000;
 
 test('Ferry cache retains only valid observed positions and explicit nonqueued records', async t => {
   // A missing/invalid number is unknown; only Ferry's explicit position-free record means nonqueued.
-  const home = mkdtempSync(join(tmpdir(), 'calli-ferry-cache-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-ferry-cache-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   t.mock.method(Date, 'now', () => now);
   writeFileSync(join(home, 'queue-seen.json'), JSON.stringify({
@@ -41,7 +41,7 @@ test('Ferry cache retains only valid observed positions and explicit nonqueued r
 
 test('missing Ferry, malformed caches and unreadable cache paths never reject metadata reads', async t => {
   // Optional local files must not turn healthy gateway discovery into an error or a fabricated zero.
-  const home = mkdtempSync(join(tmpdir(), 'calli-ferry-missing-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-ferry-missing-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   assert.equal((await readFerryQueueObservations({ HOME: home })).size, 0);
   assert.equal((await readFerryQueueObservations({ FERRY_HOME: join(home, 'not-installed') })).size, 0);
@@ -58,7 +58,7 @@ test('missing Ferry, malformed caches and unreadable cache paths never reject me
 
 test('Ferry cache uses instance home defaults and an explicit FERRY_HOME takes precedence', async t => {
   // Never inspect the developer's Ferry cache; exercise the platform path with isolated directories.
-  const home = mkdtempSync(join(tmpdir(), 'calli-ferry-path-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-ferry-path-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   t.mock.method(Date, 'now', () => now);
   const defaultDirectory = process.platform === 'darwin'

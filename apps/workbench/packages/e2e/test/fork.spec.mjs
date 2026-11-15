@@ -11,7 +11,7 @@ let daemon;
 let browser;
 let page;
 // What the fake agent says its sessions hold, so the hub can find a turn in the agent's own record.
-const scriptDir = mkdtempSync(join(tmpdir(), 'calli-fork-'));
+const scriptDir = mkdtempSync(join(tmpdir(), 'loochat-fork-'));
 const messagesFile = join(scriptDir, 'messages.json');
 
 before(async () => {

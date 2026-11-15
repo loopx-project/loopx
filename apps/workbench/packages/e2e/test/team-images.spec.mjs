@@ -55,9 +55,9 @@ for (const phone of [false, true]) for (const theme of ['light', 'dark']) test(`
     assert.equal(await card.count(), 1, 'failed sending keeps the image draft');
     await page.unroute(route);
     await page.getByRole('button', { name: '关闭提示', exact: true }).click();
-    if (process.env.CALLI_E2E_SHOTS_DIR) {
-      mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-      await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `team-images-${phone ? 'phone' : 'desktop'}-${theme}.png`), animations: 'disabled' });
+    if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+      mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+      await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `team-images-${phone ? 'phone' : 'desktop'}-${theme}.png`), animations: 'disabled' });
     }
     const dispatched = page.waitForResponse(response => response.url().endsWith(`/api/teams/${team.id}/tasks`) && response.status() === 202);
     await page.locator('.send-btn').click();

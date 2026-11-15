@@ -16,7 +16,7 @@ const manifest: ExtensionManifest = { id: 'voice', version: '1.0.0', apiVersion:
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 
 function setup(catalog = [manifest]) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-extension-voice-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-extension-voice-'));
   const store = new Store(dir);
   const extensions = new ExtensionHost({
     store: store.extensions, catalog,

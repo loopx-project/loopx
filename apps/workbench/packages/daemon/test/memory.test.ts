@@ -14,7 +14,7 @@ import { Store } from '../src/store.js';
 import { ThreadManager } from '../src/threads.js';
 
 const fixture = new URL('./fixtures/codex-memory/', import.meta.url);
-const temp = () => mkdtempSync(join(tmpdir(), 'calli-memory-'));
+const temp = () => mkdtempSync(join(tmpdir(), 'loochat-memory-'));
 
 test('native memory discovery is read-only, distinguishes states and reads the fixture layout', async () => {
   const dir = temp();

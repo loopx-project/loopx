@@ -131,9 +131,9 @@ for (const colorScheme of ['light', 'dark']) test(`quick switch fits portrait an
       assert.equal(await cards.count(), 21, 'the full session window is retained');
       await assertReachable(cards.first());
       await assertReachable(cards.last());
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `quick-switch-${viewport.width}x${viewport.height}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `quick-switch-${viewport.width}x${viewport.height}-${colorScheme}.png`) });
       }
       const title = await cards.last().locator('.quick-switch-title').innerText();
       await cards.last().tap();

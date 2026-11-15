@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Store } from '../src/store.js';
 
 test('voice-only history pages and reconnect retain speaker text without fake tasks', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-voice-history-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-voice-history-'));
   const store = new Store(dir);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.createThread({ id: 'voice', agent: 'provider', cwd: dir, title: 'voice',
@@ -29,7 +29,7 @@ test('voice-only history pages and reconnect retain speaker text without fake ta
 });
 
 test('speech during a background task never splits its work projection or hides its final answer', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-voice-history-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-voice-history-'));
   const store = new Store(dir);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.createThread({ id: 'voice', agent: 'provider', cwd: dir, title: 'voice',
@@ -52,7 +52,7 @@ test('speech during a background task never splits its work projection or hides 
 
 
 test('closed call history is metadata-only until scoped, paged transcript expansion', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-voice-fold-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-voice-fold-'));
   const store = new Store(dir);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.createThread({ id: 'voice', agent: 'provider', cwd: dir, title: 'voice', agentSessionId: null, permissionMode: 'default', model: null, effort: null });
@@ -71,7 +71,7 @@ test('closed call history is metadata-only until scoped, paged transcript expans
 
 
 test('summary context remains in the source log but is omitted from the history read model', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-voice-summary-view-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-voice-summary-view-'));
   const store = new Store(dir);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.createThread({ id: 'voice', agent: 'provider', cwd: dir, title: 'voice', agentSessionId: null, permissionMode: 'default', model: null, effort: null });

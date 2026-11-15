@@ -14,9 +14,9 @@ const json = async (daemon, path, method = 'GET', body) => {
 const plans = async page => { await page.evaluate(() => { location.hash = '#/todos'; }); await page.locator('.todos-page').waitFor(); };
 
 test('personal plans, delegation, proposals, lazy details, follow-up, wishes and push settings work in Chromium', async () => {
-  const files = mkdtempSync(join(tmpdir(), 'calli-push-ui-'));
+  const files = mkdtempSync(join(tmpdir(), 'loochat-push-ui-'));
   const config = join(files, 'config'), log = join(files, 'log'); writeFileSync(config, '{}'); writeFileSync(log, '');
-  const daemon = await startDaemon({ HOME: files, CALLI_LARK_CLI: resolve(import.meta.dirname, '../../daemon/test/fixtures/fake-lark-cli.mjs'), FAKE_LARK_CONFIG: config, FAKE_LARK_LOG: log }, { workdir: join(files, 'personal') });
+  const daemon = await startDaemon({ HOME: files, LOOCHAT_LARK_CLI: resolve(import.meta.dirname, '../../daemon/test/fixtures/fake-lark-cli.mjs'), FAKE_LARK_CONFIG: config, FAKE_LARK_LOG: log }, { workdir: join(files, 'personal') });
   const browser = await launchBrowser();
   const shots = resolve(import.meta.dirname, '../shots/personal'); mkdirSync(shots, { recursive: true });
   try {
@@ -105,7 +105,7 @@ test('personal plans, delegation, proposals, lazy details, follow-up, wishes and
     await page.getByRole('button', { name: '配置', exact: true }).click(); await page.locator('.settings-nav').getByRole('button', { name: '推送', exact: true }).click();
     dialog = page.getByRole('region', { name: '推送', exact: true }); await dialog.getByText('Lark CLI 已就绪 · 机器人', { exact: true }).waitFor();
     await dialog.getByRole('switch', { name: '推送到飞书', exact: true }).click();
-    await dialog.getByLabel('Calli 地址').fill('https://example.test');
+    await dialog.getByLabel('LooChat 地址').fill('https://example.test');
     await dialog.getByRole('button', { name: '保存', exact: true }).click();
     await dialog.getByRole('status').filter({ hasText: '已保存' }).waitFor();
     assert.ok((await json(daemon, '/api/push/settings')).enabled);

@@ -7,7 +7,7 @@ import { startDaemon, openUi, launchBrowser, repoRoot } from '../harness.mjs';
 let daemon, browser;
 before(async () => {
   const command = [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')];
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'codex', adapter: 'codex', label: 'Codex', account: 'primary@example.com', command },
     { id: 'codex2', adapter: 'codex', label: 'Codex 2', account: 'secondary@example.com', command, env: { FAKE_CODEX_WEEKLY_ONLY: '1' } },
     { id: 'pi', adapter: 'pi', command: ['fake-pi'] },
@@ -26,9 +26,9 @@ const account = (page, name) => page.locator('.agent-picker-row').filter({ has: 
 const summary = row => row.locator('.agent-quota-summary');
 const remaining = row => row.getByRole('meter').evaluateAll(nodes => nodes.map(n => n.getAttribute('aria-valuenow')));
 async function shot(page, name) {
-  if (!process.env.CALLI_E2E_SHOTS_DIR) return;
-  mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-  await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `${name}.png`) });
+  if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
+  mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+  await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${name}.png`) });
 }
 async function fits(page) {
   const panel = page.locator('.agent-picker-panel');

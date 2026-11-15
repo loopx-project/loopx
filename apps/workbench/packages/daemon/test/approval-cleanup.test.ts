@@ -22,7 +22,7 @@ const permission: ApprovalRequest = {
 };
 
 async function fixture(t: TestContext) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-approval-cleanup-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-approval-cleanup-'));
   const store = new Store(dir);
   const result = deferred<TurnResult>();
   const started = deferred<TurnHooks>();

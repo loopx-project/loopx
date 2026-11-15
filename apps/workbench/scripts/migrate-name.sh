@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Moves an installation from before the rename to Calli onto the new names, in one short stop:
+# Moves an installation from before the rename to LooChat onto the new names, in one short stop:
 #
-#   - the systemd user service remote-agent-hub becomes calli, and companion units named
-#     remote-agent-hub-*.service become calli-*.service
-#   - ~/.config/remote-agent-hub becomes ~/.config/calli, and the companions' directories under
+#   - the systemd user service remote-agent-hub becomes loochat, and companion units named
+#     remote-agent-hub-*.service become loochat-*.service
+#   - ~/.config/remote-agent-hub becomes ~/.config/loochat, and the companions' directories under
 #     ~/.config, ~/.local/state and ~/.local/lib move the same way
-#   - in .env, RAH_* and LIMI_* keys become CALLI_*; every value, the token included, stays
+#   - in .env, RAH_* and LIMI_* keys become LOOCHAT_*; every value, the token included, stays
 #
 # Every old path is left as a symbolic link to the new one. Two directories are not moved, since
 # threads work inside them and an agent may find its session by the directory it runs in:
-# ~/.local/state/remote-agent-hub (the data and the scratch area), which ~/.local/state/calli
-# links to, and ~/.limi, which Calli keeps using while there is no ~/.calli.
+# ~/.local/state/remote-agent-hub (the data and the scratch area), which ~/.local/state/loochat
+# links to, and ~/.limi, which LooChat keeps using while there is no ~/.calli.
 #
 #   scripts/migrate-name.sh             build, wait for running turns to finish, switch, check health
 #   scripts/migrate-name.sh --no-build  skip `npm install` and `npm run build`
@@ -23,7 +23,7 @@ set -Eeuo pipefail
 
 # Overridable only to try the script on a throwaway service.
 FROM="${MIGRATE_FROM:-remote-agent-hub}"
-TO="${MIGRATE_TO:-calli}"
+TO="${MIGRATE_TO:-loochat}"
 REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -59,7 +59,7 @@ ENV_FILE="$(systemctl --user show -p Environment --value "$FROM" | tr ' ' '\n' |
 ENV_FILE="${ENV_FILE:-$CONFIG_HOME/$FROM/.env}"
 [ -f "$ENV_FILE" ] || die "No .env at $ENV_FILE."
 env_raw() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 | sed -E "s/^['\"]|['\"]$//g"; }
-env_get() { local v; v="$(env_raw "CALLI_$1")"; [ -n "$v" ] || v="$(env_raw "RAH_$1")"; echo "$v"; }
+env_get() { local v; v="$(env_raw "LOOCHAT_$1")"; [ -n "$v" ] || v="$(env_raw "RAH_$1")"; echo "$v"; }
 HOST="$(env_get HOST)"; HOST="${HOST:-127.0.0.1}"
 PORT="$(env_get PORT)"; PORT="${PORT:-8787}"
 TOKEN="$(env_get TOKEN)"
@@ -99,16 +99,16 @@ fi
 # The units under their new names. Only the names change: the companions' paths into their moved
 # directories and their ordering after the main service; nothing else, not the repository's path.
 new_unit() {
-  sed -E -e "s#^Environment=(RAH|CALLI)_ENV_FILE=.*#Environment=CALLI_ENV_FILE=$NEW_ENV#" \
-    -e 's#^Description=.*#Description=Calli#' -e 's#@rah/daemon#@calli/daemon#' "$1"
+  sed -E -e "s#^Environment=(RAH|CALLI)_ENV_FILE=.*#Environment=LOOCHAT_ENV_FILE=$NEW_ENV#" \
+    -e 's#^Description=.*#Description=LooChat#' -e 's#@rah/daemon#@loopx/loochat#' "$1"
 }
 new_companion() {
-  sed -E -e "s#$FROM-#$TO-#g" -e "s#$FROM\\.service#$TO.service#g" -e 's#^(Description=.*)Limi#\1Calli#' "$1"
+  sed -E -e "s#$FROM-#$TO-#g" -e "s#$FROM\\.service#$TO.service#g" -e 's#^(Description=.*)Limi#\1LooChat#' "$1"
 }
 # .env keys under their new names; values as they are.
 new_env() {
-  sed -E -e 's/^(export +)?LIMI_SOCKET=/\1CALLI_TEAM_SOCKET=/' -e 's/^(export +)?LIMI_KEY=/\1CALLI_TEAM_KEY=/' \
-    -e 's/^(export +)?(RAH|LIMI)_/\1CALLI_/' "$ENV_FILE"
+  sed -E -e 's/^(export +)?LIMI_SOCKET=/\1LOOCHAT_TEAM_SOCKET=/' -e 's/^(export +)?LIMI_KEY=/\1LOOCHAT_TEAM_KEY=/' \
+    -e 's/^(export +)?(RAH|LIMI)_/\1LOOCHAT_/' "$ENV_FILE"
 }
 
 if [ "$DRY" = 1 ]; then
@@ -213,7 +213,7 @@ rollback() {
   [ "$LINKED_STATE" = 0 ] || rm -f "$STATE_HOME/$TO"
   cp -p "$BACKUP/env" "$ENV_FILE"
   # The old name, on this build: the workspace it used to start is gone (see restart.sh).
-  sed 's#@rah/daemon#@calli/daemon#' "$BACKUP/$(basename "$UNIT")" >"$UNIT"
+  sed 's#@rah/daemon#@loopx/loochat#' "$BACKUP/$(basename "$UNIT")" >"$UNIT"
   for s in "${COMPANIONS[@]}"; do cp -p "$BACKUP/$FROM-$s.service" "$UNIT_DIR/"; done
   systemctl --user daemon-reload
   systemctl --user enable "$FROM" "${COMPANIONS[@]/#/$FROM-}" >/dev/null 2>&1 || true

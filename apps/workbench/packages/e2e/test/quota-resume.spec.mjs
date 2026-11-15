@@ -32,12 +32,12 @@ const select = async (page, title, mobile = false) => {
 };
 
 before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'calli-resume-e2e-')); mkdirSync(shots, { recursive: true });
+  dir = mkdtempSync(join(tmpdir(), 'loochat-resume-e2e-')); mkdirSync(shots, { recursive: true });
   setQuota(10);
   daemon = await startDaemon({
     // Fast ticks and a short grace keep the recovery within a test run; production keeps 30 s / 2 min.
-    CALLI_RESUME_TICK_MS: '1000', CALLI_RESUME_GRACE_MS: '1000',
-    CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+    LOOCHAT_RESUME_TICK_MS: '1000', LOOCHAT_RESUME_GRACE_MS: '1000',
+    LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
       { id: 'agy', adapter: 'agy', label: 'Agent 1', command: ['fake-agy'], env: { FAKE_HANDOVER_QUOTA: join(dir, 'agy.json'), FAKE_HANDOVER_EXHAUST_ONCE: join(dir, 'exhausted-convs') } },
       { id: 'agy2', adapter: 'agy', label: 'Agent 2', command: ['fake-agy'], env: { FAKE_HANDOVER_QUOTA: join(dir, 'agy2.json') } },
     ] }),

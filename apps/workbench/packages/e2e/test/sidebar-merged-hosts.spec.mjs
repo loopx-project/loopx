@@ -7,15 +7,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { linkDaemon, startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
-const SOCKET_IN_HOME = '.local/state/calli/daemon.sock';
+const SOCKET_IN_HOME = '.local/state/loochat/daemon.sock';
 
 test('the merged list shows every machine, opens a thread on its own machine, and says when one is gone', { timeout: 240000 }, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-e2e-merged-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-e2e-merged-'));
   const nodeHome = join(root, 'devbox');
   mkdirSync(nodeHome);
-  const node = await startDaemon({ CALLI_SOCKET: join(nodeHome, SOCKET_IN_HOME) });
+  const node = await startDaemon({ LOOCHAT_SOCKET: join(nodeHome, SOCKET_IN_HOME) });
   const hub = await startDaemon();
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   if (shots) mkdirSync(shots, { recursive: true });
   let browser;
   let nodeUp = true;

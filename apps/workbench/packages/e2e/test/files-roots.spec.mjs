@@ -12,11 +12,11 @@ import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 let root, home, daemon, browser, messagesFile, sessionId;
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-e2e-roots-'));
+  root = mkdtempSync(join(tmpdir(), 'loochat-e2e-roots-'));
   home = join(root, 'home');
   mkdirSync(join(home, '家目录子夹'), { recursive: true });
   writeFileSync(join(home, '家目录子夹', '笔记.md'), '# 家里的笔记\n');
-  messagesFile = join(mkdtempSync(join(tmpdir(), 'calli-e2e-msgs-')), 'messages.json');
+  messagesFile = join(mkdtempSync(join(tmpdir(), 'loochat-e2e-msgs-')), 'messages.json');
   daemon = await startDaemon({ HOME: home, FAKE_PI_MESSAGES_FILE: messagesFile });
   browser = await launchBrowser();
 });
@@ -116,9 +116,9 @@ test(`the file browser moves between the thread folder, projects and home; folde
     const rootsName = await panel.locator('.files-tree .files-roots-name').innerText();
     assert.equal(rootsName, '另一个项目', 'the tree moved with the link');
 
-    if (process.env.CALLI_E2E_SHOTS_DIR) {
-      mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-      await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `files-roots-desktop-${colorScheme}.png`) });
+    if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+      mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+      await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `files-roots-desktop-${colorScheme}.png`) });
     }
   } finally {
     await context.close();
@@ -146,9 +146,9 @@ test(`on a phone the root switcher sits on the folder page: phone-${colorScheme}
     await panel.locator('.files-roots').click();
     await page.getByRole('menu', { name: '切换浏览位置' }).getByRole('menuitemradio', { name: /线程目录/ }).click();
     await panel.locator('.files-row', { hasText: '说明.pdf' }).waitFor();
-    if (process.env.CALLI_E2E_SHOTS_DIR) {
-      mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-      await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `files-roots-phone-${colorScheme}.png`) });
+    if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+      mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+      await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `files-roots-phone-${colorScheme}.png`) });
     }
   } finally {
     await context.close();

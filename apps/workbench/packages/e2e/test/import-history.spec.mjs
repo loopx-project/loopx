@@ -11,11 +11,11 @@ let browser;
 let dir;
 
 before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'calli-import-browser-'));
+  dir = mkdtempSync(join(tmpdir(), 'loochat-import-browser-'));
   const sessions = join(dir, 'sessions.json');
   writeFileSync(sessions, '[]');
   daemon = await startDaemon({
-    CALLI_AGENTS_JSON: JSON.stringify({ agents: [{
+    LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{
       id: 'codex', adapter: 'codex',
       command: [process.execPath, fileURLToPath(new URL('../../daemon/test/fixtures/fake-codex.mjs', import.meta.url))],
       env: { FAKE_CODEX_SESSIONS_FILE: sessions },
@@ -57,8 +57,8 @@ for (const mobile of [false, true]) {
         assert.ok(box.x >= 0 && box.x + box.width <= viewport.width + 1);
         assert.ok(box.y >= 0);
         assert.equal(await page.getByRole('dialog').count(), 0);
-        if (process.env.CALLI_HISTORY_SHOTS) {
-          await page.screenshot({ path: join(process.env.CALLI_HISTORY_SHOTS, `history-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_HISTORY_SHOTS) {
+          await page.screenshot({ path: join(process.env.LOOCHAT_HISTORY_SHOTS, `history-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally {
         await context.close();

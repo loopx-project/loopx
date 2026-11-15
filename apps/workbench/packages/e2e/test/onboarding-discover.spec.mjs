@@ -10,7 +10,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = join(repoRoot, 'daemon', 'test', 'fixtures');
 
 function setupIsolatedBin() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-isolated-bin-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-isolated-bin-'));
   symlinkSync(process.execPath, join(dir, 'node'));
   writeFileSync(
     join(dir, 'agy2'),
@@ -35,7 +35,7 @@ test('onboarding discovery dialog in 4 viewport and theme variations', { timeout
     for (const mobile of [false, true]) {
       for (const colorScheme of ['light', 'dark']) {
         const daemon = await startDaemon({
-          CALLI_AGENTS_JSON: JSON.stringify({ agents: [] }),
+          LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [] }),
           PATH: isolated.path,
         });
 
@@ -61,11 +61,11 @@ test('onboarding discovery dialog in 4 viewport and theme variations', { timeout
           await page.waitForTimeout(300);
 
           // Screenshot Step 1 (ask dialog) in 4 variations
-          if (process.env.CALLI_E2E_SHOTS_DIR) {
-            mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
+          if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+            mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
             await page.screenshot({
               path: join(
-                process.env.CALLI_E2E_SHOTS_DIR,
+                process.env.LOOCHAT_E2E_SHOTS_DIR,
                 `onboard-ask-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`,
               ),
             });
@@ -111,16 +111,16 @@ test('onboarding discovery dialog in 4 viewport and theme variations', { timeout
           });
 
           // Screenshot Step 2 (results dialog) in 4 variations
-          if (process.env.CALLI_E2E_SHOTS_DIR) {
+          if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
             await page.screenshot({
               path: join(
-                process.env.CALLI_E2E_SHOTS_DIR,
+                process.env.LOOCHAT_E2E_SHOTS_DIR,
                 `onboard-results-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`,
               ),
             });
             await page.screenshot({
               path: join(
-                process.env.CALLI_E2E_SHOTS_DIR,
+                process.env.LOOCHAT_E2E_SHOTS_DIR,
                 `onboard-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`,
               ),
             });
@@ -165,7 +165,7 @@ test('onboarding: clicking later prevents auto-popup after refresh, manual trigg
 
   try {
     daemon = await startDaemon({
-      CALLI_AGENTS_JSON: JSON.stringify({ agents: [] }),
+      LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [] }),
       PATH: isolated.path,
     });
 

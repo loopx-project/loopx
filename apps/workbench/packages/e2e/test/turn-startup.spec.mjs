@@ -33,9 +33,9 @@ test('preparation and response waits survive reload and clear on output, stop an
         const initial = await wait.innerText();
         await page.waitForTimeout(1100);
         assert.notEqual(await wait.innerText(), initial, 'the clock advances before any output');
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `startup-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `startup-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
         await page.reload();
         if (mobile) await page.locator('.menu-btn').click();

@@ -29,7 +29,7 @@ const wait = async (check: () => boolean, timeout = 10000) => {
   while (!check()) { if (Date.now() > until) throw new Error('timed out'); await new Promise(r => setTimeout(r, 20)); }
 };
 async function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-team-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-team-'));
   const cwd = join(dir, 'project'); mkdirSync(cwd);
   const other = join(dir, 'other'); mkdirSync(other);
   const adapters = new Map<string, AgentAdapter>([
@@ -82,7 +82,7 @@ test('coordination preserves slash commands and their arguments while enriching 
       await h.manager.startTurn(thread.id, { text: 'hello' });
       await wait(() => h.manager.threadView(thread.id).status !== 'running');
       const started = h.store.listEvents(thread.id, 0, -1).filter(e => e.type === 'turn.started').at(-1)!;
-      assert.match(String(started.data.text), /<calli-coordination>/);
+      assert.match(String(started.data.text), /<loochat-coordination>/);
       assert.equal(started.data.displayText, 'hello');
     }
   } finally { await h.close(); }
@@ -94,10 +94,10 @@ test('each advertised adapter passes the runtime environment to its fixture', as
     for (const agent of ['pi', 'claude', 'codex', 'agy', 'traex', 'dsh', 'doubao']) {
       const thread = await h.manager.createThread({ agent, cwd: h.cwd });
       await h.team.enable(thread.id);
-      await h.manager.startTurn(thread.id, { text: 'CALLI_ENV' });
+      await h.manager.startTurn(thread.id, { text: 'LOOCHAT_ENV' });
       await wait(() => h.manager.threadView(thread.id).status !== 'running');
       const answer = h.store.listEvents(thread.id, 0, -1).filter(e => e.type === 'message.delta').map(e => e.data.text).join('');
-      assert.match(answer, /calli-ready:true/, agent);
+      assert.match(answer, /loochat-ready:true/, agent);
     }
   } finally { await h.close(); }
 });
@@ -107,12 +107,12 @@ test('coordination API enables an idle session and CLI resolves its scoped runti
   try {
     assert.equal((await h.api(`/api/threads/${h.root.id}/coordination`, {}, 'wrong')).status, 401);
     assert.equal((await h.api(`/api/threads/${h.root.id}/coordination`, {})).status, 200);
-    await h.manager.startTurn(h.root.id, { text: 'CALLI_ENV' });
+    await h.manager.startTurn(h.root.id, { text: 'LOOCHAT_ENV' });
     await wait(() => h.manager.threadView(h.root.id).status === 'idle');
     const answer = h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'message.delta').map(e => e.data.text).join('');
-    assert.match(answer, /calli-ready:true/);
+    assert.match(answer, /loochat-ready:true/);
     const directive = Buffer.from(JSON.stringify({ args: ['spawn', '--agent', 'claude', '--name', 'cli-worker', '--message-file', '-', '--request-id', 'cli-create'], text: 'hello' })).toString('base64');
-    await h.manager.startTurn(h.root.id, { text: `CALLI_COMMAND:${directive}` });
+    await h.manager.startTurn(h.root.id, { text: `LOOCHAT_COMMAND:${directive}` });
     await wait(() => h.team.view(h.root.id)?.members.length === 1);
     assert.equal(h.team.view(h.root.id)!.members[0].thread!.cwd, h.cwd);
     assert.equal(h.manager.threadView(h.root.id).coordination!.children, 1);
@@ -127,20 +127,20 @@ test('Codex writes a file, Claude reviews it, and peer feedback resumes the orig
     await wait(() => h.team.view(h.root.id)!.members[0].latest?.state === 'returned');
     // A member's line in the sidebar says what it came back with; the lead's carries no such line.
     const first = h.team.view(h.root.id)!.members[0];
-    assert.equal(h.manager.threadView(first.id).coordination!.doing, first.latest!.result.split('<calli-coordination>')[0].trim().slice(0, 200));
+    assert.equal(h.manager.threadView(first.id).coordination!.doing, first.latest!.result.split('<loochat-coordination>')[0].trim().slice(0, 200));
     assert.ok(h.manager.threadView(first.id).coordination!.doing);
     assert.equal(h.manager.threadView(h.root.id).coordination!.doing, undefined);
-    await h.team.command(h.root.id, spawn('writer', 'codex', 'CALLI_WRITE'));
+    await h.team.command(h.root.id, spawn('writer', 'codex', 'LOOCHAT_WRITE'));
     await wait(() => {
       try { return readFileSync(join(h.cwd, 'review-document.md'), 'utf8').includes('## Errors'); } catch { return false; }
     });
     const state = h.team.view(h.root.id)!;
     const writer = state.members.find(m => m.name === 'writer')!;
     const reviewer = state.members.find(m => m.name === 'reviewer')!;
-    assert.ok(state.messages.some(d => d.from === writer.id && d.to === reviewer.id && d.text === 'CALLI_REVIEW'));
+    assert.ok(state.messages.some(d => d.from === writer.id && d.to === reviewer.id && d.text === 'LOOCHAT_REVIEW'));
     assert.ok(state.messages.some(d => d.from === reviewer.id && d.to === writer.id && d.kind === 'result'));
     // Every result names the message it answers, so a reader can hang it under that message.
-    const asked = state.messages.find(d => d.from === writer.id && d.to === reviewer.id && d.text === 'CALLI_REVIEW')!;
+    const asked = state.messages.find(d => d.from === writer.id && d.to === reviewer.id && d.text === 'LOOCHAT_REVIEW')!;
     assert.equal(state.messages.find(d => d.from === reviewer.id && d.to === writer.id && d.kind === 'result')!.replyTo, asked.id);
     assert.equal(asked.replyTo, null);
     await wait(() => h.manager.threadView(writer.id).status === 'idle');
@@ -462,8 +462,8 @@ test('running unconfigured threads queue collaboration without refreshing until 
     const event = h.store.listEvents(h.root.id, 0, -1).find(e => e.type === 'turn.started' && String(e.data.text).includes('一起分析'))!;
     assert.equal(String(event.data.text).split('[指定协作对象]').length - 1, 1);
     assert.match(String(event.data.text), /只给建议/);
-    await h.manager.startTurn(h.root.id, { text: 'CALLI_ENV' });
-    await wait(() => h.store.listEvents(h.root.id, 0, -1).some(e => e.type === 'message.delta' && String(e.data.text).includes('calli-ready:true')));
+    await h.manager.startTurn(h.root.id, { text: 'LOOCHAT_ENV' });
+    await wait(() => h.store.listEvents(h.root.id, 0, -1).some(e => e.type === 'message.delta' && String(e.data.text).includes('loochat-ready:true')));
   } finally { await h.close(); }
 });
 
@@ -562,7 +562,7 @@ test('natural completion enables queued collaboration without cancelling the act
 
 /** Another daemon connected through a real relay, including collaboration file commands. */
 async function otherMachine() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-remote-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-remote-'));
   const cwd = join(dir, 'far-project'); mkdirSync(cwd);
   const store = new Store(dir);
   const manager = new ThreadManager(store, new Map<string, AgentAdapter>([['pi', new PiRpcAdapter([process.execPath, join(fixtures, 'fake-pi.mjs')])]]), [cwd], new AttachmentStore(dir));
@@ -675,7 +675,7 @@ test('a remote member reads its task from a handoff file, writes a result file, 
     assert.match(rawResult.text, /结果文件：/, 'the agent-facing result keeps the path');
     const local = join(h.dir, 'results', h.root.id, `${delivery.id}.md`);
     assert.equal(readFileSync(local, 'utf8'), '# REPORT\n\nall done\n');
-    // The lead reads the same copy through calli result, which is what it can open with its own tools.
+    // The lead reads the same copy through loochat result, which is what it can open with its own tools.
     const raw = await h.team.command(h.root.id, { op: 'result', target: delivery.id }) as { resultFile?: { localPath: string } };
     assert.equal(raw.resultFile?.localPath, local);
     const res = await h.api(`/api/threads/${h.root.id}/coordination/result/${delivery.id}`);
@@ -686,7 +686,7 @@ test('a remote member reads its task from a handoff file, writes a result file, 
   } finally { await h.close(); await far.close(); }
 });
 
-test('the calli CLI carries a local handoff file to the member machine', async () => {
+test('the loochat CLI carries a local handoff file to the member machine', async () => {
   const h = await setup();
   const far = await otherMachine();
   try {
@@ -694,12 +694,12 @@ test('the calli CLI carries a local handoff file to the member machine', async (
     await h.team.enable(h.root.id);
     const file = join(h.dir, 'task.md');
     writeFileSync(file, '# CLI 交接\n\nCLI_RULE 请按文件执行\n');
-    // The same directive the fake agent's CLI runs: the flag is read by bin/calli, not by the hub.
+    // The same directive the fake agent's CLI runs: the flag is read by bin/loochat, not by the hub.
     const directive = Buffer.from(JSON.stringify({
       args: ['spawn', '--agent', 'pi@devbox', '--name', 'cli-far', '--cwd', far.cwd, '--handoff-file', file, '--request-id', 'cli-far'],
       text: '',
     })).toString('base64');
-    await h.manager.startTurn(h.root.id, { text: `CALLI_COMMAND:${directive}` });
+    await h.manager.startTurn(h.root.id, { text: `LOOCHAT_COMMAND:${directive}` });
     await wait(() => h.team.view(h.root.id)!.members.length === 1);
     const member = h.team.view(h.root.id)!.members[0];
     await wait(() => h.team.view(h.root.id)!.messages.some(m => m.to === member.id && m.state === 'returned'));
@@ -742,7 +742,7 @@ test('the lead reads and writes a remote member folder over relay; other members
     );
     // Outside the member's own folder is refused, however the path is spelled.
     await assert.rejects(h.team.command(h.root.id, { op: 'remote', action: 'read', target: 'far', path: '../outside.txt' }), (err: any) => err.status === 403);
-    await assert.rejects(h.team.command(h.root.id, { op: 'remote', action: 'write', target: 'far', path: '/etc/calli-nope', text: 'no' }), (err: any) => err.status === 403);
+    await assert.rejects(h.team.command(h.root.id, { op: 'remote', action: 'write', target: 'far', path: '/etc/loochat-nope', text: 'no' }), (err: any) => err.status === 403);
     writeFileSync(join(far.dir, 'outside.txt'), 'outside\n');
     symlinkSync(join(far.dir, 'outside.txt'), join(far.cwd, 'link.txt'));
     await assert.rejects(h.team.command(h.root.id, { op: 'remote', action: 'read', target: 'far', path: 'link.txt' }), (err: any) => err.status === 403);

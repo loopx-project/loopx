@@ -4,9 +4,9 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDaemon, openUi, launchBrowser, repoRoot, api } from '../harness.mjs';
 let daemon, browser, thread;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'pi', adapter: 'pi', command: ['fake-pi'] }] }) });
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'pi', adapter: 'pi', command: ['fake-pi'] }] }) });
   browser = await launchBrowser();
   const created = await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title: 'Plugin validation' }) });
   assert.equal(created.status, 201); thread = await created.json();

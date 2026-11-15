@@ -16,10 +16,10 @@ import { ThreadManager } from '../src/threads.js';
 import { sessionEnvironment } from '../src/adapters/types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const wire = (reference: unknown) => `<calli-references>\n${JSON.stringify([reference])}\n</calli-references>\n\nCompare the discussion.`;
+const wire = (reference: unknown) => `<loochat-references>\n${JSON.stringify([reference])}\n</loochat-references>\n\nCompare the discussion.`;
 
 test('reference API and CLI: explicit scope, fixed history, pagination, long answers and missing sources', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-references-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-references-'));
   const registry = new AgentRegistry([{ id: 'pi', adapter: 'pi', label: 'pi', command: [process.execPath, join(here, 'fixtures/fake-pi.mjs')] }], null);
   const store = new Store(join(dir, 'data'));
   const manager = new ThreadManager(store, registry.adapters, [dir], new AttachmentStore(dir));
@@ -55,11 +55,11 @@ test('reference API and CLI: explicit scope, fixed history, pagination, long ans
     assert.throws(() => manager.references.read(recipient.id, { id: reference.id }), /not attached/);
     assert.throws(() => manager.references.prepare(recipient.id, wire(reference), false), /cannot read/);
     const prepared = manager.references.prepare(recipient.id, wire(reference), true);
-    assert.match(prepared.text, /calli references/);
+    assert.match(prepared.text, /loochat references/);
     assert.throws(() => manager.references.read(recipient.id, { id: reference.id }), /not attached/, 'validation does not grant a rejected send');
     manager.references.grant(recipient.id, prepared.references);
     const env = tools.environment(recipient.id)!;
-    const cli = (...args: string[]) => new Promise<any>((resolve, reject) => execFile(process.execPath, [join(here, '../bin/calli'), 'references', reference.id, ...args], { env: sessionEnvironment({}, env) }, (err, stdout, stderr) => err ? reject(new Error(stderr)) : resolve(JSON.parse(stdout))));
+    const cli = (...args: string[]) => new Promise<any>((resolve, reject) => execFile(process.execPath, [join(here, '../bin/loochat'), 'references', reference.id, ...args], { env: sessionEnvironment({}, env) }, (err, stdout, stderr) => err ? reject(new Error(stderr)) : resolve(JSON.parse(stdout))));
     store.appendEvent(source.id, 'turn-new', 'turn.started', { text: 'must not enter the snapshot' });
     store.appendEvent(source.id, 'turn-2', 'message.delta', { text: 'late text' });
     const page = await cli('--turns', '1');

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Store } from './store.js';
 
 /**
- * The hub appends short protocol blocks to what the person sent (how to use `calli`, where to write
+ * The hub appends short protocol blocks to what the person sent (how to use `loochat`, where to write
  * progress, ...). An agent keeps its conversation, so a block it has already read needs no copy on
  * every turn: it is attached again only when the agent may no longer have it in view, which is
  * when the block itself changed (another role, other folders), the agent's session changed, the
@@ -18,7 +18,7 @@ export type InjectionGate = (kind: InjectionKind, block: string) => boolean;
 /** Turns after which a block already read is attached once more. */
 export const REMIND_EVERY = 12;
 
-const BLOCK = /<calli-(coordination|progress|tools|todo)>[\s\S]*?<\/calli-\1>/;
+const BLOCK = /<loochat-(coordination|progress|tools|todo)>[\s\S]*?<\/loochat-\1>/;
 const digest = (block: string) => createHash('sha256').update(block).digest('hex').slice(0, 16);
 
 export class Injections {

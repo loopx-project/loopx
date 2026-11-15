@@ -23,9 +23,9 @@ let instances: Array<{ id: string; hidden: boolean; store: string }>;
 let scanner: LocalSessions;
 
 before(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-local-sessions-'));
-  workdir = mkdtempSync(join(tmpdir(), 'calli-local-work-'));
-  outside = mkdtempSync(join(tmpdir(), 'calli-local-out-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-local-sessions-'));
+  workdir = mkdtempSync(join(tmpdir(), 'loochat-local-work-'));
+  outside = mkdtempSync(join(tmpdir(), 'loochat-local-out-'));
   sessionsFile = join(dataDir, 'acp-sessions.json');
   process.env.FAKE_ACP_SESSIONS_FILE = sessionsFile;
   adapters = new Map<string, AgentAdapter>();

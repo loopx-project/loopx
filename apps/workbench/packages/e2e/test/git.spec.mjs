@@ -12,7 +12,7 @@ const commit = (cwd, message) => { git(cwd, 'add', '.'); git(cwd, 'commit', '-m'
 
 for (const width of [1440, 390]) for (const colorScheme of ['light', 'dark']) {
 test(`Git sidebar reads lazily, preserves layout and pulls a real remote: ${width} ${colorScheme}`, { timeout: 120_000 }, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-git-e2e-')), repo = join(root, 'project');
+  const root = mkdtempSync(join(tmpdir(), 'loochat-git-e2e-')), repo = join(root, 'project');
   mkdirSync(join(repo, 'src'), { recursive: true }); git(repo, 'init', '-b', 'main'); identity(repo);
   writeFileSync(join(repo, 'src/demo.ts'), 'export const value = 1;\n'); commit(repo, '建立项目');
   const remote = join(root, 'remote.git'), peer = join(root, 'peer');
@@ -76,9 +76,9 @@ test(`Git sidebar reads lazily, preserves layout and pulls a real remote: ${widt
     await page.waitForFunction(() => document.querySelector('.git-foot')?.textContent.includes('已获取远端'));
     assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
     assert.match(await panel.locator('.git-tracking').innerText(), /↓ 1/);
-    if (process.env.CALLI_E2E_SHOTS_DIR) {
-      mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-      await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `git-${width}-${colorScheme}.png`) });
+    if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+      mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+      await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `git-${width}-${colorScheme}.png`) });
     }
     git(repo, 'reset', '--hard', 'HEAD');
     await panel.getByRole('button', { name: '刷新本地状态', exact: true }).click();

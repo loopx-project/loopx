@@ -6,7 +6,7 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 
 let daemon, browser, thread;
 before(async () => {
-  daemon = await startDaemon({ FAKE_TELEMETRY: '1', CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  daemon = await startDaemon({ FAKE_TELEMETRY: '1', LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'pi', adapter: 'pi', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-pi.mjs')] },
     { id: 'zcode-empty', adapter: 'zcode', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-zcode.mjs')], env: { FAKE_ZCODE_NO_MODELS: '1' } },
   ] }) });
@@ -40,22 +40,22 @@ test('usage, request details and actionable diagnostics on desktop/phone in ligh
       const [box, body] = [await menu.boundingBox(), await panel.locator('.obs-body').boundingBox()];
       if (!mobile) assert.ok(box.y >= body.y && box.y + box.height <= body.y + body.height, `menu ${JSON.stringify(box)} outside body ${JSON.stringify(body)}`);
       assert.equal(await menu.getByRole('menuitemradio', { name: '最近 24 小时' }).getAttribute('aria-checked'), 'true');
-      if (process.env.CALLI_E2E_SHOTS_DIR) { mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true }); await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `range-selector-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) }); }
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) { mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true }); await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `range-selector-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) }); }
       await week.click();
       await menu.waitFor({ state: 'hidden' });
       await panel.getByRole('button', { name: '统计范围', exact: true }).filter({ hasText: '最近 7 天' }).waitFor();
       await panel.getByRole('button', { name: '统计实例', exact: true }).click();
       const instances = page.getByRole('menu', { name: '统计实例' });
       await instances.getByRole('menuitemradio', { name: 'pi', exact: true }).waitFor();
-      if (process.env.CALLI_E2E_SHOTS_DIR) await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `instance-selector-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `instance-selector-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       await instances.getByRole('menuitemradio', { name: 'pi', exact: true }).click();
       await panel.locator('.obs-turn summary').click();
       await panel.getByText('fixture-model · fixture-provider').waitFor();
       await panel.getByText('估算 USD 0.0123', { exact: true }).last().waitFor();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `usage-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `usage-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       }
       await panel.getByRole('button', { name: 'Agent 诊断', exact: true }).click();
       await panel.getByText('没有可选模型', { exact: true }).waitFor({ timeout: 30000 });
@@ -66,7 +66,7 @@ test('usage, request details and actionable diagnostics on desktop/phone in ligh
       await empty.locator('button[disabled]').waitFor({ state: 'hidden' });
       await empty.getByRole('button', { name: /复制 .* 诊断/ }).click();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-      if (process.env.CALLI_E2E_SHOTS_DIR) await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `diagnostics-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `diagnostics-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
       await panel.waitFor({ state: 'hidden' });
     } finally { await context.close(); }
@@ -111,7 +111,7 @@ test('multi-instance chart supports selection, output rates, touch, keys and nar
       await plot.focus();
       await page.keyboard.press('End');
       assert.match(await chart.locator('.obs-chart-tip').innerText(), /10\/15/);
-      if (process.env.CALLI_E2E_SHOTS_DIR) await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `chart-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `chart-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       await panel.getByRole('button', { name: 'TPM 口径', exact: true }).click();
       await page.getByRole('menuitemradio', { name: '仅输出 token' }).click();
       assert.equal(await panel.locator('.obs-primary strong').innerText(), '48.3K');

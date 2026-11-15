@@ -77,7 +77,7 @@ test('a state subscriber may stop synchronously without leaving the start promis
 
 for (const scenario of ['ok', 'async-error-early']) {
   test(`native transport and voice leases: ${scenario} preserves the shared peer`, async t => {
-    const directory = await mkdtemp(join(tmpdir(), 'calli-voice-integration-'));
+    const directory = await mkdtemp(join(tmpdir(), 'loochat-voice-integration-'));
     const log = join(directory, 'requests.jsonl');
     const child = spawn(process.execPath, [fileURLToPath(new URL('./fixtures/fake-codex-realtime.mjs', import.meta.url))], {
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -18,8 +18,8 @@ async function closeOverview(page, mobile) {
 }
 
 test('the newest plan lives in the overview panel, opens to the whole list, and older plans go back to the conversation', { timeout: 120000 }, async () => {
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')] }] }) });
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')] }] }) });
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   if (shots) mkdirSync(shots, { recursive: true });
   let browser;
   try {

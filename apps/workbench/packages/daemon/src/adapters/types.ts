@@ -282,14 +282,14 @@ export interface DiscoveredAccount {
 export interface StartOptions {
   /** Internal metadata probes must not take the shortcuts used to create a real conversation. */
   probe?: boolean;
-  /** Native capability requested for an isolated Calli tool job, absent on ordinary threads. */
+  /** Native capability requested for an isolated LoopX tool job, absent on ordinary threads. */
   borrowedTool?: string;
   workMode?: WorkMode;
   onWorkMode?: (mode: WorkMode) => void;
   onSpeed?: (speed: string) => void;
   /** The native goal changed, or was cleared with null. */
   onGoal?: (goal: GoalSnapshot | null) => void;
-  /** Ephemeral calli connection context. Never persisted in agent configuration. */
+  /** Ephemeral loochat connection context. Never persisted in agent configuration. */
   coordinationEnv?: Record<string, string>;
   cwd: string;
   /** Agent-side session id to resume, if the thread already has one. */
@@ -317,7 +317,7 @@ export interface StreamBridgeCapability {
 }
 
 export interface AgentAdapter {
-  /** Optional task capabilities exposed through Calli's on-demand CLI. */
+  /** Optional task capabilities exposed through LoopX's on-demand CLI. */
   readonly borrowedTools?: readonly import('./borrowed-tools.js').BorrowedTool[];
   readonly id: string;
   readonly label: string;
@@ -330,7 +330,7 @@ export interface AgentAdapter {
     memory?: boolean;
     workModes?: readonly WorkMode[];
     speed?: boolean;
-    /** Accepts runtime-only calli CLI connection context. */
+    /** Accepts runtime-only loochat CLI connection context. */
     coordination?: boolean;
     /** Changing model preserves the native conversation, including through a resumed process. */
     modelSwitch?: boolean;
@@ -515,12 +515,12 @@ export function sessionEnvironment(base: Record<string, string>, context?: Recor
   // A daemon launched from another agent must never lend that agent's scoped credentials
   // to a new session. Undefined also masks inherited keys in adapters that merge env again.
   const env: NodeJS.ProcessEnv = {
-    ...process.env, ...base, CALLI_TEAM_SOCKET: undefined, CALLI_TEAM_KEY: undefined, CALLI_BIN_DIR: undefined,
-    CALLI_HANDOVER_SOCKET: undefined, CALLI_HANDOVER_KEY: undefined,
-    CALLI_TODO_SOCKET: undefined, CALLI_TODO_KEY: undefined,
-    CALLI_TOOLS_SOCKET: undefined, CALLI_TOOLS_KEY: undefined, CALLI_TOKEN: undefined, ...context,
+    ...process.env, ...base, LOOCHAT_TEAM_SOCKET: undefined, LOOCHAT_TEAM_KEY: undefined, LOOCHAT_BIN_DIR: undefined,
+    LOOCHAT_HANDOVER_SOCKET: undefined, LOOCHAT_HANDOVER_KEY: undefined,
+    LOOCHAT_TODO_SOCKET: undefined, LOOCHAT_TODO_KEY: undefined,
+    LOOCHAT_TOOLS_SOCKET: undefined, LOOCHAT_TOOLS_KEY: undefined, LOOCHAT_TOKEN: undefined, ...context,
   };
-  if (context?.CALLI_BIN_DIR) env.PATH = `${context.CALLI_BIN_DIR}${process.platform === 'win32' ? ';' : ':'}${base.PATH ?? process.env.PATH ?? ''}`;
+  if (context?.LOOCHAT_BIN_DIR) env.PATH = `${context.LOOCHAT_BIN_DIR}${process.platform === 'win32' ? ';' : ':'}${base.PATH ?? process.env.PATH ?? ''}`;
   return env;
 }
 
@@ -537,7 +537,7 @@ export function sessionStoreKey(instance: { adapter: string; env?: Record<string
     case 'codex':
       return `codex:${instance.env?.CODEX_HOME ?? ''}`;
     case 'traex':
-      return `traex:${instance.env?.CALLI_TRAEX_HOME ?? instance.env?.CODEX_HOME ?? ''}`;
+      return `traex:${instance.env?.LOOCHAT_TRAEX_HOME ?? instance.env?.CODEX_HOME ?? ''}`;
     default:
       return instance.adapter;
   }

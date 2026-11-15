@@ -8,9 +8,9 @@ const named = name => ({ name, exact: true });
 
 test('the compact thread menu preserves nested actions, keyboard return and the draft', { timeout: 180000 }, async () => {
   const command = [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')];
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', label: 'Primary', command }] }) });
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', label: 'Primary', command }] }) });
   const browser = await launchBrowser();
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   if (shots) mkdirSync(shots, { recursive: true });
   try {
     const section = await (await api(daemon, '/api/sections', { method: 'POST', body: JSON.stringify({ name: 'Menu review' }) })).json();
@@ -141,7 +141,7 @@ test('the compact thread menu preserves nested actions, keyboard return and the 
 
 test('long quota alerts fit the compact header across languages, including cached failures', { timeout: 90000 }, async () => {
   const command = [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')];
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', label: 'A long account name', command }] }) });
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', label: 'A long account name', command }] }) });
   const browser = await launchBrowser();
   try {
     const thread = await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'codex', cwd: daemon.workdir, title: 'Quota alert wrapping' }) })).json();
@@ -173,7 +173,7 @@ test('long quota alerts fit the compact header across languages, including cache
         await fits();
         const after = await root.boundingBox();
         assert.equal(after.height, before.height, 'an important refresh failure uses the same header space');
-        const shots = process.env.CALLI_E2E_SHOTS_DIR;
+        const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
         if (shots) await page.screenshot({ path: join(shots, `menu-cached-${locale}-${width}.png`) });
       } finally { await context.close(); }
     }

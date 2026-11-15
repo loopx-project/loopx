@@ -620,9 +620,9 @@ export class ProactiveService {
       createdThreadId = thread.id;
       const note = this.store.todoNote(todo.id).text || '尚未写入。';
       let prompt = kind === 'prepare'
-        ? `由 Calli 发起的提前准备。\n事项：${todo.text}\nID：${todo.id}\n材料目录：${artifacts}\n接续说明：\n${note}\n\n按接续说明提前备好回复草稿、会前提纲或其他值得准备的材料，只写材料目录下的文件。这个目录中的 artifacts 是本轮唯一允许直接写入的事项材料，matter.md 仍只由 Calli 管理。\n先用 calli todo show ${todo.id} 读取最新 rev；产出写入 ${artifacts}/<名称>.md，再用 calli todo update ${todo.id} --rev N --note-file FILE 在接续说明记一句「已备好 X」，保留原有说明。\n不发消息、不推送、不删除、不改外部仓库，不做任何对外动作。不要自行 git 提交，Calli 会为材料留底。没有值得准备的材料就安静结束，不凑内容、不通知。结束回复只写材料摘要。`
-        : `由 Calli 发起的沙盒动手。\n事项：${todo.text}\nID：${todo.id}\n接续说明：\n${note}\n\n这是独立 worktree 沙盒；只按接续说明推进已由人开始的工作。每个提交必须带 git trailer：\nCalli-Proactive: ${todo.id}\n\n跑该仓库测试；只改当前沙盒，不动主工作区、不推送远端、不发消息、不做其他对外动作。只在此沙盒提交改动。不要查看其他 agent 会话，也不要修改它们的目录或配置。结束回复按「## 改动摘要」「## 测试结果」两段写清实际改动、执行的测试和结果；没有运行测试也要写清原因。`;
-      if (variant === 'plan') prompt += `\n本轮是笼统事项拆解：把事项拆成 3–7 步，写出第一步的具体方案（要改哪里、怎么验证、要问人什么），写入 ${artifacts}/plan.md。可以只读查看相关仓库，不改任何仓库、不对外。用 calli todo update 在接续说明记一句「已备好 拆解与第一步方案」。`;
+        ? `由 LoopX 发起的提前准备。\n事项：${todo.text}\nID：${todo.id}\n材料目录：${artifacts}\n接续说明：\n${note}\n\n按接续说明提前备好回复草稿、会前提纲或其他值得准备的材料，只写材料目录下的文件。这个目录中的 artifacts 是本轮唯一允许直接写入的事项材料，matter.md 仍只由 LoopX 管理。\n先用 loochat todo show ${todo.id} 读取最新 rev；产出写入 ${artifacts}/<名称>.md，再用 loochat todo update ${todo.id} --rev N --note-file FILE 在接续说明记一句「已备好 X」，保留原有说明。\n不发消息、不推送、不删除、不改外部仓库，不做任何对外动作。不要自行 git 提交，LoopX 会为材料留底。没有值得准备的材料就安静结束，不凑内容、不通知。结束回复只写材料摘要。`
+        : `由 LoopX 发起的沙盒动手。\n事项：${todo.text}\nID：${todo.id}\n接续说明：\n${note}\n\n这是独立 worktree 沙盒；只按接续说明推进已由人开始的工作。每个提交必须带 git trailer：\nLooChat-Proactive: ${todo.id}\n\n跑该仓库测试；只改当前沙盒，不动主工作区、不推送远端、不发消息、不做其他对外动作。只在此沙盒提交改动。不要查看其他 agent 会话，也不要修改它们的目录或配置。结束回复按「## 改动摘要」「## 测试结果」两段写清实际改动、执行的测试和结果；没有运行测试也要写清原因。`;
+      if (variant === 'plan') prompt += `\n本轮是笼统事项拆解：把事项拆成 3–7 步，写出第一步的具体方案（要改哪里、怎么验证、要问人什么），写入 ${artifacts}/plan.md。可以只读查看相关仓库，不改任何仓库、不对外。用 loochat todo update 在接续说明记一句「已备好 拆解与第一步方案」。`;
       await this.manager.startTurn(thread.id, { text: prompt, scheduled: true, proactive: true }, undefined, false, undefined, turnId => {
         if (this.busy(todo.id) || this.atCapacity()) throw new HttpError(409, '有工作线程正在运行，本次主动行动未启动');
         if (this.settings().mode !== 'auto' || this.quiet(new Date(now.getTime() + Date.now() - began)) || repo && !this.settings().repos.includes(repo)) throw new HttpError(409, '主动行动设置或安静时段已改变，本次未启动');

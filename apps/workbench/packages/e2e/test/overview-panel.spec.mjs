@@ -246,14 +246,14 @@ test('a team that lands after the panel joins it without a reopen, and the readi
     await preparer.getByRole('button', { name: '启用协作', exact: true }).click();
     await preparer.locator('.composer-add.on').waitFor();
     for (const [name, requestId] of [['文档审查', 'late-team-1'], ['复核', 'late-team-2']]) {
-      const directive = Buffer.from(JSON.stringify({ args: ['spawn', '--agent', 'claude', '--name', name, '--message-file', '-', '--request-id', requestId], text: '检查接口 CALLI_REPORT' })).toString('base64');
+      const directive = Buffer.from(JSON.stringify({ args: ['spawn', '--agent', 'claude', '--name', name, '--message-file', '-', '--request-id', requestId], text: '检查接口 LOOCHAT_REPORT' })).toString('base64');
       // One spawn turn at a time: the second directive waits for the first member to exist.
       for (let n = 0; n < 300; n++) {
         const team = await (await api(daemon, `/api/threads/${root.id}/coordination`)).json();
         if (team?.members?.some(m => m.name === name) || team?.members?.length >= 2) break;
         await sleep(100);
       }
-      await post(`/api/threads/${root.id}/turns`, { text: `CALLI_COMMAND:${directive}` });
+      await post(`/api/threads/${root.id}/turns`, { text: `LOOCHAT_COMMAND:${directive}` });
       for (let n = 0; n < 300; n++) {
         const team = await (await api(daemon, `/api/threads/${root.id}/coordination`)).json();
         if (team?.members?.some(m => m.name === name)) break;

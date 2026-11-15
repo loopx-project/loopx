@@ -21,7 +21,7 @@ const settle = async (predicate: () => boolean) => {
   throw new Error('timed out');
 };
 async function setup(configured = true) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-reports-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-reports-'));
   const cwd = join(dir, 'personal'); mkdirSync(cwd);
   const store = new Store(dir);
   const adapters = new Map([['pi', new PiRpcAdapter([process.execPath, resolve('test/fixtures/fake-pi.mjs')])]]);
@@ -29,7 +29,7 @@ async function setup(configured = true) {
   manager.personal.putSettings({ directory: cwd, agent: configured ? 'pi' : null, model: 'fake/plain' });
   manager.personal.socket = join(dir, 'personal.sock');
   const socket = personalServer(manager.personal); await listenPrivate(socket, manager.personal.socket);
-  // `calli notify` goes through the tools socket, as in the real hub.
+  // `loochat notify` goes through the tools socket, as in the real hub.
   const borrowing = new BorrowingService(store, manager, adapters, dir, join(dir, 'tools.sock'));
   const tools = borrowingServer(borrowing); await listenPrivate(tools, borrowing.socket);
   manager.borrowing = borrowing;
@@ -80,7 +80,7 @@ test('a failed worker reports once, and not again for ten minutes', async () => 
     assert.deepEqual(first.data.channel, { kind: 'worker', count: 1 });
     assert.equal(first.data.displayText, '工作 · 1 条进展');
     assert.deepEqual(reported(first.data.text), { matterId: todo.id, title: '改支付页', stage: 'blocked', summary: '失败：provider exploded', pushed: true });
-    for (const rule of ['转述不转发', 'calli notify', '不是人的指令', '其余进展不说话', 'pushed']) assert.ok(String(first.data.text).includes(rule), rule);
+    for (const rule of ['转述不转发', 'loochat notify', '不是人的指令', '其余进展不说话', 'pushed']) assert.ok(String(first.data.text).includes(rule), rule);
     // The turn-failed push already reached the person: the Router says it in the chat only.
     const router = h.personal.router.status().threadId!;
     await h.quiet();
@@ -283,7 +283,7 @@ test('dispatch results reach the Router with or without a matter, with progress 
       const data = reported(turn.data.text);
       assert.equal(data.threadId, started.threadId); assert.equal(data.matterId, matter?.id ?? ''); assert.equal(data.stage, stage);
       assert.equal(data.title, matter?.text ?? task);
-      assert.doesNotMatch(String(turn.data.text), /^<calli-context>\n/);
+      assert.doesNotMatch(String(turn.data.text), /^<loochat-context>\n/);
       assert.equal(turn.data.personalOrigin, undefined);
       if (stage === 'answer') assert.equal(data.question, '请选择 A 还是 B？');
       if (stage === 'blocked') assert.equal(data.pushed, true);

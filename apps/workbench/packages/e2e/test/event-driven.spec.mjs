@@ -8,7 +8,7 @@ const meetingEvents = ['vc.meeting.participant_meeting_ended_v1', 'vc.note.gener
 const lark = { enabled: true, people: [], chats: [], intervalMin: 30, events: ['im.message.receive_v1', ...meetingEvents] };
 const status = { cli: true, loggedIn: true, lastRunAt: null, nextRunAt: null, lastError: null, lastSignals: 0 };
 // An absolute nonexistent executable cannot resolve to a real CLI on the ambient PATH.
-const isolatedDaemon = () => startDaemon({ CALLI_LARK_CLI: '/fictional-e2e-no-lark-cli' });
+const isolatedDaemon = () => startDaemon({ LOOCHAT_LARK_CLI: '/fictional-e2e-no-lark-cli' });
 const deferred = () => {
   let resolve;
   const promise = new Promise(done => { resolve = done; });

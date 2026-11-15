@@ -58,7 +58,7 @@ const MAX_PER_AGENT = 2000;
  * last activity); the past turns are read by the existing import only when one is opened.
  * Sessions outside the allowed directories, in removed directories, or already a thread here are
  * left out. Together with machine-usage.ts this is the one subsystem that reads what the agents
- * on this machine have been doing; `CALLI_LOCAL_SCAN=off` stands both down.
+ * on this machine have been doing; `LOOCHAT_LOCAL_SCAN=off` stands both down.
  */
 export class LocalSessions {
   private readonly cache = new Map<string, { at: number; sessions: ExternalSession[] }>();

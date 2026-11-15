@@ -12,12 +12,12 @@ import { createFakeDoubaoRuntime, fakeDoubaoBundle, writeFakeDoubaoManifest } fr
 
 const option = { modelId: 'model-id', name: 'Native Model', available: true, isDefault: true,
   effortAdjustable: true, efforts: [{ level: 'none' }, { level: 'high' }] };
-const envelope = (models: unknown[]) => JSON.stringify({ type: 'calli_models', models });
+const envelope = (models: unknown[]) => JSON.stringify({ type: 'loochat_models', models });
 function setup(t: { after(fn: () => unknown): void }) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-doubao-model-test-')), root = join(dir, 'native');
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-doubao-model-test-')), root = join(dir, 'native');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = createFakeDoubaoRuntime(root), log = join(dir, 'models.jsonl');
-  const env = { FAKE_DOUBAO_MODEL_LOG: log, FAKE_DOUBAO_MARKER: 'selected-account', CALLI_DOUBAO_STREAM: '0' };
+  const env = { FAKE_DOUBAO_MODEL_LOG: log, FAKE_DOUBAO_MARKER: 'selected-account', LOOCHAT_DOUBAO_STREAM: '0' };
   const calls = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
   return { dir, root, bin, log, env, calls };
 }
@@ -53,7 +53,7 @@ test('catalog snapshots patch only copies, preserve text mode and remove their r
   const runtime = await prepareDoubaoStreamRuntime([h.bin], h.env, h.dir, 'models');
   t.after(() => runtime.close());
   const patched = readFileSync(join(dirname(runtime.command[0]), 'resources/js_app/entry-cli-router/main.js'), 'utf8');
-  assert.ok(patched.includes('calliReadModels'));
+  assert.ok(patched.includes('loochatReadModels'));
   assert.ok(patched.includes('output_format:"text"'));
   assert.equal(patched.includes('calli_bridge_tool'), false);
   assert.equal(readFileSync(path, 'utf8'), original);

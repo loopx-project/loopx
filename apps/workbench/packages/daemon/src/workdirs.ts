@@ -40,7 +40,7 @@ export class Workdirs {
   personalDirectory: (() => string) | null = null;
 
   constructor(
-    /** From CALLI_WORKDIRS: always allowed, never removed from the page. */
+    /** From LOOCHAT_WORKDIRS: always allowed, never removed from the page. */
     private readonly base: string[],
     /** Where added directories are kept; null keeps them in memory only (tests). */
     private readonly file: string | null = null,

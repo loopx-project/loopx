@@ -380,8 +380,8 @@ export interface NoteSource { threadId: string; turnId: string }
 const NOTE_HEAD = /^\[注释 (\d+)\]$/;
 const NOTE_FILE = '文件：';
 const NOTE_COMMENT = '评论：';
-const NOTE_SOURCE_LINE = /^来源：交接前的会话，原文和上下文用 calli history (\S+) --turn (\S+) 读$/;
-const sourceLine = (source: NoteSource) => `来源：交接前的会话，原文和上下文用 calli history ${source.threadId} --turn ${source.turnId} 读`;
+const NOTE_SOURCE_LINE = /^来源：交接前的会话，原文和上下文用 loochat history (\S+) --turn (\S+) 读$/;
+const sourceLine = (source: NoteSource) => `来源：交接前的会话，原文和上下文用 loochat history ${source.threadId} --turn ${source.turnId} 读`;
 
 /**
  * A message with numbered notes in front, in plain text any agent reads and can refer back to
@@ -389,7 +389,7 @@ const sourceLine = (source: NoteSource) => `来源：交接前的会话，原文
  *
  *   [注释 1]
  *   文件：writing/题目.md
- *   来源：交接前的会话，原文和上下文用 calli history THREAD --turn TURN 读
+ *   来源：交接前的会话，原文和上下文用 loochat history THREAD --turn TURN 读
  *   > the passage
  *   评论：what the user says about it
  *

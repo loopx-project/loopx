@@ -8,13 +8,13 @@
 # It schedules a detached job (a systemd transient unit, outside the daemon's cgroup so the stop
 # cannot kill it) that waits for the one-time migration to finish, waits until every thread is
 # idle, then stops the service, vacuums, starts it and checks health. Log:
-# $XDG_STATE_HOME/calli/compact.log
+# $XDG_STATE_HOME/loochat/compact.log
 #
 #   scripts/compact-hub-db.sh        vacuum an already-stopped hub's db directly
 set -euo pipefail
 
-NAME=calli
-# The service's name before the rename to Calli; an installation not moved yet still runs it.
+NAME=loochat
+# The service's name before the rename to LooChat; an installation not moved yet still runs it.
 if ! systemctl --user cat "$NAME" >/dev/null 2>&1 && systemctl --user cat remote-agent-hub >/dev/null 2>&1; then
   NAME=remote-agent-hub
 fi
@@ -24,8 +24,8 @@ LOG="$STATE_DIR/compact.log"
 ENV_FILE="$(systemctl --user show -p Environment --value "$NAME" | tr ' ' '\n' | sed -nE 's/^(CALLI|RAH)_ENV_FILE=//p' | head -1)"
 ENV_FILE="${ENV_FILE:-$HOME/.config/$NAME/.env}"
 env_raw() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 | sed -E "s/^['\"]|['\"]$//g"; }
-# CALLI_<name>, else RAH_<name> from before the rename.
-env_get() { local v; v="$(env_raw "CALLI_$1")"; [ -n "$v" ] || v="$(env_raw "RAH_$1")"; echo "$v"; }
+# LOOCHAT_<name>, else RAH_<name> from before the rename.
+env_get() { local v; v="$(env_raw "LOOCHAT_$1")"; [ -n "$v" ] || v="$(env_raw "RAH_$1")"; echo "$v"; }
 HOST="$(env_get HOST)"; HOST="${HOST:-127.0.0.1}"
 PORT="$(env_get PORT)"; PORT="${PORT:-8787}"
 TOKEN="$(env_get TOKEN)"
@@ -52,14 +52,14 @@ if [ "${1:-}" != "--apply" ]; then
 fi
 
 systemctl --user cat "$NAME" >/dev/null 2>&1 || { echo "No $NAME service." >&2; exit 1; }
-if systemctl --user cat calli-compact >/dev/null 2>&1; then
-  echo "A compact job is already scheduled (unit calli-compact). Log: $LOG"
+if systemctl --user cat loochat-compact >/dev/null 2>&1; then
+  echo "A compact job is already scheduled (unit loochat-compact). Log: $LOG"
   exit 0
 fi
 mkdir -p "$STATE_DIR"
 
 # The job runs as its own transient unit: stopping the daemon must not kill the vacuum.
-systemd-run --user --unit=calli-compact --collect \
+systemd-run --user --unit=loochat-compact --collect \
   env REPO="$REPO" NAME="$NAME" BASE="$BASE" TOKEN="$TOKEN" DB="$DB" LOG="$LOG" NODE="$NODE" \
   "$NODE" -e '
     const { execFileSync, spawnSync } = require("child_process");

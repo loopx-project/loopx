@@ -9,8 +9,8 @@ import { ZcodeAdapter, ZCODE_BASIC_TOOLS } from '../src/adapters/zcode.js';
 import type { AgentSession, TurnHooks } from '../src/adapters/types.js';
 
 // Opt-in: an unmodified installed CLI, isolated storage, and a local model endpoint. No real API keys.
-test('real zcode: images, memory isolation, goals and native plan approval', { skip: !process.env.CALLI_ZCODE_REAL_BIN, timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-zcode-real-'));
+test('real zcode: images, memory isolation, goals and native plan approval', { skip: !process.env.LOOCHAT_ZCODE_REAL_BIN, timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-zcode-real-'));
   const requests: any[] = [];
   let goalMode = false;
   let goalReplies = 0;
@@ -71,7 +71,7 @@ test('real zcode: images, memory isolation, goals and native plan approval', { s
     mkdirSync(memory, { recursive: true });
     const sentinel = 'MEMORY_SENTINEL_MUST_NOT_BE_INJECTED';
     writeFileSync(join(memory, 'MEMORY.md'), sentinel);
-    const adapter = new ZcodeAdapter([process.env.CALLI_ZCODE_REAL_BIN!, 'app-server'], {
+    const adapter = new ZcodeAdapter([process.env.LOOCHAT_ZCODE_REAL_BIN!, 'app-server'], {
       ZCODE_DATA_BASE_DIR: dir, ZCODE_STORAGE_DIR: dir, ZCODE_SESSION_DB_PATH: join(dir, 'sessions.db'),
       ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: join(dir, 'builtin.json'), ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: join(dir, 'personal.json'),
     });

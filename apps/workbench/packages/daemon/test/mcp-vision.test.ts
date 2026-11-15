@@ -11,7 +11,7 @@ const fakeMcp = [process.execPath, join(here, 'fixtures', 'fake-mcp.mjs')];
 
 /** A zcode home with one installed plugin, plus whatever config.json says about it. */
 function zcodeHome(enabled: boolean | undefined) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-zcode-home-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-zcode-home-'));
   const pluginDir = join(dir, 'plugin-vision');
   mkdirSync(pluginDir, { recursive: true });
   writeFileSync(join(pluginDir, '.mcp.json'), JSON.stringify({
@@ -55,7 +55,7 @@ test('probeMcpToolNames lists a server\'s tools; a dead one yields none', async 
 test('session/create passes the plugin\'s MCP server and its probed tools in the allowlist', async (t) => {
   const home = zcodeHome(undefined);
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const dir = mkdtempSync(join(tmpdir(), 'calli-mcp-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-mcp-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const log = join(dir, 'wire.jsonl');
   const adapter = new ZcodeAdapter([process.execPath, join(here, 'fixtures', 'fake-zcode.mjs')], {
@@ -86,7 +86,7 @@ test('a plugin with no arguments still sends args as an empty list, which real z
     mcpServers: { 'zai-vision': { type: 'stdio', command: serverScript, args: [], env: { Z_AI_MODE: 'ZHIPU' } } },
   }));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const dir = mkdtempSync(join(tmpdir(), 'calli-mcp-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-mcp-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const log = join(dir, 'wire.jsonl');
   const adapter = new ZcodeAdapter([process.execPath, join(here, 'fixtures', 'fake-zcode.mjs')], {
@@ -105,9 +105,9 @@ test('a plugin with no arguments still sends args as an empty list, which real z
 });
 
 test('a disabled plugin and an absent zcode home both leave the baseline restrictions', async (t) => {
-  for (const zcodeDataDir of [zcodeHome(false), mkdtempSync(join(tmpdir(), 'calli-empty-'))]) {
+  for (const zcodeDataDir of [zcodeHome(false), mkdtempSync(join(tmpdir(), 'loochat-empty-'))]) {
     t.after(() => rmSync(zcodeDataDir, { recursive: true, force: true }));
-    const dir = mkdtempSync(join(tmpdir(), 'calli-mcp-'));
+    const dir = mkdtempSync(join(tmpdir(), 'loochat-mcp-'));
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     const log = join(dir, 'wire.jsonl');
     const adapter = new ZcodeAdapter([process.execPath, join(here, 'fixtures', 'fake-zcode.mjs')], {

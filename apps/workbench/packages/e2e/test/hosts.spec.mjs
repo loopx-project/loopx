@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { linkDaemon, startDaemon, openUi, api, launchBrowser, closeSettings, openCollaboration } from '../harness.mjs';
 
-const SOCKET_IN_HOME = '.local/state/calli/daemon.sock';
+const SOCKET_IN_HOME = '.local/state/loochat/daemon.sock';
 
 let root;
 let nodeSocket;
@@ -17,11 +17,11 @@ let page;
 let joinToken;
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-e2e-hosts-'));
+  root = mkdtempSync(join(tmpdir(), 'loochat-e2e-hosts-'));
   const nodeHome = join(root, 'devbox');
   mkdirSync(nodeHome);
   nodeSocket = join(nodeHome, SOCKET_IN_HOME);
-  node = await startDaemon({ CALLI_SOCKET: nodeSocket, CALLI_TERM_SHELL: '/bin/sh' });
+  node = await startDaemon({ LOOCHAT_SOCKET: nodeSocket, LOOCHAT_TERM_SHELL: '/bin/sh' });
 
   hub = await startDaemon();
 
@@ -60,7 +60,7 @@ test('a machine gets join settings once and appears online when the node connect
   await panel.getByRole('button', { name: '生成接入配置', exact: true }).click();
   const settings = panel.locator('.host-join-lines');
   await settings.waitFor();
-  joinToken = (await settings.innerText()).match(/CALLI_HUB_TOKEN=(.+)/)[1];
+  joinToken = (await settings.innerText()).match(/LOOCHAT_HUB_TOKEN=(.+)/)[1];
   const row = panel.locator('.host-row', { hasText: 'devbox' });
   await row.getByText('离线', { exact: true }).waitFor();
   assert.match(await row.innerText(), /还没连上来/);
@@ -216,7 +216,7 @@ test('a machine that drops says so in place of its threads, and is back after a 
   // The hub's own machine is still a click away.
   assert.equal(await page.getByRole('tab', { name: '本机' }).count(), 1);
 
-  node = await startDaemon({ CALLI_SOCKET: nodeSocket });
+  node = await startDaemon({ LOOCHAT_SOCKET: nodeSocket });
   await api(node, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: node.workdir, title: '回来以后的线程' }) });
   await node.connectRelay(hub, joinToken);
   await down.getByRole('button', { name: '重试' }).click();
@@ -247,9 +247,9 @@ test('a remote member leaves a result file, and the page downloads it', async ()
   assert.equal((await api(hub, `/api/threads/${root.id}/coordination`, { method: 'POST', body: '{}' })).status, 200);
   const directive = Buffer.from(JSON.stringify({
     args: ['spawn', '--agent', 'pi@devbox', '--name', 'far', '--cwd', node.workdir, '--message-file', '-', '--request-id', 'far-file'],
-    text: 'CALLI_RESULT_FILE 请整理报告',
+    text: 'LOOCHAT_RESULT_FILE 请整理报告',
   })).toString('base64');
-  assert.equal((await api(hub, `/api/threads/${root.id}/turns`, { method: 'POST', body: JSON.stringify({ text: `CALLI_COMMAND:${directive}` }) })).status, 202);
+  assert.equal((await api(hub, `/api/threads/${root.id}/turns`, { method: 'POST', body: JSON.stringify({ text: `LOOCHAT_COMMAND:${directive}` }) })).status, 202);
   let view;
   for (let n = 0; n < 400; n++) {
     view = await (await api(hub, `/api/threads/${root.id}/coordination`)).json();
@@ -258,7 +258,7 @@ test('a remote member leaves a result file, and the page downloads it', async ()
   }
   const result = view.messages?.find(m => m.kind === 'result' && m.resultFile);
   assert.ok(result, 'the result names the file the member left');
-  const exchange = `/tmp/calli-exchange/${root.id}`;
+  const exchange = `/tmp/loochat-exchange/${root.id}`;
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
     const page = await context.newPage();
@@ -303,11 +303,11 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       assert.ok(box && box.x >= 0 && box.x + box.width <= p.viewportSize().width);
       await submit.click();
       await panel.locator('.host-join-lines').waitFor();
-      assert.match(await panel.locator('.host-join-lines').innerText(), /CALLI_HUB_URL=.*\nCALLI_HUB_TOKEN=/);
+      assert.match(await panel.locator('.host-join-lines').innerText(), /LOOCHAT_HUB_URL=.*\nLOOCHAT_HUB_TOKEN=/);
       await p.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await p.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `${label}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await p.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${label}.png`) });
       }
       await panel.getByRole('button', { name: '完成', exact: true }).click();
       assert.equal(await panel.locator('.host-join-lines').count(), 0);

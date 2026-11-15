@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   adoptLegacyEnv();
   const config = loadConfig();
 
-  // Empty CALLI_WORKDIRS means "only the directory the daemon was started in".
+  // Empty LOOCHAT_WORKDIRS means "only the directory the daemon was started in".
   const workdirs = config.workdirs.length > 0 ? config.workdirs : [process.cwd()];
 
   // Agent instances come from agents.json (or the built-in defaults): one adapter each, so the
@@ -59,8 +59,8 @@ async function main(): Promise<void> {
   });
   const adapters = registry.adapters;
   // Copies of known CLIs and signed-in accounts found on this machine join the list on their own
-  // (every 10 minutes); what the person removed stays out. An inline CALLI_AGENTS_JSON hub (tests,
-  // scripts) owns its list outright and joins nothing, and CALLI_AUTO_JOIN=off turns it off for
+  // (every 10 minutes); what the person removed stays out. An inline LOOCHAT_AGENTS_JSON hub (tests,
+  // scripts) owns its list outright and joins nothing, and LOOCHAT_AUTO_JOIN=off turns it off for
   // anyone. The page's 「发现/添加」 entries keep working alongside. dispose(), called on shutdown,
   // stops the timer.
   registry.startAutoJoin();
@@ -85,10 +85,10 @@ async function main(): Promise<void> {
   // The two subsystems that read what the agents on this machine have been doing: the sessions
   // they already have (listed for the thread list, imported on a click) and the tokens their
   // transcripts gained (the machine's usage). Neither scans on a request's say-so alone, and
-  // neither runs on a hub that owns no agent file of its own (an inline CALLI_AGENTS_JSON list is
-  // a test or script machine, not the person's) or with CALLI_LOCAL_SCAN=off: the machine behind
+  // neither runs on a hub that owns no agent file of its own (an inline LOOCHAT_AGENTS_JSON list is
+  // a test or script machine, not the person's) or with LOOCHAT_LOCAL_SCAN=off: the machine behind
   // a throwaway hub is not ours to read.
-  const localScan = registry.ownsFile && process.env.CALLI_LOCAL_SCAN !== 'off';
+  const localScan = registry.ownsFile && process.env.LOOCHAT_LOCAL_SCAN !== 'off';
   const localSessions = new LocalSessions({
     adapters,
     workdirs: () => manager.allowedWorkdirs,
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   // Scheduled tasks tick on their own, on the machine where their threads live.
   const scheduler = new Scheduler(store, manager, adapters, push);
   const coordination = new CoordinationManager(store, manager, coordinationPath, {
-    exchangeRoot: '/tmp/calli-exchange',
+    exchangeRoot: '/tmp/loochat-exchange',
     resultDir: join(config.dataDir, 'coordination', 'files'),
   });
   const collaborationServer = coordinationServer(coordination);
@@ -182,8 +182,8 @@ async function main(): Promise<void> {
   const larkEvents = new LarkEvents(manager.lark);
   larkEvents.start();
   // Previews are served on a port of their own: the iframe needs an origin separate from the app
-  // (see preview.ts). One port past the app's is the default; CALLI_PREVIEW_PORT picks another.
-  const previewPort = Number(process.env.CALLI_PREVIEW_PORT) || config.port + 1;
+  // (see preview.ts). One port past the app's is the default; LOOCHAT_PREVIEW_PORT picks another.
+  const previewPort = Number(process.env.LOOCHAT_PREVIEW_PORT) || config.port + 1;
   const server = createHttpServer({ manager, push, feishu, registry, terminals, desktop, hosts, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, token: config.token, webDir: config.webDir, version: VERSION, previewPort });
   // Same requests, other origin: preview frames load from here so their pages cannot reach the
   // app, while their own CSS and scripts load same-origin. Without the port, previews say so.
@@ -206,7 +206,7 @@ async function main(): Promise<void> {
 
   // A hub elsewhere this machine joined: connect out to it and answer its requests from the socket above.
   let relay: RelayClient | null = null;
-  if (config.hub && !config.socket) console.warn('warning: CALLI_HUB_URL is set but CALLI_SOCKET is off; not joining the hub');
+  if (config.hub && !config.socket) console.warn('warning: LOOCHAT_HUB_URL is set but LOOCHAT_SOCKET is off; not joining the hub');
   else if (config.hub && config.socket) {
     relay = new RelayClient({ hubUrl: config.hub.url, token: config.hub.token, socket: config.socket, version: VERSION });
     relay.start();
@@ -214,7 +214,7 @@ async function main(): Promise<void> {
   }
 
   server.listen(config.port, config.host, () => {
-    console.log(`Calli daemon ${VERSION} listening on http://${config.host}:${config.port}`);
+    console.log(`loochat daemon ${VERSION} listening on http://${config.host}:${config.port}`);
     console.log(`workdirs: ${dirs.roots().join(', ')}`);
     if (config.host === '0.0.0.0' || config.host === '::') {
       console.warn('warning: listening on all interfaces. Bind to the VPN address instead.');

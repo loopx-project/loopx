@@ -45,9 +45,9 @@ test('ruler knows unloaded and folded turns without fetching their bodies', asyn
           await first.focus();
           await page.getByText('尚未加载，点击查看', { exact: true }).waitFor();
           assert.equal(requests.filter(url => url.includes('before=')).length, 0);
-          if (process.env.CALLI_E2E_SHOTS_DIR) {
-            mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-            await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `ruler-placeholder-${colorScheme}.png`) });
+          if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+            mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+            await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `ruler-placeholder-${colorScheme}.png`) });
           }
           await first.click();
           await page.locator('[data-turn="turn-1"]').waitFor();
@@ -61,9 +61,9 @@ test('ruler knows unloaded and folded turns without fetching their bodies', asyn
         } else assert.equal(await page.locator('.turn-ruler').isVisible(), false);
         assert.deepEqual(errors, []);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `ruler-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `ruler-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }

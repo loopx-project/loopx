@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
 let daemon, browser;
-const shots = process.env.CALLI_E2E_SHOTS_DIR ?? '/tmp/calli-board-collaboration-shots';
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR ?? '/tmp/loochat-board-collaboration-shots';
 async function json(path, body) {
   const res = await api(daemon, path, body ? { method: 'POST', body: JSON.stringify(body) } : undefined);
   assert.ok(res.ok, await res.clone().text());

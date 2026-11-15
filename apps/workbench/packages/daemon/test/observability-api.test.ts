@@ -19,7 +19,7 @@ import type { EmittedEvent } from '../src/events.js';
 const fixture = (name: string) => [process.execPath, fileURLToPath(new URL(`./fixtures/fake-${name}.mjs`, import.meta.url))];
 
 test('real protocol fixtures emit normalized usage without lifetime or context totals', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-observe-adapters-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-observe-adapters-'));
   const env = { FAKE_TELEMETRY: '1', ZCODE_DATA_BASE_DIR: dir };
   const adapters: AgentAdapter[] = [new PiRpcAdapter(fixture('pi'), env), new CodexAppServerAdapter(fixture('codex'), env), new ClaudeAcpAdapter(fixture('acp'), env), new ZcodeAdapter(fixture('zcode'), env)];
   try {
@@ -41,10 +41,10 @@ test('real protocol fixtures emit normalized usage without lifetime or context t
 });
 
 test('authenticated diagnostics explain unavailable, empty, login and version errors, refresh and deduplicate', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-diagnostics-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-diagnostics-'));
   const adapter = new CodexAppServerAdapter(fixture('codex'), {});
   const empty = new ZcodeAdapter(fixture('zcode'), { FAKE_ZCODE_NO_MODELS: '1', ZCODE_DATA_BASE_DIR: dir });
-  const missing = new CodexAppServerAdapter(['calli-does-not-exist-test'], {});
+  const missing = new CodexAppServerAdapter(['loochat-does-not-exist-test'], {});
   const login = new CodexAppServerAdapter(fixture('codex'), { FAKE_DIAGNOSTIC_ERROR: '401 authentication required secret-must-not-leak' });
   const old = new CodexAppServerAdapter(fixture('codex'), { FAKE_DIAGNOSTIC_ERROR: 'method not found' });
   let reads = 0;

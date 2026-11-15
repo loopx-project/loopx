@@ -20,18 +20,18 @@ if ! git merge-base --is-ancestor "$upstream" HEAD; then
 fi
 new="$(git rev-parse --short HEAD)"
 
-if [ "$(basename "$workdir")" = "calli-$new" ]; then
-  echo "current: the service already runs calli-$new"
+if [ "$(basename "$workdir")" = "loochat-$new" ]; then
+  echo "current: the service already runs loochat-$new"
   exit 0
 fi
 if [ "$dry" = 1 ]; then
-  echo "would update: ${workdir##*/} -> calli-$new"
+  echo "would update: ${workdir##*/} -> loochat-$new"
   exit 0
 fi
 
 # A snapshot per version, so the previous one stays to fall back on. It lives next to the ones
 # agents have been making by hand; the state home passed in is where the daemon keeps its data.
-snap="$HOME/.local/share/calli-$new"
+snap="$HOME/.local/share/loochat-$new"
 if [ ! -d "$snap" ]; then
   say "copying the tree into ${snap##*/}"
   mkdir -p "$snap"
@@ -42,7 +42,7 @@ if ! ( cd "$snap" && npm install --no-audit --no-fund >/dev/null 2>&1 && npm run
   rm -rf "$snap"
   fail "build failed; the running daemon was left alone"
 fi
-echo "$new" >"$snap/.calli-release"
+echo "$new" >"$snap/.loochat-release"
 
 # Its own turns end first, the way restart.sh waits for this hub's.
 busy_seen=''
@@ -57,11 +57,11 @@ done
 
 # Which file pins the running release: the lexically last drop-in that sets WorkingDirectory — a
 # drop-in outranks the unit file's own line, so editing the unit file alone switches nothing on a
-# machine that pins releases this way — or the conventional 90-calli-release.conf when there is
+# machine that pins releases this way — or the conventional 90-loochat-release.conf when there is
 # none yet. The unit file itself is never touched.
 pin_dir="$HOME/.config/systemd/user/${service}.service.d"
 pin="$(ls "$pin_dir"/*.conf 2>/dev/null | sort | while IFS= read -r f; do grep -q '^WorkingDirectory=' "$f" && printf '%s\n' "$f"; done | tail -n 1)"
-[ -n "$pin" ] || pin="$pin_dir/90-calli-release.conf"
+[ -n "$pin" ] || pin="$pin_dir/90-loochat-release.conf"
 pin_write() { mkdir -p "$pin_dir"; printf '[Service]\nWorkingDirectory=%s\n' "$1" >"$pin"; }
 put_back() {
   [ -n "$workdir" ] && pin_write "$workdir"
@@ -69,7 +69,7 @@ put_back() {
   "$workdir/scripts/restart.sh" --no-build 2>/dev/null || true
 }
 
-say "switching the service onto calli-$new"
+say "switching the service onto loochat-$new"
 mkdir -p "$pin_dir"
 [ -f "$pin" ] && cp "$pin" "$pin.bak-$(date -u +%Y%m%dT%H%M%SZ)"
 pin_write "$snap"
@@ -86,4 +86,4 @@ if [ "$up" != 1 ]; then
   put_back
   fail "no answer after the switch; rolled back onto ${workdir##*/}"
 fi
-echo "done: the service runs calli-$new (was ${workdir##*/})"
+echo "done: the service runs loochat-$new (was ${workdir##*/})"

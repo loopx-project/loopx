@@ -41,12 +41,12 @@ async function sameBox(locator, previous, reason) {
 
 test('A keeps the title and files compact, and quota refreshes do not add or remove a row', { timeout: 180000 }, async () => {
   const command = [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')];
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'primary', adapter: 'codex', label: 'Primary', command },
     { id: 'backup', adapter: 'codex', label: 'Backup', command },
   ] }) });
   const browser = await launchBrowser();
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   if (shots) mkdirSync(shots, { recursive: true });
   try {
     writeFileSync(join(daemon.workdir, 'topbar-notes.md'), 'A keeps the original file reader.\n');
@@ -142,7 +142,7 @@ test('A keeps the title and files compact, and quota refreshes do not add or rem
 
 test('a cold account detail uses reading-sized placeholders until quota arrives', { timeout: 90000 }, async () => {
   const command = [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')];
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'primary', adapter: 'codex', label: 'Primary', command },
     { id: 'backup', adapter: 'codex', label: 'Backup', command },
   ] }) });

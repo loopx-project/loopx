@@ -44,7 +44,7 @@ test('home-relative references grant only the exact named file', () => {
 });
 
 test('a named file resolves anywhere, but links beneath a temp folder are refused', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-referenced-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-referenced-'));
   try {
     const file = join(dir, 'notes.txt');
     writeFileSync(file, 'notes');

@@ -25,7 +25,7 @@ async function waitFor<T>(fn: () => T | Promise<T>, accept: (value: T) => boolea
   throw new Error('timed out');
 }
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-account-tests-')); source = join(root, 'original'); mkdirSync(source);
+  root = mkdtempSync(join(tmpdir(), 'loochat-account-tests-')); source = join(root, 'original'); mkdirSync(source);
   mkdirSync(join(source, 'skills')); mkdirSync(join(source, 'skills', 'sample'));
   writeFileSync(join(source, 'skills', 'sample', 'SKILL.md'), 'Original skill');
   symlinkSync(join(source, 'skills', 'sample'), join(source, 'skills', 'linked'));
@@ -33,7 +33,7 @@ before(async () => {
   writeFileSync(join(source, '.claude.json'), JSON.stringify({ oauthAccount: { email: 'old@example.com' }, projects: { private: {} }, mcpServers: { docs: { command: 'docs' } } }));
   writeFileSync(join(source, '.credentials.json'), 'original credentials');
   mkdirSync(join(source, 'projects')); writeFileSync(join(source, 'projects', 'old.jsonl'), 'old conversation');
-  registry = new AgentRegistry([{ id: 'claude', adapter: 'claude', command: [process.execPath, acp], env: { CLAUDE_CONFIG_DIR: source, CALLI_CLAUDE_BIN: fixture } }], join(root, 'agents.json'));
+  registry = new AgentRegistry([{ id: 'claude', adapter: 'claude', command: [process.execPath, acp], env: { CLAUDE_CONFIG_DIR: source, LOOCHAT_CLAUDE_BIN: fixture } }], join(root, 'agents.json'));
   store = new Store(root);
   manager = new ThreadManager(store, registry.adapters, [root], new AttachmentStore(root), () => registry.list());
   server = createHttpServer({ manager, registry, token, webDir: null, version: 'test' });

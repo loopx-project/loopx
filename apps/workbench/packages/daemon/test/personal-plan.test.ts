@@ -13,7 +13,7 @@ import { PersonalPrep } from '../src/personal-prep.js';
 import { personalContext } from '../src/personal-context.js';
 
 async function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-plan-')), store = new Store(dir);
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-plan-')), store = new Store(dir);
   const manager = new ThreadManager(store, new Map([['pi', new PiRpcAdapter([process.execPath, resolve('test/fixtures/fake-pi.mjs')])]]), new Workdirs([dir]), new AttachmentStore(dir));
   manager.personal.putSettings({ directory: dir, agent: 'pi' });
   return { manager, store, async close() { await manager.shutdown(); await manager.personal.flushMirror(); store.close(); rmSync(dir, { recursive: true, force: true }); } };
@@ -147,7 +147,7 @@ test('prep only triggers recurring or named meetings once across restarts and re
 });
 
  test('an existing todo database migrates horizon to null without changing the item', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-horizon-migration-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-horizon-migration-'));
   let store = new Store(dir);
   try {
     store.createTodo('old', 'Existing item', null, { dueAt: '2026-11-13T12:00:00.000Z' });

@@ -21,7 +21,7 @@ const wait = async (fn: () => boolean, timeoutMs = 20_000): Promise<void> => {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
 };
-const ALL = ['lark-profile', 'lark-chats', 'lark-messages', 'lark-calendar', 'calli-threads'];
+const ALL = ['lark-profile', 'lark-chats', 'lark-messages', 'lark-calendar', 'loochat-threads'];
 
 /** Three days of own messages: first at 09:10–09:50, last at 19:10–20:20, plus @-me group rows. */
 const message = (id: string, chat: string, name: string, at: string, content: string) =>
@@ -77,7 +77,7 @@ interface Handle {
 }
 
 async function setup(lark: object | null, options: Record<string, unknown> = {}): Promise<Handle> {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-explore-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-explore-'));
   const cwd = join(dir, 'personal'); mkdirSync(cwd);
   const data = lark === null ? null : join(dir, 'lark.json');
   if (data) writeFileSync(data, JSON.stringify({ ...lark, explore: true }));
@@ -169,7 +169,7 @@ test('all sources succeed: steps carry human lines, and the model supplements th
     assert.match(bySource.get('lark-messages')!.line!, /你发了 6 条/);
     assert.match(bySource.get('lark-messages')!.line!, /被 @ 4 次/);
     assert.match(bySource.get('lark-calendar')!.line!, /固定会议/);
-    assert.match(bySource.get('calli-threads')!.line!, /2 个对话/);
+    assert.match(bySource.get('loochat-threads')!.line!, /2 个对话/);
 
     const rec = status.recommendation!;
     // Boss selected as boss; the two human p2p partners selected; the bot chat is not a person.
@@ -241,7 +241,7 @@ test('a tenant whose self lookup has no leader still explores, and says so plain
   } finally { await h.close(); }
 });
 
-test('a missing lark-cli leaves calli-threads alone, and the run still ends ready', async () => {
+test('a missing lark-cli leaves loochat-threads alone, and the run still ends ready', async () => {
   const h = await setup(null); try {
     h.seedThread('修登录页按钮', ['把登录页按钮改成圆角']);
     const status = await runExplore(h);
@@ -251,11 +251,11 @@ test('a missing lark-cli leaves calli-threads alone, and the run still ends read
       assert.equal(bySource.get(source)!.state, 'skipped');
       assert.match(bySource.get(source)!.reason!, /lark-cli/);
     }
-    assert.equal(bySource.get('calli-threads')!.state, 'done');
+    assert.equal(bySource.get('loochat-threads')!.state, 'done');
     const rec = status.recommendation!;
     assert.deepEqual(rec.people, []); assert.deepEqual(rec.chats, []);
     assert.equal(rec.meetings.on, false); assert.equal(rec.brief.enabled, false);
-    assert.match(bySource.get('calli-threads')!.line!, /1 个对话/);
+    assert.match(bySource.get('loochat-threads')!.line!, /1 个对话/);
   } finally { await h.close(); }
 });
 
@@ -347,7 +347,7 @@ test('local-only collection reads human display text and never assistant/tool/ba
     let prompt = '';
     const ask = h.manager.askOnce.bind(h.manager);
     h.manager.askOnce = async (agent, text, options) => { prompt = text; return ask(agent, text, options); };
-    const status = await runExplore(h, ['calli-threads']);
+    const status = await runExplore(h, ['loochat-threads']);
     assert.equal(status.state, 'ready');
     assert.equal(status.steps[0].state, 'done');
     assert.match(prompt, /HUMAN_DISPLAY_SENTINEL/);
@@ -360,7 +360,7 @@ test('local-only collection reads human display text and never assistant/tool/ba
     const persisted = JSON.stringify(h.store.listEvents(question.id, 0, -1));
     assert.doesNotMatch(persisted, /HUMAN_DISPLAY_SENTINEL|Human project title|事实：/);
     assert.deepEqual(h.store.userTurns(question.id), []);
-    assert.equal(existsSync(join(h.cwd, '.calli', 'explore.json')), false);
+    assert.equal(existsSync(join(h.cwd, '.loochat', 'explore.json')), false);
   } finally { await h.close(); }
 });
 
@@ -386,7 +386,7 @@ test('one failed source does not stop the remaining sources or leak CLI stderr',
 
 test('the source deadline covers both profile subprocesses together', async () => {
   const h = await setup({ ...larkData, delays: { 'contact +get-user': 900 } }, { sourceTimeoutMs: 1500 }); try {
-    const status = await runExplore(h, ['lark-profile', 'calli-threads']);
+    const status = await runExplore(h, ['lark-profile', 'loochat-threads']);
     assert.equal(status.state, 'ready');
     assert.equal(status.steps[0].state, 'failed');
     assert.equal(status.steps[0].reason, '读取超时');
@@ -415,7 +415,7 @@ test('cancellation while askOnce creates its thread cannot launch a late prompt,
       if (input.title === '一键配置探索') { reached = true; await gate; }
       return thread;
     };
-    const first = await h.request('/api/personal/explore', { sources: ['calli-threads'] });
+    const first = await h.request('/api/personal/explore', { sources: ['loochat-threads'] });
     const firstId = (await first.json()).id;
     await wait(() => reached);
     await h.request('/api/personal/explore', undefined, 'DELETE');
@@ -426,7 +426,7 @@ test('cancellation while askOnce creates its thread cannot launch a late prompt,
     const question = h.store.listThreads({ archived: true }).find(t => t.title === '一键配置探索')!;
     assert.deepEqual(h.store.listEventsOfType(question.id, 'turn.started'), []);
     h.manager.createThread = create;
-    const next = await runExplore(h, ['calli-threads']);
+    const next = await runExplore(h, ['loochat-threads']);
     assert.equal(next.state, 'ready'); assert.notEqual(next.id, firstId);
   } finally { await h.close(); }
 });
@@ -448,7 +448,7 @@ test('baseline selects the top three peers including the boss, sorts by interact
     assert.equal(rec.agent.agent, 'pi', 'the first available agent is selected when none is configured');
     assert.equal(rec.profile.replace, false);
     h.store.saveHubSetting('push', { recipient: 'ou_receiver', baseUrl: '' });
-    assert.equal((await runExplore(h, ['calli-threads'])).recommendation!.push.available, true);
+    assert.equal((await runExplore(h, ['loochat-threads'])).recommendation!.push.available, true);
   } finally { delete process.env.FAKE_PI_EXPLORE_MODE; await h.close(); }
 });
 

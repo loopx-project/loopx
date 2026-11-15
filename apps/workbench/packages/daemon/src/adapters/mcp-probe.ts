@@ -78,7 +78,7 @@ export async function probeMcpToolNames(server: ConfiguredMcpServer, timeoutMs =
       send({ jsonrpc: '2.0', id: nextId++, method, params });
     });
     void (async () => {
-      await request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'calli', version: '0.1.0' } });
+      await request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'loochat', version: '0.1.0' } });
       send({ jsonrpc: '2.0', method: 'notifications/initialized' });
       const listed = await request('tools/list', {});
       const tools = Array.isArray(listed?.tools) ? listed.tools : [];

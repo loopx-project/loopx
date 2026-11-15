@@ -7,7 +7,7 @@ import { Store } from '../src/store.js';
 import type { EventType } from '../src/events.js';
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-history-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-history-'));
   const store = new Store(dir);
   const make = (id: string) => store.createThread({ id, agent: 'pi', cwd: dir, title: id, agentSessionId: null, permissionMode: 'default', model: null, effort: null });
   make('thread');
@@ -97,7 +97,7 @@ test('history HTTP APIs validate scope/cursors and SSE catches up lightly then s
   const { Workdirs } = await import('../src/workdirs.js');
   const { AttachmentStore } = await import('../src/attachments.js');
   const f = fixture();
-  const dir = mkdtempSync(join(tmpdir(), 'calli-history-api-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-history-api-'));
   const manager = new ThreadManager(f.store, new Map(), new Workdirs([dir], join(dir, 'workdirs.json'), join(dir, 'scratch')), new AttachmentStore(dir));
   const server = createHttpServer({ manager, token: 'history-test-token', webDir: null, version: 'test' });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

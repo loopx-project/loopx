@@ -4,9 +4,9 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mjs';
 let daemon, browser;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: ['claude', 'codex', 'traex', 'zcode', 'agy', 'pi'].map(id => ({ id, adapter: id, command: [process.execPath, join(repoRoot, 'daemon/test/fixtures', `fake-${['claude', 'traex'].includes(id) ? 'acp' : id}.mjs`)] })) }) });
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: ['claude', 'codex', 'traex', 'zcode', 'agy', 'pi'].map(id => ({ id, adapter: id, command: [process.execPath, join(repoRoot, 'daemon/test/fixtures', `fake-${['claude', 'traex'].includes(id) ? 'acp' : id}.mjs`)] })) }) });
   browser = await launchBrowser();
   if (shots) mkdirSync(shots, { recursive: true });
 });

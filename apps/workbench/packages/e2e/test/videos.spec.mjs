@@ -24,9 +24,9 @@ test('videos can be picked, previewed, retried and played from history on deskto
           await page.locator('.thread-item', { hasText: title }).click();
         };
         const shot = async name => {
-          if (!process.env.CALLI_E2E_SHOTS_DIR) return;
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `${name}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+          if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${name}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         };
         await openUi(page, daemon);
         await select();

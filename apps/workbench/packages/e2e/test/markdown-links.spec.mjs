@@ -63,9 +63,9 @@ test('document links open externally without file requests; literal URLs and loc
         assert.equal(await answer.getByRole('link', { name: 'www.docs.example.com/help', exact: true }).getAttribute('href'), 'http://www.docs.example.com/help');
         assert.ok((await answer.textContent()).includes('（进程）'));
         assert.ok(!(await answer.textContent()).includes('**'));
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `markdown-links-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `markdown-links-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
         await answer.getByRole('button', { name: '本地文件：恢复步骤', exact: true }).click();
         await page.locator('.files-panel').getByText('Restore the code first.', { exact: false }).waitFor();

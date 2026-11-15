@@ -1156,6 +1156,11 @@ html.list-open body {
   flex-shrink: 0;
 }
 
+/* The brand tile follows the theme: paper ink on light, light ink on dark. */
+.brand-icon.loo-dark { display: none; }
+[data-theme='dark'] .brand-icon.loo-light { display: none; }
+[data-theme='dark'] .brand-icon.loo-dark { display: block; }
+
 .sidebar-search {
   width: 100%;
   height: 34px;
@@ -2502,8 +2507,8 @@ html.list-open body {
 }
 
 /* A noted passage in the conversation, while its note waits in the box. */
-::highlight(calli-note),
-::highlight(calli-note-pending) {
+::highlight(loochat-note),
+::highlight(loochat-note-pending) {
   background-color: color-mix(in srgb, var(--positive) 22%, transparent);
 }
 

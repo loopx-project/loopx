@@ -24,7 +24,7 @@ test('the handover prompt tells the agent what its successor can and cannot see'
 
 test('the brief handover points at the source and tells the successor to align before going on', () => {
   const head = handoverBrief({ threadId: 'src', from: 'Claude Code 3', cwd: '/work', worktree: { root: '/work', branch: 'feat' }, lead: true });
-  assert.match(head, /calli history src/);
+  assert.match(head, /loochat history src/);
   assert.match(head, /分支 feat/);
   assert.match(head, /主控/);
   assert.doesNotMatch(handoverBrief({ threadId: 'src', from: 'pi', cwd: '/work' }), /主控/);
@@ -74,7 +74,7 @@ test('a handover or imported turn is not listed as the thread\u2019s last ask or
 
 test('the brief handover points at the source and keeps progress to a few lines', () => {
   const head = handoverBrief({ threadId: 'src', from: 'Claude Code 3', cwd: '/work', worktree: { root: '/work', branch: 'feat' }, lead: true });
-  assert.match(head, /calli history src/);
+  assert.match(head, /loochat history src/);
   assert.match(head, /分支 feat/);
   assert.match(head, /主控/);
   assert.doesNotMatch(handoverBrief({ threadId: 'src', from: 'pi', cwd: '/work' }), /主控/);

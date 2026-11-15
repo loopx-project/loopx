@@ -12,15 +12,15 @@ let browser;
 let page;
 let dataDir;
 let workdir;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 
 /** Long thoughts must not change the number of answer summaries in a page. */
 const LONG_TURN = 21_000;
 const recent = [...Array.from({ length: 7 }, (_, i) => `middle-${i}`), 'latest'];
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-e2e-long-'));
-  workdir = mkdtempSync(join(tmpdir(), 'calli-e2e-long-work-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-e2e-long-'));
+  workdir = mkdtempSync(join(tmpdir(), 'loochat-e2e-long-work-'));
   // The log is written directly: streaming this much through a fake agent would take minutes.
   const { Store } = await import(join(repoRoot, 'daemon', 'dist', 'store.js'));
   const store = new Store(dataDir);
@@ -50,7 +50,7 @@ before(async () => {
   });
   store.close();
 
-  daemon = await startDaemon({ CALLI_DATA_DIR: dataDir, CALLI_WORKDIRS: workdir });
+  daemon = await startDaemon({ LOOCHAT_DATA_DIR: dataDir, LOOCHAT_WORKDIRS: workdir });
   browser = await launchBrowser();
   if (shots) mkdirSync(shots, { recursive: true });
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, permissions: ['clipboard-read', 'clipboard-write'] });

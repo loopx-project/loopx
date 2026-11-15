@@ -59,7 +59,7 @@ const alive = (pid) => {
   }
 };
 
-/** Wraps a fixture script in an executable shell shim, so `CALLI_*_BIN` can point at a plain name. */
+/** Wraps a fixture script in an executable shell shim, so `LOOCHAT_*_BIN` can point at a plain name. */
 function shim(dir, name, script) {
   const path = join(dir, name);
   writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${join(fixtures, script)}" "$@"\n`, { mode: 0o755 });
@@ -68,7 +68,7 @@ function shim(dir, name, script) {
 
 /**
  * One daemon with its own data dir, workdir and fake agents. Returns the base URL plus handles.
- * `env` is merged into the daemon's environment (extra CALLI_* switches, fake-agent switches).
+ * `env` is merged into the daemon's environment (extra LOOCHAT_* switches, fake-agent switches).
  */
 export async function startDaemon(env = {}, opts = {}) {
   for (const artifact of ['daemon/dist/index.js', 'web/dist/index.html']) {
@@ -76,9 +76,9 @@ export async function startDaemon(env = {}, opts = {}) {
       throw new Error(`Missing ${artifact}. Run npm run test:e2e, or npm run build before running tests directly.`);
     }
   }
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-e2e-data-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-e2e-data-'));
   // A fixed name reads better in screenshots than the random suffix mkdtemp adds.
-  const workdir = opts.workdir ?? mkdtempSync(join(tmpdir(), 'calli-demo-'));
+  const workdir = opts.workdir ?? mkdtempSync(join(tmpdir(), 'loochat-demo-'));
   if (opts.workdir) mkdirSync(opts.workdir, { recursive: true });
   const homeDir = join(dataDir, 'home'); mkdirSync(homeDir);
   const binDir = join(dataDir, 'bin');
@@ -88,7 +88,7 @@ export async function startDaemon(env = {}, opts = {}) {
   shim(binDir, 'fake-agy', 'fake-agy.mjs');
   shim(binDir, 'fake-doubao', 'fake-doubao.mjs');
   let doubaoRuntime = '';
-  if (env.CALLI_DOUBAO_STREAM === '1' || env.CALLI_E2E_DOUBAO_RUNTIME === '1') {
+  if (env.LOOCHAT_DOUBAO_STREAM === '1' || env.LOOCHAT_E2E_DOUBAO_RUNTIME === '1') {
     const { createFakeDoubaoRuntime } = await import('../daemon/test/fixtures/doubao-runtime.mjs');
     doubaoRuntime = join(dataDir, 'doubao-runtime');
     createFakeDoubaoRuntime(doubaoRuntime);
@@ -100,8 +100,8 @@ export async function startDaemon(env = {}, opts = {}) {
     { mode: 0o755 },
   );
   // An extra CLI for the discovery tests: looks like another copy of agy on PATH.
-  if (env.CALLI_E2E_DISCOVER_AGY2 === '1') shim(binDir, 'agy2', 'fake-agy.mjs');
-  if (env.CALLI_E2E_DISCOVER_DOUBAO2 === '1') shim(binDir, 'doubao2', 'fake-doubao.mjs');
+  if (env.LOOCHAT_E2E_DISCOVER_AGY2 === '1') shim(binDir, 'agy2', 'fake-agy.mjs');
+  if (env.LOOCHAT_E2E_DISCOVER_DOUBAO2 === '1') shim(binDir, 'doubao2', 'fake-doubao.mjs');
 
   const port = await freePort();
   const daemonEnv = {
@@ -111,36 +111,36 @@ export async function startDaemon(env = {}, opts = {}) {
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
     // A test hub's agents are the fakes it was given; the machine's real CLIs and accounts
     // must not auto-join it, however the fakes were configured (inline or agents.json).
-    CALLI_AUTO_JOIN: 'off',
-    CALLI_HUB_URL: '',
-    CALLI_HUB_TOKEN: '',
-    CALLI_TOKEN: TOKEN,
-    CALLI_HOST: '127.0.0.1',
-    CALLI_PORT: String(port),
-    CALLI_DATA_DIR: dataDir,
-    CALLI_WORKDIRS: workdir,
+    LOOCHAT_AUTO_JOIN: 'off',
+    LOOCHAT_HUB_URL: '',
+    LOOCHAT_HUB_TOKEN: '',
+    LOOCHAT_TOKEN: TOKEN,
+    LOOCHAT_HOST: '127.0.0.1',
+    LOOCHAT_PORT: String(port),
+    LOOCHAT_DATA_DIR: dataDir,
+    LOOCHAT_WORKDIRS: workdir,
     // Serve this repo's own build, never a dist inherited from the ambient environment.
-    CALLI_WEB_DIR: join(repoRoot, 'web', 'dist'),
-    CALLI_PI_BIN: 'fake-pi',
-    CALLI_CLAUDE_ACP_BIN: 'fake-claude',
-    CALLI_AGY_BIN: 'fake-agy',
-    CALLI_DSH_BIN: 'fake-dsh',
-    CALLI_DOUBAO_BIN: 'fake-doubao',
-    CALLI_DOUBAO_STREAM: '',
-    CALLI_DOUBAO_RUNTIME: doubaoRuntime,
+    LOOCHAT_WEB_DIR: join(repoRoot, 'web', 'dist'),
+    LOOCHAT_PI_BIN: 'fake-pi',
+    LOOCHAT_CLAUDE_ACP_BIN: 'fake-claude',
+    LOOCHAT_AGY_BIN: 'fake-agy',
+    LOOCHAT_DSH_BIN: 'fake-dsh',
+    LOOCHAT_DOUBAO_BIN: 'fake-doubao',
+    LOOCHAT_DOUBAO_STREAM: '',
+    LOOCHAT_DOUBAO_RUNTIME: doubaoRuntime,
     PI_CODING_AGENT_DIR: join(dataDir, 'pi-agent'),
-    CALLI_AGY_HOME: join(dataDir, 'agy-home'),
+    LOOCHAT_AGY_HOME: join(dataDir, 'agy-home'),
     ZCODE_DATA_BASE_DIR: dataDir,
     // The person's writing habits note lives here, not in the home directory the test machine has.
-    CALLI_NOTES_DIR: join(dataDir, 'notes'),
+    LOOCHAT_NOTES_DIR: join(dataDir, 'notes'),
     // Its own socket, never the one in the home directory that a real hub on this machine holds.
-    CALLI_SOCKET: join(dataDir, 'daemon.sock'),
+    LOOCHAT_SOCKET: join(dataDir, 'daemon.sock'),
     ...env,
   };
   if (opts.agents !== undefined) {
     // A seeded file exercises persistent registry writes; inline JSON intentionally stays read-only.
     writeFileSync(join(dataDir, 'agents.json'), JSON.stringify({ agents: opts.agents }, null, 2) + '\n', { mode: 0o600 });
-    delete daemonEnv.CALLI_AGENTS_JSON;
+    delete daemonEnv.LOOCHAT_AGENTS_JSON;
   }
   const child = spawn(process.execPath, [join(repoRoot, 'daemon', 'dist', 'index.js')], {
     env: daemonEnv,
@@ -151,7 +151,7 @@ export async function startDaemon(env = {}, opts = {}) {
   child.stderr.on('data', (c) => (log += c));
 
   // A wildcard bind still answers on the loopback; a named host does not, so poll the one asked for.
-  const bound = daemonEnv.CALLI_HOST || '127.0.0.1';
+  const bound = daemonEnv.LOOCHAT_HOST || '127.0.0.1';
   const base = `http://${bound === '0.0.0.0' || bound === '::' ? '127.0.0.1' : bound}:${port}`;
   const deadline = Date.now() + 20_000;
   for (;;) {
@@ -171,7 +171,7 @@ export async function startDaemon(env = {}, opts = {}) {
     async connectRelay(hub, token) {
       relay?.stop();
       const { RelayClient } = await import('../daemon/dist/relay-client.js');
-      relay = new RelayClient({ hubUrl: hub.base, token, socket: daemonEnv.CALLI_SOCKET, version: 'e2e-node', retryMs: 50 });
+      relay = new RelayClient({ hubUrl: hub.base, token, socket: daemonEnv.LOOCHAT_SOCKET, version: 'e2e-node', retryMs: 50 });
       relay.start();
       const id = token.split('.')[0];
       for (const deadline = Date.now() + 10_000; ; ) {

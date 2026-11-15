@@ -66,5 +66,5 @@ export function personalContext(store: Store, manager: ThreadManager, threadId: 
   }
   if (full || json(previous.matters) !== json(snapshot.matters)) lines.push(`事项：未完成 ${snapshot.matters.open} 件，逾期 ${snapshot.matters.overdue} 件。`);
   if (lines.length === 1) lines.push('没有变化。');
-  return { text: `<calli-context>\n${lines.join('\n')}\n</calli-context>\n\n`, commit: () => store.saveHubSetting(KEY, snapshot) };
+  return { text: `<loochat-context>\n${lines.join('\n')}\n</loochat-context>\n\n`, commit: () => store.saveHubSetting(KEY, snapshot) };
 }

@@ -6,7 +6,7 @@ import { startDaemon, api, launchBrowser, repoRoot } from '../harness.mjs';
 
 let daemon, other, browser;
 const prefsPath = '/api/draft-model-preferences';
-const env = { CALLI_AGENTS_JSON: JSON.stringify({ agents: ['codex', 'second'].map(id => ({
+const env = { LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: ['codex', 'second'].map(id => ({
   id, label: id, adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')],
 })) }) };
 before(async () => { daemon = await startDaemon(env); other = await startDaemon(env); browser = await launchBrowser(); });
@@ -21,9 +21,9 @@ async function waitFor(check) {
   assert.fail('preference did not settle');
 }
 async function screenshot(page, name) {
-  if (!process.env.CALLI_E2E_SHOTS_DIR) return;
-  mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-  await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `${name}.png`) });
+  if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
+  mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+  await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${name}.png`) });
 }
 async function newThread(page, mobile) {
   if (mobile) await page.locator('.menu-btn').click();

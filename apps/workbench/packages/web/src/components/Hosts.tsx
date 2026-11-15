@@ -12,7 +12,7 @@ import { t } from '../i18n';
 
 /** The lines a machine that connects out needs, shown once: the token is not kept anywhere to show again. */
 function JoinSettings({ label, token, onDone }: { label: string; token: string; onDone: () => void }) {
-  const text = `CALLI_HUB_URL=${window.location.origin}\nCALLI_HUB_TOKEN=${token}`;
+  const text = `LOOCHAT_HUB_URL=${window.location.origin}\nLOOCHAT_HUB_TOKEN=${token}`;
   const [copied, setCopied] = useState(false);
   return (
     <div className="host-join" role="status">

@@ -22,7 +22,7 @@ const defaults = defaultInstances({
 let dir: string;
 
 before(() => {
-  dir = mkdtempSync(join(tmpdir(), 'calli-agents-'));
+  dir = mkdtempSync(join(tmpdir(), 'loochat-agents-'));
 });
 
 after(() => {
@@ -47,7 +47,7 @@ test('fromEnv prefers agents.json over the defaults, and instance labels reach t
 });
 
 test('add persists to agents.json and a later fromEnv reads it back', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-agents-env-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-agents-env-'));
   const registry = AgentRegistry.fromEnv({ dataDir, env: {}, defaults });
   await registry.add({ id: 'agy2', adapter: 'agy', command: ['/opt/agy2/bin/agy2'] });
   assert.ok(registry.adapters.has('agy2'));
@@ -66,7 +66,7 @@ test('add persists to agents.json and a later fromEnv reads it back', async () =
 });
 
 test('update renames and remove drops an instance from agents.json', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-agents-manage-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-agents-manage-'));
   const registry = AgentRegistry.fromEnv({ dataDir, env: {}, defaults });
   await registry.add({ id: 'agy2', adapter: 'agy', command: ['/opt/agy2/agy2'] });
 
@@ -87,7 +87,7 @@ test('update renames and remove drops an instance from agents.json', async () =>
 });
 
 test('update persists hiding and restoring without losing instance settings or rebuilding its adapter', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-agents-hidden-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-agents-hidden-'));
   try {
     const registry = AgentRegistry.fromEnv({ dataDir, env: {}, defaults });
     const instance = await registry.add({ id: 'pi2', adapter: 'pi', label: 'Second', command: ['node', 'pi.mjs'], env: { PI_CODING_AGENT_DIR: '/tmp/pi-two' }, account: 'second@example.com' });
@@ -120,7 +120,7 @@ test('update rejects empty or invalid patches without partially changing the ins
 });
 
 test('the built-in command survives deleting the instance that supplied it', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-agents-builtin-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-agents-builtin-'));
   const registry = AgentRegistry.fromEnv({ dataDir, env: {}, defaults });
   await registry.remove('claude');
   await registry.add({ id: 'claude-2', adapter: 'claude', env: { CLAUDE_CONFIG_DIR: '/tmp/claude-two' } });
@@ -263,7 +263,7 @@ test('discover offers Doubao and numbered copies but not similarly named helpers
 // The stub claude the account-discovery tests point the adapter at: it answers `auth status`
 // from the config directory it was given, so each directory below stands for one account.
 function fakeClaudeHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'calli-accounts-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-accounts-home-'));
   for (const name of ['.claude', '.claude-2', '.claude-3', '.claude-out', '.claude-broken']) {
     mkdirSync(join(home, name));
   }
@@ -292,9 +292,9 @@ function fakeClaudeBin(home: string): string {
 
 test('account discovery offers signed-in accounts no instance uses', async () => {
   const home = fakeClaudeHome();
-  const oldBin = process.env.CALLI_CLAUDE_BIN;
+  const oldBin = process.env.LOOCHAT_CLAUDE_BIN;
   const oldHome = process.env.HOME;
-  process.env.CALLI_CLAUDE_BIN = fakeClaudeBin(home);
+  process.env.LOOCHAT_CLAUDE_BIN = fakeClaudeBin(home);
   process.env.HOME = home;
   try {
     // The built-in claude has no env of its own, so it claims the default account (~/.claude);
@@ -317,8 +317,8 @@ test('account discovery offers signed-in accounts no instance uses', async () =>
       },
     ]);
   } finally {
-    if (oldBin === undefined) delete process.env.CALLI_CLAUDE_BIN;
-    else process.env.CALLI_CLAUDE_BIN = oldBin;
+    if (oldBin === undefined) delete process.env.LOOCHAT_CLAUDE_BIN;
+    else process.env.LOOCHAT_CLAUDE_BIN = oldBin;
     if (oldHome === undefined) delete process.env.HOME;
     else process.env.HOME = oldHome;
   }
@@ -326,9 +326,9 @@ test('account discovery offers signed-in accounts no instance uses', async () =>
 
 test('account discovery still sees an adapter after every instance of it is removed', async () => {
   const home = fakeClaudeHome();
-  const oldBin = process.env.CALLI_CLAUDE_BIN;
+  const oldBin = process.env.LOOCHAT_CLAUDE_BIN;
   const oldHome = process.env.HOME;
-  process.env.CALLI_CLAUDE_BIN = fakeClaudeBin(home);
+  process.env.LOOCHAT_CLAUDE_BIN = fakeClaudeBin(home);
   process.env.HOME = home;
   try {
     const registry = new AgentRegistry(defaults.filter((i) => i.adapter !== 'claude'), null, defaults);
@@ -337,8 +337,8 @@ test('account discovery still sees an adapter after every instance of it is remo
     assert.equal(found.find((a) => a.id === 'claude')?.label, 'Claude Code');
     assert.equal(found.find((a) => a.id === 'claude-3')?.label, 'Claude Code 3');
   } finally {
-    if (oldBin === undefined) delete process.env.CALLI_CLAUDE_BIN;
-    else process.env.CALLI_CLAUDE_BIN = oldBin;
+    if (oldBin === undefined) delete process.env.LOOCHAT_CLAUDE_BIN;
+    else process.env.LOOCHAT_CLAUDE_BIN = oldBin;
     if (oldHome === undefined) delete process.env.HOME;
     else process.env.HOME = oldHome;
   }
@@ -346,9 +346,9 @@ test('account discovery still sees an adapter after every instance of it is remo
 
 test('account discovery skips accounts an instance already links, and ids keep counting', async () => {
   const home = fakeClaudeHome();
-  const oldBin = process.env.CALLI_CLAUDE_BIN;
+  const oldBin = process.env.LOOCHAT_CLAUDE_BIN;
   const oldHome = process.env.HOME;
-  process.env.CALLI_CLAUDE_BIN = fakeClaudeBin(home);
+  process.env.LOOCHAT_CLAUDE_BIN = fakeClaudeBin(home);
   process.env.HOME = home;
   try {
     const instances: AgentInstance[] = [
@@ -368,8 +368,8 @@ test('account discovery skips accounts an instance already links, and ids keep c
       },
     ]);
   } finally {
-    if (oldBin === undefined) delete process.env.CALLI_CLAUDE_BIN;
-    else process.env.CALLI_CLAUDE_BIN = oldBin;
+    if (oldBin === undefined) delete process.env.LOOCHAT_CLAUDE_BIN;
+    else process.env.LOOCHAT_CLAUDE_BIN = oldBin;
     if (oldHome === undefined) delete process.env.HOME;
     else process.env.HOME = oldHome;
   }
@@ -398,7 +398,7 @@ test('supported lists all built-in adapters with labels and install guides', () 
 test('AgentRegistry.fromEnv supports an explicitly empty agents array', () => {
   const registry = AgentRegistry.fromEnv({
     dataDir: dir,
-    env: { CALLI_AGENTS_JSON: JSON.stringify({ agents: [] }) },
+    env: { LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [] }) },
     defaults,
   });
   assert.deepEqual(registry.list(), []);
@@ -408,16 +408,16 @@ test('AgentRegistry.fromEnv supports an explicitly empty agents array', () => {
  *  own (shell stubs need coreutils; agent CLIs live elsewhere, so discovery sees only the test's),
  *  HOME is empty, and the claude CLI is a stub that does not exist, so accounts find nothing. */
 function isolatedMachine(): { dataDir: string; bin: string; restore: () => void } {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-autojoin-'));
-  const home = mkdtempSync(join(tmpdir(), 'calli-autojoin-home-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-autojoin-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-autojoin-home-'));
   const bin = join(dataDir, 'bin');
   mkdirSync(bin);
   const oldPath = process.env.PATH;
   const oldHome = process.env.HOME;
-  const oldBin = process.env.CALLI_CLAUDE_BIN;
+  const oldBin = process.env.LOOCHAT_CLAUDE_BIN;
   process.env.PATH = `${bin}:/usr/bin:/bin`;
   process.env.HOME = home;
-  process.env.CALLI_CLAUDE_BIN = join(home, 'no-such-claude');
+  process.env.LOOCHAT_CLAUDE_BIN = join(home, 'no-such-claude');
   return {
     dataDir,
     bin,
@@ -425,8 +425,8 @@ function isolatedMachine(): { dataDir: string; bin: string; restore: () => void 
       process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.HOME;
       else process.env.HOME = oldHome;
-      if (oldBin === undefined) delete process.env.CALLI_CLAUDE_BIN;
-      else process.env.CALLI_CLAUDE_BIN = oldBin;
+      if (oldBin === undefined) delete process.env.LOOCHAT_CLAUDE_BIN;
+      else process.env.LOOCHAT_CLAUDE_BIN = oldBin;
       rmSync(dataDir, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     },
@@ -475,9 +475,9 @@ test('a removed CLI is not auto-joined back, not even after a restart', async ()
 test('auto-join links signed-in accounts, and a removed account stays out', async () => {
   const machine = isolatedMachine();
   const home = fakeClaudeHome();
-  const oldBin = process.env.CALLI_CLAUDE_BIN;
+  const oldBin = process.env.LOOCHAT_CLAUDE_BIN;
   const oldHome = process.env.HOME;
-  process.env.CALLI_CLAUDE_BIN = fakeClaudeBin(home);
+  process.env.LOOCHAT_CLAUDE_BIN = fakeClaudeBin(home);
   process.env.HOME = home;
   try {
     const registry = AgentRegistry.fromEnv({ dataDir: machine.dataDir, env: {}, defaults });
@@ -495,8 +495,8 @@ test('auto-join links signed-in accounts, and a removed account stays out', asyn
     const reloaded = AgentRegistry.fromEnv({ dataDir: machine.dataDir, env: {}, defaults });
     assert.deepEqual(await reloaded.autoJoin(), []);
   } finally {
-    if (oldBin === undefined) delete process.env.CALLI_CLAUDE_BIN;
-    else process.env.CALLI_CLAUDE_BIN = oldBin;
+    if (oldBin === undefined) delete process.env.LOOCHAT_CLAUDE_BIN;
+    else process.env.LOOCHAT_CLAUDE_BIN = oldBin;
     if (oldHome === undefined) delete process.env.HOME;
     else process.env.HOME = oldHome;
     rmSync(home, { recursive: true, force: true });
@@ -504,10 +504,10 @@ test('auto-join links signed-in accounts, and a removed account stays out', asyn
   }
 });
 
-test('an inline CALLI_AGENTS_JSON hub joins nothing, and CALLI_AUTO_JOIN=off turns it off too', async () => {
+test('an inline LOOCHAT_AGENTS_JSON hub joins nothing, and LOOCHAT_AUTO_JOIN=off turns it off too', async () => {
   const machine = isolatedMachine();
   // Each registry gets its own data dir: one hub's agents.json must not feed the next.
-  const dirs = [mkdtempSync(join(tmpdir(), 'calli-autojoin-')), mkdtempSync(join(tmpdir(), 'calli-autojoin-'))];
+  const dirs = [mkdtempSync(join(tmpdir(), 'loochat-autojoin-')), mkdtempSync(join(tmpdir(), 'loochat-autojoin-'))];
   try {
     writeFileSync(join(machine.bin, 'agy2'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     // The control: a hub of its own does pick the CLI up through the timer, so the waits below
@@ -521,7 +521,7 @@ test('an inline CALLI_AGENTS_JSON hub joins nothing, and CALLI_AUTO_JOIN=off tur
     // An inline hub owns its agent list: the machine's real CLIs and accounts never join it.
     const inline = AgentRegistry.fromEnv({
       dataDir: dirs[0],
-      env: { CALLI_AGENTS_JSON: JSON.stringify({ agents: defaults }) },
+      env: { LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: defaults }) },
       defaults,
     });
     inline.startAutoJoin(60_000, {});
@@ -532,7 +532,7 @@ test('an inline CALLI_AGENTS_JSON hub joins nothing, and CALLI_AUTO_JOIN=off tur
 
     // The switch turns the joining off for a hub of its own too.
     const off = AgentRegistry.fromEnv({ dataDir: dirs[1], env: {}, defaults });
-    off.startAutoJoin(60_000, { CALLI_AUTO_JOIN: 'off' });
+    off.startAutoJoin(60_000, { LOOCHAT_AUTO_JOIN: 'off' });
     await new Promise((r) => setTimeout(r, 300));
     assert.ok(!off.list().some((i) => i.id === 'agy2'));
     off.dispose();
@@ -545,7 +545,7 @@ test('an inline CALLI_AGENTS_JSON hub joins nothing, and CALLI_AUTO_JOIN=off tur
 test('a removed account instance is remembered by its env, never by the binary its adapter runs', async () => {
   const machine = isolatedMachine();
   const home = fakeClaudeHome();
-  const oldBin = process.env.CALLI_CLAUDE_BIN;
+  const oldBin = process.env.LOOCHAT_CLAUDE_BIN;
   const oldHome = process.env.HOME;
   // One claude binary, on PATH, both probing accounts and named as the adapter's command.
   const claudeBin = join(machine.bin, 'claude');
@@ -558,7 +558,7 @@ test('a removed account instance is remembered by its env, never by the binary i
     "  *) printf '{\"loggedIn\":true,\"email\":\"%s@%s\"}\\n' \"$name\" \"$(echo \"$name\" | tr -d .)\" ;;",
     'esac',
   ].join('\n'), { mode: 0o755 });
-  process.env.CALLI_CLAUDE_BIN = claudeBin;
+  process.env.LOOCHAT_CLAUDE_BIN = claudeBin;
   process.env.HOME = home;
   try {
     // A hub whose claude is one linked account, not the default instance.
@@ -579,8 +579,8 @@ test('a removed account instance is remembered by its env, never by the binary i
     // And the removed account itself still stays out.
     assert.ok(!added.some((i) => i.env?.CLAUDE_CONFIG_DIR === join(home, '.claude-2')));
   } finally {
-    if (oldBin === undefined) delete process.env.CALLI_CLAUDE_BIN;
-    else process.env.CALLI_CLAUDE_BIN = oldBin;
+    if (oldBin === undefined) delete process.env.LOOCHAT_CLAUDE_BIN;
+    else process.env.LOOCHAT_CLAUDE_BIN = oldBin;
     if (oldHome === undefined) delete process.env.HOME;
     else process.env.HOME = oldHome;
     rmSync(home, { recursive: true, force: true });

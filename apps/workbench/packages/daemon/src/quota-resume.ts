@@ -50,13 +50,13 @@ export class QuotaResume {
   private closed = false;
   private checking = false;
 
-  private graceMs = envNumber('CALLI_RESUME_GRACE_MS', RESUME_GRACE_MS);
+  private graceMs = envNumber('LOOCHAT_RESUME_GRACE_MS', RESUME_GRACE_MS);
 
   constructor(
     private readonly store: Store,
     private readonly manager: ThreadManager,
     private readonly autoHandover: AutoHandover,
-    private readonly tickMs = envNumber('CALLI_RESUME_TICK_MS', 30_000),
+    private readonly tickMs = envNumber('LOOCHAT_RESUME_TICK_MS', 30_000),
     private readonly backoffMs: number[] = RESUME_BACKOFF_MS,
   ) {}
 

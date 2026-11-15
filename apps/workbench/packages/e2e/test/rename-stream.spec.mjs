@@ -43,9 +43,9 @@ test('renaming preserves caret, selection and focus through streamed task update
       await cancel.focus();
       await page.locator('.thread .work-toggle', { hasText: '用时' }).waitFor();
       assert.equal(await cancel.evaluate(el => document.activeElement === el), true, 'completion must not steal focus');
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `rename-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `rename-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       }
       await page.getByRole('button', { name: '保存', exact: true }).click();
       await input.waitFor({ state: 'hidden' });

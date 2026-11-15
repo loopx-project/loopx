@@ -54,8 +54,8 @@ const origin = async page => {
   await page.getByRole('menuitem').filter({ hasText: '原始会话' }).click();
 };
 before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'calli-mode-e2e-')); mkdirSync(shots, { recursive: true });
-  hub = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: ['first', 'next'].map((id, i) => ({ id, adapter: 'claude', label: `Agent ${i + 1}`, command: ['fake-claude'], env: { CLAUDE_CONFIG_DIR: join(dir, id), FAKE_SESSION_ROOT: join(dir, id) } })) }) });
+  dir = mkdtempSync(join(tmpdir(), 'loochat-mode-e2e-')); mkdirSync(shots, { recursive: true });
+  hub = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: ['first', 'next'].map((id, i) => ({ id, adapter: 'claude', label: `Agent ${i + 1}`, command: ['fake-claude'], env: { CLAUDE_CONFIG_DIR: join(dir, id), FAKE_SESSION_ROOT: join(dir, id) } })) }) });
   browser = await launchBrowser();
 });
 after(async () => { await browser?.close(); await hub?.stop(); rmSync(dir, { recursive: true, force: true }); });

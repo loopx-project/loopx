@@ -43,8 +43,8 @@ const api = (path: string, init: RequestInit = {}) =>
   fetch(base + path, { ...init, headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-progress-test-'));
-  workdir = mkdtempSync(join(tmpdir(), 'calli-progress-work-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-progress-test-'));
+  workdir = mkdtempSync(join(tmpdir(), 'loochat-progress-work-'));
   store = new Store(dataDir);
   manager = new ThreadManager(store, new Map([['echo', echoAdapter]]), [workdir], new AttachmentStore(dataDir));
   manager.progressWanted = () => wanted;
@@ -71,7 +71,7 @@ test('progress lines are read leniently and only the last one counts', () => {
   assert.equal(parseProgress('引用 [进度] 待验收 的写法'), null, 'only a line of its own counts');
   assert.equal(parseProgress(`[进度] 待验收：${'长'.repeat(300)}`)?.note.length, 200);
   const once = progressInstructions('hi');
-  assert.ok(once.startsWith('hi\n\n<calli-progress>'));
+  assert.ok(once.startsWith('hi\n\n<loochat-progress>'));
   assert.equal(progressInstructions(once), once, 'never appended twice');
 });
 
@@ -92,7 +92,7 @@ test('with consent agents are asked, their answers move the thread, and the pers
 
   wanted = true;
   const asked = await turn('开始', '做完了\n[进度] 待验收：请看 diff');
-  assert.ok(asked.startsWith('开始\n\n<calli-progress>'));
+  assert.ok(asked.startsWith('开始\n\n<loochat-progress>'));
   assert.equal(store.listEventsOfType(thread.id, 'turn.started').at(-1)!.data.displayText, '开始', 'the person sees what they wrote');
   assert.deepEqual([read().report?.stage, read().report?.note], ['review', '请看 diff']);
   const view = (await (await api(`/api/threads/${thread.id}`)).json()) as { report: unknown; doneAt: unknown };

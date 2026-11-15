@@ -21,7 +21,7 @@ export function PreviewAnnotations({ api, threadId, path, url, frame, generation
   const alive = useRef(true);
   const pending = (notes?.filter(note => !note.receipt) ?? []).slice(0, 20);
   const post = (data: object) => { if (url) frame.current?.contentWindow?.postMessage(data, new URL(url).origin); };
-  const togglePick = (value: boolean) => { pickingRef.current = value; setPicking(value); post({ type: 'calli-preview:pick', enabled: value }); };
+  const togglePick = (value: boolean) => { pickingRef.current = value; setPicking(value); post({ type: 'loochat-preview:pick', enabled: value }); };
   const refresh = async () => {
     try { const values = await api.previewNotes(threadId, path); if (alive.current) { setNotes(values); setError(false); } }
     catch { if (alive.current) setError(true); }
@@ -32,14 +32,14 @@ export function PreviewAnnotations({ api, threadId, path, url, frame, generation
     if (!url) return;
     const timer = window.setTimeout(() => setConnecting(false), 3000);
     const origin = new URL(url).origin;
-    const init = () => frame.current?.contentWindow?.postMessage({ type: 'calli-preview:init', color: getComputedStyle(document.documentElement).getPropertyValue('--text').trim() }, origin);
+    const init = () => frame.current?.contentWindow?.postMessage({ type: 'loochat-preview:init', color: getComputedStyle(document.documentElement).getPropertyValue('--text').trim() }, origin);
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || event.origin !== origin || !event.data) return;
-      if (event.data.type === 'calli-preview:ready') init();
-      if (event.data.type === 'calli-preview:connected') { setReady(true); setConnecting(false); clearTimeout(timer); }
-      if (event.data.type === 'calli-preview:cancel') { setPicking(false); pickingRef.current = false; }
-      if (event.data.type === 'calli-preview:missing') setNotice(t('preview.notes.missing'));
-      if (event.data.type === 'calli-preview:picked' && pickingRef.current && isPreviewPick(event.data)) {
+      if (event.data.type === 'loochat-preview:ready') init();
+      if (event.data.type === 'loochat-preview:connected') { setReady(true); setConnecting(false); clearTimeout(timer); }
+      if (event.data.type === 'loochat-preview:cancel') { setPicking(false); pickingRef.current = false; }
+      if (event.data.type === 'loochat-preview:missing') setNotice(t('preview.notes.missing'));
+      if (event.data.type === 'loochat-preview:picked' && pickingRef.current && isPreviewPick(event.data)) {
         setPick({ target: event.data.target, context: event.data.context }); setComment(''); setPicking(false); pickingRef.current = false; setError(false);
       }
     };
@@ -74,7 +74,7 @@ export function PreviewAnnotations({ api, threadId, path, url, frame, generation
           {notes === null ? <p>{error ? t('preview.notes.failed') : t('common.loading')}</p> : notes.length === 0 ? <p>{t('preview.notes.empty')}</p> : notes.map((note, i) => <article key={note.id} className="preview-note">
             <strong>{t('preview.notes.number', i + 1)}</strong><small>{note.context.variant} · {note.context.theme} · {note.context.viewport.width}px</small>
             <blockquote>{note.target.text || note.target.selector}</blockquote><p>{note.comment}</p>
-            <div className="preview-note-actions"><button className="ghost" disabled={!ready} onClick={() => { close(); post({ type: 'calli-preview:locate', selector: note.target.selector }); }}>{t('preview.notes.locate')}</button>
+            <div className="preview-note-actions"><button className="ghost" disabled={!ready} onClick={() => { close(); post({ type: 'loochat-preview:locate', selector: note.target.selector }); }}>{t('preview.notes.locate')}</button>
               {note.receipt ? <small>{'queued' in note.receipt ? t('preview.notes.queued') : t('preview.notes.sent')}</small> : <button className="ghost" onClick={async () => { setBusy(true); try { await api.removePreviewNote(threadId, note.id); if (alive.current) setNotes(old => old?.filter(n => n.id !== note.id) ?? null); } catch { if (alive.current) setError(true); } finally { if (alive.current) setBusy(false); } }}>{t('common.delete')}</button>}
             </div>
           </article>)}

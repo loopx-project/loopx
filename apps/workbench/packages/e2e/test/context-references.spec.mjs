@@ -7,7 +7,7 @@ import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 test('compact references coexist with notes, survive reload/failure/queue editing, and work on four layouts', { timeout: 180000 }, async () => {
   const daemon = await startDaemon();
   const browser = await launchBrowser();
-  const shots = process.env.CALLI_REFERENCE_SHOTS;
+  const shots = process.env.LOOCHAT_REFERENCE_SHOTS;
   if (shots) mkdirSync(shots, { recursive: true });
   const post = async (path, body) => {
     const response = await api(daemon, path, { method: 'POST', body: JSON.stringify(body) });
@@ -91,7 +91,7 @@ test('compact references coexist with notes, survive reload/failure/queue editin
       await composer.locator('.send-btn:not(.stop)').click();
       await composer.locator('.queue-item').waitFor();
       assert.equal(await composer.locator('.context-reference').count(), 0);
-      assert.ok(!(await composer.locator('.queue-item').innerText()).includes('calli-references'));
+      assert.ok(!(await composer.locator('.queue-item').innerText()).includes('loochat-references'));
       await composer.locator('.queue-item').getByRole('button', { name: /编辑/ }).click();
       await composer.locator('.context-reference').nth(1).waitFor();
       assert.equal(await composer.locator('.note-strip').count(), 1);
@@ -102,14 +102,14 @@ test('compact references coexist with notes, survive reload/failure/queue editin
       assert.equal(await composer.locator('.note-strip').count(), 0);
       const events = await (await api(daemon, `/api/threads/${thread.id}/events`)).json();
       const started = events.findLast(event => event.type === 'turn.started');
-      assert.match(started.data.text, /calli references/);
+      assert.match(started.data.text, /loochat references/);
       assert.match(started.data.text, /\[注释 1\]/);
-      assert.ok(!started.data.displayText.includes('calli-reference-reader'));
+      assert.ok(!started.data.displayText.includes('loochat-reference-reader'));
       await idle(thread.id);
       await page.locator('.row.user').last().getByRole('button', { name: '编辑这条消息', exact: true }).click();
       const edit = page.locator('.message-edit');
       assert.equal(await edit.locator('.context-reference').count(), 2);
-      assert.ok(!(await edit.locator('textarea').inputValue()).includes('calli-references'));
+      assert.ok(!(await edit.locator('textarea').inputValue()).includes('loochat-references'));
       await edit.getByRole('button', { name: '取消', exact: true }).click();
       assert.deepEqual(errors, []);
       await context.close();

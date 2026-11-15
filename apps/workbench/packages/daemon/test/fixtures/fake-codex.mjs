@@ -240,7 +240,7 @@ const runTurn = (text, turnId, done) => {
     const url = /navigating to (\S+)/.exec(text)?.[1];
     const actions = mode === 'no-evidence' ? [] : [
       { action: 'navigate', url }, { action: 'click', x: 150, y: 120 },
-      { action: 'type', text: 'Calli' }, { action: 'click', x: 100, y: 180 }, { action: 'finish' },
+      { action: 'type', text: 'LoopX' }, { action: 'click', x: 100, y: 180 }, { action: 'finish' },
     ];
     void (async () => {
       for (const args of actions) {
@@ -508,11 +508,11 @@ rl.on('line', (line) => {
           if (activeTurn !== id) return;
           let task = process.env.FAKE_CODEX_VOICE_TASK;
           if (task === 'voice-delegate') {
-            if (!voiceInstructions.includes('<calli-coordination>')) { say('Missing voice collaboration instructions'); activeTurn = null; finishTurn(id, 'completed'); return; }
-            const target = /calli send ([a-f0-9-]{36}) --message-file/.exec(voiceInstructions)?.[1];
+            if (!voiceInstructions.includes('<loochat-coordination>')) { say('Missing voice collaboration instructions'); activeTurn = null; finishTurn(id, 'completed'); return; }
+            const target = /loochat send ([a-f0-9-]{36}) --message-file/.exec(voiceInstructions)?.[1];
             const args = target ? ['send', target] : ['spawn', '--agent', process.env.FAKE_CODEX_VOICE_AGENT ?? 'worker', '--name', 'voice-worker'];
-            const command = { args: [...args, '--message-file', '-', '--request-id', 'voice-first'], text: process.env.FAKE_CODEX_VOICE_MESSAGE ?? 'CALLI_ENV' };
-            coordinationFixture(`CALLI_COMMAND:${Buffer.from(JSON.stringify(command)).toString('base64')}`);
+            const command = { args: [...args, '--message-file', '-', '--request-id', 'voice-first'], text: process.env.FAKE_CODEX_VOICE_MESSAGE ?? 'LOOCHAT_ENV' };
+            coordinationFixture(`LOOCHAT_COMMAND:${Buffer.from(JSON.stringify(command)).toString('base64')}`);
             say('已派发任务，结果会自动返回。'); activeTurn = null; finishTurn(id, 'completed'); return;
           }
           runTurn(task, id, () => {
@@ -753,7 +753,7 @@ rl.on('line', (line) => {
       return out({ jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: 'unknown thread' } });
     case 'thread/fork': {
       // Fork by path: the rollout file is read from disk, `threadId` is then ignored (the schema
-      // still requires it; calli passes an empty one). A missing file is the caller's error.
+      // still requires it; loochat passes an empty one). A missing file is the caller's error.
       if (typeof msg.params?.path === 'string' && msg.params.path) {
         let first = '';
         try { first = readFileSync(msg.params.path, 'utf8').split('\n')[0] ?? ''; } catch { first = ''; }

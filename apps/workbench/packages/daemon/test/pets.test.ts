@@ -26,7 +26,7 @@ function fakeDownload(fail?: (url: string) => boolean) {
 }
 
 test('installs the kept frames from the pinned commit, with the license', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-pets-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-pets-'));
   try {
     const { urls, download } = fakeDownload();
     const pets = new PetService(root, download);
@@ -52,7 +52,7 @@ test('installs the kept frames from the pinned commit, with the license', async 
 });
 
 test('a failed download leaves nothing half-installed and reports the error', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-pets-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-pets-'));
   try {
     const pets = new PetService(root, fakeDownload((url) => url.includes('success_')).download);
     await assert.rejects(pets.install());
@@ -67,8 +67,8 @@ test('a failed download leaves nothing half-installed and reports the error', as
 });
 
 test('frames are served without a token; everything else about pets needs one', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-pets-data-'));
-  const root = mkdtempSync(join(tmpdir(), 'calli-pets-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-pets-data-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-pets-'));
   const store = new Store(dataDir);
   const manager = new ThreadManager(store, new Map([['pi', {} as AgentAdapter]]), [dataDir], new AttachmentStore(dataDir));
   const pets = new PetService(root, fakeDownload().download);

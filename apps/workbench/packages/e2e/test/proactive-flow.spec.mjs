@@ -88,7 +88,7 @@ test('sandbox work is looked at, merged locally, and reverted from the filter', 
     await card.getByRole('button', { name: '合入', exact: true }).click();
     await card.getByText('已合入').waitFor();
     assert.equal(existsSync(join(repo, 'proactive-fixture.txt')), true);
-    assert.match(git('log', '-1', '--format=%B'), new RegExp(`Calli-Proactive: ${todo.id}`));
+    assert.match(git('log', '-1', '--format=%B'), new RegExp(`LooChat-Proactive: ${todo.id}`));
     await page.keyboard.press('Escape');
     await page.locator('.desk-spread').waitFor({ state: 'detached' });
     await page.locator('.desk-filter').click();

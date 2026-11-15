@@ -14,7 +14,7 @@ let messagesFile;
 
 before(async () => {
   // The daemon's children read this file when asked for a session's messages.
-  messagesFile = join(mkdtempSync(join(tmpdir(), 'calli-e2e-msgs-')), 'messages.json');
+  messagesFile = join(mkdtempSync(join(tmpdir(), 'loochat-e2e-msgs-')), 'messages.json');
   daemon = await startDaemon({ FAKE_PI_MESSAGES_FILE: messagesFile });
   browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });

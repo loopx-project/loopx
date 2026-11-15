@@ -6,7 +6,7 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 
 let daemon, browser;
 before(async () => {
-  daemon = await startDaemon({ FAKE_TELEMETRY: '1', FAKE_CODEX_PRICE_MODELS: '1', CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  daemon = await startDaemon({ FAKE_TELEMETRY: '1', FAKE_CODEX_PRICE_MODELS: '1', LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'priced', adapter: 'codex', label: 'Pricing fixture', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')] },
   ] }) });
   console.log(`Pricing test daemon PID: ${daemon.pid}`);
@@ -31,7 +31,7 @@ before(async () => {
 after(async () => { await browser?.close(); await daemon?.stop(); });
 
 test('API estimates load pricing details on demand, explain aliases and retry on desktop/phone in both themes', async () => {
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   if (shots) mkdirSync(shots, { recursive: true });
   for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: mobile, hasTouch: mobile, colorScheme });

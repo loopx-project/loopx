@@ -26,8 +26,8 @@ test('a grant opens one thread\u2019s files until it expires', () => {
 });
 
 test('the route serves a page and its assets to the cookie, and nothing else', async (t) => {
-  const workdir = mkdtempSync(join(tmpdir(), 'calli-preview-'));
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-preview-data-'));
+  const workdir = mkdtempSync(join(tmpdir(), 'loochat-preview-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-preview-data-'));
   t.after(() => {
     rmSync(workdir, { recursive: true, force: true });
     rmSync(dataDir, { recursive: true, force: true });

@@ -25,11 +25,11 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
 const flag = (call: Call, name: string) => call.args[call.args.indexOf(name) + 1];
 const event = (id: string, content = 'hello', extra: Record<string, unknown> = {}) => ({ message_id: id, chat_id: 'oc_private', chat_type: 'p2p', sender_id: 'ou_owner', sender_type: 'user', message_type: 'text', content, ...extra });
 const idleSetup = { state: 'idle', url: null, reason: null, kind: null };
-const createUrl = 'https://example.invalid/authorize?fixture=calli';
+const createUrl = 'https://example.invalid/authorize?fixture=loochat';
 const loginUrl = 'https://example.invalid/authorize?fixture=login';
 
 async function setup(config: Record<string, unknown> = {}, options: { executable?: string; timeoutMs?: number; retryMs?: number; setupTimeoutMs?: number } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-feishu-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-feishu-'));
   const log = join(dir, 'calls.ndjson'), configFile = join(dir, 'config.json'), script = join(dir, 'events.ndjson');
   writeFileSync(log, ''); writeFileSync(script, ''); writeFileSync(configFile, JSON.stringify(config));
   const store = new Store(dir);
@@ -37,7 +37,7 @@ async function setup(config: Record<string, unknown> = {}, options: { executable
   const manager = new ThreadManager(store, adapters, new Workdirs([dir], join(dir, 'dirs')), new AttachmentStore(dir));
   const chat = new FeishuChat(store, manager, { executable: resolve('test/fixtures/fake-lark-feishu.mjs'), timeoutMs: 1000, retryMs: 20, setupTimeoutMs: 3000, ...options,
     env: { ...process.env, FAKE_LARK_LOG: log, FAKE_LARK_CONFIG: configFile, FAKE_LARK_EVENTS: script,
-      CALLI_TOKEN: 'fixture-secret', CALLI_TOOLS_KEY: 'fixture-secret', CALLI_UNKNOWN: 'fixture-secret' } });
+      LOOCHAT_TOKEN: 'fixture-secret', LOOCHAT_TOOLS_KEY: 'fixture-secret', LOOCHAT_UNKNOWN: 'fixture-secret' } });
   const calls = (): Call[] => readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
   const replies = () => calls().filter(call => call.args[3] === '+messages-reply');
   const settings = (extra: Record<string, unknown> = {}) => chat.putSettings({ enabled: true, agent: 'claude', cwd: dir, owner: 'ou_owner', ...extra });
@@ -100,7 +100,7 @@ test('owner text preserves inner newlines and indentation, matches web normaliza
       assert.equal(h.store.listEventsOfType(webThread.id, 'turn.started')[0].data.text, h.store.listEventsOfType(thread.id, 'turn.started')[0].data.text);
       assert.equal(h.store.listEventsOfType(webThread.id, 'message.delta').map(row => row.data.text).join(''), `echo:${normalized}`);
     } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
-    assert.ok(h.calls().every(call => call.args[0] === '--profile' && call.args[1] === 'calli' && call.credentials.length === 0));
+    assert.ok(h.calls().every(call => call.args[0] === '--profile' && call.args[1] === 'loochat' && call.credentials.length === 0));
     assert.ok(h.calls().some(call => call.args.slice(2, 5).join(' ') === 'im reactions create'));
   } finally { await h.close(); }
 });
@@ -169,7 +169,7 @@ test('failed turns send an explanation; repeated approval requests only notify o
   const h = await setup(); try {
     h.settings(); h.deliver(event('om_failure', 'flaky')); await h.sent(1); assert.match(h.replies()[0].input, /这一轮没跑完/); assert.equal(flag(h.replies()[0], '--message-id'), 'om_failure');
     h.deliver(event('om_approval', 'approve')); await h.sent(2); const threadId = h.store.feishuThreadOf('om_approval')!, approval = h.store.listEventsOfType(threadId, 'approval.request')[0];
-    h.emitted(threadId, 'approval.request', { ...approval.data, title: 'private command must not leave Calli' }, approval.turnId!); await pause(150);
+    h.emitted(threadId, 'approval.request', { ...approval.data, title: 'private command must not leave LoopX' }, approval.turnId!); await pause(150);
     const waiting = h.replies().filter(call => call.input.includes('等你批准')); assert.equal(waiting.length, 1); assert.ok(!waiting[0].input.includes('private command'));
   } finally { await h.close(); }
 });
@@ -232,7 +232,7 @@ test('QR setup returns a URL, adopts the authorized user and refuses replacing a
     await h.chat.startSetup(); assert.equal(h.calls().filter(call => call.args[0] === 'config').length, 1); h.changeConfig({ setupFinish: true });
     await wait(async () => (await h.chat.status()).setup.state === 'done', 'setup completion'); assert.equal(h.chat.getSettings().owner, 'ou_authorized'); assert.equal((await h.chat.status()).configured, true);
     assert.deepEqual((await h.chat.status()).setup, { state: 'done', url: null, reason: null, kind: 'create' });
-    await assert.rejects(h.chat.startSetup(), (error: any) => error.status === 409); assert.ok(h.calls().every(call => call.credentials.length === 0 && (call.args.join(' ') === 'config init --new --name calli' || call.args[0] === '--profile' && call.args[1] === 'calli')));
+    await assert.rejects(h.chat.startSetup(), (error: any) => error.status === 409); assert.ok(h.calls().every(call => call.credentials.length === 0 && (call.args.join(' ') === 'config init --new --name loochat' || call.args[0] === '--profile' && call.args[1] === 'loochat')));
   } finally { await h.close(); }
 });
 
@@ -254,12 +254,12 @@ for (const owner of ['', 'ou_previous']) test(`QR login confirms the user and ${
     assert.deepEqual((await h.chat.startLogin()).setup, waiting.setup);
     assert.deepEqual((await h.chat.startSetup()).setup, waiting.setup);
     const logins = h.calls().filter(call => call.args[3] === 'login'); assert.equal(logins.length, 1);
-    assert.deepEqual(logins[0].args, ['--profile', 'calli', 'auth', 'login', '--domain', 'im']); assert.ok(alive(logins[0].pid));
+    assert.deepEqual(logins[0].args, ['--profile', 'loochat', 'auth', 'login', '--domain', 'im']); assert.ok(alive(logins[0].pid));
     h.changeConfig({ loginFinish: true }); await wait(async () => (await h.chat.status()).setup.state === 'done', 'login completion');
     assert.deepEqual((await h.chat.status()).setup, { state: 'done', url: null, reason: null, kind: 'login' });
     assert.deepEqual(h.chat.getSettings(), { ...before, owner: 'ou_logged_in' });
     assert.equal(h.store.hubSetting<any>('feishu', {}).owner, 'ou_logged_in');
-    assert.ok(h.calls().every(call => call.credentials.length === 0 && call.args[0] === '--profile' && call.args[1] === 'calli'));
+    assert.ok(h.calls().every(call => call.credentials.length === 0 && call.args[0] === '--profile' && call.args[1] === 'loochat'));
     await wait(() => !alive(logins[0].pid), 'login child to exit');
   } finally { await h.close(); }
 });

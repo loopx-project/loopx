@@ -27,7 +27,7 @@ let server: Server;
 let base: string;
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-desktop-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-desktop-'));
   store = new Store(dataDir);
   manager = new ThreadManager(store, new Map(), [dataDir], new AttachmentStore(dataDir));
   vnc = await fakeVnc();
@@ -63,7 +63,7 @@ function nextMessage(ws: WebSocket): Promise<string> {
   return new Promise((resolve) => ws.once('message', (data: Buffer) => resolve(data.toString('latin1'))));
 }
 
-test('CALLI_DESKTOP_VNC: unset looks at displays :0 to :9 here, off turns it off, host:port names one', () => {
+test('LOOCHAT_DESKTOP_VNC: unset looks at displays :0 to :9 here, off turns it off, host:port names one', () => {
   const unset = parseDesktopSetting(undefined)!;
   assert.equal(unset.length, 10);
   assert.deepEqual(unset[1], { host: '127.0.0.1', port: 5901 });

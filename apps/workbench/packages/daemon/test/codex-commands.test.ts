@@ -30,7 +30,7 @@ test('quota maps old and multi-bucket responses without double counting or inven
 });
 
 test('quota and project command probes use official RPCs without opening a thread', async () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'calli-codex-probe-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'loochat-codex-probe-'));
   const log = join(cwd, 'rpc.jsonl');
   try {
     const adapter = new CodexAppServerAdapter(command, { FAKE_CODEX_RPC_LOG: log });

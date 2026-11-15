@@ -53,6 +53,6 @@ export function claudeLiveUsage(id: string, cwd: string, env: Record<string, str
 }
 
 export function agyLiveUsage(id: string, cwd: string, env: Record<string, string>, emit: (s: UsageSample) => void): LiveUsage {
-  const root = configDirectory(env, 'CALLI_AGY_HOME', ['.gemini', 'antigravity-cli'], cwd);
+  const root = configDirectory(env, 'LOOCHAT_AGY_HOME', ['.gemini', 'antigravity-cli'], cwd);
   return new LiveUsage(async () => /^[a-z0-9_-]+$/i.test(id) ? [join(root, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl')] : [], agySessionUsage, emit);
 }

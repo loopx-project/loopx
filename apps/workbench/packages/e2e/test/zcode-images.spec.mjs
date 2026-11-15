@@ -7,7 +7,7 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 let daemon, browser;
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'zcode', adapter: 'zcode', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-zcode.mjs')] }] }) });
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'zcode', adapter: 'zcode', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-zcode.mjs')] }] }) });
   browser = await launchBrowser();
 });
 after(async () => { await browser?.close(); await daemon?.stop(); });
@@ -41,9 +41,9 @@ test('zcode uploads text with images and image-only messages in desktop/phone an
       }
       assert.equal((await (await api(daemon, `/api/threads/${thread.id}`)).json()).status, 'idle');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `zcode-images-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `zcode-images-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       }
     } finally { await context.close(); }
   }

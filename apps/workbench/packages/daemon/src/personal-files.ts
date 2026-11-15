@@ -8,49 +8,49 @@ import type { TodoNote, TodoRecord } from './store.js';
  * docs/personal-files-design.md). The database stays the source of truth: every add, change,
  * note write and removal also lands as `matters/<id>-<slug>/matter.md`, and a startup
  * `syncAll` reconciles the whole tree. Git keeps local file history (no remote), but only for
- * a repository Calli initialized itself — proven by the .calli/git-owned marker; a directory
+ * a repository LoopX initialized itself — proven by the .loochat/git-owned marker; a directory
  * inside someone else's worktree is never initialized and never committed, and the add is
- * scoped to Calli's own paths. Nothing here may break the API: every failure is logged and
+ * scoped to LoopX's own paths. Nothing here may break the API: every failure is logged and
  * swallowed.
  */
 
-/** Commits as Calli no matter how git is configured on the machine; never signs. */
-const GIT_IDENTITY = ['-c', 'user.name=Calli', '-c', 'user.email=calli@localhost', '-c', 'commit.gpgsign=false'];
+/** Commits as LoopX no matter how git is configured on the machine; never signs. */
+const GIT_IDENTITY = ['-c', 'user.name=LoopX', '-c', 'user.email=loochat@localhost', '-c', 'commit.gpgsign=false'];
 
 /** The only paths a routine mirror commit may touch: the mirrored files themselves, never a
  *  matter's artifacts (committed by commitArtifacts) and never something the person staged. */
 const OWNED_PATHS = ['matters/*/matter.md', 'AGENTS.md', 'profile.md', '.gitignore'];
 
-/** Marks a repository Calli initialized itself; lives in the gitignored .calli/. */
-const OWNERSHIP_MARKER = '.calli/git-owned';
+/** Marks a repository LoopX initialized itself; lives in the gitignored .loochat/. */
+const OWNERSHIP_MARKER = '.loochat/git-owned';
 
-const GITIGNORE = '.calli/\n.matter.md.tmp\n';
+const GITIGNORE = '.loochat/\n.matter.md.tmp\n';
 
 const AGENTS_MD = `# Personal directory
 
-This is the person's private Calli directory. \`matters/\` holds one folder per matter: the
-plan page's items, mirrored here by Calli from its database. The directory is a local git
+This is the person's private LoopX directory. \`matters/\` holds one folder per matter: the
+plan page's items, mirrored here by LoopX from its database. The directory is a local git
 repository for history; there is no remote.
 
 For agents:
 
 - Read freely. A matter's state is in its \`matter.md\` frontmatter, its continuation note in
   the body.
-- Change matters only through the \`calli todo\` command (see \`calli todo --help\`). Never edit
-  a matter's \`matter.md\` by hand: Calli overwrites it from its database, and hand edits are
+- Change matters only through the \`loochat todo\` command (see \`loochat todo --help\`). Never edit
+  a matter's \`matter.md\` by hand: LoopX overwrites it from its database, and hand edits are
   lost. A matter's \`artifacts/\` is different — working material (drafts, agendas, one-pagers)
-  that Calli's proactive runs may write there.
+  that LoopX's proactive runs may write there.
 - \`profile.md\` is the person's own notes; do not rewrite it unless asked.
 
-说明（中文）：这是 Calli 为人维护的私人目录；\`matters/\` 下每个事项的 \`matter.md\` 由 Calli 从数据库
-镜像生成，事项只能用 \`calli todo\` 命令修改，不要直接改 \`matter.md\`。事项的 \`artifacts/\` 是工作材料
-（草稿、提纲、一页纸），Calli 的主动准备会写进去；\`profile.md\` 由人自己写。
+说明（中文）：这是 LoopX 为人维护的私人目录；\`matters/\` 下每个事项的 \`matter.md\` 由 LoopX 从数据库
+镜像生成，事项只能用 \`loochat todo\` 命令修改，不要直接改 \`matter.md\`。事项的 \`artifacts/\` 是工作材料
+（草稿、提纲、一页纸），LoopX 的主动准备会写进去；\`profile.md\` 由人自己写。
 `;
 
 /** The scaffold written only when profile.md does not exist; also the isTemplate marker. */
 export const PROFILE_TEMPLATE = `# 我的说明
 
-这里由我自己写，Calli 和各家 agent 都会读：了解我在意什么、找谁、什么节奏、什么算重要。
+这里由我自己写，LoopX 和各家 agent 都会读：了解我在意什么、找谁、什么节奏、什么算重要。
 
 ## 我在意什么
 
@@ -112,7 +112,7 @@ export class PersonalFiles {
   private preparedFor: string | null = null;
   /** False once git itself proved unavailable (no binary, init failed); file writes continue. */
   private gitUsable = true;
-  /** True only for a repository Calli initialized itself, proven by the ownership marker. */
+  /** True only for a repository LoopX initialized itself, proven by the ownership marker. */
   private gitOwned = false;
   /** The foreign-repository notice is logged once per instance, not per write. */
   private foreignLogged = false;
@@ -151,7 +151,7 @@ export class PersonalFiles {
     if (this.queue !== last) return this.dispose();
   }
 
-  /** Writes profile.md atomically; commits only in a Calli-owned repository. */
+  /** Writes profile.md atomically; commits only in a LoopX-owned repository. */
   writeProfile(text: string): Promise<void> {
     return this.run(async () => {
       try {
@@ -232,7 +232,7 @@ export class PersonalFiles {
     });
   }
 
-  /** Commits the matter's new and changed artifacts as Calli (`proactive prepare <id>`), scoped
+  /** Commits the matter's new and changed artifacts as LoopX (`proactive prepare <id>`), scoped
    *  to that directory alone so nothing else is swept in. Errors propagate to the proactive run. */
   commitArtifacts(id: string): Promise<{ path: string; additions: number; deletions: number }[]> {
     return this.expect(async () => {
@@ -240,7 +240,7 @@ export class PersonalFiles {
       const dir = this.matterDir(join(root, 'matters'), id);
       if (!dir) throw new Error(`matter ${id} is not mirrored yet`);
       if (!this.gitUsable) throw new Error('git is unavailable');
-      if (!this.gitOwned) throw new Error('the personal directory is not a Calli-owned git repository');
+      if (!this.gitOwned) throw new Error('the personal directory is not a LoopX-owned git repository');
       const scope = `${relative(root, dir).split(sep).join('/')}/artifacts`;
       const status = await this.git(['status', '--porcelain', '--', scope]);
       if (!status.trim()) return [];
@@ -289,10 +289,10 @@ export class PersonalFiles {
   }
 
   /**
-   * Only a repository Calli initialized itself is ever committed to: the marker in the
-   * gitignored .calli/ proves it. A directory inside someone else's worktree is neither
-   * initialized nor committed — the person's unrelated work must not be swept into Calli's
-   * commits under Calli's name.
+   * Only a repository LoopX initialized itself is ever committed to: the marker in the
+   * gitignored .loochat/ proves it. A directory inside someone else's worktree is neither
+   * initialized nor committed — the person's unrelated work must not be swept into LoopX's
+   * commits under LoopX's name.
    */
   private async claimRepository(root: string): Promise<void> {
     const real = (path: string) => { try { return realpathSync(path); } catch { return path; } };
@@ -303,13 +303,13 @@ export class PersonalFiles {
       this.gitOwned = real(toplevel) === real(root) && existsSync(join(root, OWNERSHIP_MARKER));
       if (!this.gitOwned && !this.foreignLogged) {
         this.foreignLogged = true;
-        this.log(`git repository at ${toplevel} was not created by Calli; mirror files are written but never committed`, '' );
+        this.log(`git repository at ${toplevel} was not created by LoopX; mirror files are written but never committed`, '' );
       }
       return;
     }
     try {
       await this.git(['init', '--quiet']);
-      mkdirSync(join(root, '.calli'), { recursive: true });
+      mkdirSync(join(root, '.loochat'), { recursive: true });
       writeFileSync(join(root, OWNERSHIP_MARKER), '');
       this.gitOwned = true;
     } catch (error) {
@@ -342,7 +342,7 @@ export class PersonalFiles {
     } catch { return null; }
   }
 
-  /** Commits exactly the given scopes, as Calli: the commit itself carries the pathspec, so
+  /** Commits exactly the given scopes, as LoopX: the commit itself carries the pathspec, so
    *  files someone else staged in the same repository are never swept into a mirror commit. An
    *  unowned repository, an empty tree and a broken git are all skipped or logged, never raised. */
   private async commit(message: string, scope: string[] = OWNED_PATHS): Promise<void> {

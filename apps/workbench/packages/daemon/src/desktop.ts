@@ -26,13 +26,13 @@ const HIGH_WATER = 4 * 1024 * 1024;
 /** How long a desktop ticket opens a connection. It is used at once, by the page that asked. */
 export const DESKTOP_TICKET_S = 60;
 
-/** `CALLI_DESKTOP_VNC`: unset looks on this machine, `off` turns the desktop off, `host:port` names the server. */
+/** `LOOCHAT_DESKTOP_VNC`: unset looks on this machine, `off` turns the desktop off, `host:port` names the server. */
 export function parseDesktopSetting(value: string | undefined): DesktopTarget[] | null {
   const v = value?.trim();
   if (!v) return DEFAULT_PORTS.map((port) => ({ host: '127.0.0.1', port }));
   if (v === 'off') return null;
   const m = /^(?:\[([^\]]+)\]|([^:]+)):(\d{1,5})$/.exec(v);
-  if (!m || Number(m[3]) > 65535) throw new Error(`CALLI_DESKTOP_VNC must be host:port or off, not ${v}`);
+  if (!m || Number(m[3]) > 65535) throw new Error(`LOOCHAT_DESKTOP_VNC must be host:port or off, not ${v}`);
   return [{ host: m[1] ?? m[2], port: Number(m[3]) }];
 }
 

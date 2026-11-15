@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mjs';
 
 test('tool results stay at the bottom right of expanded details, including empty and scrolling output', async () => {
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')] }] }) });
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')] }] }) });
   let browser;
   try {
     browser = await launchBrowser();
@@ -31,9 +31,9 @@ test('tool results stay at the bottom right of expanded details, including empty
       try {
         const page = await context.newPage();
         const shot = async name => {
-          if (!process.env.CALLI_E2E_SHOTS_DIR) return;
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `${name}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+          if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${name}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         };
         const select = async title => {
           if (mobile) await page.locator('.menu-btn').click();

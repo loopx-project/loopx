@@ -502,7 +502,7 @@ export interface ExploreStatus {
   finishedAt?: string;
 }
 
-export type ExploreSourceId = 'lark-profile' | 'lark-chats' | 'lark-messages' | 'lark-calendar' | 'calli-threads';
+export type ExploreSourceId = 'lark-profile' | 'lark-chats' | 'lark-messages' | 'lark-calendar' | 'loochat-threads';
 export interface ExploreSource { id: ExploreSourceId; available: boolean; reason?: string }
 
 export interface PersonalSettings { routerThreadId?: string | null; directoryIsDefault?: boolean; defaultDirectory?: string; defaultDirectoryDisplay?: string; directoryDisplay?: string | null; directory: string | null; agent: string | null; model: string | null }
@@ -1138,7 +1138,7 @@ export type VoiceEvent =
       role?: 'user' | 'assistant'; at?: string; afterSeq?: number; order?: number };
 
 /**
- * Random UUID per browser tab session, sent in X-Calli-Voice-Owner header.
+ * Random UUID per browser tab session, sent in X-LooChat-Voice-Owner header.
  * Generated in memory; never saved to storage and never exposed to extensions.
  */
 const TAB_VOICE_OWNER =
@@ -2049,7 +2049,7 @@ export class Api {
     return this.request('GET', `/api/work-sources?${params}`);
   }
 
-  /** Calli extensions this daemon ships, and which are installed on its machine. */
+  /** LoopX extensions this daemon ships, and which are installed on its machine. */
   autotitleSettings(): Promise<{ settings: import('@calli/extension-api/web').AutoTitleSettings; status: import('@calli/extension-api/web').AutoTitleStatus; pass: import('@calli/extension-api/web').AutoTitlePass | null; defaultRules: string }> {
     return this.request('GET', '/api/extensions/autotitle/settings');
   }
@@ -2225,7 +2225,7 @@ export class Api {
   // ---------------------------------------------------------------- Realtime Voice
 
   private voiceHeaders(extra: Record<string, string> = {}): Record<string, string> {
-    return this.headers({ 'X-Calli-Voice-Owner': TAB_VOICE_OWNER, ...extra });
+    return this.headers({ 'X-LooChat-Voice-Owner': TAB_VOICE_OWNER, ...extra });
   }
 
   protected async sendVoice<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -2276,7 +2276,7 @@ export class Api {
 
   /**
    * Opens an SSE stream for voice session events using fetch so the Authorization
-   * and X-Calli-Voice-Owner headers are passed.
+   * and X-LooChat-Voice-Owner headers are passed.
    */
   async streamVoiceEvents(sessionId: string, onEvent: (ev: VoiceEvent) => void, signal: AbortSignal): Promise<void> {
     const res = await fetch(this.url(`/api/voice/${encodeURIComponent(sessionId)}/events`), {

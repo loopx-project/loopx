@@ -103,7 +103,7 @@ async function carryChanges(from: string, to: string): Promise<void> {
   // Changes to tracked files, staged or not: a stash that is never stored anywhere, applied over there.
   // The identity is for that throwaway commit only: a machine without one configured must still
   // work, and one that signs its commits must not be asked for a key.
-  const throwaway = ['-c', 'user.name=calli', '-c', 'user.email=hub@localhost', '-c', 'commit.gpgsign=false'];
+  const throwaway = ['-c', 'user.name=loochat', '-c', 'user.email=hub@localhost', '-c', 'commit.gpgsign=false'];
   const stash = (await git(from, [...throwaway, 'stash', 'create'])).trim();
   if (stash) {
     await git(to, ['stash', 'apply', '--index', stash]).catch(() => git(to, ['stash', 'apply', stash]));
@@ -131,7 +131,7 @@ async function carryChanges(from: string, to: string): Promise<void> {
  * committed there brought along. On any failure nothing is left behind.
  */
 export async function addWorktree(from: Checkout, name: string): Promise<Worktree> {
-  const tree: Worktree = { root: join(from.main, WORKTREES_DIR, name), branch: `calli/${name}` };
+  const tree: Worktree = { root: join(from.main, WORKTREES_DIR, name), branch: `loochat/${name}` };
   if (existsSync(tree.root)) throw new Error(`${tree.root} already exists`);
   await ignoreWorktreesDir(from.main);
   await git(from.top, ['worktree', 'add', '--quiet', '-b', tree.branch, tree.root, 'HEAD']);
@@ -181,6 +181,6 @@ export async function initRepository(dir: string): Promise<void> {
   await git(dir, ['init', '--quiet']);
   const message = ['commit', '--quiet', '--allow-empty', '-m', 'Initial commit'];
   await git(dir, message).catch(() =>
-    git(dir, ['-c', 'user.name=calli', '-c', 'user.email=hub@localhost', '-c', 'commit.gpgsign=false', ...message]),
+    git(dir, ['-c', 'user.name=loochat', '-c', 'user.email=hub@localhost', '-c', 'commit.gpgsign=false', ...message]),
   );
 }

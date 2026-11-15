@@ -7,7 +7,7 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 let daemon;
 let browser;
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: ['claude', 'codex'].map((id) => ({
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: ['claude', 'codex'].map((id) => ({
     id, adapter: id, command: [process.execPath, join(repoRoot, 'daemon/test/fixtures', `fake-${id === 'claude' ? 'acp' : id}.mjs`)],
   })) }) });
   browser = await launchBrowser();
@@ -40,9 +40,9 @@ test('Codex quota, commands and skills work on desktop and phone in both themes'
         assert.equal(await panel.getByRole('meter').count(), 3);
         assert.deepEqual(await panel.getByRole('meter').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-valuenow'))), ['75', '18', '90']);
         assert.deepEqual(await panel.locator('.quota-meter.low .quota-percent').allTextContents(), ['剩余 18%']);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `codex-quota-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `codex-quota-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
         await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
         await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
@@ -52,7 +52,7 @@ test('Codex quota, commands and skills work on desktop and phone in both themes'
         await input.fill('/inspect');
         await page.getByRole('option', { name: /\/inspect/ }).waitFor();
         await page.waitForTimeout(400);
-        if (process.env.CALLI_E2E_SHOTS_DIR) await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `codex-skill-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `codex-skill-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         await input.press('Enter');
         await page.getByRole('button', { name: '发送', exact: true }).click();
         await page.getByText(/skills:inspect@/).waitFor();

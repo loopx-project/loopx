@@ -16,7 +16,7 @@ before(async () => {
   // Two configured instances (the built-ins plus a second pi account with its own environment)
   // and an extra `agy2` shim on PATH for discovery.
   daemon = await startDaemon({
-    CALLI_AGENTS_JSON: JSON.stringify({
+    LOOCHAT_AGENTS_JSON: JSON.stringify({
       agents: [
         { id: 'claude', adapter: 'claude', command: ['fake-claude'] },
         { id: 'pi', adapter: 'pi', command: ['fake-pi'] },
@@ -25,8 +25,8 @@ before(async () => {
         { id: 'traex', adapter: 'traex', command: ['traex', 'acp', 'serve'] },
       ],
     }),
-    FAKE_PI_MESSAGES_FILE: (messagesFile = join(mkdtempSync(join(tmpdir(), 'calli-e2e-msgs-')), 'messages.json')),
-    CALLI_E2E_DISCOVER_AGY2: '1',
+    FAKE_PI_MESSAGES_FILE: (messagesFile = join(mkdtempSync(join(tmpdir(), 'loochat-e2e-msgs-')), 'messages.json')),
+    LOOCHAT_E2E_DISCOVER_AGY2: '1',
   });
   browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });

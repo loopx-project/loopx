@@ -18,9 +18,9 @@ const wait = async fn => {
   for (;;) { const value = await fn(); if (value) return value; if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 60)); }
 };
 try {
-  dir = mkdtempSync(join(tmpdir(), 'calli-notice-shots-')); mkdirSync(shots, { recursive: true });
+  dir = mkdtempSync(join(tmpdir(), 'loochat-notice-shots-')); mkdirSync(shots, { recursive: true });
   for (const id of ['agy', 'agy2', 'agy3']) quota(id);
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     ...['agy', 'agy2', 'agy3'].map((id, i) => ({ id, adapter: 'agy', label: `Agent ${i + 1}`, command: ['fake-agy'], env: { FAKE_HANDOVER_QUOTA: join(dir, `${id}.json`) } })),
   ] }) });
   browser = await launchBrowser();

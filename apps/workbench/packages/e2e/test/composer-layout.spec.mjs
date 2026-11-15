@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { startDaemon, openUi, openCollaboration, api, launchBrowser, repoRoot } from '../harness.mjs';
 
 test('the simplified composer fits narrow screens and keeps permission, collaboration, context and quota reachable', { timeout: 180000 }, async () => {
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{
     id: 'codex', adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')],
   }] }) });
   const browser = await launchBrowser();
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   if (shots) mkdirSync(shots, { recursive: true });
   const post = async (path, body) => {
     const response = await api(daemon, path, { method: 'POST', body: JSON.stringify(body) });

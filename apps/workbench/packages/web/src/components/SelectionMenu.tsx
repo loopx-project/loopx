@@ -187,8 +187,8 @@ export function SelectionMenu({ onNote, onSideAsk }: Props) {
     const registry = typeof CSS !== 'undefined' ? (CSS as unknown as { highlights?: Map<string, unknown> }).highlights : undefined;
     const range = rangeRef.current;
     if (!commenting || !range || !registry || typeof Highlight === 'undefined') return;
-    registry.set('calli-note-pending', new Highlight(range));
-    return () => void registry.delete('calli-note-pending');
+    registry.set('loochat-note-pending', new Highlight(range));
+    return () => void registry.delete('loochat-note-pending');
   }, [commenting]);
 
   // A tap anywhere else drops a comment being written; a drag (scrolling the thread to reread the

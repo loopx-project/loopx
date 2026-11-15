@@ -6,7 +6,7 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 
 let daemon, browser;
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{
     id: 'voice-provider', adapter: 'codex',
     command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')],
   }, { id: 'text-provider', adapter: 'claude', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-acp.mjs')] }] }), FAKE_CODEX_VOICE_TASK: 'approve' });
@@ -81,9 +81,9 @@ test('voice is opt-in; stopping voice preserves native approval and work on desk
     try {
       await mediaFixture(context);
       const { page, thread } = await threadPage(context, `语音 ${mobile ? '手机' : '桌面'} ${colorScheme}`);
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `voice-idle-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `voice-idle-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       }
       await page.getByRole('button', { name: '开启实时语音', exact: true }).click();
       await page.locator('.voice-orb[data-phase="listening"], .voice-orb[data-phase="thinking"], .voice-orb[data-phase="speaking"]').waitFor();
@@ -98,9 +98,9 @@ test('voice is opt-in; stopping voice preserves native approval and work on desk
       assert.ok(sheet && bounds && (sheet.y + sheet.height <= bounds.y + 1 || bounds.y + bounds.height <= sheet.y + 1),
         'voice controls and approval must not overlap');
       assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= page.viewportSize().width + 1);
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `voice-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `voice-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       }
       await bar.getByRole('button', { name: '结束语音', exact: true }).click();
       await page.waitForFunction(() => window.voiceTracks.length > 0 && window.voiceTracks.every(t => t.readyState === 'ended'));
@@ -114,7 +114,7 @@ test('voice is opt-in; stopping voice preserves native approval and work on desk
 });
 
 test('Pi keeps its conversation while a visible Codex member provides voice in all four layouts', { timeout: 120_000 }, async () => {
-  const server = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  const server = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'speaker', adapter: 'codex', label: 'Codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')],
       env: { FAKE_CODEX_VOICE_TASK: 'voice-delegate', FAKE_CODEX_VOICE_RELAY: '1' } },
     { id: 'worker', adapter: 'pi', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-pi.mjs')] },
@@ -138,9 +138,9 @@ test('Pi keeps its conversation while a visible Codex member provides voice in a
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
         const bar = await page.locator('.voice-controls').boundingBox();
         assert.ok(bar.x >= 0 && bar.x + bar.width <= page.viewportSize().width + 1);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `voice-pi-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `voice-pi-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
         await page.locator('.voice-controls').getByRole('button', { name: '结束语音', exact: true }).click();
         await page.waitForFunction(() => window.voiceTracks.every(t => t.readyState === 'ended'));
@@ -152,7 +152,7 @@ test('Pi keeps its conversation while a visible Codex member provides voice in a
 
 test('speech streams in the conversation and final Markdown survives ending and reloading', { timeout: 120_000 }, async () => {
   const server = await startDaemon({
-    CALLI_AGENTS_JSON: JSON.stringify({ agents: [{
+    LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{
       id: 'voice-provider', adapter: 'codex',
       command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')],
     }] }),
@@ -179,8 +179,8 @@ test('speech streams in the conversation and final Markdown survives ending and 
         assert.equal(await page.getByRole('link', { name: '来源', exact: true }).getAttribute('href'), 'https://example.com/news');
         assert.equal(await page.getByText('Here are the newz', { exact: true }).count(), 0);
         assert.equal(await page.getByText('你能听到我说话吗？', { exact: true }).count(), 1);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `voice-conversation-live-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `voice-conversation-live-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
         await page.locator('.voice-controls').getByRole('button', { name: '结束语音', exact: true }).click();
         await page.waitForFunction(() => window.voiceTracks.every(t => t.readyState === 'ended'));
@@ -195,9 +195,9 @@ test('speech streams in the conversation and final Markdown survives ending and 
         });
         try { await page.getByRole('heading', { name: '科技新闻', exact: true }).waitFor({ timeout: 10_000 }); }
         catch (error) {
-          if (process.env.CALLI_E2E_SHOTS_DIR) {
-            await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, 'voice-reload-failure.png') });
-            writeFileSync(join(process.env.CALLI_E2E_SHOTS_DIR, 'voice-reload-failure.json'), JSON.stringify({
+          if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+            await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, 'voice-reload-failure.png') });
+            writeFileSync(join(process.env.LOOCHAT_E2E_SHOTS_DIR, 'voice-reload-failure.json'), JSON.stringify({
               history: await (await api(server, `/api/threads/${thread.id}/history`)).json(),
               text: await page.locator('body').innerText(), url: page.url(),
             }, null, 2));
@@ -211,8 +211,8 @@ test('speech streams in the conversation and final Markdown survives ending and 
         assert.equal(await page.getByText('帮我整理最新的科技新闻。', { exact: true }).count(), 1);
         assert.equal(await page.locator('.voice-controls').count(), 0);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `voice-conversation-ended-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `voice-conversation-ended-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }
@@ -253,9 +253,9 @@ test('voice can start from a new thread: the thread is created first, then voice
     await openUi(page, daemon);
     const before = (await (await api(daemon, '/api/threads')).json()).length;
     // The draft's agent is the first one, the native voice provider.
-    const shot = async name => { if (process.env.CALLI_E2E_SHOTS_DIR) {
-      mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-      await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `voice-draft-${name}.png`) });
+    const shot = async name => { if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+      mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+      await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `voice-draft-${name}.png`) });
     } };
     await page.getByRole('button', { name: '开启实时语音', exact: true }).waitFor();
     await shot('before');

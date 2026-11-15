@@ -4,7 +4,7 @@
 //
 //   curl-fake -sf -m 5 -H "Authorization: ..." http://127.0.0.1:PORT/api/threads[?archived=1]
 //
-// // The `mode` file (in $CALLI_FAKE_STATE, shared with the hub fake) drives it:
+// // The `mode` file (in $LOOCHAT_FAKE_STATE, shared with the hub fake) drives it:
 //   down       exit 7 before connecting (nothing is listening; a stopped hub)
 //   downonce   exit 7 once, then behave normally
 //   flaky      drop the connection (exit 56) when a `fail-next` file exists, then remove it
@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const state = process.env.CALLI_FAKE_STATE ?? here;
+const state = process.env.LOOCHAT_FAKE_STATE ?? here;
 const url = process.argv.at(-1);
 const mode = readFileSync(join(state, 'mode'), 'utf8').trim();
 

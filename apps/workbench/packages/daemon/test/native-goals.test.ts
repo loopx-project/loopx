@@ -127,7 +127,7 @@ test('zcode waits for native failure cleanup before releasing the goal turn', { 
 });
 
 test('goal controls reject during startup and bypass a full queue without releasing the running turn', { timeout: 10_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-goal-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-goal-test-'));
   const store = new Store(dir);
   const adapter = new CodexAppServerAdapter([process.execPath, join(here, 'fixtures/fake-codex.mjs')]);
   let release!: () => void;
@@ -228,7 +228,7 @@ test('zcode reports the session target to the card as it changes, and on demand'
 });
 
 test('the manager serves the goal card, emits its changes and clears it', { timeout: 10_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-goal-view-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-goal-view-test-'));
   const store = new Store(dir);
   const adapter = new CodexAppServerAdapter([process.execPath, join(here, 'fixtures/fake-codex.mjs')]);
   const manager = new ThreadManager(store, new Map([['codex', adapter]]), [dir], new AttachmentStore(dir));

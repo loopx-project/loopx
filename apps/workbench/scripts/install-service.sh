@@ -5,10 +5,10 @@
 #   scripts/install-service.sh [path/to/.env]     install or update, then (re)start
 #   scripts/install-service.sh --remove           stop and remove
 #
-# The .env defaults to ~/.config/calli/.env. Logs: journalctl --user -u calli -f
+# The .env defaults to ~/.config/loochat/.env. Logs: journalctl --user -u loochat -f
 set -euo pipefail
 
-NAME=calli
+NAME=loochat
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT="$UNIT_DIR/$NAME.service"
 
@@ -21,8 +21,8 @@ if [ "${1:-}" = "--remove" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-DEFAULT_ENV="$HOME/.config/calli/.env"
-# Where it was before the rename to Calli, when that directory has not been moved.
+DEFAULT_ENV="$HOME/.config/loochat/.env"
+# Where it was before the rename to LooChat, when that directory has not been moved.
 [ -f "$DEFAULT_ENV" ] || [ ! -f "$HOME/.config/remote-agent-hub/.env" ] || DEFAULT_ENV="$HOME/.config/remote-agent-hub/.env"
 ENV_FILE="$(realpath "${1:-$DEFAULT_ENV}")"
 [ -f "$ENV_FILE" ] || { echo "No such .env: $ENV_FILE" >&2; exit 1; }
@@ -32,7 +32,7 @@ SHELL_BIN="${SHELL:-/bin/bash}"
 mkdir -p "$UNIT_DIR"
 cat > "$UNIT" <<UNIT
 [Unit]
-Description=Calli
+Description=LooChat
 After=network-online.target
 Wants=network-online.target
 # Keep retrying: at boot the VPN address the daemon binds to may not exist yet.
@@ -41,9 +41,9 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=$REPO
-Environment=CALLI_ENV_FILE=$ENV_FILE
+Environment=LOOCHAT_ENV_FILE=$ENV_FILE
 # An interactive login shell, so the agents get the API keys and PATH set in your shell profile.
-ExecStart=$SHELL_BIN -lic 'exec npm start -w @calli/daemon'
+ExecStart=$SHELL_BIN -lic 'exec npm start -w @loopx/loochat'
 Restart=always
 RestartSec=5
 # The daemon cancels running turns on SIGTERM; give it a moment to do so.

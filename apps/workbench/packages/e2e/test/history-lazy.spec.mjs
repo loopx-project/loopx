@@ -90,9 +90,9 @@ test('eight history turns load answers first; work, tool output and diffs load o
         await changes.locator('.changes-head').click();
         assert.equal(await changes.locator('.changes-file').count(), 0, 'the whole card folds again');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `history-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `history-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
         await page.locator('.older-messages').click();
         await page.getByText('历史问题 1', { exact: true }).waitFor();
@@ -144,9 +144,9 @@ test('side chats preserve their fork boundary and expand received live output lo
         await side.locator('.step-detail pre').filter({ hasText: 'a.txt' }).waitFor();
         assert.equal(details.length, 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `history-side-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `history-side-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }
@@ -183,9 +183,9 @@ test('uninterrupted live tasks deliver full tool output without any history deta
         await tool.locator('.step-detail').getByText('12 passed', { exact: true }).waitFor();
         assert.equal(requests.filter(u => /\/history\/(work|detail)/.test(u)).length, 0, 'received live details expand locally');
         assert.deepEqual(errors, []);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `history-live-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `history-live-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }

@@ -13,9 +13,9 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 
 let root, daemon, browser, thread, configDir;
 before(async () => {
-  root = mkdtempSync(join(tmpdir(),'calli-handover-e2e-'));
+  root = mkdtempSync(join(tmpdir(),'loochat-handover-e2e-'));
   configDir = join(root,'claude-work');
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{
     id:'claude-work', adapter:'claude', label:'Claude 工作号', command:['fake-claude'],
     env:{CLAUDE_CONFIG_DIR:configDir,FAKE_SESSION_ROOT:configDir,FAKE_ACP_SESSION:'work-session'},
   }, {
@@ -53,7 +53,7 @@ for (const mobile of [false,true]) for (const theme of ['light','dark']) {
       const box=await dialog.boundingBox();
       const vp=page.viewportSize();
       assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=vp.width+1&&box.y+box.height<=vp.height+1);
-      if (process.env.CALLI_SCREENSHOTS === '1') {
+      if (process.env.LOOCHAT_SCREENSHOTS === '1') {
         const shots=join(repoRoot,'e2e','shots');
         mkdirSync(shots,{recursive:true});
         await page.screenshot({path:join(shots,`handover-${mobile?'phone':'desktop'}-${theme}.png`),animations:'disabled'});
@@ -115,7 +115,7 @@ for (const mobile of [false,true]) {
       assert.equal(git(['worktree','list','--porcelain']),treesBefore);
       assert.equal(readFileSync(join(successor.cwd,'pending.txt'),'utf8'),'preserve uncommitted work');
       const edited=summary+'\n\n补充：先运行测试。';await box.fill(edited);
-      if(process.env.CALLI_SCREENSHOTS==='1')await page.screenshot({path:join(repoRoot,'e2e','shots',`handover-${mobile?'phone-light':'desktop-dark'}-draft.png`),animations:'disabled'});
+      if(process.env.LOOCHAT_SCREENSHOTS==='1')await page.screenshot({path:join(repoRoot,'e2e','shots',`handover-${mobile?'phone-light':'desktop-dark'}-draft.png`),animations:'disabled'});
       // Manual handovers keep both drafts and composers independent, despite sidebar grouping.
       await chainDialog(page);
       await page.getByRole('menuitem').filter({hasText:'Claude 工作号'}).click();

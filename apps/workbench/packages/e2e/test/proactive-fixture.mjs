@@ -10,9 +10,9 @@ export async function arrangeProactive(daemon) {
   const failedTodo = await post(daemon, '补迁移脚本');
   const at = minutes => new Date(Date.now() - minutes * 60_000).toISOString();
   const runs = [
-    { id: 'sandbox-1', matterId: sandboxTodo.id, kind: 'sandbox', repo: '/repo', branch: `calli/proactive/${sandboxTodo.id}`, threadId: 'x1', startedAt: at(40), endedAt: at(30), status: 'ready', summary: '补好导出的边界测试，修了空列表时的崩溃。', testReport: 'npm test: 12 passed', files: [{ path: 'src/export.ts', additions: 10, deletions: 2 }, { path: 'test/export.test.ts', additions: 24, deletions: 0 }] },
+    { id: 'sandbox-1', matterId: sandboxTodo.id, kind: 'sandbox', repo: '/repo', branch: `loochat/proactive/${sandboxTodo.id}`, threadId: 'x1', startedAt: at(40), endedAt: at(30), status: 'ready', summary: '补好导出的边界测试，修了空列表时的崩溃。', testReport: 'npm test: 12 passed', files: [{ path: 'src/export.ts', additions: 10, deletions: 2 }, { path: 'test/export.test.ts', additions: 24, deletions: 0 }] },
     { id: 'prepare-1', matterId: prepareTodo.id, kind: 'prepare', threadId: 'x2', startedAt: at(90), endedAt: at(85), status: 'ready', summary: '列好目标、待决策问题和上次遗留。', files: [{ path: `matters/${prepareTodo.id}/artifacts/outline.md`, additions: 12, deletions: 0 }] },
-    { id: 'merged-1', matterId: mergedTodo.id, kind: 'sandbox', repo: '/repo', branch: `calli/proactive/${mergedTodo.id}`, threadId: 'x3', startedAt: at(200), endedAt: at(190), status: 'merged', summary: '文档里的命令更新了。', files: [{ path: 'docs/a.md', additions: 1, deletions: 1 }] },
+    { id: 'merged-1', matterId: mergedTodo.id, kind: 'sandbox', repo: '/repo', branch: `loochat/proactive/${mergedTodo.id}`, threadId: 'x3', startedAt: at(200), endedAt: at(190), status: 'merged', summary: '文档里的命令更新了。', files: [{ path: 'docs/a.md', additions: 1, deletions: 1 }] },
     { id: 'failed-1', matterId: failedTodo.id, kind: 'sandbox', repo: '/repo', threadId: 'x4', startedAt: at(300), endedAt: at(295), status: 'failed', summary: '测试没跑起来：缺少数据库。' },
   ];
   const requests = { searches: [], read(search) { this.searches.push(search); }, reads() { return this.searches.length; }, diffs: 0, actions: [] };

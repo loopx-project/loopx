@@ -110,7 +110,7 @@ function runTurn(text) {
     result({ status: 'SUCCESS', response: reply });
     return;
   }
-  const body = text.replace(/<calli-context>[\s\S]*?<\/calli-context>/g, '').split(/<calli-(?:coordination|team|tools|todo|progress)>/)[0].trim();
+  const body = text.replace(/<loochat-context>[\s\S]*?<\/loochat-context>/g, '').split(/<loochat-(?:coordination|team|tools|todo|progress)>/)[0].trim();
   if (body.startsWith('provider-error:')) {
     result({ status: 'ERROR', error: body.slice('provider-error:'.length).trim() });
     return;

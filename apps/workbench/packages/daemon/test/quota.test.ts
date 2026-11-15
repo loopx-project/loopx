@@ -58,10 +58,10 @@ let usageLog: string;
 let oldQuotaBin: string | undefined;
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-quota-test-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-quota-test-'));
   usageLog = join(dataDir, 'claude-usage-runs.log');
-  oldQuotaBin = process.env.CALLI_CLAUDE_QUOTA_BIN;
-  process.env.CALLI_CLAUDE_QUOTA_BIN = join(here, 'fixtures', 'fake-claude-usage.sh');
+  oldQuotaBin = process.env.LOOCHAT_CLAUDE_QUOTA_BIN;
+  process.env.LOOCHAT_CLAUDE_QUOTA_BIN = join(here, 'fixtures', 'fake-claude-usage.sh');
   process.env.FAKE_CLAUDE_USAGE_LOG = usageLog;
   const adapters = new Map<string, AgentAdapter>();
   adapters.set('claude', new ClaudeAcpAdapter([process.execPath, join(here, 'fixtures', 'fake-acp.mjs')]));
@@ -79,7 +79,7 @@ after(async () => {
   server.close();
   await manager.shutdown();
   store.close();
-  process.env.CALLI_CLAUDE_QUOTA_BIN = oldQuotaBin;
+  process.env.LOOCHAT_CLAUDE_QUOTA_BIN = oldQuotaBin;
   delete process.env.FAKE_CLAUDE_USAGE_LOG;
   rmSync(dataDir, { recursive: true, force: true });
 });

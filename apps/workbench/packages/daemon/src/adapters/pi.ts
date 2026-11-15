@@ -328,7 +328,7 @@ async function stopPiProcess(child: import('node:child_process').ChildProcess, o
         if (!/^\d+$/.test(entry)) continue;
         try {
           const env = readFileSync('/proc/' + entry + '/environ', 'utf8');
-          if (env.split('\0').includes('CALLI_PI_PROCESS_OWNER=' + owner)) process.kill(Number(entry), name);
+          if (env.split('\0').includes('LOOCHAT_PI_PROCESS_OWNER=' + owner)) process.kill(Number(entry), name);
         } catch (error) {
           // Other users' processes and processes which exited during the scan are expected.
           if (!['ENOENT', 'ESRCH', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
@@ -360,7 +360,7 @@ function mcpToolNames(command: string[], env: Record<string, string>): Promise<s
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'ignore'],
     detached: process.platform !== 'win32',
-    env: { ...process.env, ...env, CALLI_PI_PROCESS_OWNER: owner },
+    env: { ...process.env, ...env, LOOCHAT_PI_PROCESS_OWNER: owner },
   });
   return new Promise((resolve, reject) => {
     let out = '';
@@ -437,7 +437,7 @@ class PiSession implements AgentSession {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
-      env: { ...process.env, ...env, CALLI_PI_PROCESS_OWNER: owner },
+      env: { ...process.env, ...env, LOOCHAT_PI_PROCESS_OWNER: owner },
     });
     return new PiSession(child, label, owner);
   }

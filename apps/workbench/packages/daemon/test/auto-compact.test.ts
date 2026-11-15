@@ -48,7 +48,7 @@ test('chunkText slices with overlap and leaves short text whole', () => {
 });
 
 async function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-autocompact-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-autocompact-'));
   const store = new Store(dir);
   const adapters = new Map<string, AgentAdapter>();
   for (const id of ['agy', 'agy2']) {

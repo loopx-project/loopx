@@ -257,7 +257,7 @@ export class RelayLink {
     this.enqueue({
       spec: { id, kind: 'upgrade', method: req.method ?? 'GET', path, headers },
       tunnel: (machine, machineHead) => {
-        machine.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: calli-relay\r\n\r\n');
+        machine.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: loochat-relay\r\n\r\n');
         if (head.length) machine.write(head);
         if (machineHead.length) socket.write(machineHead);
         machine.pipe(socket);
@@ -369,7 +369,7 @@ export class RelayServer {
       return true;
     }
     const m = /^\/api\/relay\/tasks\/([0-9a-f-]{36})\/tunnel$/.exec(path);
-    if (!m || String(req.headers.upgrade).toLowerCase() !== 'calli-relay' || !link.tunnel(m[1], socket, head)) {
+    if (!m || String(req.headers.upgrade).toLowerCase() !== 'loochat-relay' || !link.tunnel(m[1], socket, head)) {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
     }
     return true;

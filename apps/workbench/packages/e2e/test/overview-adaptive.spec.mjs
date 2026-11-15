@@ -21,7 +21,7 @@ const sameFrame = (before, after) => {
 test('adaptive overview waits at its trigger, fits without scrolling and preserves its frame during refresh', { timeout: 180000 }, async () => {
   const daemon = await startDaemon();
   const browser = await launchBrowser();
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   if (shots) mkdirSync(shots, { recursive: true });
   try {
     const thread = await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title: '概况自适应预览' }) })).json();
@@ -200,7 +200,7 @@ test('cancelled cold opens stay closed; failures can retry, and another thread n
 
 test('five categories retain important summaries and extremely short windows can leave the full page', { timeout: 120000 }, async () => {
   const daemon = await startDaemon(); const browser = await launchBrowser();
-  const shots = process.env.CALLI_E2E_SHOTS_DIR;
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
   try {
     for (const width of [390, 1440]) for (const theme of ['light', 'dark']) {
       const mobile = width === 390;

@@ -10,7 +10,7 @@ import { turnOrigin, turnOutcome } from './lifecycle.js';
 import type { Store } from './store.js';
 import type { ThreadManager } from './threads.js';
 
-/** Talking to Calli from Feishu: one private chat with a bot of its own, one Calli thread per conversation. */
+/** Talking to LoopX from Feishu: one private chat with a bot of its own, one LoopX thread per conversation. */
 export interface FeishuSettings {
   enabled: boolean;
   agent: string;
@@ -34,7 +34,7 @@ export interface FeishuRecord {
 export interface FeishuSetup { state: 'idle' | 'waiting' | 'done' | 'failed'; url: string | null; reason: string | null; kind: 'create' | 'login' | null }
 
 /** The bot gets its own lark-cli profile so it never shares an app (and its event connection) with another tool. */
-export const FEISHU_PROFILE = 'calli';
+export const FEISHU_PROFILE = 'loochat';
 const defaults: FeishuSettings = { enabled: false, agent: '', cwd: '', owner: '', echoWeb: false };
 const MAX_REPLY = 20_000;
 const MAX_INBOUND = 8_000;
@@ -331,7 +331,7 @@ export class FeishuChat {
       // Say once why nothing happened, so the person knows where to go next.
       if (!this.hinted.has(message.sender)) {
         this.hinted.add(message.sender);
-        await this.reply(message.messageId, '[Calli] 还没有绑定主人。请回到 Calli 的「飞书」设置页，点「绑定这个账号」，再发一次。', `${message.messageId}:hint`, null, '');
+        await this.reply(message.messageId, '[LoopX] 还没有绑定主人。请回到 LoopX 的「飞书」设置页，点「绑定这个账号」，再发一次。', `${message.messageId}:hint`, null, '');
       }
       return;
     }
@@ -358,7 +358,7 @@ export class FeishuChat {
       const reason = e instanceof HttpError ? e.message : 'failed';
       this.record(message.messageId, 'in', threadId, title, 'failed', reason);
       if (threadId) this.unawait(threadId, message.messageId);
-      await this.reply(message.messageId, `[Calli] 没能开始：${reason}`, `${message.messageId}:error`, threadId, title);
+      await this.reply(message.messageId, `[LoopX] 没能开始：${reason}`, `${message.messageId}:error`, threadId, title);
     }
   }
 
@@ -400,7 +400,7 @@ export class FeishuChat {
       this.told.add(`${threadId}:${ev.turnId}`);
       if (this.told.size > 500) this.told.delete(this.told.values().next().value!);
       const kind = ev.type === 'approval.request' ? '等你批准' : '等你回答';
-      void this.reply(target, `[Calli] ${kind}${this.link(threadId) || '\n请回到 Calli 处理。'}`, `${threadId}:${ev.seq}`, threadId, title);
+      void this.reply(target, `[LoopX] ${kind}${this.link(threadId) || '\n请回到 LoopX 处理。'}`, `${threadId}:${ev.seq}`, threadId, title);
       return;
     }
     if (!end) return;
@@ -411,8 +411,8 @@ export class FeishuChat {
       const answer = turnAnswer(this.store.listEvents(threadId, 0, -1), ev.turnId ?? null, Number.MAX_SAFE_INTEGER);
       body = (answer || '（没有文字回答）').slice(0, MAX_REPLY);
       if (answer.length > MAX_REPLY) body += `\n\n…（已截断）${this.link(threadId)}`;
-    } else if (end.outcome === 'cancelled') body = '[Calli] 已停止。';
-    else body = `[Calli] 这一轮没跑完${end.message ? `：${String(end.message).slice(0, 500)}` : ''}${this.link(threadId)}`;
+    } else if (end.outcome === 'cancelled') body = '[LoopX] 已停止。';
+    else body = `[LoopX] 这一轮没跑完${end.message ? `：${String(end.message).slice(0, 500)}` : ''}${this.link(threadId)}`;
     void this.reply(target, body, `${threadId}:${ev.seq}`, threadId, title);
   }
 
@@ -438,10 +438,10 @@ export class FeishuChat {
   /** Send the owner a line, so a person can see the path works before relying on it. */
   async test(): Promise<FeishuRecord> {
     const owner = this.getSettings().owner;
-    const record = this.record(randomUUID(), 'out', null, 'Calli', 'failed', owner ? null : 'owner_missing');
+    const record = this.record(randomUUID(), 'out', null, 'LoopX', 'failed', owner ? null : 'owner_missing');
     if (!owner) return record;
     try {
-      await this.run(['im', '+messages-send', '--as', 'bot', '--user-id', owner, '--markdown', '-', '--idempotency-key', record.key.slice(0, 50)], '[Calli] 飞书对话已连通。直接发消息给我即可开始一个新线程。');
+      await this.run(['im', '+messages-send', '--as', 'bot', '--user-id', owner, '--markdown', '-', '--idempotency-key', record.key.slice(0, 50)], '[LoopX] 飞书对话已连通。直接发消息给我即可开始一个新线程。');
       record.result = 'sent';
     } catch (e) { record.reason = (e as Error).message; }
     return record;

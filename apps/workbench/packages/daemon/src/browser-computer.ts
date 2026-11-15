@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 
 export function browserExecutable(): string | undefined {
-  if (process.env.CALLI_BROWSER_EXECUTABLE) return existsSync(process.env.CALLI_BROWSER_EXECUTABLE) ? process.env.CALLI_BROWSER_EXECUTABLE : undefined;
+  if (process.env.LOOCHAT_BROWSER_EXECUTABLE) return existsSync(process.env.LOOCHAT_BROWSER_EXECUTABLE) ? process.env.LOOCHAT_BROWSER_EXECUTABLE : undefined;
   return [chromium.executablePath(), '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(path => existsSync(path));
 }
@@ -24,7 +24,7 @@ export const computerActionSchema = {
 
 export interface ComputerResult {
   image: Buffer;
-  evidence: { runtime: 'calli-browser'; scope: 'browser'; action: string; url: string; actions: number; screenshot?: string };
+  evidence: { runtime: 'loochat-browser'; scope: 'browser'; action: string; url: string; actions: number; screenshot?: string };
 }
 
 /** A fresh browser per delegated task. Never attaches to a person's browser or profile. */
@@ -51,7 +51,7 @@ export class BrowserComputer {
     if (this.closed) throw new Error('Browser task is closed.');
     if (this.page) return this.page;
     if (!this.opening) this.opening = (async () => {
-      if (!this.executable) throw new Error('No Chrome/Chromium executable. Set CALLI_BROWSER_EXECUTABLE on the daemon.');
+      if (!this.executable) throw new Error('No Chrome/Chromium executable. Set LOOCHAT_BROWSER_EXECUTABLE on the daemon.');
       this.timer = setTimeout(() => { void this.close(); }, 300_000);
       this.timer.unref();
       const browser = await chromium.launch({ executablePath: this.executable, headless: true, chromiumSandbox: true, timeout: 20_000 });
@@ -110,7 +110,7 @@ export class BrowserComputer {
     const image = await page.screenshot({ type: 'png', timeout: 10_000 });
     if (this.closed) throw new Error('Browser task is closed.');
     this.actions++;
-    const evidence: ComputerResult['evidence'] = { runtime: 'calli-browser', scope: 'browser', action, url: page.url(), actions: this.actions };
+    const evidence: ComputerResult['evidence'] = { runtime: 'loochat-browser', scope: 'browser', action, url: page.url(), actions: this.actions };
     if (action === 'finish') {
       evidence.screenshot = join(this.cwd, 'computer-final.png');
       writeFileSync(evidence.screenshot, image, { mode: 0o600, flag: 'wx' });

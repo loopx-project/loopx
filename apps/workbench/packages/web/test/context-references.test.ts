@@ -26,7 +26,7 @@ test('references coexist with numbered comments, preserve quoted paths and round
 });
 
 test('ordinary messages and malformed blocks are not silently removed', () => {
-  for (const text of ['hello', '<calli-references>\nnot json\n</calli-references>']) assert.deepEqual(splitReferences(text), { references: [], body: text });
+  for (const text of ['hello', '<loochat-references>\nnot json\n</loochat-references>']) assert.deepEqual(splitReferences(text), { references: [], body: text });
 });
 
 test('combined queued messages recover every reference without exposing wire data', () => {
@@ -36,8 +36,8 @@ test('combined queued messages recover every reference without exposing wire dat
   assert.deepEqual(split.references, [reference, other]);
   assert.match(split.body, /First question\./);
   assert.match(split.body, /Second question\./);
-  assert.ok(!split.body.includes('calli-references'));
-  assert.ok(!referencePreview(text).includes('calli-references'));
+  assert.ok(!split.body.includes('loochat-references'));
+  assert.ok(!referencePreview(text).includes('loochat-references'));
 });
 
 test('message context snapshots stay separate from notes when a draft is reloaded', () => {

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { addWorktree, countChanges, findCheckout, removeWorktree, worktreeLeftovers, WORKTREES_DIR } from '../src/worktrees.js';
 
 // A machine with no git identity and no settings of its own: the hub must not lean on either.
-const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'calli-test-git-')));
+const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'loochat-test-git-')));
 writeFileSync(join(scratch, 'gitconfig'), '');
 process.env.GIT_CONFIG_GLOBAL = join(scratch, 'gitconfig');
 process.env.GIT_CONFIG_NOSYSTEM = '1';
@@ -47,7 +47,7 @@ test('findCheckout says where a directory stands, or that no worktree can start 
 
   // From inside a worktree: the checkout is the worktree, the repository is still the repository.
   const tree = await addWorktree((await findCheckout(dir))!, 'aaaa1111');
-  assert.deepEqual(await findCheckout(join(tree.root, 'src')), { top: tree.root, main: dir, prefix: 'src', branch: 'calli/aaaa1111' });
+  assert.deepEqual(await findCheckout(join(tree.root, 'src')), { top: tree.root, main: dir, prefix: 'src', branch: 'loochat/aaaa1111' });
 
   git(dir, 'checkout', '--quiet', '--detach');
   assert.equal((await findCheckout(dir))!.branch, null);
@@ -73,9 +73,9 @@ test('a new worktree starts at the same commit, on its own branch, with what was
   assert.equal(await countChanges(dir), 4);
 
   const tree = await addWorktree((await findCheckout(dir))!, 'bbbb2222');
-  assert.deepEqual(tree, { root: join(dir, WORKTREES_DIR, 'bbbb2222'), branch: 'calli/bbbb2222' });
+  assert.deepEqual(tree, { root: join(dir, WORKTREES_DIR, 'bbbb2222'), branch: 'loochat/bbbb2222' });
   assert.equal(git(tree.root, 'rev-parse', 'HEAD'), git(dir, 'rev-parse', 'HEAD'));
-  assert.equal(git(tree.root, 'symbolic-ref', '--short', 'HEAD'), 'calli/bbbb2222');
+  assert.equal(git(tree.root, 'symbolic-ref', '--short', 'HEAD'), 'loochat/bbbb2222');
 
   // The same work in progress, staged where it was staged.
   assert.equal(readFileSync(join(tree.root, 'README.md'), 'utf8'), 'hello, changed\n');
@@ -120,7 +120,7 @@ test('adding fails whole: a name that is taken leaves nothing new behind', async
   const checkout = (await findCheckout(dir))!;
   await addWorktree(checkout, 'aaaa0000');
   await assert.rejects(addWorktree(checkout, 'aaaa0000'), /already exists/);
-  git(dir, 'branch', 'calli/bbbb0000');
+  git(dir, 'branch', 'loochat/bbbb0000');
   await assert.rejects(addWorktree(checkout, 'bbbb0000'));
   assert.equal(existsSync(join(dir, WORKTREES_DIR, 'bbbb0000')), false);
   assert.equal(git(dir, 'worktree', 'list').split('\n').length, 2);
@@ -137,13 +137,13 @@ test('what a worktree would take with it is counted, and removing it takes the b
   git(tree.root, 'commit', '--quiet', '-m', 'on the branch only');
   assert.deepEqual(await worktreeLeftovers(dir, tree), { changes: 0, commits: 1 });
   // Once another branch has the commit, nothing is lost with this one.
-  git(dir, 'merge', '--quiet', 'calli/abab1212');
+  git(dir, 'merge', '--quiet', 'loochat/abab1212');
   assert.deepEqual(await worktreeLeftovers(dir, tree), { changes: 0, commits: 0 });
 
   writeFileSync(join(tree.root, 'draft.md'), 'changed again\n');
   await removeWorktree(dir, tree);
   assert.equal(existsSync(tree.root), false);
-  assert.equal(git(dir, 'branch', '--list', 'calli/*'), '');
+  assert.equal(git(dir, 'branch', '--list', 'loochat/*'), '');
   assert.equal(git(dir, 'worktree', 'list').split('\n').length, 1);
 
   // Someone deleted the directory by hand: git's own record of it is cleared all the same.
@@ -151,7 +151,7 @@ test('what a worktree would take with it is counted, and removing it takes the b
   rmSync(gone.root, { recursive: true, force: true });
   await removeWorktree(dir, gone);
   assert.equal(git(dir, 'worktree', 'list').split('\n').length, 1);
-  assert.equal(git(dir, 'branch', '--list', 'calli/*'), '');
+  assert.equal(git(dir, 'branch', '--list', 'loochat/*'), '');
 });
 
 test('a rename is one change', async () => {

@@ -7,7 +7,7 @@ import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 test('message actions keep fork visible, attach snapshots, select passages and hand drafts to the assistant', { timeout: 180000 }, async () => {
   const daemon = await startDaemon();
   const browser = await launchBrowser();
-  const shots = process.env.CALLI_MESSAGE_SHOTS;
+  const shots = process.env.LOOCHAT_MESSAGE_SHOTS;
   if (shots) mkdirSync(shots, { recursive: true });
   const request = async (path, body, method = 'POST') => {
     const response = await api(daemon, path, { method, body: JSON.stringify(body) });
@@ -129,7 +129,7 @@ test('message actions keep fork visible, attach snapshots, select passages and h
       assert.notEqual(router.threadId, thread.id);
       const events = await (await api(daemon, `/api/threads/${router.threadId}/events`)).json();
       const started = events.findLast(event => event.type === 'turn.started');
-      assert.match(started.data.text, /calli references/);
+      assert.match(started.data.text, /loochat references/);
       assert.match(started.data.displayText, /Review this answer/);
       await page.evaluate(id => { location.hash = `#/thread/${id}`; }, thread.id);
       await composer.locator('.context-reference').waitFor();

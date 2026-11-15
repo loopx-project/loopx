@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { openCollaboration, startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mjs';
 
 test('compact works from a collaboration composer on desktop and phone in both themes', async () => {
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{
     id: 'codex', adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')],
   }] }) });
   let browser;
@@ -30,9 +30,9 @@ test('compact works from a collaboration composer on desktop and phone in both t
         await page.getByText('上下文压缩完成。', { exact: true }).waitFor();
         await page.getByRole('button', { name: '发送', exact: true }).waitFor();
         assert.equal(await page.getByText('/compact 不接受参数或图片。', { exact: true }).count(), 0);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `coordination-compact-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `coordination-compact-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }

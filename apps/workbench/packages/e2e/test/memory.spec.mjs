@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { startDaemon, openUi, launchBrowser, repoRoot, api } from '../harness.mjs';
 
 let daemon, browser, directory;
-const shots = join(tmpdir(), 'calli-memory-shots');
+const shots = join(tmpdir(), 'loochat-memory-shots');
 before(async () => {
-  directory = mkdtempSync(join(tmpdir(), 'calli-memory-browser-'));
+  directory = mkdtempSync(join(tmpdir(), 'loochat-memory-browser-'));
   const home = join(directory, 'primary');
   cpSync(join(repoRoot, 'daemon/test/fixtures/codex-memory'), join(home, 'memories'), { recursive: true });
   const command = [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')];
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'codex', adapter: 'codex', label: 'Codex', command, env: { CODEX_HOME: home } },
     { id: 'codex-shared', adapter: 'codex', label: 'Codex Work', command, env: { CODEX_HOME: home } },
     { id: 'codex-empty', adapter: 'codex', label: 'Codex Personal', command, env: { CODEX_HOME: join(directory, 'empty') } },

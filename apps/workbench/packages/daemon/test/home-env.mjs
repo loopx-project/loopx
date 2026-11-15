@@ -2,7 +2,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-const testHome = mkdtempSync(join(tmpdir(), 'calli-test-home-'));
+const testHome = mkdtempSync(join(tmpdir(), 'loochat-test-home-'));
 process.env.HOME = testHome;
 // Tests may run inside an agent session; never let its gateway or credentials reach the fakes.
 for (const name of Object.keys(process.env)) {

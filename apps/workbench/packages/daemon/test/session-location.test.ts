@@ -17,7 +17,7 @@ const record = (kind: string, root: string, id: string, cwd: string) => execFile
 });
 
 test('session locations belong to the configured instance and only report files that exist', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-session-location-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-session-location-'));
   const cwd = join(root, 'project with spaces');
   const id = 'session-123';
   try {
@@ -46,8 +46,8 @@ test('session locations belong to the configured instance and only report files 
     const cases = [
       ['pi', 'PI_CODING_AGENT_DIR', PiRpcAdapter],
       ['codex', 'CODEX_HOME', CodexAppServerAdapter],
-      ['agy', 'CALLI_AGY_HOME', AgyAdapter],
-      ['traex', 'CALLI_TRAEX_HOME', TraexAcpAdapter],
+      ['agy', 'LOOCHAT_AGY_HOME', AgyAdapter],
+      ['traex', 'LOOCHAT_TRAEX_HOME', TraexAcpAdapter],
     ] as const;
     for (const [kind, key, Adapter] of cases) {
       const configDir = join(root, kind);

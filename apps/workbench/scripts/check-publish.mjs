@@ -5,7 +5,7 @@
 //   npm run check:publish
 //
 // Words of your own (company or project names, for example) go in a file outside the repository,
-// one per line: $CALLI_PUBLISH_DENYLIST, or ~/.config/calli/publish-denylist by default.
+// one per line: $LOOCHAT_PUBLISH_DENYLIST, or ~/.config/loochat/publish-denylist by default.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
@@ -27,7 +27,7 @@ add('long secret', /\b[a-f0-9]{32,}\b/i);
 // A domain ends in letters, so package specs such as name@1.2.3 are not mistaken for addresses.
 add('e-mail address', /\b[\w.+-]+@(?!example\.(?:com|org)\b|users\.noreply\.github\.com\b)(?:[\w-]+\.)+[a-z]{2,}\b/i);
 
-const denylist = process.env.CALLI_PUBLISH_DENYLIST || join(homedir(), '.config', 'calli', 'publish-denylist');
+const denylist = process.env.LOOCHAT_PUBLISH_DENYLIST || join(homedir(), '.config', 'loochat', 'publish-denylist');
 if (existsSync(denylist)) {
   for (const word of readFileSync(denylist, 'utf8').split('\n').map((w) => w.trim()).filter((w) => w && !w.startsWith('#'))) {
     add('word from your denylist', new RegExp(escape(word), 'i'));

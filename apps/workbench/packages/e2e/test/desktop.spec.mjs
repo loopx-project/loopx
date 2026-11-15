@@ -62,7 +62,7 @@ async function startXvnc(display, security) {
 
 before(async () => {
   if (skip) return;
-  dir = mkdtempSync(join(tmpdir(), 'calli-e2e-desktop-'));
+  dir = mkdtempSync(join(tmpdir(), 'loochat-e2e-desktop-'));
   open = await startXvnc(freeDisplay(70), ['-SecurityTypes', 'None']);
   const passwd = join(dir, 'passwd');
   writeFileSync(passwd, execFileSync(vncpasswd, ['-f'], { input: 'secret12\n' }));
@@ -72,10 +72,10 @@ before(async () => {
   const out = join(dir, 'typed.txt');
   children.push(spawn(xterm, ['-geometry', '200x60+0+0', '-e', 'sh', '-c', `read line; printf '%s' "$line" > ${out}; sleep 600`], { env: { ...process.env, DISPLAY: `:${open.display}` }, stdio: 'ignore' }));
   open.out = out;
-  daemonOpen = await startDaemon({ CALLI_DESKTOP_VNC: `127.0.0.1:${open.port}` });
-  daemonLocked = await startDaemon({ CALLI_DESKTOP_VNC: `127.0.0.1:${locked.port}` });
-  daemonNone = await startDaemon({ CALLI_DESKTOP_VNC: 'off' });
-  daemonBlocked = await startDaemon({ CALLI_DESKTOP_VNC: `127.0.0.1:${blocked.port}` });
+  daemonOpen = await startDaemon({ LOOCHAT_DESKTOP_VNC: `127.0.0.1:${open.port}` });
+  daemonLocked = await startDaemon({ LOOCHAT_DESKTOP_VNC: `127.0.0.1:${locked.port}` });
+  daemonNone = await startDaemon({ LOOCHAT_DESKTOP_VNC: 'off' });
+  daemonBlocked = await startDaemon({ LOOCHAT_DESKTOP_VNC: `127.0.0.1:${blocked.port}` });
   if (xev) {
     touchy = await startXvnc(freeDisplay(blocked.display + 1), ['-SecurityTypes', 'None']);
     const watcher = spawn('stdbuf', ['-oL', xev, '-root', '-event', 'button'], { env: { ...process.env, DISPLAY: `:${touchy.display}` }, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -85,7 +85,7 @@ before(async () => {
     const keys = spawn('stdbuf', ['-oL', xev, '-root', '-event', 'keyboard'], { env: { ...process.env, DISPLAY: `:${touchy.display}` }, stdio: ['ignore', 'pipe', 'ignore'] });
     children.push(keys);
     keys.stdout.on('data', (d) => (xevKeys += d));
-    daemonTouchy = await startDaemon({ CALLI_DESKTOP_VNC: `127.0.0.1:${touchy.port}` });
+    daemonTouchy = await startDaemon({ LOOCHAT_DESKTOP_VNC: `127.0.0.1:${touchy.port}` });
   }
   if (xclip) {
     phone = await startXvnc(freeDisplay((touchy?.display ?? blocked.display) + 1), ['-SecurityTypes', 'None']);
@@ -93,7 +93,7 @@ before(async () => {
     // A word to select at the top left; Ctrl+C from the copy button must not end the loop.
     const script = `printf 'copyme\\n'; trap '' INT; while IFS= read -r line; do printf '%s\\n' "$line" >> ${phone.out}; done`;
     children.push(spawn(xterm, ['-geometry', '200x60+0+0', '-e', 'sh', '-c', script], { env: { ...process.env, DISPLAY: `:${phone.display}` }, stdio: 'ignore' }));
-    daemonPhone = await startDaemon({ CALLI_DESKTOP_VNC: `127.0.0.1:${phone.port}` });
+    daemonPhone = await startDaemon({ LOOCHAT_DESKTOP_VNC: `127.0.0.1:${phone.port}` });
   }
   browser = await launchBrowser();
 });
@@ -895,7 +895,7 @@ test('on a phone over plain http, paste falls back to the clipboard sheet', { sk
 });
 
 function shot(name) {
-  return join(process.env.CALLI_SHOTS ?? join(tmpdir(), 'calli-shots'), `${name}.png`);
+  return join(process.env.LOOCHAT_SHOTS ?? join(tmpdir(), 'loochat-shots'), `${name}.png`);
 }
 
 async function waitUntil(check, timeout = 10_000) {

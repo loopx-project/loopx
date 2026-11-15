@@ -20,8 +20,8 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       const title = `光标协作 ${phone} ${colorScheme}`;
       const root = await post('/api/threads', { agent: 'pi', cwd: daemon.workdir, title });
       await post(`/api/threads/${root.id}/coordination`, { directories: [daemon.workdir] });
-      const directive = Buffer.from(JSON.stringify({ args: ['spawn', '--agent', 'claude', '--name', 'claude', '--message-file', '-', '--request-id', 'caret-review'], text: '检查接口 CALLI_REPORT' })).toString('base64');
-      await post(`/api/threads/${root.id}/turns`, { text: `CALLI_COMMAND:${directive}` });
+      const directive = Buffer.from(JSON.stringify({ args: ['spawn', '--agent', 'claude', '--name', 'claude', '--message-file', '-', '--request-id', 'caret-review'], text: '检查接口 LOOCHAT_REPORT' })).toString('base64');
+      await post(`/api/threads/${root.id}/turns`, { text: `LOOCHAT_COMMAND:${directive}` });
       let team;
       for (let n = 0; n < 200; n++) {
         team = await (await api(daemon, `/api/threads/${root.id}/coordination`)).json();
@@ -54,7 +54,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       assert.equal(await box.getAttribute('aria-expanded'), 'true');
       // A reduced visual viewport represents the space left above a phone keyboard.
       if (phone) await page.setViewportSize({ width: 390, height: 520 });
-      const shots = '/tmp/calli-mention-caret-shots'; mkdirSync(shots, { recursive: true });
+      const shots = '/tmp/loochat-mention-caret-shots'; mkdirSync(shots, { recursive: true });
       await page.screenshot({ path: `${shots}/${phone ? 'phone' : 'desktop'}-${colorScheme}.png` });
       const rect = await list.boundingBox();
       assert.ok(rect.y >= 0 && rect.y + rect.height <= page.viewportSize().height, `mention menu fits: ${JSON.stringify(rect)}`);

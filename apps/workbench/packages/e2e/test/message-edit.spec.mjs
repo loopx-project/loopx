@@ -12,7 +12,7 @@ import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 let daemon;
 let browser;
 let page;
-const scriptDir = mkdtempSync(join(tmpdir(), 'calli-edit-'));
+const scriptDir = mkdtempSync(join(tmpdir(), 'loochat-edit-'));
 const messagesFile = join(scriptDir, 'messages.json');
 
 before(async () => {

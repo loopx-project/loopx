@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 import './legacy-env.mjs';
-import { personalMain, personalHelp } from './calli-personal.mjs';
+import { personalMain, personalHelp } from './loochat-personal.mjs';
 import { readFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { browserMain, notifyMain, previewNoteMain, referencesMain, help as toolsHelp, toolsMain } from './calli-tools.mjs';
+import { browserMain, notifyMain, previewNoteMain, referencesMain, help as toolsHelp, toolsMain } from './loochat-tools.mjs';
 const args = process.argv.slice(2);
 if (!args.length || (args[0] !== 'browser' && args.includes('--help'))) {
-  console.log(`calli agents | status | result ID | stop NAME
-calli spawn --agent ID --name NAME [--cwd DIR] [--model ID] [--effort LEVEL] --message-file FILE [--handoff-file FILE] --request-id KEY
-calli send NAME --message-file FILE [--handoff-file FILE] --request-id KEY
-calli dirs MACHINE [PATH]
-calli remote ls MEMBER [PATH]
-calli remote read MEMBER PATH [--offset N] [--limit N]
-calli remote write MEMBER PATH --file FILE|- [--expect-hash HASH]
-calli handover
-calli history THREAD_ID [--before TURN_CURSOR] [--turns N]
-calli history THREAD_ID --turn TURN_ID [--offset N --snapshot SEQ]
+  console.log(`loochat agents | status | result ID | stop NAME
+loochat spawn --agent ID --name NAME [--cwd DIR] [--model ID] [--effort LEVEL] --message-file FILE [--handoff-file FILE] --request-id KEY
+loochat send NAME --message-file FILE [--handoff-file FILE] --request-id KEY
+loochat dirs MACHINE [PATH]
+loochat remote ls MEMBER [PATH]
+loochat remote read MEMBER PATH [--offset N] [--limit N]
+loochat remote write MEMBER PATH --file FILE|- [--expect-hash HASH]
+loochat handover
+loochat history THREAD_ID [--before TURN_CURSOR] [--turns N]
+loochat history THREAD_ID --turn TURN_ID [--offset N --snapshot SEQ]
 History options:
   --before TURN_CURSOR  Read older rounds using nextCursor; null means the beginning.
   --turns N             Complete rounds per page, default 10, maximum 50.
@@ -24,21 +24,21 @@ History options:
   --snapshot SEQ        Keep snapshotSeq fixed across chunks; required when --offset is positive.
 Pages preview up to 4000 answer characters and the latest 30 tools per round; length/truncated and toolCount/toolsOmitted describe omissions.
 Run answer.fullText.command to read a truncated answer, then each response's command to continue; null means the end.
-Do not combine --turn with --before or --turns. If calli is not on PATH, use "$CALLI_BIN_DIR/calli".
-Handover commands are read-only and use CALLI_HANDOVER_SOCKET / CALLI_HANDOVER_KEY; collaboration is not required.
-calli team ls
-calli team run NAME|ID [--cwd DIR] --task-file FILE|-
-Team commands use CALLI_URL (or CALLI_HOST and CALLI_PORT) and CALLI_TOKEN.
-calli ask --text-file FILE|- [--timeout SECONDS]
+Do not combine --turn with --before or --turns. If loochat is not on PATH, use "$LOOCHAT_BIN_DIR/loochat".
+Handover commands are read-only and use LOOCHAT_HANDOVER_SOCKET / LOOCHAT_HANDOVER_KEY; collaboration is not required.
+loochat team ls
+loochat team run NAME|ID [--cwd DIR] --task-file FILE|-
+Team commands use LOOCHAT_URL (or LOOCHAT_HOST and LOOCHAT_PORT) and LOOCHAT_TOKEN.
+loochat ask --text-file FILE|- [--timeout SECONDS]
   Says the text to the personal assistant (Router) and waits for its reply, default 300 seconds.
   Prints {threadId, reply}; reply is null when the assistant has not answered in time. Same credentials as team.
 FILE may be - for stdin. Reuse the request ID only when retrying the same request.
 Members can message existing teammates; only the lead can spawn or stop members.
 A remote member's task is also written to a handoff markdown file on its machine, and the result it
 writes there comes back as a file; --handoff-file makes a local file the body of that handoff.
-calli remote reads and writes files through relay inside MEMBER's own folder on that machine; the lead may
+loochat remote reads and writes files through relay inside MEMBER's own folder on that machine; the lead may
 write, other members may only read. Paths outside it are refused.
-An agent ID like AGENT@MACHINE runs on another machine: --cwd is required, an absolute path there (calli dirs MACHINE [PATH] lists its folders), and that member cannot use calli; its final reply is its result.
+An agent ID like AGENT@MACHINE runs on another machine: --cwd is required, an absolute path there (loochat dirs MACHINE [PATH] lists its folders), and that member cannot use loochat; its final reply is its result.
 
 ${toolsHelp}
 
@@ -46,7 +46,7 @@ ${personalHelp}`);
   process.exit(0);
 }
 try {
-  if (args[0] === 'agents' && !process.env.CALLI_TEAM_SOCKET && (process.env.CALLI_TODO_SOCKET || process.env.CALLI_TODO_KEY)) { await personalMain(args); process.exit(0); }
+  if (args[0] === 'agents' && !process.env.LOOCHAT_TEAM_SOCKET && (process.env.LOOCHAT_TODO_SOCKET || process.env.LOOCHAT_TODO_KEY)) { await personalMain(args); process.exit(0); }
   if (['todo', 'threads', 'wish', 'quiet', 'review', 'profile', 'settings', 'signals', 'dispatch', 'plan', 'prep'].includes(args[0])) { await personalMain(args); process.exit(0); }
   if (args[0] === 'preview-note') { await previewNoteMain(args.slice(1)); process.exit(0); }
   if (args[0] === 'references') { await referencesMain(args.slice(1)); process.exit(0); }
@@ -60,10 +60,10 @@ try {
   }
   if (args[0] === 'team' || args[0] === 'ask') {
     // Like scripts/restart.sh: a hub bound to one interface is not on loopback.
-    const host = !process.env.CALLI_HOST || ['0.0.0.0', '::'].includes(process.env.CALLI_HOST) ? '127.0.0.1' : process.env.CALLI_HOST;
-    const base = process.env.CALLI_URL || `http://${host.includes(':') ? `[${host}]` : host}:${process.env.CALLI_PORT || 8787}`;
-    const token = process.env.CALLI_TOKEN;
-    if (!token) throw new Error(`Set CALLI_TOKEN for ${args[0]} commands.`);
+    const host = !process.env.LOOCHAT_HOST || ['0.0.0.0', '::'].includes(process.env.LOOCHAT_HOST) ? '127.0.0.1' : process.env.LOOCHAT_HOST;
+    const base = process.env.LOOCHAT_URL || `http://${host.includes(':') ? `[${host}]` : host}:${process.env.LOOCHAT_PORT || 8787}`;
+    const token = process.env.LOOCHAT_TOKEN;
+    if (!token) throw new Error(`Set LOOCHAT_TOKEN for ${args[0]} commands.`);
     const api = async (path, body) => {
       const response = await fetch(new URL(path, base), { method: body ? 'POST' : 'GET', signal: AbortSignal.timeout(30000), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
       const value = await response.json();
@@ -111,13 +111,13 @@ try {
       const team = teams.find(t => t.id === target) || teams.find(t => t.name === target);
       if (!team) throw new Error(`Team not found: ${target}`);
       console.log(JSON.stringify(await api(`/api/teams/${encodeURIComponent(team.id)}/tasks`, { text: readFileSync(file === '-' ? 0 : file, 'utf8'), cwd, source: { kind: 'cli' } })));
-    } else throw new Error('Use calli team ls or calli team run NAME|ID --task-file FILE.');
+    } else throw new Error('Use loochat team ls or loochat team run NAME|ID --task-file FILE.');
     process.exit(0);
   }
   const send = (input, readonly) => {
-    const socket = readonly ? process.env.CALLI_HANDOVER_SOCKET : process.env.CALLI_TEAM_SOCKET;
-    const key = readonly ? process.env.CALLI_HANDOVER_KEY : process.env.CALLI_TEAM_KEY;
-    if (!socket || !key) throw new Error(readonly ? 'Run this command in a handover recipient session.' : 'Enable collaboration in calli before running this command.');
+    const socket = readonly ? process.env.LOOCHAT_HANDOVER_SOCKET : process.env.LOOCHAT_TEAM_SOCKET;
+    const key = readonly ? process.env.LOOCHAT_HANDOVER_KEY : process.env.LOOCHAT_TEAM_KEY;
+    if (!socket || !key) throw new Error(readonly ? 'Run this command in a handover recipient session.' : 'Enable collaboration in loochat before running this command.');
     const payload = JSON.stringify(input);
     const req = request({ socketPath: socket, path: readonly ? '/handover' : '/command', method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, res => {
       let text = ''; res.setEncoding('utf8'); res.on('data', chunk => { text += chunk; });
@@ -130,7 +130,7 @@ try {
 
   if (args[0] === 'remote') {
     const [, action, member, ...rest] = args;
-    if (!['ls', 'read', 'write'].includes(action) || !member) throw new Error('Use calli remote ls|read|write MEMBER [PATH] [options].');
+    if (!['ls', 'read', 'write'].includes(action) || !member) throw new Error('Use loochat remote ls|read|write MEMBER [PATH] [options].');
     const input = { op: 'remote', action, target: member };
     if (rest[0] && !rest[0].startsWith('--')) input.path = rest.shift();
     if (action !== 'ls' && input.path === undefined) throw new Error('Give the path of the file.');
@@ -169,8 +169,8 @@ try {
       delete input.handoffFile;
       if (input.handoff.length > 64000) throw new Error('The handoff file is over the 64000 character limit.');
     }
-    if (op === 'handover' && Object.keys(input).length > 1) throw new Error('Use calli handover without arguments.');
-    if (op === 'history' && !input.target) throw new Error('Give a thread ID from calli handover.');
+    if (op === 'handover' && Object.keys(input).length > 1) throw new Error('Use loochat handover without arguments.');
+    if (op === 'history' && !input.target) throw new Error('Give a thread ID from loochat handover.');
     send(input, readonly);
   }
 } catch (err) { console.error(err.message); process.exitCode = 1; }

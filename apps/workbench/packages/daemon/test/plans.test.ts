@@ -33,9 +33,9 @@ test('Claude names Max by its multiple and the rest by their subscription', () =
 });
 
 test('Claude reads its plan from the login without carrying the login along, and asks the CLI where there is no file', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'calli-claude-plan-'));
-  const old = { bin: process.env.CALLI_CLAUDE_QUOTA_BIN, plan: process.env.FAKE_CLAUDE_PLAN };
-  process.env.CALLI_CLAUDE_QUOTA_BIN = join(here, 'fixtures', 'fake-claude-usage.sh');
+  const home = mkdtempSync(join(tmpdir(), 'loochat-claude-plan-'));
+  const old = { bin: process.env.LOOCHAT_CLAUDE_QUOTA_BIN, plan: process.env.FAKE_CLAUDE_PLAN };
+  process.env.LOOCHAT_CLAUDE_QUOTA_BIN = join(here, 'fixtures', 'fake-claude-usage.sh');
   try {
     const withFile = join(home, '.claude');
     mkdirSync(withFile);
@@ -53,7 +53,7 @@ test('Claude reads its plan from the login without carrying the login along, and
     const asked = await new ClaudeAcpAdapter(['claude'], { CLAUDE_CONFIG_DIR: keychain }).fetchQuota();
     assert.deepEqual(asked.plan, { id: 'pro', label: 'Pro' });
   } finally {
-    if (old.bin === undefined) delete process.env.CALLI_CLAUDE_QUOTA_BIN; else process.env.CALLI_CLAUDE_QUOTA_BIN = old.bin;
+    if (old.bin === undefined) delete process.env.LOOCHAT_CLAUDE_QUOTA_BIN; else process.env.LOOCHAT_CLAUDE_QUOTA_BIN = old.bin;
     if (old.plan === undefined) delete process.env.FAKE_CLAUDE_PLAN; else process.env.FAKE_CLAUDE_PLAN = old.plan;
     rmSync(home, { recursive: true, force: true });
   }

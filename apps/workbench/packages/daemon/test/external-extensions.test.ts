@@ -17,7 +17,7 @@ const executable = resolve('test/fixtures/fake-loopx.mjs');
 const manifest = JSON.parse(readFileSync(join(packageDir, 'manifest.json'), 'utf8'));
 const board = { ...manifest, id: 'board', permissions: ['events.summary', 'worksource.read'], contributes: { views: [] }, process: undefined };
 function setup(t: any) {
-  const root = mkdtempSync(join(tmpdir(), 'calli-external-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-external-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const source = { subscribe: (_f: any) => () => {}, listThreads: () => [], threadView: (id: string) => { if (!['a', 'b'].includes(id)) throw new Error('missing'); return { id, cwd: root } as any; } };
   const ext = new ExternalExtensions(join(root, 'extensions'), source, 'test-generation', () => {}, () => ['board']);
@@ -107,7 +107,7 @@ test('archive install validates checksum and loads npm pack layout without insta
 test('commands are argument arrays, omit hub credentials, bound output and cancel by owned child', async t => {
   const { root } = setup(t);
   const signal = new AbortController();
-  const result = await runExtensionCommand(process.execPath, ['-e', 'console.log(JSON.stringify([process.argv[1], process.env.CALLI_TOKEN ?? null]))', '$(echo should-not-execute)'], root, {}, signal.signal);
+  const result = await runExtensionCommand(process.execPath, ['-e', 'console.log(JSON.stringify([process.argv[1], process.env.LOOCHAT_TOKEN ?? null]))', '$(echo should-not-execute)'], root, {}, signal.signal);
   assert.deepEqual(JSON.parse(result.stdout), ['$(echo should-not-execute)', null]);
   await assert.rejects(runExtensionCommand(process.execPath, ['-e', 'process.stdout.write("x".repeat(3e6))'], root, {}, signal.signal), /output_limit/);
   const pending = runExtensionCommand(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], root, {}, signal.signal); signal.abort();

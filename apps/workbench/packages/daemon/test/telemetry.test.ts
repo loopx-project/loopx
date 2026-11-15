@@ -35,7 +35,7 @@ test('usage normalization excludes cumulative history, duplicate updates, counte
 });
 
 test('ledger persists, deduplicates, rolls TPM over 60 seconds, filters instances and excludes imports/forks', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-telemetry-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-telemetry-'));
   let store = new Store(dir);
   const now = Date.now();
   const create = (id: string, agent = 'pi') => store.createThread({ id, agent, cwd: dir, title: id, permissionMode: 'ask', model: 'chosen', effort: null });
@@ -75,7 +75,7 @@ test('ledger persists, deduplicates, rolls TPM over 60 seconds, filters instance
 });
 
 test('TPM series averages clock-aligned buckets and shortens the range edges', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-telemetry-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-telemetry-'));
   const store = new Store(dir);
   const now = Date.UTC(2026, 9, 15, 12, 5);
   const emit = (type: EventType, data: Record<string, unknown>, at: number, threadId = 'a') => store.telemetry.observe({ threadId, turnId: 'one', type, data, seq: 1, ts: new Date(at).toISOString() });
@@ -118,7 +118,7 @@ test('TPM series averages clock-aligned buckets and shortens the range edges', (
 });
 
 test('estimated timing spreads measured tokens across buckets and the rolling minute without changing totals', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-rate-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-rate-'));
   const store = new Store(dir);
   const now = Date.UTC(2026, 9, 15, 12, 5);
   try {
@@ -138,7 +138,7 @@ test('estimated timing spreads measured tokens across buckets and the rolling mi
 });
 
 test('daily token activity groups by local day, keeps unmeasured days unknown and filters instances', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-telemetry-daily-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-telemetry-daily-'));
   const store = new Store(dir);
   const now = Date.now();
   const localDay = (ms: number) => { const d = new Date(ms); return new Date(ms - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };

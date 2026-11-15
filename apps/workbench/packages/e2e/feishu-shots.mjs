@@ -22,7 +22,7 @@ const daemon = await startDaemon({}, { agents: [
 
 const now = Date.now();
 const at = (minutesAgo) => new Date(now - minutesAgo * 60_000).toISOString();
-const SETTINGS = { enabled: true, agent: 'claude', cwd: '/srv/code/calli-demo', owner: 'ou_demo7f2e', echoWeb: false };
+const SETTINGS = { enabled: true, agent: 'claude', cwd: '/srv/code/loochat-demo', owner: 'ou_demo7f2e', echoWeb: false };
 const RECORDS = [
   { key: 'r3', at: at(3), direction: 'out', threadId: 'th1', title: '修一下登录页的报错', result: 'sent', reason: null },
   { key: 'r2', at: at(62), direction: 'in', threadId: null, title: '在吗', result: 'dropped', reason: 'not_owner' },

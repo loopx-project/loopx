@@ -227,7 +227,7 @@ export class RelayClient {
   /** Opens a tunnel to the hub and joins it to this daemon's socket, replaying the page's upgrade request. */
   private runUpgrade(task: Extract<RelayTaskSpec, { kind: 'upgrade' }>): void {
     if (!task.path.startsWith('/api/')) throw new Error('only /api/ is relayed');
-    const req = this.hub('GET', `/api/relay/tasks/${task.id}/tunnel`, { Connection: 'Upgrade', Upgrade: 'calli-relay' });
+    const req = this.hub('GET', `/api/relay/tasks/${task.id}/tunnel`, { Connection: 'Upgrade', Upgrade: 'loochat-relay' });
     req.on('upgrade', (_res, hub, head) => {
       const local = connect(this.opts.socket);
       local.write([`${task.method} ${task.path} HTTP/1.1`, 'host: localhost', ...task.headers, '', ''].join('\r\n'));

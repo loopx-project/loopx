@@ -38,7 +38,7 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false> | T | 
 const listHosts = async (): Promise<HostInfo[]> => (await fetch(`${hubBase}/api/hosts`, { headers: auth })).json() as Promise<HostInfo[]>;
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-relay-'));
+  root = mkdtempSync(join(tmpdir(), 'loochat-relay-'));
   nodeSocket = join(root, 'node.sock');
   nodeServer = createServer((req, res) => {
     if (req.url === '/api/health') return void res.end(JSON.stringify({ ok: true, version: 'node-test' }));

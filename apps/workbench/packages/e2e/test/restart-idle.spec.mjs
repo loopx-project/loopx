@@ -38,7 +38,7 @@ function freePort() {
  * helper and readers for the fake state.
  */
 async function fixture(t, { hub = 'up', threadsScript = IDLE, serviceDir = repo } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-restart-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-restart-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const state = join(dir, 'state');
   mkdirSync(state, { recursive: true });
@@ -48,7 +48,7 @@ async function fixture(t, { hub = 'up', threadsScript = IDLE, serviceDir = repo 
     ['threads-active.json', threadsScript],
     ['health.json', '{}'],
     ['service-dir', `${serviceDir}\n`],
-    ['env', `CALLI_HOST=127.0.0.1\nCALLI_PORT=${port}\nCALLI_TOKEN=test-token\n`],
+    ['env', `LOOCHAT_HOST=127.0.0.1\nLOOCHAT_PORT=${port}\nLOOCHAT_TOKEN=test-token\n`],
   ]) writeFileSync(join(state, name), content);
   // The hub runs detached; the curl fake talks to it, and both share the state directory.
   const hubProc = spawn(process.execPath, [join(fakeDir, 'hub.mjs'), String(port), state], {
@@ -61,7 +61,7 @@ async function fixture(t, { hub = 'up', threadsScript = IDLE, serviceDir = repo 
   // curl and systemctl resolve to shims on PATH that exec the node fakes with the state dir.
   for (const [name, target] of [['curl', 'curl-fake.mjs'], ['systemctl', 'systemctl-fake.mjs']]) {
     const shim = join(state, name);
-    writeFileSync(shim, `#!/bin/sh\nCALLI_FAKE_STATE="${state}" exec "${process.execPath}" "${join(fakeDir, target)}" "$@"\n`);
+    writeFileSync(shim, `#!/bin/sh\nLOOCHAT_FAKE_STATE="${state}" exec "${process.execPath}" "${join(fakeDir, target)}" "$@"\n`);
     chmodSync(shim, 0o755);
   }
   const run = (args = []) =>
@@ -71,8 +71,8 @@ async function fixture(t, { hub = 'up', threadsScript = IDLE, serviceDir = repo 
         ...process.env,
         PATH: `${state}:${process.env.PATH}`,
         XDG_STATE_HOME: join(dir, 'xdg-state'),
-        CALLI_RESTART_POLL: '0.1',
-        CALLI_RESTART_CLEAN_POLLS: '3',
+        LOOCHAT_RESTART_POLL: '0.1',
+        LOOCHAT_RESTART_CLEAN_POLLS: '3',
       },
       encoding: 'utf8',
       timeout: 8_000,
@@ -87,7 +87,7 @@ test('waits while a turn is running and restarts once it ends', async (t) => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /Waiting for 1 running thread/);
   assert.doesNotMatch(result.stdout, /did not answer/);
-  assert.match(f.read('systemctl.log'), /restart .*calli/);
+  assert.match(f.read('systemctl.log'), /restart .*loochat/);
 });
 
 test('a hub that drops one poll still counts as busy and delays the restart', async (t) => {
@@ -108,14 +108,14 @@ test('an idle hub is restarted after confirmation polls, without waiting message
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.doesNotMatch(result.stdout, /Waiting for/);
   assert.doesNotMatch(result.stdout, /did not answer/);
-  assert.match(f.read('systemctl.log'), /restart .*calli/);
+  assert.match(f.read('systemctl.log'), /restart .*loochat/);
 });
 
 test('a hub with nothing listening is restarted right away', async (t) => {
   const f = await fixture(t, { hub: 'down' });
   const result = f.run(['--no-build']);
   assert.match(result.stdout, /Nothing answers/);
-  assert.match(f.read('systemctl.log'), /restart .*calli/);
+  assert.match(f.read('systemctl.log'), /restart .*loochat/);
 });
 
 test('a failed systemctl restart fails the script', async (t) => {
@@ -123,13 +123,13 @@ test('a failed systemctl restart fails the script', async (t) => {
   writeFileSync(join(f.state, 'restart-exit'), '1');
   const result = f.run(['--no-build']);
   assert.equal(result.status, 1);
-  assert.match(f.read('systemctl.log'), /restart .*calli/);
+  assert.match(f.read('systemctl.log'), /restart .*loochat/);
 });
 
 test('a service pointing at another checkout stops before restarting', async (t) => {
-  const f = await fixture(t, { threadsScript: IDLE, serviceDir: join(tmpdir(), 'calli-restart-elsewhere') });
+  const f = await fixture(t, { threadsScript: IDLE, serviceDir: join(tmpdir(), 'loochat-restart-elsewhere') });
   const result = f.run(['--no-build']);
   assert.equal(result.status, 1);
-  assert.ok(result.stderr.includes(`The service runs ${join(tmpdir(), 'calli-restart-elsewhere')}, not ${repo}. Restart it from there.`), result.stderr);
+  assert.ok(result.stderr.includes(`The service runs ${join(tmpdir(), 'loochat-restart-elsewhere')}, not ${repo}. Restart it from there.`), result.stderr);
   assert.equal(f.read('systemctl.log'), '');
 });

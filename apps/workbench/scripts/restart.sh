@@ -11,21 +11,21 @@
 #
 # Run from inside the hub (by an agent in one of its threads), it cannot wait in the foreground:
 # its own turn would never finish. It schedules the restart in the background instead, for when
-# every turn, including the caller's, has ended. Log: $XDG_STATE_HOME/calli/restart.log
+# every turn, including the caller's, has ended. Log: $XDG_STATE_HOME/loochat/restart.log
 set -euo pipefail
 
-NAME=calli
-# The service's name before the rename to Calli; an installation not moved yet still runs it.
+NAME=loochat
+# The service's name before the rename to LooChat; an installation not moved yet still runs it.
 if ! systemctl --user cat "$NAME" >/dev/null 2>&1 && systemctl --user cat remote-agent-hub >/dev/null 2>&1; then
   NAME=remote-agent-hub
 fi
 REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/$NAME"
 LOG="$STATE_DIR/restart.log"
-POLL="${CALLI_RESTART_POLL:-5}" # seconds between checks; mainly a knob for tests
+POLL="${LOOCHAT_RESTART_POLL:-5}" # seconds between checks; mainly a knob for tests
 # Consecutive empty polls that confirm idleness before restarting. A single clean poll after a
 # missed answer once restarted the hub under four running turns; two make that impossible.
-CLEAN_POLLS="${CALLI_RESTART_CLEAN_POLLS:-2}"
+CLEAN_POLLS="${LOOCHAT_RESTART_CLEAN_POLLS:-2}"
 
 FORCE=0 BUILD=1 BACKGROUND=0
 for arg in "$@"; do
@@ -51,8 +51,8 @@ SERVICE_DIR="$(systemctl --user show -p WorkingDirectory --value "$NAME")"
 ENV_FILE="$(systemctl --user show -p Environment --value "$NAME" | tr ' ' '\n' | sed -nE 's/^(CALLI|RAH)_ENV_FILE=//p' | head -1)"
 ENV_FILE="${ENV_FILE:-$HOME/.config/$NAME/.env}"
 env_raw() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 | sed -E "s/^['\"]|['\"]$//g"; }
-# CALLI_<name>, else RAH_<name> from before the rename.
-env_get() { local v; v="$(env_raw "CALLI_$1")"; [ -n "$v" ] || v="$(env_raw "RAH_$1")"; echo "$v"; }
+# LOOCHAT_<name>, else RAH_<name> from before the rename.
+env_get() { local v; v="$(env_raw "LOOCHAT_$1")"; [ -n "$v" ] || v="$(env_raw "RAH_$1")"; echo "$v"; }
 HOST="$(env_get HOST)"; HOST="${HOST:-127.0.0.1}"
 PORT="$(env_get PORT)"; PORT="${PORT:-8787}"
 TOKEN="$(env_get TOKEN)"
@@ -177,8 +177,8 @@ fi
 # gone. Point it at the new one; scripts/migrate-name.sh moves the rest when you choose to.
 UNIT_FILE="$(systemctl --user show -p FragmentPath --value "$NAME")"
 if [ -n "$UNIT_FILE" ] && grep -q '@rah/daemon' "$UNIT_FILE"; then
-  say "Pointing $NAME at the renamed workspace @calli/daemon."
-  sed -i 's#@rah/daemon#@calli/daemon#' "$UNIT_FILE"
+  say "Pointing $NAME at the renamed workspace @loopx/loochat."
+  sed -i 's#@rah/daemon#@loopx/loochat#' "$UNIT_FILE"
   systemctl --user daemon-reload
 fi
 

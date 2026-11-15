@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mjs';
 
 let daemon, browser;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 const cases = [
   { title: '确认页面范围', text: 'plan-question', reason: 'question', label: '等待回答' },
   { title: '页面实施计划', text: 'plan-approval', reason: 'plan', label: '计划待确认' },
@@ -13,7 +13,7 @@ const cases = [
 ];
 
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'claude', adapter: 'claude', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-acp.mjs')] },
   ] }) });
   browser = await launchBrowser();

@@ -9,7 +9,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 test('settings pages preserve navigation, guard drafts and load details on entry across screen sizes and themes', async () => {
   const daemon = await startDaemon();
   const browser = await launchBrowser();
-  const shots = '/tmp/calli-settings-navigation'; mkdirSync(shots, { recursive: true });
+  const shots = '/tmp/loochat-settings-navigation'; mkdirSync(shots, { recursive: true });
   try {
     const thread = await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title: 'Navigation return' }) })).json();
     await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: Array.from({ length: 50 }, (_, i) => `Review paragraph ${i + 1}`).join('\n\n') }) });

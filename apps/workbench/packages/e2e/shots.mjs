@@ -9,8 +9,8 @@ import { startDaemon, openUi, api, launchBrowser } from './harness.mjs';
 const outDir = join(process.cwd(), 'shots');
 mkdirSync(outDir, { recursive: true });
 
-const messagesFile = join(mkdtempSync(join(tmpdir(), 'calli-shots-')), 'messages.json');
-const daemon = await startDaemon({ FAKE_PI_MESSAGES_FILE: messagesFile, CALLI_E2E_DISCOVER_AGY2: '1' }, { workdir: join(tmpdir(), 'calli-demo') });
+const messagesFile = join(mkdtempSync(join(tmpdir(), 'loochat-shots-')), 'messages.json');
+const daemon = await startDaemon({ FAKE_PI_MESSAGES_FILE: messagesFile, LOOCHAT_E2E_DISCOVER_AGY2: '1' }, { workdir: join(tmpdir(), 'loochat-demo') });
 const browser = await launchBrowser();
 
 // Arrange: a scripted conversation played out as live turns, plus a section.
@@ -33,7 +33,7 @@ writeFileSync(
       { role: 'assistant', content: [
         { type: 'toolCall', id: 'c2', name: 'read', arguments: { path: 'README.md' } },
       ] },
-      { role: 'toolResult', toolCallId: 'c2', toolName: 'read', content: [{ type: 'text', text: '# Calli\n\na simple way to manage agents\n\n…安装与环境说明…' }], isError: false },
+      { role: 'toolResult', toolCallId: 'c2', toolName: 'read', content: [{ type: 'text', text: '# LooChat\n\na simple way to manage agents\n\n…安装与环境说明…' }], isError: false },
       { role: 'assistant', content: [{ type: 'text', text: '依赖装好了，README 的三步也验证过：\n\n1. `npm install` 成功，无额外系统依赖\n2. `.env` 模板字段齐全\n3. `npm run build` 通过\n\n新机器按文档操作可以一次跑通。' }] },
       { role: 'user', content: turn2 },
       { role: 'assistant', content: [

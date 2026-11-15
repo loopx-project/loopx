@@ -1065,7 +1065,7 @@ export class ThreadManager {
     if (!adapter) throw new HttpError(400, `unknown agent: ${agent}`);
     const modes = adapter.capabilities.permissionModes;
     const thread = await this.createThread({
-      agent, cwd: '', scratch: true, title: opts.title ?? 'Calli', model: opts.model ?? null,
+      agent, cwd: '', scratch: true, title: opts.title ?? 'LoopX', model: opts.model ?? null,
       permissionMode: modes.includes('ask') ? 'ask' : modes[0],
     });
     await this.updateThread(thread.id, { archived: true });
@@ -2546,7 +2546,7 @@ export class ThreadManager {
     // A collaboration member spoken to by the person directly answers the person, not the lead.
     const fromUser = Boolean(input.fromUser && !delivery && this.coordination?.isMember(threadId));
     // A resent prompt (a retry, a handover) carries its blocks already: they are not attached twice.
-    const gate: InjectionGate = (kind, block) => !rawText.includes(`<calli-${kind}>`) && this.injections.needed(threadId, kind, block);
+    const gate: InjectionGate = (kind, block) => !rawText.includes(`<loochat-${kind}>`) && this.injections.needed(threadId, kind, block);
     const coordinated = slashCommand ? rawText : rawText ? (this.coordination?.instructions(input.handoverFrom ?? threadId, rawText, fromUser, gate) ?? rawText) : '';
     // A background question goes as asked: no hints, tools or progress request around it.
     const bare = this.backgroundThreads.has(threadId);
@@ -2650,7 +2650,7 @@ export class ThreadManager {
   /**
    * The handover summary: what the agent wrote in its handover turn, or — when the turn failed or
    * none was run — one the hub synthesizes from the event log, which holds the whole process.
-   * `brief` is for a successor the hub starts itself: it can read the source with `calli`, so it gets
+   * `brief` is for a successor the hub starts itself: it can read the source with `loochat`, so it gets
    * where to look and a few lines of progress. Without it the text stands alone, to copy anywhere.
    */
   async handoverSummary(
@@ -2665,7 +2665,7 @@ export class ThreadManager {
     const worktree = checkout && !samePath(checkout.top, checkout.main)
       ? { root: checkout.top, branch: checkout.branch, main: checkout.main }
       : thread.worktree ? { root: thread.worktree.root, branch: thread.worktree.branch, main: thread.worktree.of } : null;
-    // The brief of the auto handover: the successor reads the source itself with `calli`, so it gets
+    // The brief of the auto handover: the successor reads the source itself with `loochat`, so it gets
     // where to look and how, plus a few lines of where things stood — not a retelling.
     const context = handoverBrief({ threadId, from: adapter?.label ?? thread.agent, cwd: thread.cwd, worktree, lead: this.coordination?.leads(threadId) })
       + this.personal.context(threadId);
@@ -2804,7 +2804,7 @@ export class ThreadManager {
     const thread = this.getThread(id);
     if (target === thread.agent || !thread.agentSessionId || !this.adapters.get(thread.agent)?.sessionLocation || !this.adapters.get(target)?.importSession) return false;
     // The copy starts the successor with the whole context on a cold cache, and every step after
-    // re-reads it; past this size a brief and `calli history` cost far less than carrying it over.
+    // re-reads it; past this size a brief and `loochat history` cost far less than carrying it over.
     if ((this.store.lastContextUsed(id) ?? 0) > RESUME_HANDOVER_MAX_CONTEXT) return false;
     // A teammate's place moves with the successor's first turn; without a failed turn to resend there is none.
     if (!failedTurn && this.coordination?.metadata(id)) return false;

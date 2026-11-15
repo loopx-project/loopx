@@ -1,5 +1,5 @@
 {
-  "name": "@calli/daemon",
+  "name": "@loopx/loochat",
   "version": "0.1.0",
   "private": true,
   "type": "module",

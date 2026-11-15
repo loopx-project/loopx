@@ -33,7 +33,7 @@ test('speed capability follows the native catalog, including legacy and future t
 });
 
 test('Codex sends speed in native settings, Plan turns and goal settings without changing effort', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-speed-native-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-speed-native-'));
   const log = join(dir, 'rpc.jsonl');
   const adapter = new CodexAppServerAdapter(fixture, { FAKE_CODEX_SPEED: '1', FAKE_CODEX_RPC_LOG: log });
   const s = await adapter.start({ cwd: dir, workMode: 'plan', speed: 'priority', effort: 'high', permissionMode: 'full_access' });
@@ -57,7 +57,7 @@ test('Codex sends speed in native settings, Plan turns and goal settings without
 });
 
 test('HTTP speed validates models, survives restore, and clears incompatible tiers after a model change', { timeout: 15000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-speed-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-speed-'));
   const store = new Store(dir);
   const registry = new AgentRegistry([{ id: 'codex', adapter: 'codex', command: fixture, env: { FAKE_CODEX_SPEED: '1' } }, { id: 'pi', adapter: 'pi', command: [process.execPath, join(here, 'fixtures/fake-pi.mjs')] }], null);
   let manager = new ThreadManager(store, registry.adapters, [dir], new AttachmentStore(dir));

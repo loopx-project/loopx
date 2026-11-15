@@ -19,7 +19,7 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
     const label = (id) => agents.find((a) => a.id === id)?.label ?? id;
     const passed = ['pi', 'claude', 'agy'].map(label).join(' → ');
     browser = await launchBrowser();
-    mkdirSync('/tmp/calli-handover-shots', { recursive: true });
+    mkdirSync('/tmp/loochat-handover-shots', { recursive: true });
     for (const phone of [false, true]) for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 960 }, isMobile: phone, hasTouch: phone, colorScheme: theme });
       const page = await context.newPage();
@@ -48,14 +48,14 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
       assert.ok(offsets.every(offset => offset <= 0.5), `chain line crosses dot centers: ${offsets}`);
       await page.locator('.handover-member .handover-member-time').first().waitFor();
       await page.waitForTimeout(250);
-      await page.screenshot({ path: `/tmp/calli-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-sidebar.png` });
+      await page.screenshot({ path: `/tmp/loochat-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-sidebar.png` });
       await page.locator('.handover-group > .thread-row .thread-item').click();
       await page.getByLabel('这个线程的更多操作').click();
       await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
       await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
       await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
       await page.waitForTimeout(250);
-      await page.screenshot({ path: `/tmp/calli-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-trail.png` });
+      await page.screenshot({ path: `/tmp/loochat-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-trail.png` });
       await page.locator('.handover-entry').filter({ hasText: '原始会话' }).click();
       await page.locator('.topbar-title').filter({ hasText: original.title }).waitFor();
       await page.getByLabel('这个线程的更多操作').click();
@@ -76,7 +76,7 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
 
 test('a turn stopped by a plan that ran out offers another account of the same type, which takes over in one click', async () => {
   // One product with two accounts: the one-click suggestion stays inside the same adapter.
-  const hub = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  const hub = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'claude', adapter: 'claude', command: ['fake-claude'] },
     { id: 'claude2', adapter: 'claude', label: 'Claude 备用', command: ['fake-claude'] },
   ] }) });
@@ -86,7 +86,7 @@ test('a turn stopped by a plan that ran out offers another account of the same t
     const source = await res.json();
     await api(hub, `/api/threads/${source.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'out of plan' }) });
     browser = await launchBrowser();
-    mkdirSync('/tmp/calli-handover-shots', { recursive: true });
+    mkdirSync('/tmp/loochat-handover-shots', { recursive: true });
     // The takeover goes last: after it, the sidebar's top row for this task is the successor.
     for (const phone of [true, false]) for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 960 }, isMobile: phone, hasTouch: phone, colorScheme: theme });
@@ -102,7 +102,7 @@ test('a turn stopped by a plan that ran out offers another account of the same t
       assert.match(await page.locator('.exhausted-note').innerText(), /额度用尽/);
       assert.match(await go.innerText(), /交给 .+ 接手/);
       await page.waitForTimeout(400);
-      await page.screenshot({ path: `/tmp/calli-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-exhausted.png` });
+      await page.screenshot({ path: `/tmp/loochat-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-exhausted.png` });
       if (phone || theme === 'light') { await context.close(); continue; }
       const [takeover] = await Promise.all([page.waitForResponse(r => r.url().endsWith('/takeover') && r.request().method() === 'POST'), go.click()]);
       assert.equal(takeover.request().postDataJSON().agent, 'claude2');

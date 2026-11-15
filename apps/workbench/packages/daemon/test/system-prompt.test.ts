@@ -38,7 +38,7 @@ test('each agent\'s own line shape yields the whole prompt it persisted', () => 
 });
 
 test('scanJsonl walks lines across chunk edges and treats a missing file as no prompt', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-sysprompt-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-sysprompt-'));
   try {
     const path = join(dir, 'session.jsonl');
     const lines: string[] = [];
@@ -79,22 +79,22 @@ function writeSessions(root: string) {
 }
 
 test('adapters read the prompt from their own session file, newest snapshot last, without starting anything', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-sysprompt-adapters-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-sysprompt-adapters-'));
   try {
     const homes = writeSessions(root);
     const id = '99999999-9999-9999-9999-999999999999';
-    const codex = new CodexAppServerAdapter(['calli-not-needed'], { CODEX_HOME: homes.codex });
+    const codex = new CodexAppServerAdapter(['loochat-not-needed'], { CODEX_HOME: homes.codex });
     assert.deepEqual(await codex.readSystemPrompt(id, root), { text: 'You are Codex.', source: 'Codex 会话文件' });
     // A session that never wrote a file has no prompt, which is not an error.
     assert.equal(await codex.readSystemPrompt('88888888-8888-8888-8888-888888888888', root), null);
 
-    const claude = new ClaudeAcpAdapter(['calli-not-needed'], { CLAUDE_CONFIG_DIR: homes.claude });
+    const claude = new ClaudeAcpAdapter(['loochat-not-needed'], { CLAUDE_CONFIG_DIR: homes.claude });
     assert.deepEqual(await claude.readSystemPrompt('11111111-2222-3333-4444-555555555555', root), {
       text: 'You are Claude Code, revised.\n\n# Tools',
       source: 'Claude Code 会话文件',
     });
 
-    const pi = new PiRpcAdapter(['calli-not-needed'], { PI_CODING_AGENT_DIR: homes.pi });
+    const pi = new PiRpcAdapter(['loochat-not-needed'], { PI_CODING_AGENT_DIR: homes.pi });
     assert.deepEqual(await pi.readSystemPrompt('99999999-9999-9999-9999-999999999998', root), {
       text: 'You are pi.\n\n<tools>',
       source: 'pi 会话文件',
@@ -103,11 +103,11 @@ test('adapters read the prompt from their own session file, newest snapshot last
 });
 
 test('the endpoint answers with the prompt, and says which agents do not keep one', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-sysprompt-api-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-sysprompt-api-'));
   try {
     const homes = writeSessions(root);
-    const codex = new CodexAppServerAdapter(['calli-not-needed'], { CODEX_HOME: homes.codex });
-    const claude = new ClaudeAcpAdapter(['calli-not-needed'], { CLAUDE_CONFIG_DIR: homes.claude });
+    const codex = new CodexAppServerAdapter(['loochat-not-needed'], { CODEX_HOME: homes.codex });
+    const claude = new ClaudeAcpAdapter(['loochat-not-needed'], { CLAUDE_CONFIG_DIR: homes.claude });
     const store = new Store(root);
     const manager = new ThreadManager(store, new Map<string, AgentAdapter>([['codex', codex], ['claude', claude]]), [root], new AttachmentStore(root));
     const token = 'test-sysprompt-token';

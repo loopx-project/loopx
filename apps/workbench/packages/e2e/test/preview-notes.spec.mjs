@@ -27,13 +27,13 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       };
       await openPreview();
       // Messages from the app itself cannot impersonate a pick from the sandbox frame.
-      await page.evaluate(() => window.postMessage({ type: 'calli-preview:picked', target: {}, context: {} }, location.origin));
+      await page.evaluate(() => window.postMessage({ type: 'loochat-preview:picked', target: {}, context: {} }, location.origin));
       assert.equal(await page.locator('.preview-note-editor').count(), 0);
       await page.getByRole('button', { name: '加注释', exact: true }).click();
       await page.frameLocator('.preview-frame').locator('#target').click();
       await page.getByRole('textbox', { name: '这里想怎么改？' }).fill('空心点与黑点共用右侧位置');
       assert.equal(await page.frameLocator('.preview-frame').locator('#target').innerText(), 'devbox ○', 'annotation pick must not trigger the page action');
-      const shots = process.env.CALLI_E2E_SHOTS_DIR;
+      const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
       if (shots) { mkdirSync(shots, { recursive: true }); await page.screenshot({ animations: 'disabled', path: join(shots, `notes-editor-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) }); }
       await page.getByRole('button', { name: '保存注释', exact: true }).click();
       await page.getByRole('button', { name: '发送批注 1', exact: true }).waitFor();

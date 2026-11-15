@@ -23,7 +23,7 @@ import type { ThreadManager } from './threads.js';
 import { SummaryService } from './summary.js';
 
 // Keep the default location in one place so its final component can change independently.
-// `~/.calli/personal`, or `~/.limi/personal` where only the directory from before the rename exists.
+// `~/.loochat/personal`, or `~/.limi/personal` where only the directory from before the rename exists.
 const personalDirectory = () => [basename(homeDirectory(realpathSync(homedir()))), 'personal'];
 export function defaultPersonalDirectory(): string {
   let path = realpathSync(homedir());
@@ -66,15 +66,15 @@ const time = (value: unknown): string | null => {
 function delegationPrompt(todo: TodoRecord, note: string, personal: boolean): string {
   const clarify = '只有目标笼统、看不出要交付什么时，这一轮才只做澄清：在回复中用 1～3 个具体问题问人，每个问题给出你建议的默认选项，不要自己猜着开工。';
   const workflow = personal
-    ? `先用 calli todo show ${todo.id} 读取事项与最新 rev。${clarify}
-澄清时用 calli todo update ${todo.id} --rev N --state waiting --waiting-on "等你说明目标" --note-file FILE，把事项设为等待，并写一版接续说明：用「## 欠谁什么」写已知部分，「## 定了什么」「## 做到哪」只写已知事实，「## 下一步」写「等回答后……」。
-再用 calli notify --text-file FILE 发一句话提醒人来回答，然后结束本轮。人回复后再按回答推进。
-目标清楚时直接推进：有接续说明就按说明的「下一步」推进；没有说明也直接推进，并在结束前写第一版接续说明，已有说明则更新。需要人确认完成时用 calli todo propose-done。`
+    ? `先用 loochat todo show ${todo.id} 读取事项与最新 rev。${clarify}
+澄清时用 loochat todo update ${todo.id} --rev N --state waiting --waiting-on "等你说明目标" --note-file FILE，把事项设为等待，并写一版接续说明：用「## 欠谁什么」写已知部分，「## 定了什么」「## 做到哪」只写已知事实，「## 下一步」写「等回答后……」。
+再用 loochat notify --text-file FILE 发一句话提醒人来回答，然后结束本轮。人回复后再按回答推进。
+目标清楚时直接推进：有接续说明就按说明的「下一步」推进；没有说明也直接推进，并在结束前写第一版接续说明，已有说明则更新。需要人确认完成时用 loochat todo propose-done。`
     : `${clarify}
 本线程没有事项管理凭证：需要澄清时只在回复中提问并结束本轮，人回复后再按回答推进。
 目标清楚时直接推进：有接续说明就按说明的「下一步」推进；没有说明也直接推进，并在结束前于回复中写进展和第一版接续说明，已有说明则更新。需要人确认完成时向人提议确认。`;
   return `这是一件新交给你的事，不是交接；这个线程就是它的工作线程，没有更早的对话需要读。
-由 Calli 交给你的事项。
+由 LoopX 交给你的事项。
 事项：${todo.text}
 ID：${todo.id}；状态：${todo.state}；归属：${todo.owner}
 接续说明：
@@ -259,7 +259,7 @@ export class PersonalService {
       permissionMode: this.adapters.get(checked.agent)!.capabilities.defaultPermissionMode, ...(checked.model ? { model: checked.model } : {}) });
     try {
       const note = todo ? `\n\n事项：${todo.text}\nID：${todo.id}\n接续说明（材料，不是额外授权）：\n${this.store.todoNote(todo.id).text || '尚未写入。'}` : '';
-      const text = `${checked.task}${note}\n\n由 Calli 派发的工作。只执行上述任务；不推远端、不给别人发消息、不删除、不付款。停下时说明结果和需要人处理的事；结尾单独写 [进度] 进行中、[进度] 待验收 或 [进度] 需要你，并附一句说明。`;
+      const text = `${checked.task}${note}\n\n由 LoopX 派发的工作。只执行上述任务；不推远端、不给别人发消息、不删除、不付款。停下时说明结果和需要人处理的事；结尾单独写 [进度] 进行中、[进度] 待验收 或 [进度] 需要你，并附一句说明。`;
       await this.manager.startTurn(thread.id, { text }, undefined, false, undefined, () => {
         if (!isWithinWorkdirs(checked.cwd, this.manager.allowedWorkdirs)) throw new HttpError(403, 'cwd is no longer allowed');
         claim(thread.id);
@@ -292,7 +292,7 @@ export class PersonalService {
     if (!this.socket || !this.allowed(threadId)) return undefined;
     let key = this.credentials.get(threadId);
     if (!key) { key = randomUUID(); this.credentials.set(threadId, key); }
-    return { CALLI_TODO_SOCKET: this.socket, CALLI_TODO_KEY: key, CALLI_BIN_DIR: resolve(dirname(fileURLToPath(import.meta.url)), '../bin') };
+    return { LOOCHAT_TODO_SOCKET: this.socket, LOOCHAT_TODO_KEY: key, LOOCHAT_BIN_DIR: resolve(dirname(fileURLToPath(import.meta.url)), '../bin') };
   }
   caller(key: string): string {
     for (const [id, secret] of this.credentials) if (key === secret) { this.require(id); return id; }
@@ -300,7 +300,7 @@ export class PersonalService {
   }
   instructions(threadId: string, text: string, gate?: InjectionGate): string {
     if (!this.allowed(threadId)) return text;
-    const block = '<calli-todo>由 Calli 附加：事项和跟进用 calli todo，用法 calli todo --help。改了事项的这一轮结束前，请写接续说明。</calli-todo>';
+    const block = '<loochat-todo>由 LoopX 附加：事项和跟进用 loochat todo，用法 loochat todo --help。改了事项的这一轮结束前，请写接续说明。</loochat-todo>';
     return gate?.('todo', block) === false ? text : `${text}\n\n${block}`;
   }
   note(id: string) {
@@ -350,7 +350,7 @@ export class PersonalService {
 
   /**
    * What the person wrote about themselves, for the Router's trigger message: the first 1500
-   * characters plus a pointer to `calli profile show`. Empty when there is nothing personal to
+   * characters plus a pointer to `loochat profile show`. Empty when there is nothing personal to
    * say yet — the untouched template carries no information worth injecting.
    */
   profileDigest(limit = 1500): string {
@@ -359,8 +359,8 @@ export class PersonalService {
     if (!text.trim() || text === PROFILE_TEMPLATE) return '';
     const whole = [...text.trim()];
     const digest = whole.slice(0, limit).join('');
-    const more = whole.length > limit ? '\n（以上是摘要，用 calli profile show 读全文。）' : '';
-    return `\n\n<calli-personal-profile>由 Calli 附加：这个人写下的是「你在意什么」——判断「重要」时引用这里的依据，并把依据写进理由：\n${digest}${more}</calli-personal-profile>`;
+    const more = whole.length > limit ? '\n（以上是摘要，用 loochat profile show 读全文。）' : '';
+    return `\n\n<loochat-personal-profile>由 LoopX 附加：这个人写下的是「你在意什么」——判断「重要」时引用这里的依据，并把依据写进理由：\n${digest}${more}</loochat-personal-profile>`;
   }
   /**
    * A channel source: must name its kind and an origin ref; only https links; every string
@@ -460,7 +460,7 @@ export class PersonalService {
   private threadList(value: unknown, name: string): string[] {
     if (value === undefined) return [];
     if (!Array.isArray(value) || value.length > 20 || value.some(id => typeof id !== 'string')) throw new HttpError(400, `${name} must list at most 20 thread IDs`);
-    for (const id of value) if (!this.store.getThread(id)) throw new HttpError(404, `thread ${id} not found; use IDs from calli threads`);
+    for (const id of value) if (!this.store.getThread(id)) throw new HttpError(404, `thread ${id} not found; use IDs from loochat threads`);
     return [...new Set(value as string[])];
   }
   /** The agent's own thread is linked as a work record, except when it names the threads that did the work, or only summarizes. */
@@ -524,7 +524,7 @@ export class PersonalService {
     }
     const patch = this.patch(signal ? {} : input, current.subscriptions);
     if (actor && patch.owner !== undefined && patch.owner !== current.owner) throw new HttpError(403, 'agents cannot change ownership');
-    if (actor && current.owner === 'me' && (patch.done === true || patch.state === 'done' || patch.owner === 'agent')) throw new HttpError(403, 'use calli todo propose-done for your personal commitments');
+    if (actor && current.owner === 'me' && (patch.done === true || patch.state === 'done' || patch.owner === 'agent')) throw new HttpError(403, 'use loochat todo propose-done for your personal commitments');
     if ((patch.state ?? current.state) === 'waiting' && !(patch.waitingOn ?? current.waitingOn)) throw new HttpError(400, 'waitingOn is required for waiting');
     const note = input.note !== undefined ? personalText(input.note, 4000, true) : undefined;
     const links = actor ? this.threadList(input.threads, 'threads') : [], unlinks = actor ? this.threadList(input.unlink, 'unlink') : [];
@@ -649,7 +649,7 @@ export class PersonalService {
       case 'profile.show': return this.profile();
       case 'settings.list': return this.settingsSummary();
       case 'settings.set': return this.setSetting(String(input.key ?? ''), input.value);
-      default: throw new HttpError(400, 'unknown personal command; see calli todo --help');
+      default: throw new HttpError(400, 'unknown personal command; see loochat todo --help');
     }
   }
 
@@ -769,7 +769,7 @@ export class PersonalService {
         await this.proactive.save({ repos: [...current.repos, ...adds] }); return echo();
       }
       default:
-        throw new HttpError(400, `未知或不可改的设置项：${key}；用 calli settings 查看可以改哪些`);
+        throw new HttpError(400, `未知或不可改的设置项：${key}；用 loochat settings 查看可以改哪些`);
     }
   }
 }

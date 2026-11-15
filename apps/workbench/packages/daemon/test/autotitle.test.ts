@@ -25,7 +25,7 @@ const wait = async (check: () => boolean, timeout = 15000) => {
 };
 
 async function setup(opts: { install?: boolean } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-autotitle-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-autotitle-'));
   const cwd = join(dir, 'project'); mkdirSync(cwd);
   const adapters = new Map<string, AgentAdapter>([['claude', new ClaudeAcpAdapter([process.execPath, join(here, 'fixtures/fake-acp.mjs')])]]);
   const store = new Store(dir);
@@ -107,7 +107,7 @@ test('after the first turn the chosen agent names the thread by the rules; the q
     assert.equal(asked.length, 1);
     const question = String(h.store.listEventsOfType(asked[0].id, 'turn.started')[0].data.text);
     assert.match(question, /登录接口总是超时/);
-    assert.doesNotMatch(question, /calli-tools|calli-progress/, 'nothing is added around the question');
+    assert.doesNotMatch(question, /loochat-tools|loochat-progress/, 'nothing is added around the question');
     const status = await (await h.api('/api/extensions/autotitle/settings')).json() as { status: { last: { title: string } } };
     assert.equal(status.status.last.title, '🤖 修复登录超时');
     // Later turns do not rename again unless asked for.

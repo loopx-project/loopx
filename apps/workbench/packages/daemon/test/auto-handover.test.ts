@@ -21,7 +21,7 @@ const wait = async (check: () => unknown, timeout = 8000) => {
   while (!check()) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 10)); }
 };
 async function setup(summaryFail = false, hidden?: string) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-auto-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-auto-test-'));
   const store = new Store(dir);
   const adapters = new Map<string, AgentAdapter>();
   for (const id of ['agy', 'agy2', 'agy3']) {
@@ -452,11 +452,11 @@ test('takeover: an exhausted lead hands its place, failed ask and note to the ch
     assert.equal(h.team.view(job.to)?.rootId, next.id);
     assert.equal(h.team.view(next.id)?.members[0].name, 'worker');
     const text = String(h.store.listEvents(next.id, 0, -1).find(e => e.type === 'turn.started')!.data.text);
-    assert.match(text, new RegExp(`calli history ${h.thread.id}`));
+    assert.match(text, new RegExp(`loochat history ${h.thread.id}`));
     assert.match(text, /你现在是本次协作的主控/);
     assert.match(text, /## 继续未完成的这一轮\n\nquota-exhausted/);
     assert.match(text, /## 用户补充\n\n先挑三道更难的题/);
-    // The brief leaves the full coordinates and the long synthesized summary to `calli`.
+    // The brief leaves the full coordinates and the long synthesized summary to `loochat`.
     assert.doesNotMatch(text, /Session 文件地址|# 交接摘要/);
     assert.ok(text.length < 1500, `brief handover is ${text.length} chars`);
   } finally { await h.close(); }

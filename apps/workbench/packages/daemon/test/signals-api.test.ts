@@ -10,7 +10,7 @@ import { AttachmentStore } from '../src/attachments.js';
 import { createHttpServer } from '../src/http.js';
 
 test('the signals API lists lightweight projections and reads bodies only by explicit key', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-signals-api-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-signals-api-'));
   const store = new Store(dir);
   const manager = new ThreadManager(store, new Map(), [dir], new AttachmentStore(dir));
   const server = createHttpServer({ manager, token: 'test-token', webDir: null, version: 'test' });

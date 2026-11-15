@@ -69,7 +69,7 @@ export async function probeVoice({
   requestTimeoutMs = 15_000, observeMs = 8_000, env = process.env,
 } = {}) {
   if (protocol !== undefined && !['v1', 'v2', 'v3'].includes(protocol)) throw new Error('Invalid realtime protocol');
-  const cwd = await mkdtemp(join(tmpdir(), 'calli-voice-probe-'));
+  const cwd = await mkdtemp(join(tmpdir(), 'loochat-voice-probe-'));
   const report = {
     mode: connect ? 'connection' : 'capabilities', protocol: protocol ?? 'default',
     transport: connect ? (webrtc ? 'webrtc' : 'websocket') : null, outputModality: connect ? (audioOutput ? 'audio' : 'text') : null,
@@ -150,7 +150,7 @@ export async function probeVoice({
     if (message.method === 'thread/realtime/closed') finishObservation();
   });
   try {
-    await rpc('initialize', { clientInfo: { name: 'calli', title: 'Calli voice probe', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+    await rpc('initialize', { clientInfo: { name: 'loochat', title: 'LooChat voice probe', version: '0.1.0' }, capabilities: { experimentalApi: true } });
     write({ method: 'initialized', params: {} });
     report.stage = 'account';
     const account = await rpc('account/read', { refreshToken: false });

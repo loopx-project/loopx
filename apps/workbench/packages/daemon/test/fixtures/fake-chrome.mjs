@@ -22,6 +22,6 @@ const server = createServer((req, res) => {
 });
 server.listen(0, '127.0.0.1', () => {
   log({ pid: process.pid, display: process.env.DISPLAY, args,
-    hubSecrets: ['CALLI_TOKEN', 'CALLI_TOKEN', 'CALLI_TOOLS_SOCKET', 'CALLI_TOOLS_KEY'].filter(k => process.env[k] !== undefined) });
+    hubSecrets: ['LOOCHAT_TOKEN', 'LOOCHAT_TOKEN', 'LOOCHAT_TOOLS_SOCKET', 'LOOCHAT_TOOLS_KEY'].filter(k => process.env[k] !== undefined) });
   writeFileSync(join(profile, 'DevToolsActivePort'), `${server.address().port}\n/devtools/browser/fake\n`);
 });

@@ -111,7 +111,7 @@ try {
   // A thread with a team (so the agents panel has a member waiting on the person), an edited file,
   // a written report and a chart: the overview's change row opens the preview, its picture opens
   // the lightbox, its footer opens the trace, and a member row opens the agents panel.
-  const spawn = (name, key, task) => `CALLI_COMMAND:${Buffer.from(JSON.stringify({
+  const spawn = (name, key, task) => `LOOCHAT_COMMAND:${Buffer.from(JSON.stringify({
     args: ['spawn', '--agent', 'claude', '--name', name, '--message-file', '-', '--request-id', key],
     text: task,
   })).toString('base64')}`;

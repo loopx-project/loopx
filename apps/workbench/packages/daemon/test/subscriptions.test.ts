@@ -8,7 +8,7 @@ import { Store, type TodoSubscription } from '../src/store.js';
 
 const subscription = (ref: string): TodoSubscription => ({ kind: 'lark-thread', ref, at: '2026-11-01T00:00:00Z' });
 test('subscriptions migrate empty, persist, deduplicate by kind/ref and enforce twenty unique entries atomically', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-subscriptions-')); let store = new Store(dir);
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-subscriptions-')); let store = new Store(dir);
   try {
     store.createTodo('old', 'Existing matter', null); store.close();
     const db = new DatabaseSync(join(dir, 'hub.db'));

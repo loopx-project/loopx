@@ -23,8 +23,8 @@ export interface ProgressReport {
 const STAGES: Record<string, ProgressStage> = { 进行中: 'doing', 待验收: 'review', 需要你: 'blocked' };
 const LINE = /^\s*[*_`>-]*\s*\[进度\]\s*(进行中|待验收|需要你)\s*(?:[:：\-—]\s*)?(.*?)[*_`\s]*$/;
 const MAX_NOTE = 200;
-const MARK = '<calli-progress>';
-/** The mark from before the rename to Calli, still in older messages. */
+const MARK = '<loochat-progress>';
+/** The mark from before the rename to LoopX, still in older messages. */
 const LEGACY_MARK = '<limi-progress>';
 
 /** The last progress line in a turn's answer, or null when the agent did not write one. */
@@ -38,7 +38,7 @@ export function parseProgress(answer: string): { stage: ProgressStage; note: str
 }
 
 /** Appended to what the person sent, the way collaboration appends its own; never shown to them. */
-const BLOCK = `${MARK}\n本轮结束时，在回复最后单独写一行进度：\n[进度] 进行中|待验收|需要你：一句话说明\n进行中：还有工作要做；待验收：你认为已经做完，请用户检查；需要你：没有用户就无法继续。是否完成由用户确认，不要说已完成。\n</calli-progress>`;
+const BLOCK = `${MARK}\n本轮结束时，在回复最后单独写一行进度：\n[进度] 进行中|待验收|需要你：一句话说明\n进行中：还有工作要做；待验收：你认为已经做完，请用户检查；需要你：没有用户就无法继续。是否完成由用户确认，不要说已完成。\n</loochat-progress>`;
 
 /** `gate` leaves the block out when the agent has it in view already. */
 export function progressInstructions(text: string, gate?: InjectionGate): string {

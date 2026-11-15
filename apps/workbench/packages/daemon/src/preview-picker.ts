@@ -1,7 +1,7 @@
 /** Framework-independent picker. The frame cannot save or send messages; its parent owns those actions. */
 export const PREVIEW_PICKER = String.raw`(() => {
-  if (window.parent === window || window.__calliPreviewPicker) return;
-  window.__calliPreviewPicker = true;
+  if (window.parent === window || window.__loochatPreviewPicker) return;
+  window.__loochatPreviewPicker = true;
   let enabled = false, origin = null;
   const outline = document.createElement('div');
   outline.setAttribute('aria-hidden', 'true');
@@ -22,11 +22,11 @@ export const PREVIEW_PICKER = String.raw`(() => {
   }
   window.addEventListener('message', event => {
     if(event.source!==window.parent || !event.data || typeof event.data!=='object')return;
-    if(event.data.type==='calli-preview:init'){origin=event.origin;outline.style.color=event.data.color || 'currentColor';send({type:'calli-preview:connected'});return;}
+    if(event.data.type==='loochat-preview:init'){origin=event.origin;outline.style.color=event.data.color || 'currentColor';send({type:'loochat-preview:connected'});return;}
     if(!origin || event.origin!==origin)return;
-    if(event.data.type==='calli-preview:pick'){enabled=event.data.enabled===true;outline.style.display='none';}
-    if(event.data.type==='calli-preview:locate' && typeof event.data.selector==='string'){
-      try{const el=document.querySelector(event.data.selector);if(el){el.scrollIntoView({block:'center'});box(el);}else send({type:'calli-preview:missing'});}catch{send({type:'calli-preview:missing'});}
+    if(event.data.type==='loochat-preview:pick'){enabled=event.data.enabled===true;outline.style.display='none';}
+    if(event.data.type==='loochat-preview:locate' && typeof event.data.selector==='string'){
+      try{const el=document.querySelector(event.data.selector);if(el){el.scrollIntoView({block:'center'});box(el);}else send({type:'loochat-preview:missing'});}catch{send({type:'loochat-preview:missing'});}
     }
   });
   document.addEventListener('pointermove',event=>{if(enabled && event.pointerType==='mouse' && event.target instanceof Element)box(event.target.closest('button,a')||event.target);},true);
@@ -37,8 +37,8 @@ export const PREVIEW_PICKER = String.raw`(() => {
     const el=event.target.closest('button,a')||event.target,r=el.getBoundingClientRect();box(el);
     const url=new URL(location.href);url.search='';
     const variant=document.querySelector('[data-variant]')?.getAttribute('data-variant')||'';
-    send({type:'calli-preview:picked',target:{selector:selector(el),text:(el.textContent||'').trim().slice(0,300),html:el.outerHTML.slice(0,6000),rect:{x:r.x,y:r.y,width:r.width,height:r.height}},context:{title:document.title.slice(0,300),url:url.href.slice(0,4096),theme:document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'),variant:variant.slice(0,100),revision:document.documentElement.dataset.previewRevision||'',viewport:{width:innerWidth,height:innerHeight}}});
+    send({type:'loochat-preview:picked',target:{selector:selector(el),text:(el.textContent||'').trim().slice(0,300),html:el.outerHTML.slice(0,6000),rect:{x:r.x,y:r.y,width:r.width,height:r.height}},context:{title:document.title.slice(0,300),url:url.href.slice(0,4096),theme:document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'),variant:variant.slice(0,100),revision:document.documentElement.dataset.previewRevision||'',viewport:{width:innerWidth,height:innerHeight}}});
   },true);
-  document.addEventListener('keydown',event=>{if(event.key==='Escape' && enabled){enabled=false;outline.style.display='none';send({type:'calli-preview:cancel'});}},true);
-  window.parent.postMessage({type:'calli-preview:ready'},'*');
+  document.addEventListener('keydown',event=>{if(event.key==='Escape' && enabled){enabled=false;outline.style.display='none';send({type:'loochat-preview:cancel'});}},true);
+  window.parent.postMessage({type:'loochat-preview:ready'},'*');
 })();`;

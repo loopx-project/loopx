@@ -15,12 +15,12 @@ const waitFor = async (condition: () => boolean) => {
   while (!condition()) { assert.ok(Date.now() < end, 'fixture did not reach expected state'); await new Promise(resolve => setTimeout(resolve, 10)); }
 };
 function setup(initial: object, missing = false) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-lark-events-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-lark-events-'));
   const data = join(dir, 'data.json'), log = join(dir, 'log.jsonl');
   const config = (v: object) => writeFileSync(data, JSON.stringify({ tasks: [], ...v })); config(initial);
   const store = new Store(dir), sent: string[] = [];
   const personal = { directory: () => dir, manager: { startTurn: async () => {} }, router: { status: () => ({ threadId: null }), receiveSignals: async (text: string) => { sent.push(text); return { threadId: 'router' }; } } } as unknown as Pick<PersonalService, 'directory' | 'manager' | 'router'>;
-  const options = { executable: missing ? join(dir, 'missing') : resolve('test/fixtures/fake-lark-channel.mjs'), env: { ...process.env, CALLI_TEST_SECRET: 'must-be-stripped', FAKE_LARK_DATA: data, FAKE_LARK_LOG: log } };
+  const options = { executable: missing ? join(dir, 'missing') : resolve('test/fixtures/fake-lark-channel.mjs'), env: { ...process.env, LOOCHAT_TEST_SECRET: 'must-be-stripped', FAKE_LARK_DATA: data, FAKE_LARK_LOG: log } };
   const channel = new LarkChannel(store, personal, options); channel.save(settings);
   const retries: Array<{ callback: () => void; ms: number; due: number; cancelled: boolean }> = []; let clock = 0;
   const events = new LarkEvents(channel, { ...options, schedule: (callback, ms) => { const retry = { callback, ms, due: clock + ms, cancelled: false }; retries.push(retry); return () => { retry.cancelled = true; }; } });

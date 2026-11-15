@@ -127,7 +127,7 @@ test('zcode cannot resume an active goal in plan mode', async () => {
 });
 
 test('queued planning messages retain their mode after native approval starts execution', { timeout: 10000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-plan-queue-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-plan-queue-'));
   const store = new Store(dir);
   const adapter = new ZcodeAdapter(fixture('zcode'), { ZCODE_DATA_BASE_DIR: here });
   const manager = new ThreadManager(store, new Map([['zcode', adapter]]), [dir], new AttachmentStore(dir));
@@ -167,7 +167,7 @@ test('input reannouncements, validation, cancellation and duplicate responses', 
 });
 
 test('HTTP mode and input lifecycle: persistence, invalid modes, busy changes, reload and cancellation', { timeout: 15000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-plan-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-plan-'));
   const store = new Store(dir);
   const registry = new AgentRegistry([{ id: 'codex', adapter: 'codex', command: fixture('codex') }, { id: 'pi', adapter: 'pi', command: fixture('pi') }], null);
   const manager = new ThreadManager(store, registry.adapters, [dir], new AttachmentStore(dir));

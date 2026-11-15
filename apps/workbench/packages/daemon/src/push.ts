@@ -70,8 +70,8 @@ export class PushService {
     if (next.recipient && !/^[\w-]+$/.test(next.recipient)) throw new HttpError(400, 'invalid recipient');
     if (next.baseUrl) {
       let url: URL;
-      try { url = new URL(next.baseUrl); } catch { throw new HttpError(400, 'invalid Calli address'); }
-      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new HttpError(400, 'Calli address must be an HTTP(S) address without credentials, query or hash');
+      try { url = new URL(next.baseUrl); } catch { throw new HttpError(400, 'invalid LoopX address'); }
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new HttpError(400, 'LoopX address must be an HTTP(S) address without credentials, query or hash');
       next.baseUrl = url.href.replace(/\/$/, '');
     }
     this.store.saveHubSetting('push', next);
@@ -79,8 +79,8 @@ export class PushService {
   }
   private run(args: string[], input = ''): Promise<string> {
     const env = { ...(this.options.env ?? process.env) };
-    const executable = this.options.executable ?? env.CALLI_LARK_CLI ?? 'lark-cli';
-    for (const key of Object.keys(env)) if (key === 'CALLI_TOKEN' || key.startsWith('CALLI_')) delete env[key];
+    const executable = this.options.executable ?? env.LOOCHAT_LARK_CLI ?? 'lark-cli';
+    for (const key of Object.keys(env)) if (key === 'LOOCHAT_TOKEN' || key.startsWith('LOOCHAT_')) delete env[key];
     return new Promise((resolve, reject) => {
       const child = execFile(executable, args, { env, timeout: this.options.timeoutMs ?? 15000, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, signal: this.abort.signal }, (error, stdout) => {
         // Never expose CLI output or the execFile error message: either may contain credentials.
@@ -150,7 +150,7 @@ export class PushService {
   private enqueue(kind: PushKind, threadId: string | null, key: string, notice?: string, brief?: PersonalBrief): PushRecord {
     const settings = this.settings(), now = this.now();
     const thread = threadId ? this.store.getThread(threadId) : null;
-    const record: PushRecord = { key, at: new Date(now).toISOString(), kind, threadId, title: brief?.title ?? thread?.title ?? 'Calli', result: 'queued', reason: null };
+    const record: PushRecord = { key, at: new Date(now).toISOString(), kind, threadId, title: brief?.title ?? thread?.title ?? 'LoopX', result: 'queued', reason: null };
     this.records.unshift(record); this.records.splice(20);
     for (const [id, at] of this.notices) if (now - at >= 60000) this.notices.delete(id);
     this.hourly = this.hourly.filter(t => now - t < 3600000);
@@ -164,7 +164,7 @@ export class PushService {
     this.hourly.push(now);
     if (kind === 'notice' && threadId) this.notices.set(threadId, now);
     const time = new Date(now).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    const body = brief ? [`[Calli] ${brief.title}`, brief.text, ...(settings.baseUrl ? [`打开：${settings.baseUrl}/#/desk`] : [])].join('\n') : [`[Calli] ${labels[kind]} · ${record.title}`, `${thread?.agent ?? 'Calli'} · ${time}`,
+    const body = brief ? [`[LoopX] ${brief.title}`, brief.text, ...(settings.baseUrl ? [`打开：${settings.baseUrl}/#/desk`] : [])].join('\n') : [`[LoopX] ${labels[kind]} · ${record.title}`, `${thread?.agent ?? 'LoopX'} · ${time}`,
       ...(notice !== undefined ? [`来自 agent：${notice}`] : []), ...(settings.baseUrl && threadId ? [`打开：${settings.baseUrl}/#/thread/${encodeURIComponent(threadId)}`] : [])].join('\n');
     this.queue.push({ record, body, settings, ...(brief ? { briefText: `${brief.title}\n${brief.text}` } : {}) });
     void this.drain();

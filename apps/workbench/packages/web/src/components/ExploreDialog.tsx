@@ -9,7 +9,7 @@ import { PushSettingsDialog } from './PushSettingsDialog';
 import { IconCheck, IconChevron, IconClose, IconPlus, IconSearch } from './icons';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
-const sourceName = (source: string) => ['lark-profile', 'lark-chats', 'lark-messages', 'lark-calendar', 'calli-threads'].includes(source)
+const sourceName = (source: string) => ['lark-profile', 'lark-chats', 'lark-messages', 'lark-calendar', 'loochat-threads'].includes(source)
   ? t(`explore.source.${source as ExploreSourceId}`) : source;
 
 function Row({ label, why, control, children }: { label: ReactNode; why?: ReactNode; control?: ReactNode; children?: ReactNode }) {

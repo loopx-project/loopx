@@ -11,7 +11,7 @@ import { modelGateway } from './fixtures/model-gateway.mjs';
 test('Claude gateway discovery reads account settings and capabilities without selecting every model', async t => {
   const gateway = await modelGateway();
   t.after(() => gateway.close());
-  const configDir = mkdtempSync(join(tmpdir(), 'calli-gateway-account-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'loochat-gateway-account-'));
   t.after(() => rmSync(configDir, { recursive: true, force: true }));
   gateway.state.models = [
     { id: 'claude-gpt-5-6-sol', display_name: 'Gateway GPT 5.6', capabilities: { effort: { supported: true, low: { supported: true }, high: { supported: true } }, image_input: { supported: true } } },
@@ -39,7 +39,7 @@ test('Claude gateway discovery reads account settings and capabilities without s
 });
 
 test('Claude gateway discovery shows only GPT 5.5+ and openrouter-4o families', async t => {
-  const ferryHome = mkdtempSync(join(tmpdir(), 'calli-gateway-no-ferry-'));
+  const ferryHome = mkdtempSync(join(tmpdir(), 'loochat-gateway-no-ferry-'));
   t.after(() => rmSync(ferryHome, { recursive: true, force: true }));
   const gateway = await modelGateway();
   t.after(() => gateway.close());
@@ -56,7 +56,7 @@ test('Claude gateway discovery shows only GPT 5.5+ and openrouter-4o families', 
     { id: 'claude-seed-evolving', display_name: 'Ferry Seed-Evolving' },
   ];
   const adapter = new ClaudeAcpAdapter(['nonexistent-acp-for-gateway-test'], {
-    ANTHROPIC_BASE_URL: gateway.url, CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', CALLI_TRAEX_BIN: 'nonexistent-traex-for-gateway-test', FERRY_HOME: ferryHome,
+    ANTHROPIC_BASE_URL: gateway.url, CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', LOOCHAT_TRAEX_BIN: 'nonexistent-traex-for-gateway-test', FERRY_HOME: ferryHome,
   });
   assert.deepEqual((await adapter.models()).map(m => m.id), [
     'claude-openrouter-4o',
@@ -91,7 +91,7 @@ test('local Ferry models carry upstream loads without inventing queue sizes, and
   // Use a fake metadata CLI: discovery must not run inference or query a real user's account.
   const gateway = await modelGateway();
   t.after(() => gateway.close());
-  const configDir = mkdtempSync(join(tmpdir(), 'calli-ferry-status-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'loochat-ferry-status-'));
   t.after(() => rmSync(configDir, { recursive: true, force: true }));
   const fake = fileURLToPath(new URL('./fixtures/fake-acp.mjs', import.meta.url));
   const cli = join(configDir, 'traex');
@@ -120,7 +120,7 @@ test('local Ferry models carry upstream loads without inventing queue sizes, and
   ];
   const env = {
     CLAUDE_CONFIG_DIR: configDir, ANTHROPIC_BASE_URL: gateway.url, ANTHROPIC_MODEL: 'claude-gpt-6-1-sol',
-    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', CALLI_TRAEX_BIN: cli, FAKE_TRAEX_MODELS_FILE: file,
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', LOOCHAT_TRAEX_BIN: cli, FAKE_TRAEX_MODELS_FILE: file,
     FAKE_TRAEX_MODELS_FAIL: '0', FERRY_HOME: configDir,
   };
   const adapter = new ClaudeAcpAdapter(['nonexistent-acp-for-gateway-test'], env);
@@ -178,7 +178,7 @@ test('local Ferry models carry upstream loads without inventing queue sizes, and
 
 test('remote Ferry catalogs never receive the local TRAE account status', async t => {
   // A Ferry-looking label is insufficient: local metadata does not describe a remote provider.
-  const ferryHome = mkdtempSync(join(tmpdir(), 'calli-remote-ferry-'));
+  const ferryHome = mkdtempSync(join(tmpdir(), 'loochat-remote-ferry-'));
   t.after(() => rmSync(ferryHome, { recursive: true, force: true }));
   writeFileSync(join(ferryHome, 'queue-seen.json'), JSON.stringify({ 'gpt-6.1-sol': { position: 550, at: Date.now() } }));
   t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
@@ -186,7 +186,7 @@ test('remote Ferry catalogs never receive the local TRAE account status', async 
   }), { headers: { 'content-type': 'application/json' } }));
   const adapter = new ClaudeAcpAdapter(['nonexistent-acp-for-gateway-test'], {
     ANTHROPIC_BASE_URL: 'https://gateway.test', CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
-    CALLI_TRAEX_BIN: 'nonexistent-traex-for-gateway-test', FERRY_HOME: ferryHome,
+    LOOCHAT_TRAEX_BIN: 'nonexistent-traex-for-gateway-test', FERRY_HOME: ferryHome,
   });
   const [model] = await adapter.models();
   assert.equal(model.loadPercent, undefined);
@@ -198,11 +198,11 @@ test('remote Ferry catalogs never receive the local TRAE account status', async 
 
 test('without Ferry installed, native and unrelated gateway model discovery keep their existing behavior', async t => {
   // No Ferry or TRAE binary/cache is required to use a native agent or a different gateway.
-  const home = mkdtempSync(join(tmpdir(), 'calli-native-no-ferry-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-native-no-ferry-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const env = {
     HOME: home, CLAUDE_CONFIG_DIR: home, FERRY_HOME: join(home, 'not-installed'),
-    CALLI_TRAEX_BIN: 'nonexistent-traex-for-gateway-test', CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '0',
+    LOOCHAT_TRAEX_BIN: 'nonexistent-traex-for-gateway-test', CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '0',
   };
   const fake = fileURLToPath(new URL('./fixtures/fake-acp.mjs', import.meta.url));
   const native = new ClaudeAcpAdapter([process.execPath, fake], env);
@@ -237,7 +237,7 @@ test('Claude gateway discovery preserves native slash command discovery', async 
 test('Claude on a gateway reads the plans and balances behind its own models from the gateway', async t => {
   const gateway = await modelGateway();
   t.after(() => gateway.close());
-  const home = mkdtempSync(join(tmpdir(), 'calli-gateway-quota-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-gateway-quota-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   gateway.state.models = [{ id: 'zcode/GLM-5.3' }, { id: 'zcode/GLM-5.3-Flash' }, { id: 'deepseek/deepseek-flash' }];
   gateway.state.quotas = [

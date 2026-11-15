@@ -11,7 +11,7 @@ import type { PersonalService } from '../src/personal.js';
 
 const settings: LarkChannelSettings = { enabled: true, people: [{ id: 'ou_watch', name: '示例同事', role: 'pm' }], chats: [{ id: 'oc_watch', name: '示例项目群' }], intervalMin: 30, workHours: { start: 9, end: 21, timeZone: 'Asia/Shanghai' } };
 function setup(initial: object = {}, missing = false) {
-  const directory = mkdtempSync(join(tmpdir(), 'calli-lark-'));
+  const directory = mkdtempSync(join(tmpdir(), 'loochat-lark-'));
   const data = join(directory, 'fixture.json'); const log = join(directory, 'calls.jsonl');
   writeFileSync(data, JSON.stringify(initial));
   const store = new Store(directory);
@@ -32,7 +32,7 @@ function setup(initial: object = {}, missing = false) {
   const personal = { directory: () => directory, manager: { startTurn: async (id: string, input: any) => { if (failures.has(id)) throw failures.get(id); deliveries.push({ id, input }); return { queued: true, id: 'queued' }; } }, router: { status: () => ({ threadId: 'router' }), receiveSignals: async (text: string) => { if (failSend) throw new Error('failed'); sent.push(text); return { threadId: 'router' }; } } } as unknown as Pick<PersonalService, 'directory' | 'router' | 'manager'>;
   const opts = { executable: missing ? join(directory, 'absent-cli') : resolve('test/fixtures/fake-lark-channel.mjs'), env: { ...process.env, FAKE_LARK_DATA: data, FAKE_LARK_LOG: log }, now: () => clock };
   const channel = new LarkChannel(store, personal, opts);
-  return { channel, sent, deliveries, failures, worker, subscribe, store, personal, opts, directory, config: (v: object) => writeFileSync(data, JSON.stringify(v)), calls: () => readFileSync(log, 'utf8').trim().split('\n').map(v => JSON.parse(v) as string[]), cursor: () => JSON.parse(readFileSync(join(directory, '.calli/lark-cursors.json'), 'utf8')), time: (v: string) => { clock = new Date(v); }, fail: (v: boolean) => { failSend = v; }, async close() { await channel.dispose(); store.close(); rmSync(directory, { recursive: true, force: true }); } };
+  return { channel, sent, deliveries, failures, worker, subscribe, store, personal, opts, directory, config: (v: object) => writeFileSync(data, JSON.stringify(v)), calls: () => readFileSync(log, 'utf8').trim().split('\n').map(v => JSON.parse(v) as string[]), cursor: () => JSON.parse(readFileSync(join(directory, '.loochat/lark-cursors.json'), 'utf8')), time: (v: string) => { clock = new Date(v); }, fail: (v: boolean) => { failSend = v; }, async close() { await channel.dispose(); store.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
 
 test('missing CLI and unavailable user login return actionable status', async () => {
@@ -134,7 +134,7 @@ test('scheduler waits at startup, observes working hours after sleep, single-fli
 
 test('calendar avoids past/free conflicts; malformed cursor stays visible', async () => {
   assert.deepEqual(calendarSignals([{ event_id: 'past', summary: '准备', start_time: '2026-10-31T02:00:00Z', end_time: '2026-10-31T03:00:00Z' }], new Date('2026-11-01T02:00:00Z')), []);
-  const h = setup(); try { await h.channel.run(); writeFileSync(join(h.directory, '.calli/lark-cursors.json'), '{broken'); assert.equal((await h.channel.run()).lastError, 'lark_cursor_invalid'); assert.equal(h.sent.length, 1); } finally { await h.close(); }
+  const h = setup(); try { await h.channel.run(); writeFileSync(join(h.directory, '.loochat/lark-cursors.json'), '{broken'); assert.equal((await h.channel.run()).lastError, 'lark_cursor_invalid'); assert.equal(h.sent.length, 1); } finally { await h.close(); }
 });
 
 test('a different Lark identity gets independent cursors; disabling mid-read does not dispatch', async () => {
@@ -164,7 +164,7 @@ test('subscriptions fan out per matter to the most active work thread, excluding
     const older = h.worker('older'), newest = h.worker('newest', '2026-11-01T01:10:00Z');
     const router = h.worker('router', '2026-11-01T01:20:00Z'), review = h.worker('review', '2026-11-01T01:30:00Z');
     const formerRouter = h.worker('former-router', '2026-11-01T01:25:00Z');
-    h.store.appendEvent(formerRouter, 'router-turn', 'turn.started', { hiddenPrompt: true, text: 'signal\n\n<calli-personal-router>\nRouter rules' });
+    h.store.appendEvent(formerRouter, 'router-turn', 'turn.started', { hiddenPrompt: true, text: 'signal\n\n<loochat-personal-router>\nRouter rules' });
     h.store.appendEvent(review, 'review-turn', 'turn.started', { review: true, text: 'review' });
     const archived = h.worker('archived', '2026-11-01T01:40:00Z'); h.store.updateThread(archived, { archivedAt: '2026-11-01T01:50:00Z' });
     h.subscribe('one', topic, [older, newest, router, formerRouter, review, archived]);

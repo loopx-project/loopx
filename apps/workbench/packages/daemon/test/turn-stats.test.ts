@@ -199,7 +199,7 @@ test('a turn with usage and no model time still sums tokens; the aggregate keeps
 });
 
 test('the stats response counts completed native compactions for the context panel', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-compaction-stats-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-compaction-stats-'));
   const store = new Store(dir);
   const adapter = new PiRpcAdapter(['echo'], {});
   const manager = new ThreadManager(store, new Map([['pi', adapter]]), [dir], new AttachmentStore(dir));
@@ -218,7 +218,7 @@ test('the stats response counts completed native compactions for the context pan
 });
 
 test('per-turn stats are stored when a turn ends, backfilled for old ones, and never scanned per read', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-turn-stats-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-turn-stats-'));
   const store = new Store(dir);
   const adapter = new PiRpcAdapter(['echo'], {});
   const manager = new ThreadManager(store, new Map([['pi', adapter]]), [dir], new AttachmentStore(dir));
@@ -302,7 +302,7 @@ test('per-turn stats are stored when a turn ends, backfilled for old ones, and n
 });
 
 test('the trace carries the segments the timeline will draw', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-turn-stats-trace-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-turn-stats-trace-'));
   const store = new Store(dir);
   const adapter = new PiRpcAdapter(['echo'], {});
   const manager = new ThreadManager(store, new Map([['pi', adapter]]), [dir], new AttachmentStore(dir));

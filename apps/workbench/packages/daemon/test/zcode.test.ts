@@ -11,7 +11,7 @@ import type { TurnHooks } from '../src/adapters/types.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const command = [process.execPath, join(here, 'fixtures/fake-zcode.mjs')];
 function setup(env: Record<string, string> = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-zcode-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-zcode-'));
   const log = join(dir, 'wire.jsonl');
   // The empty data dir has no plugin store, keeping these baseline tests free of any
   // machine-local MCP plugins.
@@ -264,7 +264,7 @@ test('zcode exposes and handles local query commands without sending prompts', a
 
 
 test('an optional statistics timeout leaves the native connection usable', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-zcode-optional-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-zcode-optional-'));
   const wire = new ZcodeWire(command, dir, { ...process.env, FAKE_ZCODE_USAGE_HANG: '1' });
   try {
     await assert.rejects(wire.request('session/usage', {}, 30, false), /超时/);

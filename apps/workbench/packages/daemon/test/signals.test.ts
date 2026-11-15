@@ -14,7 +14,7 @@ const ready: SignalMaterialRead = {
 };
 
 function fixture(t: TestContext) {
-  const directory = mkdtempSync(join(tmpdir(), 'calli-signals-'));
+  const directory = mkdtempSync(join(tmpdir(), 'loochat-signals-'));
   let store: Store | undefined;
   const database = <T>(work: (db: DatabaseSync) => T): T => {
     const db = new DatabaseSync(join(directory, 'hub.db'));
@@ -33,7 +33,7 @@ function fixture(t: TestContext) {
 }
 
 test('signals deduplicate, persist updated destinations, query matters and prune after ninety days', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'calli-signals-'));
+  const directory = mkdtempSync(join(tmpdir(), 'loochat-signals-'));
   let store = new Store(directory);
   try {
     const now = new Date('2026-11-01T00:00:00.000Z');

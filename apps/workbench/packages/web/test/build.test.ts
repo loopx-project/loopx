@@ -7,7 +7,7 @@ import { build } from 'vite';
 import config from '../vite.config.js';
 
 test('a failed web build preserves the published homepage and assets', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'calli-build-'));
+  const root = await mkdtemp(join(tmpdir(), 'loochat-build-'));
   try {
     await mkdir(join(root, 'dist', 'assets'), { recursive: true });
     await writeFile(join(root, 'index.html'), '<html>new page</html>');

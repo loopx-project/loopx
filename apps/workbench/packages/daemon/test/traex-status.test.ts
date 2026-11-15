@@ -28,7 +28,7 @@ test('TRAE metadata keeps overload distinct from weekly quota and tolerates miss
 });
 
 test('TRAE enriches ACP models, retains defaults, refreshes metadata and reports quota', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-traex-status-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-traex-status-'));
   try {
     const file = join(root, 'models.json');
     const seed = (load: number, used: number) => writeFileSync(file, JSON.stringify([{ name: 'Big 1.0', config_name: 'big', _meta: { trae: { load: { percent: load }, weeklyQuota: { applies: true, usedPercent: used } } } }]));
@@ -54,7 +54,7 @@ test('TRAE enriches ACP models, retains defaults, refreshes metadata and reports
 });
 
 test('TRAE quota windows carry their own model\'s load, and none when the CLI reports none', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-traex-load-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-traex-load-'));
   try {
     const file = join(root, 'models.json');
     const weeklyQuota = { applies: true, usedPercent: 5 };

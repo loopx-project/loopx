@@ -14,7 +14,7 @@ const MIN = 60_000;
 
 /** One meter over its own in-memory store and a fake home; every test starts clean. */
 function makeMeter(launchers: Array<[string, string]> = [['11111111-1111-1111-1111-111111111111', 'claude']]) {
-  const home = mkdtempSync(join(tmpdir(), 'calli-usage-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-usage-home-'));
   const db = new DatabaseSync(':memory:');
   let nowMs = Date.parse('2026-11-09T10:30:00Z');
   const meter = new MachineUsageMeter({

@@ -10,7 +10,7 @@ const e2ePackage = JSON.parse(readFileSync(new URL('./package.json', import.meta
 
 // Exercise the real npm entry points in a tiny repository, without Vite or browsers.
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), 'calli-e2e-runner-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-e2e-runner-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const e2e = join(root, 'packages/e2e');
   mkdirSync(join(e2e, 'test'), { recursive: true });

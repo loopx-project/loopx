@@ -156,7 +156,7 @@ test('routing aliases use explicitly marked assumptions and do not overwrite nat
 });
 
 test('existing ledger rows gain read-time estimates without writes; filtering and out-of-window native totals are respected', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-price-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-price-'));
   const store = new Store(dir);
   try {
     for (const [id, agent, model] of [['a', 'codex', 'gpt-6-astra'], ['b', 'zcode', 'glm-5.3'], ['c', 'pi', 'glm-5.3']]) {

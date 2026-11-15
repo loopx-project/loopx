@@ -95,10 +95,10 @@ test('the four explore API methods use the documented verbs, paths and source pa
     return new Response(JSON.stringify(null), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
   const api = new Api('test-token');
-  await api.exploreSources(); await api.startExplore(['calli-threads']); await api.exploreStatus(); await api.cancelExplore();
+  await api.exploreSources(); await api.startExplore(['loochat-threads']); await api.exploreStatus(); await api.cancelExplore();
   assert.deepEqual(calls, [
     { url: '/api/personal/explore/sources', method: 'GET', body: null },
-    { url: '/api/personal/explore', method: 'POST', body: { sources: ['calli-threads'] } },
+    { url: '/api/personal/explore', method: 'POST', body: { sources: ['loochat-threads'] } },
     { url: '/api/personal/explore', method: 'GET', body: null },
     { url: '/api/personal/explore', method: 'DELETE', body: null },
   ]);

@@ -7,13 +7,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { linkDaemon, startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
-const SOCKET_IN_HOME = '.local/state/calli/daemon.sock';
+const SOCKET_IN_HOME = '.local/state/loochat/daemon.sock';
 
 test('switching machines shows the remembered list at once and never an empty one', { timeout: 150000 }, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-e2e-host-cache-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-e2e-host-cache-'));
   const nodeHome = join(root, 'devbox');
   mkdirSync(nodeHome);
-  const node = await startDaemon({ CALLI_SOCKET: join(nodeHome, SOCKET_IN_HOME) });
+  const node = await startDaemon({ LOOCHAT_SOCKET: join(nodeHome, SOCKET_IN_HOME) });
   const hub = await startDaemon();
   let browser;
   try {

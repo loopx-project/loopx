@@ -1,4 +1,4 @@
-// Every hook between Calli and its extensions. See docs/extensions-design.md, 「hook 清单与首版实现状态」.
+// Every hook between LooChat and its extensions. See docs/extensions-design.md, 「hook 清单与首版实现状态」.
 //
 // Three shapes, no interception:
 // - Notification: host → extension, after the fact, delivered asynchronously. The core never waits.

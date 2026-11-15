@@ -691,7 +691,7 @@ export class Store {
   /** The MCP registry: business line and purpose notes, plus manually registered servers. */
   readonly mcpEntries: McpRegistry;
 
-  /** Which Calli extensions are installed on this machine, and the permissions confirmed for them. */
+  /** Which LoopX extensions are installed on this machine, and the permissions confirmed for them. */
   readonly extensions: ExtensionStore;
 
   /** Where each open turn began, so its answer is read from there and not from the thread's start. */
@@ -1155,7 +1155,7 @@ export class Store {
   isRouterThread(threadId: string): boolean {
     return !!this.db.prepare(`SELECT 1 FROM events WHERE thread_id = ? AND type = 'turn.started'
       AND json_extract(data, '$.hiddenPrompt') = 1
-      AND instr(json_extract(data, '$.text'), ?) > 0 LIMIT 1`).get(threadId, '\n\n<calli-personal-router>\n');
+      AND instr(json_extract(data, '$.text'), ?) > 0 LIMIT 1`).get(threadId, '\n\n<loochat-personal-router>\n');
   }
 
   isReviewThread(threadId: string): boolean {

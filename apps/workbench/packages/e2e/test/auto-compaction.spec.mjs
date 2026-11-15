@@ -5,13 +5,13 @@ import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mjs';
 
 let daemon, browser;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 before(async () => {
   const agents = ['codex', 'traex', 'claude', 'pi', 'zcode'].map(id => ({ id, adapter: id,
     command: [process.execPath, join(repoRoot, `daemon/test/fixtures/fake-${['claude', 'traex'].includes(id) ? 'acp' : id}.mjs`)],
     ...(id === 'traex' ? { env: { FAKE_ACP_FLAVOR: 'traex' } } : {}),
   }));
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents }), FAKE_AUTO_COMPACT_DELAY: '1500' });
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents }), FAKE_AUTO_COMPACT_DELAY: '1500' });
   browser = await launchBrowser();
   if (shots) mkdirSync(shots, { recursive: true });
 });

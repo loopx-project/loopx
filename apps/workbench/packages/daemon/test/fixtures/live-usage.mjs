@@ -20,7 +20,7 @@ export function claudeUsage(id, cwd, request) {
 }
 
 export function agyUsage(id, step) {
-  const file = join(process.env.CALLI_AGY_HOME, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
+  const file = join(process.env.LOOCHAT_AGY_HOME, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
   const row = { type: 'PLANNER_RESPONSE', step_index: step, created_at: new Date().toISOString(), input_tokens: 150, cache_read_tokens: 50, output_tokens: 20 };
   append(file, row); append(file, row);
 }

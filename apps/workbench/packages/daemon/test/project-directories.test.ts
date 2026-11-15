@@ -7,7 +7,7 @@ import { HttpError } from '../src/errors.js';
 import { listProjectDirectories } from '../src/project-directories.js';
 
 test('project browsing lists folders lazily without extending workdirs, and confines symlinks', () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-project-browser-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-project-browser-'));
   const home = join(root, 'home');
   const configured = join(root, 'configured');
   const outside = join(root, 'outside');
@@ -53,7 +53,7 @@ test('project browsing lists folders lazily without extending workdirs, and conf
 });
 
 test('project browsing takes ~ for the home directory, and says where home is', () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-project-tilde-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-project-tilde-'));
   const home = join(root, 'home');
   const project = join(home, 'project');
   mkdirSync(project, { recursive: true });

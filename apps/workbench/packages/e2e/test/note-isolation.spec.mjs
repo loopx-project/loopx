@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
 let daemon, browser;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 
 before(async () => {
   daemon = await startDaemon();

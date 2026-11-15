@@ -187,7 +187,7 @@ test('ClaudeAcpAdapter: resume uses session/load and keeps the same id', async (
 });
 
 test('DshAcpAdapter: resume goes through session/resume, which never replays', async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-dsh-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-dsh-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const log = join(dir, 'resume.log');
   const adapter = new DshAcpAdapter([process.execPath, fakeAcp], { FAKE_ACP_FLAVOR: 'dsh', FAKE_ACP_RESUME_LOG: log });
@@ -322,7 +322,7 @@ test('ClaudeAcpAdapter: model list and slash commands come from the agent', asyn
 });
 
 test('ClaudeAcpAdapter: permission mode, model and effort are applied when the native session starts', async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-claude-start-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-claude-start-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const started = join(dir, 'new.jsonl');
   const selected = join(dir, 'selected.log');
@@ -562,7 +562,7 @@ test('summarisePiSession reads id and directory from the header and picks a titl
 });
 
 test('PiRpcAdapter: sessions are discovered from pi\'s session files, newest first', async () => {
-  const agentDir = mkdtemp(join(osTmpdir(), 'calli-pi-agent-'));
+  const agentDir = mkdtemp(join(osTmpdir(), 'loochat-pi-agent-'));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
@@ -627,7 +627,7 @@ test('both agents list, replay and fork sessions through their own means', async
 
 test('a copy can be made for another directory, each agent in its own way', async () => {
   // Where the hub puts a worktree: `<repository>/.worktrees/<name>`.
-  const tree = join(mkdtempSync(join(tmpdir(), 'calli-test-into-')), '.worktrees', 'abcd1234');
+  const tree = join(mkdtempSync(join(tmpdir(), 'loochat-test-into-')), '.worktrees', 'abcd1234');
   mkdirSync(tree, { recursive: true });
   try {
     // Claude is asked for the copy from where it will run.
@@ -1020,7 +1020,7 @@ test('TraexAcpAdapter: the model list is taken as reported, with the current pic
 });
 
 test('TraexAcpAdapter: sessions are deleted through the CLI, not the protocol', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-traex-del-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-traex-del-'));
   const log = join(dir, 'deleted.log');
   // The full form of the command, as the daemon configures it; the adapter strips "acp serve".
   const adapter = new TraexAcpAdapter([process.execPath, fakeAcp, 'acp', 'serve'], { ...traexEnv, FAKE_ACP_DELETE_LOG: log });
@@ -1030,11 +1030,11 @@ test('TraexAcpAdapter: sessions are deleted through the CLI, not the protocol', 
 });
 
 test('TraexAcpAdapter: artifactDirs finds the session folder under .trae/cli/sessions', () => {
-  const home = mkdtempSync(join(tmpdir(), 'calli-traex-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-traex-home-'));
   const id = '01a1255b-b666-7820-8ae3-0842196c13b4';
   const artifacts = join(home, 'sessions', '2026', '10', '10', `rollout-2026-10-10T10-28-49-${id}.artifacts`);
   mkdirSync(artifacts, { recursive: true });
-  const adapter = new TraexAcpAdapter([process.execPath, fakeAcp], { CALLI_TRAEX_HOME: home });
+  const adapter = new TraexAcpAdapter([process.execPath, fakeAcp], { LOOCHAT_TRAEX_HOME: home });
   assert.deepEqual(adapter.artifactDirs!(id), [artifacts]);
   assert.deepEqual(adapter.artifactDirs!('not an id'), [], 'junk ids are not looked up');
   rmSync(home, { recursive: true, force: true });
@@ -1415,7 +1415,7 @@ test('CodexAppServerAdapter: permission level, model and effort ride with the tu
 });
 
 test('CodexAppServerAdapter: native auto-review is selected when threads start or resume', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-codex-auto-review-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-codex-auto-review-'));
   const log = join(dir, 'rpc.jsonl');
   try {
     const adapter = new CodexAppServerAdapter([process.execPath, fakeCodex], { FAKE_CODEX_RPC_LOG: log });
@@ -1435,7 +1435,7 @@ test('CodexAppServerAdapter: native auto-review is selected when threads start o
 });
 
 test('CodexAppServerAdapter: changing permission during a turn updates its native reviewer', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-codex-live-auto-review-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-codex-live-auto-review-'));
   const log = join(dir, 'rpc.jsonl');
   try {
     const adapter = new CodexAppServerAdapter([process.execPath, fakeCodex], {
@@ -1530,7 +1530,7 @@ test('CodexAppServerAdapter: listing, history, forking and deleting go through o
 });
 
 test('CodexAppServerAdapter: index-only listing shares requests and keeps sessions beyond page 50', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-codex-index-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-codex-index-'));
   const file = join(dir, 'sessions.json');
   const log = join(dir, 'rpc.jsonl');
   try {

@@ -17,11 +17,11 @@ const wait = async (check: () => unknown, timeout = 8_000) => {
   while (!check()) { if (Date.now() > until) throw new Error('timed out'); await new Promise(r => setTimeout(r, 10)); }
 };
 async function setup(t: { after(fn: () => unknown): void }) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-agent-stream-settings-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-agent-stream-settings-'));
   const root = join(dir, 'runtime'), bin = createFakeDoubaoRuntime(root);
   const file = join(dir, 'agents.json'), log = join(dir, 'calls.jsonl');
   const instance = { id: 'doubao', adapter: 'doubao' as const, label: 'Local CLI', command: [bin], hidden: true, account: 'local@example.com', env: {
-    CALLI_DOUBAO_STREAM: '0', FAKE_DOUBAO_LOG: log, KEEP: 'instance-setting', HOME: join(dir, 'account-home'),
+    LOOCHAT_DOUBAO_STREAM: '0', FAKE_DOUBAO_LOG: log, KEEP: 'instance-setting', HOME: join(dir, 'account-home'),
   } };
   const registry = new AgentRegistry([instance, { id: 'pi', adapter: 'pi', command: ['true'] }], file);
   const store = new Store(join(dir, 'data'));
@@ -52,7 +52,7 @@ test('stream bridge settings validate read-only, persist only their own env and 
   const old = h.registry.adapters.get('doubao');
   const saved = await h.api('/api/agents/doubao', 'PATCH', { streamBridge: true });
   assert.equal(saved.status, 200);
-  assert.deepEqual(h.registry.get('doubao'), { ...h.instance, env: { ...h.instance.env, CALLI_DOUBAO_STREAM: '1' } });
+  assert.deepEqual(h.registry.get('doubao'), { ...h.instance, env: { ...h.instance.env, LOOCHAT_DOUBAO_STREAM: '1' } });
   assert.notEqual(h.registry.adapters.get('doubao'), old);
   assert.equal(h.registry.adapters.get('doubao')!.streamBridgeEnabled, true);
   assert.equal(readFileSync(join(h.root, 'resources/js_app/entry-cli-router/main.js'), 'utf8'), original);
@@ -83,7 +83,7 @@ test('invalid settings do not partially update; incompatible installs save and r
   assert.deepEqual(await (await h.api('/api/agents/doubao/stream-bridge')).json(), { compatible: true });
   const saved = await h.api('/api/agents/doubao', 'PATCH', { streamBridge: true });
   assert.equal(saved.status, 200);
-  assert.deepEqual(h.registry.get('doubao'), { ...h.instance, env: { ...h.instance.env, CALLI_DOUBAO_STREAM: '1' } });
+  assert.deepEqual(h.registry.get('doubao'), { ...h.instance, env: { ...h.instance.env, LOOCHAT_DOUBAO_STREAM: '1' } });
   // Changed output seams are reported by the status endpoint, but saving consent never fails.
   const bundlePath = join(h.root, 'resources/js_app/entry-cli-router/main.js'), bundle = readFileSync(bundlePath, 'utf8');
   writeFileSync(bundlePath, fakeDoubaoBundle('entry-cli-router').replace('case"stream-json":', 'case"new":'));
@@ -105,7 +105,7 @@ test('adding a local CLI persists explicit consent, and enabling can be rolled b
   const h = await setup(t);
   const res = await h.api('/api/agents', 'POST', { id: 'doubao-2', adapter: 'doubao', command: [h.bin], streamBridge: true, env: { KEEP: 'second' } });
   assert.equal(res.status, 201);
-  assert.deepEqual(h.registry.get('doubao-2').env, { KEEP: 'second', CALLI_DOUBAO_STREAM: '1' });
+  assert.deepEqual(h.registry.get('doubao-2').env, { KEEP: 'second', LOOCHAT_DOUBAO_STREAM: '1' });
   assert.equal((await h.api('/api/agents', 'POST', { id: 'pi-2', adapter: 'pi', command: ['true'], streamBridge: false })).status, 400);
   assert.equal(h.registry.list().some(a => a.id === 'pi-2'), false);
   const original = h.registry.get('doubao'), adapter = h.registry.adapters.get('doubao');
@@ -146,15 +146,15 @@ test('a saved bridge switch does not interrupt the current turn and applies on t
 });
 
 test('an explicit disabled setting overrides an inherited global bridge default', async t => {
-  const h = await setup(t), old = process.env.CALLI_DOUBAO_STREAM;
-  process.env.CALLI_DOUBAO_STREAM = '1';
+  const h = await setup(t), old = process.env.LOOCHAT_DOUBAO_STREAM;
+  process.env.LOOCHAT_DOUBAO_STREAM = '1';
   try {
     await h.registry.add({ id: 'doubao-inherited', adapter: 'doubao', command: [h.bin] });
     assert.equal(h.registry.adapters.get('doubao-inherited')!.streamBridgeEnabled, true);
     await h.registry.update('doubao-inherited', { streamBridge: false });
     assert.equal(h.registry.adapters.get('doubao-inherited')!.streamBridgeEnabled, false);
-    assert.equal(h.registry.get('doubao-inherited').env?.CALLI_DOUBAO_STREAM, '0');
+    assert.equal(h.registry.get('doubao-inherited').env?.LOOCHAT_DOUBAO_STREAM, '0');
   } finally {
-    if (old === undefined) delete process.env.CALLI_DOUBAO_STREAM; else process.env.CALLI_DOUBAO_STREAM = old;
+    if (old === undefined) delete process.env.LOOCHAT_DOUBAO_STREAM; else process.env.LOOCHAT_DOUBAO_STREAM = old;
   }
 });

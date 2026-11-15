@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mjs';
 let daemon, browser;
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: ['claude', 'codex', 'traex', 'zcode'].map(id => ({
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: ['claude', 'codex', 'traex', 'zcode'].map(id => ({
     id, adapter: id, command: [process.execPath, join(repoRoot, 'daemon/test/fixtures', `fake-${['claude', 'traex'].includes(id) ? 'acp' : id}.mjs`)],
   })) }) });
   browser = await launchBrowser();
@@ -29,9 +29,9 @@ test('native goals, immediate controls and persisted results on desktop/phone in
         await input.fill('/goal');
         await page.getByRole('option', { name: /\/goal/ }).waitFor();
         await page.waitForTimeout(350); // Let the command menu and mobile navigation settle.
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `goal-${agent}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `goal-${agent}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
         await input.fill('/goal slow');
         await page.getByRole('button', { name: '发送', exact: true }).click();
@@ -55,7 +55,7 @@ test('native goals, immediate controls and persisted results on desktop/phone in
         await page.locator('.thread-title', { hasText: title }).first().click();
         await page.getByText(agent === 'claude' ? '原生目标完成。' : /原生 agent 报告已完成/).last().waitFor();
         await page.waitForTimeout(350);
-        if (process.env.CALLI_E2E_SHOTS_DIR) await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `goal-result-${agent}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `goal-result-${agent}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       }
     } finally { await context.close(); }

@@ -6,10 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startDaemon, launchBrowser, openUi, api } from './harness.mjs';
 
-const out = process.argv[2] ?? '/tmp/calli-local-sessions-shots';
+const out = process.argv[2] ?? '/tmp/loochat-local-sessions-shots';
 mkdirSync(out, { recursive: true });
 
-const workdir = mkdtempSync(join(tmpdir(), 'calli-local-shots-'));
+const workdir = mkdtempSync(join(tmpdir(), 'loochat-local-shots-'));
 const sessionsFile = join(workdir, 'sessions.json');
 const now = Date.now();
 const at = (minutesAgo) => new Date(now - minutesAgo * 60_000).toISOString();

@@ -7,15 +7,15 @@ import { fileURLToPath } from 'node:url';
 import { startDaemon, openUi, launchBrowser } from '../harness.mjs';
 
 test('TRAE model load and weekly quota appear in existing controls in both themes and sizes', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'calli-traex-ui-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-traex-ui-'));
   let daemon, browser;
   try {
     const fixtures = fileURLToPath(new URL('../../daemon/test/fixtures/', import.meta.url));
     const fakeCodex = join(home, 'fake-codex');
     writeFileSync(fakeCodex, `#!/bin/sh\nexec '${process.execPath}' '${join(fixtures, 'fake-codex.mjs')}' "$@"\n`, { mode: 0o755 });
-    daemon = await startDaemon({ CALLI_CODEX_BIN: fakeCodex, CALLI_CLAUDE_QUOTA_BIN: join(fixtures, 'fake-claude-usage.sh'), HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CODEX_HOME: join(home, '.codex'), CALLI_TRAEX_BIN: 'fake-claude', FAKE_ACP_FLAVOR: 'traex' });
+    daemon = await startDaemon({ LOOCHAT_CODEX_BIN: fakeCodex, LOOCHAT_CLAUDE_QUOTA_BIN: join(fixtures, 'fake-claude-usage.sh'), HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CODEX_HOME: join(home, '.codex'), LOOCHAT_TRAEX_BIN: 'fake-claude', FAKE_ACP_FLAVOR: 'traex' });
     browser = await launchBrowser();
-    const shots = process.env.CALLI_TRAEX_SHOTS;
+    const shots = process.env.LOOCHAT_TRAEX_SHOTS;
     if (shots) mkdirSync(shots, { recursive: true });
     for (const phone of [false, true]) for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 960 }, isMobile: phone, hasTouch: phone, colorScheme: theme });

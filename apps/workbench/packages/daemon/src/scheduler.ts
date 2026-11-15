@@ -291,7 +291,7 @@ export class Scheduler {
             threadId = thread.id; created = true;
           }
           const note = this.store.todoNote(todo.id);
-          const text = `由 Calli 发起的事项跟进。\n事项：${todo.text}\nID：${todo.id}；状态：${todo.state}；归属：${todo.owner}\n${todo.waitingOn ? `等待：${todo.waitingOn}\n` : ''}接续说明（${note.updatedAt ?? '尚未写入'}）：\n${note.text}\n\n处理完更新说明；没有进展就设下次跟进时间并 calli quiet。事项操作见 calli todo --help。`;
+          const text = `由 LoopX 发起的事项跟进。\n事项：${todo.text}\nID：${todo.id}；状态：${todo.state}；归属：${todo.owner}\n${todo.waitingOn ? `等待：${todo.waitingOn}\n` : ''}接续说明（${note.updatedAt ?? '尚未写入'}）：\n${note.text}\n\n处理完更新说明；没有进展就设下次跟进时间并 loochat quiet。事项操作见 loochat todo --help。`;
           const runId = randomUUID();
           await this.manager.startTurn(threadId, { text, scheduled: true }, undefined, false, undefined, turnId => {
             if (this.stopped) throw new HttpError(409, 'scheduler stopped');

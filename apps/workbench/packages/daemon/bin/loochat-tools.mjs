@@ -3,18 +3,18 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 
-export const help = `calli preview-note ID
-calli references ID [--before CURSOR --turns N | --turn TURN_ID --offset N [--tool TOOL_ID] | --tools TURN_ID --offset N]
-calli notify --text-file FILE|-
-calli tools search [QUERY] [--json]
-calli tools skill
-calli tools describe TOOL [--json]
-calli tools run TOOL --input-file FILE|- --request-id KEY [--json]
-calli jobs get|wait|cancel JOB [--timeout SECONDS] [--json]
-calli jobs fetch JOB ARTIFACT_ID_OR_NAME --output FILE [--json]
-calli browser [AGENT_BROWSER_ARGS...]   (see: calli tools describe calli/browser)
-Inside Calli, thread-scoped credentials are provided automatically.
-Outside Calli, set CALLI_URL and CALLI_TOKEN. Output is JSON; fetch never overwrites a file.`;
+export const help = `loochat preview-note ID
+loochat references ID [--before CURSOR --turns N | --turn TURN_ID --offset N [--tool TOOL_ID] | --tools TURN_ID --offset N]
+loochat notify --text-file FILE|-
+loochat tools search [QUERY] [--json]
+loochat tools skill
+loochat tools describe TOOL [--json]
+loochat tools run TOOL --input-file FILE|- --request-id KEY [--json]
+loochat jobs get|wait|cancel JOB [--timeout SECONDS] [--json]
+loochat jobs fetch JOB ARTIFACT_ID_OR_NAME --output FILE [--json]
+loochat browser [AGENT_BROWSER_ARGS...]   (see: loochat tools describe loochat/browser)
+Inside LooChat, thread-scoped credentials are provided automatically.
+Outside LooChat, set LOOCHAT_URL and LOOCHAT_TOKEN. Output is JSON; fetch never overwrites a file.`;
 
 function responseError(text, status) {
   try {
@@ -25,10 +25,10 @@ function responseError(text, status) {
 }
 
 export async function transport(path, body, binary = false, personal = false, socketOnly = false) {
-  const socketPath = personal ? process.env.CALLI_TODO_SOCKET : process.env.CALLI_TOOLS_SOCKET;
-  const key = personal ? process.env.CALLI_TODO_KEY : process.env.CALLI_TOOLS_KEY;
+  const socketPath = personal ? process.env.LOOCHAT_TODO_SOCKET : process.env.LOOCHAT_TOOLS_SOCKET;
+  const key = personal ? process.env.LOOCHAT_TODO_KEY : process.env.LOOCHAT_TOOLS_KEY;
   if (socketPath || key) {
-    if (!socketPath || !key) throw new Error('Incomplete Calli tool credentials; start a new Calli session.');
+    if (!socketPath || !key) throw new Error('Incomplete LooChat tool credentials; start a new LooChat session.');
     return new Promise((resolve, reject) => {
       const payload = body ? JSON.stringify(body) : undefined;
       const req = request({ socketPath, path, method: body ? 'POST' : 'GET',
@@ -53,11 +53,11 @@ export async function transport(path, body, binary = false, personal = false, so
       req.end(payload);
     });
   }
-  if (personal) throw new Error('Personal commands require a new thread in the personal directory; see calli todo --help.');
-  if (socketOnly) throw new Error('Signal commands require thread-scoped Calli socket credentials; start a new Calli session.');
-  const base = process.env.CALLI_URL;
-  const token = process.env.CALLI_TOKEN;
-  if (!base || !token) throw new Error('Run inside a new Calli agent session, or set CALLI_URL and CALLI_TOKEN.');
+  if (personal) throw new Error('Personal commands require a new thread in the personal directory; see loochat todo --help.');
+  if (socketOnly) throw new Error('Signal commands require thread-scoped LooChat socket credentials; start a new LooChat session.');
+  const base = process.env.LOOCHAT_URL;
+  const token = process.env.LOOCHAT_TOKEN;
+  if (!base || !token) throw new Error('Run inside a new LooChat agent session, or set LOOCHAT_URL and LOOCHAT_TOKEN.');
   const apiPath = path === '/command' ? '/api/tools/command' : path.replace('/artifacts/', '/api/tool-artifacts/');
   const res = await fetch(new URL(apiPath, base), {
     method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -68,22 +68,22 @@ export async function transport(path, body, binary = false, personal = false, so
 }
 
 /**
- * `calli browser ARGS` is `agent-browser ARGS` against the person's own browser: Calli starts it when
+ * `loochat browser ARGS` is `agent-browser ARGS` against the person's own browser: LooChat starts it when
  * needed and says where it listens; the commands themselves are agent-browser's, passed through.
  */
 export async function browserMain(args) {
   const browser = await transport('/command', { op: 'browser.ensure' });
   if (!args.length) { console.log(JSON.stringify(browser)); return 0; }
-  const executable = process.env.CALLI_AGENT_BROWSER || browser.agentBrowser || 'agent-browser';
+  const executable = process.env.LOOCHAT_AGENT_BROWSER || browser.agentBrowser || 'agent-browser';
   const env = { ...process.env, AGENT_BROWSER_CDP: String(browser.port) };
   // Page text is marked as untrusted data, and the helper daemon does not linger once unused.
   env.AGENT_BROWSER_CONTENT_BOUNDARIES ??= '1';
   env.AGENT_BROWSER_IDLE_TIMEOUT_MS ??= '600000';
-  env.AGENT_BROWSER_SESSION ??= 'calli';
+  env.AGENT_BROWSER_SESSION ??= 'loochat';
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { stdio: 'inherit', env });
     child.on('error', err => reject(err.code === 'ENOENT'
-      ? new Error('这台机器还没装 agent-browser。先告诉用户，征得同意后运行 npm install -g agent-browser（约 115 MB），装好即可使用，不用重启 Calli；也可以设置 CALLI_AGENT_BROWSER 指向已有的可执行文件。') : err));
+      ? new Error('这台机器还没装 agent-browser。先告诉用户，征得同意后运行 npm install -g agent-browser（约 115 MB），装好即可使用，不用重启 LooChat；也可以设置 LOOCHAT_AGENT_BROWSER 指向已有的可执行文件。') : err));
     child.on('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
   });
 }
@@ -107,7 +107,7 @@ export async function toolsMain(args) {
   const call = body => transport('/command', body);
   let result;
   if (group === 'tools' && command === 'skill') {
-    check(0, 0); result = { name: 'calli-tools', content: readFileSync(new URL('../../../skills/calli-tools/SKILL.md', import.meta.url), 'utf8') };
+    check(0, 0); result = { name: 'loochat-tools', content: readFileSync(new URL('../../../skills/loochat-tools/SKILL.md', import.meta.url), 'utf8') };
   } else if (group === 'tools' && command === 'search') {
     check(0, 1); result = await call({ op: 'tools.search', query: positional[0] ?? '' });
   } else if (group === 'tools' && command === 'describe') {
@@ -145,8 +145,8 @@ export async function toolsMain(args) {
 }
 
 export async function notifyMain(args) {
-  if (args.length !== 2 || args[0] !== '--text-file' || !args[1]) throw new Error('Use calli notify --text-file FILE|-');
-  if (!process.env.CALLI_TOOLS_SOCKET || !process.env.CALLI_TOOLS_KEY) throw new Error('notify requires thread-scoped credentials');
+  if (args.length !== 2 || args[0] !== '--text-file' || !args[1]) throw new Error('Use loochat notify --text-file FILE|-');
+  if (!process.env.LOOCHAT_TOOLS_SOCKET || !process.env.LOOCHAT_TOOLS_KEY) throw new Error('notify requires thread-scoped credentials');
   const text = readFileSync(args[1] === '-' ? 0 : args[1], 'utf8');
   console.log(JSON.stringify(await transport('/command', { op: 'notify', text })));
 }
@@ -165,6 +165,6 @@ export async function referencesMain(args) {
 }
 
 export async function previewNoteMain(args) {
-  if (args.length !== 1) throw new Error('usage: calli preview-note ID');
+  if (args.length !== 1) throw new Error('usage: loochat preview-note ID');
   console.log(JSON.stringify(await transport('/command', { op: 'preview.note', id: args[0] })));
 }

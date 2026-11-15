@@ -1,6 +1,6 @@
 # LoopX 工作数据源插件
 
-这是可独立安装的 Calli 插件，不是 LoopX 本体，也不随 Hub 自动启用。首版验证 LoopX **1.4.2**：Python ≥ 3.11，Node.js ≥ 22.22.3。
+这是可独立安装的 LooChat 插件，不是 LoopX 本体，也不随 Hub 自动启用。首版验证 LoopX **1.4.2**：Python ≥ 3.11，Node.js ≥ 22.22.3。
 
 ## 安装
 

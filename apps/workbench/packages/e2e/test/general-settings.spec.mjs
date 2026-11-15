@@ -8,7 +8,7 @@ test('general startup preference is shared, respects recent activity and explici
   const daemon = await startDaemon();
   const browser = await launchBrowser();
   const save = (startupPage, autoArchiveDays = null) => api(daemon, '/api/general-settings', { method: 'PUT', body: JSON.stringify({ startupPage, autoArchiveDays }) });
-  const shots = '/tmp/calli-general-settings-shots'; mkdirSync(shots, { recursive: true });
+  const shots = '/tmp/loochat-general-settings-shots'; mkdirSync(shots, { recursive: true });
   try {
     const create = async title => (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title }) })).json();
     const older = await create('Older pinned conversation');

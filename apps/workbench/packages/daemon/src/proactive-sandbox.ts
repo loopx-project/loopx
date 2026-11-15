@@ -3,8 +3,8 @@
  * module knows nothing about the store, threads or HTTP — the proactive service wires it.
  *
  * Every matter's sandbox is a worktree of the target repository under `<repo>/.worktrees/`
- * on a branch of its own, `calli/proactive/<matterId>`, created from the repository's default
- * branch. Merges are `--no-ff` and carry the trailer `Calli-Proactive: <matterId>`; reverting
+ * on a branch of its own, `loochat/proactive/<matterId>`, created from the repository's default
+ * branch. Merges are `--no-ff` and carry the trailer `LooChat-Proactive: <matterId>`; reverting
  * walks HEAD for commits carrying that trailer, newest first.
  */
 import { execFile } from 'node:child_process';
@@ -16,7 +16,7 @@ import { HttpError } from './errors.js';
 const WORKTREES_DIR = '.worktrees';
 
 /** The hub's own git identity, for when the machine has none of its own. */
-const IDENTITY = ['-c', 'user.name=calli', '-c', 'user.email=hub@localhost', '-c', 'commit.gpgsign=false'];
+const IDENTITY = ['-c', 'user.name=loochat', '-c', 'user.email=hub@localhost', '-c', 'commit.gpgsign=false'];
 
 /** A git failure: the message is the last line for the person, `stderr` keeps the whole output. */
 type GitError = Error & { stderr: string };
@@ -137,19 +137,19 @@ async function defaultBranch(cwd: string): Promise<string> {
 }
 
 export class ProactiveSandbox {
-  /** The branch a matter's sandbox lives on: `calli/proactive/<matterId>`. */
+  /** The branch a matter's sandbox lives on: `loochat/proactive/<matterId>`. */
   static branchFor(matterId: string): string {
-    return `calli/proactive/${matterId}`;
+    return `loochat/proactive/${matterId}`;
   }
 
-  /** Where a matter's sandbox worktree lives: `<repo>/.worktrees/calli-proactive-<matterId>`. */
+  /** Where a matter's sandbox worktree lives: `<repo>/.worktrees/loochat-proactive-<matterId>`. */
   private static worktreeFor(repoPath: string, matterId: string): string {
-    return join(resolve(repoPath), WORKTREES_DIR, `calli-proactive-${matterId}`);
+    return join(resolve(repoPath), WORKTREES_DIR, `loochat-proactive-${matterId}`);
   }
 
   /**
-   * Creates the worktree `<repo>/.worktrees/calli-proactive-<matterId>` on
-   * `calli/proactive/<matterId>`, branching from the default branch. When both already exist
+   * Creates the worktree `<repo>/.worktrees/loochat-proactive-<matterId>` on
+   * `loochat/proactive/<matterId>`, branching from the default branch. When both already exist
    * they are reused as-is (a discarded run starts over; a live one continues). Rejects a
    * repository with no commits, a bare repo, or a branch name already checked out elsewhere.
    */
@@ -221,7 +221,7 @@ export class ProactiveSandbox {
    * Merges the branch back into the default branch with `--no-ff`. The merge happens in the
    * repository's own working directory, which must sit on the default branch and be clean;
    * anything else is an error for the person to see, never a forced switch or stash. The merge
-   * commit message ends with the trailer line `Calli-Proactive: <matterId>`. Returns its SHA.
+   * commit message ends with the trailer line `LooChat-Proactive: <matterId>`. Returns its SHA.
    */
   async merge(repoPath: string, matterId: string): Promise<{ commit: string }> {
     assertMatterId(matterId);
@@ -234,7 +234,7 @@ export class ProactiveSandbox {
     if ((await git(repo, ['rev-list', '--count', `${base}..${branch}`])).trim() === '0') {
       throw new HttpError(409, `沙盒分支 ${branch} 在 ${base} 之上没有任何提交，无东西可合入`);
     }
-    const message = `Merge sandbox branch ${branch}\n\nCalli-Proactive: ${matterId}`;
+    const message = `Merge sandbox branch ${branch}\n\nLooChat-Proactive: ${matterId}`;
     let out: string;
     try {
       out = await committing(repo, ['merge', '--no-ff', branch, '-m', message]);
@@ -273,7 +273,7 @@ export class ProactiveSandbox {
 
   /**
    * Reverts every commit reachable from HEAD whose message carries the trailer
-   * `Calli-Proactive: <matterId>` (exact id — `m-1` must not match `m-10`), newest first,
+   * `LooChat-Proactive: <matterId>` (exact id — `m-1` must not match `m-10`), newest first,
    * each as its own revert commit; history is rewritten never. A conflict rolls the whole
    * revert back and throws. Returns the reverted SHAs; empty when nothing carries the trailer.
    */
@@ -283,7 +283,7 @@ export class ProactiveSandbox {
     await assertRepository(repo);
     const base = await defaultBranch(repo);
     await assertReadyForHead(repo, base, '撤回改动');
-    const trailer = `Calli-Proactive: ${matterId}`;
+    const trailer = `LooChat-Proactive: ${matterId}`;
     // Merge commits carry the trailer too, but undoing a merge is a different animal (`-m`) that
     // would swallow the per-commit reverts: only the sandbox's own commits are reverted.
     // Known edge: reverting the same merge a second time finds the original commits still

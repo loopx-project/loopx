@@ -44,7 +44,7 @@ export interface ExtensionHostOptions {
   adapters?: ReadonlyMap<string, AgentAdapter>;
   store: ExtensionStore;
   source: HostSource;
-  /** Extensions that ship with Calli (see extensions.ts, loadCatalog). */
+  /** Extensions that ship with LoopX (see extensions.ts, loadCatalog). */
   catalog: ExtensionManifest[];
   /** A turn's `turn.started`, for turns that began before the host was listening. */
   turnStart?: (threadId: string, turnId: string) => StoredEvent | undefined;
@@ -378,7 +378,7 @@ export class ExtensionHost {
     try { this.require(extensionId, permission); return true; } catch { return false; }
   }
 
-  /** A built-in extension's manifest, if it ships with Calli. */
+  /** A built-in extension's manifest, if it ships with LoopX. */
   builtin(id: string): ExtensionManifest | undefined {
     return this.catalog.find((m) => m.id === id);
   }

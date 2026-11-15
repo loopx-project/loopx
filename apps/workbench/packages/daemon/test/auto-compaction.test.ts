@@ -14,7 +14,7 @@ import type { AgentAdapter, TurnHooks } from '../src/adapters/types.js';
 import type { EmittedEvent } from '../src/events.js';
 
 const fixture = (name: string) => [process.execPath, fileURLToPath(new URL(`./fixtures/fake-${name}.mjs`, import.meta.url))];
-const dataDir = mkdtempSync(join(tmpdir(), 'calli-auto-compaction-'));
+const dataDir = mkdtempSync(join(tmpdir(), 'loochat-auto-compaction-'));
 after(() => rmSync(dataDir, { recursive: true, force: true }));
 const zcode = () => new ZcodeAdapter(fixture('zcode'), { ZCODE_DATA_BASE_DIR: dataDir });
 const adapters: Array<() => AgentAdapter> = [

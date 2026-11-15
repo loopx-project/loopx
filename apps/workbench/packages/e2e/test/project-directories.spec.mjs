@@ -7,16 +7,16 @@ import { linkDaemon, startDaemon, openUi, api, launchBrowser, repoRoot } from '.
 
 let root, remoteHome, remote, hub, browser;
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-e2e-projects-'));
+  root = mkdtempSync(join(tmpdir(), 'loochat-e2e-projects-'));
   remoteHome = join(root, 'remote-home');
   const localHome = join(root, 'local-home');
   mkdirSync(remoteHome);
   mkdirSync(localHome);
   mkdirSync(join(localHome, 'local-only'));
-  const socket = join(remoteHome, '.local/state/calli/daemon.sock');
+  const socket = join(remoteHome, '.local/state/loochat/daemon.sock');
   remote = await startDaemon({
-    HOME: remoteHome, CALLI_SOCKET: socket, FAKE_CODEX_RPC_LOG: join(root, 'codex-rpc.jsonl'),
-    CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')] }] }),
+    HOME: remoteHome, LOOCHAT_SOCKET: socket, FAKE_CODEX_RPC_LOG: join(root, 'codex-rpc.jsonl'),
+    LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')] }] }),
   });
   hub = await startDaemon({ HOME: localHome });
   await linkDaemon(hub, remote);
@@ -96,9 +96,9 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)));
       const bounds = await dialog.boundingBox();
       assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= page.viewportSize().width + 1 && bounds.y + bounds.height <= page.viewportSize().height + 1);
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `projects-${tag}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `projects-${tag}.png`) });
       }
       await dialog.getByRole('button', { name: '添加并使用', exact: true }).click();
       await dialog.waitFor({ state: 'detached' });

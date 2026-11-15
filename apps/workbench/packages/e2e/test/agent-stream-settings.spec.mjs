@@ -29,9 +29,9 @@ const openSettings = async (page, name) => {
 for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark']) {
   const mode = `${mobile ? 'phone' : 'desktop'}-${colorScheme}`;
   test(`add local CLI, persist stream consent and change the next turn in ${mode}`, { timeout: 90_000 }, async () => {
-    const root = mkdtempSync(join(tmpdir(), 'calli-stream-setting-e2e-'));
+    const root = mkdtempSync(join(tmpdir(), 'loochat-stream-setting-e2e-'));
     const log = join(root, 'calls.jsonl');
-    const daemon = await startDaemon({ CALLI_E2E_DOUBAO_RUNTIME: '1', FAKE_DOUBAO_LOG: log, FAKE_DOUBAO_STREAM_DELAY: '300' }, { agents: [] });
+    const daemon = await startDaemon({ LOOCHAT_E2E_DOUBAO_RUNTIME: '1', FAKE_DOUBAO_LOG: log, FAKE_DOUBAO_STREAM_DELAY: '300' }, { agents: [] });
     let browser;
     try {
       browser = await launchBrowser();
@@ -40,9 +40,9 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       const page = await context.newPage(), errors = [];
       page.on('pageerror', error => errors.push(String(error)));
       const shot = async name => {
-        if (!process.env.CALLI_E2E_SHOTS_DIR) return;
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `stream-settings-${mode}-${name}.png`), animations: 'disabled' });
+        if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `stream-settings-${mode}-${name}.png`), animations: 'disabled' });
       };
       await openUi(page, daemon);
       await page.evaluate(() => { location.hash = '#/agents'; });
@@ -62,7 +62,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       assert.equal(agent.label, name); assert.equal(agent.streamBridgeEnabled, true);
       assert.equal(existsSync(log), false, 'enabling only validates local code and starts no native task');
       const stored = JSON.parse(readFileSync(join(daemon.dataDir, 'agents.json'), 'utf8'));
-      assert.equal(stored.agents[0].env.CALLI_DOUBAO_STREAM, '1');
+      assert.equal(stored.agents[0].env.LOOCHAT_DOUBAO_STREAM, '1');
       await page.reload();
       const settings = await openSettings(page, name);
       assert.equal(await settings.getByRole('switch', { name: switchName }).getAttribute('aria-checked'), 'true');
@@ -124,7 +124,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
 }
 
 test('discovery offers bridge consent separately from selecting a CLI, and incompatible installs still connect', { timeout: 60_000 }, async () => {
-  const daemon = await startDaemon({ CALLI_E2E_DOUBAO_RUNTIME: '1', CALLI_E2E_DISCOVER_DOUBAO2: '1' }, { agents: [{ id: 'pi', adapter: 'pi', command: ['fake-pi'] }] });
+  const daemon = await startDaemon({ LOOCHAT_E2E_DOUBAO_RUNTIME: '1', LOOCHAT_E2E_DISCOVER_DOUBAO2: '1' }, { agents: [{ id: 'pi', adapter: 'pi', command: ['fake-pi'] }] });
   let browser;
   try {
     browser = await launchBrowser();
@@ -156,7 +156,7 @@ test('discovery offers bridge consent separately from selecting a CLI, and incom
     assert.ok(agent.available); assert.equal(agent.streamBridgeEnabled, true, 'consent saves even when incompatible');
     assert.equal((await (await api(daemon, '/api/agents/doubao2/stream-bridge')).json()).compatible, false);
     const saved = JSON.parse(readFileSync(join(daemon.dataDir, 'agents.json'), 'utf8')).agents.find(a => a.id === 'doubao2');
-    assert.equal(saved.env.CALLI_DOUBAO_STREAM, '1');
+    assert.equal(saved.env.LOOCHAT_DOUBAO_STREAM, '1');
     await context.close();
   } finally { await browser?.close(); await daemon.stop(); }
 });

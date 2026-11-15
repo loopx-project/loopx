@@ -30,7 +30,7 @@ const save = async (key: keyof typeof snapshot, value: unknown) => {
   return value;
 };
 const api = {
-  exploreSources: async () => [{id:'calli-threads',available:true},{id:'lark-profile',available:false,reason:'Not logged in'}],
+  exploreSources: async () => [{id:'loochat-threads',available:true},{id:'lark-profile',available:false,reason:'Not logged in'}],
   startExplore: async () => { reads = 0; run = {id:'run',state:'collecting',startedAt:'now',steps:[]}; return {id:'run'}; },
   exploreStatus: async () => {
     probe.reads++;

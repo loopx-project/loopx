@@ -551,7 +551,7 @@ async function withFixture<T extends NativeEndpoint>(
   run: (endpoint: T, renew: () => T) => Promise<void>,
   options?: RealtimeOptions,
 ): Promise<Array<{ method?: string; params?: any } & Record<string, unknown>>> {
-  const dir = await mkdtemp(join(tmpdir(), 'calli-realtime-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'loochat-realtime-test-'));
   const log = join(dir, 'requests.jsonl');
   const child = spawn(process.execPath, [fixture], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -567,7 +567,7 @@ async function withFixture<T extends NativeEndpoint>(
   const renew = () => { holder.endpoint = build(peerTransport(peer), handlers, opts); return holder.endpoint; };
   let messages: Array<any> = [];
   try {
-    await peer.request('initialize', { clientInfo: { name: 'calli', title: 'Calli', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+    await peer.request('initialize', { clientInfo: { name: 'loochat', title: 'LoopX', version: '0.1.0' }, capabilities: { experimentalApi: true } });
     peer.notify('initialized', {});
     await run(renew(), renew);
   } finally {

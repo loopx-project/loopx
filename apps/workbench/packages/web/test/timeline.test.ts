@@ -892,7 +892,7 @@ test('withNotes numbers each passage, with its comment when there is one, and sp
   // A passage from an earlier conversation of the chain says where the agent can read it; it comes back too.
   const source = { threadId: '8241c21f-6958-4f20-8a3b-3cf7d4aa4599', turnId: '9a00ee69-200a-4202-a7ff-90e706016fbb' };
   const fromEarlier = withNotes([{ quote: '拒收后仍推送', comment: '这个还在吗？', source }], '');
-  assert.equal(fromEarlier, `[注释 1]\n来源：交接前的会话，原文和上下文用 calli history ${source.threadId} --turn ${source.turnId} 读\n> 拒收后仍推送\n评论：这个还在吗？`);
+  assert.equal(fromEarlier, `[注释 1]\n来源：交接前的会话，原文和上下文用 loochat history ${source.threadId} --turn ${source.turnId} 读\n> 拒收后仍推送\n评论：这个还在吗？`);
   assert.deepEqual(splitNotes(fromEarlier), { notes: [{ quote: '拒收后仍推送', comment: '这个还在吗？', source }], body: '' });
   // Anything else is left as it is, including the older single quote.
   assert.deepEqual(splitNotes('> quoted\n\nwhy?'), { notes: [], body: '> quoted\n\nwhy?' });

@@ -8,7 +8,7 @@ import { startDaemon, launchBrowser, openUi, api } from '../harness.mjs';
 test('glass chrome has scrolling content behind it without hiding either end of the conversation', { timeout: 90000 }, async () => {
   const daemon = await startDaemon();
   const browser = await launchBrowser();
-  const shots = '/tmp/calli-glass-surfaces'; mkdirSync(shots, { recursive: true });
+  const shots = '/tmp/loochat-glass-surfaces'; mkdirSync(shots, { recursive: true });
   try {
     const thread = await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title: '玻璃材质与页面导航' }) })).json();
     await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: Array.from({ length: 35 }, (_, i) => `### ${i + 1}. 统一菜单与配置体验\n\n配置采用完整页面，电脑分类与详情并排，手机逐层进入。滚动时观察顶部按钮与输入框后的内容。`).join('\n\n') }) });
@@ -147,8 +147,8 @@ test('focusing the composer keeps its glass edge, and floating buttons share the
 });
 
 test('the phone edges wash only where text scrolls out, and the read-only handover note is a small glass chip', { timeout: 90000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-glass-chain-'));
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: ['first', 'next'].map((id, i) => ({ id, adapter: 'claude', label: `Agent ${i + 1}`, command: ['fake-claude'], env: { CLAUDE_CONFIG_DIR: join(dir, id), FAKE_SESSION_ROOT: join(dir, id) } })) }) });
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-glass-chain-'));
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: ['first', 'next'].map((id, i) => ({ id, adapter: 'claude', label: `Agent ${i + 1}`, command: ['fake-claude'], env: { CLAUDE_CONFIG_DIR: join(dir, id), FAKE_SESSION_ROOT: join(dir, id) } })) }) });
   const browser = await launchBrowser();
   try {
     const post = async (path, body) => { const response = await api(daemon, path, { method: 'POST', body: JSON.stringify(body) }); if (!response.ok) assert.fail(await response.text()); return response.json(); };
@@ -203,8 +203,8 @@ test('the phone edges wash only where text scrolls out, and the read-only handov
     const withNote = await edges();
     assert.ok(withNote.slot > withNote.composer + 60, 'the slot now holds the note as well as the box');
     assert.ok(Math.abs(withNote.washHeight - (withNote.composer + 40)) <= 1, 'the wash does not grow with the note stacked above the box');
-    mkdirSync('/tmp/calli-glass-surfaces', { recursive: true });
-    await page.screenshot({ path: '/tmp/calli-glass-surfaces/handover-phone.png' });
+    mkdirSync('/tmp/loochat-glass-surfaces', { recursive: true });
+    await page.screenshot({ path: '/tmp/loochat-glass-surfaces/handover-phone.png' });
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] });
     assert.equal(await page.locator('.handover-readonly').evaluate(el => getComputedStyle(el).backdropFilter), 'none', 'reduced transparency draws the chip solid');
     await context.close();

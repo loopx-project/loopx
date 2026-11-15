@@ -19,12 +19,12 @@ import { Workdirs } from '../src/workdirs.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const fakeChrome = join(here, 'fixtures/fake-chrome.mjs');
 const fakeAgentBrowser = join(here, 'fixtures/fake-agent-browser.mjs');
-const cli = join(here, '../bin/calli');
+const cli = join(here, '../bin/loochat');
 
 type LogEntry = { pid?: number; display?: string; args?: string[]; hubSecrets?: string[]; opened?: string; exited?: boolean };
 
 function harness(extra: string[] = []) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-browser-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-browser-'));
   const profileDir = join(dir, 'profile');
   let display: string | undefined = ':7';
   const make = () => new PersonalBrowser({ profileDir, command: [process.execPath, fakeChrome, ...extra], display: async () => display, startTimeoutMs: 5000 });
@@ -40,8 +40,8 @@ test('starts one Chrome on the desktop with a private profile, and later callers
   const h = harness();
   try {
     const browser = h.make();
-    const saved = { CALLI_TOKEN: process.env.CALLI_TOKEN, CALLI_TOOLS_KEY: process.env.CALLI_TOOLS_KEY };
-    process.env.CALLI_TOKEN = 'hub-token'; process.env.CALLI_TOOLS_KEY = 'thread-key';
+    const saved = { LOOCHAT_TOKEN: process.env.LOOCHAT_TOKEN, LOOCHAT_TOOLS_KEY: process.env.LOOCHAT_TOOLS_KEY };
+    process.env.LOOCHAT_TOKEN = 'hub-token'; process.env.LOOCHAT_TOOLS_KEY = 'thread-key';
     const [a, b] = await Promise.all([browser.ensure(), browser.ensure()]).finally(() => {
       for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     });
@@ -112,7 +112,7 @@ test('a Chrome that exits without a debugging port is reported, not waited on', 
   } finally { h.close(); }
 });
 
-test('a profile held by a Chrome Calli cannot reach is reported, and no second Chrome is started', async () => {
+test('a profile held by a Chrome LoopX cannot reach is reported, and no second Chrome is started', async () => {
   const h = harness();
   try {
     mkdirSync(h.profileDir, { recursive: true });
@@ -137,10 +137,10 @@ test('the desktop display follows the VNC port, only for a local server with an 
   assert.equal(displayForDesktop({ host: '127.0.0.1', port: 5900 + free }), undefined);
 });
 
-test('agent-browser is found from CALLI_AGENT_BROWSER or PATH, and only when it can run', () => {
-  assert.equal(agentBrowserExecutable({ CALLI_AGENT_BROWSER: fakeAgentBrowser }), fakeAgentBrowser);
-  assert.equal(agentBrowserExecutable({ CALLI_AGENT_BROWSER: '/nonexistent/agent-browser' }), null);
-  const bin = mkdtempSync(join(tmpdir(), 'calli-ab-path-'));
+test('agent-browser is found from LOOCHAT_AGENT_BROWSER or PATH, and only when it can run', () => {
+  assert.equal(agentBrowserExecutable({ LOOCHAT_AGENT_BROWSER: fakeAgentBrowser }), fakeAgentBrowser);
+  assert.equal(agentBrowserExecutable({ LOOCHAT_AGENT_BROWSER: '/nonexistent/agent-browser' }), null);
+  const bin = mkdtempSync(join(tmpdir(), 'loochat-ab-path-'));
   try {
     assert.equal(agentBrowserExecutable({ PATH: bin }), null);
     writeFileSync(join(bin, 'agent-browser'), '#!/bin/sh\n', { mode: 0o755 });
@@ -158,43 +158,43 @@ async function service(h: ReturnType<typeof harness>) {
   borrowing.browser = h.make();
   const server = borrowingServer(borrowing); await listenPrivate(server, socket);
   const root = await manager.createThread({ agent: 'claude', cwd });
-  return { borrowing, root, env: { ...process.env, ...borrowing.environment(root.id), CALLI_AGENT_BROWSER: fakeAgentBrowser },
+  return { borrowing, root, env: { ...process.env, ...borrowing.environment(root.id), LOOCHAT_AGENT_BROWSER: fakeAgentBrowser },
     async close() {
       await borrowing.dispose(); await manager.shutdown();
       await new Promise<void>(r => server.close(() => r())); store.close();
     } };
 }
 
-test('agents find the browser on demand through calli tools, with usage only when described', async () => {
+test('agents find the browser on demand through loochat tools, with usage only when described', async () => {
   const h = harness();
   const s = await service(h);
-  const prev = process.env.CALLI_AGENT_BROWSER;
-  process.env.CALLI_AGENT_BROWSER = fakeAgentBrowser;
+  const prev = process.env.LOOCHAT_AGENT_BROWSER;
+  process.env.LOOCHAT_AGENT_BROWSER = fakeAgentBrowser;
   try {
     for (const query of ['浏览器', '邮箱', 'gmail', 'browser']) {
       const found = await s.borrowing.command(s.root.id, { op: 'tools.search', query }) as any[];
-      assert.deepEqual(found.map(t => t.id), ['calli/browser'], query);
+      assert.deepEqual(found.map(t => t.id), ['loochat/browser'], query);
       assert.equal(found[0].usage, undefined, 'search stays short');
     }
     assert.deepEqual(await s.borrowing.command(s.root.id, { op: 'tools.search', query: '生图' }), []);
-    const spec = await s.borrowing.command(s.root.id, { op: 'tools.describe', tool: 'calli/browser' }) as any;
+    const spec = await s.borrowing.command(s.root.id, { op: 'tools.describe', tool: 'loochat/browser' }) as any;
     assert.equal(spec.mode, 'direct');
     assert.equal(spec.availability, 'available');
     assert.equal(spec.running, false, 'describing does not start Chrome');
-    assert.ok(spec.usage.some((line: string) => line.includes('calli browser snapshot')));
+    assert.ok(spec.usage.some((line: string) => line.includes('loochat browser snapshot')));
     assert.equal(h.launches().length, 0);
-    await assert.rejects(s.borrowing.command(s.root.id, { op: 'tools.run', tool: 'calli/browser', requestId: 'x', input: {} }), /used directly/);
+    await assert.rejects(s.borrowing.command(s.root.id, { op: 'tools.run', tool: 'loochat/browser', requestId: 'x', input: {} }), /used directly/);
 
-    process.env.CALLI_AGENT_BROWSER = '/nonexistent/agent-browser';
-    const missing = await s.borrowing.command(s.root.id, { op: 'tools.describe', tool: 'calli/browser' }) as any;
+    process.env.LOOCHAT_AGENT_BROWSER = '/nonexistent/agent-browser';
+    const missing = await s.borrowing.command(s.root.id, { op: 'tools.describe', tool: 'loochat/browser' }) as any;
     assert.equal(missing.availability, 'unavailable');
     assert.match(missing.reason, /征得同意后运行 npm install -g agent-browser/);
     assert.ok(missing.usage.length, 'usage is there for after the install');
-    // Installing it later is enough: each look checks again, without restarting Calli.
-    process.env.CALLI_AGENT_BROWSER = fakeAgentBrowser;
-    assert.equal((await s.borrowing.command(s.root.id, { op: 'tools.describe', tool: 'calli/browser' }) as any).availability, 'available');
+    // Installing it later is enough: each look checks again, without restarting LoopX.
+    process.env.LOOCHAT_AGENT_BROWSER = fakeAgentBrowser;
+    assert.equal((await s.borrowing.command(s.root.id, { op: 'tools.describe', tool: 'loochat/browser' }) as any).availability, 'available');
   } finally {
-    if (prev === undefined) delete process.env.CALLI_AGENT_BROWSER; else process.env.CALLI_AGENT_BROWSER = prev;
+    if (prev === undefined) delete process.env.LOOCHAT_AGENT_BROWSER; else process.env.LOOCHAT_AGENT_BROWSER = prev;
     await s.close(); h.close();
   }
 });
@@ -203,7 +203,7 @@ const run = (args: string[], env: NodeJS.ProcessEnv) => new Promise<{ code: numb
   execFile(process.execPath, [cli, ...args], { env }, (err, stdout, stderr) => resolve({ code: err ? (err as any).code ?? 1 : 0, stdout, stderr }));
 });
 
-test('calli browser passes agent-browser commands through, connected to the person\'s browser', async () => {
+test('loochat browser passes agent-browser commands through, connected to the person\'s browser', async () => {
   const h = harness();
   const s = await service(h);
   try {
@@ -219,17 +219,17 @@ test('calli browser passes agent-browser commands through, connected to the pers
     assert.deepEqual(seen.args, ['get', 'attr', '@e3', 'href', '--help'], 'arguments, --help included, belong to agent-browser');
     assert.equal(seen.cdp, String(port));
     assert.equal(seen.boundaries, '1');
-    assert.equal(seen.session, 'calli');
+    assert.equal(seen.session, 'loochat');
     assert.equal(seen.idle, '600000');
     assert.equal(h.launches().length, 1, 'later commands reuse the running browser');
 
     assert.equal((await run(['browser', 'click', '@e1'], { ...s.env, FAKE_AGENT_BROWSER_EXIT: '3' })).code, 3, 'exit status passes through');
 
-    const noAgentBrowser = await run(['browser', 'snapshot'], { ...s.env, CALLI_AGENT_BROWSER: '/nonexistent/agent-browser' });
+    const noAgentBrowser = await run(['browser', 'snapshot'], { ...s.env, LOOCHAT_AGENT_BROWSER: '/nonexistent/agent-browser' });
     assert.notEqual(noAgentBrowser.code, 0);
     assert.match(noAgentBrowser.stderr, /征得同意后运行 npm install -g agent-browser/);
 
-    const outsider = await run(['browser'], { ...process.env, CALLI_TOOLS_SOCKET: s.env.CALLI_TOOLS_SOCKET, CALLI_TOOLS_KEY: 'wrong' });
+    const outsider = await run(['browser'], { ...process.env, LOOCHAT_TOOLS_SOCKET: s.env.LOOCHAT_TOOLS_SOCKET, LOOCHAT_TOOLS_KEY: 'wrong' });
     assert.notEqual(outsider.code, 0, 'needs the thread\'s tool credentials');
   } finally { await s.close(); h.close(); }
 });

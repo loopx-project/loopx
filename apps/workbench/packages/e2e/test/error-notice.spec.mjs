@@ -6,11 +6,11 @@ import { tmpdir } from 'node:os';
 import { startDaemon, launchBrowser, api, openUi } from '../harness.mjs';
 
 test('all provider failures use quiet expandable notices in the assistant and thread view', async () => {
-  const daemon = await startDaemon({ CALLI_RETRY_TICK_MS: '600000' }, {
+  const daemon = await startDaemon({ LOOCHAT_RETRY_TICK_MS: '600000' }, {
     agents: [{ id: 'agy', adapter: 'agy', label: 'Agent 1', command: ['fake-agy'] }],
   });
   const browser = await launchBrowser();
-  const shots = process.env.CALLI_ERROR_SHOTS ?? join(tmpdir(), 'calli-error-notice');
+  const shots = process.env.LOOCHAT_ERROR_SHOTS ?? join(tmpdir(), 'loochat-error-notice');
   mkdirSync(shots, { recursive: true });
   const request = async (path, method = 'GET', body) => {
     const res = await api(daemon, path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });

@@ -16,13 +16,13 @@ export function readReferences(value: unknown): ContextReference[] {
 }
 
 export function withReferences(references: ContextReference[], body: string): string {
-  return references.length ? `<calli-references>\n${JSON.stringify(references)}\n</calli-references>\n\n${body.trim()}`.trim() : body.trim();
+  return references.length ? `<loochat-references>\n${JSON.stringify(references)}\n</loochat-references>\n\n${body.trim()}`.trim() : body.trim();
 }
 
 /** Called after splitNotes, keeping old note blocks and their numbering unchanged. */
 export function splitReferences(text: string): { references: ContextReference[]; body: string } {
   let references: ContextReference[] = [];
-  const body = text.replace(/(?:^|\n\n)<calli-references>\n([^\n]*)\n<\/calli-references>(?=\n\n|$)/g, (block, data: string) => {
+  const body = text.replace(/(?:^|\n\n)<loochat-references>\n([^\n]*)\n<\/loochat-references>(?=\n\n|$)/g, (block, data: string) => {
     try {
       const parsed = readReferences(JSON.parse(data));
       if (!parsed.length) return block;
@@ -39,7 +39,7 @@ export function mergeReferences(a: ContextReference[], b: ContextReference[]): C
 
 /** Compact queue/search labels never expose the metadata wire format. */
 export function referencePreview(text: string): string {
-  return text.replace(/(?:^|\n\n)<calli-references>\n([^\n]*)\n<\/calli-references>(?=\n\n|$)/g, (_, data: string) => {
+  return text.replace(/(?:^|\n\n)<loochat-references>\n([^\n]*)\n<\/loochat-references>(?=\n\n|$)/g, (_, data: string) => {
     try { return readReferences(JSON.parse(data)).map(r => r.title).join(' · '); }
     catch { return ''; }
   }).replace(/\n\n/g, '\n');

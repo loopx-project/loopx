@@ -13,7 +13,7 @@ export const projectPath = (path: string): string => path.replace(/\/+$/, '') ||
 
 /**
  * The project a `.worktrees` checkout belongs to. Forked threads carry the source directory with
- * them, but sessions started in a worktree directly (calli's, or a leftover) do not; either way the
+ * them, but sessions started in a worktree directly (loochat's, or a leftover) do not; either way the
  * picker offers the repository, never a checkout of it.
  */
 export const projectRoot = (path: string): string => path.replace(/\/\.worktrees(\/|$).*/, '') || '/';

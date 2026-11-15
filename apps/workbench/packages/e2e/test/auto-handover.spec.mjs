@@ -34,9 +34,9 @@ const select = async (page, title, mobile = false) => {
 };
 const shots = join(repoRoot, 'e2e', 'shots', 'auto-handover');
 before(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'calli-auto-e2e-')); mkdirSync(shots, { recursive: true });
+  dir = mkdtempSync(join(tmpdir(), 'loochat-auto-e2e-')); mkdirSync(shots, { recursive: true });
   for (const id of ['agy', 'agy2', 'agy3']) quota(id);
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     ...['agy', 'agy2', 'agy3'].map((id, i) => ({ id, adapter: 'agy', label: `Agent ${i + 1}`, command: ['fake-agy'], env: { FAKE_HANDOVER_QUOTA: join(dir, `${id}.json`) } })),
     { id: 'offline', adapter: 'agy', label: 'Offline', command: ['missing-auto-fixture'] },
   ] }) });
@@ -231,7 +231,7 @@ test('collaboration default and overrides; lead CLI sends to the replacement mem
   await request(`/api/threads/${root.id}/coordination`, 'POST', {});
   const command = async (args, text) => {
     const encoded = Buffer.from(JSON.stringify({ args, text })).toString('base64');
-    await send(root.id, `CALLI_COMMAND:${encoded}`); await idle(root.id);
+    await send(root.id, `LOOCHAT_COMMAND:${encoded}`); await idle(root.id);
   };
   await command(['spawn', '--agent', 'agy', '--model', 'gemini-pro', '--name', 'worker', '--message-file', '-', '--request-id', 'spawn-auto'], 'hello');
   let team = await request(`/api/threads/${root.id}/coordination`); const oldId = team.members[0].id; await idle(oldId);

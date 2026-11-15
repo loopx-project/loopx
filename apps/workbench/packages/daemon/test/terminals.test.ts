@@ -88,8 +88,8 @@ const create = async (cwd = workdir) => {
 };
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-term-data-'));
-  workdir = mkdtempSync(join(tmpdir(), 'calli-term-work-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-term-data-'));
+  workdir = mkdtempSync(join(tmpdir(), 'loochat-term-work-'));
   store = new Store(dataDir);
   // The thread manager is only here because the HTTP server needs one; these tests never use threads.
   manager = new ThreadManager(store, new Map(), [workdir], new AttachmentStore(dataDir));
@@ -141,11 +141,11 @@ test('the terminal cap is enforced while others are open', async () => {
 
 test('input runs, output streams, and the exit frame carries the code', async () => {
   const t = await create();
-  await api(`/api/terminals/${t.body.id}/input`, { method: 'POST', body: JSON.stringify({ data: 'echo calli-ok\r' }) });
+  await api(`/api/terminals/${t.body.id}/input`, { method: 'POST', body: JSON.stringify({ data: 'echo loochat-ok\r' }) });
   await api(`/api/terminals/${t.body.id}/input`, { method: 'POST', body: JSON.stringify({ data: 'exit\r' }) });
   // The stream is opened after the fact: the backlog and the exit must still arrive.
   const frames = await readStream(base, `/api/terminals/${t.body.id}/stream`, (f) => f.type === 'exit');
-  assert.ok(textOf(frames).includes('calli-ok'), 'echo output must come through');
+  assert.ok(textOf(frames).includes('loochat-ok'), 'echo output must come through');
   assert.equal(frames.at(-1)!.type, 'exit');
   assert.equal(frames.at(-1)!.data.code, 0);
   assert.deepEqual(await (await api('/api/terminals')).json(), [], 'an exited terminal leaves the list');
@@ -193,7 +193,7 @@ test('killing a terminal ends its stream, and it refuses input afterwards', asyn
 
 test('agent login starts a fresh terminal with the adapter command', async () => {
   const registry = new AgentRegistry([{ id: 'claude', adapter: 'claude', command: ['claude'] }], null);
-  registry.adapters.get('claude')!.loginCommand = () => 'echo calli-login';
+  registry.adapters.get('claude')!.loginCommand = () => 'echo loochat-login';
   const loginServer = createHttpServer({ manager, registry, terminals, token: TOKEN, webDir: null, version: 'test' });
   await new Promise<void>((r) => loginServer.listen(0, '127.0.0.1', () => r()));
   const loginBase = `http://127.0.0.1:${(loginServer.address() as AddressInfo).port}`;
@@ -201,8 +201,8 @@ test('agent login starts a fresh terminal with the adapter command', async () =>
     const res = await fetch(loginBase + '/api/agents/claude/login-terminal', { method: 'POST', headers: auth });
     assert.equal(res.status, 201);
     const { terminalId } = (await res.json()) as { terminalId: string };
-    const frames = await readStream(loginBase, `/api/terminals/${terminalId}/stream`, (f) => textOf([f]).includes('calli-login'));
-    assert.match(textOf(frames), /calli-login/);
+    const frames = await readStream(loginBase, `/api/terminals/${terminalId}/stream`, (f) => textOf([f]).includes('loochat-login'));
+    assert.match(textOf(frames), /loochat-login/);
     await fetch(loginBase + `/api/terminals/${terminalId}`, { method: 'DELETE', headers: auth });
   } finally {
     loginServer.close();

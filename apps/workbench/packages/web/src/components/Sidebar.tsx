@@ -1,4 +1,5 @@
-import brandIcon from '../assets/calli.svg';
+import brandIconLight from '../assets/loo-icon-paper.svg';
+import brandIconDark from '../assets/loo-icon-dark.svg';
 import { Fragment, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import type { ExternalSession, HostInfo, SearchHit, Section, Thread } from '../api';
 import type { AgentMarkInfo } from '../thread-cache';
@@ -648,7 +649,8 @@ export function Sidebar({
           </label>
         ) : (
           <>
-            <span className="brand"><img className="brand-icon" src={brandIcon} alt="" width="32" height="32" /><span>{t('app.name')}</span></span>
+            <span className="brand"><img className="brand-icon loo-light" src={brandIconLight} alt="" width="32" height="32" />
+              <img className="brand-icon loo-dark" src={brandIconDark} alt="" width="32" height="32" /><span>{t('app.name')}</span></span>
             <span className="sidebar-top-actions">
               {!inTitlebar && hideButton}
               <button

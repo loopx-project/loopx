@@ -5,15 +5,15 @@ import { toolInput, toolText, webUrl } from './borrowed-web.js';
 
 export const computerDynamicTool = {
   type: 'function', name: 'calli_computer',
-  description: 'Operate the isolated Calli browser using screenshots and pixel coordinates. Each action returns a 1280×800 screenshot. Start with navigate. Finish only after visually checking the result. No shell, DOM scripts, user profiles or OS desktop access.',
+  description: 'Operate the isolated LoopX browser using screenshots and pixel coordinates. Each action returns a 1280×800 screenshot. Start with navigate. Finish only after visually checking the result. No shell, DOM scripts, user profiles or OS desktop access.',
   inputSchema: computerActionSchema,
 };
 
 export const codexComputerTool: BorrowedTool = {
-  name: 'computer.use', description: '让 Codex 通过截图操作 Calli 独立浏览器：点击、输入、滚动并返回最终截图；范围仅浏览器。',
+  name: 'computer.use', description: '让 Codex 通过截图操作 LoopX 独立浏览器：点击、输入、滚动并返回最终截图；范围仅浏览器。',
   keywords: ['Computeruse', 'computer use', 'browser', '浏览器', '电脑', '点击', '截图', 'screenshot'],
   permissionMode: 'ask', resultKind: 'image',
-  get unavailableReason() { return browserExecutable() ? undefined : '未找到 Chrome/Chromium；请在 daemon 环境设置 CALLI_BROWSER_EXECUTABLE 后使用。'; },
+  get unavailableReason() { return browserExecutable() ? undefined : '未找到 Chrome/Chromium；请在 daemon 环境设置 LOOCHAT_BROWSER_EXECUTABLE 后使用。'; },
   inputSchema: { type: 'object', additionalProperties: false, required: ['url', 'task'], properties: {
     url: { type: 'string', minLength: 1, maxLength: 4000, description: '开始操作的 HTTP(S) 网页。使用独立、未登录的浏览器。' },
     task: { type: 'string', minLength: 1, maxLength: 8000, description: '要通过截图、点击与输入完成的网页任务。' },
@@ -33,9 +33,9 @@ export const codexComputerTool: BorrowedTool = {
   collect(events) {
     // This marker is added by the host RPC handler, never inferred from the model's answer.
     const last = [...events].reverse().find(e => e.type === 'tool.end' && e.data.status === 'completed'
-      && (e.data.computer as any)?.runtime === 'calli-browser' && (e.data.computer as any)?.action === 'finish');
+      && (e.data.computer as any)?.runtime === 'loochat-browser' && (e.data.computer as any)?.action === 'finish');
     const result = last?.data.computer as { screenshot?: string; url: string; actions: number } | undefined;
     if (!result?.screenshot) throw new Error('No verified browser finish/screenshot was observed.');
-    return { images: [result.screenshot], data: { runtime: 'calli-browser', scope: 'browser', url: result.url, actions: result.actions } };
+    return { images: [result.screenshot], data: { runtime: 'loochat-browser', scope: 'browser', url: result.url, actions: result.actions } };
   },
 };

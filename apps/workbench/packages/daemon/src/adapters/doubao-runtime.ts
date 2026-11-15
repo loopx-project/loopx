@@ -47,10 +47,10 @@ export function patchDoubaoModelBundle(source: string, bundle: typeof BUNDLES[nu
   const load = router ? '(0,U.Fo)' : 'W';
   if (source.split(branch).length !== 2 || source.split(method).length !== 2
     || !source.includes('/alice/slot/action_bar_v3/brief_list')) {
-    throw new Error('Doubao 模型目录不兼容：原生加载入口已变化，请升级 Calli');
+    throw new Error('Doubao 模型目录不兼容：原生加载入口已变化，请升级 LoopX');
   }
-  return source.replace(method, `async calliReadModels(){return ${load}({im:this.im,botId:this.botId})}${method}`)
-    .replace(branch, 'if("list"===o.kind){const catalog=await e.chat.calliReadModels();await e.output.stdout(JSON.stringify({type:"calli_models",models:catalog.models.map(model=>({...model.option}))})+"\\n");return{code:"ok"}}');
+  return source.replace(method, `async loochatReadModels(){return ${load}({im:this.im,botId:this.botId})}${method}`)
+    .replace(branch, 'if("list"===o.kind){const catalog=await e.chat.loochatReadModels();await e.output.stdout(JSON.stringify({type:"loochat_models",models:catalog.models.map(model=>({...model.option}))})+"\\n");return{code:"ok"}}');
 }
 
 async function executable(token: string, env: NodeJS.ProcessEnv, cwd: string): Promise<string> {
@@ -66,7 +66,7 @@ async function executable(token: string, env: NodeJS.ProcessEnv, cwd: string): P
 async function sourceRuntime(command: string[], env: NodeJS.ProcessEnv, cwd: string): Promise<{ root: string; base: string[] }> {
   const nodeWrapper = /^node(?:\.exe)?$/.test(basename(command[0])) && command[1] && !command[1].startsWith('-');
   const base = command.slice(nodeWrapper ? 2 : 1);
-  if (env.CALLI_DOUBAO_RUNTIME) return { root: await realpath(resolve(cwd, env.CALLI_DOUBAO_RUNTIME)), base };
+  if (env.LOOCHAT_DOUBAO_RUNTIME) return { root: await realpath(resolve(cwd, env.LOOCHAT_DOUBAO_RUNTIME)), base };
   const entry = await executable(command[nodeWrapper ? 1 : 0], env, cwd);
   const nearby = dirname(entry);
   try {
@@ -77,7 +77,7 @@ async function sourceRuntime(command: string[], env: NodeJS.ProcessEnv, cwd: str
     const pkg = JSON.parse(await readFile(join(nearby, '..', 'package.json'), 'utf8'));
     if (!['@bytedance/doubao-cli', '@bytedance-dev/doubao-cli'].includes(pkg.name) || basename(entry) !== 'run.cjs') throw new Error('unknown launcher');
   } catch {
-    throw new Error('Doubao 流式桥无法识别此入口；自定义包装器请用 CALLI_DOUBAO_RUNTIME 指定原生运行目录');
+    throw new Error('Doubao 流式桥无法识别此入口；自定义包装器请用 LOOCHAT_DOUBAO_RUNTIME 指定原生运行目录');
   }
   const home = env.HOME || homedir();
   const parent = env.XDG_DATA_HOME || join(home, '.local', 'share');
@@ -156,7 +156,7 @@ export async function validateDoubaoStreamRuntime(command: string[], env: NodeJS
 /** Anchor-checked local snapshot. No writes, hard links, config copies or downloads in the source. */
 export async function prepareDoubaoStreamRuntime(command: string[], env: NodeJS.ProcessEnv, cwd: string, mode: 'stream' | 'models' = 'stream'): Promise<DoubaoStreamRuntime> {
   const { root, base, manifest } = await inspectDoubaoStreamRuntime(command, env, cwd);
-  const directory = await mkdtemp(join(tmpdir(), 'calli-doubao-stream-'));
+  const directory = await mkdtemp(join(tmpdir(), 'loochat-doubao-stream-'));
   const target = join(directory, 'runtime');
   try {
     await chmod(directory, 0o700);

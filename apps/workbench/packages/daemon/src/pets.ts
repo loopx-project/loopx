@@ -6,7 +6,7 @@ import { HttpError } from './errors.js';
 
 /**
  * The desk's companion. Its frames are someone else's artwork (MIT, see LICENSE.txt next to them), far
- * too large to ship in this repository, so they are fetched once into the Calli home directory from a
+ * too large to ship in this repository, so they are fetched once into the LoopX home directory from a
  * pinned commit and served from there. Only the clips the desk plays are kept, every other frame.
  */
 export const PET = {

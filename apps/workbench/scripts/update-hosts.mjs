@@ -7,11 +7,11 @@ import { join } from 'node:path';
 import { adoptLegacyEnv, loadConfig, loadDotEnv } from '../packages/daemon/dist/config.js';
 
 adoptLegacyEnv();
-loadDotEnv(process.env.CALLI_ENV_FILE ?? join(homedir(), '.config/calli/.env'));
+loadDotEnv(process.env.LOOCHAT_ENV_FILE ?? join(homedir(), '.config/loochat/.env'));
 adoptLegacyEnv();
 const config = loadConfig();
 const host = ['0.0.0.0', '::'].includes(config.host) ? '127.0.0.1' : config.host;
-const base = process.env.CALLI_UPDATE_URL ?? `http://${host.includes(':') ? `[${host}]` : host}:${config.port}`;
+const base = process.env.LOOCHAT_UPDATE_URL ?? `http://${host.includes(':') ? `[${host}]` : host}:${config.port}`;
 const args = process.argv.slice(2);
 const only = args.find(arg => !arg.startsWith('-'));
 if (args.some(arg => arg.startsWith('-') && arg !== '--check') || args.filter(arg => !arg.startsWith('-')).length > 1) {
@@ -20,7 +20,7 @@ if (args.some(arg => arg.startsWith('-') && arg !== '--check') || args.filter(ar
 const dry = args.includes('--check');
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const script = readFileSync(new URL('./update-node.sh', import.meta.url), 'utf8');
-const file = process.env.CALLI_HOSTS_FILE ?? join(config.dataDir, 'hosts.json');
+const file = process.env.LOOCHAT_HOSTS_FILE ?? join(config.dataDir, 'hosts.json');
 const entries = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')).hosts ?? [] : [];
 async function api(path, body) {
   const response = await fetch(new URL(path, base), {
@@ -44,10 +44,10 @@ for (const machine of machines) {
   console.log(`[${machine.id}] ${dry ? 'Checking' : 'Updating'}`);
   try {
     if (machine.status !== 'online') throw new Error('node is offline');
-    const job = `calli-update-${randomUUID()}`;
+    const job = `loochat-update-${randomUUID()}`;
     const folder = `/tmp/${job}`;
     const entry = entries.find(entry => entry.id === machine.id);
-    const params = ['calli', '~/.local/state/calli/daemon.sock', entry?.repo ?? '~/code/calli', dry ? '1' : '0', '5'].map(quote).join(' ');
+    const params = ['loochat', '~/.local/state/loochat/daemon.sock', entry?.repo ?? '~/code/loochat', dry ? '1' : '0', '5'].map(quote).join(' ');
     // A separate unit survives restarting the node daemon. Tokens never enter the node's script.
     await exec(machine.id, `umask 077; mkdir ${quote(folder)} && cat > ${quote(`${folder}/run.sh`)} && systemd-run --user --quiet --collect --unit=${quote(job)} /bin/sh -c ${quote(`/bin/sh ${quote(`${folder}/run.sh`)} ${params} > ${quote(`${folder}/log`)} 2>&1; echo $? > ${quote(`${folder}/status`)}`)}`, script);
     let done = false;

@@ -13,7 +13,7 @@ import { HttpError } from './errors.js';
  * restart must not sign anyone out or close the tabs someone is working in.
  */
 
-const PROFILE_HELD = 'This browser profile is open in a Chrome that Calli did not start and cannot reach; close that Chrome and try again.';
+const PROFILE_HELD = 'This browser profile is open in a Chrome that LoopX did not start and cannot reach; close that Chrome and try again.';
 
 export interface PersonalBrowserOptions {
   /** Chrome's user data directory. Holds sign-ins, so it is created private. */
@@ -39,14 +39,14 @@ export interface PersonalBrowserStatus {
 
 /** The Chrome to use: an explicit one, else Google Chrome before Chromium, because Google sign-in trusts it. */
 export function personalBrowserExecutable(env = process.env): string | undefined {
-  if (env.CALLI_BROWSER_EXECUTABLE) return existsSync(env.CALLI_BROWSER_EXECUTABLE) ? env.CALLI_BROWSER_EXECUTABLE : undefined;
+  if (env.LOOCHAT_BROWSER_EXECUTABLE) return existsSync(env.LOOCHAT_BROWSER_EXECUTABLE) ? env.LOOCHAT_BROWSER_EXECUTABLE : undefined;
   return ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/opt/google/chrome/chrome', '/usr/bin/chromium',
     '/usr/bin/chromium-browser', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(p => existsSync(p));
 }
 
-/** agent-browser is not bundled (it ships every platform's binary); `CALLI_AGENT_BROWSER` or PATH names it. */
+/** agent-browser is not bundled (it ships every platform's binary); `LOOCHAT_AGENT_BROWSER` or PATH names it. */
 export function agentBrowserExecutable(env = process.env): string | null {
-  const explicit = env.CALLI_AGENT_BROWSER?.trim();
+  const explicit = env.LOOCHAT_AGENT_BROWSER?.trim();
   if (explicit) return isExecutable(explicit) ? explicit : null;
   for (const dir of (env.PATH ?? '').split(delimiter)) {
     const candidate = dir && join(dir, 'agent-browser');
@@ -103,8 +103,8 @@ export class PersonalBrowser {
     const port = await this.runningPort();
     if (port) return { available: true, running: true, cdp: `http://127.0.0.1:${port}`, port, agentBrowser };
     const display = await this.opts.display();
-    const reason = !this.command() ? 'Chrome or Chromium is not installed on this machine; set CALLI_BROWSER_EXECUTABLE.'
-      : !display ? 'This machine has no desktop to show the browser on. Start a VNC server, or set CALLI_BROWSER_DISPLAY.'
+    const reason = !this.command() ? 'Chrome or Chromium is not installed on this machine; set LOOCHAT_BROWSER_EXECUTABLE.'
+      : !display ? 'This machine has no desktop to show the browser on. Start a VNC server, or set LOOCHAT_BROWSER_DISPLAY.'
       : undefined;
     return { available: !reason, ...(reason ? { reason } : {}), running: false, ...(display ? { display } : {}), agentBrowser };
   }
@@ -135,9 +135,9 @@ export class PersonalBrowser {
 
   private async start(): Promise<number> {
     const command = this.command();
-    if (!command) throw new HttpError(503, 'Chrome or Chromium is not installed on this machine; set CALLI_BROWSER_EXECUTABLE.');
+    if (!command) throw new HttpError(503, 'Chrome or Chromium is not installed on this machine; set LOOCHAT_BROWSER_EXECUTABLE.');
     const display = await this.opts.display();
-    if (!display) throw new HttpError(503, 'This machine has no desktop to show the browser on. Start a VNC server, or set CALLI_BROWSER_DISPLAY.');
+    if (!display) throw new HttpError(503, 'This machine has no desktop to show the browser on. Start a VNC server, or set LOOCHAT_BROWSER_DISPLAY.');
     if (profileHeld(this.opts.profileDir)) throw new HttpError(409, PROFILE_HELD);
     mkdirSync(this.opts.profileDir, { recursive: true, mode: 0o700 });
     const portFile = join(this.opts.profileDir, 'DevToolsActivePort');
@@ -146,8 +146,8 @@ export class PersonalBrowser {
     const child = spawn(command[0], [...command.slice(1), `--user-data-dir=${this.opts.profileDir}`,
       '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--start-maximized'], {
       // The hub's own credentials stay with the hub; nothing Chrome starts needs them.
-      detached: true, stdio: 'ignore', env: { ...process.env, DISPLAY: display, CALLI_TOKEN: undefined,
-        CALLI_TOOLS_SOCKET: undefined, CALLI_TOOLS_KEY: undefined },
+      detached: true, stdio: 'ignore', env: { ...process.env, DISPLAY: display, LOOCHAT_TOKEN: undefined,
+        LOOCHAT_TOOLS_SOCKET: undefined, LOOCHAT_TOOLS_KEY: undefined },
     });
     let exitedAt = 0;
     child.once('exit', () => { exitedAt = Date.now(); });

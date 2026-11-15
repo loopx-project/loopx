@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, readFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-if (Object.keys(process.env).some(key => key.startsWith('CALLI_'))) throw new Error('Hub credentials must not reach Lark');
+if (Object.keys(process.env).some(key => key.startsWith('LOOCHAT_'))) throw new Error('Hub credentials must not reach Lark');
 const config = process.env.FAKE_LARK_DATA ? JSON.parse(readFileSync(process.env.FAKE_LARK_DATA, 'utf8')) : {};
 if (process.env.FAKE_LARK_LOG) appendFileSync(process.env.FAKE_LARK_LOG, JSON.stringify(args) + '\n');
 const key = args.slice(0, 2).join(' ');

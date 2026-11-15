@@ -245,7 +245,7 @@ export const PET_BUST_HEIGHT = 160;
 /** Frames kept decoded: the one on screen and those just ahead, about half a megabyte each. */
 export const PET_RING_SIZE = 8;
 export const PET_WEBP_QUALITY = 0.9;
-export const PET_CACHE_PREFIX = 'calli-pet-';
+export const PET_CACHE_PREFIX = 'loochat-pet-';
 
 /** Named after the artwork and how it is cleaned, so changing either starts over. */
 export function petCacheName(id: string, commit: string): string {
@@ -259,7 +259,7 @@ export function petLicenseUrl(commit: string): string {
 
 /** Never fetched: Cache Storage only wants an address of this origin to file the frame under. */
 export function petCacheKey(clip: PetClip, index: number): string {
-  return `/calli-pet-frames/${clip}/${index}.webp`;
+  return `/loochat-pet-frames/${clip}/${index}.webp`;
 }
 
 /** The frames to keep decoded: this one and the next ones, wrapping if it loops, stopping at the end if not. */

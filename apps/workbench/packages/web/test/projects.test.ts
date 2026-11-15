@@ -46,7 +46,7 @@ test('worktrees count under their source project and new drafts come first', () 
 });
 
 test('a session started in a .worktrees checkout offers the repository, not the checkout', () => {
-  // No worktree metadata: calli opened the session inside the checkout directly.
+  // No worktree metadata: loochat opened the session inside the checkout directly.
   const list = buildProjectOptions([
     thread('/data/code/.worktrees/agent-team'),
     thread('/data/code/.worktrees/b0b51d7d', '/data/code/.worktrees/b0b51d7d', { updatedAt: '2026-01-02' }),

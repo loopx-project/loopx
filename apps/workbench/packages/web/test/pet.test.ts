@@ -19,7 +19,7 @@ test('only the frames just ahead stay decoded', () => {
 test('cleaned frames are filed under the artwork they came from', () => {
   assert.notEqual(petCacheName('dafeiyu', 'aaa'), petCacheName('dafeiyu', 'bbb'));
   assert.match(petLicenseUrl('aaa'), /\/blob\/aaa\//);
-  assert.equal(petCacheKey('idle', 7), '/calli-pet-frames/idle/7.webp');
+  assert.equal(petCacheKey('idle', 7), '/loochat-pet-frames/idle/7.webp');
 });
 
 test('she yawns between 40 and 80 seconds', () => {

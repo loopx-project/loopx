@@ -16,7 +16,7 @@ import { Workdirs } from '../src/workdirs.js';
 const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-acp.mjs');
 
 test('handover GET assembles exact Claude instance and session coordinates without spending a turn', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-handover-api-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-handover-api-'));
   const cwd = join(root, 'project');
   mkdirSync(cwd);
   const accounts = [join(root, 'account-one'), join(root, 'account-two')];
@@ -39,7 +39,7 @@ test('handover GET assembles exact Claude instance and session coordinates witho
       // The clean brief of the auto handover: no coordinates to leak, just where to look.
       assert.match(empty.summary,/# 接手/);
       assert.ok(empty.summary.includes(cwd), 'the working directory is in it');
-      assert.ok(empty.summary.includes(`calli history ${thread.id}`));
+      assert.ok(empty.summary.includes(`loochat history ${thread.id}`));
       assert.equal((await api(`/api/threads/${thread.id}/turns`, {text:'继续完成测试'})).status,202);
       let ready = false;
       for (let n=0;n<100;n++) {
@@ -51,7 +51,7 @@ test('handover GET assembles exact Claude instance and session coordinates witho
       const session = join(accounts[i], 'projects', cwd.replace(/[^a-zA-Z0-9]/g,'-'), 'shared-session-id.jsonl');
       const fileBefore = readFileSync(session,'utf8');
       const result = await (await api(`/api/threads/${thread.id}/handover`)).json() as {summary:string};
-      for (const value of ['# 接手', `calli history ${thread.id}`, '继续完成测试', '## 进度（hub 从记录整理，可能不全）']) assert.ok(result.summary.includes(value), value);
+      for (const value of ['# 接手', `loochat history ${thread.id}`, '继续完成测试', '## 进度（hub 从记录整理，可能不全）']) assert.ok(result.summary.includes(value), value);
       assert.doesNotMatch(result.summary,/never-copy-this|ANTHROPIC_API_KEY|FAKE_SESSION_ROOT|account-/, 'neither account\u2019s coordinates or secrets appear');
       assert.deepEqual(manager.listEventsSince(thread.id,0),eventsBefore);
       assert.equal(readFileSync(session,'utf8'),fileBefore);
@@ -59,7 +59,7 @@ test('handover GET assembles exact Claude instance and session coordinates witho
         await api(`/api/threads/${thread.id}/turns`, {text:'slow'});
         const running = await api(`/api/threads/${thread.id}/handover`);
         assert.equal(running.status,200,'works while the source is running');
-        assert.ok((await running.json() as {summary:string}).summary.includes(`calli history ${thread.id}`));
+        assert.ok((await running.json() as {summary:string}).summary.includes(`loochat history ${thread.id}`));
       }
     }
     // An existing worktree may predate the hub and have no hub worktree metadata.
@@ -91,7 +91,7 @@ test('handover GET assembles exact Claude instance and session coordinates witho
 
 
 test('handover-thread creates an unsent conversation in the same worktree, including scratch and external checkouts', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-handover-start-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-handover-start-'));
   const cwd = join(root, 'project');
   const scratch = join(root, 'scratch');
   mkdirSync(cwd);
@@ -177,7 +177,7 @@ test('handover-thread creates an unsent conversation in the same worktree, inclu
 });
 
 test('a turn that fails because the plan ran out is marked so another agent can take over', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-plan-exhausted-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-plan-exhausted-'));
   const cwd = join(root, 'project');
   mkdirSync(cwd);
   const registry = new AgentRegistry([{ id: 'claude', adapter: 'claude', label: 'Claude Code', command: [process.execPath, fixture], env: { CLAUDE_CONFIG_DIR: join(root, 'claude'), FAKE_SESSION_ROOT: join(root, 'claude') } }], null);
@@ -203,7 +203,7 @@ test('a turn that fails because the plan ran out is marked so another agent can 
 });
 
 test('merged-history HTTP reads omit handover text until explicitly expanded, and require authentication', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-handover-history-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-handover-history-'));
   const store = new Store(root);
   const registry = new AgentRegistry([{ id: 'pi', adapter: 'pi', command: [process.execPath, fixture] }], null);
   const manager = new ThreadManager(store, registry.adapters, new Workdirs([root], null), new AttachmentStore(root));
@@ -250,7 +250,7 @@ test('merged-history HTTP reads omit handover text until explicitly expanded, an
 
 
 test('manual handovers always branch without stopping work, automatic handovers continue, and resumed sources separate', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-handover-mode-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-handover-mode-'));
   const store = new Store(root);
   const registry = new AgentRegistry(['source', 'next'].map(id => ({ id, adapter: 'claude', command: [process.execPath, fixture] })), null);
   const manager = new ThreadManager(store, registry.adapters, new Workdirs([root], null), new AttachmentStore(root));
@@ -324,7 +324,7 @@ test('manual handovers always branch without stopping work, automatic handovers 
 });
 
 test('a relay between accounts of the same agent keeps model and effort; across agent kinds it does not', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-handover-model-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-handover-model-'));
   const cwd = join(root, 'project'); mkdirSync(cwd);
   const one = join(root, 'one'), two = join(root, 'two');
   const fakeAgy = join(dirname(fixture), 'fake-agy.mjs');

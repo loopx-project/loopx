@@ -62,7 +62,7 @@ function seed(root: string, name: string, frontmatter: string, extra: Array<{ pa
 }
 
 before(async () => {
-  home = mkdtempSync(join(tmpdir(), 'calli-skills-home-'));
+  home = mkdtempSync(join(tmpdir(), 'loochat-skills-home-'));
   claudeHome = join(home, '.claude');
   piHome = join(home, '.pi', 'agent');
   agyHome = join(home, '.gemini', 'antigravity-cli');
@@ -83,14 +83,14 @@ before(async () => {
   seed(home, '.agents/skills/shared', '---\nname: shared\ndescription: Folded description\n---\n');
   mkdirSync(join(agyHome, 'skills', 'not-a-skill')); // a folder without SKILL.md is nothing
 
-  workdir = mkdtempSync(join(tmpdir(), 'calli-skills-work-'));
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-skills-data-'));
+  workdir = mkdtempSync(join(tmpdir(), 'loochat-skills-work-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-skills-data-'));
   // The shared `~/.agents/skills` follows HOME, so every adapter carries the test home with it.
   const env = { HOME: home };
   const adapters = new Map<string, AgentAdapter>();
   adapters.set('claude', new ClaudeAcpAdapter([process.execPath, join(here, 'fixtures', 'fake-acp.mjs')], { ...env, CLAUDE_CONFIG_DIR: claudeHome }));
   adapters.set('pi', new PiRpcAdapter([process.execPath, join(here, 'fixtures', 'fake-pi.mjs')], { ...env, PI_CODING_AGENT_DIR: piHome }));
-  adapters.set('agy', new AgyAdapter([process.execPath, join(here, 'fixtures', 'fake-agy.mjs')], { ...env, CALLI_AGY_HOME: agyHome }));
+  adapters.set('agy', new AgyAdapter([process.execPath, join(here, 'fixtures', 'fake-agy.mjs')], { ...env, LOOCHAT_AGY_HOME: agyHome }));
   adapters.set('codex', new CodexAppServerAdapter([process.execPath, join(here, 'fixtures', 'fake-codex.mjs')], { ...env, CODEX_HOME: codexHome }));
   const store = new Store(dataDir);
   manager = new ThreadManager(store, adapters, new Workdirs([workdir]), new AttachmentStore(dataDir));

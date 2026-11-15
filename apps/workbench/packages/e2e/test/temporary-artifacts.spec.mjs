@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
 test('temporary images, reports and files elsewhere open from answers on desktop and phone, light and dark', async () => {
-  const artifacts = mkdtempSync(join(tmpdir(), 'calli-preview-artifacts-'));
+  const artifacts = mkdtempSync(join(tmpdir(), 'loochat-preview-artifacts-'));
   let daemon, browser;
   try {
     daemon = await startDaemon();
@@ -31,9 +31,9 @@ test('temporary images, reports and files elsewhere open from answers on desktop
       try {
         const page = await context.newPage();
         const shot = async name => {
-          if (!process.env.CALLI_E2E_SHOTS_DIR) return;
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `${name}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+          if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${name}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         };
         await openUi(page, daemon);
         if (mobile) await page.locator('.menu-btn').click();

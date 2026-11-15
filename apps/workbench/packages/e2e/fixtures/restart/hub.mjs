@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A stand-in for a Calli hub in restart.sh tests: a tiny HTTP server speaking just enough for the
+// A stand-in for a LooChat hub in restart.sh tests: a tiny HTTP server speaking just enough for the
 // curl fake. State files live in the directory given as the second argument, so every test runs
 // against its own:
 //   threads-active.json   served for /api/threads. A leading "+" plays a scripted sequence: the

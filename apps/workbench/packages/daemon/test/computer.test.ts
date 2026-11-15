@@ -24,7 +24,7 @@ async function target() {
     res.setHeader('Content-Type', 'text/html');
     res.end(`<!doctype html><title>Computer test</title><h1>Browser test</h1>
       <form action="/submit"><input name="name" aria-label="Name" style="position:absolute;left:60px;top:100px;width:250px;height:36px">
-      <button style="position:absolute;left:60px;top:160px;width:140px;height:40px">Submit</button></form><p style="margin-top:230px">${submitted.length ? 'Submitted: Calli' : 'Enter a name'}</p>`);
+      <button style="position:absolute;left:60px;top:160px;width:140px;height:40px">Submit</button></form><p style="margin-top:230px">${submitted.length ? 'Submitted: LoopX' : 'Enter a name'}</p>`);
   });
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
@@ -41,17 +41,17 @@ test('computer task validation requires HTTP(S), rejects extra fields and never 
 });
 
 test('browser runtime validates before launch, serializes actions, saves screenshot and closes after finish', browserTest, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-computer-test-')), site = await target();
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-computer-test-')), site = await target();
   const computer = new BrowserComputer(dir);
   try {
     for (const action of [{ action: 'navigate', url: 'file:///secret' }, { action: 'click', x: -1, y: 10 }, { action: 'key', key: 'F12' }, { action: 'screenshot', script: 'x' }]) await assert.rejects(computer.execute(action));
     await computer.execute({ action: 'navigate', url: site.url });
     await Promise.all([
       computer.execute({ action: 'click', x: 150, y: 120 }),
-      computer.execute({ action: 'type', text: 'Calli' }),
+      computer.execute({ action: 'type', text: 'LoopX' }),
       computer.execute({ action: 'click', x: 100, y: 180 }),
     ]);
-    assert.deepEqual(site.submitted, ['Calli']);
+    assert.deepEqual(site.submitted, ['LoopX']);
     const result = await computer.execute({ action: 'finish' });
     assert.equal(result.evidence.scope, 'browser');
     assert.equal(result.evidence.actions, 5);
@@ -63,7 +63,7 @@ test('browser runtime validates before launch, serializes actions, saves screens
 });
 
 test('browser cancellation during startup closes the launch and rejects future actions', browserTest, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-computer-cancel-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-computer-cancel-'));
   const computer = new BrowserComputer(dir);
   try {
     const result = computer.execute({ action: 'navigate', url: 'https://example.com/' });
@@ -75,31 +75,31 @@ test('browser cancellation during startup closes the launch and rejects future a
 });
 
 test('borrowed Codex dynamic tools execute real browser actions and persist a verified artifact', browserTest, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-computer-job-')), site = await target();
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-computer-job-')), site = await target();
   const adapter = new CodexAppServerAdapter([process.execPath, fixture], { FAKE_CODEX_COMPUTER: 'success' });
   const adapters = new Map([['visual-agent', adapter]]), store = new Store(dir);
   const manager = new ThreadManager(store, adapters, new Workdirs([dir], join(dir, 'dirs.json'), join(dir, 'scratch')), new AttachmentStore(dir));
   const service = new BorrowingService(store, manager, adapters, dir, join(dir, 'tools.sock'));
   try {
-    const started = await service.command('operator', { op: 'tools.run', tool: 'visual-agent/computer.use', requestId: 'form-test', input: { url: site.url, task: 'Fill Name with Calli and submit.' } }) as any;
+    const started = await service.command('operator', { op: 'tools.run', tool: 'visual-agent/computer.use', requestId: 'form-test', input: { url: site.url, task: 'Fill Name with LoopX and submit.' } }) as any;
     const deadline = Date.now() + 20_000;
     let job;
     do { await new Promise(r => setTimeout(r, 50)); job = store.toolJobs.get(started.id)!; }
     while (['queued', 'running'].includes(job.state) && Date.now() < deadline);
     assert.equal(job.state, 'succeeded', JSON.stringify(job.error));
-    assert.deepEqual(site.submitted, ['Calli']);
-    assert.deepEqual(job.result, { runtime: 'calli-browser', scope: 'browser', url: `${site.url}submit?name=Calli`, actions: 5 });
+    assert.deepEqual(site.submitted, ['LoopX']);
+    assert.deepEqual(job.result, { runtime: 'loochat-browser', scope: 'browser', url: `${site.url}submit?name=LoopX`, actions: 5 });
     assert.equal(job.artifacts.length, 1);
     assert.equal(readFileSync(job.artifacts[0].path).readUInt32BE(16), 1280);
     const events = store.listEvents(job.threadId!, 0, -1);
-    assert.equal(events.filter(e => (e.data.computer as any)?.runtime === 'calli-browser').length, 5);
+    assert.equal(events.filter(e => (e.data.computer as any)?.runtime === 'loochat-browser').length, 5);
     assert.ok(!JSON.stringify(events).includes('data:image/png;base64,'), 'screenshots must not inflate persisted events');
     assert.equal(service.environment(job.threadId!), undefined);
   } finally { await service.dispose(); await manager.shutdown(); store.close(); await site.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 for (const mode of ['no-evidence', 'wrong-turn', 'slow']) test(`Codex computer ${mode} cannot report a verified result`, browserTest, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-computer-rpc-')), site = await target();
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-computer-rpc-')), site = await target();
   const adapter = new CodexAppServerAdapter([process.execPath, fixture], { FAKE_CODEX_COMPUTER: mode });
   const events: EmittedEvent[] = [];
   const session = await adapter.start({ cwd: dir, borrowedTool: 'computer.use' });
@@ -119,7 +119,7 @@ for (const mode of ['no-evidence', 'wrong-turn', 'slow']) test(`Codex computer $
 });
 
 test('ordinary Codex sessions do not receive the dynamic browser tool', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-computer-ordinary-')), log = join(dir, 'rpc.jsonl');
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-computer-ordinary-')), log = join(dir, 'rpc.jsonl');
   const adapter = new CodexAppServerAdapter([process.execPath, fixture], { FAKE_CODEX_RPC_LOG: log });
   const session = await adapter.start({ cwd: dir });
   try {

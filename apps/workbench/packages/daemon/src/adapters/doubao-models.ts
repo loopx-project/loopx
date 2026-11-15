@@ -9,7 +9,7 @@ const OUTPUT_LIMIT = 1024 * 1024;
 export function doubaoModels(stdout: string): ModelOption[] {
   let record;
   try { record = JSON.parse(stdout); } catch { throw new Error('Doubao 返回了无效模型目录'); }
-  if (record?.type !== 'calli_models' || !Array.isArray(record.models) || record.models.length > 512) {
+  if (record?.type !== 'loochat_models' || !Array.isArray(record.models) || record.models.length > 512) {
     throw new Error('Doubao 返回了无效模型目录');
   }
   const seen = new Set<string>();
@@ -23,7 +23,7 @@ export function doubaoModels(stdout: string): ModelOption[] {
     seen.add(model.modelId);
     const efforts: EffortLevel[] = model.efforts.map((effort: any) => {
       const level = effort?.level === 'none' ? 'off' : effort?.level;
-      if (!EFFORT_LEVELS.includes(level)) throw new Error('Doubao 返回了未知推理强度，请升级 Calli');
+      if (!EFFORT_LEVELS.includes(level)) throw new Error('Doubao 返回了未知推理强度，请升级 LoopX');
       return level;
     });
     if (!model.available) return [];

@@ -18,9 +18,9 @@ test('a dropped text file is attached, sent to the agent by path and saved from 
         let reads = 0;
         page.on('request', req => { if (req.url().includes('/attachments/')) reads++; });
         const shot = async name => {
-          if (!process.env.CALLI_E2E_SHOTS_DIR) return;
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `${name}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+          if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${name}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         };
         await openUi(page, daemon);
         if (mobile) await page.locator('.menu-btn').click();

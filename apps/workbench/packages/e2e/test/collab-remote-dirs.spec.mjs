@@ -12,12 +12,12 @@ import { linkDaemon, startDaemon, openUi, api, launchBrowser, openCollaboration 
  */
 let root, remoteHome, added, remote, hub, browser;
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-collab-dirs-'));
+  root = mkdtempSync(join(tmpdir(), 'loochat-collab-dirs-'));
   remoteHome = join(root, 'remote-home');
   mkdirSync(remoteHome);
   added = join(remoteHome, '手动添加的项目');
   mkdirSync(added);
-  remote = await startDaemon({ HOME: remoteHome, CALLI_SOCKET: join(remoteHome, '.local/state/calli/daemon.sock') });
+  remote = await startDaemon({ HOME: remoteHome, LOOCHAT_SOCKET: join(remoteHome, '.local/state/loochat/daemon.sock') });
   mkdirSync(join(remote.workdir, '子目录'));
   hub = await startDaemon({  });
   await linkDaemon(hub, remote);
@@ -29,11 +29,11 @@ after(async () => {
 });
 
 async function shot(page, name) {
-  if (!process.env.CALLI_E2E_SHOTS_DIR) return;
+  if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
   // A shot taken mid-fade shows a half-built dialog; let the entry animation land first.
   await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
-  mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-  await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `${name}.png`) });
+  mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+  await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${name}.png`) });
 }
 
 /** An address in the one input is submitted with Enter. */

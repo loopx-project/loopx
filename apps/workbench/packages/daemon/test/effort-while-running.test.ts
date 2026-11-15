@@ -36,8 +36,8 @@ async function waitRunning(manager: ThreadManager, id: string): Promise<void> {
  * Claude Code, and what Codex does by passing the model with the next turn's start.
  */
 test('an effort change during a running turn is stored and reaches the next turn', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-effort-data-'));
-  const workdir = mkdtempSync(join(tmpdir(), 'calli-effort-work-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-effort-data-'));
+  const workdir = mkdtempSync(join(tmpdir(), 'loochat-effort-work-'));
   const effortLog = join(dataDir, 'effort.log');
   // The fake pi holds its first turn open long enough to change the setting mid-turn, refuses the
   // in-place change while streaming, and logs every thinking-level attempt.
@@ -82,8 +82,8 @@ test('an effort change during a running turn is stored and reaches the next turn
 
 /** The same deferral resets a stored effort or model back to the agent's default. */
 test('clearing the effort mid-turn also waits for the turn', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'calli-effort-clear-'));
-  const workdir = mkdtempSync(join(tmpdir(), 'calli-effort-clear-work-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-effort-clear-'));
+  const workdir = mkdtempSync(join(tmpdir(), 'loochat-effort-clear-work-'));
   process.env.FAKE_PI_FIRST_OUTPUT_DELAY_MS = '2500';
   process.env.FAKE_PI_EFFORT_BUSY = '1';
   let manager: ThreadManager | null = null;

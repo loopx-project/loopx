@@ -53,7 +53,7 @@ export function GitPanel({ api, threadId, phone, running, onClose }: {
   const pushed = useRef(false);
   useEffect(() => {
     if (!phone) return;
-    window.history.pushState({ ...window.history.state, calliGit: true }, '');
+    window.history.pushState({ ...window.history.state, loochatGit: true }, '');
     pushed.current = true;
     const pop = () => { if (pushed.current) { pushed.current = false; closeRef.current(); } };
     window.addEventListener('popstate', pop);

@@ -19,7 +19,7 @@ const configure = (cwd: string) => { run(cwd, 'config', 'user.name', 'Test'); ru
 const commit = (cwd: string, message = 'change') => { run(cwd, 'add', '.'); run(cwd, 'commit', '-m', message); };
 const refusal = (code: string) => (error: unknown) => error instanceof HttpError && error.details?.gitCode === code;
 function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-git-test-')), repo = join(dir, 'repo'); mkdirSync(repo);
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-git-test-')), repo = join(dir, 'repo'); mkdirSync(repo);
   run(repo, 'init', '-b', 'main'); configure(repo);
   const service = new GitManager(() => repo, () => {}, () => false);
   return { dir, repo, service, cleanup: () => rmSync(dir, { recursive: true, force: true }) };

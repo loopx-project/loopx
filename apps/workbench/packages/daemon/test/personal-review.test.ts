@@ -30,14 +30,14 @@ const wait = async (fn: () => boolean | Promise<boolean>) => {
   throw new Error('timed out');
 };
 function stateFixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-review-state-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-review-state-'));
   const store = new Store(dir), review = new PersonalReview(store);
   const save = (patch: Partial<ReviewState>) => store.saveHubSetting('personalReview', { ...review.status(), ...patch });
   return { dir, store, review, save, close() { store.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 async function setup(options: { fake?: 'notify' | 'quiet'; startError?: boolean } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-review-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-review-'));
   const cwd = join(dir, 'personal'), outside = join(dir, 'outside'); mkdirSync(cwd); mkdirSync(outside);
   const store = new Store(dir);
   let release: (() => void) | undefined, gate: Promise<void> | undefined;
@@ -61,7 +61,7 @@ async function setup(options: { fake?: 'notify' | 'quiet'; startError?: boolean 
   const thread = await manager.createThread({ agent: 'pi', cwd });
   const save = (patch: Partial<ReviewState>) => store.saveHubSetting('personalReview', { ...review.status(), ...patch });
   const due = () => { review.command(thread.id, 'review.on'); save({ nextReviewAt: iso(Date.now() - 1000), quietHours: { start: '00:00', end: '00:00' } }); };
-  const cli = async (args: string[], owner = thread.id) => JSON.parse((await exec(process.execPath, [resolve('bin/calli'), ...args], {
+  const cli = async (args: string[], owner = thread.id) => JSON.parse((await exec(process.execPath, [resolve('bin/loochat'), ...args], {
     env: { ...process.env, ...service.environment(owner), ...borrowing.environment(owner) },
   })).stdout);
   return { dir, cwd, outside, store, manager, service, review, scheduler, adapters, thread, push, save, due, cli,
@@ -143,7 +143,7 @@ test('due review launches one dated private thread with summary only, clears nex
     assert.equal(thread.permissionMode, h.adapters.get('pi')!.capabilities.defaultPermissionMode ?? 'auto_edit');
     const started = h.store.listEventsOfType(thread.id, 'turn.started')[0]; assert.equal(started.data.review, true);
     const prompt = String(started.data.text);
-    for (const phrase of ['只读、只问', '一条 calli notify', 'calli quiet', 'calli review next', 'calli todo delegate', 'Useful preview', 'followUpPaused', '"running": false']) assert.ok(prompt.includes(phrase), phrase);
+    for (const phrase of ['只读、只问', '一条 loochat notify', 'loochat quiet', 'loochat review next', 'loochat todo delegate', 'Useful preview', 'followUpPaused', '"running": false']) assert.ok(prompt.includes(phrase), phrase);
     assert.ok(!prompt.includes('Full detail not to load'));
     assert.equal(h.store.listThreads().length, 2);
     h.release(); await wait(() => !h.review.status().active);
@@ -421,7 +421,7 @@ test('the review prompt carries watch facts only for suspicious matters, read fr
 
   // Neither the Router, a review, a summary nor an archived thread is a worker.
   const notWork = (name: string, prepare: (id: string) => void) => { h.store.createTodo(name, name, null); const id = thread(`${name}-thread`); link(name, id); prepare(id); assert.equal(watchOf(name, later), undefined, name); };
-  notWork('router', id => { rounds(id, 3, undefined, 'turn.done', { hiddenPrompt: true, text: 'hi\n\n<calli-personal-router>\nrules' }); h.store.updateThread(id, { status: 'running', hubTurnAt: new Date().toISOString() }); });
+  notWork('router', id => { rounds(id, 3, undefined, 'turn.done', { hiddenPrompt: true, text: 'hi\n\n<loochat-personal-router>\nrules' }); h.store.updateThread(id, { status: 'running', hubTurnAt: new Date().toISOString() }); });
   notWork('review', id => rounds(id, 3, undefined, 'turn.done', { review: true }));
   notWork('summary', id => { rounds(id, 3); h.store.saveSummaryRun('s1', id, 1); });
   notWork('archived', id => { rounds(id, 3); h.store.updateThread(id, { archivedAt: new Date().toISOString() }); });

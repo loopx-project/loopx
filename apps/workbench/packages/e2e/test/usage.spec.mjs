@@ -11,7 +11,7 @@ let browser;
 
 before(async () => {
   daemon = await startDaemon({
-    CALLI_AGENTS_JSON: JSON.stringify({ agents: ['claude', 'codex', 'pi'].map((id) => ({
+    LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: ['claude', 'codex', 'pi'].map((id) => ({
       id, adapter: id, command: [process.execPath, join(repoRoot, 'daemon', 'test', 'fixtures', `fake-${id === 'claude' ? 'acp' : id}.mjs`)],
     })) }),
   });
@@ -100,9 +100,9 @@ test('Codex shows current context on desktop and phone in both themes, including
         assert.equal(modelReads, readsBefore, 'opening context details does not request the model catalog');
         const bounds = await panel.boundingBox();
         assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= page.viewportSize().width + 1 && bounds.y + bounds.height <= page.viewportSize().height + 1);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `context-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `context-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
         await openUi(page, daemon);
         await selectThread(page, thread, mobile);
@@ -172,9 +172,9 @@ test('the context panel shows the request composition, session totals and the /c
   // A daemon of its own: the telemetry fixtures change the numbers the shared daemon asserts above.
   // Claude's live usage needs a config dir the fixture can write and the adapter tails; both get
   // the same scratch directory through the instance env.
-  const claudeConfig = mkdtempSync(join(tmpdir(), 'calli-claude-config-'));
+  const claudeConfig = mkdtempSync(join(tmpdir(), 'loochat-claude-config-'));
   const hub = await startDaemon({
-    CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+    LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
       { id: 'pi', adapter: 'pi', command: [process.execPath, join(repoRoot, 'daemon', 'test', 'fixtures', 'fake-pi.mjs')] },
       { id: 'claude', adapter: 'claude', command: [process.execPath, join(repoRoot, 'daemon', 'test', 'fixtures', 'fake-acp.mjs')],
         env: { FAKE_LIVE_USAGE: '1', CLAUDE_CONFIG_DIR: claudeConfig } },
@@ -223,9 +223,9 @@ test('the context panel shows the request composition, session totals and the /c
         assert.equal(await panel.getByRole('button', { name: /\/context/ }).count(), 0, 'pi has no context command');
         const bounds = await panel.boundingBox();
         assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= page.viewportSize().width + 1);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `context-panel-desktop-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `context-panel-desktop-${colorScheme}.png`) });
         }
       } finally {
         await context.close();
@@ -250,8 +250,8 @@ test('the context panel shows the request composition, session totals and the /c
         assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0
           && bounds.x + bounds.width <= page.viewportSize().width + 1
           && bounds.y + bounds.height <= page.viewportSize().height + 1);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `context-panel-phone-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `context-panel-phone-${colorScheme}.png`) });
         }
       } finally {
         await phone.close();

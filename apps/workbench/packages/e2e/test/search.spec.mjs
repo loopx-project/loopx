@@ -37,7 +37,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
     const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: phone, hasTouch: phone, colorScheme });
     const page = await context.newPage();
     const errors = []; page.on('pageerror', e => errors.push(e.message));
-    const shots = '/tmp/calli-search-shots'; mkdirSync(shots, { recursive: true });
+    const shots = '/tmp/loochat-search-shots'; mkdirSync(shots, { recursive: true });
     const shot = name => page.screenshot({ path: `${shots}/${phone ? 'phone' : 'desktop'}-${colorScheme}-${name}.png` });
     try {
       await openUi(page, daemon);

@@ -47,7 +47,7 @@ function Permissions({ list }: { list: Permission[] }) {
 }
 
 /**
- * Settings → Extensions: the Calli extensions this hub ships, what each may read, and installing or
+ * Settings → Extensions: the LoopX extensions this hub ships, what each may read, and installing or
  * removing them on the machine on screen. Daily work happens in the views they add, not here.
  */
 export function ExtensionsPage({ api, demo = false, extensions, threads = [], onReload, onChange, onOpenView, onError }: Props) {

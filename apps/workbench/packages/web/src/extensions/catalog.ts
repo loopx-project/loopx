@@ -1,5 +1,5 @@
 /**
- * The browser code of the extensions that ship with Calli. Each loads as a chunk of its own the
+ * The browser code of the extensions that ship with LoopX. Each loads as a chunk of its own the
  * first time one of its views opens, so a page that never shows one never downloads it. Extension
  * packages depend on @calli/extension-api only; nothing here is visible to them but `WebHost`.
  */

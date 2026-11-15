@@ -19,14 +19,14 @@ import type { EventType } from '../src/events.js';
 const exec = promisify(execFile);
 const wait = async (fn: () => boolean | Promise<boolean>) => { for (let i = 0; i < 500; i++) { if (await fn()) return; await new Promise(r => setTimeout(r, 10)); } throw new Error('timed out'); };
 async function setup(options: { executable?: string; timeoutMs?: number } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-push-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-push-'));
   const log = join(dir, 'calls'), config = join(dir, 'config'); writeFileSync(log, ''); writeFileSync(config, '{}');
   const store = new Store(dir);
   const adapters = new Map([['claude', new ClaudeAcpAdapter([process.execPath, resolve('test/fixtures/fake-acp.mjs')])]]);
   const manager = new ThreadManager(store, adapters, new Workdirs([dir], join(dir, 'dirs')), new AttachmentStore(dir));
   let now = Date.now();
   const push = new PushService(store, manager, { executable: resolve('test/fixtures/fake-lark-cli.mjs'), timeoutMs: 1000, retryMs: 1, ...options,
-    env: { ...process.env, FAKE_LARK_LOG: log, FAKE_LARK_CONFIG: config, CALLI_TOKEN: 'secret', CALLI_TOKEN: 'secret', CALLI_TOOLS_KEY: 'secret', CALLI_OTHER: 'secret' }, now: () => now });
+    env: { ...process.env, FAKE_LARK_LOG: log, FAKE_LARK_CONFIG: config, LOOCHAT_TOKEN: 'secret', LOOCHAT_TOKEN: 'secret', LOOCHAT_TOOLS_KEY: 'secret', LOOCHAT_OTHER: 'secret' }, now: () => now });
   const service = new BorrowingService(store, manager, adapters, dir, join(dir, 'tools.sock'));
   const socket = borrowingServer(service); await listenPrivate(socket, service.socket);
   const server = createHttpServer({ manager, push, token: 'test', version: 'test', webDir: null });
@@ -37,7 +37,7 @@ async function setup(options: { executable?: string; timeoutMs?: number } = {}) 
   const sent = () => calls().filter(x => x.args[0] === 'im');
   const emit = (type: EventType, data: Record<string, unknown> = {}, turnId = 'turn') => (manager as any).emitThreadEvent(thread.id, turnId, type, data);
   const api = (path: string, method = 'GET', body?: unknown) => fetch(base + '/api/push/' + path, { method, headers: { Authorization: 'Bearer test', 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
-  const cli = (args: string[], extra = {}) => exec(process.execPath, [resolve('bin/calli'), ...args], { env: { ...process.env, ...service.environment(thread.id), ...extra } });
+  const cli = (args: string[], extra = {}) => exec(process.execPath, [resolve('bin/loochat'), ...args], { env: { ...process.env, ...service.environment(thread.id), ...extra } });
   return { dir, store, manager, push, service, thread, emit, api, cli, calls, sent, config, advance: (ms: number) => { now += ms; }, async close() {
     push.dispose(); await service.dispose(); await manager.shutdown();
     await new Promise<void>(r => socket.close(() => r())); await new Promise<void>(r => server.close(() => r())); store.close(); rmSync(dir, { recursive: true, force: true });
@@ -113,9 +113,9 @@ test('real notify CLI authenticates its own thread, enforces Unicode length, acc
   const h = await setup(); try {
     const file = join(h.dir, 'notice'); writeFileSync(file, 'hello'); await h.cli(['notify', '--text-file', file]);
     assert.equal(h.store.getThread(h.thread.id)?.unread, true); assert.equal(h.store.listEventsOfType(h.thread.id, 'agent.notice')[0].data.text, 'hello');
-    await assert.rejects(h.cli(['notify', '--text-file', file], { CALLI_TOOLS_KEY: 'wrong' }), /credentials/);
+    await assert.rejects(h.cli(['notify', '--text-file', file], { LOOCHAT_TOOLS_KEY: 'wrong' }), /credentials/);
     const fromStdin = await new Promise<string>((resolveInput, reject) => {
-      const child = execFile(process.execPath, [resolve('bin/calli'), 'notify', '--text-file', '-'], { env: { ...process.env, ...h.service.environment(h.thread.id) } }, (error, stdout) => error ? reject(error) : resolveInput(stdout));
+      const child = execFile(process.execPath, [resolve('bin/loochat'), 'notify', '--text-file', '-'], { env: { ...process.env, ...h.service.environment(h.thread.id) } }, (error, stdout) => error ? reject(error) : resolveInput(stdout));
       child.stdin!.end('stdin notice');
     });
     assert.equal(JSON.parse(fromStdin).data.text, 'stdin notice');

@@ -54,15 +54,15 @@ for (const entry of preset) {
   else lines.push(entry);
 }
 
-// RAH_TOKEN is its name from before the rename to Calli; a token set then is kept as it is.
+// RAH_TOKEN is its name from before the rename to LooChat; a token set then is kept as it is.
 const at = lines.findIndex((l) => /^(CALLI|RAH)_TOKEN=/.test(l));
 const current = at >= 0 ? lines[at].slice(lines[at].indexOf('=') + 1).trim() : '';
 if (current) {
   say('The access token is already set. To see it:', `  grep -E '^(CALLI|RAH)_TOKEN=' ${envPath}`);
 } else {
   const token = randomBytes(24).toString('hex');
-  if (at >= 0) lines[at] = `CALLI_TOKEN=${token}`;
-  else lines.push(`CALLI_TOKEN=${token}`);
+  if (at >= 0) lines[at] = `LOOCHAT_TOKEN=${token}`;
+  else lines.push(`LOOCHAT_TOKEN=${token}`);
   say('Generated a random access token:', `  ${token}`, 'Use it to sign in at http://127.0.0.1:8787/ .');
 }
 writeFileSync(envPath, lines.join('\n'), { mode: 0o600 });
@@ -70,4 +70,4 @@ writeFileSync(envPath, lines.join('\n'), { mode: 0o600 });
 if (envPath === join(root, '.env')) say(`
 Next:
   npm run build
-  CALLI_ENV_FILE=../../.env npm start -w @calli/daemon   # from the repo root`);
+  LOOCHAT_ENV_FILE=../../.env npm start -w @loopx/loochat   # from the repo root`);

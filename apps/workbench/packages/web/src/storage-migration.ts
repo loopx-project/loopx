@@ -1,6 +1,6 @@
 /**
- * Before the rename to Calli this app kept its keys under `rah.`, `rah_`, `rah:` and `limi.`. Each
- * one is copied once to its `calli` name, unless that is set already, so the saved token, drafts
+ * Before the rename to LoopX this app kept its keys under `rah.`, `rah_`, `rah:` and `limi.`. Each
+ * one is copied once to its `loochat` name, unless that is set already, so the saved token, drafts
  * and preferences carry over. The old keys stay, for a version from before to read. Imported
  * before anything else, since some modules read their keys when they load.
  */

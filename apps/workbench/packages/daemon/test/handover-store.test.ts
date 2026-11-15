@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/store.js';
 
 test('legacy handovers recover only from explicit local first-turn coordinates and survive source deletion', () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-handover-store-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-handover-store-'));
   let store = new Store(root);
   try {
     const create = (id: string, cwd = '/project') => store.createThread({ id, cwd, agent: 'test', title: 'Same title', permissionMode: 'auto_edit', model: null, effort: null });
@@ -39,7 +39,7 @@ test('legacy handovers recover only from explicit local first-turn coordinates a
 });
 
 test('lastContextUsed reads the newest reported context, and null when none was reported', () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-context-used-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-context-used-'));
   const store = new Store(root);
   try {
     store.createThread({ id: 't', cwd: '/project', agent: 'test', title: 't', permissionMode: 'auto_edit', model: null, effort: null });

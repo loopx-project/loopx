@@ -59,7 +59,7 @@ test('history cache is cleared when a historyChanged event streams in', async ()
 });
 
 test('projected completed histories have the same visible answers, boundaries, status and file counts', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-view-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-view-'));
   const store = new Store(dir);
   store.createThread({ id: 'th', agent: 'pi', cwd: dir, title: 'test', permissionMode: 'default', model: null, effort: null });
   const add = (turn: string, type: EventType, data: Record<string, unknown>) => store.appendEvent('th', turn, type, data);
@@ -183,7 +183,7 @@ test('reset keeps already received work visible while lazy details reload', asyn
 
 
 test('running history stays summarized while complete live events hydrate old and new tools locally', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-live-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-live-'));
   const store = new Store(dir);
   store.createThread({ id: 'th', agent: 'pi', cwd: dir, title: 'test', permissionMode: 'default', model: null, effort: null });
   const add = (type: EventType, data: Record<string, unknown>) => store.appendEvent('th', 'turn', type, data);
@@ -221,7 +221,7 @@ test('running history stays summarized while complete live events hydrate old an
 
 
 test('reconnect preserves received tool payloads but does not override missed newer output', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-reconnect-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-reconnect-'));
   const store = new Store(dir);
   store.createThread({ id: 'th', agent: 'pi', cwd: dir, title: 'test', permissionMode: 'default', model: null, effort: null });
   const add = (type: EventType, data: Record<string, unknown>) => store.appendEvent('th', 'turn', type, data);

@@ -73,9 +73,9 @@ test('answers yield pictures by any mention and files only when handed over', ()
 });
 
 test('closing markup tags are not file references; explicit paths remain supported', () => {
-  const text = '<calli-tools>Use calli tools search.</calli-tools>\n<calli-progress>Report progress.</calli-progress>\n<div>answer<br/></div >';
+  const text = '<loochat-tools>Use loochat tools search.</loochat-tools>\n<loochat-progress>Report progress.</loochat-progress>\n<div>answer<br/></div >';
   assert.deepEqual(pathsIn(text), []);
-  for (const tag of ['</calli-tools>', '</calli-progress>', '<br/>']) assert.deepEqual(pathsIn(tag), [], tag);
+  for (const tag of ['</loochat-tools>', '</loochat-progress>', '<br/>']) assert.deepEqual(pathsIn(tag), [], tag);
   assert.deepEqual(mentionedFiles([{ turnId: 't1', seq: 1, ts: '1', text }], '/w'), { images: [], files: [] });
   assert.deepEqual(pathsIn('[root](</README>) <file:///tmp/report.md> </tmp/report.md> `/README`').map(f => f.path), ['/README', '/tmp/report.md', '/tmp/report.md', '/README']);
   assert.deepEqual(pathsIn('</srv/out/report.html> <file:///tmp/a b.png> </srv/README> </report.html> <file:///README>').map(f => f.path), ['/srv/out/report.html', '/tmp/a b.png', '/srv/README', '/report.html', '/README']);
@@ -125,7 +125,7 @@ test('home-relative paths expand before resolving against the thread directory',
 });
 
 test('disk checks mark missing files and directories, then clear stale missing flags', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-outputs-disk-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-outputs-disk-'));
   const present = join(dir, 'present.txt');
   const absent = join(dir, 'absent.txt');
   const folder = join(dir, 'folder');
@@ -167,7 +167,7 @@ test('files the thread created count as output even when no answer names them', 
 });
 
 test('the store reads diffs from the log and answers from the finished turns', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-outputs-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-outputs-'));
   const store = new Store(dir);
   try {
     store.createThread({ id: 'th', agent: 'pi', cwd: dir, title: 'th', agentSessionId: null, permissionMode: 'default', model: null, effort: null });
@@ -190,7 +190,7 @@ test('the store reads diffs from the log and answers from the finished turns', a
 });
 
 test('log order wins over timestamps, including answers that begin before an edit', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-outputs-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-outputs-'));
   const store = new Store(dir);
   const db = new DatabaseSync(join(dir, 'hub.db'));
   try {
@@ -233,7 +233,7 @@ test('relative paths and cwd symlink spellings name the same file', () => {
 });
 
 test('forks and cold histories build only tools and keep all copied turns in order', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-outputs-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-outputs-'));
   const store = new Store(dir);
   const db = new DatabaseSync(join(dir, 'hub.db'));
   try {
@@ -264,7 +264,7 @@ test('forks and cold histories build only tools and keep all copied turns in ord
 });
 
 test('older projections upgrade only creation flags and keep large diff bodies out of sources', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-outputs-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-outputs-'));
   const store = new Store(dir);
   const db = new DatabaseSync(join(dir, 'hub.db'));
   try {

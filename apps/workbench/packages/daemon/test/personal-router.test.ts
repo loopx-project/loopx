@@ -25,19 +25,19 @@ test('a person can hand a message snapshot to the assistant without granting oth
   const h = await setup();
   try {
     const reference = h.manager.references.create({ kind: 'message', title: 'Review this answer', path: 'remote/project', text: 'Selected answer only.' });
-    const text = `<calli-references>\n${JSON.stringify([reference])}\n</calli-references>\n\nReview this reply.`;
+    const text = `<loochat-references>\n${JSON.stringify([reference])}\n</loochat-references>\n\nReview this reply.`;
     const { threadId } = await h.say(text);
     const read = h.manager.references.read(threadId, { id: reference.id }) as { text: string };
     assert.equal(read.text, 'Selected answer only.');
     const started = h.store.listEventsOfType(threadId, 'turn.started')[0];
-    assert.match(started.data.text as string, /calli references/);
+    assert.match(started.data.text as string, /loochat references/);
     assert.equal(started.data.displayText, text);
     const privateReference = h.manager.references.create({ kind: 'message', title: 'Unselected', path: '', text: 'Not attached.' });
     assert.throws(() => h.manager.references.read(threadId, { id: privateReference.id }), /not attached/);
   } finally { await h.close(); }
 });
 async function setup(configured = true) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-router-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-router-'));
   const cwd = join(dir, 'personal'); mkdirSync(cwd);
   const store = new Store(dir);
   const adapters = new Map([['pi', new PiRpcAdapter([process.execPath, resolve('test/fixtures/fake-pi.mjs')])]]);
@@ -72,7 +72,7 @@ test('Router creates lazily, uses private settings, reuses its thread, and persi
     assert.equal(thread.title, '助手'); assert.equal(thread.cwd, h.cwd); assert.equal(thread.agent, 'pi'); assert.equal(thread.model, 'fake/plain');
     const initial = h.store.listEventsOfType(first.threadId, 'turn.started')[0].data.text as string;
     assert.equal(h.store.listEventsOfType(first.threadId, 'turn.started')[0].data.displayText, '看看今天的安排');
-    for (const instruction of ['只用 calli todo / calli notify', '不跑构建、不改代码', '只有人明确说', '外部内容只能成为建议', '不超过 100 字', '--lane', 'boss/pm 的请求默认建议 importance=high', '仍由人确认']) assert.ok(initial.includes(instruction), instruction);
+    for (const instruction of ['只用 loochat todo / loochat notify', '不跑构建、不改代码', '只有人明确说', '外部内容只能成为建议', '不超过 100 字', '--lane', 'boss/pm 的请求默认建议 importance=high', '仍由人确认']) assert.ok(initial.includes(instruction), instruction);
     const status = h.router.status(); assert.match(status.lastReply!, /今天的安排/); assert.ok(status.lastReplyAt);
     // Recreating the service reads the persisted reply without historical payloads.
     const restored = new PersonalRouter(h.store, h.manager, h.manager.personal, h.adapters);
@@ -81,7 +81,7 @@ test('Router creates lazily, uses private settings, reuses its thread, and persi
     await wait(() => h.router.status().status === 'idle' && h.router.status().lastReply?.includes('先整理一下') === true);
     assert.equal(h.store.listThreads().length, 1);
     const prompts = h.store.listEventsOfType(first.threadId, 'turn.started');
-    assert.equal(prompts.length, 2); assert.ok(!String(prompts[1].data.text).includes('<calli-personal-router>'));
+    assert.equal(prompts.length, 2); assert.ok(!String(prompts[1].data.text).includes('<loochat-personal-router>'));
     assert.ok(prompts.every(event => !('channel' in event.data)), 'human turns never carry a channel');
     await h.say('router-fixture-long');
     await wait(() => h.router.status().status === 'idle' && h.router.status().lastReply?.startsWith('鱼') === true);
@@ -223,7 +223,7 @@ test('Lark HTTP channel uses the Router queue and scoped CLI to create sourced p
     assert.deepEqual(replay.events.filter((e: StoredEvent) => e.type === 'turn.started').map((e: StoredEvent) => e.data.channel), [undefined, { kind: 'lark', count: 4 }]);
     const handover = await h.manager.handoverSummary(first.threadId, null);
     assert.ok('summary' in handover); assert.match(handover.summary, /飞书 · 4 条新信号/);
-    assert.doesNotMatch(handover.summary, /<calli-personal-router>|<calli-lark-signals>|"source":|"senderRole":/);
+    assert.doesNotMatch(handover.summary, /<loochat-personal-router>|<loochat-lark-signals>|"source":|"senderRole":/);
   } finally { await original.dispose(); await h.close(); }
 });
 
@@ -236,11 +236,11 @@ test('Lark origin survives immediate dispatch, failed-turn retries and handover 
     const failed = h.store.listEventsOfType(threadId, 'turn.started')[0];
     assert.deepEqual(failed.data.channel, { kind: 'lark', count: 1 });
     assert.equal(failed.data.displayText, '飞书 · 1 条新信号');
-    assert.match(String(failed.data.text), /<calli-personal-router>/);
+    assert.match(String(failed.data.text), /<loochat-personal-router>/);
     assert.ok(String(failed.data.text).includes(JSON.stringify(source)));
 
-    mkdirSync(join(h.cwd, '.calli'), { recursive: true });
-    writeFileSync(join(h.cwd, '.calli', 'router-retry-ready'), 'ready');
+    mkdirSync(join(h.cwd, '.loochat'), { recursive: true });
+    writeFileSync(join(h.cwd, '.loochat', 'router-retry-ready'), 'ready');
     await h.manager.retryAutoHandoverTurn(threadId, failed.turnId!);
     await wait(() => h.router.status().status === 'idle');
     const retried = h.store.listEventsOfType(threadId, 'turn.started').at(-1)!;
@@ -253,7 +253,7 @@ test('Lark origin survives immediate dispatch, failed-turn retries and handover 
     const continued = h.store.listEventsOfType(next.id, 'turn.started')[0];
     assert.deepEqual(continued.data.channel, failed.data.channel);
     assert.ok(String(continued.data.text).includes(JSON.stringify(source)));
-    assert.doesNotMatch(String(continued.data.displayText), /calli-lark-signals|"source":/);
+    assert.doesNotMatch(String(continued.data.displayText), /loochat-lark-signals|"source":/);
   } finally { await h.close(); }
 });
 
@@ -281,9 +281,9 @@ test('Router hides protocol context on replay, retries, handover and withdrawn q
     await wait(() => h.router.status().status === 'error');
     const failed = h.store.listEventsOfType(threadId, 'turn.started').at(-1)!;
     assert.equal(failed.data.displayText, 'router-fixture-fail');
-    assert.match(String(failed.data.text), /<calli-personal-profile>/);
-    mkdirSync(join(h.cwd, '.calli'), { recursive: true });
-    writeFileSync(join(h.cwd, '.calli', 'router-retry-ready'), 'ready');
+    assert.match(String(failed.data.text), /<loochat-personal-profile>/);
+    mkdirSync(join(h.cwd, '.loochat'), { recursive: true });
+    writeFileSync(join(h.cwd, '.loochat', 'router-retry-ready'), 'ready');
     await h.manager.retryAutoHandoverTurn(threadId, failed.turnId!);
     await wait(() => h.router.status().status === 'idle');
     assert.deepEqual(JSON.parse(h.router.status().lastReply!), { intro: false, profile: true }, 'retry keeps the hidden profile in the actual prompt');
@@ -292,14 +292,14 @@ test('Router hides protocol context on replay, retries, handover and withdrawn q
     assert.equal(retried.data.displayText ?? retried.data.text, 'router-fixture-fail');
     const handover = await h.manager.handoverSummary(threadId, null, { carryFailed: true });
     assert.ok('summary' in handover); assert.match(handover.summary, /router-fixture-fail/);
-    assert.doesNotMatch(handover.summary, /<calli-personal-router>|<calli-personal-profile>|"source":/);
+    assert.doesNotMatch(handover.summary, /<loochat-personal-router>|<loochat-personal-profile>|"source":/);
     const history = h.store.history.handoverPage(threadId);
-    assert.doesNotMatch(history.turns.map(turn => turn.question).join('\n'), /calli-personal-router|calli-personal-profile|hidden-source/);
+    assert.doesNotMatch(history.turns.map(turn => turn.question).join('\n'), /loochat-personal-router|loochat-personal-profile|hidden-source/);
     const next = await h.manager.executeAutoHandover(threadId, { agent: 'pi', model: 'fake/loose' }, handover.summary, failed.turnId!);
     const nextStart = h.store.listEventsOfType(next.id, 'turn.started')[0];
-    assert.match(String(nextStart.data.text), /<calli-personal-profile>/);
-    assert.doesNotMatch(String(nextStart.data.displayText), /<calli-personal-profile>/);
-    assert.doesNotMatch(JSON.stringify(h.store.history.handoverInfo(next.id, true)), /calli-personal-profile/);
+    assert.match(String(nextStart.data.text), /<loochat-personal-profile>/);
+    assert.doesNotMatch(String(nextStart.data.displayText), /<loochat-personal-profile>/);
+    assert.doesNotMatch(JSON.stringify(h.store.history.handoverInfo(next.id, true)), /loochat-personal-profile/);
   } finally { await h.close(); }
 });
 
@@ -314,12 +314,12 @@ test('Router rides the profile digest on every trigger, truncated with a pointer
     writeFile(join(h.cwd, 'profile.md'), long);
     await h.say('第二句'); await wait(() => h.router.status().status === 'idle');
     const turns = h.store.listEventsOfType(threadId, 'turn.started').map(e => String(e.data.text));
-    const withDigest = turns.find(t => t.includes('</calli-context>\n\n第二句'))!;
-    assert.ok(withDigest.includes('<calli-personal-profile>'));
+    const withDigest = turns.find(t => t.includes('</loochat-context>\n\n第二句'))!;
+    assert.ok(withDigest.includes('<loochat-personal-profile>'));
     assert.ok(withDigest.includes('在意交付质量与结果。'));
-    assert.ok(withDigest.includes('calli profile show'), 'the truncated digest points at the full read');
+    assert.ok(withDigest.includes('loochat profile show'), 'the truncated digest points at the full read');
     assert.ok(!withDigest.includes(long), 'only the first 1500 characters ride along');
-    const intro = turns.find(t => t.includes('<calli-personal-router>'))!;
+    const intro = turns.find(t => t.includes('<loochat-personal-router>'))!;
     assert.ok(intro.includes('判断「重要」必须引用里面的依据'), 'the intro names the profile as importance evidence');
     assert.deepEqual(h.store.listEventsOfType(threadId, 'turn.started').map(e => e.data.displayText ?? e.data.text), ['第一句', '第二句']);
   } finally { await h.close(); }
@@ -328,8 +328,8 @@ test('Router rides the profile digest on every trigger, truncated with a pointer
 test('legacy current Router display is repaired once, including cached history, search and preview', async () => {
   const h = await setup(); try {
     const thread = await h.manager.createThread({ agent: 'pi', cwd: h.cwd, title: '助手' });
-    const intro = '原话\n\n<calli-personal-router>内部说明</calli-personal-router>\n\n<calli-personal-profile>个人摘要</calli-personal-profile>';
-    const signal = '<calli-lark-signals>\n规则\n{"summary":"材料","source":{"type":"lark-message","ref":"secret-ref"}}\n</calli-lark-signals>';
+    const intro = '原话\n\n<loochat-personal-router>内部说明</loochat-personal-router>\n\n<loochat-personal-profile>个人摘要</loochat-personal-profile>';
+    const signal = '<loochat-lark-signals>\n规则\n{"summary":"材料","source":{"type":"lark-message","ref":"secret-ref"}}\n</loochat-lark-signals>';
     const first = h.store.appendEvent(thread.id, 'old-human', 'turn.started', { text: intro, displayText: intro });
     h.store.appendEvent(thread.id, 'old-human', 'turn.done', {});
     const second = h.store.appendEvent(thread.id, 'old-lark', 'turn.started', { text: signal });
@@ -373,7 +373,7 @@ test('a burst while the Router is busy folds into one next turn with every perso
     const started = h.store.listEventsOfType(threadId, 'turn.started');
     assert.equal(started.length, 2, 'one running turn and one merged turn');
     assert.equal(started[1].data.personalOrigin, 'person', 'a person arriving after an internal message stays a human origin');
-    assert.match(String(started[1].data.text), /^<calli-context>/);
+    assert.match(String(started[1].data.text), /^<loochat-context>/);
     const text = String(started[1].data.text);
     for (const word of [words[0], words[1].trim(), words[2]]) assert.ok(text.includes(word), word);
     assert.ok(text.indexOf(words[0]) < text.indexOf(words[1].trim()) && text.indexOf(words[1].trim()) < text.indexOf(words[2]), 'in arrival order');
@@ -390,7 +390,7 @@ test('the profile digest rides along once however many arrivals fold together', 
     await h.say('一'); await h.say('二'); await h.say('三');
     await h.manager.cancelTurn(threadId, { keepQueue: true });
     await wait(() => h.store.listEventsOfType(threadId, 'turn.started').length === 2);
-    assert.equal(String(h.store.listEventsOfType(threadId, 'turn.started')[1].data.text).split('<calli-personal-profile>').length, 2);
+    assert.equal(String(h.store.listEventsOfType(threadId, 'turn.started')[1].data.text).split('<loochat-personal-profile>').length, 2);
   } finally { await h.close(); }
 });
 
@@ -466,10 +466,10 @@ test('a replaced conversation still running is left to finish, and archived once
   } finally { await h.close(); }
 });
 
-test('calli ask says the text to the Router and prints its reply once the turn ends', async () => {
+test('loochat ask says the text to the Router and prints its reply once the turn ends', async () => {
   const h = await setup(); try {
     const ask = (args: string[], input: string) => new Promise<any>((done, fail) => {
-      const child = execFile(process.execPath, [resolve('bin/calli'), 'ask', ...args], { env:{ ...process.env, CALLI_URL:h.base, CALLI_TOKEN:'router-test' } },
+      const child = execFile(process.execPath, [resolve('bin/loochat'), 'ask', ...args], { env:{ ...process.env, LOOCHAT_URL:h.base, LOOCHAT_TOKEN:'router-test' } },
         (error, stdout, stderr) => error ? fail(new Error(stderr || error.message)) : done(JSON.parse(stdout)));
       child.stdin!.end(input);
     });
@@ -486,7 +486,7 @@ test('live context is hidden, acknowledged by the fixture, absent on signals, an
   const h = await setup(); try {
     const { threadId } = await h.say('router-fixture-context'); await wait(() => h.router.status().status === 'idle');
     const first = h.store.listEventsOfType(threadId, 'turn.started')[0];
-    assert.match(String(first.data.text), /^<calli-context>/); assert.match(String(first.data.text), /全量概况/);
+    assert.match(String(first.data.text), /^<loochat-context>/); assert.match(String(first.data.text), /全量概况/);
     assert.equal(first.data.personalOrigin, 'person'); assert.equal(first.data.displayText, 'router-fixture-context');
     assert.match(String(h.store.listEventsOfType(threadId, 'message.delta').at(-1)!.data.text), /全量概况/);
     assert.doesNotMatch(String(first.data.text), /\bfail\b/);
@@ -494,12 +494,12 @@ test('live context is hidden, acknowledged by the fixture, absent on signals, an
     await h.router.receiveSignals(JSON.stringify({ summary: 'FYI', delivered: true, source: { type: 'lark-message', ref: 'ctx-signal' } }));
     await wait(() => h.router.status().status === 'idle');
     const internal = h.store.listEventsOfType(threadId, 'turn.started').at(-1)!;
-    assert.doesNotMatch(String(internal.data.text), /<calli-context>/); assert.equal(internal.data.personalOrigin, undefined);
+    assert.doesNotMatch(String(internal.data.text), /<loochat-context>/); assert.equal(internal.data.personalOrigin, undefined);
     assert.deepEqual(h.store.hubSetting('personalContext', null), before);
     assert.equal((await h.request(`/api/threads/${threadId}/turns`, { text: 'router-fixture-context' })).status, 202);
     await wait(() => h.router.status().status === 'idle');
     const direct = h.store.listEventsOfType(threadId, 'turn.started').at(-1)!;
-    assert.match(String(direct.data.text), /^<calli-context>/); assert.equal(direct.data.personalOrigin, 'person');
+    assert.match(String(direct.data.text), /^<loochat-context>/); assert.equal(direct.data.personalOrigin, 'person');
     assert.equal(direct.data.displayText, 'router-fixture-context');
   } finally { await h.close(); }
 });
@@ -557,7 +557,7 @@ test('dispatch CLI proposes; HTTP starts once, links a matter; dismiss opens no 
 });
 
 test('dispatch validates input and rechecks a card before starting', async () => {
-  const h = await setup(), outside = mkdtempSync(join(tmpdir(), 'calli-dispatch-outside-')); try {
+  const h = await setup(), outside = mkdtempSync(join(tmpdir(), 'loochat-dispatch-outside-')); try {
     const { threadId } = await h.say('hello'); await wait(() => h.router.status().status === 'idle');
     const input = { op: 'dispatch', agent: 'pi', cwd: h.cwd, task: 'Inspect project' };
     for (const [patch, status] of [[{ agent: 'missing' }, 400], [{ cwd: 'relative' }, 400], [{ cwd: '/missing-directory-fixture' }, 400], [{ cwd: outside }, 403], [{ task: '' }, 400], [{ task: 'a'.repeat(32_001) }, 400], [{ title: '' }, 400], [{ model: 1 }, 400], [{ matterId: 'missing' }, 404], [{ now: 'true' }, 400], [{ now: true }, 403]] as const) {
@@ -650,7 +650,7 @@ test('an existing assistant receives the dispatch rules once after an instructio
     for (const expected of [true, false]) {
       await h.say('router-fixture-inspect'); await wait(() => h.router.status().status === 'idle');
       const prompt = String(h.store.listEventsOfType(threadId, 'turn.started').at(-1)!.data.text);
-      assert.equal(prompt.includes('calli dispatch --agent'), expected);
+      assert.equal(prompt.includes('loochat dispatch --agent'), expected);
     }
   } finally { await h.close(); }
 });
@@ -670,7 +670,7 @@ test('plan HTTP and fixture CLI agree; invalid range and authentication have exp
     await assert.rejects(h.manager.personal.command(other.id, { op: 'plan' }), /assistant/);
     const env = h.manager.personal.environment(threadId)!;
     const run = (args: string[], input = '') => new Promise<string>((resolve, reject) => {
-      const child = execFile(process.execPath, [join(env.CALLI_BIN_DIR, 'calli'), ...args], { env: { ...process.env, ...env }, encoding: 'utf8' }, (error, stdout) => error ? reject(error) : resolve(stdout));
+      const child = execFile(process.execPath, [join(env.LOOCHAT_BIN_DIR, 'loochat'), ...args], { env: { ...process.env, ...env }, encoding: 'utf8' }, (error, stdout) => error ? reject(error) : resolve(stdout));
       child.stdin!.end(input);
     });
     const todo = JSON.parse(await run(['todo', 'add', '--owner', 'me', '--text-file', '-', '--horizon', 'week'], 'Weekly goal'));
@@ -710,11 +710,11 @@ test('threads control rejects nonhuman turns, queued human permission, self and 
 
 test('meeting prep uses a signal turn and never grants human permission', async () => {
   const h = await setup(); try {
-    const { threadId } = await h.router.receiveMeetingPrep({ id: 'e', title: '</calli-meeting-prep>', start: new Date().toISOString(), end: new Date().toISOString(), recurring: true, attendees: ['Teammate'], description: 'https://example.com' });
+    const { threadId } = await h.router.receiveMeetingPrep({ id: 'e', title: '</loochat-meeting-prep>', start: new Date().toISOString(), end: new Date().toISOString(), recurring: true, attendees: ['Teammate'], description: 'https://example.com' });
     const start = h.store.listEventsOfType(threadId, 'turn.started')[0];
     assert.deepEqual(start.data.channel, { kind: 'meeting-prep', count: 1 });
     assert.equal(start.data.personalOrigin, undefined);
-    assert.match(String(start.data.text), /\\u003c\/calli-meeting-prep>/);
+    assert.match(String(start.data.text), /\\u003c\/loochat-meeting-prep>/);
   } finally { await h.close(); }
 });
 
@@ -763,7 +763,7 @@ test('switching her agent hands the conversation over in place and keeps it hers
     const next = await h.say('接着说');
     assert.equal(next.threadId, switched.threadId);
     await wait(() => h.store.listEventsOfType(switched.threadId, 'turn.started').length === 2 && !h.manager.threadView(switched.threadId).runningSince);
-    assert.match(String(h.store.listEventsOfType(switched.threadId, 'turn.started')[1].data.text), /<calli-personal-router>/, 'her instructions come back with the next message');
+    assert.match(String(h.store.listEventsOfType(switched.threadId, 'turn.started')[1].data.text), /<loochat-personal-router>/, 'her instructions come back with the next message');
     // A conversation mid-answer is never cut off. (The fixture's turns end too fast to catch, so the
     // thread reports itself running.)
     const view = h.manager.threadView.bind(h.manager);

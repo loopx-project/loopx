@@ -2,8 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // In development the UI runs on Vite and forwards /api to the daemon.
-// Override the target with CALLI_DAEMON_URL when the daemon is not on localhost:8787.
-const daemon = process.env.CALLI_DAEMON_URL ?? 'http://127.0.0.1:8787';
+// Override the target with LOOCHAT_DAEMON_URL when the daemon is not on localhost:8787.
+const daemon = process.env.LOOCHAT_DAEMON_URL ?? 'http://127.0.0.1:8787';
 
 export default defineConfig({
   plugins: [react()],

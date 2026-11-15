@@ -29,10 +29,10 @@ export interface WritingState {
 export const WRITING_DIR = 'writing';
 /**
  * The person's own notes, kept across projects and agents: what reviews distil, which they confirm
- * and may edit. Not an agent's memory: plain Markdown the person owns. `CALLI_NOTES_DIR` moves it.
+ * and may edit. Not an agent's memory: plain Markdown the person owns. `LOOCHAT_NOTES_DIR` moves it.
  */
 export function notesDir(): string {
-  return process.env.CALLI_NOTES_DIR || join(homeDirectory(), 'notes');
+  return process.env.LOOCHAT_NOTES_DIR || join(homeDirectory(), 'notes');
 }
 
 /** Writing habits: read before writing, grown by 复盘. */
@@ -44,8 +44,8 @@ export function isWritingStage(value: unknown): value is WritingStage {
   return typeof value === 'string' && (WRITING_STAGES as readonly string[]).includes(value);
 }
 
-const MARK = '<calli-writing>';
-/** The mark from before the rename to Calli, still in older messages. */
+const MARK = '<loochat-writing>';
+/** The mark from before the rename to LoopX, still in older messages. */
 const LEGACY_MARK = '<limi-writing>';
 
 const common = (habits: string) => `你在写作模式里，帮我写一篇文章。观点必须是我的，哪怕偏激；你负责采访、记录、补充，不替我下结论，不把尖锐的话磨圆。
@@ -71,7 +71,7 @@ const STAGES: Record<WritingStage, string> = {
 指出可以删的字、句、段，说明理由，我同意了再删；回复里说这一稿比上一稿短了多少。
 提醒我：第二稿 = 第一稿 − 10%（Stephen King）；可有可无的删去，毫不可惜（鲁迅）；能用短词就不用长词（Orwell）；去掉杂物（Zinsser）。`,
   figures: `现在是配图。
-先说哪里需要图、画什么，我同意了再画。流程、结构、关系用 \`\`\`mermaid 代码块写在正文里；自己设计的示意图画成 SVG；插画可以用 calli tools 里的生图工具（calli tools search image）。图片文件放 ${WRITING_DIR}/<题目>/。
+先说哪里需要图、画什么，我同意了再画。流程、结构、关系用 \`\`\`mermaid 代码块写在正文里；自己设计的示意图画成 SVG；插画可以用 loochat tools 里的生图工具（loochat tools search image）。图片文件放 ${WRITING_DIR}/<题目>/。
 提醒我：图是带读者去看一样东西，不是装饰（Pinker）。`,
   polish: `现在是润色。
 只改语言，不改观点。先把改动列成清单给我：每条写原句和改后；改变了意思、磨掉了棱角的，单独列在最后。我确认的才改进正文。
@@ -84,7 +84,7 @@ export function writingInstructions(text: string, state: WritingState): string {
   const edited = state.edited
     ? `\n${state.file ?? '正文'}在你上一轮之后被我直接改过：先重读再动手，不要改回去。`
     : '';
-  return `${text}\n\n${MARK}\n${common(habitsPath())}\n\n${STAGES[state.stage]}${edited}\n</calli-writing>`;
+  return `${text}\n\n${MARK}\n${common(habitsPath())}\n\n${STAGES[state.stage]}${edited}\n</loochat-writing>`;
 }
 
 /** The newest `.md` directly in `writing/`, relative to the thread's directory, or null. */

@@ -7,7 +7,7 @@ import { linkDaemon, startDaemon, openUi, api, launchBrowser, repoRoot } from '.
 
 let root, hub, remote, browser, localCode, remoteCode;
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-project-machines-'));
+  root = mkdtempSync(join(tmpdir(), 'loochat-project-machines-'));
   const remoteHome = join(root, 'remote-home');
   mkdirSync(remoteHome);
   localCode = join(root, 'local', 'code');
@@ -19,8 +19,8 @@ before(async () => {
     symlinkSync(real, alias);
   }
   const agents = JSON.stringify({ agents: [{ id: 'pi', adapter: 'pi', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-pi.mjs')] }] });
-  remote = await startDaemon({ HOME: remoteHome, CALLI_WORKDIRS: remoteCode, CALLI_SOCKET: join(remoteHome, '.local/state/calli/daemon.sock'), CALLI_AGENTS_JSON: agents });
-  hub = await startDaemon({ CALLI_WORKDIRS: localCode, CALLI_AGENTS_JSON: agents });
+  remote = await startDaemon({ HOME: remoteHome, LOOCHAT_WORKDIRS: remoteCode, LOOCHAT_SOCKET: join(remoteHome, '.local/state/loochat/daemon.sock'), LOOCHAT_AGENTS_JSON: agents });
+  hub = await startDaemon({ LOOCHAT_WORKDIRS: localCode, LOOCHAT_AGENTS_JSON: agents });
   await linkDaemon(hub, remote);
   for (const [daemon, code, name] of [[hub, localCode, '本机项目'], [remote, remoteCode, '远端项目']]) {
     mkdirSync(join(code, name));
@@ -33,9 +33,9 @@ after(async () => {
   if (root) rmSync(root, { recursive: true, force: true });
 });
 async function shot(page, name) {
-  if (!process.env.CALLI_E2E_SHOTS_DIR) return;
-  mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-  await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `${name}.png`) });
+  if (!process.env.LOOCHAT_E2E_SHOTS_DIR) return;
+  mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+  await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `${name}.png`) });
 }
 async function projects(page, cwd) {
   await page.locator('.composer').getByTitle(cwd, { exact: true }).click();

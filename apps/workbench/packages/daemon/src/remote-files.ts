@@ -88,7 +88,7 @@ if [ -f "$target" ]; then
 else
   mode=644
 fi
-tmp="$target.calli-$$"
+tmp="$target.loochat-$$"
 trap 'rm -f -- "$tmp"' EXIT
 cat > "$tmp"
 chmod "$mode" -- "$tmp"

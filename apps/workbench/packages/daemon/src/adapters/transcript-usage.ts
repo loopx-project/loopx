@@ -136,11 +136,11 @@ export function claudeConfigDirs(home: string, instanceEnvs: Array<Record<string
   return [...dirs];
 }
 
-/** Codex homes: the instances' own CODEX_HOME (TRAE pins CALLI_TRAEX_HOME), and the default one. */
+/** Codex homes: the instances' own CODEX_HOME (TRAE pins LOOCHAT_TRAEX_HOME), and the default one. */
 export function codexHomes(instanceEnvs: Array<Record<string, string>>): string[] {
   const homes = new Set<string>();
   for (const env of instanceEnvs) {
-    if (env.CALLI_TRAEX_HOME || env.CODEX_HOME) {
+    if (env.LOOCHAT_TRAEX_HOME || env.CODEX_HOME) {
       homes.add(configDirectory(env, 'CODEX_HOME', ['.codex'], process.cwd()));
     }
   }

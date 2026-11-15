@@ -6,8 +6,8 @@ import { deflateSync } from 'node:zlib';
 import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
 let daemon, browser;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
-const prefix = process.env.CALLI_E2E_SHOTS_PREFIX ?? 'writing';
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
+const prefix = process.env.LOOCHAT_E2E_SHOTS_PREFIX ?? 'writing';
 before(async () => {
   daemon = await startDaemon();
   browser = await launchBrowser();

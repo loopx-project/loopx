@@ -24,13 +24,13 @@ const todo = (overrides: Partial<TodoRecord> = {}): TodoRecord => ({
 const note = (text = '', updatedAt: string | null = null): TodoNote => ({ text, updatedAt, threadId: null });
 
 test('personal files: ensure scaffolds once and never overwrites what is already there', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-files-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-files-'));
   try {
     const files = new PersonalFiles(dir);
     await files.ensure();
-    assert.match(readFileSync(join(dir, '.gitignore'), 'utf8'), /(^|\n)\.calli\/(\n|$)/);
+    assert.match(readFileSync(join(dir, '.gitignore'), 'utf8'), /(^|\n)\.loochat\/(\n|$)/);
     const agents = readFileSync(join(dir, 'AGENTS.md'), 'utf8');
-    assert.match(agents, /calli todo/);
+    assert.match(agents, /loochat todo/);
     assert.match(agents, /matters/);
     const profile = readFileSync(join(dir, 'profile.md'), 'utf8');
     for (const heading of ['我在意什么', '老板和 PM', '周报节奏', '重要的判断', '不要打扰我的时间']) {
@@ -51,7 +51,7 @@ test('personal files: ensure scaffolds once and never overwrites what is already
 });
 
 test('personal files: write, lane mapping, rename on title change, remove, git history', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-matter-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-matter-'));
   try {
     const files = new PersonalFiles(dir);
     await files.ensure();
@@ -76,10 +76,10 @@ test('personal files: write, lane mapping, rename on title change, remove, git h
     // The temporary file was renamed into place, nothing torn is left behind.
     assert.deepEqual(readdirSync(join(dir, 'matters', dirName)), ['matter.md']);
 
-    // Every write is committed, as Calli, with the operation and the id in the message.
+    // Every write is committed, as LoopX, with the operation and the id in the message.
     await wait(() => git(dir, ['log', '--format=%s']).includes(`matter update m-7f3a`));
     const log = git(dir, ['log', '--format=%an|%ae|%s']);
-    assert.match(log, /Calli\|calli@localhost\|matter update m-7f3a/);
+    assert.match(log, /LoopX\|loochat@localhost\|matter update m-7f3a/);
 
     // Done items carry the done lane; the same directory is overwritten in place.
     await files.writeMatter(todo({ ...base, state: 'done', done: true, doneAt: '2026-10-31T11:00:00.000Z' }), note('完成'), []);
@@ -101,7 +101,7 @@ test('personal files: write, lane mapping, rename on title change, remove, git h
 });
 
 test('personal files: matter lane prefers the explicit field; done wins; waiting defaults to wait', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-lane-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-lane-'));
   try {
     const files = new PersonalFiles(dir);
     await files.ensure();
@@ -121,7 +121,7 @@ test('personal files: matter lane prefers the explicit field; done wins; waiting
 });
 
 test('personal files: artifacts commit on their own; mirror commits never sweep them', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-artifacts-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-artifacts-'));
   try {
     const files = new PersonalFiles(dir);
     await files.ensure();
@@ -137,10 +137,10 @@ test('personal files: artifacts commit on their own; mirror commits never sweep 
     assert.match(git(dir, ['status', '--porcelain']), /^\?\? matters\/m-art-note\/artifacts\/$/m);
     assert.ok(!git(dir, ['show', '--name-only', '--format=', 'HEAD']).includes('reply-draft.md'));
 
-    // commitArtifacts takes it, as Calli, with the id in the message, and reports the numbers.
+    // commitArtifacts takes it, as LoopX, with the id in the message, and reports the numbers.
     assert.deepEqual(await files.commitArtifacts('m-art'),
       [{ path: 'matters/m-art-note/artifacts/reply-draft.md', additions: 1, deletions: 0 }]);
-    assert.match(git(dir, ['log', '--format=%an|%s']), /Calli\|proactive prepare m-art/);
+    assert.match(git(dir, ['log', '--format=%an|%s']), /LoopX\|proactive prepare m-art/);
     assert.equal(git(dir, ['status', '--porcelain']).trim(), '');
     // Nothing new: an empty list, not an empty commit.
     assert.deepEqual(await files.commitArtifacts('m-art'), []);
@@ -159,8 +159,8 @@ test('personal files: artifacts commit on their own; mirror commits never sweep 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('personal files: a repository Calli did not create is never committed', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-foreign-'));
+test('personal files: a repository LoopX did not create is never committed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-foreign-'));
   try {
     // The person's own repository, with history and uncommitted work of theirs.
     execFileSync('git', ['-C', dir, 'init', '--quiet']);
@@ -179,12 +179,12 @@ test('personal files: a repository Calli did not create is never committed', asy
     assert.match(status, /draft\.md/);
     assert.match(status, /matters/);
     // An explicit artifacts commit in a foreign repository refuses instead of committing.
-    await assert.rejects(() => files.commitArtifacts('m-no-commit'), /not a Calli-owned/);
+    await assert.rejects(() => files.commitArtifacts('m-no-commit'), /not a LoopX-owned/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('personal files: a subdirectory of someone else\'s repository is not initialized', async () => {
-  const parent = mkdtempSync(join(tmpdir(), 'calli-personal-parent-'));
+  const parent = mkdtempSync(join(tmpdir(), 'loochat-personal-parent-'));
   try {
     execFileSync('git', ['-C', parent, 'init', '--quiet']);
     writeFileSync(join(parent, 'readme.md'), 'repo');
@@ -202,15 +202,15 @@ test('personal files: a subdirectory of someone else\'s repository is not initia
   } finally { rmSync(parent, { recursive: true, force: true }); }
 });
 
-test('personal files: a Calli-created repository commits only the managed paths', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-owned-'));
+test('personal files: a LoopX-created repository commits only the managed paths', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-owned-'));
   try {
     const files = new PersonalFiles(dir);
     await files.ensure();
     writeFileSync(join(dir, 'sketch.txt'), 'the person\'s own draft');
     await files.writeMatter(todo({ id: 'm-owned', text: 'note' }), note('x'), []);
     await wait(() => git(dir, ['log', '--format=%s']).includes('matter update m-owned'));
-    assert.ok(existsSync(join(dir, '.calli', 'git-owned')));
+    assert.ok(existsSync(join(dir, '.loochat', 'git-owned')));
     for (const path of git(dir, ['ls-files']).split('\n').filter(Boolean)) {
       assert.match(path, /^(matters\/|AGENTS\.md$|profile\.md$|\.gitignore$)/);
     }
@@ -219,7 +219,7 @@ test('personal files: a Calli-created repository commits only the managed paths'
 });
 
 test('personal files: matter.md carries importance, urgent_until and source', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-importance-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-importance-'));
   try {
     const files = new PersonalFiles(dir);
     await files.ensure();
@@ -240,7 +240,7 @@ test('personal files: matter.md carries importance, urgent_until and source', as
 });
 
 test('personal files: syncAll writes what the database has and moves what it does not', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-sync-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-sync-'));
   try {
     const files = new PersonalFiles(dir);
     await files.syncAll([{ todo: todo({ id: 'm-keep', text: '整理报销单据' }), note: note('## 下一步\n收集发票'), threads: [] }]);
@@ -279,7 +279,7 @@ test('personal files: slug is path-safe, bounded and never empty', () => {
 });
 
 test('personal files: a broken mirror never breaks its caller', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-blocked-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-blocked-'));
   try {
     // The root is a file, so every write inside must fail; the calls still resolve.
     const blocker = join(dir, 'blocker');
@@ -293,7 +293,7 @@ test('personal files: a broken mirror never breaks its caller', async () => {
 });
 
 test('PersonalService mirrors adds, edits, notes and removals; credential checks still apply', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-personal-service-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-personal-service-'));
   const store = new Store(dir);
   try {
     const personal = join(dir, 'personal');
@@ -327,7 +327,7 @@ test('PersonalService mirrors adds, edits, notes and removals; credential checks
     // Removal, through the hook the web's plan-page delete uses, takes the directory away.
     service.mirrorTodoRemoval(created.id);
     await wait(() => !existsSync(renamedDir));
-    assert.match(git(personal, ['log', '--format=%an|%ae']), /Calli\|calli@localhost/);
+    assert.match(git(personal, ['log', '--format=%an|%ae']), /LoopX\|loochat@localhost/);
     // Everything queued has been written before the store and the directory go away.
     await service.flushMirror();
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }

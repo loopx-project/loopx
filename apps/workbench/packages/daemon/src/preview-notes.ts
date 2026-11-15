@@ -84,7 +84,7 @@ export class PreviewNotes {
       if (notes.some((n: PreviewNote) => n.receipt)) throw new HttpError(409, 'some annotations were already sent; refresh the preview');
       const quote = (s: string) => s.split('\n').map(line => `> ${line}`).join('\n');
       const message = notes.map((n: PreviewNote, i: number) => [
-        `[注释 ${i + 1}]`, quote(`网页：${n.page}\n元素：${n.target.selector}\n文字：${n.target.text}\n外观：${n.context.variant} · ${n.context.theme} · ${n.context.viewport.width}×${n.context.viewport.height}\n捕获：${n.at}${n.context.revision ? ` · ${n.context.revision}` : ''}\n详情：calli preview-note ${n.id}`),
+        `[注释 ${i + 1}]`, quote(`网页：${n.page}\n元素：${n.target.selector}\n文字：${n.target.text}\n外观：${n.context.variant} · ${n.context.theme} · ${n.context.viewport.width}×${n.context.viewport.height}\n捕获：${n.at}${n.context.revision ? ` · ${n.context.revision}` : ''}\n详情：loochat preview-note ${n.id}`),
         `评论：${n.comment.replace(/\s*\n\s*/g, ' ')}`,
       ].join('\n')).join('\n\n');
       const record = (receipt: Receipt) => { for (const id of ids) this.store.db.prepare('UPDATE preview_notes SET receipt=? WHERE thread_id=? AND id=?').run(JSON.stringify(receipt), owner, id); };

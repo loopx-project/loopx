@@ -293,10 +293,10 @@ test('dispatch can be declined without creating work, and a rejected start remai
 });
 
 // Capture the selected D1 layout using real messages and matters; no screenshot-only UI.
-if (process.env.CALLI_ASSISTANT_SHOTS) test('assistant chat screenshot matrix', async () => {
+if (process.env.LOOCHAT_ASSISTANT_SHOTS) test('assistant chat screenshot matrix', async () => {
   const daemon = await startDaemon();
   const browser = await launchBrowser();
-  const directory = process.env.CALLI_ASSISTANT_SHOTS;
+  const directory = process.env.LOOCHAT_ASSISTANT_SHOTS;
   mkdirSync(directory, { recursive: true });
   try {
     await json(daemon, '/api/personal/settings', 'PUT', { agent: 'pi', directory: daemon.workdir });

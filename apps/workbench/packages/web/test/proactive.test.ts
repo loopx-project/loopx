@@ -23,7 +23,7 @@ test('a run offers what can still be decided, as its status moves', () => {
   assert.deepEqual(runControls(run({ status: 'merged' })), ['revert']);
   assert.deepEqual(runControls(run({ status: 'reverted' })), []);
   assert.deepEqual(runControls(run({ status: 'discarded' })), []);
-  assert.deepEqual(runControls(run({ status: 'failed', branch: 'calli/proactive/m1' })), ['discard']);
+  assert.deepEqual(runControls(run({ status: 'failed', branch: 'loochat/proactive/m1' })), ['discard']);
   assert.deepEqual(runControls(run({ status: 'failed' })), [], 'failed before a sandbox existed: nothing to clear');
   assert.deepEqual(runControls(run({ kind: 'prepare', status: 'ready' })), [], 'materials ask for no decision');
 });

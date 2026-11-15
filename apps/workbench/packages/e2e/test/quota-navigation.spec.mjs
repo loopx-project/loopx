@@ -6,13 +6,13 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 
 test('chat quota and account pages share refreshes and preserve the conversation across layouts', { timeout: 180000 }, async () => {
   const command = [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-codex.mjs')];
-  const daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  const daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'codex', adapter: 'codex', label: 'Primary', command },
     { id: 'backup', adapter: 'codex', label: 'Backup', command },
     { id: 'hidden', adapter: 'codex', label: 'Hidden', hidden: true, command },
   ] }) });
   const browser = await launchBrowser();
-  const shots = process.env.CALLI_E2E_SHOTS_DIR || '/tmp/calli-quota-navigation'; mkdirSync(shots, { recursive: true });
+  const shots = process.env.LOOCHAT_E2E_SHOTS_DIR || '/tmp/loochat-quota-navigation'; mkdirSync(shots, { recursive: true });
   try {
     const thread = await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'codex', cwd: daemon.workdir, title: 'Quota navigation return' }) })).json();
     await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: Array.from({ length: 60 }, (_, index) => `Review paragraph ${index + 1}`).join('\n\n') }) });

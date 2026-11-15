@@ -17,7 +17,7 @@ import { HttpError } from '../src/errors.js';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 async function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-teams-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-teams-test-'));
   const cwd = join(dir, 'project'); mkdirSync(cwd);
   const store = new Store(dir);
   const manager = new ThreadManager(store, new Map([['pi', new PiRpcAdapter([process.execPath, join(fixtures, 'fake-pi.mjs')])], ['second', new PiRpcAdapter([process.execPath, join(fixtures, 'fake-pi.mjs')])]]), [cwd], new AttachmentStore(dir));
@@ -106,7 +106,7 @@ for (const scenario of ['TEAM_FLOW', 'TEAM_REWORK']) test(`scripted ${scenario}:
     assert.deepEqual(view.members.map(m => m.name), ['dev', 'reviewer']);
     for (const id of [threadId, ...view.members.map(m => m.id)]) {
       assert.equal(h.coordination.environment(id), undefined);
-      assert.match(h.coordination.instructions(id, 'x'), /<calli-team>/);
+      assert.match(h.coordination.instructions(id, 'x'), /<loochat-team>/);
       await assert.rejects(h.coordination.command(id, { op: 'spawn' }), /@/);
     }
     const rootId = view.team!.taskId;
@@ -161,7 +161,7 @@ test('interrupted team root recovers into needs_attention without injecting CLI 
 test('CLI team ls and run use authenticated HTTP without socket credentials', async () => {
   const h = await setup();
   const cli = (args: string[], input = '') => new Promise<any>((resolve, reject) => {
-    const child = spawn(process.execPath, [join(fixtures, '../../bin/calli'), 'team', ...args], { env: { ...process.env, CALLI_URL: h.base, CALLI_TOKEN: 'test-token', CALLI_TEAM_SOCKET: '', CALLI_TEAM_KEY: '' }, stdio: 'pipe' });
+    const child = spawn(process.execPath, [join(fixtures, '../../bin/loochat'), 'team', ...args], { env: { ...process.env, LOOCHAT_URL: h.base, LOOCHAT_TOKEN: 'test-token', LOOCHAT_TEAM_SOCKET: '', LOOCHAT_TEAM_KEY: '' }, stdio: 'pipe' });
     let out = '', err = ''; child.stdout.on('data', d => out += d); child.stderr.on('data', d => err += d); child.on('error', reject);
     child.on('exit', code => code ? reject(new Error(err)) : resolve(JSON.parse(out))); child.stdin.end(input);
   });
@@ -213,7 +213,7 @@ test('team runtime has no CLI credentials and members honor fixed directories', 
     h.teams.save({ ...h.definition, members: h.definition.members.map(m => m.name === 'dev' ? { ...m, cwd } : m) }, h.definition.id);
     const first = await h.dispatch('TEAM_ENV'); await h.settled(first.threadId);
     const answer = h.store.listEvents(first.threadId, 0, -1).filter(e => e.type === 'message.delta').map(e => e.data.text).join('');
-    assert.match(answer, /calli-ready:false/);
+    assert.match(answer, /loochat-ready:false/);
     const flow = await h.dispatch(); await h.settled(flow.threadId);
     assert.equal(h.coordination.view(flow.threadId)!.members.find(m => m.name === 'dev')!.thread!.cwd, cwd);
   } finally { await h.close(); }

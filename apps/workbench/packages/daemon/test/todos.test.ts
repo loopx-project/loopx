@@ -58,8 +58,8 @@ interface TodoJson {
 }
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-todo-test-'));
-  workroot = mkdtempSync(join(tmpdir(), 'calli-todo-work-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-todo-test-'));
+  workroot = mkdtempSync(join(tmpdir(), 'loochat-todo-work-'));
   store = new Store(dataDir);
   manager = new ThreadManager(store, new Map([['pi', stubAdapter]]), [workroot], new AttachmentStore(dataDir));
   server = createHttpServer({ manager, token: TOKEN, webDir: null, version: 'test' });

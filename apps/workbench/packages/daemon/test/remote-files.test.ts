@@ -19,7 +19,7 @@ const local: RemoteExec = (command, opts = {}) => new Promise((resolve, reject) 
 });
 
 function workspace() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-remote-files-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-remote-files-'));
   const root = join(dir, 'project'); mkdirSync(root);
   return { dir, root, done: () => rmSync(dir, { recursive: true, force: true }) };
 }

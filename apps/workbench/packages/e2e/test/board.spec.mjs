@@ -7,7 +7,7 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 
 // The board lays out conversations by what they are doing and what their agents report; the person marks them done.
 let daemon, browser;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 const threads = {};
 
 async function json(path, init) {
@@ -23,7 +23,7 @@ async function until(check, message) {
 }
 
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'claude', adapter: 'claude', label: 'Claude Code', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-acp.mjs')] },
   ] }) });
   // Automatic handover checks hold a thread for a moment after each turn; they have nothing to do with the board.
@@ -92,7 +92,7 @@ test('the person marks a conversation done, and new work reopens it', async () =
 
     await until(async () => (await view(threads.review.id)).status === 'idle', 'the earlier turn did not end');
     // The host leaves the progress instructions out once the agent has them in view; the fake agent writes its line only when it sees them.
-    await post(`/api/threads/${threads.review.id}/turns`, { text: 'report 进行中 等 CI\n<calli-progress>' });
+    await post(`/api/threads/${threads.review.id}/turns`, { text: 'report 进行中 等 CI\n<loochat-progress>' });
     await card(column(page, '进行中'), '重构支付流程').getByText('等 CI').waitFor();
     assert.equal((await view(threads.review.id)).doneAt, null);
 

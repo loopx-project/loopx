@@ -59,10 +59,10 @@ test('code in an answer is one card: its language in plain type, copy at the rig
         assert.match(await plain.getAttribute('class'), /\bbare\b/);
         await plain.getByRole('button', { name: '复制代码' }).waitFor();
         assert.equal(await blocks.filter({ hasText: 'retries' }).locator('.code-lang').innerText(), 'JSON');
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
           await bash.scrollIntoViewIfNeeded();
-          await page.screenshot({ animations: 'disabled', path: join(process.env.CALLI_E2E_SHOTS_DIR, `code-blocks-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+          await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `code-blocks-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }

@@ -95,7 +95,7 @@ const listHosts = async () => (await (await hubApi('/api/hosts')).json()) as Hos
 const hostNamed = async (id: string) => (await listHosts()).find((h) => h.id === id);
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'calli-hosts-test-'));
+  root = mkdtempSync(join(tmpdir(), 'loochat-hosts-test-'));
   process.env.PI_CODING_AGENT_DIR = join(root, 'pi-agent');
   node = makeManager('node');
   hub = makeManager('hub');

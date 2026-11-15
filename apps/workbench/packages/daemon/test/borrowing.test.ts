@@ -23,7 +23,7 @@ import { turnAnswer } from '../src/coordination.js';
 import type { ToolJob } from '../src/tool-jobs.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const cli = join(here, '../bin/calli');
+const cli = join(here, '../bin/loochat');
 const exec = promisify(execFile);
 const wait = async (check: () => boolean, timeout = 15000) => {
   const until = Date.now() + timeout;
@@ -31,7 +31,7 @@ const wait = async (check: () => boolean, timeout = 15000) => {
 };
 
 async function setup(mode = 'success') {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-tools-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-tools-'));
   const cwd = join(dir, 'project'); mkdirSync(cwd);
   const outside = join(cwd, 'private.png');
   writeFileSync(outside, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX2kAAAAASUVORK5CYII=', 'base64'));
@@ -86,7 +86,7 @@ test('Claude ACP process borrows native image generation through the scoped CLI,
     await wait(() => h.manager.threadView(h.root.id).status !== 'running');
     const second = h.store.listEventsOfType(h.root.id, 'turn.started').at(-1)!;
     assert.equal(second.data.text, 'next request', 'do not repeat the hint');
-    assert.equal((await h.runCli(['tools', 'skill'])).name, 'calli-tools');
+    assert.equal((await h.runCli(['tools', 'skill'])).name, 'loochat-tools');
     const job = JSON.parse(turnAnswer(events, started.turnId));
     assert.equal(job.state, 'succeeded');
     assert.equal(h.manager.getThread(job.threadId).agent, 'art-account');
@@ -165,7 +165,7 @@ test('missing stored artifacts produce useful JSON errors over socket and HTTP w
     rmSync(h.service.artifact(h.root.id, job.id, artifact.id).path);
     const args = ['jobs', 'fetch', job.id, artifact.id, '--output', join(h.cwd, 'missing.png')];
     await assert.rejects(h.runCli(args), /artifact file unavailable/);
-    await assert.rejects(h.runCli(args, { CALLI_TOOLS_SOCKET: '', CALLI_TOOLS_KEY: '', CALLI_URL: h.base, CALLI_TOKEN: 'test-token' }), /artifact file unavailable/);
+    await assert.rejects(h.runCli(args, { LOOCHAT_TOOLS_SOCKET: '', LOOCHAT_TOOLS_KEY: '', LOOCHAT_URL: h.base, LOOCHAT_TOKEN: 'test-token' }), /artifact file unavailable/);
     const response = await fetch(`${h.base}/api/tool-artifacts/${job.id}/${artifact.id}`, { headers: { Authorization: 'Bearer test-token' } });
     assert.equal(response.status, 404);
     assert.deepEqual(await response.json(), { error: 'artifact file unavailable' });
@@ -173,7 +173,7 @@ test('missing stored artifacts produce useful JSON errors over socket and HTTP w
 });
 
 test('CLI preserves plain-text errors from old servers or proxies in both transports', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-error-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-error-'));
   const socket = join(dir, 'error.sock');
   const local = createServer((_req, res) => res.writeHead(502).end('upstream unavailable'));
   const http = createServer((_req, res) => res.writeHead(502).end('upstream unavailable'));
@@ -181,8 +181,8 @@ test('CLI preserves plain-text errors from old servers or proxies in both transp
   await new Promise<void>(r => http.listen(0, '127.0.0.1', r));
   try {
     for (const env of [
-      { CALLI_TOOLS_SOCKET: socket, CALLI_TOOLS_KEY: 'test' },
-      { CALLI_TOOLS_SOCKET: '', CALLI_TOOLS_KEY: '', CALLI_URL: `http://127.0.0.1:${(http.address() as AddressInfo).port}`, CALLI_TOKEN: 'test' },
+      { LOOCHAT_TOOLS_SOCKET: socket, LOOCHAT_TOOLS_KEY: 'test' },
+      { LOOCHAT_TOOLS_SOCKET: '', LOOCHAT_TOOLS_KEY: '', LOOCHAT_URL: `http://127.0.0.1:${(http.address() as AddressInfo).port}`, LOOCHAT_TOKEN: 'test' },
     ]) {
       await assert.rejects(exec(process.execPath, [cli, 'tools', 'search'], { env: { ...process.env, ...env } }), /upstream unavailable/);
     }
@@ -238,7 +238,7 @@ test('HTTP requires bearer auth and external CLI uses the same command/artifact 
     assert.equal((await h.api({ op: 'missing' })).status, 400);
     assert.equal((await h.api({ op: 'tools.run', tool: 'art-account/image.generate', input: {}, requestId: 'bad' })).status, 400);
     const input = join(h.cwd, 'request.json'); writeFileSync(input, '{"prompt":"a fox"}');
-    const external = { CALLI_TOOLS_SOCKET: '', CALLI_TOOLS_KEY: '', CALLI_URL: h.base, CALLI_TOKEN: 'test-token' };
+    const external = { LOOCHAT_TOOLS_SOCKET: '', LOOCHAT_TOOLS_KEY: '', LOOCHAT_URL: h.base, LOOCHAT_TOKEN: 'test-token' };
     const job = await h.runCli(['tools', 'run', 'art-account/image.generate', '--input-file', input, '--request-id', 'outside'], external);
     const finished = await h.done(job.id).catch(() => h.service.command('operator', { op: 'jobs.get', id: job.id })) as any;
     assert.equal(finished.state, 'succeeded');
@@ -270,11 +270,11 @@ test('restart retains results and request IDs, marks unfinished jobs interrupted
 });
 
 test('runtime environments discard inherited scopes and administrator tokens', () => {
-  const env = sessionEnvironment({ CALLI_TOOLS_KEY: 'parent', CALLI_TOOLS_SOCKET: 'parent', CALLI_TOKEN: 'admin', CALLI_TOKEN: 'admin' },
-    { CALLI_TOOLS_KEY: 'child', CALLI_TOOLS_SOCKET: 'child', CALLI_BIN_DIR: '/example/bin' });
-  assert.equal(env.CALLI_TOOLS_KEY, 'child');
-  assert.equal(env.CALLI_TOKEN, undefined);
-  assert.equal(env.CALLI_TOKEN, undefined);
+  const env = sessionEnvironment({ LOOCHAT_TOOLS_KEY: 'parent', LOOCHAT_TOOLS_SOCKET: 'parent', LOOCHAT_TOKEN: 'admin', LOOCHAT_TOKEN: 'admin' },
+    { LOOCHAT_TOOLS_KEY: 'child', LOOCHAT_TOOLS_SOCKET: 'child', LOOCHAT_BIN_DIR: '/example/bin' });
+  assert.equal(env.LOOCHAT_TOOLS_KEY, 'child');
+  assert.equal(env.LOOCHAT_TOKEN, undefined);
+  assert.equal(env.LOOCHAT_TOKEN, undefined);
   assert.ok(env.PATH?.startsWith('/example/bin:'));
 });
 

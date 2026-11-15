@@ -107,7 +107,7 @@ test('the isolated output patch rejects version-shape drift and adds no permissi
 });
 
 function setup(t: { after(fn: () => unknown): void }) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-doubao-stream-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-doubao-stream-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const root = join(dir, 'native'); const bin = createFakeDoubaoRuntime(root);
   return { dir, root, bin };
@@ -165,9 +165,9 @@ test('an enabled bridge on an incompatible install reports why and falls back to
   const bundlePath = join(h.root, 'resources/js_app/entry-cli-router/main.js'), bundle = readFileSync(bundlePath, 'utf8');
   writeFileSync(bundlePath, bundle.replace('case"stream-json":', 'case"new":'));
   writeFakeDoubaoManifest(h.root);
-  const adapter = new DoubaoAdapter([h.bin], { CALLI_DOUBAO_STREAM: '1', FAKE_DOUBAO_LOG: log });
+  const adapter = new DoubaoAdapter([h.bin], { LOOCHAT_DOUBAO_STREAM: '1', FAKE_DOUBAO_LOG: log });
   const setting = await adapter.streamBridgeEnvironment(true);
-  assert.equal(setting.environment.CALLI_DOUBAO_STREAM, '1');
+  assert.equal(setting.environment.LOOCHAT_DOUBAO_STREAM, '1');
   assert.match(setting.incompatible ?? '', /输出结构/, 'the reason explains the fallback');
   assert.equal((await adapter.streamBridgeEnvironment(false)).incompatible, undefined, 'disabling never reports incompatibility');
   const session = await adapter.start({ cwd: h.dir });
@@ -183,7 +183,7 @@ test('an enabled bridge on an incompatible install reports why and falls back to
 
 test('streaming adapter uses an isolated copy, emits tools/deltas before result, resumes and cleans up', async t => {
   const h = setup(t), log = join(h.dir, 'calls.jsonl');
-  const adapter = new DoubaoAdapter([h.bin], { CALLI_DOUBAO_STREAM: '1', FAKE_DOUBAO_LOG: log, FAKE_DOUBAO_STREAM_DELAY: '80' });
+  const adapter = new DoubaoAdapter([h.bin], { LOOCHAT_DOUBAO_STREAM: '1', FAKE_DOUBAO_LOG: log, FAKE_DOUBAO_STREAM_DELAY: '80' });
   assert.equal((await adapter.diagnose()).protocol, 'doubao stream-json bridge (experimental)');
   const ids: string[] = [];
   const session = await adapter.start({ cwd: h.dir, onSessionId: id => ids.push(id) }); t.after(() => session.close());
@@ -209,7 +209,7 @@ test('streaming adapter uses an isolated copy, emits tools/deltas before result,
 });
 
 test('cancellation in streaming mode waits for exit and interrupts pending tool snapshots', async t => {
-  const h = setup(t), session = await new DoubaoAdapter([h.bin], { CALLI_DOUBAO_STREAM: '1' }).start({ cwd: h.dir });
+  const h = setup(t), session = await new DoubaoAdapter([h.bin], { LOOCHAT_DOUBAO_STREAM: '1' }).start({ cwd: h.dir });
   t.after(() => session.close());
   const events: EmittedEvent[] = [], hooks = { emit: (e: EmittedEvent) => events.push(e), requestApproval: async () => ({ cancelled: true as const }) };
   const pending = session.prompt({ text: 'slow', images: [] }, hooks);

@@ -29,7 +29,7 @@ const wait = async (fn: () => boolean) => {
 };
 const historical = (id: string, kind: ProactiveRun['kind'], startedAt = at(8)): ProactiveRun => ({ id, kind, matterId: `old-${id}`, threadId: '', startedAt, endedAt: startedAt, status: 'discarded' });
 async function setup(mode = '') {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-proactive-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-proactive-'));
   const cwd = join(dir, 'personal'); mkdirSync(cwd);
   const store = new Store(dir);
   const adapters = new Map<string, AgentAdapter>([['claude', new ClaudeAcpAdapter([process.execPath, resolve('test/fixtures/fake-acp.mjs')], mode ? { FAKE_PROACTIVE_MODE: mode } : {})]]);
@@ -64,7 +64,7 @@ async function setup(mode = '') {
 }
 
 test('settings are opt-in, validate the whole list, canonicalize symlinks and persist', async () => {
-  const h = await setup(), outside = mkdtempSync(join(tmpdir(), 'calli-proactive-outside-'));
+  const h = await setup(), outside = mkdtempSync(join(tmpdir(), 'loochat-proactive-outside-'));
   try {
     assert.deepEqual(await (await h.api('/api/personal/proactive')).json(), { settings: { mode: 'off', repos: [], enabled: false }, runs: [] });
     const repo = await h.repository();
@@ -164,7 +164,7 @@ test('L1 fake agent writes artifacts, updates the note, commits only materials a
     assert.match(h.store.todoNote(todo.id).text, /已备好/);
     assert.equal(h.store.todoThreadIds(todo.id).includes(run.threadId), true);
     const log = await h.git(h.cwd, 'log', '--format=%an %s', '--', run.files![0].path);
-    assert.match(log, new RegExp(`Calli .*prepare.*${todo.id}|Calli .*${todo.id}.*prepare`));
+    assert.match(log, new RegExp(`LoopX .*prepare.*${todo.id}|LoopX .*${todo.id}.*prepare`));
     assert.equal(await h.git(h.cwd, 'diff', '--cached', '--name-only'), 'unrelated.txt');
     const notices = h.store.listEventsOfType(run.threadId, 'agent.notice');
     assert.equal(notices.length, 1); assert.equal(notices[0].data.proactive, true);
@@ -332,7 +332,7 @@ test('L2 requires a prior linked work thread inside an explicitly allowed repo a
     h.store.saveHubSetting('personalProactiveRuns', [historical('yesterday', 'sandbox', at(9, 0))]);
     await h.service.tick(now); const run = await h.settled(h.service.runs().at(-1)!.id);
     assert.equal(run.status, 'ready', run.summary); assert.equal(run.kind, 'sandbox'); assert.equal(run.repo, repo);
-    assert.equal(run.branch, `calli/proactive/${todo.id}`); assert.notEqual(h.store.getThread(run.threadId)!.cwd, repo);
+    assert.equal(run.branch, `loochat/proactive/${todo.id}`); assert.notEqual(h.store.getThread(run.threadId)!.cwd, repo);
     assert.equal(existsSync(join(repo, 'proactive-fixture.txt')), false);
     assert.equal(run.summary, '补好沙盒示例。'); assert.equal(run.testReport, 'fixture check: passed');
     assert.deepEqual(run.files, [{ path: 'proactive-fixture.txt', additions: 1, deletions: 0 }]);
@@ -346,7 +346,7 @@ test('sandbox API: real git diff, refused merge preserves status, merge/revert/d
     const seed = async (matterId: string) => {
       const tree = await sandbox.prepare(repo, matterId);
       writeFileSync(join(tree.root, `${matterId}.txt`), `${matterId}\n`);
-      await h.git(tree.root, 'add', '.'); await h.git(tree.root, 'commit', '-qm', `change\n\nCalli-Proactive: ${matterId}`);
+      await h.git(tree.root, 'add', '.'); await h.git(tree.root, 'commit', '-qm', `change\n\nLooChat-Proactive: ${matterId}`);
       const run: ProactiveRun = { ...historical(matterId, 'sandbox'), matterId, repo, branch: tree.branch, status: 'ready' };
       h.store.saveHubSetting('personalProactiveRuns', [...h.service.runs(), run]); return run;
     };
@@ -358,7 +358,7 @@ test('sandbox API: real git diff, refused merge preserves status, merge/revert/d
     assert.equal(h.service.runs()[0].status, 'ready'); await h.git(repo, 'switch', 'main');
     const merged = await h.api(`${endpoint}/merge`, 'POST'); assert.equal(merged.status, 200); assert.equal((await merged.json()).status, 'merged');
     assert.equal(readFileSync(join(repo, 'merge-me.txt'), 'utf8'), 'merge-me\n');
-    assert.match(await h.git(repo, 'log', '-1', '--format=%B'), /Calli-Proactive: merge-me/);
+    assert.match(await h.git(repo, 'log', '-1', '--format=%B'), /LooChat-Proactive: merge-me/);
     assert.equal((await h.api(`${endpoint}/discard`, 'POST')).status, 409);
     assert.equal((await h.api(`${endpoint}/merge`, 'POST')).status, 409);
     const reverted = await h.api(`${endpoint}/revert`, 'POST'); assert.equal(reverted.status, 200); assert.equal((await reverted.json()).status, 'reverted');
@@ -384,7 +384,7 @@ test('merge and revert succeed on a machine with no git identity, leaving a clea
       const matterId = 'no-identity';
       const tree = await sandbox.prepare(repo, matterId);
       writeFileSync(join(tree.root, `${matterId}.txt`), `${matterId}\n`);
-      await h.git(tree.root, 'add', '.'); await h.git(tree.root, 'commit', '-qm', `change\n\nCalli-Proactive: ${matterId}`);
+      await h.git(tree.root, 'add', '.'); await h.git(tree.root, 'commit', '-qm', `change\n\nLooChat-Proactive: ${matterId}`);
       const run: ProactiveRun = { ...historical(matterId, 'sandbox'), matterId, repo, branch: tree.branch, status: 'ready' };
       h.store.saveHubSetting('personalProactiveRuns', [...h.service.runs(), run]);
       const endpoint = `/api/personal/proactive/runs/${run.id}`;
@@ -463,11 +463,11 @@ test('preparation failure is recorded, and activity arriving during async sandbo
     assert.equal(h.store.listThreads().length, 1);
     sandbox.prepare = async () => {
       h.store.updateThread(work.id, { status: 'running' });
-      return { root: repo, branch: `calli/proactive/${todo.id}` };
+      return { root: repo, branch: `loochat/proactive/${todo.id}` };
     };
     await service.tick(new Date(2026, 10, 1, 14));
     assert.equal(service.runs().at(-1)?.status, 'failed'); assert.match(service.runs().at(-1)!.summary!, /正在运行/);
-    assert.equal(service.runs().at(-1)?.branch, `calli/proactive/${todo.id}`, 'a prepared sandbox stays discardable when its worker cannot start');
+    assert.equal(service.runs().at(-1)?.branch, `loochat/proactive/${todo.id}`, 'a prepared sandbox stays discardable when its worker cannot start');
     assert.equal(h.store.listThreads().length, 1);
     h.store.updateThread(work.id, { status: 'idle' });
   } finally { await h.close(); }

@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
 let daemon, browser;
-const shots = '/tmp/calli-team-shots';
+const shots = '/tmp/loochat-team-shots';
 before(async () => {
   daemon = await startDaemon();
   mkdirSync(shots, { recursive: true });

@@ -52,7 +52,7 @@ export function externalManifest(value: unknown): ExtensionManifest {
     const executable = c.executable;
     if (typeof executable !== 'string' && (!executable || !m.settings!.some(f => f.key === executable.setting && f.scope === 'installation'))) fail('invalid executable');
     if (!Array.isArray(c.args) || c.args.length > 100 || c.args.some(a => typeof a !== 'string' && (!a || !('setting' in a && keys.has(a.setting)) && !('binding' in a && a.binding === 'externalId')))) fail('invalid arguments');
-    if (c.env && (!strings(c.env) || Object.keys(c.env).some(k => !/^[A-Z][A-Z0-9_]*$/.test(k) || /^(CALLI_|RAH_|LIMI_|NODE_OPTIONS$|LD_|DYLD_)/.test(k)))) fail('invalid command environment');
+    if (c.env && (!strings(c.env) || Object.keys(c.env).some(k => !/^[A-Z][A-Z0-9_]*$/.test(k) || /^(LOOCHAT_|RAH_|LIMI_|NODE_OPTIONS$|LD_|DYLD_)/.test(k)))) fail('invalid command environment');
     if (c.timeoutMs !== undefined && (!Number.isInteger(c.timeoutMs) || c.timeoutMs < 100 || c.timeoutMs > 20000)) fail('invalid timeout');
   }
   return m;

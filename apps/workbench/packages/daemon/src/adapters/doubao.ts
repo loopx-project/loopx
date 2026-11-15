@@ -110,10 +110,10 @@ export class DoubaoAdapter implements AgentAdapter {
     return this.modelLoad;
   }
   commands() { return Promise.resolve([]); }
-  get streamBridgeEnabled(): boolean { return (this.env.CALLI_DOUBAO_STREAM ?? process.env.CALLI_DOUBAO_STREAM) === '1'; }
+  get streamBridgeEnabled(): boolean { return (this.env.LOOCHAT_DOUBAO_STREAM ?? process.env.LOOCHAT_DOUBAO_STREAM) === '1'; }
   /** Saving consent never fails: `incompatible` reports why turns will run in text output. */
   async streamBridgeEnvironment(enabled: boolean): Promise<{ environment: Record<string, string>; incompatible?: string }> {
-    const environment = { CALLI_DOUBAO_STREAM: enabled ? '1' : '0' };
+    const environment = { LOOCHAT_DOUBAO_STREAM: enabled ? '1' : '0' };
     if (!enabled) return { environment };
     try {
       await validateDoubaoStreamRuntime(this.command, sessionEnvironment(this.env), process.cwd());
@@ -124,7 +124,7 @@ export class DoubaoAdapter implements AgentAdapter {
   }
   diagnose() { return cliDiagnostic([this.command[0], ...this.cliPrefix()], this.env, this.streamBridgeEnabled ? 'doubao stream-json bridge (experimental)' : 'doubao -p (text)'); }
 
-  /** Account-directory settings only; neither shell command carries scoped Calli credentials. */
+  /** Account-directory settings only; neither shell command carries scoped LoopX credentials. */
   private cliPrefix(): string[] {
     return withoutOptions(this.command.slice(1), new Set([...VALUE_OPTIONS, '--list', '--service-start', BYPASS]));
   }

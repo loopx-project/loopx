@@ -2,7 +2,7 @@
   "name": "@calli/extension-api",
   "version": "0.1.0",
   "private": true,
-  "description": "Public contract between Calli and its extensions. Types only.",
+  "description": "Public contract between LooChat and its extensions. Types only.",
   "license": "MIT",
   "type": "module",
   "exports": {

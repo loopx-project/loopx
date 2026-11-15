@@ -21,7 +21,7 @@ const wait = async (check: () => unknown, timeout = 8000) => {
 
 /** One daemon with fake agy agents whose quota file a test rewrites as the "provider". */
 async function setup(opts: { exhaustOnce?: boolean; exhaustDelayMs?: number } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-resume-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-resume-test-'));
   const store = new Store(dir);
   const adapters = new Map<string, AgentAdapter>();
   const quotaFiles: Record<string, string> = {};

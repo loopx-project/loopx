@@ -9,7 +9,7 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 import { modelGateway } from '../../daemon/test/fixtures/model-gateway.mjs';
 
 test('a gateway account shows plan windows and key balances on the board, menu and picker', { timeout: 180000 }, async () => {
-  const home = mkdtempSync(join(tmpdir(), 'calli-gateway-quota-'));
+  const home = mkdtempSync(join(tmpdir(), 'loochat-gateway-quota-'));
   const gateway = await modelGateway();
   const reset = new Date(Date.now() + 3 * 3600_000).toISOString();
   gateway.state.models = [{ id: 'zcode/GLM-5.3' }, { id: 'deepseek/deepseek-flash' }];
@@ -21,7 +21,7 @@ test('a gateway account shows plan windows and key balances on the board, menu a
   ];
   let daemon, browser;
   try {
-    daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [
+    daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
       { id: 'claude-gw', adapter: 'claude', label: 'Claude Code · Gateway', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-acp.mjs')],
         env: { CLAUDE_CONFIG_DIR: home, ANTHROPIC_BASE_URL: gateway.url, CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1' } },
     ] }) });
@@ -29,7 +29,7 @@ test('a gateway account shows plan windows and key balances on the board, menu a
     assert.deepEqual(quota.balances, [{ scope: 'DeepSeek', amount: '¥60.52', modelIds: ['deepseek/deepseek-flash'] }]);
     browser = await launchBrowser();
     const thread = await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'claude-gw', cwd: daemon.workdir, title: 'Gateway quota' }) })).json();
-    const shots = process.env.CALLI_E2E_SHOTS_DIR;
+    const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
     if (shots) mkdirSync(shots, { recursive: true });
     for (const phone of [false, true]) for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 960 }, isMobile: phone, hasTouch: phone, colorScheme: theme });

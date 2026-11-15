@@ -24,7 +24,7 @@ const input = {
 };
 
 test('preview annotations: authenticated drafts, scoped details, persistent acceptance and retry without duplicate turns', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-notes-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-notes-'));
   const registry = new AgentRegistry([{ id: 'pi', adapter: 'pi', label: 'pi', command: [process.execPath, join(dirname(fileURLToPath(import.meta.url)), 'fixtures/fake-pi.mjs')] }], null);
   const store = new Store(join(dir, 'data'));
   const manager = new ThreadManager(store, registry.adapters, [dir], new AttachmentStore(dir));
@@ -63,9 +63,9 @@ test('preview annotations: authenticated drafts, scoped details, persistent acce
     assert.equal(manager.previewNotes.read(thread.id, note.id, true).html, input.target.html);
     const message = store.listEvents(thread.id, 0, -1).find(e => e.type === 'turn.started')!;
     assert.match(JSON.stringify(message), /Keep one dot/);
-    assert.match(JSON.stringify(message), /calli preview-note/);
+    assert.match(JSON.stringify(message), /loochat preview-note/);
     assert.ok(!JSON.stringify(message).includes('<span'), 'agent receives summary first');
-    const cli = await new Promise<string>((resolve, reject) => execFile(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), '../bin/calli'), 'preview-note', note.id], { env: sessionEnvironment({}, tools.environment(thread.id)!) }, (err, stdout, stderr) => err ? reject(new Error(stderr)) : resolve(stdout)));
+    const cli = await new Promise<string>((resolve, reject) => execFile(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), '../bin/loochat'), 'preview-note', note.id], { env: sessionEnvironment({}, tools.environment(thread.id)!) }, (err, stdout, stderr) => err ? reject(new Error(stderr)) : resolve(stdout)));
     assert.equal(JSON.parse(cli).html, input.target.html);
     assert.equal((await request(`${route}/${note.id}`, 'DELETE')).status, 409);
     assert.deepEqual(new PreviewNotes(store, manager).list(thread.id, input.page)[0].receipt, first);

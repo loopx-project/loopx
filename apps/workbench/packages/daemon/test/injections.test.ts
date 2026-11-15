@@ -33,8 +33,8 @@ const echoAdapter = {
 } as unknown as AgentAdapter;
 
 async function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-injections-'));
-  const work = mkdtempSync(join(tmpdir(), 'calli-injections-work-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-injections-'));
+  const work = mkdtempSync(join(tmpdir(), 'loochat-injections-work-'));
   const store = new Store(dir);
   const open = () => {
     const manager = new ThreadManager(store, new Map([['echo', echoAdapter]]), [work], new AttachmentStore(dir));
@@ -55,7 +55,7 @@ async function setup() {
     async close() { await manager.shutdown(); store.close(); rmSync(dir, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); },
   };
 }
-const carried = (prompt: string) => prompt.includes('<calli-progress>');
+const carried = (prompt: string) => prompt.includes('<loochat-progress>');
 
 test('a block is attached to the first turn and left out until it is worth a reminder', async () => {
   const h = await setup();

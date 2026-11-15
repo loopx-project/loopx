@@ -59,7 +59,7 @@ test('the adapter observes quota as the agent answers', async () => {
 });
 
 test('the hub reads plan usage the thread itself reported, with no probe', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-quota-inband-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-quota-inband-'));
   const store = new Store(dir);
   const adapters = new Map([['cc', new ClaudeAcpAdapter(fixture('acp'))] as const]);
   const manager = new ThreadManager(store, adapters as any, new Workdirs([dir], join(dir, 'dirs.json'), join(dir, 'scratch')), new AttachmentStore(dir), () => [{ id: 'cc', adapter: 'claude' }]);
@@ -77,7 +77,7 @@ test('the hub reads plan usage the thread itself reported, with no probe', async
 });
 
 test('a reported reading is pushed to pages once, and a refresh right after it does not probe', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-quota-push-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-quota-push-'));
   const store = new Store(dir);
   const adapter = new ClaudeAcpAdapter(fixture('acp'));
   let probes = 0;

@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
 let daemon, browser;
-const shots = process.env.CALLI_E2E_SHOTS_DIR;
+const shots = process.env.LOOCHAT_E2E_SHOTS_DIR;
 before(async () => {
-  daemon = await startDaemon({ CALLI_E2E_DOUBAO_RUNTIME: '1', CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'doubao', adapter: 'doubao', command: ['fake-doubao'] }] }) });
+  daemon = await startDaemon({ LOOCHAT_E2E_DOUBAO_RUNTIME: '1', LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'doubao', adapter: 'doubao', command: ['fake-doubao'] }] }) });
   browser = await launchBrowser();
   if (shots) mkdirSync(shots, { recursive: true });
 });

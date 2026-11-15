@@ -9,7 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { startDaemon, launchBrowser, openUi, api } from './harness.mjs';
 
-const out = process.argv[2] ?? '/tmp/calli-machine-usage-shots';
+const out = process.argv[2] ?? '/tmp/loochat-machine-usage-shots';
 mkdirSync(out, { recursive: true });
 
 const daemon = await startDaemon({}, { agents: [

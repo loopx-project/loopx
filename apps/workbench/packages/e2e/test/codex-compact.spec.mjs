@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mjs';
 
 for (const agent of ['codex', 'claude', 'pi', 'zcode']) test(`${agent} compaction stays running and queues the next message until completion`, async () => {
-  const daemon = await startDaemon({ FAKE_CODEX_COMPACT_DELAY: '3000', FAKE_COMPACT_DELAY: '9000', CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: agent, adapter: agent, command: [process.execPath, join(repoRoot, 'daemon/test/fixtures', `fake-${agent === 'claude' ? 'acp' : agent}.mjs`)] }] }) });
+  const daemon = await startDaemon({ FAKE_CODEX_COMPACT_DELAY: '3000', FAKE_COMPACT_DELAY: '9000', LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: agent, adapter: agent, command: [process.execPath, join(repoRoot, 'daemon/test/fixtures', `fake-${agent === 'claude' ? 'acp' : agent}.mjs`)] }] }) });
   let browser;
   try {
     browser = await launchBrowser();
@@ -24,9 +24,9 @@ for (const agent of ['codex', 'claude', 'pi', 'zcode']) test(`${agent} compactio
         await page.locator('.thread-title', { hasText: '压缩状态验证' }).first().click();
         await page.getByText('压缩上下文', { exact: true }).waitFor();
         await page.waitForTimeout(300);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `compact-${agent}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `compact-${agent}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }

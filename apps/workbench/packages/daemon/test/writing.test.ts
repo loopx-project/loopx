@@ -45,11 +45,11 @@ const api = (path: string, init: RequestInit = {}) =>
   fetch(base + path, { ...init, headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'calli-writing-test-'));
-  workdir = mkdtempSync(join(tmpdir(), 'calli-writing-work-'));
-  outside = mkdtempSync(join(tmpdir(), 'calli-writing-outside-'));
-  notes = mkdtempSync(join(tmpdir(), 'calli-writing-notes-'));
-  process.env.CALLI_NOTES_DIR = notes;
+  dataDir = mkdtempSync(join(tmpdir(), 'loochat-writing-test-'));
+  workdir = mkdtempSync(join(tmpdir(), 'loochat-writing-work-'));
+  outside = mkdtempSync(join(tmpdir(), 'loochat-writing-outside-'));
+  notes = mkdtempSync(join(tmpdir(), 'loochat-writing-notes-'));
+  process.env.LOOCHAT_NOTES_DIR = notes;
   store = new Store(dataDir);
   manager = new ThreadManager(store, new Map([['echo', echoAdapter]]), [workdir], new AttachmentStore(dataDir));
   server = createHttpServer({ manager, token: TOKEN, webDir: null, version: 'test' });
@@ -62,7 +62,7 @@ after(async () => {
   await manager.shutdown();
   store.close();
   for (const dir of [dataDir, workdir, outside, notes]) rmSync(dir, { recursive: true, force: true });
-  delete process.env.CALLI_NOTES_DIR;
+  delete process.env.LOOCHAT_NOTES_DIR;
 });
 
 async function turn(threadId: string, text: string): Promise<string> {
@@ -77,7 +77,7 @@ test('each stage has its own way of working, appended once, with an edit mention
   const texts = WRITING_STAGES.map((stage) => writingInstructions('hi', { stage, file: null }));
   assert.equal(new Set(texts).size, WRITING_STAGES.length);
   for (const text of texts) {
-    assert.ok(text.startsWith('hi\n\n<calli-writing>') && text.endsWith('</calli-writing>'));
+    assert.ok(text.startsWith('hi\n\n<loochat-writing>') && text.endsWith('</loochat-writing>'));
     assert.equal(writingInstructions(text, { stage: 'draft', file: null }), text, 'never appended twice');
   }
   assert.match(texts[0], /只记录、只采访/);
@@ -105,7 +105,7 @@ test('writing mode rides along with messages, follows the article and takes the 
   const thread = (await (await api('/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'echo', cwd: workdir, title: '写作' }) })).json()) as { id: string };
   const id = thread.id;
 
-  assert.doesNotMatch(await turn(id, '还没开'), /<calli-writing>/);
+  assert.doesNotMatch(await turn(id, '还没开'), /<loochat-writing>/);
   assert.equal((await (await api(`/api/threads/${id}/writing`, { method: 'PUT', body: JSON.stringify({ stage: 'nope' }) })).json()).error?.includes('stage'), true);
   let res = await api(`/api/threads/${id}/writing`, { method: 'PUT', body: JSON.stringify({ stage: 'draft' }) });
   assert.equal(res.status, 200);
@@ -115,7 +115,7 @@ test('writing mode rides along with messages, follows the article and takes the 
   const article = join(workdir, 'writing', '思考是人类的事情.md');
   work.push(() => { mkdirSync(join(workdir, 'writing'), { recursive: true }); writeFileSync(article, '# 思考是人类的事情\n\n初稿\n'); });
   const first = await turn(id, '今天写 PR 的时候');
-  assert.match(first, /<calli-writing>[\s\S]*现在是初稿/);
+  assert.match(first, /<loochat-writing>[\s\S]*现在是初稿/);
   assert.deepEqual(store.getThread(id)!.writing, { stage: 'draft', file: 'writing/思考是人类的事情.md' });
   assert.match(await turn(id, '/compact'), /^\/compact$/, 'slash commands carry nothing extra');
 
@@ -150,7 +150,7 @@ test('writing mode rides along with messages, follows the article and takes the 
 
   res = await api(`/api/threads/${id}/writing`, { method: 'DELETE' });
   assert.equal(((await res.json()) as { writing: unknown }).writing, null);
-  assert.doesNotMatch(await turn(id, '结束了'), /<calli-writing>/);
+  assert.doesNotMatch(await turn(id, '结束了'), /<loochat-writing>/);
   assert.equal(readFileSync(article, 'utf8'), '我的版本\n', 'the article stays');
 });
 

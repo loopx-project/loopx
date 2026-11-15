@@ -3,9 +3,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 // Deliberately use the same CLI a real agent would execute, with its injected environment.
 export function coordinationFixture(text) {
-  const body = text.split(/<calli-(?:coordination(?:-note)?|team)>/)[0].trim();
-  if (text.includes('<calli-team>')) {
-    if (body.endsWith('TEAM_ENV')) return `calli-ready:${Boolean(process.env.CALLI_TEAM_SOCKET && process.env.CALLI_TEAM_KEY)}`;
+  const body = text.split(/<loochat-(?:coordination(?:-note)?|team)>/)[0].trim();
+  if (text.includes('<loochat-team>')) {
+    if (body.endsWith('TEAM_ENV')) return `loochat-ready:${Boolean(process.env.LOOCHAT_TEAM_SOCKET && process.env.LOOCHAT_TEAM_KEY)}`;
     if (body.endsWith('TEAM_FINISH')) return 'Task finished after continuation.';
     if (body.endsWith('TEAM_STOP')) return '@dev slow\n@reviewer TEAM_MULTI_REVIEW';
     if (body.endsWith('TEAM_SHORT')) return '@dev TEAM_SHORT_WORK';
@@ -36,23 +36,23 @@ export function coordinationFixture(text) {
     if (body.endsWith('TEAM_LOOP')) return '@lead Continue TEAM_BUDGET';
     if (body.endsWith('TEAM_BUDGET')) return '@dev Loop TEAM_LOOP';
   }
-  if (body.endsWith('CALLI_REPORT')) return '文档审查完成。\n\n已检查接口约定、目录分工和异常处理。建议补充重启后的恢复步骤，测试覆盖其余预期行为。';
-  if (body === 'CALLI_ENV' || body.endsWith('\nCALLI_ENV')) return `calli-ready:${Boolean(process.env.CALLI_TEAM_SOCKET && process.env.CALLI_TEAM_KEY)};cwd:${process.cwd()}`;
-  if (body === 'CALLI_HANDOVER_ENV') {
-    const ready = Boolean(process.env.CALLI_HANDOVER_SOCKET && process.env.CALLI_HANDOVER_KEY);
-    return `handover-ready:${ready};collaboration:${Boolean(process.env.CALLI_TEAM_SOCKET && process.env.CALLI_TEAM_KEY)};${ready ? execFileSync('calli', ['handover'], { encoding: 'utf8' }).trim() : ''}`;
+  if (body.endsWith('LOOCHAT_REPORT')) return '文档审查完成。\n\n已检查接口约定、目录分工和异常处理。建议补充重启后的恢复步骤，测试覆盖其余预期行为。';
+  if (body === 'LOOCHAT_ENV' || body.endsWith('\nLOOCHAT_ENV')) return `loochat-ready:${Boolean(process.env.LOOCHAT_TEAM_SOCKET && process.env.LOOCHAT_TEAM_KEY)};cwd:${process.cwd()}`;
+  if (body === 'LOOCHAT_HANDOVER_ENV') {
+    const ready = Boolean(process.env.LOOCHAT_HANDOVER_SOCKET && process.env.LOOCHAT_HANDOVER_KEY);
+    return `handover-ready:${ready};collaboration:${Boolean(process.env.LOOCHAT_TEAM_SOCKET && process.env.LOOCHAT_TEAM_KEY)};${ready ? execFileSync('loochat', ['handover'], { encoding: 'utf8' }).trim() : ''}`;
   }
-  const command = /CALLI_COMMAND:([A-Za-z0-9+/=]+)/.exec(body);
+  const command = /LOOCHAT_COMMAND:([A-Za-z0-9+/=]+)/.exec(body);
   if (command && !body.startsWith('[协作消息')) {
     const { args, text: message = '' } = JSON.parse(Buffer.from(command[1], 'base64').toString());
-    return execFileSync('calli', args, { input: message, encoding: 'utf8' }).trim();
+    return execFileSync('loochat', args, { input: message, encoding: 'utf8' }).trim();
   }
-  if (body.endsWith('CALLI_WRITE')) {
+  if (body.endsWith('LOOCHAT_WRITE')) {
     writeFileSync('review-document.md', '# Design\n\nFirst draft.\n');
-    execFileSync('calli', ['send', 'reviewer', '--message-file', '-', '--request-id', 'review-draft'], { input: 'CALLI_REVIEW', encoding: 'utf8' });
+    execFileSync('loochat', ['send', 'reviewer', '--message-file', '-', '--request-id', 'review-draft'], { input: 'LOOCHAT_REVIEW', encoding: 'utf8' });
     return '文档初稿已写入 review-document.md，已请求审查。';
   }
-  if (body.endsWith('CALLI_REVIEW')) return `审查完成：${readFileSync('review-document.md', 'utf8').includes('First draft') ? '请补充异常处理。' : '未找到初稿。'}`;
+  if (body.endsWith('LOOCHAT_REVIEW')) return `审查完成：${readFileSync('review-document.md', 'utf8').includes('First draft') ? '请补充异常处理。' : '未找到初稿。'}`;
   if (body.includes('请补充异常处理。') && body.startsWith('[协作消息')) {
     writeFileSync('review-document.md', '# Design\n\nFirst draft.\n\n## Errors\nReport failures.\n');
     return '已根据审查补充异常处理。';
@@ -60,7 +60,7 @@ export function coordinationFixture(text) {
   if (body.startsWith('[协作消息') && body.includes('状态：')) return '已收到成员结果，将继续检查并汇总。';
   if (body.startsWith('请审查接口文档')) return '已收到协作要求。';
   // A remote member that leaves the report the handoff asked for, in the file it named.
-  if (body.includes('CALLI_RESULT_FILE')) {
+  if (body.includes('LOOCHAT_RESULT_FILE')) {
     const target = /把完整结果写到[：:\s]+(\S+?)(?:；|\s|$)/.exec(body)?.[1];
     if (target) writeFileSync(target, '# REPORT\n\nfrom the fixture\n');
     return '结果已写入文件。';

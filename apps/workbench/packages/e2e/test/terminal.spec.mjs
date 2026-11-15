@@ -9,7 +9,7 @@ let browser;
 
 before(async () => {
   // /bin/sh keeps the test off the user's rc files and shell prompt.
-  daemon = await startDaemon({ CALLI_TERM_SHELL: '/bin/sh' });
+  daemon = await startDaemon({ LOOCHAT_TERM_SHELL: '/bin/sh' });
   browser = await launchBrowser();
 });
 

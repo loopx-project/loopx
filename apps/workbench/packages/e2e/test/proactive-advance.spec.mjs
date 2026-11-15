@@ -17,9 +17,9 @@ const closeSpread = async page => {
   await page.locator('.desk-spread').waitFor({ state: 'detached' });
 };
 const screenshot = async (page, name) => {
-  if (!process.env.CALLI_PROACTIVE_SCREENSHOTS) return;
-  mkdirSync(process.env.CALLI_PROACTIVE_SCREENSHOTS, { recursive: true });
-  await page.screenshot({ path: join(process.env.CALLI_PROACTIVE_SCREENSHOTS, `${name}.png`), fullPage: true, animations: 'disabled' });
+  if (!process.env.LOOCHAT_PROACTIVE_SCREENSHOTS) return;
+  mkdirSync(process.env.LOOCHAT_PROACTIVE_SCREENSHOTS, { recursive: true });
+  await page.screenshot({ path: join(process.env.LOOCHAT_PROACTIVE_SCREENSHOTS, `${name}.png`), fullPage: true, animations: 'disabled' });
 };
 
 for (const width of [1440, 390]) for (const colorScheme of ['light', 'dark']) {

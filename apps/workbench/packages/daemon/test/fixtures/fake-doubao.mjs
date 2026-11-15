@@ -30,14 +30,14 @@ for (let index = 0; index < args.length; index++) {
 if (flags.has('--list')) {
   const runtime = process.env.FAKE_DOUBAO_RUNTIME;
   const source = runtime && readFileSync(join(dirname(runtime), 'resources/js_app/entry-cli-router/main.js'), 'utf8');
-  if (!source?.includes('type:"calli_models"')) { console.log('fixture-session  Fixture conversation'); process.exit(0); }
+  if (!source?.includes('type:"loochat_models"')) { console.log('fixture-session  Fixture conversation'); process.exit(0); }
   if (process.env.FAKE_DOUBAO_MODEL_LOG) appendFileSync(process.env.FAKE_DOUBAO_MODEL_LOG, JSON.stringify({ args, runtime, marker: process.env.FAKE_DOUBAO_MARKER }) + '\n');
   if (process.env.FAKE_DOUBAO_IGNORE_SIGINT) process.on('SIGINT', () => undefined);
   await delay(Number(process.env.FAKE_DOUBAO_MODEL_DELAY ?? 0));
   if (process.env.FAKE_DOUBAO_MODEL_LARGE) { await new Promise(resolve => process.stdout.write('x'.repeat(1024 * 1024 + 1), resolve)); process.exit(0); }
   if (process.env.FAKE_DOUBAO_MODEL_ERROR) fail(process.env.FAKE_DOUBAO_MODEL_ERROR);
   if (process.env.FAKE_DOUBAO_MODEL_OUTPUT) { console.log(process.env.FAKE_DOUBAO_MODEL_OUTPUT); process.exit(0); }
-  console.log(JSON.stringify({ type: 'calli_models', models: [
+  console.log(JSON.stringify({ type: 'loochat_models', models: [
     { modelId: 'native-default', name: 'Doubao Default', available: true, isDefault: true, effortAdjustable: true, efforts: [{ level: 'none', name: 'None' }, { level: 'low', name: 'Low' }, { level: 'high', name: 'High' }] },
     { modelId: 'native-fast', name: 'Doubao Fast', description: 'Fast task model', available: true, isDefault: false, effortAdjustable: false, efforts: [] },
     { modelId: 'native-locked', name: 'Doubao Locked', available: false, isDefault: false, effortAdjustable: true, efforts: [] },
@@ -49,7 +49,7 @@ if (flags.get('-C') !== process.cwd()) fail('invalid_arguments: Wrong working di
 if (flags.has('--permission-mode') && flags.has('--dangerously-bypass-approvals-and-sandbox')) fail('invalid_arguments: Conflicting permission flags.');
 if (process.env.FAKE_DOUBAO_LOG) appendFileSync(process.env.FAKE_DOUBAO_LOG, JSON.stringify({
   args, pid: process.pid, cwd: process.cwd(), marker: process.env.FAKE_DOUBAO_MARKER,
-  ready: Boolean(process.env.CALLI_TEAM_SOCKET && process.env.CALLI_TEAM_KEY),
+  ready: Boolean(process.env.LOOCHAT_TEAM_SOCKET && process.env.LOOCHAT_TEAM_KEY),
   path: process.env.PATH, runtime: process.env.FAKE_DOUBAO_RUNTIME,
 }) + '\n');
 
@@ -61,7 +61,7 @@ await new Promise(resolve => process.stdin.on('end', resolve));
 const text = flags.get('-p');
 const stream = process.env.FAKE_DOUBAO_RUNTIME && readFileSync(join(dirname(process.env.FAKE_DOUBAO_RUNTIME), 'resources/js_app/entry-cli-router/main.js'), 'utf8').includes('output_format:"stream-json"');
 if (stream) {
-  const body = text.split(/<calli-(?:tools|coordination|team)>/)[0].trim();
+  const body = text.split(/<loochat-(?:tools|coordination|team)>/)[0].trim();
   const id = body === 'wrong-session' ? '38450000000000002' : flags.get('--resume') ?? '38450000000000001';
   const out = (record) => process.stdout.write(JSON.stringify({ session_id: id, ...record }) + '\n');
   const messageId = 'fake-message';
@@ -114,7 +114,7 @@ if (text.startsWith('slow') || text === 'wrong-session') {
   await delay(60_000);
 }
 if (text === 'stderr-noise') process.stderr.write('diagnostic '.repeat(3_000) + '\n');
-const body = text.split(/<calli-(?:tools|coordination|team)>/)[0].trim();
+const body = text.split(/<loochat-(?:tools|coordination|team)>/)[0].trim();
 const answer = coordinationFixture(text) ?? (text === 'json-text'
   ? '{"type":"session","session_id":"reply-not-metadata"}'
   : `doubao:${body}`);

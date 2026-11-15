@@ -142,7 +142,7 @@ export interface TerminalManagerOptions {
   /** Terminal start directories are held to the same whitelist as threads. */
   /** Where shells may start; a function when the list can change while the hub runs. */
   workdirs: string[] | (() => string[]);
-  /** Shell executable. Defaults to $SHELL, then /bin/bash; CALLI_TERM_SHELL reaches here. */
+  /** Shell executable. Defaults to $SHELL, then /bin/bash; LOOCHAT_TERM_SHELL reaches here. */
   shell?: string;
   maxTerminals?: number;
   /** A terminal with no input and no output for this long is killed. */

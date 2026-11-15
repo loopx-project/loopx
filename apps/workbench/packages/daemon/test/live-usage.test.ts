@@ -18,7 +18,7 @@ const row = (id: string, output = 20, timestamp = new Date().toISOString()) => J
 } });
 
 test('incremental reads skip history, handle partial UTF-8 lines, revisions, truncation and missing files', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-tail-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-tail-'));
   const file = join(dir, 'session.jsonl'), missing = join(dir, 'later.jsonl');
   const samples: UsageSample[] = [];
   writeFileSync(file, row('history', 9999, '2020-01-01T00:00:00Z') + '\n');
@@ -66,8 +66,8 @@ test('native parsers reject invalid counts and only clean cache/output overlap w
 });
 
 test('Claude, agy and zcode fixtures report mid-turn, deduplicate and flush on completion', { timeout: 25000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-live-adapters-'));
-  const env = { FAKE_LIVE_USAGE: '1', FAKE_TELEMETRY: '1', CLAUDE_CONFIG_DIR: join(dir, 'claude'), CALLI_AGY_HOME: join(dir, 'agy'), ZCODE_DATA_BASE_DIR: dir };
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-live-adapters-'));
+  const env = { FAKE_LIVE_USAGE: '1', FAKE_TELEMETRY: '1', CLAUDE_CONFIG_DIR: join(dir, 'claude'), LOOCHAT_AGY_HOME: join(dir, 'agy'), ZCODE_DATA_BASE_DIR: dir };
   const adapters: AgentAdapter[] = [new ClaudeAcpAdapter(fixture('acp'), env), new AgyAdapter(fixture('agy'), env), new ZcodeAdapter(fixture('zcode'), env), new ZcodeAdapter(fixture('zcode'), { ...env, FAKE_ZCODE_REQUEST_USAGE: '1', ZCODE_SESSION_DB_PATH: join(dir, 'usage.sqlite') })];
   try {
     for (const adapter of adapters) {
@@ -91,7 +91,7 @@ test('Claude, agy and zcode fixtures report mid-turn, deduplicate and flush on c
 });
 
 test('cancellation flushes measured file usage without waiting for a protocol summary', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'calli-cancel-usage-'));
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-cancel-usage-'));
   const adapter = new ClaudeAcpAdapter(fixture('acp'), { FAKE_LIVE_USAGE: '1', CLAUDE_CONFIG_DIR: dir });
   const session = await adapter.start({ cwd: dir });
   try {

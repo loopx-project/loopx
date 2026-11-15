@@ -45,7 +45,7 @@ export async function readFerryQueueObservations(env: NodeJS.ProcessEnv): Promis
       observations.set(key, { at, position: now - at > QUEUE_FRESH_MS ? null : typeof position === 'number' ? position : 0 });
     }
   } catch {
-    // No executable, control token, probes, writes or warnings: this cache is never required to run Calli.
+    // No executable, control token, probes, writes or warnings: this cache is never required to run LoopX.
   }
   return observations;
 }

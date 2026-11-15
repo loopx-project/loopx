@@ -7,13 +7,13 @@ import { startDaemon, openUi, api, launchBrowser, repoRoot } from '../harness.mj
 let daemon;
 let browser;
 before(async () => {
-  daemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'zcode', adapter: 'zcode', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-zcode.mjs')] }] }) });
+  daemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'zcode', adapter: 'zcode', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-zcode.mjs')] }] }) });
   browser = await launchBrowser();
 });
 after(async () => { await browser?.close(); await daemon?.stop(); });
 
 test('empty model discovery keeps an explanatory picker visible without offering effort levels', async () => {
-  const emptyDaemon = await startDaemon({ CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'zcode', adapter: 'zcode', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-zcode.mjs')], env: { FAKE_ZCODE_NO_MODELS: '1' } }] }) });
+  const emptyDaemon = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'zcode', adapter: 'zcode', command: [process.execPath, join(repoRoot, 'daemon/test/fixtures/fake-zcode.mjs')], env: { FAKE_ZCODE_NO_MODELS: '1' } }] }) });
   try {
     assert.deepEqual(await (await api(emptyDaemon, '/api/agents/zcode/models')).json(), []);
     for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark']) {
@@ -26,10 +26,10 @@ test('empty model discovery keeps an explanatory picker visible without offering
         await page.getByText('还没有从这个实例读到可选模型。', { exact: false }).waitFor();
         assert.equal(await page.getByRole('slider').count(), 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
-        if (process.env.CALLI_E2E_SHOTS_DIR) {
-          mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
+        if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+          mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
           await page.waitForTimeout(300);
-          await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `zcode-empty-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+          await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `zcode-empty-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
         }
       } finally { await context.close(); }
     }
@@ -71,9 +71,9 @@ test('ZCode threads use the shared interface in desktop/phone and both themes', 
       await page.getByText('总计：1,500 tokens', { exact: false }).waitFor();
       await page.waitForTimeout(300);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
-      if (process.env.CALLI_E2E_SHOTS_DIR) {
-        mkdirSync(process.env.CALLI_E2E_SHOTS_DIR, { recursive: true });
-        await page.screenshot({ path: join(process.env.CALLI_E2E_SHOTS_DIR, `zcode-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+        mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `zcode-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       }
     } finally { await context.close(); }
   }

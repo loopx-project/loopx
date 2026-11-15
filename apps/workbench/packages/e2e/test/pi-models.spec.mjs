@@ -9,7 +9,7 @@ test('Pi new-thread and personal model pickers work while MCP discovery is block
   const dir = mkdtempSync(join(tmpdir(), 'pi-model-ui-')), state = join(dir, 'state');
   writeFileSync(state, JSON.stringify({ mcpHold: true }));
   const daemon = await startDaemon({ FAKE_PI_CATALOG_FILE: state, FAKE_PI_REQUIRE_NO_MCP: '1', FAKE_PI_MANY_MODELS: '1',
-    CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'pi', adapter: 'pi', command: ['fake-pi'] }] }) });
+    LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'pi', adapter: 'pi', command: ['fake-pi'] }] }) });
   const browser = await launchBrowser();
   try {
     for (const mobile of [false, true]) {
@@ -45,7 +45,7 @@ test('Pi image capabilities refresh open desktop and phone composers after backg
   const dir = mkdtempSync(join(tmpdir(), 'pi-vision-ui-')), state = join(dir, 'state');
   writeFileSync(state, JSON.stringify({ mcpHold: true }));
   const daemon = await startDaemon({ FAKE_PI_CATALOG_FILE: state, FAKE_PI_REQUIRE_NO_MCP: '1',
-    CALLI_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'pi', adapter: 'pi', command: ['fake-pi'] }] }) });
+    LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [{ id: 'pi', adapter: 'pi', command: ['fake-pi'] }] }) });
   const browser = await launchBrowser();
   const shots = resolve(import.meta.dirname, '../shots/personal'); mkdirSync(shots, { recursive: true });
   const pages = [];

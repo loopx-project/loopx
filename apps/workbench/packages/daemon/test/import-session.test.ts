@@ -52,11 +52,11 @@ function agyTree(root: string, id: string): string {
 }
 
 test('an Antigravity conversation is copied whole under the same id, and a same-id one is refused', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-agy-import-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-agy-import-'));
   try {
     const id = '11111111-2222-3333-4444-555555555555';
     const source = agyTree(join(root, 'one'), id);
-    const adapter = new AgyAdapter(['unused'], { CALLI_AGY_HOME: join(root, 'two', '.gemini', 'antigravity-cli') });
+    const adapter = new AgyAdapter(['unused'], { LOOCHAT_AGY_HOME: join(root, 'two', '.gemini', 'antigravity-cli') });
     assert.equal(await adapter.importSession(source), id);
     const to = join(root, 'two', '.gemini', 'antigravity-cli');
     assert.equal(readFileSync(join(to, 'conversations', `${id}.db`), 'utf8'), 'db-bytes');
@@ -71,13 +71,13 @@ test('an Antigravity conversation is copied whole under the same id, and a same-
     const other = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     const second = agyTree(join(root, 'three'), other);
     rmSync(join(root, 'three', '.gemini', 'antigravity-cli', 'annotations', `${other}.pbtxt`));
-    assert.equal(await new AgyAdapter(['unused'], { CALLI_AGY_HOME: join(to) }).importSession(second), other);
+    assert.equal(await new AgyAdapter(['unused'], { LOOCHAT_AGY_HOME: join(to) }).importSession(second), other);
     assert.ok(readFileSync(join(to, 'brain', other, 'scratch', 'note.txt'), 'utf8'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('copyDirectorySnapshot copies nested folders and skips entries that vanish mid-copy', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-agy-snapshot-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-agy-snapshot-'));
   try {
     mkdirSync(join(root, 'from', 'deep', 'deeper'), { recursive: true });
     writeFileSync(join(root, 'from', 'top.txt'), 'top');
@@ -96,7 +96,7 @@ function exists(path: string): boolean {
 }
 
 test('a pi session is copied under a new id with only the header renamed', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'calli-pi-import-'));
+  const root = mkdtempSync(join(tmpdir(), 'loochat-pi-import-'));
   try {
     const oldId = '01234567-89ab-cdef-0123-456789abcdef';
     const dir = join(root, 'one', 'sessions', '-work-app');

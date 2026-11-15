@@ -169,7 +169,7 @@ async function handle(message) {
         done('success', `answer:${JSON.stringify(answer)};mode:${mode}`); return;
       }
       if (p.content === 'plan-draft') { done('success', `mode:${mode}`); return; }
-      if (p.content?.startsWith('CALLI_') || p.content?.startsWith('[协作消息')) {
+      if (p.content?.startsWith('LOOCHAT_') || p.content?.startsWith('[协作消息')) {
         const answer = coordinationFixture(p.content);
         if (answer !== null) { done('success', answer); return; }
       }

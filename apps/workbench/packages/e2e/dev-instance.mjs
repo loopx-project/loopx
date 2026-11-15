@@ -47,7 +47,7 @@ async function smoke(daemon) {
   }
 }
 
-const daemon = await startDaemon(host ? { CALLI_HOST: host } : {});
+const daemon = await startDaemon(host ? { LOOCHAT_HOST: host } : {});
 let stopping = false;
 async function stop(code) {
   if (stopping) return;
