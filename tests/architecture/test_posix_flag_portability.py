@@ -27,6 +27,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOOPX_ROOT = REPO_ROOT / "loopx"
 CEILINGS_FIXTURE = Path(__file__).with_name("posix_flag_ceilings.json")
@@ -103,7 +105,10 @@ def test_no_module_exceeds_its_bare_posix_flag_ceiling() -> None:
     assert not exceeded, (
         "bare POSIX-only os flags grew: "
         + json.dumps(
-            {path: [f"{line}: {what}" for line, what in uses] for path, uses in exceeded.items()},
+            {
+                path: [f"{path}:{line}: {what}" for line, what in detail["observed"]]
+                for path, detail in exceeded.items()
+            },
             indent=2,
         )
         + ". Read the flag with `getattr(os, \"<flag>\", 0)` the way the peer, completion "
@@ -111,6 +116,42 @@ def test_no_module_exceeds_its_bare_posix_flag_ceiling() -> None:
         "own terms instead of raising AttributeError first. Raising a ceiling in "
         f"{CEILINGS_FIXTURE.name} needs a recorded reason."
     )
+
+
+def test_ceiling_failure_reports_offending_path_and_use_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A synthetic violation reports use sites rather than crashing its formatter."""
+    loopx_root = tmp_path / "loopx"
+    loopx_root.mkdir()
+    (loopx_root / "offender.py").write_text(
+        "import os\nfirst = os.O_NOFOLLOW\nsecond = os.O_DIRECTORY\n",
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "posix_flag_ceilings.json"
+    fixture.write_text(
+        json.dumps(
+            {
+                "schema": CEILINGS_SCHEMA,
+                "baseline_commit": "a" * 40,
+                "ceiling": {"loopx/offender.py": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(globals(), "LOOPX_ROOT", loopx_root)
+    monkeypatch.setitem(globals(), "CEILINGS_FIXTURE", fixture)
+
+    with pytest.raises(AssertionError) as failure:
+        test_no_module_exceeds_its_bare_posix_flag_ceiling()
+
+    message = str(failure.value)
+    assert "bare POSIX-only os flags grew" in message
+    assert "loopx/offender.py:2: os.O_NOFOLLOW" in message
+    assert "loopx/offender.py:3: os.O_DIRECTORY" in message
+    assert 'Read the flag with `getattr(os, "<flag>", 0)`' in message
+    assert "Raising a ceiling in posix_flag_ceilings.json needs a recorded reason." in message
 
 
 def test_fixed_readers_keep_no_bare_posix_flag() -> None:
