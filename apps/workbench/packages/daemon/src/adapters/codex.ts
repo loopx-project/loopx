@@ -523,7 +523,7 @@ class CodexSession implements AgentSession {
   private collaboration: any = undefined;
   private defaultModel = '';
   private defaultEffort: string | null = null;
-  private overrides: { serviceTier?: string | null; model?: string; effort?: EffortLevel; approvalPolicy?: string; approvalsReviewer?: ApprovalsReviewer; sandboxPolicy?: { type: string } } = {};
+  private overrides: { serviceTier?: string | null; model?: string; effort?: EffortLevel; approvalPolicy?: string; approvalsReviewer?: ApprovalsReviewer; sandboxPolicy?: { type: string } & Record<string, unknown> } = {};
 
   constructor(
     readonly agentSessionId: string,
@@ -950,11 +950,19 @@ class CodexSession implements AgentSession {
     return true;
   }
 
+  /**
+   * A Goal conversation may write its own directory and nothing else. Codex's plain workspace-write
+   * also leaves /tmp and $TMPDIR writable, which would let it write anywhere a path can be named there.
+   */
+  private goalWorkspacePolicy(): { type: string } & Record<string, unknown> {
+    return { type: 'workspaceWrite', writableRoots: [this.cwd], excludeSlashTmp: true, excludeTmpdirEnvVar: true, networkAccess: false };
+  }
+
   async setPermissionMode(mode: PermissionMode | LoopxPolicy): Promise<void> {
     const codex = CODEX_MODES[mode];
     this.overrides.approvalPolicy = codex.approvalPolicy;
     this.overrides.approvalsReviewer = codex.approvalsReviewer;
-    this.overrides.sandboxPolicy = SANDBOX_POLICY[codex.sandbox];
+    this.overrides.sandboxPolicy = mode === 'loopx_workspace_auto' ? this.goalWorkspacePolicy() : SANDBOX_POLICY[codex.sandbox];
     // Native app-server only permits changing the reviewer on an active turn. The sandbox and
     // approval policy intentionally remain unchanged until the next turn starts.
     if (this.turn?.id) await this.peer.request('turn/settings/update', { threadId: this.agentSessionId,
