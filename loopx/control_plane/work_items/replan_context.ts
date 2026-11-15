@@ -43,8 +43,8 @@ function sameSourceDigest(left: JsonObject, right: JsonObject, field: string): b
     value === objectOrNull(right._source_facts)?.[field + "_digest"];
 }
 
-/** Qualify the existing Todo settlement identity before using it as evidence. */
-function todoWorkIdentity(row: JsonObject): string[] | null {
+/** Keep the recorded fields used by existing history references. */
+function recordedTodoIdentity(row: JsonObject): string[] | null {
   const source = objectOrNull(row._source_facts);
   const identity = objectOrNull(source?.settlement_identity);
   if (!source || identity?.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION) return null;
@@ -55,8 +55,20 @@ function todoWorkIdentity(row: JsonObject): string[] | null {
   return keys.map(key => String(identity[key]));
 }
 
+function hasConflictingTodoSettlement(row: JsonObject): boolean {
+  const source = objectOrNull(row._source_facts);
+  const identity = objectOrNull(source?.settlement_identity);
+  if (identity?.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION ||
+      !(row.todo_id || source?.todo_id || identity.todo_id)) return false;
+  const recorded = recordedTodoIdentity(row);
+  if (!recorded) return true;
+  const [goal_id, agent_id, todo_id, turn_instance_id, effect_id] = recorded;
+  const expected = settlementIdentityPayload({goal_id, agent_id, todo_id, turn_instance_id});
+  return expected.todo_id !== todo_id || expected.effect_id !== effect_id;
+}
+
 function accountingMatchKey(row: JsonObject): string | null {
-  const identity = todoWorkIdentity(row);
+  const identity = recordedTodoIdentity(row);
   const actionDigest = objectOrNull(row._source_facts)?.recommended_action_digest;
   return identity && typeof actionDigest === "string" &&
     BARE_SHA256_PATTERN.test(actionDigest) && row.recommended_action
@@ -98,13 +110,12 @@ function historicalEvidenceRef(row: JsonObject): string {
   return "replan-evidence-" + digest(readableEvidenceRow(row));
 }
 
-/** Bind ordinary evidence to its admitted work without changing the refs for
- * typed progress or records whose Turn identity cannot be verified. */
+/** Preserve historical references even when a record fails work qualification. */
 function workEvidenceRef(row: JsonObject): string {
   const source = objectOrNull(row._source_facts);
   if (row.progress_observation !== null || source?.quota_spend_commit ||
       row.classification === "quota_slot_spent") return historicalEvidenceRef(row);
-  const identity = todoWorkIdentity(row);
+  const identity = recordedTodoIdentity(row);
   if (!identity) return historicalEvidenceRef(row);
   const goalRef = objectOrNull(source?.goal_ref);
   return "replan-evidence-" + digest([readableEvidenceRow(row), identity, goalRef?.goal_instance_id ?? null]);
@@ -280,7 +291,8 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
     // or create a new pending work result. Unknown legacy outcomes stay unknown.
     // Material gaps remain eligible: this relation certifies neither successful
     // execution nor scientific gain, and must preserve useful negative evidence.
-    if (!MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome)) continue;
+    if (!MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome) ||
+        hasConflictingTodoSettlement(row)) continue;
     const todo = String(observationTodo(row));
     if (!origin.has(todo)) continue;
     const ref = workEvidenceRef(row);
@@ -333,7 +345,8 @@ function reviewEvidence(rows: JsonObject[], request: JsonObject): JsonObject {
       || (objectOrNull(row.progress_observation)?.evidence_ids as unknown[] | undefined)?.includes(ref));
     const subsequent = matches.filter(row => {
       const facts = objectOrNull(row._source_facts)!;
-      return Number(facts.history_position) > Number(source.history_position) && !facts.quota_spend_commit;
+      return Number(facts.history_position) > Number(source.history_position) && !facts.quota_spend_commit
+        && !hasConflictingTodoSettlement(row);
     });
     return {evidence_ref: ref, available: matches.length > 0, subsequent: subsequent.length > 0,
       declared_work: subsequent.some(row => targets.has(String(observationTodo(row))))};
@@ -357,7 +370,8 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
   const targets = new Set(todoIds);
   for (const row of scoped) {
     const facts = objectOrNull(row._source_facts)!;
-    if (Number(facts.history_position) <= Number(source.history_position) || facts.quota_spend_commit) continue;
+    if (Number(facts.history_position) <= Number(source.history_position) || facts.quota_spend_commit ||
+        hasConflictingTodoSettlement(row)) continue;
     if (!row.progress_observation) {
       if (targets.has(String(observationTodo(row)))) {
         const ref = workEvidenceRef(row);
@@ -602,8 +616,13 @@ export function projectReplanContext(value: unknown): JsonObject {
   }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
     JSON.stringify(readableEvidenceRow(a)).localeCompare(JSON.stringify(readableEvidenceRow(b))));
+  // Unpaired accounting can still explain a failure. It never contributes
+  // to the Todo result ledger merely by being visible here.
+  const evidenceRows = request.operation === "resolve" ? rows : rows.filter(row =>
+    row.classification === "quota_slot_spent" || objectOrNull(row._source_facts)?.quota_spend_commit ||
+    !hasConflictingTodoSettlement(row));
   const unique = new Map<string, JsonObject>();
-  for (const row of rows) {
+  for (const row of evidenceRows) {
     const readableRow = readableEvidenceRow(row);
     const ref = workEvidenceRef(row);
     if (!unique.has(ref)) unique.set(ref, {...readableRow, evidence_ref: ref});
@@ -620,9 +639,9 @@ export function projectReplanContext(value: unknown): JsonObject {
       "replan_evidence_unavailable");
     return {ok: true, goal_id: goal, agent_id: agent, evidence: match};
   }
-  const repeated = repeatedAccounting(rows);
+  const repeated = repeatedAccounting(evidenceRows);
   const repeatedByGroup = new Map<string, {workKey: string; healthRepeated: boolean} | null>();
-  for (const row of rows) {
+  for (const row of evidenceRows) {
     const key = evidenceFactsKey(row);
     const work = repeated.get(row);
     const proof = work ? {workKey: evidenceFactsKey(work),

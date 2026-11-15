@@ -13,11 +13,9 @@ from test_replan_context_evidence import _settled_pair
 
 
 def _rows():
-    work, _ = _settled_pair()
-
     def decision(turn, timestamp):
-        return {**work, "generated_at": timestamp, "turn_instance_id": turn,
-            "settlement_identity": {**work["settlement_identity"], "turn_instance_id": turn},
+        work, _ = _settled_pair(turn_instance_id=turn)
+        return {**work, "generated_at": timestamp,
             "agent_vision": {"schema_version": "goal_vision_replan_contract_v0", "agent_id": "agent-a",
                 "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "replan",
                     "prior_assumption": "The current route could explain the gap.",
@@ -29,8 +27,8 @@ def _rows():
 
     older = decision("turn-old", "2026-08-18T03:00:00Z")
     latest = decision("turn-latest", "2026-08-18T01:00:00Z")
-    later = {**work, "turn_instance_id": "turn-probe", "generated_at": "2026-08-18T00:00:00Z",
-        "settlement_identity": {**work["settlement_identity"], "turn_instance_id": "turn-probe"},
+    work, _ = _settled_pair(turn_instance_id="turn-probe")
+    later = {**work, "generated_at": "2026-08-18T00:00:00Z",
         "progress_observation": {**work["progress_observation"], "surface_id": "surface-probe"}}
     return [older, latest, later]
 
@@ -65,10 +63,8 @@ def test_declared_results_survive_busy_work_through_the_source_codec(typed):
     decision["agent_vision"]["todo_delta"] = ["retain:todo-busy", "retain:todo-comparison"]
 
     def result(todo, index):
-        item = {**work, "todo_id": todo, "turn_instance_id": f"turn-work-{index}",
-            "settlement_identity": {**work["settlement_identity"], "todo_id": todo,
-                "turn_instance_id": f"turn-work-{index}"},
-            "health_check": f"Independent measured result {index}."}
+        settled, _ = _settled_pair(todo_id=todo, turn_instance_id=f"turn-work-{index}")
+        item = {**settled, "generated_at": work["generated_at"], "health_check": f"Independent measured result {index}."}
         if typed:
             item["progress_observation"] = {**work["progress_observation"], "work_item_id": todo,
                 "surface_id": f"surface-{index}"}
@@ -116,6 +112,11 @@ def test_same_second_work_references_resolve_through_the_history_cli(tmp_path):
             "effect_id": f"evidence-goal:agent-a:todo-a:{turn}",
         }}
         rows.append(recorded)
+    first = rows[1]
+    identity = first["settlement_identity"]
+    rows.extend([dict(first), {**first, "settlement_identity": {
+        **identity, "effect_id": "evidence-goal:agent-a:todo-a:turn-unrelated",
+    }}, {**first, "settlement_identity": {key: value for key, value in identity.items() if key != "effect_id"}}])
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"goals": [{"id": "evidence-goal", "repo": str(tmp_path)}]}))
     index = tmp_path / "goals/evidence-goal/runs/index.jsonl"
@@ -129,9 +130,11 @@ def test_same_second_work_references_resolve_through_the_history_cli(tmp_path):
     context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
         source_status={"registry": str(registry), "runtime_root": str(tmp_path),
             "run_history": {"runs": []}})
-    evidence = context["decision_followthrough"]["ordinary_work"]
+    followthrough = context["decision_followthrough"]
+    evidence = followthrough["ordinary_work"]
     refs = {row["evidence_ref"] for row in evidence["evidence"]}
     assert evidence["recorded_count"] == len(refs) == 2
+    assert followthrough["work_result_use"]["unresolved_count"] == 2
     legacy = {key: value for key, value in work.items() if key != "settlement_identity"}
     old_context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[legacy])
     refs.add(old_context["evidence"][0]["evidence_ref"])

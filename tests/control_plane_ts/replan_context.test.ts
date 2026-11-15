@@ -127,11 +127,12 @@ test("references resolve only the exact immutable row within the same Goal and A
   }
 });
 
-function pair(time = 1): [JsonObject, JsonObject] {
-  const identity = {schema_version: "quota_settlement_identity_v0", goal_id: "goal-a", agent_id: "agent-a",
-    todo_id: "todo-a", turn_instance_id: "turn-" + time, effect_id: "settlement-" + time};
+function pair(time = 1, todo = "todo-a"): [JsonObject, JsonObject] {
+  const identity = settlementIdentityPayload({goal_id: "goal-a", agent_id: "agent-a",
+    todo_id: todo, turn_instance_id: "turn-" + time});
   const hash = (text: string) => createHash("sha256").update(text).digest("hex");
-  const work = {...row(time), todo_id: "todo-a", classification: "bounded_probe", recommended_action: "Try the next route.",
+  const work = {...row(time), todo_id: todo, progress_observation: {...progress, work_item_id: todo},
+    classification: "bounded_probe", recommended_action: "Try the next route.",
     _source_facts: {...identity, settlement_identity: identity, quota_spend_commit: null,
       recommended_action_digest: hash("Try the next route."), health_check_digest: hash(String(row(time).health_check))}};
   const accounting = {...work, ...row(time + 0.1), progress_observation: null, classification: "quota_slot_spent",
@@ -154,9 +155,9 @@ function reviewed(position = 0): JsonObject {
         satisfying_outcomes: ["fresh_vision_path_outcome"]}}}};
 }
 
-function subsequent(position: number): JsonObject {
-  const [work] = pair(position + 1);
-  return {...work, progress_observation: {...progress, result_class: "advanced",
+function subsequent(position: number, todo = "todo-a"): JsonObject {
+  const [work] = pair(position + 1, todo);
+  return {...work, progress_observation: {...progress, work_item_id: todo, result_class: "advanced",
     fingerprint: "probe-" + position, hypothesis_id: "hypothesis-local"},
     _source_facts: {...work._source_facts, history_position: position}};
 }
@@ -183,13 +184,28 @@ test("unconsumed result survives later reviews and citations alone; recorded wor
   // pending research result from each status update.
   for (const delivery_outcome of ["surface_only", null, "future_outcome"]) {
     for (const progress_observation of [null, {...progress, work_item_id: "todo-b"}]) {
-      const status = {...subsequent(4), todo_id: "todo-b", delivery_outcome, progress_observation};
+      const status = {...subsequent(4, "todo-b"), delivery_outcome, progress_observation};
       assert.deepEqual(readUse([first, result, next, status]), proposed);
       assert.equal((projectReplanContext({...request, rows: [status]}).evidence as JsonObject[]).length, 1);
     }
   }
-  const actual = {...subsequent(4), todo_id: "todo-b", progress_observation: null,
+  const actual = {...subsequent(4, "todo-b"), progress_observation: null,
     delivery_outcome: "outcome_progress"};
+  const legacy: JsonObject = {...actual};
+  delete legacy._source_facts;
+  const legacyRef = projectReplanContext({...request, rows: [legacy]}).evidence[0].evidence_ref;
+  const facts = actual._source_facts;
+  for (const effect_id of ["goal-a:agent-a:todo-b:another-turn", ""]) {
+    const conflict = {...actual, _source_facts: {...facts, settlement_identity: {...facts.settlement_identity, effect_id}}};
+    const rows = [first, result, next, conflict];
+    assert.deepEqual(readUse(rows), proposed, "a conflicting settlement cannot close the earlier result");
+    const context = projectReplanContext({...strideRequest, rows});
+    const follow = context.decision_followthrough;
+    assert.equal(follow.ordinary_work, undefined);
+    const replay = projectReplanContext({...strideRequest, operation: "review_evidence", rows,
+      previous_decision_ref: follow.previous_decision.evidence_ref, evidence_refs: [legacyRef]});
+    assert.deepEqual(replay.citations, [{evidence_ref: legacyRef, available: true, subsequent: false, declared_work: false}]);
+  }
   const adopted = readUse([first, result, next, actual]);
   assert.equal(adopted.unresolved_count, 1, "the next result remains available for the next decision");
   assert.notEqual((adopted.unresolved as JsonObject[])[0].evidence_ref, ref);
@@ -227,7 +243,7 @@ test("ordinary declared-work evidence reaches followthrough without becoming typ
     health_check: "The alternate implementation regressed; retain the reference."};
   const ref = (projectReplanContext({...request, rows: [actual]}).evidence as JsonObject[])[0].evidence_ref;
   const before = {...subsequent(0), progress_observation: null};
-  const other = {...subsequent(3), todo_id: "todo-other", progress_observation: null};
+  const other = {...subsequent(3, "todo-other"), progress_observation: null};
   const accounting = {...actual, generated_at: row(10).generated_at,
     _source_facts: {...actual._source_facts as JsonObject, history_position: 10,
       quota_spend_commit: {schema_version: "quota_spend_commit_receipt_v0", effect_id: "spent"}}};
@@ -377,7 +393,7 @@ test("busy planned work cannot crowd another declared experiment out of review",
   const decision = reviewed(1);
   decision._source_facts.planned_todo_ids = ["todo-busy", "todo-counterexample"];
   for (const typed of [true, false]) {
-    const observation = (position: number, todo: string): JsonObject => ({...subsequent(position), todo_id: todo,
+    const observation = (position: number, todo: string): JsonObject => ({...subsequent(position, todo),
       health_check: todo === "todo-counterexample" ? "The comparison rejected the proposed explanation." : "Repeated validation.",
       progress_observation: typed ? {...progress, work_item_id: todo, fingerprint: `result-${position}`} : null});
     const counterexample = observation(2, "todo-counterexample");
@@ -411,11 +427,11 @@ test("busy planned work cannot crowd another declared experiment out of review",
 test("declared work returns canonical state and only its subsequent observations", () => {
   const decision = reviewed(2);
   decision._source_facts.planned_todo_ids = ["todo-experiment", "todo-unavailable"];
-  const before = {...subsequent(1), todo_id: "todo-experiment",
+  const before = {...subsequent(1, "todo-experiment"),
     progress_observation: {...progress, work_item_id: "todo-experiment", fingerprint: "before"}};
-  const experiment = {...subsequent(3), todo_id: "todo-experiment",
+  const experiment = {...subsequent(3, "todo-experiment"),
     progress_observation: {...progress, work_item_id: "todo-experiment", fingerprint: "negative-result"}};
-  const other = {...subsequent(4), todo_id: "todo-other",
+  const other = {...subsequent(4, "todo-other"),
     progress_observation: {...progress, work_item_id: "todo-other", fingerprint: "other"}};
   const context = projectReplanContext({...strideRequest, rows: [before, decision, experiment, other],
     todo_items: [{todo_id: "todo-experiment", role: "agent", status: "done", claimed_by: null,
@@ -448,7 +464,7 @@ test("declared work returns canonical state and only its subsequent observations
     assert.throws(() => validateReplanContext({...context,
       decision_followthrough: {...follow, ...patch}}), /planned work/);
   }
-  const unrelated = Array.from({length: 12}, (_, i) => ({...subsequent(i + 5), todo_id: "todo-other",
+  const unrelated = Array.from({length: 12}, (_, i) => ({...subsequent(i + 5, "todo-other"),
     progress_observation: {...progress, work_item_id: "todo-other", fingerprint: "unrelated-" + i}}));
   const crowded = projectReplanContext({...strideRequest, rows: [decision, experiment, ...unrelated]});
   assert.equal(crowded.decision_followthrough.observations.length, 6);
