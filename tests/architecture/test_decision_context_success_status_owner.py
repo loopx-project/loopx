@@ -9,14 +9,13 @@ Both consumers *already import* from ``freshness``, so borrowing the owner objec
 adds no new import edge and cannot introduce a cycle. Every site now references
 the single owner and the restated name is retired.
 
-Blocking checks are bound to the two known consumers and their status-decision
-slots: a named binding of the folded set, or an ``in`` / ``not in`` membership
-comparand stating it inline. Equal value alone is not proof of one concept
-(semantic-vocabulary-convergence-v0): the ordered four-status report tuple in
-``_source_coverage`` is display data, and regrouping it as
-``(*("completed", "no_change"), "failed", "unavailable")`` preserves every
-observable output. The whole-tree folded-value census still collects such
-same-value candidates, but only as advisory output -- never a failure.
+Blocking checks are bound to the two known consumers' membership decisions:
+an ``in`` / ``not in`` comparand stating the folded set inline, or through a
+name the same module restates. A binding alone decides nothing -- display
+columns assigned to a local tuple and expanded into the report keep every
+observable output identical -- so ordinary assignments and unknown uses stay
+with the whole-tree folded-value census as advisory output, never a failure
+(semantic-vocabulary-convergence-v0: equal value is not proof of one concept).
 
 Behavioural parity runs through the owner's own ``source_freshness_row`` gate
 and the real ``_source_coverage`` report, so a migration that silently changed
@@ -104,33 +103,40 @@ def _status_literal_sites(source: str) -> list[int]:
 
 
 def _decision_slot_sites(source: str) -> list[int]:
-    """SUCCESS-folding literals in status-decision slots, counted once.
+    """SUCCESS restatements in status-decision slots, counted once.
 
-    A decision slot is a named binding (an ``Assign`` / ``AnnAssign`` value) or
-    a membership comparand (``in`` / ``not in``). Iteration and display order
-    -- the ``status_counts`` report tuple, including a starred regrouping of
-    it -- are not decisions and are left to the advisory census.
+    A decision slot is an ``in`` / ``not in`` membership comparand: either a
+    collection literal folding to SUCCESS, or a name this module binds to such
+    a literal. Bindings alone (display columns), iteration order, and any
+    other use decide nothing and are left to the advisory census.
     """
 
     tree = ast.parse(source)
     wrapped = _wrapped_inner_ids(tree)
-    slots: set[int] = set()
+    restated: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
-            slots.add(id(node.value))
+            targets, value = node.targets, node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            slots.add(id(node.value))
-        elif isinstance(node, ast.Compare):
-            slots.update(
-                id(comparator)
-                for op, comparator in zip(node.ops, node.comparators)
-                if isinstance(op, (ast.In, ast.NotIn))
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if id(value) not in wrapped and _members(value) == SUCCESS:
+            restated.update(
+                target.id for target in targets if isinstance(target, ast.Name)
             )
-    return [
-        node.lineno
-        for node in ast.walk(tree)
-        if id(node) in slots and id(node) not in wrapped and _members(node) == SUCCESS
-    ]
+    sites: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        for op, comparand in zip(node.ops, node.comparators):
+            if not isinstance(op, (ast.In, ast.NotIn)):
+                continue
+            if id(comparand) not in wrapped and _members(comparand) == SUCCESS:
+                sites.append(comparand.lineno)
+            elif isinstance(comparand, ast.Name) and comparand.id in restated:
+                sites.append(comparand.lineno)
+    return sorted(sites)
 
 
 @pytest.fixture(scope="module")
@@ -304,38 +310,49 @@ def test_successful_read_consumers_keep_observable_semantics() -> None:
 
 
 def test_same_value_without_same_slot_remains_advisory() -> None:
-    # The reviewer counterexample: the starred regrouping of the ordered
-    # report keys folds to SUCCESS inside a display tuple, so the advisory
-    # census sees it -- but it decides nothing, so the hard check stays silent.
+    # The reviewer counterexamples: both report layouts fold to SUCCESS
+    # inside display data, so the advisory census sees them -- but they
+    # decide nothing, so the hard check stays silent.
     starred_report = (
         'for status in (*("completed", "no_change"), "failed", "unavailable"):\n'
         "    pass\n"
     )
     assert _status_literal_sites(starred_report) == [1]
     assert _decision_slot_sites(starred_report) == []
+    named_columns = (
+        'success_columns = ("completed", "no_change")\n'
+        'for status in (*success_columns, "failed", "unavailable"):\n'
+        "    pass\n"
+    )
+    assert _status_literal_sites(named_columns) == [1]
+    assert _decision_slot_sites(named_columns) == []
 
 
 # --- the census bites every restatement form; the hard check bites decisions only -------
 
 POISON_CORPUS = (
-    ("bare set restatement", 'X = {"completed", "no_change"}\n', 1, 1),
-    ("frozenset call", 'X = frozenset({"completed", "no_change"})\n', 1, 1),
-    ("set call over a list", 'X = set(["completed", "no_change"])\n', 1, 1),
-    ("list literal", 'X = ["completed", "no_change"]\n', 1, 1),
-    ("tuple literal", 'X = ("completed", "no_change")\n', 1, 1),
-    ("reordered members fold the same", 'X = {"no_change", "completed"}\n', 1, 1),
-    ("renamed binding is still caught", '_ANY = {"completed", "no_change"}\n', 1, 1),
-    ("annotated binding is still caught", '_ANY: frozenset = frozenset({"completed", "no_change"})\n', 1, 1),
-    ("membership inside a function", 'def f(status):\n    return status in {"completed", "no_change"}\n', 1, 1),
+    ("inline membership restatement", 'def f(status):\n    return status in {"completed", "no_change"}\n', 1, 1),
     ("negative membership is a decision too", 'def f(status):\n    return status not in {"completed", "no_change"}\n', 1, 1),
+    ("frozenset call in membership", 'def f(status):\n    return status in frozenset({"completed", "no_change"})\n', 1, 1),
+    ("set call over a list in membership", 'def f(status):\n    return status in set(["completed", "no_change"])\n', 1, 1),
+    ("list comparand", 'def f(status):\n    return status in ["completed", "no_change"]\n', 1, 1),
+    ("tuple comparand", 'def f(status):\n    return status in ("completed", "no_change")\n', 1, 1),
+    ("reordered members fold the same", 'def f(status):\n    return status in {"no_change", "completed"}\n', 1, 1),
+    ("renamed binding decided through is still caught", '_ANY = {"completed", "no_change"}\ndef f(status):\n    return status in _ANY\n', 1, 1),
+    ("annotated binding decided through is still caught", '_ANY: frozenset = frozenset({"completed", "no_change"})\ndef f(status):\n    return status in _ANY\n', 1, 1),
+    ("the retired capture shape is still caught", '_READ_SUCCESS_STATUSES = frozenset({"completed", "no_change"})\nif source["status"] in _READ_SUCCESS_STATUSES:\n    pass\n', 1, 1),
+    ("a display binding alone is advisory only", 'X = {"completed", "no_change"}\n', 1, 0),
+    ("a renamed display binding alone is advisory only", '_ANY = {"completed", "no_change"}\n', 1, 0),
+    ("the starred report regrouping is advisory only", 'for status in (*("completed", "no_change"), "failed", "unavailable"):\n    pass\n', 1, 0),
+    ("named display columns are advisory only", 'success_columns = ("completed", "no_change")\nfor status in (*success_columns, "failed", "unavailable"):\n    pass\n', 1, 0),
+    ("iterating the success pair for display is advisory only", 'for status in ("completed", "no_change"):\n    pass\n', 1, 0),
     ("importing the owner is not a restatement", "from .m import _SUCCESS_STATUSES\n", 0, 0),
     ("alias rebind is not a restatement", "_READ_SUCCESS_STATUSES = _SUCCESS_STATUSES\n", 0, 0),
+    ("deciding through an alias of the owner is legal", "_ALIAS = _SUCCESS_STATUSES\ndef f(status):\n    return status in _ALIAS\n", 0, 0),
     ("the full scan vocabulary is not this set", '_SCAN = {"completed", "failed", "no_change", "unavailable"}\n', 0, 0),
     ("the ordered report tuple is not this set", 'X = ("completed", "no_change", "failed", "unavailable")\n', 0, 0),
     ("a superset is not this set", 'X = {"completed", "no_change", "failed"}\n', 0, 0),
     ("a single status is not this set", 'X = {"completed"}\n', 0, 0),
-    ("the starred report regrouping is advisory only", 'for status in (*("completed", "no_change"), "failed", "unavailable"):\n    pass\n', 1, 0),
-    ("iterating the success pair for display is advisory only", 'for status in ("completed", "no_change"):\n    pass\n', 1, 0),
 )
 
 
