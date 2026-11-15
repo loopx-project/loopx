@@ -6,6 +6,7 @@ import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
 import {parseExploreHistoryPage, projectExploreHistory} from '../presentation/explore_history.ts';
 import {trajectoryDisplayFields, trajectoryDisplaySnapshotText, maskTrajectoryDisplayText} from './trajectory_assessment_display.ts';
 import {qualifyTrajectoryCaseStudy} from './trajectory_case_study.ts';
+import {projectTrajectoryHumanAttention} from './trajectory_human_attention.ts';
 
 export const TRAJECTORY_METHOD = 'research-episodes-v2';
 import {TRAJECTORY_METRICS} from './trajectory_assessment_types.ts';
@@ -97,10 +98,12 @@ export function parseTrajectoryInput(raw: unknown, generationDefaults = false): 
   const input: TrajectoryInput = {schema_version: 'trajectory_assessment_input_v1', scope, objective: str(x.objective, 'objective'),
     selection: {rule: str(selection.rule, 'selection.rule'), population_episodes: population, exhaustive: selection.exhaustive}, sources, episodes,
     ...(x.native_outcomes_source_id === undefined ? {} : {native_outcomes_source_id: str(x.native_outcomes_source_id, 'native context source')}),
+    ...(x.human_attention_source_id === undefined ? {} : {human_attention_source_id: str(x.human_attention_source_id, 'human attention source')}),
     ...(display ? {display_snapshot: {schema_version: 'research_display_snapshot_v1', source_id: str(display.source_id, 'display source'),
       source_namespace: str(display.source_namespace, 'display source namespace'),
       ...(encoding ? {translation_encoding: encoding} : {}), ...(contexts ? {contexts} : {})}} : {})};
   if (input.native_outcomes_source_id) nativeContext(input);
+  projectTrajectoryHumanAttention(input);
   if (display) {
     const {events} = displaySnapshot(input); // Validate captured owner fields, never renderer strings.
     if (contexts?.length) {
@@ -294,6 +297,8 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   }
   const display = language && input.display_snapshot ? prepareDisplay(input) : undefined;
   const native = input.native_outcomes_source_id ? nativeContext(input) : undefined;
+  const attention = projectTrajectoryHumanAttention(input);
+  const attentionInstruction = attention ? '\nHuman attention observations are source-bound records, not model estimates. Never infer human origin from user-role messages, count every replan as a human correction, or turn unmeasured time into zero. Necessity labels are observer declarations: verify their cited causes. In research synthesis, explain actionable attention hotspots only where episode evidence supports them, preserve required authorization and useful review, and connect any proposed optimization to subsequent accepted quality. Do not claim savings from fewer requests alone.\n' : '';
   const measured = params.native_outcomes === undefined ? undefined : projectTrajectoryNativeOutcomes(params.native_outcomes, input);
   if (native && measured && JSON.stringify(native) !== JSON.stringify(measured)) throw new EffectRuntimeRequestError('native readback differs from the bound analysis context');
   // Only analysis identity; provider configuration/execution is owned by its adapter.
@@ -318,6 +323,7 @@ Keep JSON field names, IDs, metric/verdict tokens and citation ranges unchanged.
   const analysis_key = createHash('sha256').update(JSON.stringify({method, rubric: RUBRIC, input, config: configIdentity,
     ...(synthesis ? {synthesis_instruction: synthesisInstruction} : {}),
     ...(native ? {native_context_instruction: NATIVE_CONTEXT_INSTRUCTION} : {}),
+    ...(attention ? {human_attention_instruction: attentionInstruction} : {}),
     ...(language ? {language_instruction: languageInstruction} : {}),
     ...(display ? {display_method: display.schema_version, display_instruction: displayInstructions} : {})})).digest('hex');
   // Context-only captures are represented once as fields/projections. Sources
@@ -331,7 +337,8 @@ Keep JSON field names, IDs, metric/verdict tokens and citation ranges unchanged.
     ...(display ? {display_request: {schema_version: display.schema_version, snapshot_key: display.snapshot_key,
       source_id: display.source_id, source_namespace: display.source_namespace, eligible: display.fields.length}} : {}),
     ...(measured ? {native_outcomes: measured} : {}),
-    prompt: `${RUBRIC}${languageInstruction}${displayInstructions}${synthesis ? synthesisInstruction : ''}${native ? NATIVE_CONTEXT_INSTRUCTION : ''}\n\nEvidence pack:\n${JSON.stringify({...input, sources: promptSources})}${native ? `\n\nNative outcome context:\n${JSON.stringify(native)}` : ''}${display ? `\n\ndisplay_fields:\n${JSON.stringify(display.requests.map(field => ({field_id: field.field_id, text: field.protected.masked,
+    ...(attention ? {human_attention: attention} : {}),
+    prompt: `${RUBRIC}${languageInstruction}${displayInstructions}${synthesis ? synthesisInstruction : ''}${native ? NATIVE_CONTEXT_INSTRUCTION : ''}${attentionInstruction}\n\nEvidence pack:\n${JSON.stringify({...input, sources: promptSources})}${native ? `\n\nNative outcome context:\n${JSON.stringify(native)}` : ''}${display ? `\n\ndisplay_fields:\n${JSON.stringify(display.requests.map(field => ({field_id: field.field_id, text: field.protected.masked,
       ...(field.context_citations ? {context_citations: field.context_citations} : {}),
       ...(display.literalContext ? {literals: field.protected.literals} : {}),
       ...(display.literalValues ? {explanation_numbers: field.protected.explanation_numbers} : {})})))}` : ''}`,

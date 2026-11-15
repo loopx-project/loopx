@@ -936,7 +936,9 @@ coordination runtime; neither root is moved and path containment stays enforced.
 When the provider returned a trustworthy message locator before readback failed,
 the same background pump persists that private attempt and later performs a
 read-only verification. A matching message advances the original delivery to
-`delivered` without sending again. Provider outages retain
+`delivered` without sending again. When the project registry cannot be read,
+the pump retries without changing delivery receipts. A legacy transaction may
+not modify a receipt bound to an exact Goal instance. Provider outages retain
 `verification_required`; a missing legacy locator, changed intent, missing
 message, or verified mismatch becomes `explicit_unverified`. CLI, Manager read,
 and Chat expose the same public-safe state and reason without returning the

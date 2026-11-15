@@ -1,7 +1,7 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { TurnStep } from "../../data/turn-steps";
 import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
-import type { BoundConversationTarget, ChatSessionSummary, BoundConversationSource, ChatReplyContext } from "../../data/chat";
+import type { BoundConversationTarget, ChatSessionSummary, BoundConversationSource, ChatReplyContext, ManagedConversationTarget } from "../../data/chat";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
@@ -115,7 +115,7 @@ export type WorkspaceConversationDirectory = {
   onSelect: (projectRef: string | null) => void;
   onOpenOriginal?: (target: BoundConversationTarget) => void;
   /** Local manager entry discovery blocks sending, never Goal navigation. */
-  entryGate?: {unavailable: boolean; retry: () => void};
+  entryGate?: {unavailable: boolean; ownerLoginUnavailable?: boolean; retry: () => void};
   bound?: { target: BoundConversationTarget; session?: ChatSessionSummary; source?: BoundConversationSource;
     error?: string; retry: () => void };
   managed?: {target: import("../../data/chat").ManagedConversationTarget; session?: import("../../data/chat").ChatSessionSummary; error?: string; retry: () => void};
@@ -347,6 +347,8 @@ export type WorkspaceActionPreview = {
   /** Stored Todo operation for result wording; never grants execution authority. */
   todoOperation?: string;
   reviewPlan?: ActionReviewPlan;
+  /** Creation receipt address; unavailable identity never falls back to a new Goal Session. */
+  createdManagedSession?: {target?: ManagedConversationTarget; invalid?: true};
   actionKind:
     | "goal.create"
     | "goal.update"
@@ -583,7 +585,7 @@ export type PersonalWorkspaceCallbacks = {
   onSteerConversationTurn?: (contextId: string, turnId: string, message: string, ingressId: string) => Promise<void>;
   onQueueConversationTurn?: (contextId: string, sessionId: string, message: string, ingressId: string, attachments?: WorkspaceImageAttachment[]) => Promise<void>;
   onObserveConversationQueue?: (contextId: string, sessionId: string) => Promise<void>;
-  onOpenGoal?: (goalId: string) => void | Promise<void>;
+  onOpenGoal?: (goalId: string, managedSession?: ManagedConversationTarget) => void | Promise<void>;
   onOpenGoalView?: (tab: WorkspaceGoalTab) => void;
   onOpenRunSession?: (run: WorkspaceRun) => void | Promise<void>;
   onOpenOutput?: (output: WorkspaceOutput) => void;
@@ -637,7 +639,7 @@ export type PersonalWorkspaceCallbacks = {
   onSelectAgentModel?: (agentId: string, modelId: string) => void | Promise<void>;
   onSelectAgentReasoningEffort?: (agentId: string, effort: string) => void | Promise<void>;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
-  onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
+  onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab, managedSession?: ManagedConversationTarget) => void;
   onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
   onSelectWorkAgent?: (agentId: string | null, sessionId?: string) => void;

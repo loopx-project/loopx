@@ -2,7 +2,8 @@ import {DocumentAttachment, isDocumentAttachment} from "./document-attachment";
 import { MessageActivity } from "./message-activity";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import {Fragment, useEffectEvent, useLayoutEffect, useRef, useState} from "react";
+import {goalDraftReady} from "./goal-create-request";
+import {Fragment, memo, useEffect, useEffectEvent, useLayoutEffect, useRef, useState} from "react";
 import { CollaborationCards } from "./collaboration-card";
 import {ConversationReplyContext} from "./conversation-requests";
 import { Activity, Bot, Sparkles } from "lucide-react";
@@ -20,7 +21,7 @@ import {ManagerTeamResult} from "./manager-team-result";
 import { compareProposalRecency } from "./proposal-recency";
 import { conversationOrder } from "./conversation-order";
 import { ConversationFind, conversationMessageKey } from "./conversation-find";
-import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
+import type { WorkspaceActionPreview, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 function answerLink(sessionId: string, messageId: string) {
   const url = new URL(window.location.href);
@@ -31,8 +32,30 @@ function answerLink(sessionId: string, messageId: string) {
   return url.toString();
 }
 
+function LinkedHistoryImage({name, source, ready, zh}: {name: string; source: string; ready: boolean; zh: boolean}) {
+  const ref = useRef<HTMLImageElement>(null);
+  const [imageRead, setImageRead] = useState<{source: string; failed?: boolean}>();
+  const requested = imageRead?.source === source;
+  useEffect(() => {
+    const image = ref.current;
+    if (!image || !ready || requested) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry?.isIntersecting) return;
+      observer.disconnect();
+      setImageRead({source});
+    }, {root: image.closest(".personal-channel-scroll"), rootMargin: "64px 0px"});
+    observer.observe(image);
+    return () => observer.disconnect();
+  }, [ready, requested, source]);
+  if (requested && imageRead.failed) return <div className="personal-history-notice">
+    <div role="status"><span>{name}</span><span>{zh ? "图片无法显示" : "Could not load image"}</span></div>
+    <button type="button" onClick={() => setImageRead({source})}>{zh ? "重试图片" : "Retry image"}</button>
+  </div>;
+  return <img ref={ref} alt={name} src={requested ? source : undefined}
+    onError={() => setImageRead(current => current?.source === source ? {source, failed: true} : current)}/>;
+}
 
-export function ChannelTimeline({
+export const ChannelTimeline = memo(function ChannelTimeline({
   emptyState,
   readOnly = false,
   items,
@@ -40,6 +63,8 @@ export function ChannelTimeline({
   selectedGoal,
   showManagerTeamResults = false,
   onReviewGoalDraft,
+  onApplyGoalDraft,
+  goalDraftPreparationContext,
   onSuggestReply,
   onOpenGoalEvidence,
   onInterruptTurn,
@@ -47,6 +72,7 @@ export function ChannelTimeline({
   onCancelPreparation,
   messageFocus,
   historyPhase = "ready",
+  historyPositionReady = true,
   onReadMessage,
   onRetryHistory,
   queuedTurnKeys,
@@ -54,6 +80,7 @@ export function ChannelTimeline({
   emptyState?: { title: string; description: string };
   messageFocus?: {sessionId: string; messageId: string};
   historyPhase?: ConversationHistoryStatus["phase"];
+  historyPositionReady?: boolean;
   onReadMessage?: () => void;
   onRetryHistory?: () => void;
   queuedTurnKeys?: ReadonlySet<string>;
@@ -63,13 +90,25 @@ export function ChannelTimeline({
   onSelect: (selection: WorkspaceDrawerSelection) => void;
   selectedGoal: WorkspaceGoal | null;
   showManagerTeamResults?: boolean;
-  onReviewGoalDraft?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<void>;
+  onReviewGoalDraft?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<WorkspaceActionPreview | void>;
+  onApplyGoalDraft?: (proposal: WorkspaceActionPreview) => Promise<WorkspaceActionPreview>;
+  goalDraftPreparationContext?: string;
   onSuggestReply?: (text: string) => void;
   onOpenGoalEvidence?: (goalId: string) => void;
   onInterruptTurn?: (turnId: string) => Promise<void>;
   onAdjustTurn?: (turnId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
+  const [draftProposalIds, setDraftProposalIds] = useState<Record<string, string>>({});
+  const draftKey = (id: string, draft: GoalDraft) => JSON.stringify([id, draft, goalDraftPreparationContext]);
+  const inlineProposalIds = new Set(items.flatMap(item => item.kind === "message"
+    && item.message.goalDraft && goalDraftReady(item.message.goalDraft)
+    ? [draftProposalIds[draftKey(`${item.message.sourceSessionId ?? ""}:${item.message.id}`, item.message.goalDraft)]] : []));
+  async function reviewDraft(draft: GoalDraft, edit = false, id = "") {
+    const result = await onReviewGoalDraft?.(draft, edit, id);
+    if (!edit && result) setDraftProposalIds(current => ({...current, [draftKey(id, draft)]: result.previewId}));
+    return result;
+  }
   const [findNavigation, setFindNavigation] = useState(0);
   const [findMessageId, setFindMessageId] = useState<string | null>(null);
   const timeline = useRef<HTMLDivElement>(null);
@@ -84,7 +123,14 @@ export function ChannelTimeline({
     });
     return () => cancelAnimationFrame(frame);
   }, [findMessageId, findNavigation]);
-  const orderedItems = conversationOrder(items.filter(item => {
+  const presentedItems = items.filter(item => {
+    // The visible draft already owns this confirmation and recovery entry.
+    // Its canonical proposal remains available when the draft is not loaded.
+    if (item.kind === "proposal" && !readOnly && onApplyGoalDraft && onReviewGoalDraft
+      && inlineProposalIds.has(item.proposal.previewId)) return false;
+    return true;
+  });
+  const orderedItems = conversationOrder(presentedItems.filter(item => {
     if (item.kind !== "message") return true;
     if (item.message.queued) return false;
     const queued = item.message.role === "user" && queuedTurnKeys?.has(
@@ -104,23 +150,24 @@ export function ChannelTimeline({
       && !item.message.pending && item.message.sourceSessionId && item.message.sourceMessageId).map(item => messageKey(item.message))));
   }
   const focusTarget = useRef<HTMLElement>(null);
-  const restoredFocus = useRef<string | null>(null);
+  const [restoredFocus, setRestoredFocus] = useState<string | null>(null);
   const focusKey = messageFocus ? JSON.stringify([messageFocus.sessionId, messageFocus.messageId]) : null;
   const focusPresent = Boolean(messageFocus && items.some(item => item.kind === "message"
     && item.message.sourceSessionId === messageFocus.sessionId && item.message.sourceMessageId === messageFocus.messageId));
   useLayoutEffect(() => {
-    if (!focusKey) {restoredFocus.current = null; return;}
-    if (!focusPresent || restoredFocus.current === focusKey || !focusTarget.current) return;
+    if (!focusKey) {if (restoredFocus !== null) setRestoredFocus(null); return;}
+    if (!focusPresent || restoredFocus === focusKey || !focusTarget.current) return;
     onReadMessage?.();
     const frame = window.requestAnimationFrame(() => {
       if (!focusTarget.current) return;
       onReadMessage?.();
       focusTarget.current.scrollIntoView({block: "start"});
       focusTarget.current.focus({preventScroll: true});
-      restoredFocus.current = focusKey;
+      setRestoredFocus(focusKey);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [focusKey, focusPresent, onReadMessage]);
+  }, [focusKey, focusPresent, onReadMessage, restoredFocus]);
+  const loadHistoryImages = historyPositionReady && (!focusPresent || restoredFocus === focusKey);
   const focusNotice = messageFocus && !focusPresent ? <div className="personal-message-focus-notice" role="status">
     <span>{historyPhase === "loading" ? (locale === "zh-CN" ? "正在定位原消息…" : "Finding the original message…")
       : historyPhase === "ready" ? (locale === "zh-CN" ? "原消息不在当前已读取的对话中。" : "The original message is not in the loaded conversation.")
@@ -151,7 +198,7 @@ export function ChannelTimeline({
         ? t("timeline.runCompleted", { run: latestAnnounceable.run.title })
         : "";
 
-  const gatedItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
+  const gatedItems = presentedItems.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
     item.kind === "proposal" && item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute");
   // Only routine execution is folded. Waiting, interruption, and failures stay
   // visible; no prose-based inference that a waiting run is safe to ignore.
@@ -172,7 +219,7 @@ export function ChannelTimeline({
   ] as Array<string | number | null>).concat(locale === "zh-CN"
     ? [workingCount && `${workingCount} 个执行中`, queuedCount && `${queuedCount} 个排队中`, completedCount && `${completedCount} 次执行已结束`, progressCount && `${progressCount} 项进展更新`]
     : [workingCount && `${workingCount} running`, queuedCount && `${queuedCount} queued`, completedCount && `${completedCount} runs finished`, progressCount && `${progressCount} progress updates`]).filter(Boolean).join(" · ");
-  const activeProposalItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
+  const activeProposalItems = presentedItems.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
     item.kind === "proposal" && (item.proposal.status !== "gated" || item.proposal.actionKind === "operation.execute"));
   // Only drafts awaiting the owner fold behind the newest one; applying, applied and failed results stay visible.
   // "Newest" is read from the stored proposal, not from the position in this
@@ -199,14 +246,18 @@ export function ChannelTimeline({
     }
     if (item.kind === "proposal") {
       const appliedTeamPlan = item.proposal.actionKind === "team.plan" && item.proposal.status === "applied";
+      const taskReceipt = item.proposal.reviewPlan?.taskExecution;
       const pendingOperation = item.proposal.reviewPlan?.operationFrame?.kind === "pending";
       return (
         <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} data-action-kind={item.proposal.actionKind} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
           <span><small>{pendingOperation ? t(`proposal.kind.${item.proposal.actionKind}`)
+            : taskReceipt ? t("drawer.taskLaunchReceipt")
             : appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
             : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
-          <b>{item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review") : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
+          <b>{taskReceipt ? t("feedback.taskStartRequested")
+            : item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review")
+            : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
         </button>{showManagerTeamResults && onOpenGoalEvidence && appliedTeamPlan
           && item.proposal.goalId && item.proposal.teamPlanTodoIds?.length
           ? <ManagerTeamResult goalId={item.proposal.goalId} todoIds={item.proposal.teamPlanTodoIds} zh={locale === "zh-CN"} onOpenGoalEvidence={onOpenGoalEvidence}/>
@@ -225,7 +276,13 @@ export function ChannelTimeline({
           <header><strong>{item.message.role === "user" ? item.message.agentLabel ?? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
           <ReturnDeliveryStatus delivery={item.message.returnDelivery} />
           {item.message.queueInputCancelled ? <span>{locale === "zh-CN" ? "已取消排队" : "Cancelled before starting"}</span> : null}
-          {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => isDocumentAttachment(attachment.mimeType) ? <DocumentAttachment key={attachment.id} {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
+          {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => {
+            if (isDocumentAttachment(attachment.mimeType)) return <DocumentAttachment key={attachment.id} {...attachment} zh={locale === "zh-CN"}/>;
+            const linked = attachment.dataUrl.startsWith("/api/chat/sessions/") && attachment.dataUrl.includes("/images/");
+            return linked ? <LinkedHistoryImage key={attachment.id} name={attachment.name} source={attachment.dataUrl}
+              ready={loadHistoryImages} zh={locale === "zh-CN"}/>
+              : <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} loading="lazy"/>;
+          })}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <HistoricalMessageText text={item.message.text}
             initiallyCollapsed={Boolean(historical?.has(messageKey(item.message)))}
             focusRequest={messageKey(item.message) === findMessageId ? findNavigation : undefined}
@@ -238,7 +295,7 @@ export function ChannelTimeline({
             : null}
           {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn}/> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
-            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
+            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} preparationContext={goalDraftPreparationContext} draft={item.message.goalDraft} onReview={onReviewGoalDraft ? reviewDraft : undefined} onApply={onApplyGoalDraft} onSuggest={onSuggestReply}/> : null}
           <CollaborationCards request={item.message.collaboration} requests={item.message.collaborations} />
         </div>
       </article>
@@ -272,4 +329,4 @@ export function ChannelTimeline({
       </div>
     </>
   );
-}
+});

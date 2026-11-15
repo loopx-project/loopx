@@ -720,6 +720,8 @@ class CodexChatAgentSession:
     _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
         default=None, repr=False
     )
+    _native_task_policy_used: bool = field(default=False, repr=False)
+    _managed_goal_read_default: bool = field(default=False, repr=False)
 
     @classmethod
     def start(
@@ -1734,28 +1736,15 @@ class CodexChatAgentSession:
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
         check_running: Callable[[], None] | None = None,
+        _native_task: bool = False,
+        sandbox_policy: dict[str, object] | None = None,
     ) -> dict[str, Any]:
-        text = str(user_message or "")
-        if not text.strip():
-            raise ValueError("user message is required")
-        if self.read_only_review and not self.metadata_review and not self.answer_review:
-            text = (
-                "Review the existing results of the interrupted original request below. "
-                "Its earlier execution may have already changed files or external systems. "
-                "Use the original native history and current local artifacts to verify what actually happened. "
-                "This Turn is read-only: do not re-execute the business request, write, send, delegate or start background work. "
-                "Return a clear answer to the original user, distinguishing verified results from remaining gaps. "
-                "If verification is incomplete, report the concrete limitation; do not claim completion. "
-                "Original request: " + text
-            )
-        if project_collaboration:
-            if (self.execution_mode or self.read_only_review or output_schema is not None
-                    or not self.project_context or self.project_context.get("audience") != "bound_owner"):
-                raise ValueError("original project collaboration requires its existing bound project session")
-            from .control_plane.effect_runtime import effect_runtime_result
-            output_schema = effect_runtime_result("collaboration.project.response_schema", {})
-        if output_schema is not None and not self.execution_mode and not project_collaboration:
-            raise ValueError("structured Turn output requires an execution session")
+        if not _native_task and (self._native_task_policy_used or self._managed_goal_read_default) and sandbox_policy is None:
+            sandbox_policy = {"type": "readOnly", "networkAccess": False}
+        from .capabilities.native_chat.codex_adapter import prepare_native_turn_text
+        text, output_schema = prepare_native_turn_text(self, user_message, output_schema=output_schema,
+            project_collaboration=project_collaboration, native_task=_native_task,
+            sandbox_policy=sandbox_policy, turn_start_guard=turn_start_guard)
         with self._request_id_lock:
             request_id = self.next_request_id
             self.next_request_id += 1
@@ -1763,7 +1752,7 @@ class CodexChatAgentSession:
             text = _turn_prompt(
                 text,
                 context_summary=self.context_summary,
-                execution_mode=self.execution_mode,
+                execution_mode=self.execution_mode or _native_task,
                 runtime_profile=self.runtime_profile,
                 project_work=self.project_context is not None and self.sandbox == "workspace-write",
                 public_source_read_context=self._public_source_read_context,
@@ -1777,6 +1766,10 @@ class CodexChatAgentSession:
         started_at = time.monotonic()
         start_timeout = min(self.idle_timeout_sec, self.hard_timeout_sec
                             if self.hard_timeout_sec is not None else self.idle_timeout_sec)
+        if _native_task:
+            # Publication may be uncertain. Every subsequent ordinary send
+            # must narrow the sticky native policy, even after an exception.
+            self._native_task_policy_used = True
         turn_result = self._request(
             "turn/start",
             {
@@ -1788,9 +1781,13 @@ class CodexChatAgentSession:
                 # Chat renders native summaries, but a resumed thread may have
                 # disabled them. Request the public summary on each Chat Turn;
                 # execution hosts retain their own verbosity configuration.
-                **({"summary": "concise"} if not self.execution_mode else {}),
+                **({"summary": "concise"} if not (self.execution_mode or _native_task) else {}),
                 "approvalPolicy": "never",
                 **({"permissions": self.permissions_profile} if self.permissions_profile else {}),
+                **({"sandboxPolicy": sandbox_policy} if sandbox_policy is not None else {}),
+                **({"runtimeWorkspaceRoots": [str(self.work_dir.resolve())]}
+                   if _native_task and sandbox_policy is not None
+                   and sandbox_policy.get("type") == "workspaceWrite" else {}),
                 **(
                     {"outputSchema": output_schema} if output_schema is not None else {}
                 ),

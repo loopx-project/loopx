@@ -20,7 +20,7 @@ import type { JsonObject } from "../effect_program.ts";
 import {decodeCompletionValidationRevision} from "../todos/completion_validation_revision.ts";
 import {executeCoordinationMonitorPoll, COORDINATION_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_MONITOR_RECEIPT_ONLY_REQUEST_SCHEMA,
   COORDINATION_MONITOR_POLL_RESULT_SCHEMA} from "./todo_monitor_poll.ts";
-import { requireJsonObject, requireBoolean } from "../runtime_decode.ts";
+import { requireJsonObject, requireBoolean, requireStringArray, optionalNonEmptyString } from "../runtime_decode.ts";
 import {
   LOCAL_COORDINATION_PROMOTION_RECEIPT_SCHEMA,
   LOCAL_COORDINATION_PROMOTION_REQUEST_SCHEMA,
@@ -481,6 +481,10 @@ export async function pollLocalCoordinationMonitor(value: unknown,
       evidence.source_authority = sourceAuthorityFor(store);
       return {...await executeCoordinationMonitorPoll(store, {
         goal_id: goalId, operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
+        runtime_root: root,
+        available_capabilities: input.available_capabilities == null ? undefined :
+          requireStringArray(input.available_capabilities, "available_capabilities"),
+        admitted_resume_when: optionalNonEmptyString(input.admitted_resume_when, "admitted_resume_when") ?? undefined,
         actor_agent_id: input.actor_agent_id == null ? null : claimAgentValue(input.actor_agent_id, "actor_agent_id"),
         registered_agents: registered, dry_run: input.dry_run as boolean,
         receipt_only: receiptOnly,

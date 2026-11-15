@@ -1483,10 +1483,12 @@ def test_runtime_service_reconciles_manager_route_before_answer(
     import loopx.extensions.lark.goal_topic_runtime as runtime
 
     observed: list[str] = []
-    stop = threading.Event()
+    completed = threading.Event()
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "binding.json"
+    _seed_legacy_topic(target_path, binding_path)
     snapshot = {
-        "target_payload": {},
-        "binding_payloads": {},
+        "target_payload": read_goal_channel_targets(target_path),
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
         "goal_contexts": {"goal-alpha": {"work_dir": str(tmp_path)}},
     }
 
@@ -1500,9 +1502,12 @@ def test_runtime_service_reconciles_manager_route_before_answer(
             "status",
         )
         assert receipt["response_text"] == "done"
-        stop.set()
+        snapshot["binding_payloads"] = {}
+        kwargs["stop"].set()
+        completed.set()
         return {"ok": True, "status": "stopped"}
 
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", fake_stream)
     monkeypatch.setattr(
         runtime,
@@ -1518,7 +1523,11 @@ def test_runtime_service_reconciles_manager_route_before_answer(
             "session_id": "new-session",
         },
     )
-    service._poll_profile("mew", stop)
+    try:
+        service.refresh()
+        assert completed.wait(5)
+    finally:
+        service.close()
     assert observed == ["new-session"]
 
 
@@ -3903,6 +3912,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             )
             result = {}
             stream_errors = []
+            completed = threading.Event()
 
             def owned_stream(**kwargs):
                 nonlocal result
@@ -3915,13 +3925,18 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
                 finally:
                     service._closed.set()
                     kwargs["stop"].set()
+                    completed.set()
 
             # Only provider IO is synthetic: the service supplies the actual
             # capture callback and owns the real machine/App consumer lease.
             monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
             monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", owned_stream)
             monkeypatch.setattr(runtime, "start_team_plan_review_callback_stream", lambda **kwargs: None)
-            service._poll_profile("mew", threading.Event())
+            try:
+                service.refresh()
+                assert completed.wait(60), "the admitted listener did not finish the fixture stream"
+            finally:
+                service.close()
             if stream_errors:
                 raise stream_errors[0]
         else:

@@ -140,7 +140,7 @@ def test_discovery_facts_do_not_cross_sessions(failed_source):
 def test_lark_scanner_shares_only_one_pass_and_pins_one_code_revision(failed_source, monkeypatch):
     from loopx.control_plane import effect_runtime
     store, runtime, provider, transport, binding, _, ref, row = failed_source
-    event = provider.event("steward-app", "second-discovery-history", "typed terminal failure")
+    event = provider.event("steward-app", "second-discovery-history", "typed terminal failure on a second request")
     transport.admit("steward-app", event)
     second = identity_ref(binding["provider_ref"], event["message_id"])
     next_row = transport.core.read_request(second)

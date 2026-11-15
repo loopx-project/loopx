@@ -895,6 +895,16 @@ requires a running container; latest files remain in the stopped source and, on
 successful export, the terminal point. Native graded history/results remain
 independent and are not discarded with that optional archive.
 
+If the joint export failed, a confirmed stopped worker with a completed grading
+drain gets one independent native scorer capture before the original scorer
+exits. The receipt links this separate checkpoint, including the released results,
+incumbent and consumed rounds. It carries no worker clock or resume qualification;
+a receiver still needs to prove the original workspace, session and remaining
+allowance together. An unknown grading outcome or unconfirmed stop does not
+trigger this capture.
+If the native runner raises after writing its drain receipt, the runner
+checks the matching run history before attempting the same capture.
+
 If the optional preservation receipt cannot be written, a redacted warning reports
 that gap; observer shutdown, one capture attempt and verified source stopping
 still proceed. The known solver exit and native grading remain authoritative.

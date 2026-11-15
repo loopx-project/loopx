@@ -247,6 +247,11 @@ class ChatIngressStore:
                 and str(payload.get("turn_id") or "") != active_turn_id
             ):
                 rows.append(payload)
+        # The ordinary read has no selectable Turn when storage has no queued
+        # candidates. Explicit capacity and strict reads still use the owner.
+        if not rows and not strict and not include_reserved and capacity_at is None:
+            return []
+
         from .control_plane.chat_turn_acceptance import queued_chat_turn_ids
         selected = set(queued_chat_turn_ids(rows, active_turn_id, include_reserved=include_reserved, capacity_at=capacity_at))
         return sorted(

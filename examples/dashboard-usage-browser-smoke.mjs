@@ -72,7 +72,7 @@ async function main() {
   const { chromium } = loadPlaywright();
   const server = packaged
     ? spawn(resolveTestPython(), ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(repoRoot, "loopx/web")], { stdio: "ignore" })
-    : startViteDashboardServer({ dashboardDir, port });
+    : await startViteDashboardServer({ dashboardDir, port });
   let browser;
   try {
     const baseUrl = `http://127.0.0.1:${port}${packaged ? "/chat" : ""}`;
