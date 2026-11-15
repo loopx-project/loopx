@@ -418,6 +418,21 @@ def _bind_host_child_operations(
     return bound
 
 
+def _complete_plan_source_fields(
+    work_contract: object, projection: Mapping[str, Any], original_envelope: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    fields = {"work_contract": work_contract, "source_decision_hash": projection["source_decision_hash"]}
+    for key in ("inspection_paths", "selected_work_basis"):
+        if key in projection:
+            fields[f"_{key}"] = projection[key]
+    if original_envelope is not None:
+        # Carry the reader of the original capture from a transitional pair.
+        header = captured_turn_host_input({"turn_envelope": original_envelope})
+        if "detail_ref" in header:
+            fields["detail_ref"] = header["detail_ref"]
+    return fields
+
+
 def build_loopx_turn_plan(
     turn_envelope: Mapping[str, Any],
     *,
@@ -611,18 +626,9 @@ def build_loopx_turn_plan(
         ),
     }
     if current:
-        payload["work_contract"] = work_contract
-        payload["source_decision_hash"] = projection["source_decision_hash"]
-        if include_selected_work_basis:
-            payload["_selected_work_basis"] = projection["selected_work_basis"]
-        if "inspection_paths" in projection:
-            payload["_inspection_paths"] = projection["inspection_paths"]
-        if not source_only_input:
-            # Older callers may already carry an original quota capture. Keep
-            # its exact header without retaining that caller's second source.
-            header = captured_turn_host_input({"turn_envelope": supplied})
-            if "detail_ref" in header:
-                payload["detail_ref"] = header["detail_ref"]
+        payload.update(_complete_plan_source_fields(
+            work_contract, projection, None if source_only_input else supplied,
+        ))
     else:
         payload["turn_envelope"] = envelope
     if child_operations:
