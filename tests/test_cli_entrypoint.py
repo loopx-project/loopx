@@ -661,7 +661,8 @@ def test_heartbeat_chain_routes_do_not_load_the_chat_layer(tmp_path, monkeypatch
 	initialize_canonical_source_fixture(runtime, "perf-goal", state_path=state, provider="sqlite")
 	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *command]
 	result = run_cli_main("loopx.entrypoint", argv,
-		forbidden_modules=("loopx.cli", "loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store"))
+		forbidden_modules=("loopx.cli", "loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store",
+            "loopx.capabilities.issue_fix.pr_wait_reconcile"))
 	assert result.returncode == 0, result.stderr
 	assert json.loads(result.stdout)["ok"] is True
 
@@ -700,6 +701,10 @@ for name in (
     "issue_fix.periodic_report",
     "issue_fix.pr_description",
     "issue_fix.reward_memory",
+    "issue_fix.pr_wait_reconcile",
+    "issue_fix.pr_lifecycle",
+    "issue_fix.metadata_preview",
+    "content_ops.surface",
     "reward_memory.codex_app_outcome",
     "reward_memory.dogfood",
     "reward_memory.evaluation",
@@ -717,6 +722,75 @@ for facade in (issue_fix, reward_memory):
 """
 	completed = run_isolated_script(script)
 	assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("permission", ["denied", "revoked", "source-unavailable", "recheck-unavailable", "granted"])
+def test_pr_wait_provider_import_obeys_permission_and_failure_owner(permission):
+    script = f"""
+import importlib.abc
+import sys
+from pathlib import Path
+
+attempts = []
+class UnavailableProvider(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "loopx.capabilities.issue_fix.pr_wait_reconcile":
+            attempts.append(fullname)
+            raise ImportError("optional observation provider unavailable")
+
+sys.meta_path.insert(0, UnavailableProvider())
+from loopx.capabilities.issue_fix import pr_wait_hook
+
+permission = {permission!r}
+grant = ["external_evidence_poll"]
+states = iter({{
+    "denied": [[]], "revoked": [grant, []],
+    "source-unavailable": [OSError("permission source unavailable")] * 2,
+    "recheck-unavailable": [grant, OSError("permission source unavailable")],
+    "granted": [grant, grant],
+}}[permission])
+checks = []
+def availability(*args):
+    value = next(states)
+    checks.append(value)
+    if isinstance(value, Exception):
+        raise value
+    return {{"effective": value}}
+
+pr_wait_hook._availability = availability
+hook = pr_wait_hook.turn_start_hook(registry_path=Path("unused"), runtime_root=Path("unused"),
+    goal_id="fixture", agent_id="fixture", available=None)
+assert attempts == [], attempts
+if permission == "denied":
+    assert hook is None and len(checks) == 1
+else:
+    assert hook is not None
+    result = hook.producer()
+    assert len(checks) == 2
+    assert result["external_writes_performed"] is False
+    if permission == "granted":
+        assert len(attempts) == 1
+        assert result["status"] == "failed"
+        assert result["error_code"] == "dependency_observation_failed"
+        assert result["external_reads_performed"] is None
+        assert result["local_private_state_mutated"] is None
+        assert result["readback"]["external_read_count"] is None
+        assert result["readback"]["state_written"] is None
+        assert result["readback"]["error_category"] == "ImportError"
+    else:
+        assert attempts == []
+        assert result["external_reads_performed"] is False
+        assert result["local_private_state_mutated"] is False
+        assert result["status"] == ("not_applicable" if permission == "revoked" else "unavailable")
+        if permission != "revoked":
+            assert result["error_code"] == "capability_source_unavailable"
+            assert result["readback"]["external_read_count"] == 0
+for name in ("pr_wait_reconcile", "pr_lifecycle", "metadata_preview"):
+    assert "loopx.capabilities.issue_fix." + name not in sys.modules
+assert "loopx.capabilities.content_ops.surface" not in sys.modules
+"""
+    completed = run_isolated_script(script)
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_quota_facade_lazy_exports_preserve_owner_identity() -> None:
