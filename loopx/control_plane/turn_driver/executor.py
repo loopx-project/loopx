@@ -40,7 +40,6 @@ from .command_validation import (
 )
 from ..quota.turn_envelope import (
     COMPLETE_TURN_HOST_REQUEST_SCHEMA,
-    captured_turn_host_input,
     turn_plan_host_source,
 )
 from .driver import (
@@ -176,20 +175,20 @@ def _assemble_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     if route.get("would_invoke_host") is not True:
         raise ValueError(str(plan.get("error") or "LoopX Turn route is not host executable"))
+    current = plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
     request = {
         "schema_version": LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
         "turn_key": turn_key,
         "route": route.get("kind"),
         "session": plan.get("session"),
-        "turn_envelope": plan.get("turn_envelope"),
+        **({} if current else {"turn_envelope": plan.get("turn_envelope")}),
         "result_contract": {
             "schema_version": LOOPX_TURN_RESULT_SCHEMA_VERSION,
             "completed_phases": list(TRANSACTION_PHASES[:2]),
             "stdout": "one public-safe JSON object",
         },
     }
-    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
-        request.pop("turn_envelope")
+    if current:
         request.update(turn_plan_host_source(plan))
     if "work_contract" in plan:
         # Presence selects the current reader, including malformed values.
@@ -222,11 +221,9 @@ def _build_staged_dispatch_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     if (plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
             and request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA
             and "work_contract" in request and "turn_envelope" not in request):
-        # All assembly guards and projections still run on the staged aliases.
-        # This carrier's existing conversion only copies the top-level mapping;
-        # host_context returns no facts used by it. The caller checks this exact
-        # source with host_dispatch_context before admission or publication.
-        return captured_turn_host_input(request)
+        # Current assembly already supplies the complete wire. The caller
+        # checks it with host_dispatch_context before admission or publication.
+        return request
     return _complete_loopx_turn_host_request(request)
 
 
@@ -878,12 +875,8 @@ def _run_host(
     project: Path,
     timeout_seconds: float | None,
 ) -> dict[str, Any]:
-    # Dispatch has checked the source and its internal effect adapter before
-    # journal/cadence admission. External stdin gets the same single complete
-    # input as native model prompts, not another executable authority carrier.
-    from ..quota.turn_envelope import captured_turn_host_input
-
-    host_input = captured_turn_host_input(request) if "work_contract" in request else request
+    # Dispatch has already validated the input and resolved any recorded
+    # compatibility carrier. Serialize the same request as the in-process Host.
     stdout: list[str] = []
     stderr_chars = 0
 
@@ -895,7 +888,7 @@ def _run_host(
         observed = run_host_process(
             argv,
             project=project,
-            input_text=json.dumps(host_input, ensure_ascii=False, separators=(",", ":")),
+            input_text=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
             timeout_seconds=timeout_seconds,
             stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
             on_stdout=stdout.append,
@@ -964,8 +957,13 @@ def _run_host_runner(
                 else {}
             ),
         }
-    except FirstPartyHostRuntimeRejected:
-        raise
+    except FirstPartyHostRuntimeRejected as exc:
+        # This check is issued only by the original-work comparison before
+        # model dispatch. Other refusals can still need reconciliation.
+        if exc.code != "current_turn_work_changed":
+            raise
+        return {"ok": False, "reason": str(exc), "failure_kind": "contract_rejected",
+                "launch_rejection_code": exc.code}
     except Exception as exc:  # noqa: BLE001 - host adapters fail closed at boundary
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if not isinstance(value, dict):
@@ -1048,7 +1046,8 @@ def _host_result_stage(
                     timeout_seconds=timeout_seconds,
                 )
             )
-        effects["host_invoked"] = True
+        rejected_launch = host_observation.get("launch_rejection_code")
+        effects["host_invoked"] = rejected_launch is None
         if not host_observation.get("ok"):
             failure = _host_failure(
                 plan,
@@ -1074,17 +1073,16 @@ def _host_result_stage(
             else:
                 journal.pop("host_recovery", None)
             persist_journal(journal)
-            return (
-                None,
-                [],
-                execution_payload(
-                    plan,
-                    journal,
-                    execute=True,
-                    replayed=False,
-                    effects=effects,
-                ),
+            terminal = execution_payload(
+                plan,
+                journal,
+                execute=True,
+                replayed=False,
+                effects=effects,
             )
+            if rejected_launch is not None:
+                terminal["error_code"] = rejected_launch
+            return None, [], terminal
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
 

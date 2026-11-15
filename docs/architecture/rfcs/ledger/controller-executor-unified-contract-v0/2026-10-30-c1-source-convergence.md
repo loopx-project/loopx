@@ -2979,3 +2979,22 @@ authority. Installed MCP clients still need end-to-end readback.
 
 Ordinary quota, installed App adoption, the remaining settlement callers,
 and single-session outcomes and full costs remain open.
+
+### Staged Host dispatch and stale-work retry
+
+Staged dispatch reuses the last TypeScript source check before publishing the
+capture or reserving a start. Current plans assemble only the complete Host
+request. The external process and in-process Host then receive the same checked
+transport; the external stdin writer does not reconstruct a legacy adapter.
+The legacy conversion remains at the boundary for saved transitional plans.
+
+An exact native retry still reads the original capture. If the selected Todo's
+required body, write scope or capabilities changed, the pre-dispatch refusal
+now records a contract rejection for the original attempt. It does not leave an
+unresolved dispatch intent. Other unexpected interruptions still require
+original-attempt reconciliation. A changed task needs a fresh eligible Turn;
+previous capture bytes and completed effects retain their original identity.
+
+The File/SQLite cases exercise unchanged retries, task changes before retry,
+explicit historical input and subprocess stdin. They use isolated synthetic
+Hosts; this does not qualify actual installed Hosts or model outcomes.

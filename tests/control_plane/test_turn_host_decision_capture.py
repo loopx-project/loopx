@@ -183,8 +183,8 @@ def test_generic_dispatch_checks_complete_goal_before_host(
 
     host = {"host_runner": runner} if launch == "runner" else {"host_argv": [
         sys.executable, "-c",
-        "from pathlib import Path; import sys; sys.stdin.read(); "
-        f"Path({str(marker)!r}).write_text('started'); raise SystemExit(9)",
+        "from pathlib import Path; import sys; "
+        f"Path({str(marker)!r}).write_bytes(sys.stdin.buffer.read()); raise SystemExit(9)",
     ]}
     if launch == "argv" and mode != "historical":
         host["host_adapter_request_schema"] = "loopx_turn_host_request_v1"
@@ -206,6 +206,19 @@ def test_generic_dispatch_checks_complete_goal_before_host(
         assert result["effects"]["host_invoked"] is True
         assert len(calls) == (1 if launch == "runner" else 0)
         assert marker.exists() is (launch == "argv")
+        received = calls[0] if launch == "runner" else json.loads(marker.read_bytes())
+        if mode == "historical":
+            assert received["schema_version"] == "loopx_turn_host_request_v0"
+            assert received["turn_envelope"] == request["turn_envelope"]
+            assert "work_contract" not in received
+        else:
+            assert received["schema_version"] == "loopx_turn_host_request_v1"
+            assert received["work_contract"] == original
+            assert "turn_envelope" not in received
+            if capture:
+                saved = received["detail_ref"]["captured_decision"]
+                assert saved["turn_key"] == received["turn_key"]
+                assert json.loads(Path(saved["path"]).read_bytes()) == original
     state = effect_runtime_result("quota.automation_cadence.manage", {**scope, "operation": "read"})
     if mode == "pending_goal":
         assert state["eligibility"]["state"] == "eligible"
@@ -233,11 +246,12 @@ def test_staged_capture_rechecks_aliased_plan_guards_before_effects(
     from loopx.control_plane.turn_driver import executor
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 
-    request, original = complete_host_request
-    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=original,
+    _, original = complete_host_request
+    plan = build_loopx_turn_plan(original,
         host="generic-cli", execution_mode="isolated-headless",
         turn_instance_id="staged-alias-guards")
     runtime = tmp_path / "staged-alias-runtime"
+    turn_key = plan["transaction"]["turn_key"]
     captures = []
     effects = []
     original_stage = executor.stage_turn_decision_capture
@@ -275,7 +289,7 @@ def test_staged_capture_rechecks_aliased_plan_guards_before_effects(
     assert len(captures) == 1 and effects == []
     assert not captures[0].path.exists()
     journal = turn_journal_path(runtime, goal_id=original["goal_id"],
-        turn_key=request["turn_key"])
+        turn_key=turn_key)
     assert not journal.exists()
 
 
@@ -294,7 +308,7 @@ def test_staged_capture_rechecks_source_and_header_before_effects(
 
     request, original = complete_host_request
     original = deepcopy(original)
-    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=original,
+    plan = build_loopx_turn_plan(original,
         host="generic-cli", execution_mode="isolated-headless",
         turn_instance_id="staged-source-guards")
     captures = []
@@ -327,7 +341,7 @@ def test_staged_capture_rechecks_source_and_header_before_effects(
     assert str(refused.value) == expected
     assert len(captures) == 1 and not captures[0].path.exists()
     assert not turn_journal_path(runtime, goal_id=original["goal_id"],
-        turn_key=request["turn_key"]).exists()
+        turn_key=plan["transaction"]["turn_key"]).exists()
 
 
 @pytest.mark.parametrize("optional_context", [False, True])
@@ -339,8 +353,8 @@ def test_staged_capture_preserves_optional_bridge_startup_diagnostic(
     from loopx.control_plane.turn_driver import executor
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 
-    request, original = complete_host_request
-    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=original,
+    _, original = complete_host_request
+    plan = build_loopx_turn_plan(original,
         host="generic-cli", execution_mode="isolated-headless",
         turn_instance_id="staged-bridge-failure")
     original_carrier = json.dumps(plan, ensure_ascii=False)
@@ -391,7 +405,7 @@ def test_staged_capture_preserves_optional_bridge_startup_diagnostic(
     assert operations[-1][1] in {"host_context", "host_dispatch_context"}
     assert len(captures) == 1 and not captures[0].path.exists()
     assert not turn_journal_path(runtime, goal_id=original["goal_id"],
-        turn_key=request["turn_key"]).exists()
+        turn_key=plan["transaction"]["turn_key"]).exists()
     assert json.dumps(plan, ensure_ascii=False) == original_carrier
     assert json.dumps(captures[0].observation, ensure_ascii=False) == json.dumps(original, ensure_ascii=False)
     assert not list(runtime.rglob("*.jsonl"))
@@ -415,9 +429,9 @@ def test_staged_dispatch_preserves_complete_request_values(
         {"capability_id": "multi_subagent", "facts": {"max_children": child_limit}},
     ]}
     contract = turn_envelope.compose_turn_decision(source)
-    envelope = turn_envelope.build_turn_envelope(contract)
-    plan = build_loopx_turn_plan(envelope, host="generic-cli", execution_mode="isolated-headless",
-        turn_instance_id="staged-request-values", **({"work_contract": contract} if current else {}))
+    source_for_plan = contract if current else turn_envelope.build_turn_envelope(contract)
+    plan = build_loopx_turn_plan(source_for_plan, host="generic-cli", execution_mode="isolated-headless",
+        turn_instance_id="staged-request-values")
     if not current:
         # Retain the published transitional adapter decoder as a control.
         plan["work_contract"] = contract
@@ -487,8 +501,8 @@ def test_staged_capture_preserves_bridge_transport_failure(
     from loopx.control_plane.turn_driver import executor
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 
-    request, original = complete_host_request
-    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=original,
+    _, original = complete_host_request
+    plan = build_loopx_turn_plan(original,
         host="generic-cli", execution_mode="isolated-headless",
         turn_instance_id="staged-transport-failure")
     original_carrier = json.dumps(plan, ensure_ascii=False)
@@ -545,7 +559,7 @@ def test_staged_capture_preserves_bridge_transport_failure(
     assert operations[-1][0] == "quota.turn_envelope.evaluate"
     assert operations[-1][1] in {"host_context", "host_dispatch_context"}
     assert len(captures) == 1 and not captures[0].path.exists()
-    assert not turn_journal_path(runtime, goal_id=original["goal_id"], turn_key=request["turn_key"]).exists()
+    assert not turn_journal_path(runtime, goal_id=original["goal_id"], turn_key=plan["transaction"]["turn_key"]).exists()
     assert json.dumps(plan, ensure_ascii=False) == original_carrier
     assert json.dumps(captures[0].observation, ensure_ascii=False) == json.dumps(original, ensure_ascii=False)
     assert not list(runtime.rglob("*.jsonl"))
@@ -590,10 +604,10 @@ def test_typed_result_recovery_does_not_start_a_pending_goal_host(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("first_attempt_fails", [False, True])
+@pytest.mark.parametrize("attempt", ["committed", "retry", "changed_before_retry"])
 @pytest.mark.parametrize("legacy_pretty", [False, True])
 def test_real_host_reads_original_capture_after_source_change(
-    tmp_path, monkeypatch, provider, first_attempt_fails, legacy_pretty,
+    tmp_path, monkeypatch, provider, attempt, legacy_pretty,
 ):
     from loopx.cli_commands import turn_decision
 
@@ -642,6 +656,7 @@ def test_real_host_reads_original_capture_after_source_change(
     executable = f._write_fake_codex(tmp_path)
     source = executable.read_text().replace("#!/usr/bin/env python3", "#!" + sys.executable)
     source = source.replace("prompt = sys.stdin.read()", 'prompt = sys.stdin.read()\npathlib.Path("received.txt").write_text(prompt)')
+    first_attempt_fails = attempt != "committed"
     if first_attempt_fails:
         source = source.replace("marker = pathlib.Path(",
             'failed = pathlib.Path("failed-once")\n'
@@ -693,21 +708,25 @@ def test_real_host_reads_original_capture_after_source_change(
     for field in ("work_lane_contract", "execution_obligation"):
         assert source_a[field]
         assert request["task_context"][field] == source_a[field]
-    # Change the real provider through its native CAS CLI, not the projection.
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
-    code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
-    assert code == 0
-    code, update = f._run_cli([*prefix, "todo", "update", "--goal-id", f.GOAL_ID,
-        "--todo-id", f.TODO_ID, "--agent-id", f.AGENT_ID, "--text", current["todo"]["text"] + " SOURCE_B",
-        "--update-operation-id", "source-b", "--update-expected-provider-revision",
-        current["authority_read"]["provider_revision"], "--execute"])
-    assert code == 0, update
+    def change_current_task():
+        # Change the real provider through its native CAS CLI, not the projection.
+        code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
+        assert code == 0
+        code, update = f._run_cli([*prefix, "todo", "update", "--goal-id", f.GOAL_ID,
+            "--todo-id", f.TODO_ID, "--agent-id", f.AGENT_ID, "--text", current["todo"]["text"] + " SOURCE_B",
+            "--update-operation-id", "source-b", "--update-expected-provider-revision",
+            current["authority_read"]["provider_revision"], "--execute"])
+        assert code == 0, update
+        code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
+        assert code == 0 and "SOURCE_B" in current["todo"]["text"]
+
+    if attempt != "retry":
+        change_current_task()
     # Execute precisely what the actual subprocess received.
     detail_bytes = subprocess.run(shlex.split(detail["full_decision"]), check=True,
                                   capture_output=True).stdout
     assert detail_bytes == original and b"SOURCE_B" not in detail_bytes
-    code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
-    assert code == 0 and "SOURCE_B" in current["todo"]["text"]
     plan = load_loopx_turn_plan_from_journal(runtime, goal_id=f.GOAL_ID, turn_key=request["turn_key"])
     journal_path = turn_journal_path(runtime, goal_id=f.GOAL_ID, turn_key=request["turn_key"])
     # An existing receipt must not let a malformed complete request bypass the
@@ -769,17 +788,29 @@ def test_real_host_reads_original_capture_after_source_change(
             assert (workspace / "received.txt").read_bytes() == received_before
             assert f._quota_spend_count(runtime) == 0
             path.write_bytes(original)
-        code, recovered = f._run_cli([*replay, "--resume-turn-key", request["turn_key"],
-                                      "--retry-failed-turn", "--execute"])
-        assert code == 0 and recovered["status"] == "committed", json.dumps(recovered)
-        retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
-        assert retried["task_context"] == request["task_context"]
-        assert retried["detail_ref"] == detail
+        code, recovered = f._run_cli(retry)
+        if attempt == "changed_before_retry":
+            assert code == 1 and recovered["error_code"] == "current_turn_work_changed", recovered
+            assert recovered["status"] == "failed" and not any(recovered["effects"].values())
+            assert recovered["host_failure"]["kind"] == "contract_rejected"
+            assert recovered["recovery"]["actual"]["host_invoked"] is False
+            assert (workspace / "received.txt").read_bytes() == received_before
+        else:
+            assert code == 0 and recovered["status"] == "committed", json.dumps(recovered)
+            retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
+            assert retried["task_context"] == request["task_context"]
+            assert retried["detail_ref"] == detail
+            change_current_task()
         assert path.read_bytes() == original
     code, repeated = f._run_cli([*replay, "--resume-turn-key", request["turn_key"], "--execute"])
-    assert code == 0, repeated
+    if attempt == "changed_before_retry":
+        assert code == 1 and repeated["status"] == "failed", repeated
+        assert repeated["recovery"]["planned"]["reason"] == "failed_retry_not_requested"
+        assert repeated["host_failure"]["kind"] == "contract_rejected"
+    else:
+        assert code == 0, repeated
     assert not any(repeated["effects"].values())
-    assert f._quota_spend_count(runtime) == 1
+    assert f._quota_spend_count(runtime) == (0 if attempt == "changed_before_retry" else 1)
     assert path.read_bytes() == original
     # Admission can run between source validation and publication. It cannot
     # replace or silently recreate an original capture changed in that window.
