@@ -431,6 +431,7 @@ def build_loopx_turn_plan(
     goal_ref: Mapping[str, object] | None = None,
     work_contract: object = _ABSENT_WORK_CONTRACT,
     inspect_plan: bool = False,
+    include_selected_work_basis: bool = False,
 ) -> dict[str, Any]:
     """Plan from one complete source; retain the recorded v0 input codec.
 
@@ -483,6 +484,7 @@ def build_loopx_turn_plan(
         projection = _turn_envelope_result("planning_facts", payload=work_contract,
             turn_instance_id=turn_instance_id,
             **({"inspect_plan": True} if inspect_plan else {}),
+            **({"include_selected_work_basis": True} if include_selected_work_basis else {}),
             **({} if source_only_input else {"envelope": supplied}))
         envelope = _mapping(projection["work"])
     else:
@@ -611,6 +613,8 @@ def build_loopx_turn_plan(
     if current:
         payload["work_contract"] = work_contract
         payload["source_decision_hash"] = projection["source_decision_hash"]
+        if include_selected_work_basis:
+            payload["_selected_work_basis"] = projection["selected_work_basis"]
         if "inspection_paths" in projection:
             payload["_inspection_paths"] = projection["inspection_paths"]
         if not source_only_input:

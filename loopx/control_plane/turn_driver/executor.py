@@ -877,6 +877,7 @@ def _run_host(
     argv: Sequence[str],
     project: Path,
     timeout_seconds: float | None,
+    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
     # Dispatch has checked the source and its internal effect adapter before
     # journal/cadence admission. External stdin gets the same single complete
@@ -900,7 +901,10 @@ def _run_host(
             stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
             on_stdout=stdout.append,
             on_stderr=count_stderr,
+            launch_guard=launch_guard,
         )
+    except FirstPartyHostRuntimeRejected:
+        raise
     except (OSError, RuntimeError, ValueError) as exc:
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if observed["outcome"] == "output_limit":
@@ -1011,6 +1015,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -1033,22 +1038,32 @@ def _host_result_stage(
             confirm_start()
         from ...usage_goal import observe_goal_execution
 
-        with observe_goal_execution(
-            usage_runtime_root or project,
-            usage_goal_id,
-            host=str((plan.get("host") or {}).get("kind") or "unknown"),
-        ):
-            host_observation = (
-                _run_host_runner(request, runner=host_runner)
-                if host_runner is not None
-                else _run_host(
-                    request,
-                    argv=argv or [],
-                    project=project,
-                    timeout_seconds=timeout_seconds,
+        rejected_launch = None
+        try:
+            with observe_goal_execution(
+                usage_runtime_root or project,
+                usage_goal_id,
+                host=str((plan.get("host") or {}).get("kind") or "unknown"),
+            ):
+                host_observation = (
+                    _run_host_runner(request, runner=host_runner)
+                    if host_runner is not None
+                    else _run_host(
+                        request,
+                        argv=argv or [],
+                        project=project,
+                        timeout_seconds=timeout_seconds,
+                        launch_guard=host_launch_guard,
+                    )
                 )
-            )
-        effects["host_invoked"] = True
+        except FirstPartyHostRuntimeRejected as exc:
+            # Stdio checks the Goal only before spawn. A native Host can reject
+            # after dispatch too, so retain reconciliation for other failures.
+            if host_runner is not None and exc.code != "current_turn_work_changed":
+                raise
+            rejected_launch = exc.code
+            host_observation = {"ok": False, "reason": str(exc), "failure_kind": "contract_rejected"}
+        effects["host_invoked"] = rejected_launch is None
         if not host_observation.get("ok"):
             failure = _host_failure(
                 plan,
@@ -1074,17 +1089,10 @@ def _host_result_stage(
             else:
                 journal.pop("host_recovery", None)
             persist_journal(journal)
-            return (
-                None,
-                [],
-                execution_payload(
-                    plan,
-                    journal,
-                    execute=True,
-                    replayed=False,
-                    effects=effects,
-                ),
-            )
+            terminal = execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
+            if rejected_launch is not None:
+                terminal["error_code"] = rejected_launch
+            return None, [], terminal
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
 
@@ -1575,6 +1583,7 @@ def run_loopx_turn_once(
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
     argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
     transaction_plan = (
@@ -1846,6 +1855,7 @@ def run_loopx_turn_once(
             persist_journal=persist_journal,
             effects=effects,
             confirm_start=confirm_start if reserved_start else None,
+            host_launch_guard=host_launch_guard,
         )
         if terminal is not None:
             return finish_recovery(terminal)
