@@ -47,6 +47,7 @@ import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue, ha
 import { TeamPlanResult } from "./team-plan-result";
 import { TaskRequest, taskRequestIdentity, type TaskRequestRead } from "./task-request";
 import { ConfirmedTaskResult } from "./confirmed-task-result";
+import {GoalCreationExecution} from "./goal-creation-execution";
 import { parseTodoResumeCondition, todoResumeTransition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
@@ -1231,7 +1232,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               {selection.item.todoId && (selection.item.actionKind === "gate.resolve" || selection.item.actionKind === "todo.update")
                 ? <div className="personal-attention-meta"><AttentionProvenance detail={proposalRequests.length === 1 ? proposalRequests[0].details : undefined} /></div> : null}
               {selection.item.impact ? <p>{selection.item.impact}</p> : null}
-              {selection.item.reviewPlan && !selection.item.reviewPlan.retryOriginal && !taskExecution && selection.item.actionKind !== "team.plan" && !(decisionFrame && ["ready", "applied"].includes(selection.item.status)) ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{operationUnknown
+              {selection.item.reviewPlan && !selection.item.reviewPlan.creationExecution && !selection.item.reviewPlan.retryOriginal && !taskExecution && selection.item.actionKind !== "team.plan" && !(decisionFrame && ["ready", "applied"].includes(selection.item.status)) ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{operationUnknown
                 ? t("actionReview.operation_reconcile_original")
                 : selection.item.reviewPlan.operationFrame?.kind === "inactive"
                 ? t(`actionReview.${selection.item.reviewPlan.operationFrame.reason}`)
@@ -1242,7 +1243,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 : selection.item.actionKind === "operation.execute" && selection.item.reviewPlan.reason === "readback_unverified"
                   ? t("actionReview.operation_result_delivery_pending")
                   : t(`actionReview.${selection.item.reviewPlan.reason}`)}</p> : null}
-              {selection.item.status === "ready" && selection.item.actionKind !== "team.plan" && !decisionFrame ? <p className="personal-proposal-explainer">{t("drawer.proposalExplainer")}</p> : null}
+              {selection.item.status === "ready" && !selection.item.reviewPlan?.creationExecution && selection.item.actionKind !== "team.plan" && !decisionFrame ? <p className="personal-proposal-explainer">{t("drawer.proposalExplainer")}</p> : null}
+              {selection.item.reviewPlan?.creationExecution ? <GoalCreationExecution execution={selection.item.reviewPlan.creationExecution}/> : null}
               {!taskExecution && visibleProposalFields.length ? <dl>{visibleProposalFields.map((field) => <div key={field.key}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl> : null}
             </section>}
             {selection.item.reviewPlan?.creationProgress?.goalId && selection.item.status !== "applied" ? <div className="personal-proposal-state is-applied" role="status" data-testid="goal-creation-committed"><Check size={16} /><span>

@@ -546,6 +546,7 @@ class ChatActionNormalizationMixin:
                     "stop_condition",
                     "initial_todos",
                     "native_token_budget",
+                    "start_execution",
                 },
             )
             goal_id = _opaque(values.get("goal_id"), field="goal_id")
@@ -569,11 +570,13 @@ class ChatActionNormalizationMixin:
                 "objective",
                 "completion_criteria",
                 "execution_boundary",
-                "permission",
                 "stop_condition",
             ):
                 if values.get(field):
                     result[field] = _text(values[field], field=field, limit=1000)
+            if "permission" in values or "start_execution" in values:
+                from .control_plane.effect_runtime import effect_runtime_result
+                result.update(effect_runtime_result("goal.creation.execution.normalize", values))
             for field in ("agent_id", "workspace_ref"):
                 if values.get(field):
                     result[field] = _opaque(values[field], field=field)

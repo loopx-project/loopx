@@ -301,6 +301,7 @@ class ChatRuntimeController:
         self.session_queue_workers: set[str] = set()
         self.session_queue_threads: dict[str, threading.Thread] = {}
         self.session_queue_wakeups: set[str] = set()
+        self.original_task_action_store = None
         self.closed = threading.Event()
         from .chat_loopx_mode import ChatLoopXMode
         self.loopx_mode = ChatLoopXMode(self)
@@ -374,6 +375,8 @@ class ChatRuntimeController:
         manager_runtime: Mapping[str, Any] | None = None,
         project_coordination: bool = False,
         loopx_tools: bool = False,
+        check_preparation: bool = False,
+        managed_read_default: bool = False,
         executor_model: Mapping[str, str | None] | None = None,
         project_context: dict[str, str] | None = None,
         agent_config: dict[str, str] | None = None,
@@ -412,11 +415,9 @@ class ChatRuntimeController:
                 manager_runtime=manager_runtime, executor_model=executor_model,
                 agent_config=agent_config, execution_mode=execution_mode,
             )
-            native_context = {
-                "objective": self._session_objective(goal_id=goal_id, objective=objective,
-                    project_coordination=project_coordination and not execution_mode),
-                "runtime_profile": str(manager_profile["runtime_profile"]) if manager_profile else "restricted",
-            }
+            from .capabilities.native_chat.codex_adapter import native_runtime_context, start_runtime_adapter
+            native_context = native_runtime_context(self, goal_id=goal_id, objective=objective,
+                manager_profile=manager_profile, project_coordination=project_coordination, execution_mode=execution_mode)
         if agent_id == "antigravity":
             from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
             if execution_mode or project_context is not None or read_only_review:
@@ -433,11 +434,12 @@ class ChatRuntimeController:
                 hard_timeout_sec=self.hard_timeout_sec,
             )
         if agent_id == "codex":
-            from .capabilities.native_chat.codex_adapter import start_runtime_adapter
             return start_runtime_adapter(self, work_dir=work_dir, goal_id=goal_id, native_context=native_context,
                 manager_profile=manager_profile, model_config=model_config, history=history,
                 resume_thread_id=resume_thread_id, execution_mode=execution_mode, project_context=project_context,
                 project_coordination=project_coordination, loopx_tools=loopx_tools,
+                check_preparation=check_preparation,
+                managed_read_default=managed_read_default,
                 codex_home_override=codex_home_override, read_only_review=read_only_review,
                 metadata_review_context=metadata_review_context, answer_review_context=answer_review_context,
                 history_check=history_check, working_continuation=working_continuation)
@@ -694,6 +696,8 @@ class ChatRuntimeController:
                 objective=objective,
                 execution_mode=selected_channel.startswith("task."),
                 project_coordination=conversation_scope(selected_scope)["kind"] == "owner_goal",
+                check_preparation=managed_agent_id is not None,
+                managed_read_default=managed_agent_id is not None,
                 manager_runtime=manager_runtime,
                 project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
@@ -1041,6 +1045,7 @@ class ChatRuntimeController:
                 execution_mode=str(session.get("channel_id") or "").startswith("task."),
                 project_coordination=conversation_scope(session)["kind"] == "owner_goal",
                 loopx_tools=session.get("loopx_tools") is True,
+                managed_read_default=session.get("managed_agent_id") is not None,
                 executor_model=(alloc.manager_executor_model(model_allocation)
                     if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
@@ -1190,6 +1195,7 @@ class ChatRuntimeController:
         loopx_execution: bool = False,
         loopx_request: dict[str, object] | None = None,
         _goal_commit: ManagedSessionGoalCommit | None = None,
+        display_message: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         commit = _goal_commit or nullcontext
         session = self.store.load_session(session_id)
@@ -1210,16 +1216,9 @@ class ChatRuntimeController:
         if parse_native_goal_command(message) is not None:
             validate_goal_chat(session, attachments)
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
-            if attachments:
-                raise ValueError("attached host session queue does not yet accept attachments")
             return enqueue_attached_agent_turn(
-                store=self.store,
-                registry_path=self.registry_path,
-                session_id=session_id,
-                client_turn_id=client_turn_id,
-                message=message,
-                origin="web",
-            )
+                store=self.store, registry_path=self.registry_path, session_id=session_id,
+                client_turn_id=client_turn_id, message=message, origin="web", attachments=attachments)
         with self._session_adapter_lock(session_id):
             session = self.store.load_session(session_id)
             if session is None or session.get("status") == "closed":
@@ -1257,7 +1256,7 @@ class ChatRuntimeController:
                                 "wake": "成员结果已验收，继续推进 LoopX 模式。",
                             }.get(str((loopx_request or {}).get("operation")), "恢复 LoopX 模式。")
                             if loopx_execution
-                            else None
+                            else display_message
                         ),
                         loopx_execution=loopx_execution,
                         loopx_request=loopx_request,
@@ -1555,6 +1554,7 @@ class ChatRuntimeController:
                 return
             if session_id in self.session_queue_workers:
                 self.session_queue_wakeups.add(session_id)
+                self.turn_release_wakeup.notify()
                 return
             worker = threading.Thread(
                 target=self._drain_session_queue,
@@ -1569,123 +1569,13 @@ class ChatRuntimeController:
             self.session_queue_threads[session_id] = worker
             worker.start()
 
-    def _drain_session_queue(
-        self,
-        *,
-        session_id: str,
-        work_dir: Path,
-        objective: str,
-    ) -> None:
-        try:
-            while not self.closed.is_set():
-                session = self.store.load_session(session_id)
-                if (
-                    self.closed.is_set()
-                    or session is None
-                    or session.get("status") == "closed"
-                    or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED
-                ):
-                    return
-                turn = None
-                active_turn_id = str(session.get("active_turn_id") or "")
-                if active_turn_id:
-                    try:
-                        self.recover_exited_turn(session_id, active_turn_id)
-                    except OSError:
-                        # Storage can still be unavailable. Retry only the
-                        # non-executing lifecycle repair, never the old input.
-                        self.closed.wait(0.25)
-                        continue
-                    active = self.store.load_turn(session_id, active_turn_id)
-                    if (active and active.get("status") == "queued" and "_acceptance" not in active
-                            and active.get("started_at") is None and active.get("upstream_turn_id") is None
-                            and active.get("delta_count") == 0):
-                        # A crash can leave the queue claim before native
-                        # dispatch. Keep that exact claim and pass through the
-                        # normal preparation and execution fences below.
-                        turn = active
-                    else:
-                        with self.lock:
-                            attached = self.adapters.get(session_id)
-                        if attached is None or not attached.healthcheck():
-                            try:
-                                self._ensure_adapter(
-                                    session,
-                                    work_dir=work_dir,
-                                    objective=objective,
-                                )
-                            except Exception as exc:
-                                self._fail_queue_preparation(session_id, active_turn_id, exc)
-                            else:
-                                continue
-                        active = self.store.load_turn(session_id, active_turn_id)
-                        if active and active.get("status") not in TERMINAL_TURN_STATES:
-                            self.closed.wait(0.05)
-                            continue
-                        self.store.release_active_turn(session_id, active_turn_id)
-                refreshed = self.store.load_session(session_id)
-                if refreshed is None:
-                    return
-                with self.lock:
-                    self.session_queue_wakeups.discard(session_id)
-                if turn is None:
-                    turn = self.store.claim_next_queued_turn(session_id)
-                if turn is None:
-                    with self.lock:
-                        if session_id in self.session_queue_wakeups:
-                            continue
-                        worker = self.session_queue_threads.get(session_id)
-                        if worker is threading.current_thread():
-                            self.session_queue_workers.discard(session_id)
-                            self.session_queue_threads.pop(session_id, None)
-                    return
-                turn_id = str(turn["turn_id"])
-                try:
-                    if turn.get("origin") == "peer" or "collaboration_request" in turn:
-                        from .capabilities.native_chat.conversation_bindings import OriginalConversationRequests
-                        OriginalConversationRequests(self).validate_turn(session_id, turn)
-                    # An empty queue needs no provider preparation. Claim real
-                    # work first, keeping the existing enqueue/retirement fence
-                    # above and the Turn's execution/stop checks below.
-                    current = self.store.load_session(session_id)
-                    if current is None or current.get("active_turn_id") != turn_id:
-                        return
-                    adapter = self._ensure_adapter(
-                        current,
-                        work_dir=work_dir,
-                        objective=objective,
-                    )
-                    if (self.store.load_session(session_id) or {}).get("active_turn_id") != turn_id:
-                        return
-                except Exception as exc:
-                    # The claimed request still owns a terminal outcome when
-                    # workspace preparation or adapter restoration fails.
-                    self._fail_queue_preparation(session_id, turn_id, exc)
-                    continue
-                done_event = threading.Event()
-                with self.lock:
-                    self.turn_done_events[(session_id, turn_id)] = done_event
-                try:
-                    self._run_turn(
-                        session_id=session_id,
-                        turn_id=turn_id,
-                        message=str(turn.get("message") or ""),
-                        attachments=turn.get("attachments") or [],
-                        adapter=adapter,
-                        done_event=done_event,
-                    )
-                except OSError:
-                    # _run_turn has released its execution fence/done event.
-                    # A failed error checkpoint must not kill this queue worker;
-                    # the next iteration reconciles the original durable state.
-                    self.closed.wait(0.25)
-        finally:
-            with self.lock:
-                worker = self.session_queue_threads.get(session_id)
-                if worker is threading.current_thread():
-                    self.session_queue_workers.discard(session_id)
-                    self.session_queue_threads.pop(session_id, None)
-                    self.session_queue_wakeups.discard(session_id)
+    def resume_creation_requests(self) -> None:
+        from .capabilities.native_chat.creation_queue import resume_creation_requests
+        resume_creation_requests(self)
+
+    def _drain_session_queue(self, *, session_id: str, work_dir: Path, objective: str) -> None:
+        from .capabilities.native_chat.session_queue import drain_session_queue
+        drain_session_queue(self, session_id=session_id, work_dir=work_dir, objective=objective)
 
     def _fail_queue_preparation(
         self, session_id: str, turn_id: str, error: Exception,
@@ -2505,6 +2395,7 @@ class ChatRuntimeController:
 
     def close(self) -> None:
         self.closed.set()
+        self.turn_release_wakeup.notify()
         with self.lock:
             adapters = list(self.adapters.values())
             event_buffers = list(self.turn_event_buffers.values())

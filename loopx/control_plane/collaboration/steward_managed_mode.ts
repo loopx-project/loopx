@@ -1,18 +1,21 @@
-/** Source-bound preparation of one native execution identity for a steward.
+/** Source-bound managed Session identity and native host policy.
  *
- * This owner prepares/binds identity only. Goal bootstrap, Agent registration,
- * scheduling and model execution retain their existing owners. In particular,
- * a prepared identity never advertises a running monitor or an enabled host.
+ * Identity preparation grants no execution. Host policy maps only the original
+ * already-admitted Task and existing approval. Goal bootstrap, registration,
+ * scheduling and execution retain their owners; a prepared identity never
+ * advertises a running monitor or enabled host.
  */
 import { createHash } from "node:crypto";
+import {posix, win32} from "node:path";
 import type { JsonObject } from "../runtime_decode.ts";
-import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
+import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {boundConversationExecutorMatches, goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
 import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
-import {turnPlanWorkSource} from "../quota/turn_envelope.ts";
+import {projectTurnBoundary, turnPlanWorkSource} from "../quota/turn_envelope.ts";
+import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.ts";
 
 /** A stopped observation may get one new Chat carrier, never a new native
  * observation identity. The host independently reads the old worker lock,
@@ -278,6 +281,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   const reportWork = request.work_kind === "report";
   const scheduledWork = request.work_kind === "scheduled_task";
   const requestFields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
+    ...(request.creation_request === undefined ? [] : ["creation_request"]),
     ...(observationOnly ? ["monitor_deadline", "monitor_lease_version", "monitor_restart_recovery"] : []),
     ...(reportWork ? ["report_window_id", "report_subscription_revision", "report_quota_recovery"] : []),
     ...(scheduledWork ? ["schedule_window_id", "schedule_subscription_revision"] : [])];
@@ -287,6 +291,18 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
       || typeof request.turn_instance_id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(request.turn_instance_id)
       || request.todo_id !== null && (typeof request.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(request.todo_id))) {
     throw new EffectRuntimeRequestError("managed work uses the native task's existing validation, without caller commands");
+  }
+  if (request.creation_request !== undefined) {
+    const original = projectGoalCreationExecutionRequest({proposal: params.creation_proposal,
+      session, goal, current_original_task: params.current_original_task});
+    const retained = requireJsonObject(request.creation_request, "original creation execution request");
+    if (request.work_kind !== "native_turn" || original === null
+        || Object.keys(retained).length !== Object.keys(original).length
+        || Object.entries(original).some(([key, value]) => JSON.stringify(retained[key]) !== JSON.stringify(value))
+        || request.todo_id !== original.todo_id
+        || request.turn_instance_id !== `managed-session.${original.operation_id}`) {
+      throw new EffectRuntimeRequestError("native execution must retain its exact confirmed original creation request");
+    }
   }
   if (observationOnly) {
     const monitor = requireJsonObject(params.monitor_todo, "original managed Session monitor");
@@ -356,8 +372,13 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("scheduled work requires its original explicit task, validation, Session and calendar window");
     }
   }
+  const creation = jsonObject(request.creation_request);
+  const queuedCreation = turn !== null && creation !== null && turn.status === "queued"
+    && turn.started_at === null && turn.upstream_turn_id === null && turn.delta_count === 0
+    && !Object.hasOwn(turn, "_acceptance")
+    && turn.client_turn_id === `managed.${creation.operation_id}`;
   if (turn ? turn.session_id !== session.session_id || turn.turn_id !== session.active_turn_id
-      || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
+      || !(["starting", "running"].includes(String(turn.status)) || queuedCreation) || turn.origin !== "native_loopx"
       || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request)
     : session.active_turn_id || params.queued_turn_count !== 0) {
     throw new EffectRuntimeRequestError("the original conversation is busy or no longer owns this Turn; retain its current work");
@@ -731,4 +752,49 @@ export function bindStewardManagedActor(params: JsonObject): JsonObject {
   return normalizeStewardManagedActor({schema_version: STEWARD_MANAGED_ACTOR_SCHEMA,
     goal_id: current.goalId, goal_instance_id: goal.goal_instance_id, agent_id: AGENT_ID,
     session_id: current.sessionId, source_ref: current.source, creation_operation_id: current.creation});
+}
+
+/** Adapt a current, already admitted native Task to the host's existing
+ * sandbox vocabulary. A Task selection or check confirmation grants no writes.
+ * Only the existing whole-workspace approval is expressible here. The current
+ * Task lease cannot enlarge it. Narrower scopes remain read-only; the native
+ * transport pins the same workspace roots in the guarded Task-start frame.
+ */
+export function canonicalNativeTaskSandboxPolicy(params: JsonObject): JsonObject {
+  const actor = requireJsonObject(params.actor, "original native Task actor");
+  const authority = requireJsonObject(params.authority, "admitted Task authority");
+  const validation = requireJsonObject(params.validation, "current Task validation plan");
+  const identity = requireJsonObject(authority._work_identity, "checked original work identity");
+  const preparation = requireJsonObject(authority.execution_preparation, "original Task execution preparation");
+  if (!(params.host === "codex-app-server" && actor.schema_version === "loopx_managed_session_actor_v0"
+    && typeof actor.workspace_path === "string" && actor.workspace_path.length > 0
+    && identity.goal_id === actor.goal_id && identity.agent_id === actor.agent_id
+    && identity.todo_id === validation.todo_id && preparation.todo_id === validation.todo_id
+    && preparation.agent_id === actor.agent_id && preparation.state === "ready"
+    && preparation.delivery_allowed === true && authority.should_run === true
+    && authority.normal_delivery_allowed === true && validation.state === "ready")) {
+    throw new EffectRuntimeRequestError("native host policy requires the original admitted Task, validation and execution lease");
+  }
+  const approval = jsonObject(projectTurnBoundary(authority).checkpointed_boundary_authority);
+  const readonly = {type: "readOnly", networkAccess: false};
+  if (approval?.schema_version !== "checkpointed_boundary_authority_v0"
+      || !Array.isArray(approval.active_write_scope) || approval.active_write_scope.length === 0) return readonly;
+  const lease = requireJsonObject(params.task_lease, "current original Task write lease");
+  if (lease.schema_version !== "task_lease_v0" || lease.status !== "active"
+      || lease.goal_id !== actor.goal_id || lease.todo_id !== validation.todo_id || lease.owner !== actor.agent_id
+      || !Number.isSafeInteger(lease.version) || Number(lease.version) < 1
+      || !Array.isArray(lease.write_scopes)) {
+    throw new EffectRuntimeRequestError("native Task writes require the same current execution lease");
+  }
+  const paths = actor.workspace_path.startsWith("/") ? posix : win32;
+  if (!paths.isAbsolute(actor.workspace_path)) {
+    throw new EffectRuntimeRequestError("native filesystem policy requires the original absolute workspace");
+  }
+  const workspace = paths.resolve(actor.workspace_path);
+  // Empty legacy inventories retain their already explicit Goal-wide grant.
+  // Fresh writable creations declare the reviewed scope on their original Task.
+  if (!approval.active_write_scope.includes("**")
+      || lease.write_scopes.length > 0 && !lease.write_scopes.includes("**")) return readonly;
+  return {type: "workspaceWrite", writableRoots: [workspace], networkAccess: false,
+    excludeTmpdirEnvVar: true, excludeSlashTmp: true};
 }

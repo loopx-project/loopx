@@ -202,6 +202,12 @@ conversations, tasks, files, schedules, and recovery stay durable across days,
 restarts, and harnesses. Reopen a project, inspect the previous turn’s state
 and evidence, and continue the next permitted action.
 
+For a new default Codex Goal, review the task and workspace permission before
+confirming **Create Goal and start first run**. The original task continues in
+its original conversation when independent checks and allowance are ready;
+ordinary messages remain read-only. Follow the [workspace guide](docs/guides/personal-workspace-user-guide.md#在原对话执行已检查的任务--run-the-checked-original-task)
+for waiting, result readback and recovery.
+
 LoopX brings these long-horizon control states into the Personal Workspace. It gives you one place to:
 
 - see what needs you, what is running, what is being watched, and what is

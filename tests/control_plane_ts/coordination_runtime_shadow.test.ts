@@ -377,9 +377,9 @@ for (const scenario of [
       ]),
     ], {encoding: "utf8", timeout: 60_000});
     assert.equal(result.status, 0, result.stderr);
-    const finalLine = result.stdout.trim().split("\n").at(-1);
-    assert.ok(finalLine, "source-observation subprocess must return a result");
-    const observed = JSON.parse(finalLine);
+    const resultLine = result.stdout.trim().split("\n").at(-1);
+    assert.ok(resultLine, "the source lease probe must report its observation");
+    const observed = JSON.parse(resultLine);
     assert.equal(observed.status === "failed" ? observed.reason_code : observed.status, scenario.expected);
     const passes = scenario.expected === "applied" ? 2 : 1;
     assert.equal(observed.lstatCalls, 2 * passes);

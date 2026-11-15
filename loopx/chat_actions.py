@@ -242,6 +242,8 @@ class ChatActionService(
         self.registry_path = Path(registry_path).expanduser().resolve()
         self.chat_store = chat_store
         self.runtime_controller = runtime_controller
+        if runtime_controller is not None:
+            runtime_controller.original_task_action_store = store
         # The runtime root the serving Chat selected (its --runtime-root). A
         # creation on a registry that does not exist yet has no recorded root
         # to follow, so the first Goal must persist where the service already
@@ -788,6 +790,9 @@ class ChatActionService(
                 },
             )
         todo_ids: list[str] = list(progress.get("todoIds") or [])
+        if creation_plan.get("creationExecution"):
+            from .chat.goal_creation_execution import retain_creation_write_approval
+            retain_creation_write_approval(self, proposal_id, creation_plan["creationExecution"])
         # Canonical File/SQLite own replay after a committed write loses its
         # response. Historical target-only creation retains its old adapter.
         pending_todos = (parameters.get("initial_todos") or []) if "todoIds" not in progress else []
@@ -804,6 +809,8 @@ class ChatActionService(
                 agent_id=agent_id or None,
                 dry_run=False,
                 operation_id=f"goal-create:{proposal_id}:todo:{index}" if authority is not None else None,
+                **({"required_write_scopes": creation_plan["creationExecution"]["writeScope"]}
+                   if creation_plan.get("creationExecution", {}).get("writeScope") else {}),
             )
             if todo.get("todo_id"):
                 todo_ids.append(str(todo["todo_id"]))
@@ -844,7 +851,7 @@ class ChatActionService(
                 "Goal projection did not retain the selected Agent binding"
             )
         from functools import partial
-        from .chat.session_open import read_goal_creation_session, recover_goal_creation_session, require_regular_session_paths
+        from .chat.session_open import read_goal_creation_session, recover_goal_creation_session, require_regular_session_paths, goal_creation_display_message
 
         read_original_session = partial(read_goal_creation_session,
             self.store, self.chat_store or getattr(self.runtime_controller, "store", None),
@@ -984,13 +991,17 @@ class ChatActionService(
                          "channel_id": session["channel_id"],
                          **({"managed_agent_id": session["managed_agent_id"],
                              "goal_instance_id": session.get("goal_instance_id")}
-                            if session.get("managed_agent_id") is not None else {})})
+                            if session.get("managed_agent_id") is not None else {}),
+                         **({"upstream_thread_id": session.get("upstream_thread_id")}
+                            if creation_plan.get("creationExecution") else {})})
             first_turn, created = self.runtime_controller.submit_turn(
                 session_id=session_id,
                 client_turn_id=f"goal-start-{proposal_id}",
                 message=first_turn_message,
                 work_dir=project,
                 objective=objective,
+                **({"display_message": goal_creation_display_message(turn_store, session_id=session_id,
+                    client_turn_id=f"goal-start-{proposal_id}", objective=objective)} if expected_managed_agent else {}),
             )
             require_first_turn_readback(first_turn)
             turn_result = {
@@ -1013,8 +1024,18 @@ class ChatActionService(
                 step="first_turn_gated",
                 receipt={"outcome": "first_turn_gated", "gate": first_turn_gate},
             )
+            if creation_plan.get("creationExecution"):
+                # An applied receipt is immutable. Keep this confirmed start
+                # retryable until its original Session/request is retained;
+                # quota denial cannot silently discard the requested work.
+                raise ValueError("The original Goal and Task are retained, but their first Turn admission is held. "
+                    + first_turn_gate["summary"] + " Retry this same creation when its allowance is ready.")
         if session_id:
             session = read_original_session(session_id=session_id)
+        original_task_request = None
+        if session_id and parameters.get("start_execution") is True:
+            from .chat.goal_creation_execution import retain_original_task_request
+            original_task_request = retain_original_task_request(self, proposal_id, session)
         child_gate: dict[str, Any] | None = first_turn_gate
         if heartbeat.get("enabled") is True:
             heartbeat_parameters = {
@@ -1067,12 +1088,15 @@ class ChatActionService(
             "step_receipts": (
                 (self.store.load(proposal_id) or {}).get("checkpoint") or {}
             ).get("steps", {}),
+            **({"original_task_request": original_task_request} if original_task_request is not None else {}),
         }
         stored = self.store.apply(
             proposal_id,
             current_state_fingerprint=str(proposal["expected_state_fingerprint"]),
             receipt=receipt,
         )
+        if original_task_request is not None:
+            self.runtime_controller.resume_session_queue(session_id=session_id, work_dir=project, objective=objective)
         return {"proposal": stored, "turn": turn_result, "gate": child_gate}
 
     def _apply_agent_bind(
@@ -1589,6 +1613,18 @@ class ChatActionService(
 
     def apply(self, proposal_id: str, *, steward_context: dict[str, Any] | None = None,
               steward_confirmed_at: str | None = None) -> dict[str, Any]:
+        result = self._apply_owner_action(proposal_id, steward_context=steward_context,
+            steward_confirmed_at=steward_confirmed_at)
+        # A committed action changes current facts. Existing queue readers may
+        # reobserve their retained requests; this content-free hint performs no
+        # transport, Task admission, permission change or new submission.
+        wakeup = getattr(self.runtime_controller, "turn_release_wakeup", None)
+        if (result.get("proposal") or {}).get("status") == "applied" and wakeup is not None:
+            wakeup.notify()
+        return result
+
+    def _apply_owner_action(self, proposal_id: str, *, steward_context: dict[str, object] | None = None,
+              steward_confirmed_at: str | None = None) -> dict[str, object]:
         proposal = self.store.load(proposal_id)
         if proposal is None:
             raise KeyError("typed Chat action proposal was not found")
@@ -1615,7 +1651,7 @@ class ChatActionService(
                 },
             )
         parameters = proposal.get("normalized_parameters")
-        if (proposal.get("action_kind") == "todo.create" and isinstance(parameters, dict)
+        if (proposal.get("action_kind") in {"todo.create", "goal.create"} and isinstance(parameters, dict)
                 and parameters.get("start_execution") is True):
             key = _opaque(proposal_id, field="proposal_id")
             with try_exclusive_file_lock(

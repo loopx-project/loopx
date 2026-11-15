@@ -51,6 +51,26 @@ def create(host):
     return proposal, ids, first
 
 
+def test_creation_display_preserves_user_intent_and_the_internal_execution_request(host):
+    proposal, ids, first = create(host)
+    store = host[2].store
+    assert store.messages(ids["session_id"])[0]["text"] == proposal["normalized_parameters"]["objective"]
+    assert first["message"].startswith("开始推进 Goal")
+
+
+def test_creation_display_recovery_retains_the_original_historical_message(host):
+    from loopx.chat.session_open import goal_creation_display_message
+    create(host)
+    store, project = host[2].store, host[4]
+    session, _ = host[2].open_session(goal_id="report", agent_id="codex", work_dir=project,
+        objective="Historical objective", mode="new", channel_id="goal.report", agent_goal_id="report")
+    turn, _ = store.create_turn(session["session_id"], client_turn_id="historical-first",
+        message="Historical internal execution request", display_message="The original confirmed request")
+    assert goal_creation_display_message(store, session_id=session["session_id"],
+        client_turn_id="historical-first", objective="Later objective") == "The original confirmed request"
+    assert store.load_turn(session["session_id"], turn["turn_id"])["message"] == "Historical internal execution request"
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_first_goal_retains_ordinary_messages_in_the_registered_session(environment, host, provider):
     configure, *_ = environment
