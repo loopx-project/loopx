@@ -1,0 +1,16 @@
+{
+  "name": "@calli/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node run.mjs",
+    "test:restart": "node --test test/restart-idle.spec.mjs",
+    "test:runner": "node --test runner.test.mjs test/restart-idle.spec.mjs test/install.spec.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  }
+}

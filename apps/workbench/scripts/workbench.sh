@@ -21,11 +21,16 @@ case "${1:-start}" in
     if alive; then echo "already running pid $(cat "$PIDF")"; exit 0; fi
     [ -d "$HERE/packages/daemon/dist" ] && [ -d "$HERE/packages/web/dist" ] || (cd "$HERE" && npm run build)
     cd "$HERE/packages/daemon"
-    # Do not inherit another agent session's model credentials.
-    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_EXECPATH CLAUDECODE
+    # Do not inherit an enclosing Calli session's credentials, web build or hub wiring:
+    # the UI served must be this checkout's own packages/web/dist, and no socket may
+    # point at another daemon. Inert for most daemon features, fatal for CALLI_WEB_DIR.
+    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_EXECPATH CLAUDECODE \
+      CALLI_WEB_DIR CALLI_TOKEN CALLI_AGENTS_JSON CALLI_HUB_URL CALLI_HUB_TOKEN \
+      CALLI_BIN_DIR CALLI_TOOLS_SOCKET CALLI_TOOLS_KEY CALLI_TEAM_SOCKET CALLI_TEAM_KEY \
+      CALLI_HANDOVER_SOCKET CALLI_HANDOVER_KEY CALLI_TODO_SOCKET CALLI_TODO_KEY
     CALLI_ENV_FILE="$ENVF" CALLI_HOST=0.0.0.0 CALLI_PORT="$PORT" CALLI_PREVIEW_PORT=$((PORT+1)) \
     CALLI_DATA_DIR="$STATE/data" CALLI_SOCKET="$STATE/daemon.sock" \
-    CALLI_WORKDIRS="${WORKBENCH_WORKDIRS:-/data00/home/liuhuadong.hans/code,/home/liuhuadong.hans/code,/tmp}" \
+    CALLI_WORKDIRS="${WORKBENCH_WORKDIRS:-/home/liuhuadong.hans/code,/tmp}" \
       setsid nohup node dist/index.js > "$STATE/daemon.log" 2>&1 < /dev/null &
     echo $! > "$PIDF"
     sleep 3; alive && echo "started pid $(cat "$PIDF"), log $STATE/daemon.log" || { tail -20 "$STATE/daemon.log"; exit 1; };;

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# A stand-in for systemctl --user in install.sh tests. The service exists while its unit file
+# does (install-service.sh writes it under $XDG_CONFIG_HOME); every call goes to $STATE/systemctl.log.
+S="$CALLI_FAKE_STATE"
+UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/calli.service"
+echo "$*" >> "$S/systemctl.log"
+[ ! -e "$S/no-systemd" ] || exit 1
+case " $* " in
+  *" cat "*) [ -f "$UNIT" ] ;;
+  *" show -p WorkingDirectory "*) [ ! -f "$UNIT" ] || sed -n 's/^WorkingDirectory=//p' "$UNIT" ;;
+  *" show -p MainPID "*) echo 0 ;;
+  *) exit 0 ;;
+esac

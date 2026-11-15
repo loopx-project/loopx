@@ -11,7 +11,8 @@
     "dev:daemon": "npm run dev -w @calli/daemon",
     "dev:web": "npm run dev -w @calli/web",
     "build": "npm run build -w @calli/daemon && npm run build -w @calli/web && npm run build -w @calli/ext-loopx",
-    "test": "npm test -w @calli/daemon && npm test -w @calli/web && npm test -w @calli/ext-board && npm test -w @calli/ext-loopx",
+    "test": "npm test -w @calli/daemon && npm test -w @calli/web && npm test -w @calli/ext-board && npm test -w @calli/ext-loopx && npm run test:runner -w @calli/e2e",
+    "test:e2e": "node packages/e2e/run.mjs",
     "setup": "node scripts/setup.mjs",
     "typecheck": "npm run typecheck -w @calli/daemon && npm run typecheck -w @calli/web && npm run typecheck -w @calli/ext-board && npm run typecheck -w @calli/ext-loopx && npm run typecheck -w @calli/ext-memory && npm run typecheck -w @calli/ext-voice",
     "start": "scripts/workbench.sh start"

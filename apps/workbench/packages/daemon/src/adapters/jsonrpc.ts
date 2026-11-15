@@ -46,6 +46,12 @@ export class JsonRpcPeer {
     });
     child.on('exit', (code, signal) => this.failAll(new Error(`${this.label} exited (code=${code}, signal=${signal})`)));
     child.on('error', (err) => this.failAll(err));
+    // A dead child's stdin breaks before its 'exit' event reaches us; a write then
+    // fails with EPIPE. Swallow it here as the peer closing instead of crashing the hub.
+    child.stdin.on('error', (err) => {
+      if (this.closed) return;
+      this.failAll(err);
+    });
   }
 
   get isClosed(): boolean {

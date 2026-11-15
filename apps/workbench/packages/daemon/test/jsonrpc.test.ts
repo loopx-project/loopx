@@ -38,3 +38,34 @@ for (const completion of ['result', 'error'] as const) {
     child.stdin.destroy();
   });
 }
+
+test('JSON-RPC survives a broken stdin pipe before the exit event', async () => {
+  // The agent dies at the OS level first: writes to its stdin fail with EPIPE while the
+  // child's 'exit' event has not been delivered yet. That must close the peer, not the hub.
+  let closed = false;
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(), stderr: new PassThrough(),
+    stdin: new Writable({
+      write(_chunk, _encoding, callback) {
+        const e = Object.assign(new Error('write EPIPE'), { code: 'EPIPE', errno: -32, syscall: 'write' }) as Error & { code: string };
+        this.emit('error', e);
+        callback(e);
+      },
+    }),
+    kill: () => true,
+  });
+  const peer = new JsonRpcPeer(child as unknown as ChildProcessWithoutNullStreams, {
+    onNotification: () => undefined,
+    onRequest: () => undefined,
+    onClosed: () => { closed = true; },
+  }, 'fixture');
+  const prompt = peer.request('session/prompt', { sessionId: 'fixture' });
+  await assert.rejects(prompt, /EPIPE/);
+  assert.equal(peer.isClosed, true);
+  assert.equal(closed, true);
+  peer.notify('session/cancel', { sessionId: 'fixture' }); // quiet on a closed peer
+  child.emit('exit', 9, null); // late exit must not throw either
+  child.stdout.destroy();
+  child.stderr.destroy();
+  child.stdin.destroy();
+});

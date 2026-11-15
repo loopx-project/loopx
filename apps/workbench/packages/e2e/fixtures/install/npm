@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# A stand-in for npm in install.sh tests: logs each call to $CALLI_FAKE_STATE/npm.log, makes
+# `run build` leave a daemon dist (install-service.sh checks for it), and fails `install` when
+# $CALLI_FAKE_STATE/npm-install-fails exists.
+echo "$*" >> "$CALLI_FAKE_STATE/npm.log"
+case "$1" in
+  install) [ ! -e "$CALLI_FAKE_STATE/npm-install-fails" ] || exit 1 ;;
+  run) [ "$2" != build ] || mkdir -p packages/daemon/dist ;;
+esac
