@@ -29,6 +29,12 @@ the compatibility signature binds that source. Retire the view after the
 supported raw readers migrate. Keep historical decoding for the original
 recovery window.
 
+Thin `heartbeat-prompt` now renders the complete guard for new captured work,
+including an exact saved loader with the old option. Regenerated bootstrap
+commands use `--complete-turn`. The direct `quota should-run` compatibility
+route above serves existing raw callers and original pending commands during
+their migration and recovery window.
+
 The C1 native candidate reuses advisory outcome navigation and the generic
 same-capture selector. Its existing native planner and full/delta encoder retain
 their two calls; the retired mandatory scoped-reading wrapper adds no third
@@ -102,6 +108,9 @@ original source, with no extra validation request or model-facing view.
 核验并放行同一份完整捕获，再由 CLI 返回 v0；工具中断时从完整原包恢复。
 若要求捕获，`decision.json` 保存完整来源与原结算身份，兼容视图的签名绑定
 该来源。支持的原始读取方迁移后再退役此视图，并在原恢复窗口内保留历史解码。
+薄 `heartbeat-prompt` 为新捕获工作生成完整 guard，覆盖仍带旧参数的已保存入口。
+重新生成的引导命令使用 `--complete-turn`。上面的直接 quota 兼容入口在迁移和恢复
+窗口内服务既有原始调用方及原待完成命令。
 提议的组合点位于 capture 与编码之前。当前 action signature 比较其注册投影；
 仅签名相等不能证明完整来源条款得到保留，也不能验收统一契约。
 RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)

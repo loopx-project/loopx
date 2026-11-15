@@ -3071,3 +3071,22 @@ product and runner revisions already recorded by the source pin. Retire the
 historical reader after the supported recovery window and outstanding records
 no longer require it. The remaining product callers of the explicit legacy CLI
 and actual installed adoption have separate acceptance.
+
+### Complete contract for captured heartbeat loaders
+
+The shared thin heartbeat renderer now sends the complete guard for a captured
+wake that uses the former `--turn-envelope` option. New saved loaders write
+`--complete-turn`; the managed upgrade still recognizes byte-exact earlier
+loaders and carries their explicit binding, capture and delivery settings. The
+same thin budget allowance covers both spellings of an explicit captured Turn.
+
+The direct quota compatibility route remains available for existing raw
+callers. Those callers must migrate before the raw writer exits. Original
+captures and pending commands retain their versioned readers during recovery.
+
+Six matched local CLI pairs used the same selected Todo on File and SQLite
+with context delivery Off. The first guard grew from 22.1 KB to 37.9 KB. For
+complete readback, loader, guard and original-capture pages together changed
+from 71.7–71.9 KB to 42.9–43.0 KB across the two backends. Every arm kept one
+heartbeat receipt and the same settlement identity. Model outcomes, selective
+read costs and actual installed adoption still need qualification.

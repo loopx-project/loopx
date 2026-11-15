@@ -246,6 +246,18 @@ contract on every wake. The embedded command omits `--bootstrap`, preventing
 recursive loaders. New `$loopx` App activation and existing automation upgrades
 use this same renderer. Native `/goal` hosts retain their own scheduler binding.
 
+On the C1 candidate, an existing captured loader using `heartbeat-prompt
+--turn-envelope` resolves the complete Turn guard on its next wake. Regenerated
+loaders save `--complete-turn` with the same explicit capture and delivery
+settings. The managed upgrade recognizes exact older loader text and retains
+its registered Goal, Agent and scope. Already captured work uses its original
+reader and settlement identity.
+
+中文：C1 候选中的已保存捕获入口若带 `heartbeat-prompt --turn-envelope`，下次
+唤醒会加载完整 Turn。重新生成时使用 `--complete-turn` 并保留显式捕获和交付设置。
+托管升级按原文核对旧入口，保留登记的 Goal、Agent 与范围。已捕获工作沿原读取器与
+结算身份恢复。
+
 `--thin`, `--compact`, `--brief` and `--full` without `--bootstrap` return the
 current execution or audit body; do not save that changing policy as the recurring
 prompt. Connected goals resolve their active-state path from the registry.

@@ -173,8 +173,8 @@ def register_heartbeat_control_commands(
     turn_view.add_argument(
         "--turn-envelope",
         action="store_true",
-        help="Use the short TurnEnvelope dispatcher on supported heartbeat callers. Requires --decision-output-root. "
-             "Codex SSH Goal accepts the old launch argument and generates a complete Turn guard.",
+        help="Compatibility spelling for saved heartbeat loaders. Generates a complete Turn guard. "
+             "Requires --decision-output-root. New loaders use --complete-turn.",
     )
     turn_view.add_argument("--complete-turn", action="store_true",
         help="Use complete v1 Turn context on a thin heartbeat guard. Codex SSH Goal already uses this source.")

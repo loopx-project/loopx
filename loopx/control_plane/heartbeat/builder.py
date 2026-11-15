@@ -180,7 +180,6 @@ def _heartbeat_prompt_commands(
     codex_context_dir: str | None,
     codex_context_root: str | None,
     context_delivery: str | None,
-    turn_envelope: bool,
     delta_delivery: str | None = None,
     complete_turn: bool = False,
 ) -> dict[str, str | None]:
@@ -299,10 +298,9 @@ def _heartbeat_prompt_commands(
     if delta_delivery == "off" or (context_delivery == "off" and delta_delivery == "auto"):
         capture_arg += " --delta-delivery " + shlex.quote(delta_delivery)
     if capture_arg:
-        display_arg = " --turn-envelope" if turn_envelope else ""
         for key in ("quota_guard_command", "task_body_quota_guard_command"):
-            commands[key] = str(commands[key]) + display_arg + capture_arg
-        commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + display_arg + capture_arg
+            commands[key] = str(commands[key]) + capture_arg
+        commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + capture_arg
     if complete_turn:
         commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + " --complete-turn"
     return commands
@@ -438,9 +436,9 @@ def build_heartbeat_prompt(
         complete_turn=complete_turn,
         codex_ssh_goal=codex_ssh_goal,
     )
-    # A saved SSH loader may still name the old display. New SSH work uses
-    # the complete source selected by the resolved runtime profile.
-    turn_envelope = turn_envelope and not codex_ssh_goal
+    # Saved loaders can request the retired display. Preserve their validated
+    # capture routes and render the complete guard. SSH already selects it.
+    complete_turn = complete_turn or (turn_envelope and not codex_ssh_goal)
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:
         normalized_agent_scopes = explicit_agent_scopes
@@ -532,7 +530,6 @@ def build_heartbeat_prompt(
         codex_context_root=codex_context_root,
         context_delivery=context_delivery,
         delta_delivery=delta_delivery,
-        turn_envelope=turn_envelope,
         complete_turn=complete_turn,
     )
     cli_preflight = render_cli_preflight(cli_bin=cli_bin)
@@ -655,7 +652,7 @@ def build_heartbeat_prompt(
             brief=brief,
             thin=thin,
             native_goal_host=native_goal_host,
-            captured_envelope=turn_envelope,
+            explicit_captured_turn=complete_turn and decision_output_root is not None,
         ),
         "task_body": task_body,
     }
