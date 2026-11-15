@@ -3244,7 +3244,7 @@ export async function selectAppSteward(bindingId: string | null, revision: numbe
   return result;
 }
 export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project", projectGrant: "workspace_read" | "workspace_write" = "workspace_write", groupIds?: string[]) {
-  return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
+  return z.object({ok: z.literal(true)}).parse(await requestJson<unknown>("/api/chat/lark/private-conversations?response=minimal", {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind, project_grant: projectGrant,
       ...(contextKind === "steward" ? {goal_scope: "all_registered"} : {}),

@@ -5236,7 +5236,10 @@ def test_group_status_and_recipient_commands_cannot_expose_private_sessions(ordi
 
 
 @pytest.mark.parametrize("owner_ready", [True, False])
-def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_widening(ordinary, monkeypatch, owner_ready):  # noqa: F811
+@pytest.mark.parametrize("response_form", ["legacy", "minimal"])
+def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_widening(
+    ordinary, monkeypatch, owner_ready, response_form,  # noqa: F811
+):
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
     import loopx.chat_lark_api as api
@@ -5266,6 +5269,7 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
             connection.close()
 
     path = "/api/chat/lark/private-conversations"
+    connect_path = f"{path}?response=minimal" if response_form == "minimal" else path
     body = {"app_ref": "notes-app", "project_ref": runtime.project_contexts.available()[0]["project_ref"],
         "executor_endpoint_id": "codex", "audience": "group", "group_ids": ["oc_community"]}
     provider.owner_ready = owner_ready
@@ -5274,22 +5278,45 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
         for bad in [{"group_ids": ["oc_not_selected"]}, {"group_ids": []},
                     {"group_ids": ["oc_community", "oc_community"]}, {"context_kind": "steward"},
                     {"executor_endpoint_id": "claude-code"}]:
-            assert request(path, {**body, **bad})[0] == 400
+            assert request(connect_path, {**body, **bad})[0] == 400
             assert transport.bindings.read() == original and not refreshes
-        status, response = request(path, body)
+        health_reads = []
+        read_health = transport.health
+
+        def observe_health():
+            health_reads.append(True)
+            return read_health()
+
+        monkeypatch.setattr(transport, "health", observe_health)
+        status, response = request(connect_path, body)
         assert status == 200, response
+        if response_form == "minimal":
+            assert response == {"ok": True}
+            assert not health_reads
+            status, response = request(path)
+            assert status == 200
+        assert health_reads == [True]
         saved = next(row for row in response["connections"] if row["app_ref"] == "notes-app")
         assert saved["audience"] == "group" and saved["group_count"] == 1
         assert saved["agent_candidates"] == saved["agent_targets"] == []
         assert str(ordinary[-1]) not in json.dumps(response)
         selected = request("/api/chat/lark/chats?app_ref=notes-app")[1]["chats"]
         assert [(row["chat_id"], row["selected"]) for row in selected] == [("oc_community", True), ("oc_second", False)]
-        assert request(path, body)[1]["revision"] == response["revision"]
+        status, retry = request(connect_path, body)
+        assert status == 200
+        if response_form == "minimal":
+            assert retry == {"ok": True} and health_reads == [True]
+        else:
+            assert retry["revision"] == response["revision"]
+        assert transport.bindings.read()["revision"] == response["revision"]
+        for malformed in ("", "legacy", "minimal&response=minimal"):
+            assert request(f"{path}?response={malformed}", body)[0] == 400
+            assert transport.bindings.read()["revision"] == response["revision"]
         assert refreshes == [True, True]
         assert not store.list_sessions() and not provider.writes
         if not owner_ready:
             frozen = transport.bindings.read()
-            assert request(path, {key: value for key, value in body.items() if key not in {"audience", "group_ids"}})[0] == 400
+            assert request(connect_path, {key: value for key, value in body.items() if key not in {"audience", "group_ids"}})[0] == 400
             assert transport.bindings.read() == frozen
     finally:
         server.shutdown()

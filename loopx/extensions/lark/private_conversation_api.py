@@ -158,6 +158,9 @@ class PrivateConversationRequestMixin:
         from .goal_topic_runtime import _active_profile_configs
         from ...chat_lark_api import build_lark_goal_topic_runtime_snapshot
         try:
+            response = parse_qs(urlsplit(getattr(self, "path", "")).query, keep_blank_values=True).get("response")
+            if response is not None and response != ["minimal"]:
+                raise ValueError("Unknown private conversation connect response")
             body = self._read_json()
             if set(body) - {"context_kind", "project_grant", "goal_scope", "audience", "group_ids"} != {"app_ref", "project_ref", "executor_endpoint_id"}:
                 raise ValueError("select an App, authorized workspace and executor")
@@ -224,6 +227,10 @@ class PrivateConversationRequestMixin:
             self.server.lark_goal_topic_runtime.refresh()
         except (ValueError, OSError, KeyError) as exc:
             self._send_error(str(exc), status=400)
+            return
+        if response == ["minimal"]:
+            # Settings reads back the verified grant and its diagnostics separately.
+            self._send_json({"ok": True})
             return
         self._private_conversations()
 
