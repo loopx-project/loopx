@@ -3531,6 +3531,23 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   全 Settings 旅程、真实模型采纳、总成本、自然进程 drain、完整 D2/D5 闭包、
   R1/M3、完整 C1 验收及其默认切换仍未资格化。
 
+### 2026-11-15 — 打包所选 manager discovery 的既有 projection
+
+- **缺口：**普通 wheel 遗漏了既有的 `manager_context/discovery_projection.ts`
+  资源。已授权的多来源 Agent discovery 到达 `manager.discovery.project` 后，
+  lazy handler 导入缺失文件而失败；源码 checkout 和 Core 已包含原 typed projection。
+- **增量：**普通发行包的 package data 将该包既有 TypeScript 资源与 skill 一起打包。
+  原 projection、caller、授权和 lazy dispatch 继续由原 owner 持有，不增加并行
+  decision owner 或 activation setting。
+- **验证：**原 package data 下的真实 setuptools 构建回归失败，包含资源后通过。
+  installed ordinary，以及 C1 #8266
+  `1c578cfe85c23db40605843a0afc1d9d37caad39` 加入本补丁的实际组合，分别按自身
+  source、wheel 和 RECORD 资格化。所选 projection 检查覆盖有界且标明来源的结果、
+  来源不可用的回读和非法 bounds；未选中的 dispatch 保留 lazy loading。
+- **边界：**本次修复所选发行包资源，不完成完整 D2/D5 闭包、真实模型／上下文
+  采用、完整成本改善、完整 R1/M3 验收或 C1 默认切换。历史失败、预算和 checkpoints
+  保留各自原范围。
+
 ### 2026-11-15 — 既有 opt-out 提前跳过自动 usage 观察
 
 - **缺口：**Python observation hints 识别的环境 opt-out 少于原 TypeScript usage

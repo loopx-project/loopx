@@ -4562,6 +4562,28 @@ view shows its independently checked result in the same conversation.
   cost, natural process drain, complete D2/D5 closure, R1/M3, full C1 acceptance
   and its default cutover remain unqualified.
 
+### 2026-11-15 — Ship the selected manager discovery projection
+
+- **Gap:** an ordinary wheel omitted the existing
+  `manager_context/discovery_projection.ts` resource. Authorized Agent discovery
+  across multiple sources reached `manager.discovery.project` and failed when
+  its lazy handler imported that missing file. Source checkouts and Core already
+  contained the original typed projection.
+- **Delta:** ordinary distribution package data includes the package's existing
+  TypeScript resource alongside its skill. The original projection, callers,
+  authorization and lazy dispatch keep their ownership; no parallel decision
+  owner or new activation setting is introduced.
+- **Validation:** the real setuptools build regression fails with the original
+  package data and passes with the resource included. Installed ordinary and C1
+  #8266 at `1c578cfe85c23db40605843a0afc1d9d37caad39` plus this patch are qualified
+  separately against their source, wheel and RECORD. Selected projection checks
+  cover bounded source-qualified results, unavailable-source readback and invalid
+  bounds; unselected dispatch retains lazy loading.
+- **Boundary:** this repairs a selected distribution resource. It does not
+  establish complete D2/D5 closure, actual-model/context adoption, total-cost
+  improvement, full R1/M3 acceptance or C1 default cutover. Earlier failures,
+  budgets and checkpoints retain their original scopes.
+
 ### 2026-11-15 — Skip automatic usage observers for existing opt-outs
 
 - **Gap:** Python observation hints recognized fewer environment opt-outs than
