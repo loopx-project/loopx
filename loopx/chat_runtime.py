@@ -24,6 +24,7 @@ from .chat_manager import (
     steward_machine_defaults,
 )
 from .chat.coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
+from .chat.session_open import read_exact_original_session
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
 from .capabilities.native_chat.codex_adapter import (
     CodexAppServerAdapter, NativeHistoryRestoration, NativeWorkingContinuation, start_attachment_turn,
@@ -59,6 +60,7 @@ from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
 from .file_lock import (
     LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED,
     _lock_id, lock_holder_host_label, lock_holder_liveness, process_is_alive, try_exclusive_file_lock,
+    exclusive_cross_runtime_file_lock,
 )
 from .kiro_cli_goal_mode import (
     KIRO_CLI_BIN,
@@ -521,6 +523,7 @@ class ChatRuntimeController:
         agent_goal_id: str | None = None,
         goal_instance_id: str | None = None,
         managed_agent_id: str | None = None,
+        session_id: str | None = None,
         manager_executor_allocation: Mapping[str, Any] | None = None,
         project_ref: str | None = None,
         conversation_binding_id: str | None = None,
@@ -541,6 +544,8 @@ class ChatRuntimeController:
                                           error_code="unsupported_configuration", gate=None)
         if mode not in {"resume_latest", "new"}:
             raise ValueError("mode must be resume_latest or new")
+        if session_id is not None and mode != "new":
+            raise ValueError("an exact Session opening requires mode=new")
         selected_channel = channel_id or f"goal.{goal_id}"
         project_context = None
         steward_context = None
@@ -593,9 +598,24 @@ class ChatRuntimeController:
                 goal_id = MANAGER_AGENT_GOAL_ID
         route_goal_id = "*" if is_manager_channel(selected_channel) else goal_id
         route_key = (route_goal_id, agent_id, selected_channel)
+        if session_id is not None:
+            if not isinstance(session_id, str) or session_id != session_id.strip() or session_id in {".", ".."}:
+                raise ValueError("session_id must retain its exact non-empty opaque identity")
+            session_id = _opaque_id(session_id, field="session_id")
+            if (project_context is not None or steward_context is not None or is_manager_channel(selected_channel)
+                    or goal_id is None or agent_goal_id is not None and agent_goal_id != goal_id
+                    or conversation_scope(selected_scope)["kind"] != "owner_goal"):
+                raise ValueError("an exact Session opening requires its original local Goal route")
         with self.lock:
             route_lock = self.session_open_locks.setdefault(route_key, threading.Lock())
-        with route_lock:
+        with route_lock, (exclusive_cross_runtime_file_lock(
+                self.store.root / "session-open-locks" / session_id, operation="open_original_goal_session")
+                if session_id is not None else nullcontext()):
+            if session_id is not None:
+                original = read_exact_original_session(self, session_id=session_id, selected_scope=selected_scope,
+                    agent_id=agent_id, work_dir=work_dir, requested_model=agent_model_id, requested_effort=agent_reasoning_effort)
+                if original is not None:
+                    return original, True
             latest = None
             if not is_manager_channel(selected_channel) and project_context is None:
                 exact_attached, strict_profile = select_current_attached_session(
@@ -618,7 +638,7 @@ class ChatRuntimeController:
                         error_code="source_session_managed_chat_unsupported",
                         gate=None,
                     )
-            if mode == "resume_latest":
+            if mode == "resume_latest" and session_id is None:
                 latest = self.store.latest_session(
                     goal_id=None if is_manager_channel(selected_channel) else goal_id,
                     agent_id=agent_id,
@@ -686,6 +706,7 @@ class ChatRuntimeController:
                 require_managed_agent_session(self, selected_scope, work_dir)
                 observed_settings = self._observed_model_settings(adapter, agent_reasoning_effort, agent_model_id)
                 persisted = self.store.create_session(
+                    **({"session_id": session_id} if session_id is not None else {}),
                     goal_id=goal_id,
                     goal_instance_id=goal_instance_id,
                     **({"managed_agent_id": managed_agent_id, "managed_workspace_path": str(work_dir.resolve())} if managed_agent_id is not None else {}),
