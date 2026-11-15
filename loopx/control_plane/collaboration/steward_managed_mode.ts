@@ -7,13 +7,13 @@
  */
 import { createHash } from "node:crypto";
 import type { JsonObject } from "../runtime_decode.ts";
-import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
+import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {boundConversationExecutorMatches, goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
 import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
-import {turnPlanWorkSource} from "../quota/turn_envelope.ts";
+import {projectTurnBoundary, turnPlanWorkSource} from "../quota/turn_envelope.ts";
 
 /** A stopped observation may get one new Chat carrier, never a new native
  * observation identity. The host independently reads the old worker lock,
@@ -754,10 +754,8 @@ export function canonicalNativeTaskSandboxPolicy(params: JsonObject): JsonObject
     && authority.normal_delivery_allowed === true && validation.state === "ready")) {
     throw new EffectRuntimeRequestError("native host policy requires the original admitted Task, validation and execution lease");
   }
-  const boundary = requireJsonObject(authority.goal_boundary, "original Goal boundary");
-  const approval = boundary.checkpointed_boundary_authority;
-  const writable = approval && typeof approval === "object" && !Array.isArray(approval)
-    && approval.schema_version === "checkpointed_boundary_authority_v0"
+  const approval = jsonObject(projectTurnBoundary(authority).checkpointed_boundary_authority);
+  const writable = approval?.schema_version === "checkpointed_boundary_authority_v0"
     && Array.isArray(approval.active_write_scope) && approval.active_write_scope.includes("**");
   return writable ? {type: "workspaceWrite", writableRoots: [actor.workspace_path], networkAccess: false,
     excludeTmpdirEnvVar: true, excludeSlashTmp: true} : {type: "readOnly", networkAccess: false};

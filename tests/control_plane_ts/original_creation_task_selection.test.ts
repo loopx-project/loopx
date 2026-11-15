@@ -40,16 +40,23 @@ test("a native Task or its confirmed checks do not grant workspace writes", () =
 for (const scope of ["cart.py", "outputs/**"]) test(`narrow ${scope} approval is never widened to the workspace`, () => {
   const input = policyInput();
   input.authority.goal_boundary = {checkpointed_boundary_authority: {
-    schema_version: "checkpointed_boundary_authority_v0", active_write_scope: [scope]}};
+    schema_version: "checkpointed_boundary_authority_v0", active_count: 1, active_write_scope: [scope]}};
   assert.deepEqual(canonicalNativeTaskSandboxPolicy(input), {type: "readOnly", networkAccess: false});
 });
 
 test("the original admitted Task uses the already approved workspace with network and temp writes disabled", () => {
   const input = policyInput();
   input.authority.goal_boundary = {checkpointed_boundary_authority: {
-    schema_version: "checkpointed_boundary_authority_v0", active_write_scope: ["**"]}};
+    schema_version: "checkpointed_boundary_authority_v0", active_count: 1, active_write_scope: ["**"]}};
   assert.deepEqual(canonicalNativeTaskSandboxPolicy(input), {type: "workspaceWrite", writableRoots: ["/exercise"],
     networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true});
+});
+
+for (const count of [undefined, 0]) test(`an approval without an active count of ${count} grants no workspace writes`, () => {
+  const input = policyInput();
+  input.authority.goal_boundary = {checkpointed_boundary_authority: {
+    schema_version: "checkpointed_boundary_authority_v0", active_count: count, active_write_scope: ["**"]}};
+  assert.deepEqual(canonicalNativeTaskSandboxPolicy(input), {type: "readOnly", networkAccess: false});
 });
 
 test("Task substitution and an unavailable execution lease cannot yield host permissions", () => {

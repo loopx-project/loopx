@@ -3,7 +3,7 @@
  * pure plan; caller/model input is not authority and the plan grants no execution
  * or write permission. */
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "./acceptance_contract.ts";
@@ -23,11 +23,10 @@ export function originalCreationTaskSelection(params: JsonObject): JsonObject {
   requireThat(basis.status === "loaded" && typeof basis.provider_revision === "string"
     && basis.provider_revision.length > 0, "current Goal acceptance basis required");
   const contract = requireJsonObject(basis.goal_acceptance_contract, "current Goal acceptance projection");
-  const outcomes = contract.outcome_requirements;
-  if (!outcomes || typeof outcomes !== "object" || Array.isArray(outcomes)
-      || !Array.isArray(outcomes.outcomes)) return {todo_id: null, reason: "original_task_unavailable"};
-  const original = outcomes.outcomes.filter(row => row && typeof row === "object"
-    && !Array.isArray(row) && row.id === "goal-creation");
+  const outcomes = jsonObject(contract.outcome_requirements);
+  if (!outcomes || !Array.isArray(outcomes.outcomes)) return {todo_id: null, reason: "original_task_unavailable"};
+  const candidates: unknown[] = outcomes.outcomes;
+  const original = candidates.map(jsonObject).filter((row): row is JsonObject => row?.id === "goal-creation");
   if (original.length !== 1 || !Array.isArray(original[0].todo_ids)
       || original[0].todo_ids.length !== 1 || typeof original[0].todo_ids[0] !== "string"
       || !original[0].todo_ids[0]) return {todo_id: null, reason: "original_task_unavailable"};
