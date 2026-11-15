@@ -92,6 +92,33 @@ test("a Todo saved before create preparation was introduced retries from its ori
     checkpoint: {steps: {todo_created: {...created, source: null}}}}).retryOriginal, undefined);
 });
 
+test("a confirmation saved before source binding remains reachable on its original card", () => {
+  const receipt = {schema_version: "loopx_chat_todo_receipt_v0", receipt_id: "original-create",
+    todo_id: "todo-original", goal_id: "report", preview_id: "reviewed", preview_revision: "original-revision",
+    status: "applied"};
+  const created = {todo_id: "todo-original", canonical_receipt: receipt};
+  const proposal = {proposal_id: "confirmed", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    status: "failed", permission_classification: "durable_write", normalized_parameters: {goal_id: "report"},
+    context: {kind: "goal", goal_id: "report"}, checkpoint: {steps: {todo_created: created}}};
+  const gated = {...proposal, status: "gated", gate: {kind: "canonical_authority_required"}};
+  for (const original of [proposal, {...proposal, status: "applying"}, gated]) {
+    const plan = compileActionReviewPlan(original);
+    assert.equal(plan.proposalId, "confirmed");
+    assert.equal(plan.canApply, true);
+    assert.equal(plan.retryOriginal, true);
+    assert.equal(plan.prohibitRegeneration, true);
+  }
+  for (const change of [
+    {context: {kind: "goal", goal_id: "different-report"}},
+    {context: {...proposal.context, binding_id: "steward-chat"}},
+    {checkpoint: {steps: {todo_created: {...created, canonical_receipt: {...receipt, preview_revision: ""}}}}},
+    {checkpoint: {steps: {todo_created: {...created, source: null}}}},
+  ]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+  assert.equal(compileActionReviewPlan({...gated, gate: {kind: "authenticated_steward_confirmation_required"}}).canApply, false);
+});
+
 test("confirmed Task dispatch resolves only to the receipt's own execution Turn", () => {
   const resources = {goal_id: "repair", todo_id: "todo-first", session_id: "session-first", turn_id: "turn-first"};
   const canonical = {goal_id: "repair", todo_id: "todo-first", preview_id: "reviewed", status: "applied"};

@@ -688,6 +688,9 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
     : "";
   const operationFrame = reviewPlan.operationFrame;
   const decision = reviewPlan.decisionFrame?.decision;
+  const retryGate = reviewPlan.retryOriginal && proposal.gate?.kind === "canonical_authority_required"
+    ? [proposal.gate.summary, proposal.gate.next_action].filter(value => typeof value === "string").join(" ")
+    : "";
   const operationTitle = operationFrame?.content.title ?? proposal.summary;
   const localizedSummary = proposal.action_kind === "operation.execute"
     ? operationTitle
@@ -729,7 +732,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
         || proposal.status === "applied"
         || ["objective", "completion_criteria", "execution_boundary", "permission", "workspace_ref"].includes(field.key)),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
-    impact: reviewPlan.retryOriginal ? t(`actionReview.${reviewPlan.reason}`) : proposal.action_kind === "operation.execute"
+    impact: reviewPlan.retryOriginal ? retryGate || t(`actionReview.${reviewPlan.reason}`) : proposal.action_kind === "operation.execute"
       ? operationFrame?.kind === "inactive" ? t(`actionReview.${operationFrame.reason}`)
         : operationFrame?.kind === "pending" && operationFrame.executionState
         ? t(operationFrame.executionState === "consumed_outcome_pending"
@@ -2233,17 +2236,23 @@ export function PersonalWorkspacePage({
         const observed = returned.success && returned.data.proposal_id === proposal.previewId
           && returned.data.action_kind === proposal.actionKind && returned.data.normalized_parameters.goal_id === proposal.goalId
           ? workspaceProposal(returned.data, t) : proposal;
+        const retryOriginal = returned.success && returned.data.status === "gated"
+          && observed !== proposal && observed.reviewPlan?.retryOriginal === true
+          && observed.reviewPlan.sourceFingerprint === proposal.reviewPlan?.sourceFingerprint;
+        if (retryOriginal) await actionReadback.acceptProposal(returned.data);
         const gated = {
           ...observed,
-          reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: "gated" as const, reason: "authority_gate" as const, canApply: false as const } : undefined,
-          impact: proposal.reviewPlan?.retryOriginal ? "" : proposal.impact,
-          primaryLabel: proposal.reviewPlan?.retryOriginal ? undefined : proposal.primaryLabel,
+          ...(retryOriginal ? {} : {
+            reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, retryOriginal: undefined, interaction: "gated" as const, reason: "authority_gate" as const, canApply: false as const } : undefined,
+            impact: proposal.reviewPlan?.retryOriginal ? "" : proposal.impact,
+            primaryLabel: proposal.reviewPlan?.retryOriginal ? undefined : proposal.primaryLabel,
+            status: "gated" as const,
+          }),
           gate: {
             kind: String(gate.kind ?? "protected_action"),
             nextAction: typeof gate.next_action === "string" ? gate.next_action : undefined,
             summary: String(gate.summary ?? error.message),
           },
-          status: "gated" as const,
         };
         setProposals((current) => ({ ...current, [proposal.previewId]: gated }));
         // A newly discovered authority gate always deserves review. Preserve
