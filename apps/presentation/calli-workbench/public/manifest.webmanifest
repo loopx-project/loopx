@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Calli",
+  "short_name": "Calli",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay"],
+  "background_color": "#fafafa",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/calli-icon.png?v=crab-1",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
