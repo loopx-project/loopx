@@ -7,7 +7,7 @@ import type {PostgreSqlAuthorityDatabase} from "./postgresql_authority_store.ts"
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "./todo_update.ts";
 import {executeCoordinationTodoCreate} from "./todo_create.ts";
-import {executeCoordinationTodoTerminalLifecycle} from "./todo_terminal_lifecycle.ts";
+import {executeCoordinationTodoTerminalLifecycle, type CoordinationTodoTerminalLifecycleInput} from "./todo_terminal_lifecycle.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "./task_lease_lifecycle.ts";
 import {leaseVersion, leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {TODO_DOMAIN_ITEM_SCHEMA} from "./coordination_state_contract.ts";
@@ -225,18 +225,25 @@ export class RemoteAuthorityService {
         patch: {note: request.note}, clear_fields: []});
       else if (request.operation === "complete") {
         const claimOpId = remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id);
-        result = await executeCoordinationTodoTerminalLifecycle(store, {
+        const input: CoordinationTodoTerminalLifecycleInput = {
           goal_id: request.goal_id, todo_id: request.todo_id, command: "complete",
           expected_role: "agent", actor_agent_id: request.actor_id,
           registered_agents: admission.registered_agents, lifecycle_grants: [], authority_reason: null,
           decision_outcome: null, operation_identity: {kind: "explicit", operation_id: operationId},
           claim_operation_id: claimOpId, lease_idempotency_key: null, lease_expected_version: null,
-          allow_user_gate_auto_acquire: false, requested_no_followup: true,
+          allow_user_gate_auto_acquire: false, requested_no_followup: request.no_followup === true,
           requested_completion_turn_key: null, requested_completion_identity_source: null,
           linked_successor_todo_ids: [], successor_intents: [], note: request.note ?? null,
           evidence: request.evidence, reason: null, clear_claim: true, validation_declaration: null,
           validation_receipt: null, completion_policy_request: null, dry_run: false, now,
-        });
+        };
+        result = await executeCoordinationTodoTerminalLifecycle(store, input);
+        // Older complete requests implied no_followup. Use that intent only to
+        // replay an already committed receipt for the exact authenticated request.
+        if (previous?.status === "found" && request.no_followup === undefined &&
+            result.reason_code === "coordination_operation_identity_mismatch") {
+          result = await executeCoordinationTodoTerminalLifecycle(store, {...input, requested_no_followup: true});
+        }
         if (result.status === "applied") result.completed = true;
       } else if (request.operation === "block" || request.operation === "defer") {
         const claimOpId = request.claim_request_id

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {prepareCoordinationProjectionCommit, type CoordinationProjectionMutation} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {executeCoordinationTodoTerminalLifecycle} from "../../loopx/control_plane/coordination/todo_terminal_lifecycle.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "../../loopx/control_plane/coordination/task_lease_lifecycle.ts";
 import type {RemoteAuthorityRequest} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {postgresRemoteFixture, claimRequest, serviceIdentity} from "./remote_authority_fixture.ts";
@@ -90,10 +91,89 @@ export function registerRemoteAuthorityLifecycleConformance(connectionString: st
     assert.deepEqual(await fixture.store.loadAuthority(), committed, "replay and recovery retain the original no-op receipt");
   });
 
+  test("remote completion keeps a recorded successor available to the next actor", {skip: !connectionString}, async t => {
+    const fixture = await postgresRemoteFixture(t, connectionString!);
+    const running = await fixture.start();
+    await fixture.seed(["todo_remote", "todo_local", "todo_next_remote", "todo_next_local"]);
+    const seed = await fixture.store.loadAuthority();
+    assert.equal(seed.status, "loaded");
+    if (seed.status !== "loaded") return;
+    const links: Record<string, JsonObject> = {
+      todo_remote: {successor_todo_ids: ["todo_next_remote"]},
+      todo_local: {successor_todo_ids: ["todo_next_local"]},
+      todo_next_remote: {resume_when: "todo_done:todo_remote"},
+      todo_next_local: {resume_when: "todo_done:todo_local"},
+    };
+    const mutations: CoordinationProjectionMutation[] = (seed.head.todos as JsonObject[]).map(todo => ({
+      kind: "todo_upsert", todo: {...todo, ...links[String(todo.todo_id)]},
+    }));
+    const linked = await fixture.store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: "goal-one",
+      operation_id: "existing-successors", expected_provider_revision: seed.provider_revision, projection: seed.head, mutations}));
+    assert.equal(linked.status, "applied");
+
+    const client = (actor: "a" | "b", request: RemoteAuthorityRequest, recover = false) =>
+      fixture.client(running.endpoint, actor, request, recover);
+    const localClaim = await client("a", claimRequest("a", "todo_local"));
+    assert.equal(localClaim.code, 0);
+    const control = await executeCoordinationTodoTerminalLifecycle(fixture.store, {
+      goal_id: "goal-one", todo_id: "todo_local", command: "complete",
+      expected_role: "agent", actor_agent_id: "actor-a", registered_agents: ["actor-a", "actor-b"],
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      operation_identity: {kind: "explicit", operation_id: "finish-local"},
+      claim_operation_id: String((localClaim.value.result as JsonObject).claim_operation_id),
+      lease_idempotency_key: null, lease_expected_version: null, allow_user_gate_auto_acquire: false,
+      requested_no_followup: false, requested_completion_turn_key: null, requested_completion_identity_source: null,
+      linked_successor_todo_ids: [], successor_intents: [], note: null, evidence: "verified fixture result",
+      reason: null, clear_claim: true, validation_declaration: null, validation_receipt: null,
+      completion_policy_request: null, dry_run: false, now: new Date(),
+    });
+    assert.equal(control.status, "applied");
+    assert.equal(control.completion_continuation, "successor");
+
+    const next = claimRequest("b", "todo_next_remote");
+    const pending = await client("b", next);
+    assert.equal(pending.code, 1);
+    assert.equal((pending.value.result as JsonObject).reason_code, "todo_dependency_pending");
+    const {request_id: claim_request_id, ...scope} = claimRequest("a", "todo_remote");
+    assert.equal((await client("a", {...scope, request_id: claim_request_id})).code, 0);
+    const command = {...scope, operation: "complete" as const, request_id: "finish-remote",
+      claim_request_id, evidence: "verified fixture result"};
+    const finished = await client("a", command);
+    assert.equal(finished.code, 0, JSON.stringify(finished.value));
+    assert.equal((finished.value.result as JsonObject).status, "applied");
+    const receipt = (finished.value.result as JsonObject).completion_receipt_id;
+
+    const committed = await fixture.store.loadAuthority();
+    assert.equal(committed.status, "loaded");
+    if (committed.status !== "loaded") return;
+    const todo = (committed.head.todos as JsonObject[]).find(row => row.todo_id === command.todo_id);
+    assert.equal(todo?.completion_continuation, control.completion_continuation);
+    assert.deepEqual(todo?.successor_todo_ids, [next.todo_id]);
+    assert.equal(todo?.completion_receipt_id, receipt);
+    const replay = await client("a", command);
+    assert.equal(replay.code, 0);
+    assert.equal((replay.value.result as JsonObject).status, "replayed");
+    const recovered = await client("a", command, true);
+    assert.equal(recovered.code, 0);
+    assert.equal(recovered.value.historical_only, true);
+    assert.equal((recovered.value.result as JsonObject).completion_receipt_id, receipt);
+    const changedIntent = await client("a", {...command, no_followup: true});
+    assert.equal(changedIntent.code, 1);
+    assert.equal(changedIntent.value.reason_code, "remote_authority_operation_mismatch");
+    assert.deepEqual(await fixture.store.loadAuthority(), committed);
+
+    const {request_id: _, ...reader} = claimRequest("b", command.todo_id);
+    const observed = await client("b", {...reader, operation: "read"});
+    assert.equal(observed.code, 0);
+    assert.equal((observed.value.todo as JsonObject).status, "done");
+    assert.equal((observed.value.lease as JsonObject).status, "released");
+    assert.equal((await client("b", next)).code, 0);
+  });
+
   test("remote authority full lifecycle: snapshot, todo_add, complete, block, and defer", {skip: !connectionString}, async t => {
     const fixture = await postgresRemoteFixture(t, connectionString!);
     const running = await fixture.start();
-    await fixture.seed(["todo_for_complete", "todo_for_block", "todo_for_defer"]);
+    await fixture.seed(["todo_for_complete", "todo_for_terminal", "todo_for_block", "todo_for_defer"]);
 
     const baseScope = {
       schema_version: "loopx_remote_authority_request_v0" as const,
@@ -149,6 +229,20 @@ export function registerRemoteAuthorityLifecycleConformance(connectionString: st
     assert.equal(comp.code, 0);
     assert.equal((comp.value.result as JsonObject).status, "applied");
     assert.equal((comp.value.result as JsonObject).completed, true);
+
+    const {request_id: terminalClaimId, ...terminalScope} = claimRequest("a", "todo_for_terminal");
+    assert.equal((await fixture.client(running.endpoint, "a", {...terminalScope, request_id: terminalClaimId})).code, 0);
+    const terminal = await fixture.client(running.endpoint, "a", {
+      ...terminalScope, operation: "complete", request_id: "finish-terminal", claim_request_id: terminalClaimId,
+      evidence: "verified fixture result", no_followup: true,
+    });
+    assert.equal(terminal.code, 0);
+    const completedHead = await fixture.store.loadAuthority();
+    assert.equal(completedHead.status, "loaded");
+    if (completedHead.status !== "loaded") return;
+    const completedTodos = completedHead.head.todos as JsonObject[];
+    assert.equal(completedTodos.find(row => row.todo_id === "todo_for_complete")?.completion_continuation, "active_goal");
+    assert.equal(completedTodos.find(row => row.todo_id === "todo_for_terminal")?.completion_continuation, "no_followup");
 
     // 4. Claim -> Block
     const claimBlock = await fixture.client(running.endpoint, "a", {

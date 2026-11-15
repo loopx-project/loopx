@@ -71,7 +71,7 @@ canonical `todo_<token>` syntax. Unknown fields and operations are rejected.
 | `progress` | `request_id`, `claim_request_id`, `note` | Update a note using the original claim and current execution fence. |
 | `renew` | `idempotency_key`, `expected_version`, `ttl_seconds` | Renew the current lease through the existing lifecycle owner. |
 | `release` | `idempotency_key`, `expected_version` | Release execution; this does not clear the task's assignment or complete it. |
-| `complete` | `request_id`, `claim_request_id`, `evidence`, `note?` | Record an evidence reference and complete the task through the existing completion and lease owners. |
+| `complete` | `request_id`, `claim_request_id`, `evidence`, `note?`, `no_followup?` | Complete the task with evidence, preserve a recorded successor and release the execution lease. |
 | `block` | `request_id`, `reason`, `claim_request_id?`, `resume_when?`, `note?` | Pause task as blocked with explicit reason, releasing execution lease. |
 | `defer` | `request_id`, `reason`, `resume_when`, `claim_request_id?`, `note?` | Defer task with resumption condition and rationale, releasing execution lease. |
 | `todo_add` | `request_id`, `text`, `priority?`, `role?`, ... | Create a canonical task under policy grant and tenant fence. |
@@ -100,6 +100,14 @@ Claim/progress request IDs identify immutable intent within
 the principal/tenant/Goal/actor scope. Reusing one with different intent fails.
 Renew/release retain the canonical lease operation identity. Their receipts also
 verify the admitted principal, actor and request digest before reuse.
+
+Ordinary `complete` follows the Todo's continuation policy. A recorded successor
+stays linked. With neither a successor nor a terminal declaration, completion
+records `active_goal`. Supply `no_followup: true` only
+for an explicit terminal completion. A recorded successor conflicts with that
+intent, so the operation fails before writing a completion receipt or releasing
+the lease. Existing successful completions replay their original continuation
+when clients supply the same request.
 
 For `block` and `defer`, use the existing Todo resume condition syntax, such as
 `todo_done:todo_dependency` or `resume_at:2026-12-01T00:00:00Z`. A reason alone

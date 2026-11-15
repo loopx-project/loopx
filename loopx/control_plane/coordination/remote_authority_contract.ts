@@ -33,7 +33,7 @@ export type RemoteAuthorityRequest = Base & (
   | {operation: "progress"; todo_id: string; request_id: string; claim_request_id: string; note: string}
   | {operation: "renew"; todo_id: string; idempotency_key: string; expected_version: number; ttl_seconds: number}
   | {operation: "release"; todo_id: string; idempotency_key: string; expected_version: number}
-  | {operation: "complete"; todo_id: string; request_id: string; claim_request_id: string; evidence: string; note?: string}
+  | {operation: "complete"; todo_id: string; request_id: string; claim_request_id: string; evidence: string; note?: string; no_followup?: boolean}
   | {operation: "block"; todo_id: string; request_id: string; claim_request_id?: string; reason: string; resume_when?: string; note?: string}
   | {operation: "defer"; todo_id: string; request_id: string; claim_request_id?: string; reason: string; resume_when: string; note?: string}
   | {
@@ -77,7 +77,7 @@ const OPTIONAL_KEYS: Record<RemoteAuthorityOperation, readonly string[]> = {
   progress: [],
   renew: [],
   release: [],
-  complete: ["note"],
+  complete: ["note", "no_followup"],
   block: ["claim_request_id", "resume_when", "note"],
   defer: ["claim_request_id", "note"],
   todo_add: ["role", "priority", "task_class", "action_kind", "task_repository", "required_write_scopes", "claimed_by", "note"],
@@ -120,6 +120,9 @@ export function decodeRemoteAuthorityRequest(raw: unknown): RemoteAuthorityReque
   }
   if ("note" in value && (typeof value.note !== "string" || !value.note.trim() || Buffer.byteLength(value.note) > 4096)) {
     throw new TypeError("Note requires a bounded non-empty string");
+  }
+  if ("no_followup" in value && typeof value.no_followup !== "boolean") {
+    throw new TypeError("no_followup must be a boolean");
   }
   if ("evidence" in value && (typeof value.evidence !== "string" || !value.evidence.trim() || Buffer.byteLength(value.evidence) > 16 * 1024)) {
     throw new TypeError("Evidence requires a bounded non-empty string");
