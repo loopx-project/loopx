@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tomllib
 import zipfile
 
 import pytest
@@ -118,6 +119,30 @@ def wheel(source, output, *, keep_temp=False, skip_build=False):
             for name in archive.namelist()
             if name.startswith("loopx/")
         }
+
+
+def test_manager_discovery_projection_ships_with_its_skill(checkout, tmp_path):
+    """The installed lazy handler must have its original typed dependency."""
+    package = "loopx.capabilities.manager_context"
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["setuptools"]["package-data"]
+    with (checkout / "pyproject.toml").open("a") as configuration:
+        configuration.write(f'"{package}"={json.dumps(data[package])}\n')
+    for name in ("loopx/capabilities", "loopx/capabilities/manager_context"):
+        directory = checkout / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "__init__.py").write_text("", encoding="utf-8")
+    resources = (
+        "loopx/capabilities/manager_context/discovery_projection.ts",
+        "loopx/capabilities/manager_context/skills/loopx-manager/SKILL.md",
+    )
+    for name in resources:
+        target = checkout / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
+    packaged = wheel(checkout, tmp_path / "manager-wheel")
+    for name in resources:
+        assert name in packaged, f"installed manager discovery dependency missing: {name}"
+        assert packaged[name] == (ROOT / name).read_bytes()
 
 
 @pytest.mark.parametrize("keep_temp", [False, True])
