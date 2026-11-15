@@ -4406,3 +4406,22 @@ view shows its independently checked result in the same conversation.
   model/context continuity, D2/D5 closure, progressive Standard journeys,
   comparable full costs, full V1–V5/V10, R1/M3 and C1 cutover remain open. Run full
   original-goal regression before completion and subsequent EdgeBench preparation.
+
+### 2026-11-15 — Defer material inventory behind its explicit operation
+
+- **Gap:** static content configuration discovery imported Material Lifecycle's
+  inventory package, loading its apply, intake, ranking and revision owners
+  before any material operation was requested.
+- **Delta:** the existing reference adapter loads that provider only when
+  `inspect_reference_materials` is called. Configuration descriptors, content
+  search/capture/draft, the TypeScript reference owner and the existing Python
+  inventory owner keep their contracts.
+- **Evidence:** fresh source processes on `main@35c5efbd4b90` retain identical
+  descriptor output while reducing its LoopX import graph from 108 to 88 modules;
+  the 18 material modules and two project-skill modules are no longer loaded.
+  `configure-goal --help` remains identical at 39 modules. Explicit inventory
+  still uses the same source bytes, validation and private-artifact boundaries.
+- **Boundary:** this reduces configuration loading, not installed package size
+  or execute/replay imports. It reuses C1's existing composition and owners;
+  complete D2/D5 closure, actual-model adoption, comparable full costs, R1/M3,
+  C1 cutover and full original-goal regression remain open.
