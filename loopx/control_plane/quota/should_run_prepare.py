@@ -260,6 +260,11 @@ def _prepare_quota_replan_context(
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Project the current frontier and contextualize its receipt-bound review."""
+    # Once the settlement owner verifies writeback, an old review's sources
+    # cannot be prerequisites for spending its receipt (or replaying it).
+    reconstruct_review = receipt_bound_replay_phase not in (
+        ReceiptBoundReplayPhase.SETTLEMENT_PENDING, ReceiptBoundReplayPhase.SETTLED,
+    )
     goal_frontier_context = build_goal_frontier_projection_context_from_status(
         replan_explore_reader=replan_explore_reader,
         goal_id=safe_goal_id,
@@ -277,19 +282,23 @@ def _prepare_quota_replan_context(
         registered_agent_ids=registered_agent_ids,
         goal_status=str(registry_goal.get("status") or ""),
         agent_profile=_quota_agent_profile(agent_identity),
-        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+        receipt_bound_replan_obligation_id=(
+            receipt_bound_replan_obligation_id if reconstruct_review else None
+        ),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
     )
     replan_obligation = (
         None
         if receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED
         else _preserve_receipt_bound_replan_obligation(
-            goal_frontier_context.get("replan_obligation"),
+            goal_frontier_context.get("replan_obligation") if reconstruct_review else None,
             receipt_bound_replan_obligation_id,
             guard_scoped=receipt_bound_replan_guard_scoped,
             agent_id=agent_frontier_id,
             replay_phase=receipt_bound_replay_phase,
-            transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
+            transition_candidates=(
+                goal_frontier_context.get("replan_transition_candidates") if reconstruct_review else None
+            ),
             stride_strategy=goal_frontier_context["stride_strategy"],
             receipt_review=receipt_bound_replan_review,
             goal_id=safe_goal_id,

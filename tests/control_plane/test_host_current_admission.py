@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -150,3 +151,96 @@ def test_native_launch_rechecks_same_todo_after_planning(
         assert _bindings(runtime) == readbacks[0][1]
         index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
         assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["unchanged", "text", "renew_lease", "replace_lease"])
+def test_stdio_retry_checks_original_task_before_launch(tmp_path, monkeypatch, provider, change):
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from tests.control_plane.test_turn_host_decision_capture import _fixture_module
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = _fixture_module()
+    project, runtime, workspace, registry = fixture._write_fixture(tmp_path, turn_count=2)
+    state = project / ".codex/goals" / fixture.GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    todos = parse_active_state_todos(state.read_text(), state_path=state, item_limit=None)
+    uses_lease = change in {"renew_lease", "replace_lease"}
+    initialize_canonical_authority(runtime, fixture.GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID,
+            handoff_mode="hard_lease" if uses_lease else "soft_claim",
+            todos=todos["agent_todos"]["items"]), state_path=state, provider=provider)
+    marker = workspace / "process-count"
+    runner = tmp_path / "runner.py"
+    runner.write_text(f'''import json
+from pathlib import Path
+
+def run_dsh_turn(**options):
+    workspace = Path(options["workspace"])
+    marker = workspace / "process-count"
+    first = not marker.exists()
+    marker.write_text("1" if first else "2")
+    if first:
+        raise TimeoutError("Fixture failed before producing a result")
+    (workspace / {fixture.MARKER_NAME!r}).write_text({fixture._marker_value(1)!r})
+    return json.dumps({{"result_kind": "validated_progress", "classification": "checked_work",
+        "summary": "The original work passed independent validation.", "next_action": "Continue.",
+        "work_evidence": ["artifact:marker"], "validation_evidence": ["fixture:validate-marker"]}})
+''', encoding="utf-8")
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    subject = ["--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID]
+
+    def lease(action, key, version, *options):
+        code, payload = fixture._run_cli([
+            *prefix, "task-lease", action, "--goal-id", fixture.GOAL_ID,
+            "--todo-id", fixture.TODO_ID, "--owner", fixture.AGENT_ID,
+            "--idempotency-key", key, "--expected-version", str(version), *options,
+        ])
+        assert code == 0, payload
+        return payload["lease"]
+
+    original = lease("acquire", "original-attempt", 0, "--ttl-seconds", "300") if uses_lease else None
+    adapter = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(workspace),
+        "--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "dsh-home")]
+    validator = [sys.executable, "-c", "from pathlib import Path; import json,sys; json.load(sys.stdin); "
+        f"assert Path({fixture.MARKER_NAME!r}).read_text() == {fixture._marker_value(1)!r}"]
+    argv = [*prefix, "turn", "run-once", *subject, "--host", "generic-cli", "--project", str(workspace),
+        "--execution-mode", "isolated-headless", "--no-global-sync", "--timeout-seconds", "20",
+        "--host-adapter-request-schema", "loopx_turn_host_request_v1",
+        "--host-adapter-command-json", json.dumps(adapter),
+        "--validation-command-json", json.dumps(validator), "--execute"]
+    code, first = fixture._run_cli([*argv, "--turn-instance-id", "bound-stdio-retry"])
+    assert code == 1 and first["status"] == "failed", first
+    assert marker.read_text() == "1" and fixture._quota_spend_count(runtime) == 0
+    if change == "text":
+        binding = [*subject, "--todo-id", fixture.TODO_ID]
+        code, before = fixture._run_cli([*prefix, "todo", "list", *binding])
+        assert code == 0
+        code, changed = fixture._run_cli([*prefix, "todo", "update", *binding, "--execute",
+            "--text", before["todo"]["text"] + " Follow the replacement requirement.",
+            "--update-operation-id", "change-captured-work",
+            "--update-expected-provider-revision", before["authority_read"]["provider_revision"]])
+        assert code == 0 and changed["changed"], changed
+    if change == "renew_lease":
+        assert original is not None
+        renewed = lease("renew", original["idempotency_key"], original["version"], "--ttl-seconds", "600")
+        assert renewed["lease_epoch"] == original["lease_epoch"]
+    if change == "replace_lease":
+        assert original is not None
+        released = lease("release", original["idempotency_key"], original["version"])
+        replacement = lease("acquire", "replacement-attempt", released["version"], "--ttl-seconds", "300")
+        assert replacement["lease_epoch"] > original["lease_epoch"]
+    recovery = [*argv, "--resume-turn-key", first["resume_turn_key"]]
+    code, result = fixture._run_cli([*recovery, "--retry-failed-turn"])
+    refused = change in {"text", "replace_lease"}
+    if refused:
+        assert code == 1 and result["error_code"] == "current_turn_work_changed", result
+        assert result["host_failure"]["kind"] == "contract_rejected", result
+        assert not any(result["effects"].values())
+    else:
+        assert code == 0 and result["status"] == "committed", result
+    _, replay = fixture._run_cli(recovery)
+    assert replay["replayed"] and not any(replay["effects"].values())
+    assert marker.read_text() == ("1" if refused else "2")
+    assert fixture._quota_spend_count(runtime) == (0 if refused else 1)

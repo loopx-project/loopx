@@ -2998,12 +2998,13 @@ its capabilities permits that retry through the current guard. Changed work
 requires a fresh eligible Turn. Unknown dispatch outcomes still require
 reconciliation of the original attempt.
 
-The current native launch check also binds the original hard-lease execution
+Native and external stdio launch checks bind the original hard-lease execution
 key. Renewal retains that key. Release and reacquisition require a fresh Turn,
 even when the same Agent still owns the same Todo. File/SQLite runs through
 Codex CLI and the operation-equipped app-server verify that a replacement
-lease rejects the initial dispatch and an explicit retry of that Turn before
-model work or settlement. Renewal permits dispatch.
+lease rejects the initial dispatch and explicit retry before model work or
+settlement. The stdio adapter also refuses to spawn on a retry after replacement.
+Renewal permits dispatch on each of those paths.
 
 File/SQLite cases exercise unchanged retries, capability and task changes,
 recovery in the original session, historical formats, and subprocess stdin.

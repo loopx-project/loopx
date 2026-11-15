@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import sys as _sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -769,7 +770,7 @@ def execute_turn_run_once(
         session_binding_resolver = None
 
         def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-            # Both native transports recheck the original work at launch.
+            # Native and stdio transports recheck the original work at launch.
             # A global route checks its source even if the mirror is unchanged.
             return current_turn_host_launch_decision(
                 args, registry_path=current_registry, runtime_root=runtime_root,
@@ -914,6 +915,10 @@ def execute_turn_run_once(
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,
+            host_launch_guard=(partial(
+                goal_admission.with_launch_decision(current_launch_decision).launch_lifetime,
+                operation="turn_external_host_launch",
+            ) if raw_argv is not None and goal_admission is not None else None),
         )
         if args.execute:
             result.update(drain_committed_turn_post_writeback_hooks(

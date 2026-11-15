@@ -875,6 +875,7 @@ def _run_host(
     argv: Sequence[str],
     project: Path,
     timeout_seconds: float | None,
+    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
     # Dispatch has already validated the input and resolved any recorded
     # compatibility carrier. Serialize the same request as the in-process Host.
@@ -894,7 +895,10 @@ def _run_host(
             stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
             on_stdout=stdout.append,
             on_stderr=count_stderr,
+            launch_guard=launch_guard,
         )
+    except FirstPartyHostRuntimeRejected:
+        raise
     except (OSError, RuntimeError, ValueError) as exc:
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if observed["outcome"] == "output_limit":
@@ -958,14 +962,6 @@ def _run_host_runner(
                 else {}
             ),
         }
-    except FirstPartyHostLaunchRejected as exc:
-        return {
-            "ok": False,
-            "reason": str(exc),
-            "failure_kind": "contract_rejected",
-            "launch_rejection_code": exc.code,
-            "recovery_kind": "resume_session" if exc.session_prepared else None,
-        }
     except FirstPartyHostRuntimeRejected:
         # A refusal during or after dispatch still needs reconciliation.
         raise
@@ -1014,6 +1010,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -1036,22 +1033,32 @@ def _host_result_stage(
             confirm_start()
         from ...usage_goal import observe_goal_execution
 
-        with observe_goal_execution(
-            usage_runtime_root or project,
-            usage_goal_id,
-            host=str((plan.get("host") or {}).get("kind") or "unknown"),
-        ):
-            host_observation = (
-                _run_host_runner(request, runner=host_runner)
-                if host_runner is not None
-                else _run_host(
-                    request,
-                    argv=argv or [],
-                    project=project,
-                    timeout_seconds=timeout_seconds,
+        rejected_launch: str | None = None
+        try:
+            with observe_goal_execution(
+                usage_runtime_root or project,
+                usage_goal_id,
+                host=str((plan.get("host") or {}).get("kind") or "unknown"),
+            ):
+                host_observation = (
+                    _run_host_runner(request, runner=host_runner)
+                    if host_runner is not None
+                    else _run_host(
+                        request,
+                        argv=argv or [],
+                        project=project,
+                        timeout_seconds=timeout_seconds,
+                        launch_guard=host_launch_guard,
+                    )
                 )
-            )
-        rejected_launch = host_observation.get("launch_rejection_code")
+        except FirstPartyHostLaunchRejected as exc:
+            rejected_launch = exc.code
+            host_observation = {
+                "ok": False,
+                "reason": str(exc),
+                "failure_kind": "contract_rejected",
+                "recovery_kind": "resume_session" if exc.session_prepared else None,
+            }
         effects["host_invoked"] = rejected_launch is None
         if not host_observation.get("ok"):
             failure = _host_failure(
@@ -1579,6 +1586,7 @@ def run_loopx_turn_once(
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
     argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
     transaction_plan = (
@@ -1851,6 +1859,7 @@ def run_loopx_turn_once(
             persist_journal=persist_journal,
             effects=effects,
             confirm_start=confirm_start if reserved_start else None,
+            host_launch_guard=host_launch_guard,
         )
         if terminal is not None:
             return finish_recovery(terminal)
