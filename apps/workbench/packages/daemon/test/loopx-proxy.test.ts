@@ -13,9 +13,9 @@ test('only the core namespaces are forwarded', () => {
 });
 
 test('a request is forwarded without the hub credentials, and a down core is a 502', async () => {
-  let seen: { auth?: string; host?: string; url?: string; body: string } = { body: '' };
+  let seen: { auth?: string; host?: string; url?: string; body: string; length?: string; encoding?: string } = { body: '' };
   const core = createServer((req, res) => {
-    seen = { auth: req.headers.authorization, host: req.headers.host, url: req.url, body: '' };
+    seen = { auth: req.headers.authorization, host: req.headers.host, url: req.url, body: '', length: req.headers['content-length'], encoding: req.headers['transfer-encoding'] };
     req.on('data', (c) => (seen.body += c));
     req.on('end', () => { res.writeHead(201, { 'Content-Type': 'application/json' }); res.end('{"ok":true}'); });
   });
@@ -31,6 +31,9 @@ test('a request is forwarded without the hub credentials, and a down core is a 5
   assert.equal(seen.host, coreUrl.host);
   assert.equal(seen.url, '/api/actions/preview?a=1');
   assert.equal(seen.body, '{"k":1}');
+  // Python's http.server cannot read a chunked body: the length must be sent, never chunked.
+  assert.equal(seen.length, '7');
+  assert.equal(seen.encoding, undefined);
   core.close();
   const down = await fetch(`${base}/x`);
   assert.equal(down.status, 502);

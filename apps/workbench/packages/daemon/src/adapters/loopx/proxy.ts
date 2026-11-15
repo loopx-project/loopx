@@ -31,8 +31,16 @@ export function proxyToCore(req: IncomingMessage, res: ServerResponse, path: str
   return new Promise<void>((resolve) => {
     const headers: Record<string, string | string[]> = {};
     for (const [k, v] of Object.entries(req.headers)) if (v !== undefined && !DROP_REQUEST.has(k)) headers[k] = v;
+    // The core is Python's http.server, which does not read a chunked request body. The body is buffered
+    // (these are small JSON requests) and sent with its length; only the answer is streamed.
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('error', () => { res.destroy(); resolve(); });
+    req.on('end', () => send(Buffer.concat(chunks)));
+    const send = (payload: Buffer) => {
     const upstream = httpRequest(
-      { hostname: core.hostname, port: core.port || 80, method: req.method, path: path + search, headers: { ...headers, host: core.host } },
+      { hostname: core.hostname, port: core.port || 80, method: req.method, path: path + search,
+        headers: { ...headers, host: core.host, ...(payload.length || (req.method !== 'GET' && req.method !== 'HEAD') ? { 'content-length': String(payload.length) } : {}) } },
       (answer) => {
         const out: Record<string, string | string[]> = {};
         for (const [k, v] of Object.entries(answer.headers)) if (v !== undefined && !DROP_RESPONSE.has(k)) out[k] = v;
@@ -51,6 +59,7 @@ export function proxyToCore(req: IncomingMessage, res: ServerResponse, path: str
     });
     // A page that goes away must not leave the core streaming to nobody.
     res.on('close', () => upstream.destroy());
-    req.pipe(upstream);
+    upstream.end(payload);
+    };
   });
 }
