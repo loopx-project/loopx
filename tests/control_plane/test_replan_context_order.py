@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -11,11 +13,9 @@ from test_replan_context_evidence import _settled_pair
 
 
 def _rows():
-    work, _ = _settled_pair()
-
     def decision(turn, timestamp):
-        return {**work, "generated_at": timestamp, "turn_instance_id": turn,
-            "settlement_identity": {**work["settlement_identity"], "turn_instance_id": turn},
+        work, _ = _settled_pair(turn_instance_id=turn)
+        return {**work, "generated_at": timestamp,
             "agent_vision": {"schema_version": "goal_vision_replan_contract_v0", "agent_id": "agent-a",
                 "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "replan",
                     "prior_assumption": "The current route could explain the gap.",
@@ -27,8 +27,8 @@ def _rows():
 
     older = decision("turn-old", "2026-08-18T03:00:00Z")
     latest = decision("turn-latest", "2026-08-18T01:00:00Z")
-    later = {**work, "turn_instance_id": "turn-probe", "generated_at": "2026-08-18T00:00:00Z",
-        "settlement_identity": {**work["settlement_identity"], "turn_instance_id": "turn-probe"},
+    work, _ = _settled_pair(turn_instance_id="turn-probe")
+    later = {**work, "generated_at": "2026-08-18T00:00:00Z",
         "progress_observation": {**work["progress_observation"], "surface_id": "surface-probe"}}
     return [older, latest, later]
 
@@ -63,10 +63,8 @@ def test_declared_results_survive_busy_work_through_the_source_codec(typed):
     decision["agent_vision"]["todo_delta"] = ["retain:todo-busy", "retain:todo-comparison"]
 
     def result(todo, index):
-        item = {**work, "todo_id": todo, "turn_instance_id": f"turn-work-{index}",
-            "settlement_identity": {**work["settlement_identity"], "todo_id": todo,
-                "turn_instance_id": f"turn-work-{index}"},
-            "health_check": f"Independent measured result {index}."}
+        settled, _ = _settled_pair(todo_id=todo, turn_instance_id=f"turn-work-{index}")
+        item = {**settled, "generated_at": work["generated_at"], "health_check": f"Independent measured result {index}."}
         if typed:
             item["progress_observation"] = {**work["progress_observation"], "work_item_id": todo,
                 "surface_id": f"surface-{index}"}
@@ -98,6 +96,57 @@ def test_real_append_index_ignores_compact_display_order_and_clock_skew(tmp_path
         source_status={"registry": str(registry), "runtime_root": str(tmp_path),
             "run_history": {"runs": [_rows()[0]]}}, stride_strategy="evidence_conditioned_v1")
     assert _assert_followthrough(context)["source_history_complete"] is True
+    assert index.read_bytes() == before
+
+
+def test_same_second_work_references_resolve_through_the_history_cli(tmp_path):
+    _, decision, work = _rows()
+    decision["agent_vision"]["todo_delta"] = ["retain:todo-a"]
+    work["todo_id"] = "todo-a"
+    work["delivery_outcome"] = "outcome_progress"
+    work.pop("progress_observation")
+    rows = [decision]
+    for turn in ("turn-negative-a", "turn-negative-b"):
+        recorded = {**work, "turn_instance_id": turn, "settlement_identity": {
+            **work["settlement_identity"], "todo_id": "todo-a", "turn_instance_id": turn,
+            "effect_id": f"evidence-goal:agent-a:todo-a:{turn}",
+        }}
+        rows.append(recorded)
+    first = rows[1]
+    identity = first["settlement_identity"]
+    rows.extend([dict(first), {**first, "settlement_identity": {
+        **identity, "effect_id": "evidence-goal:agent-a:todo-a:turn-unrelated",
+    }}, {**first, "settlement_identity": {key: value for key, value in identity.items() if key != "effect_id"}}])
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [{"id": "evidence-goal", "repo": str(tmp_path)}]}))
+    index = tmp_path / "goals/evidence-goal/runs/index.jsonl"
+    index.parent.mkdir(parents=True)
+    for position, row in enumerate(rows):
+        artifact = index.parent / f"run-{position}.json"
+        row["json_path"] = str(artifact)
+        artifact.write_text(json.dumps(row))
+    index.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    before = index.read_bytes()
+    context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
+        source_status={"registry": str(registry), "runtime_root": str(tmp_path),
+            "run_history": {"runs": []}})
+    followthrough = context["decision_followthrough"]
+    evidence = followthrough["ordinary_work"]
+    refs = {row["evidence_ref"] for row in evidence["evidence"]}
+    assert evidence["recorded_count"] == len(refs) == 2
+    assert followthrough["work_result_use"]["unresolved_count"] == 2
+    legacy = {key: value for key, value in work.items() if key != "settlement_identity"}
+    old_context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[legacy])
+    refs.add(old_context["evidence"][0]["evidence_ref"])
+    for ref in refs:
+        cli = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+            "--registry", str(registry), "--runtime-root", str(tmp_path), "history",
+            "--goal-id", "evidence-goal", "--agent-id", "agent-a", "--evidence-ref", ref],
+            text=True, capture_output=True, timeout=30)
+        assert cli.returncode == 0, cli.stdout + cli.stderr
+        result = json.loads(cli.stdout)
+        assert result["evidence"]["evidence_ref"] == ref
+        assert result["evidence"]["health_check"] == work["health_check"]
     assert index.read_bytes() == before
 
 
