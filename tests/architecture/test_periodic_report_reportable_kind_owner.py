@@ -16,6 +16,14 @@ literals -- an equivalent rewrite of that mapping must stay green. Behavioural
 parity runs through the consumer's own policy normalizer and the real decision
 entry.
 
+Equal values make a renamed copy indistinguishable by value, so the policy
+entry is also exercised under a controlled change of the shared definition:
+with ``manual`` removed from the imported object the entry rejects the explicit
+list (and its default follows the reduced set), and with the definition
+restored the same request passes. A same-valued copy in that path is inert
+under the change and fails there, while the report mapping and per-profile
+selections -- different slots -- are unaffected.
+
 The neighbouring ``_NON_REPORTABLE_KINDS`` (five different kinds) is a separate
 vocabulary and is deliberately left alone; it must not overlap the reportable
 set. A profile's ``enabled_kinds`` is a different slot -- a per-profile choice
@@ -228,6 +236,44 @@ def test_the_default_enabled_kinds_is_the_owner_set() -> None:
     # so the consumer's default is pinned to the borrowed object, not a copy.
     normalized = triggers._normalize_policy({})
     assert normalized["enabled_kinds"] == sorted(KINDS)
+
+
+def test_the_policy_entry_follows_the_shared_definition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A renamed same-value copy feeding only the explicit-list check passes every
+    # value check above, because the values are equal today. Make the definition
+    # observably different instead -- drop ``manual`` -- and require the real
+    # entry to reject it, then accept it again once the definition is restored.
+    # A copy is inert under that change, so it fails here.
+    reduced = KINDS - {"manual"}
+    request = {
+        "schema_version": triggers.TRIGGER_REQUEST_SCHEMA,
+        "evaluated_at": "2026-11-12T00:00:00Z",
+        "profile": {"profile_id": "manual_probe", "profile_version": "v1"},
+        "trigger_policy": {"enabled_kinds": ["manual"]},
+        "candidates": [
+            {
+                "trigger_kind": "surface_only",
+                "observed_at": "2026-11-12T00:00:00Z",
+                "source_ref": "manual-probe",
+                "evidence_digest": "manual-probe-evidence",
+                "facts": {},
+            }
+        ],
+    }
+    with monkeypatch.context() as patched:
+        # Patch both legitimate lookup forms of the shared object, so an
+        # attribute-style ``core._REPORTABLE_TRIGGER_KINDS`` read stays green too.
+        patched.setattr(core, "_REPORTABLE_TRIGGER_KINDS", reduced)
+        patched.setattr(triggers, "_REPORTABLE_TRIGGER_KINDS", reduced)
+        with pytest.raises(ValueError, match=r"enabled_kinds\[0\] is not reportable"):
+            triggers.build_periodic_report_trigger_decision(request)
+        assert triggers._normalize_policy({})["enabled_kinds"] == sorted(reduced)
+    decision = triggers.build_periodic_report_trigger_decision(request)
+    assert decision["ok"] is True
+    assert decision["selected_trigger_kind"] is None
+    assert decision["reason"] == "no_material_trigger"
 
 
 # --- the folded-value scan bites every restatement form and leaves the others -----------
