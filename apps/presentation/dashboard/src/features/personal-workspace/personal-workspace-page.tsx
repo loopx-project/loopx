@@ -129,7 +129,9 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   const latest = new Map<string, WorkspaceActionPreview>();
   proposals.forEach((proposal) => {
     const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
-    const key = proposal.actionKind === "operation.execute" || proposal.reviewPlan?.taskExecution ? proposal.previewId
+    const ownConfirmation = proposal.reviewPlan?.retryOriginal === true
+      && (proposal.actionKind === "todo.create" || proposal.actionKind === "monitor.create");
+    const key = proposal.actionKind === "operation.execute" || proposal.reviewPlan?.taskExecution || ownConfirmation ? proposal.previewId
       : [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
     // Two records can describe the same draft; keep the newest by its stored
     // time rather than whichever one this list happened to end with, since a
@@ -689,7 +691,10 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
   const operationFrame = reviewPlan.operationFrame;
   const decision = reviewPlan.decisionFrame?.decision;
   const operationTitle = operationFrame?.content.title ?? proposal.summary;
-  const localizedSummary = proposal.action_kind === "operation.execute"
+  const taskText = proposal.normalized_parameters.text;
+  const localizedSummary = reviewPlan.reason === "canonical_create_projection_pending"
+    && proposal.action_kind === "todo.create" && typeof taskText === "string" ? taskText
+    : proposal.action_kind === "operation.execute"
     ? operationTitle
     : proposal.action_kind === "team.plan"
     ? proposal.status === "applied"
@@ -2264,6 +2269,12 @@ export function PersonalWorkspacePage({
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
       const scopedReadback = isTodoCreation || ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind);
+      if (!stored && isTodoCreation && !readbackMismatch && !stale) {
+        try {
+          // The Goal list can fail independently of a single confirmation.
+          stored = await loadTypedAction(proposal.previewId, AbortSignal.timeout(8000));
+        } catch { /* The Goal list may still be readable. */ }
+      }
       if (!stored && scopedReadback && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
@@ -2285,6 +2296,19 @@ export function PersonalWorkspacePage({
           : isTodoCreation ? t("actionReview.readback_unverified")
           : t("feedback.executionFailed", { error: error instanceof Error ? error.message : String(error) }));
         return reconciled;
+      }
+      const httpStatus = error instanceof ChatApiError ? error.payload.http_status : undefined;
+      const interruptedResponse = error instanceof ChatApiError && error.payload.error_code === "chat_api_unavailable"
+        && (httpStatus === undefined || (typeof httpStatus === "number"
+          && (httpStatus < 400 || (httpStatus >= 500 && httpStatus < 600))));
+      if (!stored && !stale && !readbackMismatch && interruptedResponse
+          && isTodoCreation && proposal.reviewPlan?.reason === "canonical_create_projection_pending") {
+        // A lost response or gateway 5xx without a typed result cannot erase
+        // an observed commitment. The original apply rechecks its authority.
+        setProposals(current => ({ ...current, [proposal.previewId]: proposal }));
+        if (options.presentation !== "inline") selectReceipt(proposal);
+        setActionFeedback(t("actionReview.readback_unverified"));
+        return proposal;
       }
       const failed = {
         ...proposal,

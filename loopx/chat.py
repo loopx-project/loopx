@@ -1178,6 +1178,7 @@ def apply_prepared_todo_review(
         "receipt": _todo_write_receipt(preview_id=preview_id,
             preview_revision=expected_provider_revision, applied_payload=applied),
         "authority_write": _todo_authority_write(applied),
+        "projection_delivery": applied["projection_delivery"],
     }
 
 

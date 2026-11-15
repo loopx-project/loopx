@@ -41,6 +41,12 @@
 .goal-inline-create textarea { width: 100%; min-height: 84px; resize: vertical; border: 1px solid var(--pw-line-strong); border-radius: 6px; color: var(--pw-text); background: var(--pw-bg); padding: 10px; font: inherit; }
 .goal-inline-create [role="alert"] { color: var(--pw-red); }
 .goal-inline-create form > button { justify-self: start; }
+.goal-task-display-recovery { margin-top: 12px; border-block: 1px solid var(--pw-line); padding-block: 8px; }
+.goal-task-display-recovery h3 { margin: 0; font-size: var(--text-caption); font-weight: 600; color: var(--pw-muted); }
+.goal-task-display-recovery ul { margin: 4px 0 0; padding: 0; list-style: none; }
+.goal-task-display-recovery li > button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; min-height: 44px; border: 0; background: transparent; color: var(--pw-text); font: inherit; text-align: start; cursor: pointer; }
+.goal-task-display-recovery li > button span { overflow-wrap: anywhere; }
+.goal-task-display-recovery li > button svg { flex: none; }
 .goal-all-work { min-width: 0; display: grid; gap: 12px; padding-top: 8px; }
 .goal-work-search { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--pw-line); color: var(--pw-muted); }
 .goal-work-search input { width: 100%; min-width: 0; border: 0; padding: 10px 0; background: transparent; color: var(--pw-text); font: inherit; font-size: var(--text-body); }

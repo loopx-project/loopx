@@ -358,10 +358,10 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
             original = read(original_root)
             unrelated_todo = next(row for row in original["todos"] if row["todo_id"] == added["todo_id"])
         if change == "lost_assignment_checkpoint":
-            def lose_assignment_checkpoint(proposal_id, *, step, receipt):
+            def lose_assignment_checkpoint(proposal_id, *, step, receipt, **kwargs):
                 if step == "todo_assigned":
                     raise OSError("Interrupted after assigning the original Todo")
-                return checkpoint(proposal_id, step=step, receipt=receipt)
+                return checkpoint(proposal_id, step=step, receipt=receipt, **kwargs)
 
             with monkeypatch.context() as fault:
                 fault.setattr(store, "save_checkpoint", lose_assignment_checkpoint)

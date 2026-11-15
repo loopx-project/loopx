@@ -6,12 +6,19 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from ..agent_registry import registered_agent_ids_for_goal
-from ..chat import apply_prepared_todo_review, plan_reviewed_todo_create, todo_create_was_duplicate
+from ..chat import (
+    CHAT_TODO_RECEIPT_SCHEMA_VERSION, _stable_digest, apply_prepared_todo_review,
+    plan_reviewed_todo_create, todo_create_was_duplicate,
+)
 from ..chat_action_store import action_checkpoint_steps, is_todo_create_recovery
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )
+from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
+from ..control_plane.todos.provider_projection import (
+    projection_delivery_requires_ack, settle_canonical_todo_projection,
+)
 from ..file_lock import LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED, lock_holder_liveness, try_exclusive_file_lock
 from .todo_source import ChatTodoSource, ChatTodoSourceChanged, resolve_chat_todo_source
 
@@ -117,6 +124,74 @@ class ChatTodoCreationMixin:
             return {**proposal, "creation_retry_available": True}
         return proposal
 
+    def _pending_create_projection(
+        self, proposal: dict[str, Any], *, todo_id: str, operation_id: str,
+    ) -> dict[str, Any]:
+        saved = self.store.mark_failed(
+            proposal["proposal_id"],
+            error_code="canonical_create_projection_pending",
+            message="The task was committed. Retry this confirmation to finish updating its display.",
+            details={"canonical_committed": True, "todo_id": todo_id, "operation_id": operation_id,
+                     "projection_delivery": "pending"},
+        )
+        return {"proposal": saved, "turn": None}
+
+    def _recover_create_display(
+        self, source: ChatTodoSource, *, goal_id: str, todo_id: str, operation_id: str,
+        binding: dict[str, Any] | None, duplicate: bool = False,
+        legacy_preview_revision: str | None = None,
+    ) -> str:
+        # Repair presentation from the confirmed Goal, never from a new create
+        # or assignment. A historical receipt only proves its original effect.
+        snapshot = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
+        if binding is not None:
+            source.require_created_todo(binding, snapshot)
+        if duplicate:
+            # Semantic duplicates are no-ops and do not get a commit receipt.
+            verified = any(row.get("todo_id") == todo_id for row in snapshot["todos"])
+        else:
+            receipt = effect_runtime_result("coordination.local_authority.operation_receipt", {
+                "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+                "runtime_root": str(source.runtime_root), "goal_id": goal_id, "operation_id": operation_id,
+            })
+            rows = receipt.get("receipts") if receipt.get("status") == "found" else None
+            verified = (receipt.get("source_authority") == snapshot["source_authority"]
+                        and receipt.get("decision_read_from_provider") is True
+                        and receipt.get("legacy_fallback_used") is False
+                        and isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)
+                        and rows[0].get("goal_id") == goal_id and rows[0].get("todo_id") == todo_id
+                        and rows[0].get("operation_id") == operation_id)
+            if verified and legacy_preview_revision is not None:
+                verified = (
+                    rows[0].get("schema_version") == "loopx_coordination_todo_create_receipt_v0"
+                    and self._legacy_create_has_reviewed_parent(source, goal_id, snapshot, receipt, legacy_preview_revision)
+                )
+        if not verified:
+            raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
+        return settle_canonical_todo_projection(
+            {}, registry_path=source.registry_path, runtime_root=source.runtime_root,
+            goal_id=goal_id, expected_store_identity=snapshot["store_identity"],
+        )["projection_delivery"]
+
+    @staticmethod
+    def _legacy_create_has_reviewed_parent(
+        source: ChatTodoSource, goal_id: str, snapshot: dict[str, Any],
+        operation: dict[str, Any], preview_revision: str,
+    ) -> bool:
+        cursor = operation.get("cursor")
+        if not isinstance(cursor, str) or not cursor.isdecimal() or int(cursor) <= 1:
+            return False
+        # The old reviewed create used a provider CAS. Its original revision
+        # must be the verified predecessor of the recorded create transaction.
+        parent = effect_runtime_result("coordination.local_authority.todo_source", {
+            "schema_version": "loopx_local_coordination_todo_source_request_v0",
+            "runtime_root": str(source.runtime_root), "goal_id": goal_id,
+            "source": {"provider_revision": preview_revision, "cursor": str(int(cursor) - 1),
+                       "source_authority": snapshot["source_authority"], "store_identity": snapshot["store_identity"]},
+        })
+        return (parent.get("status") == "loaded" and parent.get("decision_read_from_provider") is True
+                and parent.get("legacy_fallback_used") is False)
+
     def _apply_monitor_create(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
     ) -> dict[str, Any]:
@@ -142,25 +217,47 @@ class ChatTodoCreationMixin:
             proposal = self._save_create_plan(proposal, source, authority, fingerprint=fingerprint,
                 resume_when=resume_when, monitor_metadata=metadata)
         arguments = self._prepared_create_arguments(proposal, source)
-        plan = action_checkpoint_steps(proposal)["todo_create_prepared"]
-        try:
-            result = add_goal_todo(
-                **source.writer_scope(), goal_id=goal_id, role="agent",
-                routing_registry_witness=source.routing_registry_witness,
-                text=_monitor_text(parameters) or str(parameters["target"]),
-                task_class="continuous_monitor", action_kind="observe",
-                claimed_by=agent_id, agent_id=agent_id, resume_when=plan["resume_when"],
-                monitor_metadata=plan["monitor_metadata"], dry_run=False, **arguments,
-            )
-        except LocalCoordinationAuthorityUnavailable as error:
-            return self._create_confirmation_conflict(proposal, error)
-        todo_id = _opaque(result.get("todo_id"), field="todo_id")
+        operation_id = arguments["operation_id"]
+        created = steps.get("todo_created")
+        if isinstance(created, dict):
+            binding = created.get("source")
+            if not isinstance(binding, dict) or binding.get("operation_id") != operation_id:
+                raise ChatTodoSourceChanged("Restore the original Goal source to recover this Monitor confirmation.")
+            source.require_review(binding)
+            todo_id = _opaque(created.get("todo_id"), field="todo_id")
+            duplicate = created.get("already_exists") is True
+            delivery = self._recover_create_display(source, goal_id=goal_id, todo_id=todo_id,
+                operation_id=operation_id, binding=binding, duplicate=duplicate)
+        else:
+            plan = action_checkpoint_steps(proposal)["todo_create_prepared"]
+            try:
+                result = add_goal_todo(
+                    **source.writer_scope(), goal_id=goal_id, role="agent",
+                    routing_registry_witness=source.routing_registry_witness,
+                    text=_monitor_text(parameters) or str(parameters["target"]),
+                    task_class="continuous_monitor", action_kind="observe",
+                    claimed_by=agent_id, agent_id=agent_id, resume_when=plan["resume_when"],
+                    monitor_metadata=plan["monitor_metadata"], dry_run=False, **arguments,
+                )
+            except LocalCoordinationAuthorityUnavailable as error:
+                return self._create_confirmation_conflict(proposal, error)
+            todo_id = _opaque(result.get("todo_id"), field="todo_id")
+            duplicate = todo_create_was_duplicate(result)
+            delivery = result["projection_delivery"]
+            self.store.save_checkpoint(proposal_id, step="todo_created", once=True, receipt={
+                "todo_id": todo_id, "already_exists": duplicate, "projection_delivery": delivery,
+                "source": {"source_identity": source.source_identity, "source_authority": result["source_authority"],
+                           "store_identity": arguments["expected_store_identity"], "operation_id": operation_id},
+            })
+        if not projection_delivery_requires_ack(delivery):
+            return self._pending_create_projection(proposal, todo_id=todo_id, operation_id=operation_id)
         receipt = {
             "receipt_id": _digest(
                 {"proposal_id": proposal_id, "goal_id": goal_id, "todo_id": todo_id}
             )[:32],
-            "outcome": "monitor_already_exists" if todo_create_was_duplicate(result) else "monitor_created",
+            "outcome": "monitor_already_exists" if duplicate else "monitor_created",
             "projection_verified": True,
+            "projection_delivery": delivery,
             "resource_ids": {"goal_id": goal_id, "todo_id": todo_id, "agent_id": agent_id},
         }
         stored = self.store.apply(proposal_id,
@@ -179,15 +276,38 @@ class ChatTodoCreationMixin:
         steps = action_checkpoint_steps(proposal)
         current_fingerprint = proposal["expected_state_fingerprint"]
         todo_step = steps.get("todo_created")
+        assigned = steps.get("todo_assigned")
+        assignment_owns_display = isinstance(assigned, dict) and bool(agent_id) and not start_execution
         if isinstance(todo_step, dict) and todo_step.get("todo_id"):
             todo_id = _opaque(todo_step.get("todo_id"), field="todo_id")
             canonical_receipt = todo_step.get("canonical_receipt")
             if not isinstance(canonical_receipt, dict):
                 raise ValueError("Todo creation checkpoint is malformed")
             binding = todo_step.get("source")
-            if not isinstance(binding, dict):
-                raise ValueError("The created Task predates source binding. Recover the original Todo before assigning it.")
-            source.require_review(binding)
+            if isinstance(binding, dict):
+                source.require_review(binding)
+                create_operation_id = binding["operation_id"]
+                delivery = todo_step.get("projection_delivery")
+                if not assignment_owns_display:
+                    delivery = self._recover_create_display(source, goal_id=goal_id, todo_id=todo_id,
+                        operation_id=create_operation_id, binding=binding,
+                        duplicate=canonical_receipt.get("already_exists") is True)
+            else:
+                if "source" in todo_step or agent_id or start_execution:
+                    raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
+                saved_id = canonical_receipt.get("receipt_id")
+                prior_revision = canonical_receipt.get("preview_revision")
+                if (canonical_receipt.get("schema_version") != CHAT_TODO_RECEIPT_SCHEMA_VERSION
+                        or canonical_receipt.get("preview_id") != current_fingerprint
+                        or canonical_receipt.get("goal_id") != goal_id or canonical_receipt.get("todo_id") != todo_id
+                        or canonical_receipt.get("status") != "applied" or canonical_receipt.get("outcome") != "todo_added"
+                        or not isinstance(prior_revision, str) or not prior_revision
+                        or saved_id != _stable_digest({key: value for key, value in canonical_receipt.items()
+                                                       if key != "receipt_id"})):
+                    raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
+                create_operation_id = f"chat-todo:{current_fingerprint}"
+                delivery = self._recover_create_display(source, goal_id=goal_id, todo_id=todo_id,
+                    operation_id=create_operation_id, binding=None, legacy_preview_revision=prior_revision)
         else:
             if agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
                 raise ValueError("the selected Agent is no longer registered for this Goal")
@@ -214,6 +334,7 @@ class ChatTodoCreationMixin:
             except LocalCoordinationAuthorityUnavailable as error:
                 return self._create_confirmation_conflict(proposal, error)
             canonical_receipt = applied["receipt"]
+            delivery = applied["projection_delivery"]
             todo_id = _opaque(canonical_receipt["todo_id"], field="todo_id")
             binding = {
                 **applied["authority_write"],
@@ -221,34 +342,51 @@ class ChatTodoCreationMixin:
                 "store_identity": arguments["expected_store_identity"],
                 "registry_sha256": arguments["expected_registry_sha256"],
             }
+            create_operation_id = binding["operation_id"]
             proposal = self.store.save_checkpoint(proposal_id, step="todo_created", once=True,
-                receipt={"todo_id": todo_id, "canonical_receipt": canonical_receipt, "source": binding})
+                receipt={"todo_id": todo_id, "canonical_receipt": canonical_receipt, "source": binding,
+                         "projection_delivery": delivery})
             steps = action_checkpoint_steps(proposal)
-        if agent_id and not start_execution and not isinstance(steps.get("todo_assigned"), dict):
-            def apply_assignment(current_source: ChatTodoSource, revision: str) -> dict[str, Any]:
-                return update_goal_todo(
-                    **current_source.writer_scope(), goal_id=goal_id, todo_id=todo_id,
-                    claimed_by=str(agent_id), agent_id=str(agent_id),
-                    authority_reason="owner-confirmed typed Chat action",
-                    update_operation_id=f"chat-assign:{proposal_id}",
-                    update_expected_provider_revision=revision,
-                    update_expected_registry_sha256=binding["registry_sha256"],
-                    routing_registry_witness=current_source.routing_registry_witness,
-                    dry_run=False,
-                )
+        if not assignment_owns_display and not projection_delivery_requires_ack(delivery):
+            return self._pending_create_projection(proposal, todo_id=todo_id, operation_id=create_operation_id)
+        if agent_id and not start_execution:
+            assignment_operation_id = f"chat-assign:{proposal_id}"
+            source = resolve_chat_todo_source(self, goal_id)
+            source.require_review(binding)
+            if isinstance(assigned, dict):
+                delivery = assigned.get("projection_delivery")
+                if delivery is None or not projection_delivery_requires_ack(delivery):
+                    delivery = self._recover_create_display(source, goal_id=goal_id, todo_id=todo_id,
+                        operation_id=assignment_operation_id, binding=binding)
+                else:
+                    source.require_created_todo(binding,
+                        read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id))
+            else:
+                def apply_assignment(current_source: ChatTodoSource, revision: str) -> dict[str, Any]:
+                    return update_goal_todo(
+                        **current_source.writer_scope(), goal_id=goal_id, todo_id=todo_id,
+                        claimed_by=str(agent_id), agent_id=str(agent_id),
+                        authority_reason="owner-confirmed typed Chat action",
+                        update_operation_id=assignment_operation_id,
+                        update_expected_provider_revision=revision,
+                        update_expected_registry_sha256=binding["registry_sha256"],
+                        routing_registry_witness=current_source.routing_registry_witness,
+                        dry_run=False,
+                    )
 
-            self._apply_created_todo_assignment(
-                proposal_id, goal_id=goal_id, todo_id=todo_id, binding=binding, steps=steps, apply=apply_assignment,
-            )
-            self.store.save_checkpoint(
-                proposal_id,
-                step="todo_assigned",
-                receipt={"todo_id": todo_id, "agent_id": str(agent_id)},
-            )
+                assignment = self._apply_created_todo_assignment(
+                    proposal_id, goal_id=goal_id, todo_id=todo_id, binding=binding, steps=steps, apply=apply_assignment,
+                )
+                delivery = assignment["projection_delivery"]
+                self.store.save_checkpoint(proposal_id, step="todo_assigned", once=True,
+                    receipt={"todo_id": todo_id, "agent_id": str(agent_id), "projection_delivery": delivery})
+            if not projection_delivery_requires_ack(delivery):
+                return self._pending_create_projection(proposal, todo_id=todo_id, operation_id=assignment_operation_id)
         receipt = {
             "receipt_id": str(canonical_receipt["receipt_id"]),
             "outcome": str(canonical_receipt["outcome"]),
             "projection_verified": True,
+            "projection_delivery": delivery,
             "resource_ids": {
                 "goal_id": str(canonical_receipt["goal_id"]),
                 "todo_id": todo_id,

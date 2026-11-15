@@ -29,16 +29,17 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
   const submitting = useRef(false);
   const [reviewed, setReviewed] = useState<{text: string; id: string} | null>(null);
   const proposal = reviewed ? proposals[reviewed.id] : undefined;
+  const pendingDisplay = proposal?.reviewPlan?.reason === "canonical_create_projection_pending" ? proposal : null;
   useEffect(() => {
     if (!reviewed || proposal) return;
     const successor = Object.values(proposals).find(item => item.regeneratedFrom === reviewed.id);
     if (successor) setReviewed({...reviewed, id: successor.previewId});
   }, [reviewed, proposal, proposals]);
   useEffect(() => {
-    if (proposal?.status !== "applied") return;
+    if (proposal?.status !== "applied" && !pendingDisplay) return;
     setText(current => current === reviewed?.text ? "" : current);
-    setReviewed(null);
-  }, [proposal?.status, reviewed]);
+    if (proposal?.status === "applied") setReviewed(null);
+  }, [pendingDisplay, proposal?.status, reviewed]);
   const textLength = boundedLength(text);
   const tooLong = textLength > todoTextLimit;
   return <div className="goal-inline-create">
@@ -58,10 +59,30 @@ function AddTask({goal, proposals, onPreview, onSelect}: {
       <label>{zh ? "任务内容" : "Task"}<textarea autoFocus aria-label={zh ? "任务内容" : "Task"} value={text} onChange={event => setText(event.target.value)} disabled={busy}/></label>
       {tooLong ? <p role="status">{zh ? `请将任务精简至 ${todoTextLimit} 字以内。` : `Shorten the task to ${todoTextLimit} characters.`}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
-      {proposal?.status === "error" || proposal?.status === "stale" ? <p role="status">{zh ? "任务尚未确认创建，草稿已保留。" : "Creation is not confirmed; your draft is retained."}</p> : null}
+      {!pendingDisplay && (proposal?.status === "error" || proposal?.status === "stale") ? <p role="status">{zh ? "任务尚未确认创建，草稿已保留。" : "Creation is not confirmed; your draft is retained."}</p> : null}
       <button disabled={busy || textLength === 0 || tooLong} type="submit">{busy ? (zh ? "正在检查…" : "Reviewing…") : (zh ? "检查任务" : "Review task")}</button>
     </form> : null}
   </div>;
+}
+
+function PendingTaskDisplay({goalId, proposals, onSelect}: {
+  goalId: string; proposals: Record<string, WorkspaceActionPreview>;
+  onSelect: (selection: WorkspaceDrawerSelection) => void;
+}) {
+  const {t} = useWorkspaceI18n();
+  const pending = Object.values(proposals).filter(proposal => proposal.goalId === goalId
+    && proposal.reviewPlan?.reason === "canonical_create_projection_pending"
+    && proposal.reviewPlan.retryOriginal);
+  if (!pending.length) return null;
+  return <section className="goal-task-display-recovery" aria-label={t("goalWork.displayPending")}>
+    <h3>{t("goalWork.displayPending")}</h3>
+    <ul>{pending.map(proposal => <li key={proposal.previewId}>
+      <button type="button" onClick={() => onSelect({kind: "proposal", item: proposal})}>
+        <span>{proposal.fields.find(field => field.key === (proposal.actionKind === "monitor.create" ? "target" : "text"))?.value ?? proposal.title}</span>
+        <ArrowRight size={15} aria-hidden/>
+      </button>
+    </li>)}</ul>
+  </section>;
 }
 
 export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoId, onSelect, board, map, brief, attention: attentionContent,
@@ -223,6 +244,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
           </div> : null}
           {!readOnly ? <AddTask goal={goal} proposals={proposals} onPreview={onPreview} onSelect={select}/> : null}
         </header>
+        {!readOnly ? <PendingTaskDisplay goalId={goal.goalId} proposals={proposals} onSelect={select}/> : null}
         <div className="goal-owner-groups" hidden={lens !== "owner"}>{digest.work.groups.map(group => <section className="goal-owner-group" key={group.ownerId ?? ""} data-owner-id={group.ownerId ?? ""}>
           <header><h3>{ownerName(group.ownerId)}</h3><span>{group.todoIds.length} {zh ? "项任务" : "tasks"} · {group.todoIds.filter(id => rows.get(id)?.displayClass === group.displayClass).length} {goalWorkClassLabel(group.displayClass, zh)}</span>
             {!readOnly && group.ownerId && onOpenAgentConversation ? <button type="button" className="goal-owner-conversation" data-agent-id={group.ownerId} aria-label={zh ? `与 ${ownerName(group.ownerId)} 对话` : `Talk to ${ownerName(group.ownerId)}`} onClick={() => onOpenAgentConversation(group.ownerId!)}>{zh ? "工作记录" : "Work conversation"}</button> : null}

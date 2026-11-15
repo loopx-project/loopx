@@ -17,7 +17,8 @@ export type ActionReviewReason =
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
   | "operation_confirmation_expired" | "operation_expiry_unknown" | "team_plan_retry"
-  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry" | "task_start_retry" | "todo_creation_retry";
+  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry" | "task_start_retry"
+  | "todo_creation_retry" | "canonical_create_projection_pending";
 
 export type OperationReviewContent = {
   title: string;
@@ -636,7 +637,10 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     && textValue(createdTodo?.todo_id) && createdTodo?.todo_id === createReceipt?.todo_id
     && textValue(parameters?.goal_id) && createReceipt?.goal_id === parameters?.goal_id
     && createReceipt?.preview_id === identity.sourceFingerprint && createReceipt.status === "applied";
-  if (originalTodoMatches && parameters?.start_execution === true
+  const pendingDisplay = (failure?.error_code === "canonical_create_projection_pending"
+      && objectValue(failure.details)?.canonical_committed === true)
+    || (objectValue(steps?.todo_assigned) ?? createdTodo)?.projection_delivery === "pending";
+  if (originalTodoMatches && parameters?.start_execution === true && !pendingDisplay
       && proposal.permission_classification === "durable_write" && identity.proposalId && identity.sourceFingerprint
       && (proposal.status === "applying" || (proposal.status === "failed" && failure?.retry_safe === true))) {
     return {...finish({interaction: "review", canApply: true, reason: "task_start_retry"}), retryOriginal: true};
@@ -648,6 +652,11 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     && textValue(createdSource?.source_identity) && textValue(createdSource?.source_authority)
     && textValue(createdSource?.store_identity) && textValue(createdSource?.registry_sha256)
     && textValue(createdSource?.provider_revision) && textValue(createdSource?.operation_id);
+  // The server must still prove the legacy operation and its provider history.
+  const legacyCreateReadback = originalTodoMatches && !Object.hasOwn(createdTodo ?? {}, "source")
+    && parameters?.agent_id == null && parameters?.start_execution !== true
+    && createReceipt?.schema_version === "loopx_chat_todo_receipt_v0"
+    && createReceipt.outcome === "todo_added" && textValue(createReceipt.preview_revision);
   const preparedCreateMatches = createPlan?.operation_id === ("chat-create:" + identity.proposalId)
     && createPlan.preview_id === identity.sourceFingerprint
     && textValue(createPlan.source_identity) && textValue(createPlan.source_authority)
@@ -663,8 +672,9 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       && proposal.permission_classification === "durable_write"
       && failure?.retry_safe !== false
       && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
-      && (interruptedBeforePlan || preparedCreateMatches || recordedCreateMatches)) {
-    return {...finish({interaction: "review", canApply: true, reason: "todo_creation_retry"}), retryOriginal: true};
+      && (interruptedBeforePlan || preparedCreateMatches || recordedCreateMatches || legacyCreateReadback)) {
+    return {...finish({interaction: "review", canApply: true,
+      reason: pendingDisplay ? "canonical_create_projection_pending" : "todo_creation_retry"}), retryOriginal: true};
   }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null

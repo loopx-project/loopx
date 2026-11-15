@@ -121,10 +121,25 @@ def native_command(controller: Any, argv: list[str]) -> dict[str, Any]:
     return result
 
 
+def todo_confirmation_readback(proposal: dict[str, Any], proposal_id: str) -> dict[str, Any]:
+    failure = proposal.get("failure") or {}
+    if (proposal.get("status") == "failed" and failure.get("error_code") == "canonical_create_projection_pending"
+            and (failure.get("details") or {}).get("canonical_committed") is True):
+        return {"response": ("待办已创建，展示尚未更新。请在原确认有效期内"
+                             f"重试 /confirm {proposal_id} 以完成更新。")}
+    if proposal.get("status") != "applied":
+        raise ValueError("the creation preview became stale; prepare a new preview")
+    receipt = proposal["receipt"]
+    return {"todo_receipt": receipt, "response": (
+        f"已记录待办：{proposal['normalized_parameters']['text']}\n"
+        f"目标：{receipt['resource_ids']['goal_id']}；规范写入回执已读回。本次没有启动执行。")}
+
+
 __all__ = [
     "NativeStewardCommandError",
     "execute_steward_fast_path",
     "native_command",
     "native_fast_path_triage",
     "parse_steward_fast_path_intent",
+    "todo_confirmation_readback",
 ]
