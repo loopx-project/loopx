@@ -40,7 +40,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
   const [busy, setBusy] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const openController = useRef<AbortController | null>(null);
-  const connectionRead = useRef<{controller: AbortController; refresh: () => void} | null>(null);
+  const connectionRead = useRef<{cancel: () => void; refresh: () => void} | null>(null);
   useEffect(() => () => openController.current?.abort(), []);
   async function openOriginal(bindingId: string) {
     setOpening(bindingId); setError("");
@@ -71,14 +71,22 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
 
   useEffect(() => {
     if (busy) return;
-    const controller = new AbortController();
-    const {signal} = controller;
+    let active = true;
+    let currentRequest: AbortController | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let reading = false;
-    async function read() {
-      if (reading || signal.aborted) return;
+    function cancel() {
+      active = false;
       clearTimeout(timer);
-      reading = true;
+      currentRequest?.abort();
+    }
+    async function read() {
+      if (!active) return;
+      clearTimeout(timer);
+      // A manual refresh must read authorization even while diagnostics wait.
+      currentRequest?.abort();
+      const request = new AbortController();
+      currentRequest = request;
+      const {signal} = request;
       let hasSettings = false;
       let nextReadMs = 5000;
       try {
@@ -87,6 +95,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
         hasSettings = true;
         setSettings(current);
         setSettingsUnavailable(false);
+        setDiagnosticsUnavailable(false);
         const fresh = await fetchPrivateConversationDiagnostics(current, AbortSignal.any([signal, AbortSignal.timeout(30000)]));
         if (signal.aborted) return;
         setDiagnostics(fresh);
@@ -105,13 +114,12 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
           setSettingsUnavailable(true);
         }
       } finally {
-        reading = false;
         if (!signal.aborted) timer = setTimeout(() => void read(), nextReadMs);
       }
     }
-    connectionRead.current = {controller, refresh: () => void read()};
+    connectionRead.current = {cancel, refresh: () => void read()};
     void read();
-    return () => {controller.abort(); clearTimeout(timer); connectionRead.current = null;};
+    return () => {cancel(); connectionRead.current = null;};
   }, [busy, refreshAfterMutation]);
 
   useEffect(() => {
@@ -138,7 +146,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
   }
 
   async function act(operation: () => Promise<unknown>) {
-    connectionRead.current?.controller.abort();
+    connectionRead.current?.cancel();
     setDiagnostics(null);
     setBusy(true); setError("");
     try {await operation();} catch (error) {setError(String(error));}
