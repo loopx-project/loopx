@@ -1,0 +1,41 @@
+.autotitle-page { box-sizing: border-box; height: 100%; overflow-y: auto; max-width: 720px; margin: 0 auto; padding: 32px 32px 48px; color: var(--text); }
+.autotitle-lead { margin: 0 0 24px; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+.autotitle-section { padding: 22px 0; border-top: 1px solid var(--border); }
+.autotitle-row > .pop { flex: 0 1 auto; min-width: 0; }
+.autotitle-section h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+.autotitle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.autotitle-note { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.autotitle-section h2 + .autotitle-note { margin: -4px 0 10px; }
+.autotitle-muted { color: var(--muted); }
+.autotitle-error { color: var(--danger); font-size: 12.5px; line-height: 1.6; }
+.autotitle-button { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 34px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.autotitle-button:hover:not(:disabled) { background: var(--hover); }
+.autotitle-button:disabled { opacity: .55; cursor: default; }
+.autotitle-button.primary { border-color: transparent; background: var(--accent); color: var(--accent-fg); }
+.autotitle-button.primary:hover:not(:disabled) { background: var(--accent); opacity: .9; }
+.autotitle-thread { max-width: min(420px, 100%); }
+.autotitle-thread span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.autotitle-link { padding: 0 4px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.autotitle-link:hover { color: var(--text); }
+.autotitle-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.autotitle-choice { display: flex; flex-direction: column; gap: 3px; padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.autotitle-choice:hover { background: var(--hover); }
+.autotitle-choice.on { border-color: var(--border-strong); box-shadow: var(--shadow-selected); }
+.autotitle-choice-label { display: block; font-size: 13.5px; }
+.autotitle-choice-hint { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.autotitle-switch { display: flex; align-items: flex-start; gap: 12px; width: 100%; margin-top: 12px; padding: 6px 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.autotitle-switch-track { flex: none; position: relative; width: 32px; height: 18px; margin-top: 1px; border-radius: var(--radius-pill); background: var(--border-strong); transition: background .15s; }
+.autotitle-switch-track span { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow-radio); transition: transform .15s; }
+.autotitle-switch.on .autotitle-switch-track { background: var(--accent); }
+.autotitle-switch.on .autotitle-switch-track span { transform: translateX(14px); }
+.autotitle-rules { box-sizing: border-box; width: 100%; margin-bottom: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; line-height: 1.65; resize: vertical; outline: none; }
+.autotitle-rules:focus { border-color: var(--border-strong); box-shadow: var(--shadow-selected); }
+.autotitle-result { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 13.5px; }
+.autotitle-result strong { font-size: 15px; font-weight: 600; }
+.autotitle-result .autotitle-note { flex-basis: 100%; margin: 0; }
+.autotitle-status { display: flex; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+.autotitle-status span { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 640px) {
+  .autotitle-page { padding: 22px 18px 40px; }
+  .autotitle-choices { grid-template-columns: 1fr; }
+}

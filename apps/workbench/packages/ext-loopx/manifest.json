@@ -1,0 +1,95 @@
+{
+  "id": "loopx",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "name": {
+    "zh": "LoopX",
+    "en": "LoopX",
+    "ja": "LoopX"
+  },
+  "description": {
+    "zh": "在线程和看板查看 LoopX 目标、待办与待决定事项。",
+    "en": "View LoopX goals, todos and decisions in threads and boards.",
+    "ja": "スレッドとボードで LoopX の目標・タスク・判断待ちを表示。"
+  },
+  "permissions": [
+    "commands.run",
+    "worksource.read"
+  ],
+  "contributes": {
+    "workSource": true
+  },
+  "process": {
+    "entry": "src/index.mjs"
+  },
+  "answers": [
+    "extension.detect",
+    "extension.validateSettings",
+    "worksource.snapshot"
+  ],
+  "settings": [
+    {
+      "key": "executable",
+      "scope": "installation",
+      "label": {
+        "zh": "LoopX 可执行文件",
+        "en": "LoopX executable",
+        "ja": "LoopX 実行ファイル"
+      },
+      "default": "loopx",
+      "required": true
+    },
+    {
+      "key": "registry",
+      "scope": "binding",
+      "label": {
+        "zh": "Registry 文件路径",
+        "en": "Registry file path",
+        "ja": "Registry ファイルパス"
+      },
+      "required": true,
+      "kind": "path"
+    }
+  ],
+  "commands": [
+    {
+      "id": "version",
+      "executable": {
+        "setting": "executable"
+      },
+      "args": [
+        "--version"
+      ],
+      "scope": "installation",
+      "effect": "read",
+      "env": {
+        "LOOPX_USAGE_PING": "0"
+      }
+    },
+    {
+      "id": "status",
+      "executable": {
+        "setting": "executable"
+      },
+      "args": [
+        "--registry",
+        {
+          "setting": "registry"
+        },
+        "status",
+        "--format",
+        "json",
+        "--goal-id",
+        {
+          "binding": "externalId"
+        }
+      ],
+      "scope": "binding",
+      "effect": "runtime",
+      "env": {
+        "LOOPX_USAGE_PING": "0"
+      },
+      "timeoutMs": 20000
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "connected_without_run": {
+    "zh": "已关联，待执行",
+    "en": "Connected, awaiting work",
+    "ja": "接続済み・実行待ち"
+  },
+  "active_state_agent_todo": {
+    "zh": "有待推进的任务",
+    "en": "Work to continue",
+    "ja": "継続するタスクあり"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "board",
+  "version": "0.4.0",
+  "apiVersion": 1,
+  "name": {
+    "zh": "看板",
+    "en": "Board",
+    "ja": "ボード"
+  },
+  "description": {
+    "zh": "按进行中、等你、待验收和已完成排列线程。agent 每轮结束会报告进度，完成由你勾选。",
+    "en": "Lays out threads as in progress, needs you, to review and done. Agents report progress at the end of each turn; you mark threads done.",
+    "ja": "スレッドを進行中・対応待ち・確認待ち・完了に並べます。エージェントは各ターンの終わりに進捗を報告し、完了はあなたがチェックします。"
+  },
+  "permissions": [
+    "events.summary",
+    "progress.report",
+    "worksource.read",
+    "assistant.ask"
+  ],
+  "contributes": {
+    "views": [
+      {
+        "id": "board",
+        "title": {
+          "zh": "看板",
+          "en": "Board",
+          "ja": "ボード"
+        },
+        "icon": "board",
+        "route": "#/board",
+        "sidebar": {
+          "pinned": true
+        }
+      }
+    ]
+  }
+}

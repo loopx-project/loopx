@@ -1,0 +1,42 @@
+{
+  "id": "autotitle",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "name": {
+    "zh": "自动取名",
+    "en": "Auto titles",
+    "ja": "自動タイトル"
+  },
+  "description": {
+    "zh": "新线程第一轮结束后，让你指定的 agent 按你的规则起一个简短标题。你改过的标题不会被动。",
+    "en": "After a new thread's first turn, the agent you choose gives it a short title by your rules. Titles you set yourself are left alone.",
+    "ja": "新しいスレッドの最初のターンが終わると、選んだエージェントがあなたのルールで短いタイトルを付けます。自分で付けたタイトルはそのままです。"
+  },
+  "permissions": [
+    "events.summary",
+    "transcript.read",
+    "threads.rename",
+    "agents.ask"
+  ],
+  "subscribes": [
+    "turn.started",
+    "turn.finished"
+  ],
+  "contributes": {
+    "views": [
+      {
+        "id": "autotitle",
+        "title": {
+          "zh": "自动取名",
+          "en": "Auto titles",
+          "ja": "自動タイトル"
+        },
+        "icon": "bolt",
+        "route": "#/autotitle",
+        "sidebar": {
+          "pinned": false
+        }
+      }
+    ]
+  }
+}

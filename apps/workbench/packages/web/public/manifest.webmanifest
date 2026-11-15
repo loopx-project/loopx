@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "Calli",
+  "short_name": "Calli",
+  "description": "Calli · 远程 coding agent 工作台",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay"],
+  "background_color": "#f8f6f1",
+  "theme_color": "#f8f6f1",
+  "icons": [
+    {
+      "src": "/calli-icon.png?v=crab-1",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
