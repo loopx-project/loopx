@@ -192,8 +192,12 @@ function appAutomation(decision: SchedulerBackoffTransitionResult, cadence: Cade
 function hostFacts(request: JsonObject, profile: HintProfile, decision: SchedulerBackoffTransitionResult, scope: JsonObject): JsonObject | null {
   const payload = request.payload as JsonObject, agent = jsonObject(payload.agent_identity)?.agent_id;
   if (!payload.goal_id || !agent) return null;
+  // The follow-up the host repeats verbatim must stay bound to the Goal instance
+  // whose Turn produced the receipt. Without it a native command can only
+  // resolve a Turn id, and two instances sharing this log would collide.
+  const goalRef = jsonObject(request.goal_ref);
   return {schema_version: "loopx_scheduler_heartbeat_host_facts_v0", goal_id: String(payload.goal_id), agent_id: String(agent),
-    ...scope, progression_index: decision.current_index, progression_minutes: scope.progression_minutes,
+    ...(goalRef === null ? {} : {goal_ref: goalRef}), ...scope, progression_index: decision.current_index, progression_minutes: scope.progression_minutes,
     expected_rrule: decision.current_rrule, cadence_class: profile.cadence_class, stale_tolerance_minutes: 2,
     generated_at: request.generated_at, ack_needed: ["apply_required", "host_match_ack_required"].includes(decision.host_transition),
     apply_needed: decision.host_transition === "apply_required"};

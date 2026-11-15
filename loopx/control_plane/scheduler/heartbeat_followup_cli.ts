@@ -4,7 +4,7 @@ import {
   effectRuntimeErrorPayload,
   EffectRuntimeRequestError,
 } from "../effect_runtime_errors.ts";
-import { requireJsonObject } from "../runtime_decode.ts";
+import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
 import { isSupportedNodeVersion } from "../runtime/node_version.ts";
 import {
   evaluateSchedulerHeartbeatFollowup,
@@ -214,6 +214,12 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
   const facts = requireJsonObject(hint.host_facts, "host_facts");
   matchingText(facts, "goal_id", parsed.goal_id, "--goal-id");
   matchingText(facts, "agent_id", parsed.agent_id, "--agent-id");
+  // The origin receipt's scope travels with the facts it was generated for.
+  // Passing it into the transaction is what keeps the pre-flight check and the
+  // in-lock recheck on that receipt instead of resolving the bare Turn id again.
+  const goalRef = jsonObject(facts.goal_ref);
+  if (goalRef !== null)
+    matchingText(goalRef, "goal_id", parsed.goal_id, "--goal-id");
   const expectedOperation = parsed.command === "scheduler-ack-current"
     ? "ack"
     : "host_failure";
@@ -291,6 +297,7 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
       runtime_root: parsed.runtime_root,
       turn_instance_id: parsed.turn_instance_id,
       require_heartbeat_receipt: true,
+      ...(goalRef === null ? {} : { goal_ref: goalRef }),
       before: hint.before ?? {},
       use_current_hint: hint.use_current_hint ?? expectedOperation === "ack",
       reason_summary: values["--reason-summary"] ?? null,

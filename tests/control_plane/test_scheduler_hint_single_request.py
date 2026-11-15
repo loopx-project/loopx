@@ -176,3 +176,54 @@ def test_invalid_host_view_preserves_python_whitespace_rules(surface, view):
     assert hint["action"] == "repair_scheduler_execution_context"
     assert hint[view]["applicability"] == "blocked_invalid_context"
     assert ("codex_app" if view == "app_automation" else "app_automation") not in hint
+
+
+def _followup_facts(cli_args: list[str]) -> dict:
+    import base64
+    import json
+    import zlib
+
+    encoded = "".join(
+        cli_args[index + 1]
+        for index, value in enumerate(cli_args[:-1])
+        if value == "--scheduler-host-facts-chunk"
+    )
+    padded = encoded + "=" * (-len(encoded) % 4)
+    return json.loads(zlib.decompress(base64.b64decode(padded)))["host_facts"]
+
+
+def _ack_hint_facts(payload: dict) -> dict:
+    arbitration = SchedulerArbitration(
+        SchedulerDisposition("active_work"), "active_work", "normal_run"
+    )
+    hint = scheduler_hint.build_scheduler_hint(
+        payload,
+        arbitration=arbitration,
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            "codex_app_heartbeat"
+        ),
+    )
+    return _followup_facts(hint["app_automation"]["ack_hint"]["cli_args"])
+
+
+def _hint_payload() -> dict:
+    return {
+        "goal_id": "hint-fixture",
+        "agent_identity": {"agent_id": "agent-fixture"},
+        "heartbeat_recommendation": {"recommended_mode": "normal_run"},
+        "recommended_action": "Perform the bounded work.",
+        "effective_action": "normal_run",
+        "interaction_contract": {"mode": "normal_run"},
+    }
+
+
+def test_generated_ack_hint_carries_the_origin_goal_instance():
+    goal_ref = {"goal_id": "hint-fixture", "goal_instance_id": "ginst_" + "a" * 32}
+    facts = _ack_hint_facts({**_hint_payload(), "goal_ref": goal_ref})
+    # A shared log can hold another instance's row under the same Turn id, so the
+    # generated command must not resolve its receipt from the Turn id alone.
+    assert facts["goal_ref"] == goal_ref
+
+
+def test_generated_ack_hint_omits_scope_for_a_legacy_owner():
+    assert "goal_ref" not in _ack_hint_facts(_hint_payload())

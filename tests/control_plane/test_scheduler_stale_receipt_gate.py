@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -356,3 +359,103 @@ def test_another_goal_instance_receipt_cannot_expire_the_receipt(
         runtime, goal_id=GOAL, agent_id=SCOPED_AGENT_ID, state_key=APP_KEY
     )
     assert state is not None
+
+
+def _prepend_receipt(
+    runtime: Path, turn: str, goal_ref: dict[str, str]
+) -> None:
+    """Place another Goal instance's row before the admitted Turn's receipt."""
+
+    path = rollout_event_log_path(runtime, GOAL)
+    row = json.dumps(
+        build_rollout_event(
+            goal_id=GOAL,
+            event_kind="quota_should_run",
+            goal_ref=goal_ref,
+            agent_id=SCOPED_AGENT_ID,
+            run_id=turn,
+            status="normal_run",
+            details={"ok": True, "should_run": True},
+        ),
+        sort_keys=True,
+    )
+    path.write_bytes(row.encode("utf-8") + b"\n" + path.read_bytes())
+
+
+def _run_generated(
+    hint: dict, operation: str, project: Path
+) -> tuple[int, dict]:
+    """Run the native follow-up command the hint generated for this Turn."""
+
+    packet = hint["scheduler_hint"]["app_automation"][f"{operation}_hint"]
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json", *packet["cli_args"]],
+        cwd=project,
+        check=False,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+    )
+    return result.returncode, json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("operation", ["ack", "failure"])
+def test_generated_native_writeback_refuses_a_shared_turn_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, operation: str
+) -> None:
+    """The generated command cannot resolve its receipt from the Turn id alone.
+
+    Two Goal instances may write one Turn id into this log. When another
+    instance's row lands first, picking it as the origin would scan the wrong
+    instance's successors and let the admitted Turn's stale writeback through.
+    """
+
+    registry, runtime, project = _fixture(tmp_path, monkeypatch, provider=provider)
+    hint = _should_run(registry, runtime, project, TURN_1)
+    _prepend_receipt(runtime, TURN_1, exact_goal_ref(GOAL, OTHER_INSTANCE))
+    _supercede(runtime, TURN_2)
+
+    code, result = _run_generated(hint, operation, project)
+
+    assert code == 1, result
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "heartbeat_receipt_ambiguous"
+    assert not scheduler_state_path(
+        runtime, goal_id=GOAL, agent_id=SCOPED_AGENT_ID, state_key=APP_KEY
+    ).exists()
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_generated_native_failure_writeback_commits_without_a_shared_turn_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    """Control: the same generated command still writes when nothing collides."""
+
+    registry, runtime, project = _fixture(tmp_path, monkeypatch, provider=provider)
+    hint = _should_run(registry, runtime, project, TURN_1)
+
+    code, result = _run_generated(hint, "failure", project)
+
+    assert code == 0, result
+    assert result["ok"] is True
+    assert result["scheduler_state_mutated"] is True
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_generated_native_ack_only_refuses_on_a_shared_turn_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    """The ambiguity is decided by the log, not by the writeback's own gates."""
+
+    registry, runtime, project = _fixture(tmp_path, monkeypatch, provider=provider)
+    hint = _should_run(registry, runtime, project, TURN_1)
+
+    code, result = _run_generated(hint, "ack", project)
+
+    assert code == 1, result
+    assert result["reason_code"] == "rrule_mismatch"
+    assert "error" not in result
+

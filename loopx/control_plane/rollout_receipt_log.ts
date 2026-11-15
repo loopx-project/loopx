@@ -190,12 +190,29 @@ export async function heartbeatReceiptStatus(params: {
     params.agentId,
   );
   if (snapshot === null || receipts === null) return "missing";
-  const firstReceipt = receipts.find((event) =>
+  const firstReceiptMatches = receipts.filter((event) =>
     event.run_id === params.turnInstanceId &&
     (requestedScope === null ||
       quotaScopeOwnsProjection(requestedScope, event.goal_ref))
   );
-  if (firstReceipt === undefined) return "missing";
+  if (firstReceiptMatches.length === 0) return "missing";
+  // A command generated before the origin scope travelled with its facts cannot
+  // say which instance its Turn belonged to. Two Goal instances may share one
+  // Turn id inside a log they both write, and taking whichever row landed first
+  // would scan the wrong instance's successors and let a stale writeback
+  // through, so the ambiguity is refused instead of guessed. The host re-reads
+  // a scoped hint and retries with the origin receipt's own scope.
+  if (
+    requestedScope === null &&
+    new Set(firstReceiptMatches.map((event) => receiptScopeKey(event.goal_ref)))
+      .size > 1
+  ) {
+    throw new EffectRuntimeRequestError(
+      "heartbeat receipt Turn identity matches more than one Goal instance",
+      "heartbeat_receipt_ambiguous",
+    );
+  }
+  const firstReceipt = firstReceiptMatches[0];
   const firstMatch = snapshot.events.indexOf(firstReceipt);
   if (firstMatch < 0) return "missing";
   // The receipt itself states the scope its successor scan may use: a legacy
@@ -216,6 +233,12 @@ export async function heartbeatReceiptStatus(params: {
   )
     ? "stale"
     : "fresh";
+}
+
+/** One comparable key per scope, so ambiguity is decided by set size. */
+function receiptScopeKey(value: unknown): string {
+  const scope = quotaProjectionScope(value);
+  return scope === null ? "unscopable" : JSON.stringify(scope);
 }
 
 /**

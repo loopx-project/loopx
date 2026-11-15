@@ -326,8 +326,13 @@ def build_scheduler_hint(
         for key in ("agent_todo_summary", "user_todo_summary")
     ]
     facts = _projection_facts(payload)
+    # The generated follow-up commands must stay bound to the Goal instance whose
+    # Turn produced the receipt, so the owner scope travels beside the facts
+    # rather than being re-resolved from a bare Turn id at execution time.
+    goal_ref = payload.get("goal_ref")
     params = {
         "payload": facts,
+        "goal_ref": dict(goal_ref) if isinstance(goal_ref, Mapping) else None,
         "identity_json": _identity_json(payload),
         "context": context.projection(),
         "arbitration": asdict(arbitration) if arbitration is not None else None,

@@ -367,3 +367,95 @@ test("native host-followup transport rejects inflated facts beyond its bound", (
     "invalid_scheduler_host_facts",
   );
 });
+
+const ownInstance = { goal_id: goalId, goal_instance_id: `ginst_${"a".repeat(32)}` };
+const otherInstance = { goal_id: goalId, goal_instance_id: `ginst_${"b".repeat(32)}` };
+
+async function writeReceiptRows(
+  runtimeRoot: string,
+  rows: readonly { turn: string; goalRef?: Record<string, string> }[],
+): Promise<void> {
+  const path = join(runtimeRoot, "goals", goalId, "rollout-event-log.jsonl");
+  await mkdir(dirname(path), { recursive: true });
+  const lines = rows.map((row) => JSON.stringify({
+    schema_version: "loopx_rollout_event_v0",
+    event_kind: "quota_should_run",
+    goal_id: goalId,
+    agent_id: agentId,
+    run_id: row.turn,
+    ...(row.goalRef === undefined ? {} : { goal_ref: row.goalRef }),
+  }));
+  await writeFile(path, `${lines.join("\n")}\n`, "utf8");
+}
+
+function scopedHint(): Record<string, unknown> {
+  const hint = hintPayload();
+  hint.host_facts = { ...(hint.host_facts as Record<string, unknown>), goal_ref: ownInstance };
+  return hint;
+}
+
+// A shared log can hold another Goal instance's row under the same Turn id. A
+// command that only resolves that id would pick whichever row landed first and
+// scan the wrong instance's successors, so the generated facts carry the origin
+// scope and the command keeps it.
+test("native follow-up keeps the receipt scope its facts bound", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceiptRows(runtimeRoot, [
+    { turn: turnId, goalRef: otherInstance },
+    { turn: turnId, goalRef: ownInstance },
+    { turn: "turn-followup-cli-next", goalRef: ownInstance },
+  ]);
+
+  const scoped = runCli(argv(runtimeRoot, "json", scopedHint()));
+  const scopedResult = JSON.parse(scoped.stdout) as Record<string, unknown>;
+  assert.equal(scoped.status, 1, scoped.stderr);
+  assert.equal(
+    scopedResult.error_code,
+    "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE",
+  );
+  assert.equal(scopedResult.scheduler_state_mutated, false);
+});
+
+// The same log with no successor is legal for the instance that owns the Turn.
+test("a bound scope accepts its own fresh receipt beside another instance", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceiptRows(runtimeRoot, [
+    { turn: turnId, goalRef: otherInstance },
+    { turn: turnId, goalRef: ownInstance },
+  ]);
+
+  const scoped = runCli(argv(runtimeRoot, "json", scopedHint()));
+  assert.equal(scoped.status, 0, scoped.stderr);
+  assert.equal(
+    ((JSON.parse(scoped.stdout) as Record<string, unknown>).scheduler_commit as Record<string, unknown>).status,
+    "written",
+  );
+});
+
+// A historical command generated before the scope travelled in its facts cannot
+// tell the two rows apart; refusing is the only answer that cannot write back to
+// the wrong instance.
+test("an unscoped command refuses a Turn id shared by two Goal instances", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceiptRows(runtimeRoot, [
+    { turn: turnId, goalRef: otherInstance },
+    { turn: turnId, goalRef: ownInstance },
+  ]);
+
+  const unscoped = runCli(argv(runtimeRoot));
+  const result = JSON.parse(unscoped.stdout) as Record<string, unknown>;
+  assert.equal(unscoped.status, 1, unscoped.stderr);
+  assert.equal(result.status, "error");
+  assert.equal(
+    (result.error as Record<string, unknown>).code,
+    "heartbeat_receipt_ambiguous",
+  );
+});
+
+test("an unscoped legacy log still accepts its own single Turn receipt", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await writeReceiptRows(runtimeRoot, [{ turn: turnId }]);
+
+  const unscoped = runCli(argv(runtimeRoot));
+  assert.equal(unscoped.status, 0, unscoped.stderr);
+});
