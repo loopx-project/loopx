@@ -4561,3 +4561,30 @@ view shows its independently checked result in the same conversation.
   contents or activation. Full Settings journeys, actual-model adoption, total
   cost, natural process drain, complete D2/D5 closure, R1/M3, full C1 acceptance
   and its default cutover remain unqualified.
+
+### 2026-11-15 — Skip automatic usage observers for existing opt-outs
+
+- **Gap:** Python observation hints recognized fewer environment opt-outs than
+  the existing TypeScript usage owner. `LOOPX_USAGE_PING=off`, `CI=1` or
+  `DO_NOT_TRACK=yes` could still schedule observers, including binding/native
+  metadata discovery, before TypeScript rejected sending.
+- **Delta:** one negative-only host hint preserves the owner's per-variable
+  trim/case semantics and skips automatic CLI, Host, quota, direct-cycle and
+  detached observation earlier. `LOOPX_USAGE_PING=yes` and `CI=false` remain
+  permitted by that hint; `DO_NOT_TRACK=false` remains blocked. TypeScript
+  retains positive decisions, notice, consent, generation, state and sending;
+  allowed payloads and business errors retain their original contracts.
+- **Evidence:** against source baseline
+  `main@2e52541f909089181e7415e0d796f6d413c83dbf`, the real CLI counterexample
+  starts six detached Node children, two for each of the three opt-outs; all
+  return blocked. The same candidate replay starts zero, preserving CLI results
+  and fixture state. Source validation passes 107 Python and 55 TypeScript
+  tests. Eight permitted environment cases retain 48 complete observation
+  requests and Host error behavior under fixed fixture/clocks; this payload
+  comparison captures dispatch locally, alongside the real transport tests.
+- **Boundary:** this qualifies source automatic-observation isolation only.
+  Updated installed Core and current-C1 qualification remain pending. It does
+  not establish whole process/network closure, natural process drain, measured
+  overhead or complete-cost benefit, actual-model adoption, full D2/D5,
+  R1/M3, Goal completion or C1 default cutover. Preserve earlier checkpoints,
+  failures, budgets and acceptance requirements.

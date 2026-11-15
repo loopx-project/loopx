@@ -3530,3 +3530,24 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
 - **边界：**本次收窄 metadata discovery，不改变安装的 capability 内容或 activation。
   全 Settings 旅程、真实模型采纳、总成本、自然进程 drain、完整 D2/D5 闭包、
   R1/M3、完整 C1 验收及其默认切换仍未资格化。
+
+### 2026-11-15 — 既有 opt-out 提前跳过自动 usage 观察
+
+- **缺口：**Python observation hints 识别的环境 opt-out 少于原 TypeScript usage
+  owner。`LOOPX_USAGE_PING=off`、`CI=1` 或 `DO_NOT_TRACK=yes` 仍可能调度观察，
+  包括 binding／native metadata 发现，之后 TypeScript 才拒绝发送。
+- **增量：**一个 negative-only host hint 保留原 owner 各变量的 trim／case 语义，
+  提前跳过自动 CLI、Host、quota、direct-cycle 和 detached observation。
+  `LOOPX_USAGE_PING=yes`、`CI=false` 仍通过该 hint，`DO_NOT_TRACK=false` 仍阻断。
+  正向 decision、notice、consent、generation、state 和发送继续由 TypeScript
+  持有；允许路径的 payload 和业务错误保留原契约。
+- **证据：**源码基线 `main@2e52541f909089181e7415e0d796f6d413c83dbf` 的真实 CLI
+  反例启动六个 detached Node 子进程，每个上述 opt-out 各两个，均返回 blocked；
+  相同候选回放启动零个，CLI 结果和 fixture state 保持不变。源码验证通过
+  107 个 Python、55 个 TypeScript 测试。固定 fixture／clocks 的八个允许环境
+  场景保留 48 个完整 observation request 与 Host 错误行为；该 payload 对照
+  在本地捕获 dispatch，并与真实 transport 测试并列，范围不同。
+- **边界：**本次仅资格化源码 automatic-observation 隔离。更新后的 installed
+  Core 与 current-C1 资格仍待完成；不证明完整 process／network 闭包、自然进程
+  drain、实测 overhead 或完整成本收益、真实模型采用、完整 D2/D5、R1/M3、
+  Goal 完成或 C1 默认切换。保留既有 checkpoints、失败、预算和验收要求。
