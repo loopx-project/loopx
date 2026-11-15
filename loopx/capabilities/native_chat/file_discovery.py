@@ -11,6 +11,11 @@ from threading import Lock
 from typing import Any
 
 
+def external_source_route_path(root: Path, binding_id: str, source_ref: str) -> Path:
+    """Locate the original source's cross-process admission fence."""
+    return root / "source-fences" / f"{binding_id}.{source_ref}.json"
+
+
 def _ordinary_request_text_digest(row: dict[str, Any]) -> str | None:
     """Match ordinary private text without retaining its body in discovery."""
     message = row.get("message")
