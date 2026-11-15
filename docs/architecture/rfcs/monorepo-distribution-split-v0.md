@@ -4632,6 +4632,10 @@ view shows its independently checked result in the same conversation.
   errors remain on the original activation service and typed state owner.
   Unrelated commands and top-level help retain lazy loading; App and messaging
   controls retain their existing owner.
+- **Ownership boundary:** the existing native outer-controller guard now
+  recognizes lifecycle execution for its managed Goal. Owner/controller labels
+  cannot bypass that guard; preview, other Goals and ordinary execution remain
+  available. The same guard protects selected and full CLI entrypoints.
 - **Source evidence:** owner-only command help, complete-parser comparison,
   source stop/resume and anonymous/stale-fingerprint refusal regressions protect
   V2/V3 reachability and ordinary CLI parity. Planned activation timestamps are

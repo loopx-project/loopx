@@ -514,6 +514,23 @@ def test_installed_core_goal_lifecycle_preserves_work_and_resumes_execution(core
     assert replay["effects"]["quota_spent"] is False
 
 
+@pytest.mark.parametrize("operation", ["stop", "resume"])
+@pytest.mark.parametrize("actor", ["owner", "controller"])
+def test_installed_core_goal_lifecycle_respects_outer_controller(core_python, task, operation, actor):
+    workspace, runtime, registry, arguments = task
+    before = (registry.read_bytes(), (runtime / "registry.global.json").read_bytes())
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "goal-lifecycle", "--goal-id", GOAL, "--operation", operation, "--actor-kind", actor]
+    environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "1", "LOOPX_KUNLUNCODE_OUTER_GOAL_ID": GOAL}
+    preview = json.loads(_run(core_python, prefix, workspace, environment=environment).stdout)
+    assert preview["written"] is False
+    blocked = _run(core_python, [*prefix, "--execute"], workspace, environment=environment, expected=2)
+    assert blocked.stdout == ""
+    assert json.loads(blocked.stderr)["error_code"] == "kunluncode_outer_controller_write_owned"
+    assert (registry.read_bytes(), (runtime / "registry.global.json").read_bytes()) == before
+    assert _spends(runtime) == 0 and not (workspace / "host-invocations").exists()
+
+
 def _assert_committed(core_python, workspace, runtime, result):
     assert result["status"] == "committed", result
     assert result["validation"]["status"] == "passed"

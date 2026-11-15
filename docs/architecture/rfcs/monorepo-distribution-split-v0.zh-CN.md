@@ -3586,6 +3586,9 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   expected fingerprint、preview、partial-write 读回与错误继续由原 activation
   service 和 typed state owner 持有。无关命令及顶层 help 保持 lazy loading；
   App 与消息控制继续使用既有 owner。
+- **写入归属边界：**既有 native outer-controller guard 现在识别其受管 Goal 的
+  生命周期执行。Owner／controller 标签不能绕过该 guard；preview、其他 Goal
+  与普通执行继续可用。同一个 guard 保护 selected 及完整 CLI 入口。
 - **源码证据：**仅加载命令 owner 的 help、完整 parser 对照、源码 stop／resume、
   anonymous 与 stale-fingerprint 拒绝回归，保护 V2/V3 入口可达性及普通 CLI
   parity。计划 activation 的时间戳独立校验，不在不同调用之间比较相等。
