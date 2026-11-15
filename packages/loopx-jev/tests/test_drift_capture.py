@@ -594,37 +594,98 @@ def test_windows_rejects_workspace_swap_between_lstat_and_open(
             saved.rename(repo)
 
 
-@pytest.mark.parametrize("alias", ["record.txt", "RECORD.txt"])
-def test_index_only_change_is_seen_through_case_alias(repo, alias):
-    def git(*args):
-        return subprocess.run(
-            ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-        ).stdout
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    ).stdout
 
+
+@pytest.fixture
+def icase_repo(repo):
     if (
-        git(
-            "config", "--type=bool", "--default=false", "--get", "core.ignorecase"
+        _git(
+            repo, "config", "--type=bool", "--default=false", "--get", "core.ignorecase"
         ).strip()
         != "true"
     ):
         pytest.skip("requires a case-insensitive workspace")
     if os.name != "nt" and not hasattr(os, "O_NOFOLLOW"):
         pytest.skip("unsupported capture platform")
-    (repo / "record.txt").write_bytes(b"original\n")
-    git("add", "record.txt")
+    return repo
+
+
+def _stage(repo, name, text):
+    target = repo / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(text)
+    _git(repo, "add", "--", name)
+
+
+@pytest.mark.parametrize("literal_env", [False, True], ids=["clean-env", "literal-env"])
+@pytest.mark.parametrize(
+    ("tracked", "alias"),
+    [
+        ("record.txt", "record.txt"),
+        ("record.txt", "RECORD.txt"),
+        ("caf\u00e9.txt", "CAF\u00c9.txt"),
+        ("dir/caf\u00e9.txt", "DIR/CAF\u00c9.txt"),
+    ],
+    ids=["exact", "ascii-alias", "non-ascii-alias", "aliased-directory"],
+)
+def test_index_only_change_is_seen_through_any_spelling(
+    icase_repo, monkeypatch, literal_env, tracked, alias
+):
+    repo = icase_repo
+    if literal_env:
+        # An inherited pathspec mode must not reinterpret the capture's own queries.
+        monkeypatch.setenv("GIT_LITERAL_PATHSPECS", "1")
+    _stage(repo, tracked, b"original\n")
     before = drift_capture.stable_capture(repo, [alias])
     assert before["files"][alias]["text"] == "original\n"
     # Stage different content, then restore the working file: only the index changed.
-    (repo / "record.txt").write_bytes(b"staged\n")
-    git("add", "record.txt")
-    (repo / "record.txt").write_bytes(b"original\n")
+    _stage(repo, tracked, b"staged\n")
+    (repo / tracked).write_bytes(b"original\n")
     after = drift_capture.stable_capture(repo, [alias])
     assert after["content_digest"] == before["content_digest"]
     assert after["index_digest"] != before["index_digest"]
-    # An untracked or absent neighbour keeps its ordinary empty index evidence.
+
+
+@pytest.mark.parametrize(
+    ("tracked", "alias"),
+    [("record.txt", "RECORD.txt"), ("caf\u00e9.txt", "CAF\u00c9.txt")],
+    ids=["ascii-alias", "non-ascii-alias"],
+)
+def test_deleted_but_tracked_file_keeps_index_evidence_through_alias(
+    icase_repo, tracked, alias
+):
+    repo = icase_repo
+    empty = drift_capture.stable_capture(repo, [alias])
+    assert empty["files"][alias] is None
+    _stage(repo, tracked, b"first\n")
+    (repo / tracked).unlink()
+    first = drift_capture.stable_capture(repo, [alias])
+    assert first["files"][alias] is None
+    assert first["index_digest"] != empty["index_digest"]
+    _stage(repo, tracked, b"second\n")
+    (repo / tracked).unlink()
+    second = drift_capture.stable_capture(repo, [alias])
+    assert second["index_digest"] != first["index_digest"]
+
+
+def test_distinct_and_missing_files_keep_empty_index_evidence(icase_repo):
+    repo = icase_repo
+    empty = drift_capture.stable_capture(repo, ["missing.txt"])
+    assert empty["files"]["missing.txt"] is None
+    # A tracked neighbour with another name is not evidence for the selected file.
+    _stage(repo, "record.txt", b"tracked\n")
+    _stage(repo, "dir/record.txt", b"tracked elsewhere\n")
+    for name in ("missing.txt", "new/missing.txt", "records.txt"):
+        captured = drift_capture.stable_capture(repo, [name])
+        assert captured["index_digest"] == empty["index_digest"], name
+    (repo / "untracked.txt").write_bytes(b"new\n")
     assert (
-        drift_capture.stable_capture(repo, ["missing.txt"])["files"]["missing.txt"]
-        is None
+        drift_capture.stable_capture(repo, ["untracked.txt"])["index_digest"]
+        == empty["index_digest"]
     )
 
 

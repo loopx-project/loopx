@@ -8,6 +8,8 @@ import os
 import stat
 import subprocess
 import tempfile
+import unicodedata
+from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -22,6 +24,21 @@ def digest(value: Any) -> str:
     return hashlib.sha256(request_bytes(value)).hexdigest()
 
 
+# Inherited pathspec modes would reinterpret the explicit pathspecs used below.
+_PATHSPEC_ENV = (
+    "GIT_LITERAL_PATHSPECS",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+)
+
+
+def _git_env() -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if key not in _PATHSPEC_ENV}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
 def git(repo: Path, *args: str) -> str:
     # File-backed output avoids accumulating an unbounded Git response in RAM.
     with tempfile.TemporaryFile() as output:
@@ -31,7 +48,7 @@ def git(repo: Path, *args: str) -> str:
             stderr=subprocess.DEVNULL,
             timeout=5,
             check=False,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env=_git_env(),
         )
         output.seek(0)
         raw = output.read(131073)
@@ -208,9 +225,83 @@ def _windows_capture(repo: Path, target: Path) -> tuple[bytes, int] | None:
             return raw, opened.st_mode & 0o111
 
 
+def _name_key(name: str) -> str:
+    # One component, compared the way a case-insensitive file system resolves it.
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", name).lower())
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _disk_parent(repo: Path, name: str) -> str:
+    """Spell the existing leading directories of name as their parents list them."""
+    parts = name.split("/")[:-1]
+    current, spelled = repo, []
+    for position, part in enumerate(parts):
+        try:
+            names = os.listdir(current)
+        except OSError:
+            return "/".join([*spelled, *parts[position:]])
+        if part not in names:
+            if not os.path.lexists(current / part):
+                return "/".join([*spelled, *parts[position:]])
+            # Prefer names that fold to the same key; a short-name alias has none.
+            folded = [
+                listed for listed in names if _name_key(listed) == _name_key(part)
+            ]
+            matches = [
+                listed
+                for listed in folded or names
+                if _same_file(current / listed, current / part)
+            ]
+            # An unresolved spelling stays as given; path validity is judged by capture.
+            if len(matches) == 1:
+                part = matches[0]
+        spelled.append(part)
+        current = current / part
+    return "/".join(spelled)
+
+
+def _index_children(repo: Path, parent: str) -> Iterator[str]:
+    """Yield the index records directly inside parent without holding the listing."""
+    escaped = "".join("\\" + char if char in "\\*?[" else char for char in parent)
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(
+            [
+                "git",
+                "--no-optional-locks",
+                "-C",
+                str(repo),
+                "ls-files",
+                "--stage",
+                "-z",
+                "--",
+                ":(glob,icase)" + (escaped + "/*" if escaped else "*"),
+            ],
+            stdout=output,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+            env=_git_env(),
+        )
+        if result.returncode:
+            raise ValueError("git_evidence_unavailable")
+        output.seek(0)
+        pending = b""
+        while chunk := output.read(65536):
+            *complete, pending = (pending + chunk).split(b"\0")
+            for record in complete:
+                yield record.decode("utf-8")
+
+
 def _index(repo: Path, paths: list[str]) -> str:
-    # A case-insensitive workspace opens RECORD.txt as the tracked record.txt;
-    # read that entry the same way so its staged changes are not missed.
+    literal = git(
+        repo, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", *paths
+    )
     try:
         icase = (
             git(repo, "config", "--type=bool", "--get", "core.ignorecase").strip()
@@ -218,16 +309,35 @@ def _index(repo: Path, paths: list[str]) -> str:
         )
     except ValueError:  # unset: Git matches paths exactly
         icase = False
-    if icase:
-        return git(
-            repo,
-            "ls-files",
-            "--stage",
-            "-z",
-            "--",
-            *(f":(icase,literal){name}" for name in paths),
-        )
-    return git(repo, "--literal-pathspecs", "ls-files", "--stage", "-z", "--", *paths)
+    if not icase:
+        return literal
+    # A case-insensitive workspace opens an alias such as RECORD.txt as the tracked
+    # record.txt. Git matches neither a literal alias nor, beyond ASCII, an icase
+    # one, so find the entry for the same file among its directory's index entries.
+    records = {record for record in literal.split("\0") if record}
+    found = {record.split("\t", 1)[1] for record in records}
+    for name in paths:
+        if name in found:
+            continue
+        target = repo / name
+        key = _name_key(name.rsplit("/", 1)[-1])
+        for record in _index_children(repo, _disk_parent(repo, name)):
+            path = record.split("\t", 1)[1]
+            if _name_key(path.rsplit("/", 1)[-1]) != key:
+                continue
+            entry = repo / path
+            # Two existing files that only share a key are different files.
+            if (
+                os.path.lexists(target)
+                and os.path.lexists(entry)
+                and not _same_file(entry, target)
+            ):
+                continue
+            records.add(record)
+    return "".join(
+        record + "\0"
+        for record in sorted(records, key=lambda item: (item.split("\t", 1)[1], item))
+    )
 
 
 def capture(repo: Path, paths: list[str]) -> dict[str, Any]:
