@@ -79,5 +79,6 @@ export function failureLabel(failure: LoopxStatusFailure | null): string {
   if (!failure) return '';
   if (failure.kind === 'not-connected') return t('loopx.notConnected');
   if (failure.kind === 'bad-data') return t('loopx.badData', failure.detail);
+  if (failure.detail === 'loopx_core_unavailable') return t('loopx.coreDown');
   return t('loopx.unavailable', failure.detail);
 }

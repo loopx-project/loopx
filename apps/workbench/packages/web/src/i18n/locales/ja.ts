@@ -2873,6 +2873,7 @@ export const ja: Messages = {
   },
   'loopx.objective': '目標',
   'loopx.notConnected': 'LoopX コアは未接続です（プロキシ未整備または Python サービス停止中）。',
+  'loopx.coreDown': 'LoopX コアサービスが停止しているため、Goals と管家は現在読めません。',
   'loopx.badData': (detail: string) => `LoopX 状態の解析に失敗：${detail}`,
   'loopx.unavailable': (detail: string) => `LoopX コアは利用できません：${detail}`,
   'loopx.steward': 'LoopX 管家',

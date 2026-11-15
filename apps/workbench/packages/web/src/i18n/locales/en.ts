@@ -2877,6 +2877,7 @@ export const en: Messages = {
   },
   'loopx.objective': 'Objective',
   'loopx.notConnected': 'The LoopX core is not connected yet (proxy not ready, or the Python service is down).',
+  'loopx.coreDown': 'The LoopX core service is not running; Goals and the steward cannot be read right now.',
   'loopx.badData': (detail: string) => `LoopX status failed to parse: ${detail}`,
   'loopx.unavailable': (detail: string) => `The LoopX core is unavailable: ${detail}`,
   'loopx.steward': 'LoopX steward',

@@ -2875,6 +2875,7 @@ export const zh = {
   },
   'loopx.objective': '目标',
   'loopx.notConnected': 'LoopX 核心尚未接入（反代未就绪或 Python 服务未启动）。',
+  'loopx.coreDown': 'LoopX 核心服务没有在运行（8792），Goals 和管家暂时读不到。',
   'loopx.badData': (detail: string) => `LoopX 状态解析失败：${detail}`,
   'loopx.unavailable': (detail: string) => `LoopX 核心暂不可用：${detail}`,
   'loopx.steward': 'LoopX 管家',

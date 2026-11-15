@@ -155,6 +155,11 @@ export async function fetchLoopxStatus(options: { url?: string; token?: string; 
   const response = await fetch(options.url ?? '/api/loopx/status.json', { headers, signal: options.signal });
   if (response.status === 404) throw new LoopxStatusError('not-connected', 'the LoopX core is not proxied');
   if (response.status === 401) throw new LoopxStatusError('unavailable', 'the LoopX core rejected the token');
+  if (response.status === 502) {
+    // The proxy's own word for "the Python service is down"; keep it, it says more than the status code.
+    const body = await response.json().catch(() => null);
+    throw new LoopxStatusError('unavailable', body && typeof body === 'object' && 'error' in body ? String((body as { error: unknown }).error) : 'the LoopX core service is down');
+  }
   if (!response.ok) throw new LoopxStatusError('unavailable', `status answered ${response.status}`);
   try {
     return parseLoopxStatus(await response.json());
