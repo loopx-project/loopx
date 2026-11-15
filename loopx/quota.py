@@ -1244,6 +1244,7 @@ def record_quota_scheduler_ack(
     | None = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     before_decision: Mapping[str, Any] | None = None,
+    turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     safe_agent_id = normalize_todo_claimed_by(agent_id)
@@ -1278,6 +1279,7 @@ def record_quota_scheduler_ack(
         reason_summary=reason_summary,
         use_current_hint=use_current_hint,
         host_match_observed=host_match_observed,
+        turn_instance_id=turn_instance_id,
     )
 
 

@@ -442,6 +442,134 @@ def test_scheduler_fail_current_rejects_missing_turn_receipt_without_state_write
     assert not state_path.exists()
 
 
+def _scheduler_state_files(runtime_root: Path) -> list[Path]:
+    return [
+        path
+        for goal_dir in sorted((runtime_root / "goals").glob(f"{GOAL_ID}*"))
+        for path in sorted((goal_dir / "scheduler-state").rglob("*.json"))
+    ]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("operation", ["scheduler-ack-current", "scheduler-fail-current"])
+def test_scheduler_followup_gates_state_migration(
+    tmp_path: Path, provider: str, operation: str,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture", scoped_agents=True, provider=provider,
+    )
+
+    def call(command: str, turn: str, *flags: str):
+        return run_json_cli_result(
+            "quota", command, "--goal-id", GOAL_ID, "--agent-id", SCOPED_AGENT_ID,
+            "--codex-app", "--app-automation-current-rrule", "FREQ=MINUTELY;INTERVAL=5",
+            "--turn-instance-id", turn, *flags,
+            registry_path=registry_path, runtime_root=runtime_root, cwd=project,
+        )
+
+    stale, current = "heartbeat-older", "heartbeat-current"
+    for turn in (stale, current):
+        rc, guard = call("should-run", turn)
+        assert rc == 0 and guard["ok"] is True
+        assert guard["heartbeat_receipt"]["turn_instance_id"] == turn
+    app = guard["scheduler_hint"]["app_automation"]
+    key = APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    flags = ["--state-key", key]
+    if operation == "scheduler-fail-current":
+        flags.extend(["--failed-rrule", app["recommended_rrule"]])
+
+    def reject_stale(*execution: str) -> None:
+        rc, payload = call(operation, stale, *flags, *execution)
+        assert rc == 1 and payload["ok"] is False
+        assert payload["status"] == "heartbeat_receipt_stale"
+        assert payload["state"] == "blocked_receipt"
+        assert payload["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
+        assert payload["write_performed"] is False
+        assert payload["scheduler_state_mutated"] is False
+        assert payload["quota_spend_performed"] is False
+
+    reject_stale("--execute")
+    assert _scheduler_state_files(runtime_root) == []
+
+    canonical = scheduler_state_path(
+        runtime_root, goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID, state_key=key,
+    )
+    legacy = (
+        runtime_root / "goals" / GOAL_ID / "scheduler-state"
+        / SCOPED_AGENT_ID / "codex_app" / canonical.name
+    )
+    assert legacy != canonical
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps(build_scheduler_state(
+        goal_id=GOAL_ID, agent_id=SCOPED_AGENT_ID, state_key=key,
+        reset_token="earlier-upgrade", identity_signature="earlier-host",
+        progression_index=0, progression_minutes=[3, 10, 30],
+        last_applied_rrule="FREQ=MINUTELY;INTERVAL=5",
+        updated_at="2026-01-01T00:00:00Z",
+    )), encoding="utf-8")
+    original = legacy.read_bytes()
+
+    for execution in ([], ["--execute"]):
+        reject_stale(*execution)
+        assert legacy.read_bytes() == original
+        assert not canonical.exists()
+    rc, preview = call(operation, current, *flags)
+    assert rc == 0 and preview["ok"] is True
+    assert legacy.read_bytes() == original and not canonical.exists()
+
+    rc, committed = call(operation, current, *flags, "--execute")
+    assert rc == 0 and committed["ok"] is True
+    assert committed["scheduler_state_mutated"] is True
+    assert canonical.exists() and not legacy.exists()
+
+
+def test_scheduler_ack_current_routes_the_newest_turn_receipt(
+    tmp_path: Path,
+) -> None:
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+
+    seeded_rc, seeded = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-newest",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert seeded_rc == 0
+    assert seeded["ok"] is True
+
+    returncode, payload = run_json_cli_result(
+        "quota",
+        "scheduler-ack-current",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        "heartbeat-newest",
+        "--execute",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+
+    assert returncode == 0
+    assert payload["ok"] is True
+    assert payload["scheduler_state_mutated"] is True
+    assert Path(payload["scheduler_state_path"]).exists()
+
+
 def test_trae_app_scheduler_failure_does_not_read_codex_automation_store(
     tmp_path: Path,
     monkeypatch,
