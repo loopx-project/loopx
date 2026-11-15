@@ -93,6 +93,8 @@ import { SchedulesPage } from './components/SchedulesPage';
 import { AssistantHome } from './components/AssistantPanel';
 import { TodosPage } from './components/TodosPage';
 import { ActivityPage } from './components/ActivityPage';
+import { GoalBar, GoalConfirm, GoalPermissionPicker, LoopxToggle } from './components/LoopxGoal';
+import { defaultGoalPermission, fetchGoalCapabilities, goalOf, lx, type GoalAgentCapability, type GoalPermission } from './loopx/launch';
 import { ExtensionsPage } from './components/ExtensionsPage';
 import { VoiceOrb, VoiceControls } from './components/VoiceOrb';
 import { useVoiceSession } from './voice-session';
@@ -738,6 +740,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [draftCwd, setDraftCwd] = useState(() => typeof start === 'object' && 'draft' in start ? start.draft.project ?? keptDraft?.cwd ?? '' : keptDraft?.cwd ?? '');
   // A new thread may start in a git worktree of its directory; offered only when the directory is in a repository.
   const [draftWorktree, setDraftWorktree] = useState(false);
+  // A new conversation can be handed to LoopX as a Goal: it then runs under the Goal's own two permission levels.
+  const [draftLoopx, setDraftLoopx] = useState(false);
+  const [goalCaps, setGoalCaps] = useState<GoalAgentCapability[]>([]);
+  const [draftGoalPermission, setDraftGoalPermission] = useState<GoalPermission | null>(null);
+  const [pendingGoal, setPendingGoal] = useState<{ text: string; resolve: () => void; reject: (e: unknown) => void } | null>(null);
   const [worktreeOffer, setWorktreeOffer] = useState<{ cwd: string; branch: string | null; changes: number } | null>(null);
   const [draftSectionId, setDraftSectionId] = useState<string | null>(null);
   const [draftWorkMode, setDraftWorkMode] = useState<WorkMode>('execute');
@@ -749,6 +756,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const modelPreferences = useModelPreferences(api, error => setError(message(error)));
   const [modelsByAgent, setModelsByAgent] = useState<Record<string, ModelOption[]>>(() => (keepThreads ? cachedModels(hostId) ?? {} : {}));
   const draftCaps = agents.find(agent => agent.id === draftAgent)?.capabilities;
+  const goalCap = goalCaps.find(cap => cap.agent === draftAgent);
+  const draftGoalLevel: GoalPermission = draftGoalPermission && goalCap?.permissions.find(p => p.id === draftGoalPermission)?.available ? draftGoalPermission : defaultGoalPermission(goalCap);
+  useEffect(() => {
+    if (api.demo || !token) return;
+    void fetchGoalCapabilities(token).then(setGoalCaps, () => setGoalCaps([]));
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  // An agent that cannot hold a Goal takes the mode back off.
+  useEffect(() => { if (draftLoopx && goalCap && !goalCap.available) setDraftLoopx(false); }, [draftAgent, goalCap?.available]); // eslint-disable-line react-hooks/exhaustive-deps
   const draftChoice = fitDraftModelPreference(modelPreferences.preferences[draftAgent] ?? EMPTY_MODEL_PREFERENCE,
     modelsByAgent[draftAgent] ?? [], draftCaps?.effortLevels ?? [], Boolean(draftCaps?.speed));
   const { model: draftModel, effort: draftEffort, speed: draftSpeed } = draftChoice;
@@ -2014,6 +2029,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     setError(null);
     try {
       let id = selectedId;
+      // A Goal is reviewed by the LoopX core before it exists; the draft stays in the box until it is created or backed out of.
+      if (!id && draftLoopx && !draftTeam) {
+        if (images.length || videos.length) throw new Error(lx('LoopX Goal 暂不支持带图片或视频发起', 'A Goal cannot be started with images or videos yet'));
+        return await new Promise<void>((resolve, reject) => setPendingGoal({ text, resolve, reject }));
+      }
       if (!id && draftTeam) {
         if (videos.length) throw new Error(t('teams.attachments'));
         const task = await api.dispatchTeam(draftTeam, text, draftCwd, images.map(({ data, mimeType }) => ({ data, mimeType })));
@@ -2672,13 +2692,17 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     </Popover>);
 
   const left = (<>
-    <PermissionPicker
-      modes={permissionModes}
-      value={permission}
-      canAsk={activeCaps?.approvals ?? true}
-      openSignal={permissionSignal}
-      onChange={(m) => (selected ? updateSelected({ permissionMode: m }) : setDraftPermission(m))}
-    />
+    {goalOf(selected) ? null : !selected && draftLoopx ? (
+      <GoalPermissionPicker capability={goalCap} value={draftGoalLevel} onChange={setDraftGoalPermission} />
+    ) : (
+      <PermissionPicker
+        modes={permissionModes}
+        value={permission}
+        canAsk={activeCaps?.approvals ?? true}
+        openSignal={permissionSignal}
+        onChange={(m) => (selected ? updateSelected({ permissionMode: m }) : setDraftPermission(m))}
+      />
+    )}
   </>);
 
   // When the thread's agent has run out of plan, the one-click takeover must use the
@@ -3444,15 +3468,19 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           header={header}
           writingMode={draftTeam ? undefined : { active: !!writing, disabled: writingBusy, onChange: active => void changeWriting(active ? 'draft' : null) }}
           takeover={outOfPlan && !voice.state.active ? { from: agentLabel(selected!.agent), current: selected!.agent, go: (agent, note) => threadActions.takeOver(selected!, agent, note) } : undefined}
-          banner={writing && !draftTeam && <WritingBar writing={writing} busy={writingBusy} onStage={stage => void changeWriting(stage)} onEnd={() => void changeWriting(null)}
+          banner={<>{goalOf(selected) && selected && !api.demo && <GoalBar token={token} threadId={selected.id} binding={goalOf(selected)!} running={selected.status === 'running'} title={selected.title} />}{writing && !draftTeam && <WritingBar writing={writing} busy={writingBusy} onStage={stage => void changeWriting(stage)} onEnd={() => void changeWriting(null)}
             onOpen={file => void openFileLink(file).catch(handleError)}
             habits={habitsPath ? { path: habitsPath, ready: habitsReady } : null}
             onCheckHabits={() => void checkWritingHabits()}
-            onOpenHabits={path => void openFileLink(path).catch(handleError)} />}
+            onOpenHabits={path => void openFileLink(path).catch(handleError)} />}</>}
           planMode={!draftTeam && activeCaps?.workModes?.includes('plan') ? { active: workMode === 'plan', disabled: running || modeBusy, onChange: active => void changeWorkMode(active ? 'plan' : 'execute') } : undefined}
           left={draftTeam ? undefined : left}
           right={draftTeam ? undefined : right}
-          composerActions={(canVoice || canVoiceDraft) && !voice.state.active && (
+          composerActions={<>
+            {!selected && !draftTeam && !api.demo && goalCap && (
+              <LoopxToggle active={draftLoopx} disabledReason={goalCap.available ? undefined : goalCap.reason} onToggle={() => setDraftLoopx(on => !on)} />
+            )}
+            {(canVoice || canVoiceDraft) && !voice.state.active && (
             <button
               type="button"
               className={`tool-btn composer-voice${voice.state.active ? ' active' : ''}`}
@@ -3464,6 +3492,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               <IconWaveform size={16} />
             </button>
           )}
+          </>}
           commands={commandsByKey[commandsKey] ?? []}
           goal={activeCaps?.goal}
           goalState={goalView}
@@ -3613,6 +3642,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             setAddAgentOpen(false);
           }}
         />
+      )}
+      {pendingGoal && (
+        <GoalConfirm token={token} agent={draftAgent} agentLabel={agentLabel(draftAgent)} cwd={draftCwd} permission={draftGoalLevel} text={pendingGoal.text}
+          model={draftModel} effort={draftEffort}
+          onCancel={() => { pendingGoal.reject(new Error('not sent')); setPendingGoal(null); }}
+          onCreated={(threadId) => { pendingGoal.resolve(); setPendingGoal(null); setDraftLoopx(false); setSelectedId(threadId); setView('thread'); void refreshThreads(); }} />
       )}
       {pendingSend && (
         <Dialog
