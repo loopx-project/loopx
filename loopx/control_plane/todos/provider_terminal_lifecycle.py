@@ -127,6 +127,7 @@ def route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any]
             call.get("completion_identity_source") if complete else None
         ),
         review_basis=call.get("terminal_review_basis"),
+        routing_registry_witness=call.get("routing_registry_witness"),
         expected_todo_text_sha256=call.get("expected_todo_text_sha256"),
         require_captured_todo_text=call.get("require_captured_todo_text") is True,
         completion_delivery_workspace=(
@@ -281,6 +282,7 @@ def terminal_canonical_todo_if_promoted(
     self_merged: bool,
     dry_run: bool,
     review_basis: Mapping[str, Any] | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
     expected_todo_text_sha256: str | None = None,
     require_captured_todo_text: bool = False,
     project: Path | None = None,
@@ -329,7 +331,7 @@ def terminal_canonical_todo_if_promoted(
             )["result"]
             result_descriptor = {key: bound[key] for key in
                                  ("provider", "sha256", "size_bytes", "content_type")}
-    with authority_registry_source(registry_path) as registry_source:
+    with authority_registry_source(registry_path, routing_registry_witness=routing_registry_witness) as registry_source:
         registered, grants = todo_lifecycle_facts(registry_path, goal_id)
         successor_intents = build_successor_intents(
             next_agent_todo=next_agent_todo,
