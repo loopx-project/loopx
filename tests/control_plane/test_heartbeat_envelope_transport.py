@@ -645,8 +645,7 @@ def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, tur
     assert "--decision-output-root" in guard and "--codex-context-root" in guard
     assert "visible-goal" in enabled["quota_spend_command"]
     assert enabled["interface_budget"]["within_budget"]
-    assert shlex.split(guard).count("--complete-turn") == 1
-    assert "--turn-envelope" not in shlex.split(guard)
+    assert not {"--complete-turn", "--turn-envelope"} & set(shlex.split(guard))
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -961,8 +960,7 @@ def test_ssh_goal_generated_command_uses_complete_source(tmp_path, monkeypatch, 
     assert rc == 0, current
     assert_complete_turn_decision(current)
     assert "detail_ref.full_decision" not in prompt["task_body"]
-    assert shlex.split(guard).count("--complete-turn") == 1
-    assert "--turn-envelope" not in shlex.split(guard)
+    assert not {"--complete-turn", "--turn-envelope"} & set(shlex.split(guard))
     identity = current["heartbeat_receipt"]["settlement_identity"]
     plan = current["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == identity
