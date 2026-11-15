@@ -291,6 +291,12 @@ soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成�
 这取得脚本式本地执行与调用方资格；实际模型采用、校准、同预算与跨任务
 收益仍未证明。
 
+直接 `run-once` 恢复现经普通 writeback callback 及其 resolver 保留已提交的
+重放标记。经验证的原回执修复可在 Yardstick 关闭后完成，新 typed 捕获仍被拒绝。
+聚焦的 File/SQLite 回归保留原 Run 和 Host，只写一个 finding 与回执、扣额一次，
+并验证重放无副作用及新捕获拒绝。这修复既有恢复合同，不新增 owner 或 activation；
+已安装 Host、其它后端及收益仍沿各自门禁。
+
 后端名称也须有实际 provider 证据。共享的
 [本地 authority fixture](../../../tests/control_plane/canonical_authority_fixture.py)
 现于存储或 writer-fence 副作用前拒绝不支持的 provider；

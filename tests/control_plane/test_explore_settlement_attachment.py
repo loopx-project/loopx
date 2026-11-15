@@ -259,7 +259,9 @@ def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mo
 @pytest.mark.parametrize("kind", ["progress", "completion", "terminal", "successor"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("recovery", ["turn", "refresh", "combined_refresh"])
-def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatch, provider, kind, recovery):
+def test_turn_recovers_requested_delivery_from_original_run(
+    tmp_path, monkeypatch, provider, kind, recovery, *, with_yardstick=False,
+):
     import contextlib
     import io
     import sys
@@ -278,6 +280,9 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
 
     project, runtime, registry = _write_attachment_turn_fixture(tmp_path, provider, kind)
     configure_goal(registry_path=registry, goal_id="loopx-turn-fixture", execute=True, explore_mode="evidence")
+    if with_yardstick:
+        configure_goal(registry_path=registry, goal_id="loopx-turn-fixture",
+                       execute=True, execution_yardstick_enabled=True)
     workspace = project / "host-workspace"
     workspace.mkdir()
     vision = {
@@ -294,6 +299,25 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
                            "interpretation": "Recover the original evidence; method benefit is unqualified.",
                            "status": "confirmed", "evidence_refs": ["result:original-attachment"]},
     }
+    if with_yardstick:
+        import hashlib
+        from tests.control_plane.test_work_yardstick_cli import decision
+
+        digest = hashlib.sha256(b"completed").hexdigest()
+        attachment = vision["explore_result"]
+        attachment["execution_observation"] = {
+            "schema_version": "explore_execution_observation_v0", "candidate_sha256": digest,
+            "result_candidate_sha256": digest, "input_revision": "fixture-v1",
+            "planned_method_id": "method:artifact-check", "executed_method_id": "method:artifact-check",
+            "change_reason": None, "elapsed_seconds": None, "limit_seconds": None,
+            "search_iterations": 1, "stop_reason": "artifact validated", "exit_code": 0,
+            "evidence_refs": ["result:original-attachment"], "result_ref": "result:original-attachment",
+        }
+        attachment["work_yardstick_decision"] = choice = decision()
+        choice["counterevidence_refs"] = ["result:original-attachment"]
+        for role in ("authoritative", "proxy"):
+            choice[role]["input_revision"] = "fixture-v1"
+        choice["next_action"]["method_id"] = "method:artifact-check"
     host, validator = _completion_host_and_validation_scripts()
     if kind == "progress":
         host = host.replace('"result_kind": "validated_completion"', '"result_kind": "validated_progress"')
@@ -373,6 +397,9 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
         assert not explore_result_log_path(runtime, identity["goal_id"]).exists()
         assert original.read_bytes() == original_bytes
         assert (workspace / "host-count.txt").read_text() == "1"
+    if with_yardstick:
+        configure_goal(registry_path=registry, goal_id="loopx-turn-fixture",
+                       execute=True, execution_yardstick_enabled=False)
     available = True
     if recovery != "turn":
         output = io.StringIO()
@@ -437,3 +464,39 @@ def test_ordinary_cli_settlement_without_evidence_does_not_create_graph(tmp_path
     assert rc == 0, spent
     assert _spend_run_count(runtime) == 1
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
+
+    if with_yardstick:
+        assert len(writeback_receipts()) == 1
+        original_log = log.read_bytes()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            replay_rc = main([*argv, "--resume-turn-key", failed["resume_turn_key"]])
+        replay = json.loads(output.getvalue())
+        assert replay_rc == 0 and not any(replay["effects"].values()), replay
+        assert log.read_bytes() == original_log and original.read_bytes() == original_bytes
+        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
+        # A separate new capture stays subject to disabled configuration.
+        new_workspace = project / "new-disabled-workspace"
+        new_workspace.mkdir()
+        new_host = new_workspace / "host.py"
+        new_host.write_text(host)
+        new_argv = list(argv)
+        new_argv[new_argv.index("--project") + 1] = str(new_workspace)
+        new_argv[new_argv.index("--host-adapter-command-json") + 1] = json.dumps([sys.executable, str(new_host)])
+        new_argv += ["--turn-instance-id", "new-disabled-yardstick"]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            new_rc = main(new_argv)
+        rejected = json.loads(output.getvalue())
+        assert new_rc != 0, rejected
+        assert rejected["error"] == "work yardstick capture requires explicit yardstick_enabled configuration"
+        assert log.read_bytes() == original_log and original.read_bytes() == original_bytes
+        assert len(writeback_receipts()) == 1
+        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_turn_recovers_committed_yardstick_after_disable(tmp_path, monkeypatch, provider):
+    test_turn_recovers_requested_delivery_from_original_run(
+        tmp_path, monkeypatch, provider, "progress", "turn", with_yardstick=True,
+    )

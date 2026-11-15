@@ -305,6 +305,14 @@ this path; the obsolete test consumer failed before its reader migration.
 This is scripted local execution and caller qualification. Actual model
 adoption, calibration, matched-budget and cross-task benefit remain unproven.
 
+Direct `run-once` recovery now carries that committed replay through both the
+ordinary writeback callback and its resolver. A verified original receipt repair
+can finish after Yardstick is disabled; a new typed capture remains refused.
+The focused File/SQLite regression preserves the original Run and Host, writes
+one finding and receipt, spends once, and checks effect-free replay plus rejected
+new capture. This repairs the existing recovery contract without a new owner or
+activation; installed Hosts, other backends and benefit retain their own gates.
+
 Backend names also need actual provider evidence. The shared
 [local authority fixture](../../../tests/control_plane/canonical_authority_fixture.py)
 now rejects unsupported providers before storage or writer-fence effects;

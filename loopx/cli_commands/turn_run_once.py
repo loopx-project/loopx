@@ -349,7 +349,12 @@ def execute_turn_run_once(
                 # Receipt repair returns the verified original Run without
                 # appending it again. Its committed payload can deliver the
                 # requested attachment before repairing the quota receipt.
-                refresh = finish_explore_delivery({**refresh, "appended": True})
+                refresh = finish_explore_delivery({
+                    **refresh, "appended": True,
+                    "idempotent_replay": bool(
+                        refresh.get("idempotent_replay") or refresh.get("receipt_repair_required")
+                    ),
+                })
                 if refresh.get("ok") is True:
                     # The shared quota owner treats this receipt as proof of
                     # completed writeback. Keep it absent while a requested
@@ -664,6 +669,7 @@ def execute_turn_run_once(
                     }
                 delivered = finish_explore_delivery({
                     **run, "ok": True, "appended": True,
+                    "idempotent_replay": True,
                     "settlement_identity": settlement_identity.as_dict(),
                 })
                 if delivered.get("ok") is not True:
