@@ -1642,7 +1642,7 @@ def spend_quota_slot(
             "goal_id": safe_goal_id,
             "reason": "effect_ref must be a non-empty string when provided",
         }
-    if normalized_effect_ref:
+    if normalized_effect_ref and not turn_instance_id:
         if not raw_runtime_root:
             return {
                 "ok": False,
@@ -1709,6 +1709,7 @@ def spend_quota_slot(
         and not replan_obligation_id
     )
     settlement_readback = None
+    spend_request = {"slots": slots, "source": source}
     if (
         not turn_instance_id
         and raw_runtime_root
@@ -1727,6 +1728,7 @@ def spend_quota_slot(
             allow_unbound_binding=recover_unbound_visible_goal,
             registry_path=registry_path,
             goal_ref=goal_ref,
+            spend_request=spend_request,
         )
         inferred_result = (
             settlement_readback.identity
@@ -1765,6 +1767,7 @@ def spend_quota_slot(
                 replan_obligation_id=replan_obligation_id,
                 registry_path=registry_path,
                 goal_ref=goal_ref,
+                spend_request=spend_request,
             )
         if settlement_readback is None:
             raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -1784,6 +1787,18 @@ def spend_quota_slot(
                 "settlement_result": settlement_result_payload(guard_result),
             }
         identity = guard_result.value
+        refusal = settlement_readback.spend_request_rejection
+        if refusal is not None:
+            return {
+                "ok": False,
+                "mode": "spend-slot",
+                "dry_run": not execute,
+                "appended": False,
+                "goal_id": safe_goal_id,
+                "settlement_identity": identity.as_dict(),
+                "settlement_result": settlement_result_payload(refusal),
+                "reason": refusal.failure.reason if refusal.failure else "invalid original Turn spend",
+            }
         spent_result = settlement_readback.settlement
         if spent_result.failure is None:
             return {
