@@ -48,7 +48,7 @@ These are recommendations, not automatically launched experiments.
 | Reference | `--worker heartbeat-resume --task-entry loopx-planned --replan-after-turns 6` | Planned entry with effective-turn replanning |
 | Seeded | Replace only `--task-entry` with `seeded-todo` | Does initial task decomposition help? |
 | Explore | Replace only `--worker` with `heartbeat-explore` | Are recorded evidence and subsequent route choices useful? |
-| Short envelope | With `--context-delivery off` in both arms, add only `--turn-envelope` | What does the v0 presentation change when both arms use the same C1 decision source? |
+| Context delivery | Add `--context-delivery off` | How does native context delivery affect the same complete C1 contract? |
 | Todo cadence | Replace `--replan-after-turns 6` with `--replan-after-todos 3` | How do units and thresholds change interruptions? This is a combined ablation. |
 | No LoopX | `--worker official`; omit LoopX-specific flags | What is the net effect of the whole LoopX treatment? |
 
@@ -58,8 +58,9 @@ selected matched arms within each feedback setting rather than mixing them.
 Prioritize entry and cadence first; enable the other arms after verifying that
 planning, settlement and evaluation work. For Explore, inspect whether evidence
 was written, retrieved and adopted; an enabled hook with an empty graph is not
-full mechanism use. For the envelope, check deferred context retrieval as well
-as initial prompt size.
+full mechanism use. For context delivery, check deferred reads and recovery
+alongside the initial prompt. Reproduce archived short-envelope observations
+with the runner and LoopX revisions recorded for those trials.
 
 A Portfolio reference command after source, image and credential preflight:
 

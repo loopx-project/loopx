@@ -165,23 +165,25 @@ A simultaneous `fresh_replan` checkpoint listener retains ownership of the same
 original capture. It validates and holds the original full decision before any
 context projection, then releases its exact digest. Only afterward may the
 native projector present full/delta for an uninterrupted tool. With context
-delivery off, an explicit short-view request still returns the v0 display
-after release. A refused/lost release reports the original typed transport
-failure. An interrupted guard continues with the original full packet; no
-delta or replay is required for checkpoint recovery. Native
-cursor verification binds the context-directory/root option and the worker's
+delivery off, the current worker reads the complete contract directly after
+release. A refused or lost release reports the original typed transport failure.
+An interrupted guard resumes by reading the original full packet. Native cursor
+verification binds the context-directory/root option and the worker's
 original `--complete-turn` and `--turn-envelope` choices. A checkpoint without
 a complete-mode binding cannot verify a pending command that uses
 `--complete-turn`. Historical ordinary and envelope guards remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
 
-New heartbeat work uses the complete C1 guard by default, with context delivery
-on or off. The explicit v0 display still reads a signed C1 source. An omitted
-display flag does not by itself add a checkpoint or capture directory. The
-worker and trial receipts record whether C1 was selected explicitly or by default.
-Preflight and live handoff require the signed source before selecting a replan
-point. Native checkpoint recovery can still read previously recorded unversioned
-originals with their receipt and scope checks.
+New heartbeat work and preflight use the same complete C1 guard with context
+delivery on or off. A wake allocates a capture directory for an explicit complete
+request, context delivery, or a checkpoint handoff. The worker and trial
+receipts record whether C1 was selected explicitly or by default. Current
+workers reject the retired `--turn-envelope`
+option and its saved environment flag before a new wake. For an original
+short-view control, keep the recorded product and runner revisions. Preflight
+and live handoff require the signed source before selecting a replan point.
+Native checkpoint recovery reads legacy originals with their recorded mode,
+receipt and scope checks.
 
 The host-side checkpoint preflight captures the complete original decision.
 With context delivery enabled, its prompt supplies `quota context-project`

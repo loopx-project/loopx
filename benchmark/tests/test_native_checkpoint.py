@@ -1026,7 +1026,7 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(
 @pytest.mark.skipif(os.name != "posix", reason="Exercises the private Host Unix rendezvous")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("mode_matches", [True, False], ids=["retained", "switched"])
-@pytest.mark.parametrize("display", ["default", "complete", "short"])
+@pytest.mark.parametrize("display", ["default", "complete", "historical"])
 def test_held_guard_checkpoint_binds_original_source_and_display(
     tmp_path, monkeypatch, provider, mode_matches, display,
 ):
@@ -1073,29 +1073,43 @@ def test_held_guard_checkpoint_binds_original_source_and_display(
            "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_CLI": str(cli),
            "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
            "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CHECKPOINT_REQUEST": str(declaration),
-           "LOOPX_CONTEXT_DELIVERY": "off", "LOOPX_TURN_ENVELOPE": "1" if display == "short" else "0",
+           "LOOPX_CONTEXT_DELIVERY": "off",
            "LOOPX_COMPLETE_TURN": "1" if display == "complete" else "0"}
     session = CodexAgentSession(env, context="resume", sandbox="read-only", receipt={})
     _store_codex_cli_session(runtime, lineage=session.lineage, session_scope="agent",
         session_id="fixture-session", goal_ref=session.goal_ref, session_profile_digest=session.digest)
+    historical = display == "historical"
+    display_receipt = ({"turn_envelope": True, "turn_envelope_source": "explicit"} if historical
+                       else turn_envelope_receipt(explicit_turn_display(env)))
     receipt = {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID,
-        "session": {"session_id": "fixture-session"},
-        **turn_envelope_receipt(explicit_turn_display(env))}
-    short = display == "short"
-    if short:
-        assert receipt["turn_envelope_source"] == "explicit" and "complete_turn" not in receipt
-    else:
+        "session": {"session_id": "fixture-session"}, **display_receipt}
+    if not historical:
         assert receipt["complete_turn_source"] == ("explicit" if display == "complete" else "default")
     (tmp_path / "wakes" / TURN_ID).mkdir(parents=True)
 
     with CheckpointWake(env, receipt) as host:
-        body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=host.socket_path)
-        block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
-        command = shlex.join(["/bin/bash", "-lc", block])
-        original = _guard_cli_arguments(command, {"cli": str(cli), "turn_instance_id": TURN_ID})
-        display_flag = "--turn-envelope" if short else "--complete-turn"
-        assert ("--turn-envelope" in original) is short
-        assert ("--complete-turn" in original) is not short
+        if historical:
+            # Recreate a recorded v0 pending command via the product's legacy
+            # CLI. The current benchmark writer never emits this command.
+            host.capture_root.mkdir(mode=0o700)
+            original = [
+                "--format", "json", "--registry", str(registry), "--runtime-root", str(runtime),
+                "quota", "should-run", "--runtime-profile", "generic_cli",
+                "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
+                "--available-capability", "shell", "--available-capability", "filesystem_write",
+                "--turn-envelope", "--context-delivery", "off",
+                "--decision-output-root", str(host.capture_root),
+                "--decision-handoff-socket", host.socket_path,
+            ]
+        else:
+            body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=host.socket_path)
+            block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+            command = shlex.join(["/bin/bash", "-lc", block])
+            original = _guard_cli_arguments(command, {"cli": str(cli), "turn_instance_id": TURN_ID})
+            assert "--turn-envelope" not in original
+            assert original.count("--complete-turn") == 1
+            assert original[original.index("--context-delivery") + 1] == "off"
+        display_flag = "--turn-envelope" if historical else "--complete-turn"
         observed = original if mode_matches else [word for word in original if word != display_flag]
         item = {"type": "commandExecution", "id": "pending-guard", "cwd": str(project),
                 "command": shlex.join(["/bin/bash", "-lc", shlex.join([str(cli), *observed])]),
@@ -1124,7 +1138,7 @@ def test_held_guard_checkpoint_binds_original_source_and_display(
                     assert result["sha256"] == captured["sha256"]
                     manifest = json.loads((point / "checkpoint.json").read_bytes())["point_metadata"]
                     stored = manifest["native_session"]["interrupted_guard"]
-                    assert stored["complete_turn"] is not short and stored["turn_envelope"] is short
+                    assert stored["complete_turn"] is not historical and stored["turn_envelope"] is historical
                     assert stored["turn_instance_id"] == TURN_ID and stored["native_call_id"] == item["id"]
                     assert stored["decision_sha256"] == digest
                     assert (point / "components" / manifest["held_decision_component_id"]).read_bytes() == held["path"].read_bytes()
@@ -1135,7 +1149,7 @@ def test_held_guard_checkpoint_binds_original_source_and_display(
             stdout, stderr = command_process.communicate(timeout=30)
             assert command_process.returncode == 0, (stdout, stderr)
             shown = json.loads(stdout)
-            if short:
+            if historical:
                 assert shown["schema_version"] == "loopx_turn_envelope_v0"
                 assert shown["detail_ref"]["captured_decision"]["path"] == str(held["path"])
                 signature = shown["action_signature"]

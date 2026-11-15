@@ -263,9 +263,9 @@ def test_bound_captured_prompt_fits_budget_without_reward_memory(
         assert 'goal_acceptance' in body  # Retain the complete outcome guidance too.
 
 
-@pytest.mark.parametrize('mode', ['plain', 'native-goal', 'loopx-goal', 'turn'])
-def test_incompatible_worker_rejected(mode):
-    with pytest.raises(ValueError, match='turn_envelope'):
+@pytest.mark.parametrize('mode', ['plain', 'native-goal', 'loopx-goal', 'turn', 'heartbeat'])
+def test_worker_rejects_retired_envelope(mode):
+    with pytest.raises(ValueError, match='--turn-envelope is retired'):
         Execution(mode=mode, turn_envelope=True)
 
 
@@ -305,11 +305,11 @@ def private_handoff(request):
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('explicit', [False, True])
 @pytest.mark.parametrize('private_handoff', [False, True], indirect=True)
 @pytest.mark.parametrize('context_delivery', [False, True])
 def test_real_worker_generated_guard_selection_reentry_and_settle_once(
-    tmp_path, monkeypatch, provider, enabled, private_handoff, context_delivery,
+    tmp_path, monkeypatch, provider, explicit, private_handoff, context_delivery,
 ):
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -331,7 +331,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
                LOOPX_CLI=str(Path(sys.executable).parent / 'loopx'),
                LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                LOOPX_PROJECT=str(project), LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
-               LOOPX_WAKE_LOG_DIR=str(logs), LOOPX_TURN_ENVELOPE='1' if enabled else '0')
+               LOOPX_WAKE_LOG_DIR=str(logs), LOOPX_COMPLETE_TURN='1' if explicit else '0')
     if context_delivery:
         # No native proof in this CLI fixture: composed capture must still
         # save a full baseline and preserve reentry and settlement.
@@ -350,7 +350,9 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     guard = next(line for line in block.splitlines() if 'quota should-run' in line)
     guard = guard.replace('${LOOPX_TURN:?}', TURN_ID)
     argv = shlex.split(guard)
-    assert ("--complete-turn" in argv) is not enabled
+    assert argv.count("--complete-turn") == 1
+    assert "--turn-envelope" not in argv
+    assert argv[argv.index("--context-delivery") + 1] == ("on" if context_delivery else "off")
     result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True)
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
@@ -393,28 +395,19 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     if context_delivery:
         assert reader_contracts, 'The worker must actually receive the delegated reader obligations'
     root = logs / TURN_ID / 'decisions'
-    captured = enabled or private_handoff is not None or context_delivery
+    captured = explicit or private_handoff is not None or context_delivery
     if captured:
         captures = list(root.glob('*/decision.json'))
         assert len(captures) == 1
         full = json.loads(captures[0].read_text())
         assert_complete_turn_decision(full)
-        if enabled:
-            assert_original_contract_view(first, full)
-            if not context_delivery:
-                assert first['schema_version'] == 'loopx_turn_envelope_v0'
-                assert_original_read_and_recovery_duties(body)
-            else:
-                assert first['schema_version'] == 'loopx_turn_envelope_v1'
-            receipts = _heartbeat_receipt_count(runtime, TURN_ID)
-            readback = read_original_capture(captures[0], registry=registry, runtime=runtime)
-            assert json.loads(readback) == full
-            assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
-        else:
-            assert first['interaction_contract'] == full['interaction_contract']
-            assert 'action_signature' not in first and 'quota' in first
-            assert 'Use TurnEnvelope:' not in body
-            assert '--turn-envelope' not in argv
+        assert first['schema_version'] == 'loopx_turn_envelope_v1'
+        assert first['interaction_contract'] == full['interaction_contract']
+        assert 'action_signature' not in first and 'quota' in first
+        receipts = _heartbeat_receipt_count(runtime, TURN_ID)
+        readback = read_original_capture(captures[0], registry=registry, runtime=runtime)
+        assert json.loads(readback) == full
+        assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
     else:
         assert not root.exists()
         full = first
@@ -431,15 +424,9 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert json.loads(captures[0].read_text()) == full
         selected_full = json.loads(next(p for p in paths if p != captures[0]).read_text())
         assert_complete_turn_decision(selected_full)
-        if enabled:
-            assert_original_contract_view(selected, selected_full)
-            assert selected['schema_version'] == first['schema_version']
-            cli = (selected['writeback'] if selected['schema_version'] == 'loopx_turn_envelope_v0'
-                else selected['interaction_contract']['cli_channel'])
-            assert cli['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']
-        else:
-            assert selected['interaction_contract'] == selected_full['interaction_contract']
-            assert 'action_signature' not in selected
+        assert selected['schema_version'] == 'loopx_turn_envelope_v1'
+        assert selected['interaction_contract'] == selected_full['interaction_contract']
+        assert 'action_signature' not in selected
     else:
         selected_full = selected
         assert_complete_turn_decision(selected_full)
@@ -453,16 +440,18 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     if captured:
         assert len(list(root.glob('*/decision.json'))) == 3
     rc, refresh = _run_cli(
-        registry, runtime, 'refresh-state', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
+        registry, runtime, '--cli-bin', env['LOOPX_CLI'],
+        'refresh-state', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
         '--todo-id', ALTERNATIVE_TODO_ID, '--turn-instance-id', TURN_ID,
         '--classification', 'validated_progress', '--delivery-batch-scale', 'implementation',
         '--delivery-outcome', 'outcome_progress', '--delivery-boundary', 'in_flight_continuation',
         '--no-global-sync', '--suppress-external-sinks', cwd=project)
     assert rc == 0, refresh
-    spend = refresh['settlement_owed']['command']
+    spend = shlex.split(refresh['settlement_owed']['command'])
+    assert spend[0] == env['LOOPX_CLI']
     for _ in range(2):
-        rc, settled = _run_cli(registry, runtime, *shlex.split(spend)[1:])
-        assert rc == 0, settled
+        result = subprocess.run(spend, env=env, cwd=project, capture_output=True, text=True, timeout=45)
+        assert result.returncode == 0, (result.stdout, result.stderr)
     assert _spend_run_count(runtime) == 1
 
 
@@ -552,7 +541,7 @@ def test_native_worker_and_stable_bootstrap_cannot_use_capture(tmp_path):
     env = dict(os.environ, LOOPX_CLI='unused', LOOPX_REGISTRY=str(registry),
                LOOPX_RUNTIME_ROOT=str(runtime), LOOPX_PROJECT=str(project),
                LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
-               LOOPX_WAKE_LOG_DIR=str(tmp_path / 'absent'), LOOPX_TURN_ENVELOPE='1')
+               LOOPX_WAKE_LOG_DIR=str(tmp_path / 'absent'), LOOPX_COMPLETE_TURN='1')
     with pytest.raises(ValueError, match='host-owned'):
         heartbeat_body(env, TURN_ID, native_goal=True)
     assert not (tmp_path / 'absent').exists()

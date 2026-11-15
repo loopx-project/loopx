@@ -3056,3 +3056,18 @@ them. End-to-end CLI time moved in both directions across the four cases.
 The fixture counts CLI outputs and calls and exercises same-capture recovery.
 RPC and filesystem IO totals, actual model decisions, model costs and adoption
 in an installed DSH or App session require further evidence.
+
+### Complete contract for new EdgeBench heartbeat work
+
+The EdgeBench CLI, SForge/Harbor launch settings, ordinary worker wake and
+checkpoint preflight now use the same complete contract for new heartbeat work.
+The explicit legacy display request fails before registration or creation of a
+new wake. An explicit context-delivery Off still reaches the quota guard and
+preserves its complete source and settlement identity.
+
+Native checkpoint recovery still checks the recorded presentation and exact
+pending command, including original v0 records. Archived reproduction uses the
+product and runner revisions already recorded by the source pin. Retire the
+historical reader after the supported recovery window and outstanding records
+no longer require it. The remaining product callers of the explicit legacy CLI
+and actual installed adoption have separate acceptance.

@@ -331,13 +331,9 @@ def test_warm_receiver_owns_only_selected_research_before_preparation(
     assert restored == ["workspace"]
 
 
-@pytest.mark.parametrize("explicit,trigger,expected", [
-    (False, None, None),
-    (False, "fresh_replan", None),
-    (True, None, "explicit"),
-    (True, "fresh_replan", "explicit"),
-])
-def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkeypatch, explicit, trigger, expected):
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("trigger", [None, "fresh_replan"])
+def test_sforge_checkpoint_preserves_complete_contract(tmp_path, monkeypatch, explicit, trigger):
     from types import SimpleNamespace
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -354,12 +350,13 @@ def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkey
     backend = SimpleNamespace(copy_to_container=lambda *args: None,
         exec_run=lambda *args, **kwargs: SimpleNamespace(exit_code=0))
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-        profile="heartbeat-resume", cwd="/task", turn_envelope=explicit,
+        profile="heartbeat-resume", cwd="/task", complete_turn=explicit,
         checkpoint_request=json.dumps(declaration).encode())
     worker.install_stop_hook(backend, None, tmp_path, None)
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
-    assert profile.get("turn_envelope_source") == expected
-    assert profile.get("turn_envelope") is (True if expected else None)
+    assert profile["complete_turn_source"] == ("explicit" if explicit else "default")
+    assert profile["complete_turn"] is True
+    assert "turn_envelope" not in profile
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -691,9 +688,9 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert profile["task_entry"] == entry
     assert profile["planning_horizon_goal"] is expected_horizon
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
-@pytest.mark.parametrize('enabled,complete', [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize('complete', [False, True])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
-def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, complete, cadence):
+def test_complete_turn_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, complete, cadence):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
@@ -703,43 +700,35 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
         pass  # Transport only; the real renderer/guard test runs without a solver.
     monkeypatch.setattr(BenchmarkCodex, 'install', installed)
     worker = SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
-                          profile=profile, cwd='/task', turn_envelope=enabled, complete_turn=complete,
+                          profile=profile, cwd='/task', complete_turn=complete,
                           replan_after_turns=cadence)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd='/task')
-    assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
-    assert worker.runtime.execution.turn_envelope is enabled
+    assert 'LOOPX_TURN_ENVELOPE' not in env
     assert env['LOOPX_COMPLETE_TURN'] == ('1' if complete else '0')
     assert worker.runtime.execution.complete_turn is complete
     assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
-    assert receipt.get('complete_turn') is (None if enabled else True)
-    assert receipt.get('turn_envelope') is (True if enabled else None)
-    if enabled:
-        assert 'complete_turn_source' not in receipt
-    else:
-        assert receipt['complete_turn_source'] == ('explicit' if complete else 'default')
-        assert 'turn_envelope' not in receipt
+    assert receipt['complete_turn'] is True
+    assert receipt['complete_turn_source'] == ('explicit' if complete else 'default')
+    assert 'turn_envelope' not in receipt
     from types import SimpleNamespace
     context = SimpleNamespace()
     worker.runtime._populate_context(context)
-    assert context.metadata.get('complete_turn') is (None if enabled else True)
-    assert context.metadata.get('turn_envelope') is (True if enabled else None)
-    if not enabled:
-        assert 'turn_envelope' not in context.metadata
-    # The opt-in only changes context transport, not resume or model settings.
+    assert context.metadata['complete_turn'] is True
+    assert 'turn_envelope' not in context.metadata
     assert env['LOOPX_ITERATION_CONTEXT'] == 'resume'
     assert env['REASONING_EFFORT'] == 'xhigh'
 
 
-@pytest.mark.parametrize('profile', ['official', 'single', 'native-goal'])
-def test_envelope_rejects_incompatible_sforge_worker(profile):
+@pytest.mark.parametrize('profile', ['official', 'single', 'native-goal', 'heartbeat-resume', 'heartbeat-explore'])
+def test_sforge_worker_rejects_retired_view(profile):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker
-    with pytest.raises(ValueError, match='turn_envelope'):
+    with pytest.raises(ValueError, match='--turn-envelope is retired'):
         SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
                      profile=profile, cwd='/task', turn_envelope=True)
 
@@ -875,6 +864,8 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
 
 @pytest.mark.parametrize("profile,options", [
     ("native-goal", ["--turn-envelope"]),
+    ("heartbeat-resume", ["--turn-envelope", "--context-delivery", "off"]),
+    ("heartbeat-explore", ["--turn-envelope", "--context-delivery", "on"]),
     ("native-goal", ["--context-delivery"]),
     ("official", ["--replan-after-turns", "3"]),
     ("single", ["--replan-after-todos", "3"]),
@@ -891,7 +882,7 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
     ("heartbeat-explore", ["--checkpoint-export-root", "/unused-export"]),
     ("heartbeat-explore", ["--no-checkpoint-retention", "--checkpoint-retention-policy", "policy.json"]),
 ])
-def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
+def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, capsys, profile, options):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from benchmark.edgebench.run import main
@@ -900,6 +891,8 @@ def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_pa
               '--run-id', 'invalid', '--worker', profile, '--model', 'fixture',
               '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999', *options])
     assert error.value.code == 2
+    if "--turn-envelope" in options:
+        assert "--turn-envelope is retired for new benchmark work" in capsys.readouterr().err
     assert not (tmp_path / 'runs').exists()
 
 
@@ -1048,7 +1041,7 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     (["--replan-after-turns", "2"], "replan_after_effective_turns", 2),
     (["--replan-after-todos", "3"], "replan_after_completed_todos", 3),
 ])
-@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("explicit", [False, True])
 @pytest.mark.parametrize("entry", [None, "seeded-todo"])
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
     ("fixture", [], 64800, 0),
@@ -1056,7 +1049,7 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     ("lean_analysis_proofs", [], 43200, 0),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
     ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
-def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
+def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, explicit, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -1101,7 +1094,7 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     if entry:
         args += ["--task-entry", entry]
     with pytest.raises(RuntimeError, match="synthetic launch failure"):
-        run.main(args + timeout_args + cadence_args + (["--turn-envelope"] if enabled else []))
+        run.main(args + timeout_args + cadence_args + (["--complete-turn"] if explicit else []))
     receipt = json.loads((tmp_path / f"runs/receipt/{task}/runtime-receipt.json").read_text())
     assert receipt["task_entry"] == (entry or "loopx-planned")
     assert receipt["timeout_seconds"] == expected
@@ -1113,9 +1106,9 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt
-    assert ("turn_envelope" in receipt) is enabled
-    if enabled:
-        assert receipt["turn_envelope"] is True
+    assert "turn_envelope" not in receipt
+    assert receipt["complete_turn"] is True
+    assert receipt["complete_turn_source"] == ("explicit" if explicit else "default")
     assert receipt["status"] == "runner_failed"
 
 

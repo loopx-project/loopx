@@ -902,16 +902,17 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     assert "--timeout-seconds" not in turn_command(env, execution, "wake-default")
 
 
-@pytest.mark.parametrize("enabled,trigger,expected", [
-    (False, None, None),
-    (True, None, "explicit"),
-    (False, "after_wake", None),
-    (False, "fresh_replan", None),
-    (True, "fresh_replan", "explicit"),
+@pytest.mark.parametrize("explicit,trigger", [
+    (False, None),
+    (True, None),
+    (False, "after_wake"),
+    (False, "fresh_replan"),
+    (True, "fresh_replan"),
 ])
 @pytest.mark.parametrize("context_delivery", ["off", "on"])
 @pytest.mark.parametrize("provider_request_admission", [False, True])
-def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected, context_delivery, provider_request_admission):
+def test_harbor_install_receipt_keeps_capture_independent_from_display(
+        tmp_path, monkeypatch, explicit, trigger, context_delivery, provider_request_admission):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
     from benchmark.runtime.checkpoint_wake import CheckpointWake
@@ -931,7 +932,7 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
                            "checkpoint_request": request.read_bytes()}
     provider_env = {"OPENAI_BASE_URL": "https://provider.invalid/v1",
                     "OPENAI_API_KEY": "synthetic-provider-key", "CODEX_WIRE_API": "responses"}
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled,
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", complete_turn=explicit,
                            context_delivery=context_delivery,
                            provider_request_admission=provider_request_admission,
                            extra_env=provider_env,
@@ -942,7 +943,6 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
         # Real declaration parser and socket lifecycle, independent of the
         # metadata helper. Omitted trigger is legal after-wake capture.
         assert bool(wake.socket_path) is (trigger == "fresh_replan")
-        assert enabled is (expected is not None)
     commands = []
     command_envs = {}
     async def no_op(*args, **kwargs):
@@ -976,8 +976,9 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
         if "install-local.sh" in command or " doctor " in command:
             assert command_envs[command]["LOOPX_USAGE_PING"] == "0"
     assert agent._worker_env(cwd="/task")["LOOPX_USAGE_PING"] == "0"
-    assert ("turn_envelope" in receipt) is (expected is not None)
-    assert receipt.get("turn_envelope_source") == expected
+    assert receipt["complete_turn"] is True
+    assert receipt["complete_turn_source"] == ("explicit" if explicit else "default")
+    assert "turn_envelope" not in receipt and "turn_envelope_source" not in receipt
     assert receipt.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
     assert agent._worker_env(cwd="/task")["LOOPX_CONTEXT_DELIVERY"] == context_delivery
     assert receipt.get("provider_request_admission") == ("on" if provider_request_admission else None)
@@ -986,22 +987,28 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     assert worker_env["OPENAI_BASE_URL"] == provider_env["OPENAI_BASE_URL"]
     assert worker_env["OPENAI_API_KEY"] == provider_env["OPENAI_API_KEY"]
     assert provider_env["OPENAI_API_KEY"] not in json.dumps(receipt)
-    if expected:
-        assert receipt["turn_envelope"] is True
 
 
-@pytest.mark.parametrize("enabled", [False, True])
-def test_wake_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
+@pytest.mark.parametrize("explicit", [False, True])
+def test_wake_receipt_preserves_complete_contract_with_context_off(tmp_path, monkeypatch, explicit):
     from benchmark.tests.test_resume_sessions import resume_env
     env = resume_env(tmp_path, monkeypatch)
-    env["LOOPX_TURN_ENVELOPE"] = "1" if enabled else "0"
+    env["LOOPX_COMPLETE_TURN"] = "1" if explicit else "0"
     receipt = run_once(env)
     assert receipt["ok"], receipt
-    assert ("turn_envelope" in receipt) is enabled
-    assert ("turn_envelope_source" in receipt) is enabled
-    if enabled:
-        assert receipt["turn_envelope"] is True
-        assert receipt["turn_envelope_source"] == "explicit"
+    assert receipt["complete_turn"] is True
+    assert receipt["complete_turn_source"] == ("explicit" if explicit else "default")
+    assert "turn_envelope" not in receipt and "turn_envelope_source" not in receipt
+
+
+@pytest.mark.parametrize("delivery", ["off", "on"])
+def test_worker_refuses_retired_display_before_wake(tmp_path, monkeypatch, delivery):
+    from benchmark.tests.test_resume_sessions import resume_env
+    env = resume_env(tmp_path, monkeypatch)
+    env.update(LOOPX_CONTEXT_DELIVERY=delivery, LOOPX_TURN_ENVELOPE="1")
+    with pytest.raises(ValueError, match="--turn-envelope is retired.*pinned runner"):
+        run_once(env)
+    assert not Path(env["LOOPX_WAKE_LOG_DIR"]).exists()
 
 
 @pytest.mark.parametrize("observed", [

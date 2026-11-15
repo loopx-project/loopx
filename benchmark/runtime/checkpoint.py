@@ -24,7 +24,6 @@ from loopx.hosts.research_checkpoint import (
     research_participants, select_checkpoint_replan, verify_research_participants,
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
-from .codex import explicit_turn_display
 
 
 def normalize_checkpoint_request_path(value: str) -> str:
@@ -220,21 +219,15 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("fresh_replan checkpoint trigger requires a heartbeat execute wake")
     started = time.monotonic()
     guard_path = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
-    # The selector and the model both use the original CLI guard. The explicit
-    # compatibility display can still render v0 from that signed source.
+    # The selector and model both use this wake's signed original CLI guard.
     capture_root = Path(tempfile.mkdtemp(prefix="checkpoint-start-", dir=guard_path.parent))
     command = [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
                "--runtime-root", env["LOOPX_RUNTIME_ROOT"], "quota", "should-run",
                "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
-               "--available-capability", "shell", "--available-capability", "filesystem_write"]
-    display = explicit_turn_display(env)
+               "--available-capability", "shell", "--available-capability", "filesystem_write",
+               "--complete-turn"]
     native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
-    if display.uses_complete_heartbeat_guard:
-        command.append("--complete-turn")
-    elif display.turn_envelope:
-        command.append("--turn-envelope")
-    legacy_display = display.turn_envelope and env.get("LOOPX_CONTEXT_DELIVERY", "off") == "off"
     if native_context:
         # The native reader selects full/delta after SessionStart. Ask the
         # existing preparation route for the committed capture reference now.
@@ -243,11 +236,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                     "--context-delivery", "on", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
                     "--defer-context-presentation"]
     else:
-        command += ["--decision-output-root", str(capture_root)]
-        if legacy_display:
-            # Forward the explicit raw display to the same CLI that renders
-            # ordinary wakes. The checkpoint selector still reads the source.
-            command += ["--context-delivery", "off"]
+        command += ["--decision-output-root", str(capture_root), "--context-delivery", "off"]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
     projected = json.loads(guard_run.stdout)
@@ -263,7 +252,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("checkpoint requires a successful original quota guard")
     if native_context and projected.get("capture_sha256") != guard_digest:
         raise ValueError("checkpoint prepared capture differs from the original guard; do not replay the guard")
-    # A fresh guard always captures signed C1, including for the v0 display.
+    # Select from the signed source that the new wake will read.
     intent = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
         agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"])
     # A previous preflight on this wake may already have allowed model work,
@@ -295,18 +284,9 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         view = guard_run.stdout
         atomic_write_state_text(view_path, view, private=True)
         reader = bounded_read(view_path, view.encode("utf-8"))
-        action = "action, required reads and settlement instructions" if legacy_display else "interaction_contract"
-        reading = (f"Read the complete saved CLI view before work, then follow its {action} "
+        reading = ("Read the complete saved CLI view before work, then follow its interaction_contract "
             "and replan review/writeback reads when present.\n```sh\n" + reader + "\n```\n"
             + CONTEXT_CAPTURE_PAGE_GUIDANCE + " ")
-        if legacy_display:
-            reading += (
-                "Use this paged command for the short view's detail_ref.full_decision. "
-                "To read only a required field, append --select with its JSON pointer, for example "
-                "--select /interaction_contract/cli_channel/selection_command when Todo selection is required. "
-                "Apply the same byte checks and follow this source's own page cursors.\n```sh\n"
-                + bounded_read(source_path, raw_guard) + "\n```\n"
-            )
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)

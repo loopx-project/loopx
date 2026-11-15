@@ -692,7 +692,6 @@ class BenchmarkCodex(CodexOffline):
                    if self.execution_observation is not None else {}),
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
-                **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
                 "LOOPX_COMPLETE_TURN": "1" if self.execution.complete_turn else "0",
                 "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
                 # A trial's explicit None must not inherit a container opt-in.

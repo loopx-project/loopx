@@ -99,21 +99,21 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         command += ["--turn-instance-id", turn_id]
     display = explicit_turn_display(env)
     context_dir = env.get("LOOPX_CODEX_CONTEXT_DIR") if env.get("LOOPX_CONTEXT_DELIVERY") == "on" else None
-    if display.complete_turn or display.turn_envelope or decision_handoff_socket is not None or context_dir:
+    if display.complete_turn or decision_handoff_socket is not None or context_dir:
         if native_goal:
-            raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
+            raise ValueError("Quota capture requires a host-owned heartbeat Turn")
         # Wake identity comes from this worker, never from model-authored text.
         root = Path(env["LOOPX_WAKE_LOG_DIR"]) / turn_id / "decisions"
         root.mkdir(mode=0o700, exist_ok=False)
         command += ["--decision-output-root", str(root)]
-        if display.turn_envelope:
-            command += ["--turn-envelope"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
         if context_dir:
             command += ["--context-delivery", "on", "--codex-context-dir", context_dir]
-    if not native_goal and display.uses_complete_heartbeat_guard:
+    if not native_goal:
         command += ["--complete-turn"]
+        if env.get("LOOPX_CONTEXT_DELIVERY") == "off":
+            command += ["--context-delivery", "off"]
     result = subprocess.run(
         command,
         cwd=env["LOOPX_PROJECT"],
@@ -537,7 +537,6 @@ def run_once(env: dict[str, str]) -> dict:
                          if env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC") else None),
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
         task_entry=env.get("LOOPX_TASK_ENTRY"),
-        turn_envelope=display.turn_envelope,
         context_delivery=env.get("LOOPX_CONTEXT_DELIVERY"),
         native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
                             if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),

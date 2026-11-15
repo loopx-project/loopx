@@ -956,7 +956,7 @@ count (1–6); `--replan-after-turns 3` retains the previous benchmark default.
 Use `--replan-after-todos 3` for the previous completed-Todo cadence
 as an explicit ablation. The two options are mutually exclusive and require a
 heartbeat profile. This default is independent of `--task-entry`, feedback mode,
-and `--turn-envelope`. Official, single and native-goal profiles are unchanged.
+and context delivery. Official, single and native-goal retain their existing cadence.
 
 The shared control plane counts settled work Turns, not tool calls or idle wakes;
 other replan reasons may trigger sooner. Both runtime and worker-profile receipts
@@ -969,7 +969,7 @@ New `heartbeat-resume` and `heartbeat-explore` trials include the same-source
 original Goal and acceptance in preselection planning context by default.
 `--no-planning-horizon-goal` disables it for rollback or comparison;
 `--planning-horizon-goal` explicitly enables it. Plain and native-Goal workers reject
-this setting. It does not enable stride, Explore or TurnEnvelope.
+this setting. Stride and Explore retain their own settings.
 
 The adapter writes the shared `execution_profile.planning_horizon_goal` through
 `configure-goal`, checks the effective readback before work, and records an
@@ -1011,20 +1011,21 @@ settlement. `--complete-turn` records an explicit selection in the worker
 and runtime receipts. `--context-delivery off` disables native context
 delivery while keeping the same decision contract.
 
-Use `--turn-envelope --context-delivery off` to reproduce the v0 presentation
-of a signed C1 decision. A successful checkpoint handoff preserves that
-presentation; interrupted-tool recovery reads the complete source. Match
-task/scorer version, model and budget under a new run ID. To compare against the
-original quota source, pin the pre-C1 runner and LoopX revision. Wake receipts
-show the requested settings; verify actual delivery in native tool output and
-any recovery reads. See the
+Current runners reject `--turn-envelope` before trial registration. Reproduce a
+historical short-view control with its recorded runner and LoopX revisions.
+Historical checkpoint recovery verifies the original command and reads the
+same captured source. To compare C1 with the original quota path, use a pinned
+pre-C1 runner and LoopX revision for the baseline. Match the task, scorer, model
+and budget in both arms. Verify actual delivery in native tool output and
+recovery reads alongside the wake receipts. See the
 [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
 for source readback and recovery.
 
-中文：新 heartbeat 运行默认用 C1 决策，关闭上下文交付后仍用同一份决策契约。
-同时传 `--turn-envelope --context-delivery off` 可复现旧短包展示，工具中断后
-从完整来源恢复。回执记录配置；实际交付看原生工具结果和恢复读取。原 quota
-对照需要固定 C1 之前的 runner 与 LoopX 版本。
+新 heartbeat 统一使用 C1 完整契约，关闭上下文交付时仍用同一份契约。
+当前 runner 在登记新试验前拒绝 `--turn-envelope`。重跑旧短包对照时固定原
+runner 与 LoopX 版本，历史 checkpoint 按原命令和同一捕获恢复。与原 quota
+比较时固定 pre-C1 基线版本，并匹配题目、评估器、模型和预算。实际交付须核对
+原生工具输出和恢复读取。
 
 ## Close a managed native attempt
 
