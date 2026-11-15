@@ -7,17 +7,19 @@ eight kinds as ``_REPORTABLE_KINDS`` while *already importing* eleven names from
 module restating a constant whose owner it already imports from. It now borrows
 the owner object and the restated name is retired.
 
-The neighbouring ``_NON_REPORTABLE_KINDS`` (five different kinds) is a separate
-vocabulary and is deliberately left alone. The targeted literal checks key on
-the **folded value**, so that neighbour is never swept: its members differ. The
-by-name semantic inventory cannot see this pair either, because the two sides
-use different names and both are module-private.
+The hard checks are limited to identifiable eligibility decisions: the owner
+states the vocabulary once, the consumer borrows that exact object and retires
+its restated name, and the report mapping's domain equals the vocabulary. The
+report mapping (``_REPORT_KIND``) legitimately keys on the same eight kinds, so
+its keys are pinned by runtime domain parity, never by banning same-valued
+literals -- an equivalent rewrite of that mapping must stay green. Behavioural
+parity runs through the consumer's own policy normalizer and the real decision
+entry.
 
-Hard checks are pinned to the sites that share one semantic slot, scope and
-contract: the owner (``core``) and the validation entry
-(``triggers._normalize_policy``), with behavioural parity through that entry.
-A profile's ``enabled_kinds`` is a different slot -- a per-profile choice of
-which kinds *that profile* enables -- so two profiles may legitimately select
+The neighbouring ``_NON_REPORTABLE_KINDS`` (five different kinds) is a separate
+vocabulary and is deliberately left alone; it must not overlap the reportable
+set. A profile's ``enabled_kinds`` is a different slot -- a per-profile choice
+of which kinds *that profile* enables -- so two profiles may legitimately select
 the same eight kinds with different intervals; those selections are verified
 through the real decision entry, not by counting literals. Whole-package
 same-value matching stays in the existing advisory lane (the semantic
@@ -112,20 +114,25 @@ def test_the_consumer_borrows_the_owner_object() -> None:
     assert triggers._REPORTABLE_TRIGGER_KINDS is core._REPORTABLE_TRIGGER_KINDS
 
 
+def test_the_report_mapping_domain_is_the_owner_set() -> None:
+    # The report mapping keys on the same eight kinds -- a legitimate
+    # same-valued use, not a restatement of the vocabulary. Pin the domain at
+    # runtime so any equivalent source shape (dict literal, dict(zip(...)))
+    # stays green while a drifted domain still fails.
+    assert set(triggers._REPORT_KIND) == KINDS
+
+
 def test_the_consumer_retired_its_restated_name() -> None:
     assert not hasattr(triggers, "_REPORTABLE_KINDS")
     source = (REPO_ROOT / CONSUMER_PATH).read_text(encoding="utf-8")
-    assert _kind_literal_sites(source) == []
     assert "_REPORTABLE_TRIGGER_KINDS" in source
 
 
 def test_the_non_reportable_neighbour_is_a_different_set() -> None:
-    # The five non-reportable kinds stay where they are; the value census must
-    # not sweep them, and they must not overlap the reportable set.
+    # The five non-reportable kinds stay where they are; they are a separate
+    # vocabulary and must not overlap the reportable set.
     assert frozenset(triggers._NON_REPORTABLE_KINDS) == NON_REPORTABLE
     assert NON_REPORTABLE.isdisjoint(KINDS)
-    source = (REPO_ROOT / CONSUMER_PATH).read_text(encoding="utf-8")
-    assert _kind_literal_sites(source) == []
 
 
 def test_the_preset_enabled_kinds_is_a_configuration_not_the_vocabulary() -> None:
