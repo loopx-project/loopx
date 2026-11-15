@@ -2073,17 +2073,19 @@ function completeTaskTextSha256(decision: JsonObject, todoId: unknown): string |
   return capturedTodoTextSha256(declared, context, decision.recommended_action, todoId);
 }
 
-/** Launch rechecks the admitted task, not the provider revision or the bounded
- * action signature. Progress, diagnostics and receipt changes are not edits to
- * the work. Losing the verified body on a fresh read is not a match. */
+/** Launch rechecks the admitted task and its execution lease. Progress,
+ * diagnostics and receipt changes are not edits to the work. Renewals
+ * update the lease version and retain the execution key. */
 function selectedWorkLaunchBasis(decision: JsonObject, verifiedTextSha256?: string | null): string | null {
   const todoId = selectedWorkTodoId(decision);
   const selected = object(decision.selected_todo);
   if (!todoId || todoId !== selected.todo_id) return null;
   const textSha256 = verifiedTextSha256 === undefined ? completeTaskTextSha256(decision, todoId) : verifiedTextSha256;
+  const leaseKey = object(object(decision.execution_preparation).lease_proof).idempotency_key;
   return textSha256 === null ? null : canonicalHash({todo_id: todoId, text_sha256: textSha256,
     required_write_scopes: selected.required_write_scopes ?? [],
-    required_capabilities: selected.required_capabilities ?? []});
+    required_capabilities: selected.required_capabilities ?? [],
+    ...(typeof leaseKey === "string" ? {task_lease_idempotency_key: leaseKey} : {})});
 }
 
 export function composeCompleteTurnDecision(value: unknown): JsonObject {

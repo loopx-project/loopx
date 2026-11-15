@@ -211,13 +211,14 @@ def _host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation_tools: bool
     return arguments, native_start, turn_start
 
 
-def _run(registry: Path, runtime: Path, project: Path, host_arguments: list[str]):
+def _run(registry: Path, runtime: Path, project: Path, host_arguments: list[str], *, resume_key: str | None = None):
+    turn = (["--turn-instance-id", "launch-authority-fixture"] if resume_key is None
+            else ["--resume-turn-key", resume_key, "--retry-failed-turn"])
     return _cli(registry, runtime,
         "turn", "run-once", "--goal-id", GOAL, "--agent-id", AGENT,
         "--host", "codex-cli", "--project", str(project),
         "--codex-sandbox", "read-only", "--no-global-sync", "--iteration-context", "fresh",
-        "--turn-instance-id", "launch-authority-fixture",
-        "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]),
+        *turn, "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]),
         *host_arguments, "--execute",
     )
 
@@ -347,6 +348,63 @@ def test_first_normal_turn_with_declared_state_needs_no_global_registry(
     assert native_start.exists() and turn_start.exists(), payload
     assert payload["effects"]["quota_spent"] is True, payload
     assert not (runtime / "registry.global.json").exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("operation_tools", [False, True])
+@pytest.mark.parametrize("change", ["renew", "replace"])
+def test_actual_launch_preserves_original_task_lease_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, operation_tools: bool, change: str,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease")
+    host_arguments, native_start, turn_start = _host(tmp_path, monkeypatch, operation_tools)
+    lease_scope = ["--goal-id", GOAL, "--todo-id", "todo_fixture0001", "--owner", AGENT]
+
+    def lease(action, key, version, *options):
+        code, payload = _cli(registry, runtime, "task-lease", action, *lease_scope,
+            "--idempotency-key", key, "--expected-version", str(version), *options)
+        assert code == 0, payload
+        return payload["lease"]
+
+    original = lease("acquire", "first-generation", 0, "--ttl-seconds", "300")
+    owner = codex_operation_host if operation_tools else codex_cli
+    prepare_input = owner.prepare_codex_cli_input
+    changes = []
+
+    def change_lease_before_dispatch(request):
+        if change == "renew":
+            current = lease("renew", original["idempotency_key"], original["version"],
+                            "--ttl-seconds", "600")
+            assert current["lease_epoch"] == original["lease_epoch"]
+        else:
+            released = lease("release", original["idempotency_key"], original["version"])
+            current = lease("acquire", "next-generation", released["version"], "--ttl-seconds", "300")
+            assert current["lease_epoch"] > original["lease_epoch"]
+        assert current["version"] > original["version"]
+        changes.append(current)
+        return prepare_input(request)
+
+    monkeypatch.setattr(owner, "prepare_codex_cli_input", change_lease_before_dispatch)
+    code, result = _run(registry, runtime, project, host_arguments)
+    assert len(changes) == 1, result
+    if change == "replace":
+        assert code == 1 and result.get("error_code") == "current_turn_work_changed", (
+            code, result.get("status"), result.get("error_code"), result.get("effects"),
+        )
+        assert result["host_failure"]["kind"] == "contract_rejected"
+        assert result["effects"]["host_invoked"] is False and not turn_start.exists()
+        assert native_start.exists() is operation_tools
+        _assert_no_settlement(runtime, result)
+        monkeypatch.setattr(owner, "prepare_codex_cli_input", prepare_input)
+        code, retry = _run(registry, runtime, project, host_arguments, resume_key=result["resume_turn_key"])
+        assert code == 1 and retry.get("error_code") == "current_turn_work_changed", retry
+        assert retry["resume_turn_key"] == result["resume_turn_key"]
+        assert retry["effects"]["host_invoked"] is False and not turn_start.exists()
+        _assert_no_settlement(runtime, retry)
+    else:
+        assert code == 0 and result["status"] == ("stopped" if operation_tools else "committed"), result
+        assert native_start.exists() and turn_start.exists()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
