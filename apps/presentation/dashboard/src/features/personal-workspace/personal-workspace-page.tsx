@@ -578,6 +578,7 @@ function proposalFields(parameters: Record<string, unknown>, t: WorkspaceTransla
   };
   const priority = ["title", "objective", "completion_criteria", "execution_boundary", "permission", "agent_id", "workspace_ref", "initial_todos", "heartbeat", "stop_condition", "goal_id"];
   return Object.entries(parameters)
+    .filter(([key]) => key !== "start_execution")
     .sort(([left], [right]) => {
       const leftIndex = priority.indexOf(left);
       const rightIndex = priority.indexOf(right);
@@ -722,7 +723,9 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       : proposal.action_kind === "team.plan"
       ? teamPlanFields(proposal.normalized_parameters, t)
       : decision ? []
-      : proposalFields(proposal.normalized_parameters, t, proposal.workspace_binding).filter(field => !reviewPlan.creationProgress?.goalId
+      : proposalFields(proposal.normalized_parameters, t, proposal.workspace_binding)
+        .filter(field => !(reviewPlan.creationExecution && ["permission", "title", "heartbeat", "stop_condition", "initial_todos", "goal_id"].includes(field.key)))
+        .filter(field => !reviewPlan.creationProgress?.goalId
         || proposal.status === "applied"
         || ["objective", "completion_criteria", "execution_boundary", "permission", "workspace_ref"].includes(field.key)),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
@@ -744,7 +747,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
         : proposal.status === "applied" ? t("proposal.teamPlan.assignedHint") : t("proposal.impact.teamPlan")
       : decision ? proposal.status === "applied" ? "" : t(`proposal.impact.gate.${decision}`)
       : proposal.action_kind === "goal.create"
-      ? t("proposal.impact.goalCreate")
+      ? t(reviewPlan.creationExecution ? "proposal.impact.goalCreateExecution" : "proposal.impact.goalCreate")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
         ? t("proposal.impact.lifecycleStop")
         : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
@@ -786,7 +789,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
         ? t("proposal.primary.operationGroup") : t("proposal.primary.operationDeliveryPending")
       : proposal.action_kind === "team.plan" ? t(proposal.status === "applied" ? "proposal.teamPlan.viewResult" : "proposal.primary.teamPlan")
       : decision ? t(`proposal.primary.gate.${decision}`)
-      : proposal.action_kind === "goal.create" ? t("proposal.primary.goalCreate")
+      : proposal.action_kind === "goal.create" ? t(reviewPlan.creationExecution ? "proposal.primary.goalCreate" : "proposal.primary.goalCreateOnly")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
         ? t("proposal.primary.lifecycleStop")
         : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
@@ -1114,7 +1117,8 @@ export function PersonalWorkspacePage({
         if (recorded) return workspaceProposal(recorded, t);
         return await createPreview(goalCreateRequest({ objective: draft.objective,
           completion: draft.completion_criteria, boundary: draft.execution_boundary,
-          permission: "read_only", agentId: goalAgentId, contextGoalId: null, operationId }, t), { select: false });
+          permission: "read_only", agentId: goalAgentId, contextGoalId: null, operationId,
+          startExecution: agents.find(agent => agent.agentId === goalAgentId)?.adapterKind === "codex_app_server" }, t), { select: false });
       })();
       goalDraftPreparations.current.set(preparationKey, preparation);
       try { return await preparation; }
@@ -3162,7 +3166,9 @@ export function PersonalWorkspacePage({
             {composerCollapsed && composerSuggestions ? <ComposerActions>{composerSuggestions}</ComposerActions> : null}
             </div>
             {!composerCollapsed ? <>
-            {actionDraft ? <WorkspaceActionForm draft={actionDraft} workspaceGoals={workspaceGoals} workspaceProjects={workspaceConversations?.projects ?? []} onClose={() => setActionDraft(null)} onPreview={async (request) => {
+            {actionDraft ? <WorkspaceActionForm draft={actionDraft} workspaceGoals={workspaceGoals} workspaceProjects={workspaceConversations?.projects ?? []}
+              startExecution={agents.find(agent => agent.agentId === actionDraft.agentId)?.adapterKind === "codex_app_server"}
+              onClose={() => setActionDraft(null)} onPreview={async (request) => {
               const proposal = await createPreview(request, { select: false });
               if (proposal.gate?.kind === "workspace_unavailable") {
                 throw new Error(proposal.gate.summary);

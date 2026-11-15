@@ -39,6 +39,10 @@ export const goalDraftScenario = {
       assert.equal(api.durableWriteCount, writes, "Preparing a complete draft cannot create a Goal");
       await card.getByRole("button", {name: "重新准备", exact: true}).click();
       await card.getByRole("button", {name: "创建并开始", exact: true}).waitFor();
+      await card.locator(".personal-goal-creation-execution").getByText("只读", {exact: true}).waitFor();
+      await card.locator(".personal-goal-creation-execution").getByText("无", {exact: true}).waitFor();
+      assert.equal(api.actionPreviews.at(-1).normalized_parameters.start_execution, true,
+        "A fresh Codex Create and start explicitly requests execution");
       assert.equal(await page.locator('.personal-proposal-row[data-action-kind="goal.create"]').count(), 0,
         "The visible draft owns one confirmation instead of a duplicate action card");
       await card.getByText("codex", {exact: true}).waitFor();
@@ -71,13 +75,17 @@ export const goalDraftScenario = {
       await objective.fill(`\u0085${draft.objective}\u001c`);
       await boundary.fill(draft.execution_boundary);
       await form.getByLabel("完成标准", {exact: true}).fill("资本支出对照表与原始来源");
+      await form.getByLabel("执行权限", {exact: true}).selectOption("workspace_write_on_confirmation");
       await form.getByRole("button", {name: "检查配置"}).click();
       await page.getByText("确认执行", {exact: true}).waitFor();
       const preview = api.actionPreviews.at(-1);
       assert.equal(preview.action_kind, "goal.create");
       assert.equal(preview.normalized_parameters.title, draft.objective);
       assert.equal(preview.normalized_parameters.workspace_ref, "current");
-      assert.equal(preview.normalized_parameters.permission, "read_only");
+      assert.equal(preview.normalized_parameters.permission, "workspace_write_on_confirmation");
+      assert.equal(preview.normalized_parameters.start_execution, true);
+      await page.locator(".personal-context-drawer .personal-goal-creation-execution")
+        .getByText("所选工作区的所有文件", {exact: true}).waitFor();
       assert.equal(preview.normalized_parameters.heartbeat.enabled, false);
       assert.equal(api.durableWriteCount, writes);
       await page.getByRole("button", {name: "关闭", exact: true}).click();

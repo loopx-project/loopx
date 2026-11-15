@@ -692,6 +692,10 @@ def test_fenced_native_task_dispatch_then_ordinary_read_reset_preserves_session_
     native = captured[-1]["params"]
     assert native["sandboxPolicy"] == policy
     assert "permissions" not in native
+    if writable:
+        assert native["runtimeWorkspaceRoots"] == [str(fixture.project.resolve())]
+    else:
+        assert "runtimeWorkspaceRoots" not in native
     assert (
         "You are the execution agent for a confirmed LoopX Task"
         in native["input"][0]["text"]
@@ -701,6 +705,7 @@ def test_fenced_native_task_dispatch_then_ordinary_read_reset_preserves_session_
     fixture.adapter.start_turn("Prepare the check for review.", lambda *_: None)
     ordinary = captured[-1]["params"]
     assert ordinary["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
+    assert "runtimeWorkspaceRoots" not in ordinary
     assert "Do not edit files, mutate LoopX state" in ordinary["input"][0]["text"]
     fixture.adapter.start_turn_with_attachments(
         "Read the original attachment.", lambda *_: None, []
@@ -720,7 +725,7 @@ def test_fenced_native_task_dispatch_then_ordinary_read_reset_preserves_session_
 
 
 @pytest.mark.parametrize(
-    "invalid", ["no-guard", "wrong-workspace", "network", "named-profile", "review"]
+    "invalid", ["no-guard", "wrong-workspace", "extra-root", "network", "named-profile", "review"]
 )
 def test_native_task_transport_refuses_unbound_policy_or_missing_host_fence(
     original_check, monkeypatch, invalid
@@ -738,6 +743,8 @@ def test_native_task_transport_refuses_unbound_policy_or_missing_host_fence(
         fixture.native._launch_guard = None
     elif invalid == "wrong-workspace":
         policy["writableRoots"] = [str(fixture.project.parent.resolve())]
+    elif invalid == "extra-root":
+        policy["writableRoots"].append(str(fixture.project.parent.resolve()))
     elif invalid == "network":
         policy["networkAccess"] = True
     elif invalid == "named-profile":

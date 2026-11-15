@@ -1,5 +1,5 @@
 import {ContextHelp} from "./context-help";
-import { goalCreateContent, goalCreateRequest } from "./goal-create-request";
+import { goalCreateContent, goalCreateRequest, type GoalCreationPermission } from "./goal-create-request";
 import { useEffect, useId, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
 import type { ChatProject } from "../../data/chat-model";
@@ -16,7 +16,7 @@ export type WorkspaceActionDraft = {
   text?: string;
   completionCriteria?: string;
   executionBoundary?: string;
-  permission?: "read_only";
+  permission?: GoalCreationPermission;
 };
 
 // Mirrors the backend preview normalizer: whitespace is collapsed, then code points are counted.
@@ -28,11 +28,12 @@ export function todoCreateRequest(text: string, goalId: string, summary: string)
     normalizedParameters: {goal_id: goalId, text: compactPythonWhitespace(text)}, summary};
 }
 
-export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProjects = [], onClose, onPreview }: {
+export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProjects = [], startExecution = false, onClose, onPreview }: {
   draft: WorkspaceActionDraft;
   workspaceGoals?: WorkspaceGoal[];
   /** Dashboard-configured workspaces; each admits Goal creation by its own reference. */
   workspaceProjects?: ChatProject[];
+  startExecution?: boolean;
   onClose: () => void;
   onPreview: (request: WorkspaceActionPreviewRequest) => Promise<unknown>;
 }) {
@@ -51,7 +52,7 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
   const [workspaceRef, setWorkspaceRef] = useState("current");
   const configuredWorkspaces = workspaceProjects.filter(
     (project): project is ChatProject & { goal_workspace_ref: string } => Boolean(project.goal_workspace_ref));
-  const [permission, setPermission] = useState<string>(draft.permission ?? "workspace_write_on_confirmation");
+  const [permission, setPermission] = useState<GoalCreationPermission>(draft.permission ?? "workspace_write_on_confirmation");
   const [interval, setInterval] = useState(draft.kind === "heartbeat" ? "1" : "2");
   const [unit, setUnit] = useState(draft.kind === "heartbeat" ? "d" : "h");
   const [stop, setStop] = useState("goal_complete");
@@ -82,10 +83,10 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
     setError("");
     try {
       if (draft.kind === "goal") {
-        const content = JSON.stringify([objective, completion, boundary, permission, workspaceRef, draft.agentId, draft.goalId, locale]);
+        const content = JSON.stringify([objective, completion, boundary, permission, workspaceRef, draft.agentId, draft.goalId, locale, startExecution]);
         if (goalRequest.current?.content !== content) goalRequest.current = { content, operationId: crypto.randomUUID() };
         await onPreview(goalCreateRequest({ objective, completion, boundary, permission, workspaceRef,
-          agentId: draft.agentId, contextGoalId: draft.goalId, operationId: goalRequest.current.operationId }, t));
+          agentId: draft.agentId, contextGoalId: draft.goalId, operationId: goalRequest.current.operationId, startExecution }, t));
         onClose();
         return;
       }
@@ -135,7 +136,10 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
             <ContextHelp label={zh ? "工作区目录范围" : "Workspace directory scope"}><p>{zh
               ? <>检查配置时会显示具体目录。要添加其他目录，请用 <code>loopx dashboard --scan-path &lt;目录&gt;</code> 重新启动 Dashboard（每个项目一个）。选择目录不会增加执行权限。</>
               : <>The review names the directory before anything is created. To add another directory, restart the Dashboard with <code>loopx dashboard --scan-path &lt;directory&gt;</code>, once per project. Choosing a directory does not expand execution permissions.</>}</p></ContextHelp>
-            <label>{zh ? "执行权限" : "Execution permission"}<select aria-label={zh ? "执行权限" : "Execution permission"} value={permission} onChange={(event) => setPermission(event.target.value)}><option value="read_only">{zh ? "只读" : "Read only"}</option><option value="workspace_write_on_confirmation">{zh ? "确认后允许修改工作区" : "Allow workspace changes after confirmation"}</option></select></label>
+            <label>{zh ? "执行权限" : "Execution permission"}<select aria-label={zh ? "执行权限" : "Execution permission"} value={permission} onChange={(event) => {
+              const next = event.target.value;
+              if (next === "read_only" || next === "workspace_write_on_confirmation") setPermission(next);
+            }}><option value="read_only">{zh ? "只读" : "Read only"}</option><option value="workspace_write_on_confirmation">{zh ? "确认后允许修改工作区" : "Allow workspace changes after confirmation"}</option></select></label>
           </> : null}
         </>}
       </fieldset>

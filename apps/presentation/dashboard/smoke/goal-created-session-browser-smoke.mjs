@@ -13,7 +13,7 @@ let browser;
 try {
   browser = await launchBrowser(loadPlaywright().chromium);
   await mkdir(evidence, {recursive: true});
-  for (const scenario of ["managed", "legacy", "malformed"]) {
+  for (const scenario of ["managed", "creation", "legacy", "malformed"]) {
     const page = await browser.newPage({viewport: {width: 1440, height: 960}});
     page.setDefaultTimeout(10000);
     await page.emulateMedia({reducedMotion: "reduce"});
@@ -21,7 +21,8 @@ try {
     const proposalId = `create-${scenario}`, goalId = "progress-projection", owner = "codex", sessionId = "created-original-session";
     const proposal = {schema_version: "loopx_chat_action_proposal_v1", proposal_id: proposalId, action_kind: "goal.create",
       summary: "Prepare the original Session journey", normalized_parameters: {goal_id: goalId, title: "Original Session journey / 原会话",
-        objective: "Retain the original work conversation", completion_criteria: ["Reopen its original history"], execution_boundary: "Synthetic readback only", agent_id: "codex"},
+        objective: "Retain the original work conversation", completion_criteria: scenario === "creation" ? "Reopen its original history" : ["Reopen its original history"], execution_boundary: "Synthetic readback only", agent_id: "codex",
+        ...(scenario === "creation" ? {start_execution: true, permission: "workspace_write_on_confirmation", initial_todos: ["Reopen its original history"]} : {})},
       context: {kind: "manager"}, expected_state_fingerprint: "original-fingerprint", permission_classification: "durable_write",
       validation_evidence: ["Synthetic proposal is ready for the routing check"], available_transitions: ["apply", "cancel"],
       status: "preview_ready", receipt: null, stale: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z"};
@@ -40,6 +41,11 @@ try {
       created_at: `2026-01-01T00:00:${String(i).padStart(2, "0")}Z`})).map((row, i) => i === 18 ? {...row, role: "agent"} : row));
     const writes = [], discovery = [];
     let mode = "ready";
+    const creationRequest = {creation_operation_id: proposalId, operation_id: `goal-create-${proposalId}`, goal_id: goalId,
+      goal_instance_id: null, agent_id: owner, session_id: sessionId, todo_id: "original-task", permission: "workspace_write_on_confirmation", write_scope: ["**"]};
+    const creationTurn = {session_id: sessionId, turn_id: "original-creation-native-turn", client_turn_id: `managed.${creationRequest.operation_id}`,
+      status: "failed", origin: "native_loopx", loopx_execution: true,
+      loopx_request: {operation: "native_turn", todo_id: creationRequest.todo_id, actor: {goal_id: goalId, agent_id: owner, session_id: sessionId}}};
     page.on("request", request => {
       if (request.method() !== "GET") writes.push({path: new URL(request.url()).pathname, body: request.postDataJSON()});
     });
@@ -56,6 +62,13 @@ try {
     });
     await page.route("**/api/chat/sessions**", async route => {
       const request = route.request(), url = new URL(request.url());
+      if (scenario === "creation" && url.pathname === `/api/chat/sessions/${sessionId}/native-turn`) {
+        assert.equal(request.method(), "GET", "Populated original creation observation never launches");
+        return route.fulfill({json: {ok: true, session_id: sessionId, managed_agent_id: owner, registered_agents: [owner], available: true,
+          task: {todo_id: creationRequest.todo_id, state: "ready", source: "goal-creation", canonical_done: false,
+            observation: {check_count: 6, pinned_file_count: 1, basis_sha256: "original-confirmed-checks"},
+            creation_request: creationRequest, creation_turn: creationTurn}, turn: null}});
+      }
       if (url.pathname === "/api/chat/sessions" && request.method() === "GET" && url.searchParams.has("managed_agent_id")) {
         discovery.push([url.searchParams.get("goal_id"), url.searchParams.get("managed_agent_id")]);
         const actual = runtime.sessions.get(sessionId);
@@ -71,7 +84,7 @@ try {
       await row.waitFor();
       await row.click();
       const drawer = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
-      await drawer.getByRole("button", {name: "创建 Goal 并开始首轮", exact: true}).click();
+      await drawer.getByRole("button", {name: scenario === "creation" ? "创建 Goal 并开始首轮" : "创建 Goal", exact: true}).click();
       const enter = drawer.getByRole("button", {name: "进入新 Goal", exact: true});
       if (scenario === "malformed") {
         await drawer.getByRole("alert").filter({hasText: "无法验证新 Goal 的原 Session 地址"}).waitFor();
@@ -101,6 +114,21 @@ try {
       assert.equal(routed.searchParams.get("view"), "conversation");
       const original = page.getByRole("heading", {name: "Original first-run result / 原首轮结果", exact: true});
       await original.waitFor();
+      if (scenario === "creation") {
+        const control = page.getByRole("region", {name: "当前任务", exact: true});
+        await control.getByRole("button", {name: "继续当前任务", exact: true}).waitFor();
+        for (const [label, viewport] of [["desktop", {width: 1440, height: 960}], ["narrow", {width: 390, height: 844}]]) {
+          await page.setViewportSize(viewport);
+          await page.screenshot({path: resolve(evidence, `creation-populated-${label}.png`), animations: "disabled"});
+          await control.getByRole("button", {name: "当前任务与检查", exact: true}).click();
+          await page.getByRole("tooltip").filter({hasText: "当前任务与检查"}).waitFor();
+          await page.screenshot({path: resolve(evidence, `creation-populated-help-${label}.png`), animations: "disabled"});
+          await page.keyboard.press("Escape");
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+        }
+        assert.equal(writes.filter(row => row.path.endsWith("/native-turn")).length, 0);
+        await page.setViewportSize({width: 1440, height: 960});
+      }
       assert.ok(discovery.some(([goal, agent]) => goal === goalId && agent === owner));
       await page.screenshot({path: resolve(evidence, "managed-original-first-desktop.png"), animations: "disabled"});
       await original.evaluate(element => element.scrollIntoView({block: "start"}));
@@ -142,7 +170,7 @@ try {
       assert.deepEqual(errors, []);
     } catch (error) {
       await page.screenshot({path: resolve(evidence, `${scenario}-failure.png`), animations: "disabled"});
-      throw new Error(`${error.message}; url=${page.url()}; body=${(await page.locator("body").innerText()).slice(-10000)}`);
+      throw new Error(`${error.message}; pageerrors=${JSON.stringify(errors)}; url=${page.url()}; body=${(await page.locator("body").innerText()).slice(-10000)}`);
     } finally {await page.unrouteAll({behavior: "ignoreErrors"}); await page.close();}
     console.log(`goal-created-session browser: PASS ${scenario}`);
   }
