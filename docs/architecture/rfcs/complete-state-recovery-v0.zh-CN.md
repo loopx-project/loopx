@@ -774,7 +774,7 @@ provider、捕获一致性、身份接纳或 M2/M3 重新启用。同条评论�
 | 归档 128 MiB；展开 tar 流和普通文件总量 512 MiB；展开比例 2,000 | 发布前限制压缩输入、复制和解压放大 | 指南有接近上限的原生输入及超限拒绝。比例有源码限制，但未记录独立的精确比例边界测量。 |
 | 外部及内嵌清单各 16 MiB；扩展 tar header 每项 128 KiB、累计 16 MiB；JSON 深度 64 | 限制 metadata 解码与遍历 | 指南有外部清单 16 MiB／超一字节；恢复测试在解码前拒绝超大 PAX 变体及 sparse。最大结构化 metadata、累计 header 与深度组合未资格化。 |
 | 20,000 个 member；路径最多 64 段／1,024 字符／每段 255 UTF-8 字节；链接解析最多 40 跳 | 限制清单与路径处理，拒绝歧义或越界提取 | 指南有精确 20,000／20,001；测试覆盖路径、链接、碰撞与占用目标拒绝。并未测量所有路径形状的精确上限和最长链接链。 |
-| 128 个 Goal；128 个 SQLite 文件；每 Goal 20,000 个已提交事务 | 限制 owner 清单与完整历史读取，不截断历史 | 指南有原生 128／129 清单；`test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication` 覆盖 20,000／20,001。不保证 128 个满历史 Goal 同时符合其它上限与时限。 |
+| 128 个 Goal；128 个 SQLite 文件；逐页验到已捕获的历史游标 | 限制 owner 清单和单页内存；总工作量仍受字节上限和验证时限约束 | 指南有原生 128／129 清单；SQLite 外层备份与验证回归完整读出 20,000 和 20,001 笔提交。样本不保证所有 Goal 同时符合归档上限与时限。 |
 | 当前 audit 结构最多 258 个 component、128 个 dependency link | 通过上述清单上限约束本 profile 的图 | 来自 1 个配置、最多 128 个数据库、最多 128 个各自依赖配置的 Goal，以及 1 个 unknown 余项。这不是通用 graph 上限或完整 mutable-owner 清单，通用 graph profile 不在本提案内。 |
 | 隔离 owner verifier：90 秒；V8 old-space 512 MiB；SQLite 进程级 heap 至多 64 MiB | 将数据库／owner 检查限制在共享 daemon 之外 | Timeout 清理和 SQLite view 拒绝测试覆盖隔离。Heap 有源码限制；整个进程树峰值内存、最坏耗时未资格化。该超时不是归档全流程 deadline 或 RTO。 |
 | 既有 transport：仅两项清单检查用 64 MiB private snapshot；普通 RPC 和 worker 输入 2 MiB；owner stdout 2 Mi 字符；历史 audit 输入 16 MiB | 限制传输和历史报告解码，不扩大普通 transport | 大清单 transport 与 audit 完整性测试覆盖路径。独立上限不能相加，也不保证任意最大 audit 均可发布。 |

@@ -46,6 +46,7 @@ def _load_exports() -> None:
     )
     from .canary import handle_canary_command, register_canary_commands
     from .authority_archive import handle_authority_archive_command, register_authority_archive_command
+    from .postgres import handle_postgres_command, register_postgres_commands
     from .coordination_shadow import (
         handle_coordination_shadow_command,
         register_coordination_shadow_command,
@@ -210,6 +211,7 @@ __all__ = [
     "handle_dash_command",
     "handle_project_lifecycle_command",
     "handle_project_command",
+    "handle_postgres_command",
     "handle_pr_review_command",
     "handle_deepresearch_command",
     "handle_quota_command",
@@ -243,6 +245,7 @@ __all__ = [
     "register_canary_commands",
     "register_coordination_shadow_command",
     "register_authority_archive_command",
+    "register_postgres_commands",
     "register_capability_commands",
     "register_extension_commands",
     "register_doctor_command",

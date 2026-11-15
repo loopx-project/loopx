@@ -145,7 +145,9 @@ def turn_plan_host_source(request: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def captured_turn_host_input(request: Mapping[str, Any]) -> dict[str, Any]:
-    """Transport original-reader metadata after complete-source validation."""
+    """Use the checked wire or transfer original-reader metadata from v0."""
+    if "turn_envelope" not in request:
+        return {**request, "schema_version": COMPLETE_TURN_HOST_REQUEST_SCHEMA}
     envelope = _wire_mapping(request.get("turn_envelope"))
     model_input = {**{key: value for key, value in request.items() if key != "turn_envelope"},
                    "schema_version": COMPLETE_TURN_HOST_REQUEST_SCHEMA}
@@ -186,14 +188,15 @@ def complete_turn_host_source(
         assert_turn_host_request_version(request)
     if "work_contract" not in request:
         return None
-    header = ({"complete_host_request": {key: request[key] for key in (
-        "schema_version", "turn_key", "source_decision_hash", "detail_ref",
-    ) if key in request}} if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA else {})
-    # Identity-only current callers need no executor adapter. Keep an explicit
-    # adapter, even a damaged one, on the typed owner's full Host validation.
-    adapter = ({"envelope": _wire_mapping(request.get("turn_envelope"))}
-               if "turn_envelope" in request or operation != "complete_host_lineage" else {})
-    checked = _turn_envelope_result(operation, payload=request["work_contract"], **adapter, **header,
+    wire = {}
+    if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA:
+        wire["complete_host_request"] = {key: request[key] for key in (
+            "schema_version", "turn_key", "source_decision_hash", "detail_ref",
+        ) if key in request}
+    elif "turn_envelope" in request or operation != "complete_host_lineage":
+        # An explicit historical adapter still requires full validation.
+        wire["envelope"] = _wire_mapping(request.get("turn_envelope"))
+    checked = _turn_envelope_result(operation, payload=request["work_contract"], **wire,
                                  **({"recorded_capability_result": True} if recorded_capability_result else {}),
                                  **({"include_model_context": True} if include_model_context else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
