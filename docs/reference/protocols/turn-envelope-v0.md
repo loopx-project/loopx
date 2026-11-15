@@ -494,7 +494,8 @@ from the live check through process spawn or the native `turn/start` send. A
 writer that commits first changes the inputs to the live check. A writer that
 arrives after the check can continue once dispatch completes, while the Host
 runs. Registry contention can refuse dispatch with `goal_authority_unavailable`.
-The journal retains the original capture and identity for retry or readback.
+The journal retains the original capture, identity and saved session recovery
+for retry or readback.
 Use a fresh eligible Turn for changed work. Reading detail consumes no quota.
 Source admission, cancellation, workspace and mutation authority remain with
 their existing owners.
@@ -526,7 +527,7 @@ supported journal and its recovery window are reconciled.
 对本地权威工作，从实时检查到进程启动或发送原生 `turn/start`，派发与 Todo 和
 租约写入共用同一锁。写入先提交时，实时检查读取变更后的事实。写入在检查后到达时，
 可以在派发完成、Host 仍运行时继续。遇到 registry 写入竞争，派发可以返回
-`goal_authority_unavailable`。journal 保留原捕获与身份，用于重试或读回。
+`goal_authority_unavailable`。journal 保留原捕获、身份和已保存的会话恢复信息，用于重试或读回。
 变更后的工作通过新的合格 Turn 执行。读取详情不扣额。来源准入、取消、工作区和
 写入权限继续由原模块维护。
 

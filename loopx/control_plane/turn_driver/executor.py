@@ -1088,7 +1088,7 @@ def _host_result_stage(
             recovery_kind = host_observation.get("recovery_kind")
             if recovery_kind is not None:
                 journal["host_recovery"] = build_host_recovery_record(recovery_kind)
-            else:
+            elif rejected_launch is None:
                 journal.pop("host_recovery", None)
             persist_journal(journal)
             terminal = execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
@@ -1097,6 +1097,7 @@ def _host_result_stage(
             return None, [], terminal
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
+    journal.pop("host_recovery", None)
 
     recorded_plan = journal.get("plan")
     validation = validate_loopx_turn_host_result(
@@ -1799,7 +1800,8 @@ def run_loopx_turn_once(
                 journal.pop("validation_stage", None)
             journal.pop("reason", None)
             journal.pop("receipt", None)
-            journal.pop("host_recovery", None)
+            # A launch refusal can leave the existing Host session available.
+            # Keep its recovery requirement until the next Host observation.
             journal.pop("host_failure", None)
             journal["status"] = "in_progress"
             persist_journal(journal)
