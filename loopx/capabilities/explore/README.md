@@ -201,6 +201,13 @@ the same Goal/Agent/Todo, question and tested input, plus the original commit an
 visible work window. Foreign, tentative, stale and late-visible records cannot
 become that choice's execution. This reuses existing findings and readback;
 the association does not independently verify method adoption or benefit.
+Ordinary `turn run-once` accepts the same inline `explore_result` inside the
+Host's existing `agent_vision_json`. It retains one decoded Vision packet,
+then uses the original attachment parser and delivery owner. A failed delivery
+leaves quota unspent and recovers from the original Run on the same Turn;
+completed replay repeats neither Host work, finding ingestion nor quota spend.
+Off mode with an omitted attachment creates no finding; supplied invalid or
+disabled attachments reject before primary writeback.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use

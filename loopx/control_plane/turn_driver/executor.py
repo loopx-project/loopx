@@ -317,9 +317,9 @@ def _normalize_host_path_delta(
 
     agent_vision: dict[str, Any] | None = None
     if from_journal and "agent_vision" in result:
-        # The journal stores the typed owner's decoded packet. Revalidate it
-        # through that same owner, without treating derived budget diagnostics
-        # as a new Host wire string or widening the untrusted Host protocol.
+        # Keep one decoded packet for Goal fields and capability attachments.
+        # Revalidate Goal semantics through their owner; capability owners
+        # validate their existing inline payloads before durable writeback.
         try:
             if "agent_vision_json" in result:
                 raise ValueError("cached vision cannot carry both packet forms")
@@ -327,9 +327,12 @@ def _normalize_host_path_delta(
             if not isinstance(packet, dict):
                 raise TypeError("cached agent_vision must be a JSON object")
             lineage = turn_host_lineage(plan)
-            agent_vision = normalize_goal_vision_packet(
+            goal_vision = normalize_goal_vision_packet(
                 packet, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"] or None,
             )
+            agent_vision = goal_vision
+            if "explore_result" in packet:
+                agent_vision = {**goal_vision, "explore_result": packet["explore_result"]}
         except (TypeError, ValueError, RuntimeError) as exc:
             errors.append(f"invalid cached agent_vision: {exc}")
     elif agent_vision_json:
@@ -344,9 +347,12 @@ def _normalize_host_path_delta(
                 if not isinstance(packet, dict):
                     raise TypeError("agent_vision_json must decode to a JSON object")
                 lineage = turn_host_lineage(plan)
-                agent_vision = normalize_goal_vision_packet(
+                goal_vision = normalize_goal_vision_packet(
                     packet, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"] or None,
                 )
+                agent_vision = goal_vision
+                if "explore_result" in packet:
+                    agent_vision = {**goal_vision, "explore_result": packet["explore_result"]}
             except (json.JSONDecodeError, TypeError, ValueError, RuntimeError) as exc:
                 errors.append(f"invalid agent_vision_json: {exc}")
 

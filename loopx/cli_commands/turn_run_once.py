@@ -46,6 +46,7 @@ from .turn_decision import collect_turn_status_payload, current_turn_host_launch
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
 from .turn_todo_writeback import write_turn_validated_completion
+from .project_lifecycle_inputs import split_explore_result_input
 
 if _TYPE_CHECKING:
     from .turn_dsh_host import (
@@ -229,6 +230,23 @@ def execute_turn_run_once(
             else None
         )
 
+        def finish_explore_delivery(refresh: dict[str, object]) -> dict[str, object]:
+            if refresh.get("explore_result") is None or refresh.get("ok") is not True:
+                return refresh
+            from ..capabilities.explore.result_writeback import deliver_result_attachment
+
+            delivery = deliver_result_attachment(
+                payload=refresh, registry_path=registry_path, runtime_root=runtime_root,
+                goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                todo_id=settlement_identity.todo_id,
+                turn_instance_id=settlement_identity.turn_instance_id,
+            )
+            refresh["explore_result_delivery"] = delivery
+            if not delivery["ok"]:
+                refresh["ok"] = False
+                refresh["error"] = "Primary writeback committed; retry this original Turn to deliver Explore evidence"
+            return refresh
+
         def refresh_candidate(
             result: dict[str, object],
             *,
@@ -248,6 +266,16 @@ def execute_turn_run_once(
             # Diagnostics already live in the journal's typed host_result.
             # Do not overwrite task context before refresh can reject a result.
             progress_observation = result.get("progress_observation")
+            vision, explore_result = split_explore_result_input(
+                dict(result["agent_vision"]) if isinstance(result.get("agent_vision"), dict) else None,
+                None,
+                scope_context=dict(
+                    registry_path=registry_path, runtime_root_override=str(runtime_root),
+                    goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                    todo_id=settlement_identity.todo_id,
+                    turn_instance_id=settlement_identity.turn_instance_id,
+                ),
+            )
             return refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
@@ -273,11 +301,8 @@ def execute_turn_run_once(
                     dict(progress_observation)
                     if isinstance(progress_observation, dict) else None
                 ),
-                agent_vision_packet=(
-                    dict(result["agent_vision"])
-                    if isinstance(result.get("agent_vision"), dict)
-                    else None
-                ),
+                agent_vision_packet=vision,
+                explore_result=explore_result,
                 vision_unchanged_reason=(
                     str(result.get("vision_unchanged_reason") or "") or None
                 ),
@@ -287,7 +312,6 @@ def execute_turn_run_once(
                 sync_global=not bool(args.no_global_sync),
                 goal_ref=goal_ref,
             )
-
         # A Todo-less native governance Turn has no business artifact/argv.
         # Its independent validator is the canonical semantic writeback preview,
         # with the same captured obligation and fresh authority as the commit.
@@ -322,6 +346,11 @@ def execute_turn_run_once(
                     status="appended",
                     details={"command": "turn run-once"},
                 )
+                refresh = finish_explore_delivery(refresh)
+                if refresh.get("ok") is True:
+                    # Turn callbacks acknowledge committed data, including
+                    # the original primary record returned on receipt repair.
+                    return {**refresh, "appended": True}
             return refresh
 
         def completion_intent(_result: dict[str, object]) -> dict[str, object]:
@@ -607,6 +636,16 @@ def execute_turn_run_once(
                     return {
                         "kind": "unknown",
                         "reason": "refresh-state receipt has no durable run",
+                    }
+                delivered = finish_explore_delivery({
+                    **run, "ok": True, "appended": True,
+                    "settlement_identity": settlement_identity.as_dict(),
+                })
+                if delivered.get("ok") is not True:
+                    return {
+                        "kind": "unknown",
+                        "reason": "original Explore delivery is still pending",
+                        "explore_result_delivery": delivered.get("explore_result_delivery"),
                     }
                 if event is None:
                     append_settlement_event(

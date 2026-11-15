@@ -264,6 +264,17 @@ not current-model adoption, prediction calibration, cross-task benefit or
 matched-budget gains. Those requirements and C1/C4/C9 integration remain open;
 there is no new decision owner, execution entry, schema or default activation.
 
+The ordinary [`Turn consumer`](../../../loopx/cli_commands/turn_run_once.py)
+also retains the existing inline `explore_result` in its decoded Vision packet
+and delegates parsing and delivery to the original Explore owner. File/SQLite
+[public Turn checks](../../../tests/control_plane/test_explore_settlement_attachment.py)
+cover independently validated artifacts, off/omitted and rejected inputs,
+committed replay, and interrupted delivery recovered from the original Run.
+Recovery preserves that Run, invokes the Host once, and debits once only after
+the requested delivery finishes. These checks qualify the caller boundary;
+native model adoption, complete-budget benefit, other backend qualification
+and integration of the in-flight execution proposals remain open.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

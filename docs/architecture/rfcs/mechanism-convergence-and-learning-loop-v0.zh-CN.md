@@ -260,6 +260,14 @@ tentative、过时和迟到证据的错误关联。这只取得源码传输和�
 当前模型采用、预测校准、跨任务收益或可比预算下的效果提升。对应要求与
 C1/C4/C9 集成继续开放；没有新增决策 owner、执行入口、schema 或默认启用。
 
+普通 [`Turn 消费者`](../../../loopx/cli_commands/turn_run_once.py)也在解码后的
+Vision packet 中保留已有内联 `explore_result`，由原 Explore owner 解析和交付。
+File/SQLite [公开 Turn 检查](../../../tests/control_plane/test_explore_settlement_attachment.py)
+覆盖独立验证的产物、关闭/省略及非法输入、已提交重放，以及从原 Run 恢复中断的交付。
+恢复保持原 Run 不变、Host 调用一次，且仅在请求的交付完成后扣额一次。
+这些检查取得调用边界资格；native 模型采用、完整预算收益、其他后端资格及在途
+执行提案的集成仍开放。
+
 首个任务须确有反馈或方法选择需求。已有链完整时直接复用；有缺口时由真实消费者证明并修复，不为配合示例制造失败。运行实验、训练模型和发布过程各沿原权限，本文不占用其他 lane 配额或预设 PR 数。
 
 ## 12. 待确认的关键选择
