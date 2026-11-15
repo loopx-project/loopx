@@ -73,6 +73,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Iterable, Mapping
 
+from .field_use import MAPPING_READ_CALLS as _MAPPING_READS
 from .inventory import SourceFile
 from .python_production import _qualified_bindings, enum_members
 
@@ -91,11 +92,6 @@ _ROLES = ('read', 'interpret', 'pass_through', 'unknown')
 # stronger statement about the value, so a site that branches and also forwards
 # is an interpreter; a site that only forwards is a pass-through.
 _ROLE_RANK = {'interpret': 3, 'pass_through': 2, 'read': 1}
-
-# Mapping accessors whose first argument names a slot. Unlike a subscript,
-# these are unambiguously mapping reads, so a computed argument is real
-# evidence of an unresolved read rather than an indexing false positive.
-_MAPPING_READS = frozenset({'get', 'pop'})
 
 # Wildcard vocabulary id for a site that may read any covered slot.
 ANY_VOCABULARY = '*'
