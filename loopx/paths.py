@@ -407,6 +407,36 @@ def display_path_text(path: Path | str) -> str:
     return f"{GIT_BYTE_PATH_PREFIX}{os.fsencode(text)!r}"
 
 
+def display_report_text(text: str) -> str:
+    """Render a diagnostic string so a UTF-8 reader can always parse it.
+
+    A message often names a file the report cannot spell.  Escaping the whole
+    sentence would hide what the finding is about, so each maximal run of
+    PEP 383 surrogate-escaped bytes is written as a ``git-bytes:`` label inside
+    the message; :func:`display_path_bytes` recovers those bytes, and ordinary
+    text keeps its original spelling.
+    """
+
+    if _is_utf8(text):
+        return text
+    parts: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if run:
+            parts.append(f"{GIT_BYTE_PATH_PREFIX}{os.fsencode(''.join(run))!r}")
+            run.clear()
+
+    for character in text:
+        if 0xDC80 <= ord(character) <= 0xDCFF:
+            run.append(character)
+        else:
+            flush()
+            parts.append(character)
+    flush()
+    return "".join(parts)
+
+
 def display_path_bytes(text: str) -> bytes:
     """Recover the pathname bytes a display label names."""
 

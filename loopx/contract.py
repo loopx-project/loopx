@@ -46,6 +46,7 @@ from .paths import (
     DEFAULT_RUNTIME_ROOT,
     LEGACY_RUNTIME_ROOT,
     display_path_text,
+    display_report_text,
     rel_or_abs,
     resolve_runtime_root,
 )
@@ -1758,8 +1759,8 @@ def check_contract(
 
     payload = {
         "ok": not errors,
-        "registry": str(registry_path),
-        "runtime_root": str(runtime_root),
+        "registry": display_path_text(registry_path),
+        "runtime_root": display_path_text(runtime_root),
         "scan_roots": [display_path_text(path) for path in scan_roots],
         "summary": {
             "errors": len(errors),
@@ -1771,7 +1772,31 @@ def check_contract(
         "checks": checks,
         "public_boundary_scan": public_boundary_scan,
     }
-    return project_contract_health_for_goal(payload, goal_id=goal_id_filter)
+    return project_contract_health_for_goal(
+        display_report_value(payload), goal_id=goal_id_filter,
+    )
+
+
+def display_report_value(value: Any) -> Any:
+    """Project every string a check report can carry onto a UTF-8 spelling.
+
+    Findings name Git paths, warnings quote the registry and runtime roots, and
+    the boundary scan carries its own path strings.  One report boundary keeps
+    all of them decodable without changing ordinary text; see
+    :func:`loopx.paths.display_report_text`.
+    """
+
+    if isinstance(value, str):
+        return display_report_text(value)
+    if isinstance(value, list):
+        return [display_report_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [display_report_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: display_report_value(item) for key, item in value.items()
+        }
+    return value
 
 
 def render_contract_markdown(payload: dict[str, Any]) -> str:

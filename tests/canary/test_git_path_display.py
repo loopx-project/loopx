@@ -13,7 +13,7 @@ import pytest
 from loopx.contract import scan_public_boundary
 from loopx.canary.maintainability_ratchet import _dependency_finding
 from loopx.control_plane.runtime.file_reads import Utf8FileRead
-from loopx.paths import display_path_bytes, display_path_text
+from loopx.paths import display_path_bytes, display_path_text, display_report_text
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -417,3 +417,118 @@ def test_worktree_root_reads_bytes_and_removes_only_gits_terminator(
         assert contract._git_worktree_root(tmp_path) == Path(
             os.fsdecode(raw_root)
         ).resolve()
+
+
+def test_display_report_text_escapes_only_the_unspellable_bytes() -> None:
+    """A message keeps its words and still carries a decodable path label."""
+
+    assert display_report_text("registry should be gitignored") == (
+        "registry should be gitignored"
+    )
+    raw = "registry should be gitignored: /tmp/repo\udcff/.loopx/registry.json"
+    escaped = display_report_text(raw)
+
+    assert escaped == (
+        "registry should be gitignored: /tmp/repo"
+        + "git-bytes:" + repr(b"\xff")
+        + "/.loopx/registry.json"
+    )
+    assert "\udcff" not in escaped
+    assert json.dumps({"warning": escaped}, ensure_ascii=False).encode("utf-8")
+    fragment = escaped.split("git-bytes:", 1)[1].split("/.loopx", 1)[0]
+    assert display_path_bytes("git-bytes:" + fragment) == b"\xff"
+
+
+def test_check_report_projection_covers_config_and_diagnostics() -> None:
+    """Registry, runtime root and nested diagnostics share one output boundary."""
+
+    from loopx.contract import display_report_value
+
+    payload = {
+        "ok": False,
+        "registry": "/tmp/repo\udcff/.loopx/registry.json",
+        "runtime_root": "/tmp/repo\udcff/.loopx/runtime",
+        "scan_roots": ["git-bytes:" + repr(b"/tmp/repo\xff")],
+        "errors": ["leak.md:1: internal_task_id"],
+        "warnings": ["runtime root does not exist yet: /tmp/repo\udcff/.loopx/runtime"],
+        "public_boundary_scan": {
+            "private_state_git_warnings": ["tracked private state: /tmp/repo\udcff/x"],
+        },
+    }
+    projected = display_report_value(payload)
+    encoded = json.dumps(projected, ensure_ascii=False).encode("utf-8")
+    decoded = json.loads(encoded.decode("utf-8"))
+
+    fragment = "git-bytes:" + repr(b"\xff")
+    assert decoded["registry"] == f"/tmp/repo{fragment}/.loopx/registry.json"
+    assert decoded["runtime_root"] == f"/tmp/repo{fragment}/.loopx/runtime"
+    assert decoded["scan_roots"] == ["git-bytes:" + repr(b"/tmp/repo\xff")]
+    assert fragment in decoded["warnings"][0]
+    assert decoded["public_boundary_scan"]["private_state_git_warnings"][0].endswith(
+        "x"
+    )
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="non-UTF-8 Git paths are POSIX-only"
+)
+def test_check_json_keeps_project_local_config_under_a_byte_root(
+    tmp_path: Path,
+) -> None:
+    """Registry and runtime inside the repo never block the findings' JSON."""
+
+    raw_root = b"repo\xffname"
+    root = Path(os.fsdecode(os.path.join(os.fsencode(tmp_path), raw_root)))
+    try:
+        os.mkdir(os.fsencode(root))
+    except (OSError, UnicodeEncodeError):
+        pytest.skip("this filesystem rejects the root name")
+    _init_repo(root, exists=True)
+    hidden = root / ".venv"
+    hidden.mkdir()
+    _write_raw_name(
+        str(hidden / "leak.md"), "ticket t-" + "20260828123456-example\n"
+    )
+    _git(root, "add", "-f", "--", ".venv")
+    _git(root, "commit", "-m", "tracked file under a pruned directory")
+
+    loopx_config = root / ".loopx"
+    loopx_config.mkdir()
+    registry = loopx_config / "registry.json"
+    registry.write_text(json.dumps({"goals": []}), encoding="utf-8")
+    runtime_root = loopx_config / "runtime"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "--format",
+            "json",
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime_root),
+            "check",
+            "--scan-root",
+            ".",
+        ],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "PYTHONPATH": str(REPOSITORY_ROOT)},
+        check=False,
+        timeout=120,
+    )
+
+    # Every byte of the report must be readable, including the configuration
+    # and warning paths that live under the same undecodable root.
+    payload = json.loads(result.stdout.decode("utf-8"))
+    assert result.returncode == 1, result.stderr
+    assert payload["ok"] is False
+    messages = "\n".join(str(item) for item in payload["errors"])
+    assert "leak.md:1: internal_task_id" in messages, payload
+    expected_root = "git-bytes:" + repr(os.fsencode(str(root)))
+    assert payload["registry"] == expected_root + "/.loopx/registry.json"
+    assert payload["runtime_root"] == expected_root + "/.loopx/runtime"
+    assert json.dumps(payload, ensure_ascii=False).encode("utf-8")
