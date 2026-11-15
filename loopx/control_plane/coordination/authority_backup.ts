@@ -8,7 +8,7 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {isRecoveryDigest, type RecoveryComponentState} from "../state_recovery_contract.ts";
 import {canonicalAuthoritySha256, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {exportAuthorityArchive} from "./authority_archive.ts";
-import {withVerifiedAuthorityArchive} from "./authority_archive_read.ts";
+import {archiveCursor, withVerifiedAuthorityArchive} from "./authority_archive_read.ts";
 import {canonicalTodoCollection} from "./local_authority_read.ts";
 import {decodeLocalAuthoritySelection, localAuthorityProviderPaths, openRuntimeAuthorityStore,
   type LocalAuthorityProviderDependencies} from "./local_authority_provider.ts";
@@ -120,6 +120,7 @@ export function decodeAuthorityBackupCapture(value: unknown): JsonObject {
   }
   const archive = requireJsonObject(row.archive, "authority archive summary");
   const binding = requireJsonObject(row.dependencies, "authority capture dependencies");
+  archiveCursor(archive.commits);
   if (archive.goal_id !== goalId || !isRecoveryDigest(archive.archive_sha256) ||
       !Object.hasOwn(binding, "selector_sha256") || !Object.hasOwn(binding, "writer_fence_sha256") ||
       Object.values(binding).some(value => value !== null && !isRecoveryDigest(value))) {

@@ -125,8 +125,8 @@ function isLocalReference(value: string): boolean {
 }
 
 function matchesRedaction(pattern: RegExp, value: string): boolean {
-  // Global regexes are only used by replace. Validation never shares lastIndex.
-  return new RegExp(pattern.source).test(value);
+  // search starts at zero even for the global patterns used by replace.
+  return value.search(pattern) !== -1;
 }
 
 export function scanForbiddenPrivacyTokens(value: unknown, path = "projection"): void {
