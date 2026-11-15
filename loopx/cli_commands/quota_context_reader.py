@@ -82,7 +82,7 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     selection = cli.get("selection_command") if isinstance(cli, dict) else None
     if isinstance(selection, dict):
         template = selection.get("command_args_template")
-    elif complete_turn and isinstance(cli, dict) and cli.get("turn_binding_required") is True:
+    elif (complete_turn or retain_delivery_options) and isinstance(cli, dict) and cli.get("turn_binding_required") is True:
         actions = cli.get("next_cli_actions")
         template = actions[0] if isinstance(actions, list) and len(actions) == 1 else None
     else:
@@ -100,13 +100,13 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
 
 def bind_capture_recovery_transport(payload: dict[str, Any], args: argparse.Namespace, *,
                                     capture_directory: Path | None, registry_path: Path,
-                                    runtime_root: Path, preserve_app_delivery: bool = False) -> None:
+                                    runtime_root: Path, preserve_profile_delivery: bool = False) -> None:
     """Keep the caller's work contract on the quota owner's recovery guards."""
     if payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
         return
     complete_turn = getattr(args, "complete_turn", False)
     legacy_capture = capture_directory is not None and getattr(args, "turn_envelope", False)
-    if not (complete_turn or legacy_capture or preserve_app_delivery):
+    if not (complete_turn or legacy_capture or preserve_profile_delivery):
         return
     native_transport = any(getattr(args, name, None) for name in (
         "decision_handoff_socket", "codex_context_dir", "codex_context_root",
