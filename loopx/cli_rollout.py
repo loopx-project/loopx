@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from .control_plane.projects.registry_codec import load_registry
 from .paths import resolve_runtime_root
 from .rollout_event_log import (
+    RolloutAppendPreconditionChanged,
     append_rollout_event,
     append_rollout_event_once,
     build_rollout_event,
@@ -31,6 +32,7 @@ def append_cli_rollout_event(
     details: dict[str, object] | None = None,
     allow_failed: bool = False,
     idempotency_fields: list[str] | None = None,
+    precondition: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     """Append a compact rollout event for core CLI lifecycle commands.
 
@@ -73,6 +75,7 @@ def append_cli_rollout_event(
                 log_path,
                 event,
                 identity_fields=idempotency_fields,
+                precondition=precondition,
             )
         else:
             appended = append_rollout_event(log_path, event)
@@ -87,6 +90,8 @@ def append_cli_rollout_event(
         if idempotency_fields:
             rollout_event_view["appended"] = newly_appended
         payload["rollout_event"] = rollout_event_view
+    except RolloutAppendPreconditionChanged:
+        raise
     except Exception as exc:
         payload["rollout_event_log_error"] = {
             "recorded": False,

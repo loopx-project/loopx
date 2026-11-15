@@ -11,10 +11,12 @@ from __future__ import annotations
 from .effective_action import EffectiveAction
 from .states import quota_item_is_paused
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from ...rollout_event_log import RolloutAppendPreconditionChanged
 from ..effect_runtime import (
     EffectRuntimeRejected,
     EffectRuntimeResponseAmbiguous,
@@ -182,44 +184,57 @@ def _prior_closeout_preflight(
     than a megabyte log, and a settled prior Turn never causes a bound-fact read.
     """
 
-    try:
-        with quota_accounting_admission(
+    with quota_accounting_admission(
+        runtime_root=runtime_root,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        goal_ref=goal_ref,
+        operation="prior-host-turn-closeout-preflight",
+        lock_legacy_index=False,
+    ) as source_admission:
+        return _read_prior_closeout_preflight(
             runtime_root=runtime_root,
-            registry_path=registry_path,
             goal_id=goal_id,
+            agent_id=agent_id,
+            current_turn_instance_id=current_turn_instance_id,
             goal_ref=goal_ref,
-            operation="prior-host-turn-closeout-preflight",
-            lock_legacy_index=False,
-        ) as source_admission:
-            request_runtime_root = (
-                runtime_root.expanduser().resolve()
-                if source_admission is not None
-                else runtime_root.expanduser()
-            )
-            result = effect_runtime_result(
-                PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
-                {
-                    "schema_version": (
-                        PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA
-                    ),
-                    "runtime_root": str(request_runtime_root),
-                    "goal_id": goal_id,
-                    "agent_id": agent_id,
-                    "exclude_turn_instance_id": current_turn_instance_id,
-                    "owner_action_id": owner_action_id,
-                    **(
-                        {"goal_ref": dict(goal_ref)}
-                        if goal_ref is not None
-                        else {}
-                    ),
-                    **(
-                        {"source_admission": dict(source_admission)}
-                        if source_admission is not None
-                        else {}
-                    ),
-                },
-                timeout=PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS,
-            )
+            owner_action_id=owner_action_id,
+            source_admission=source_admission,
+        )
+
+
+def _read_prior_closeout_preflight(
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    agent_id: str,
+    current_turn_instance_id: str | None,
+    goal_ref: Mapping[str, Any] | None,
+    owner_action_id: str | None,
+    source_admission: Mapping[str, Any] | None,
+    borrow_source_admission: bool = False,
+) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]] | None:
+    try:
+        request_runtime_root = (
+            runtime_root.expanduser().resolve()
+            if source_admission is not None
+            else runtime_root.expanduser()
+        )
+        result = effect_runtime_result(
+            PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
+            {
+                "schema_version": PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+                "runtime_root": str(request_runtime_root),
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "exclude_turn_instance_id": current_turn_instance_id,
+                "owner_action_id": owner_action_id,
+                **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
+                **({"source_admission": dict(source_admission)} if source_admission is not None else {}),
+                **({"borrow_source_admission": True} if borrow_source_admission else {}),
+            },
+            timeout=PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS,
+        )
     except EffectRuntimeResponseAmbiguous as exc:
         # This method only reads receipts. A lost query response is not a
         # possibly committed mutation, and must not send the operator hunting
@@ -259,6 +274,57 @@ def _prior_closeout_preflight(
         dict(monitor_poll) if isinstance(monitor_poll, Mapping) else {},
         dict(result["recovery_admissions"]),
     )
+
+
+@contextmanager
+def recovery_admission_append_precondition(
+    payload: Mapping[str, Any],
+    *,
+    registry_path: Path,
+    runtime_root: Path,
+    goal_id: str,
+    agent_id: str,
+    turn_instance_id: str,
+    goal_ref: Mapping[str, Any] | None,
+) -> Iterator[Callable[[], None] | None]:
+    recovery = payload.get("unsettled_host_turn_recovery")
+    if (payload.get("should_run") is not True or not isinstance(recovery, Mapping)
+            or recovery.get("state") != "recovery_required"):
+        yield None
+        return
+
+    from ...agent_registry import load_goal_from_registry
+    from ..goals.activation import goal_is_stopped, goal_owner_resume_id
+
+    # The append owns the rollout lock. Acquire any source-lifetime locks
+    # first, as quota settlement does, and reuse those locks for the read.
+    with quota_accounting_admission(
+        runtime_root=runtime_root,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        goal_ref=goal_ref,
+        operation="recovery_admission_append",
+        lock_legacy_index=False,
+    ) as source_admission:
+        def check() -> None:
+            goal = load_goal_from_registry(registry_path, goal_id)
+            if goal is None or goal_is_stopped(goal):
+                raise RolloutAppendPreconditionChanged("The Goal is unavailable or stopped before recovery admission.")
+            current = _read_prior_closeout_preflight(
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                current_turn_instance_id=turn_instance_id,
+                goal_ref=goal_ref,
+                owner_action_id=goal_owner_resume_id(goal),
+                source_admission=source_admission,
+                borrow_source_admission=source_admission is not None,
+            )
+            if (current is None or current[3]["checkpoint"] != recovery["admission_checkpoint"]
+                    or current[3]["count"] != recovery["admissions_without_progress"]):
+                raise RolloutAppendPreconditionChanged("The recovery admission basis changed before append.")
+
+        yield check
 
 
 def _unsettled_host_turn_recovery(

@@ -265,7 +265,8 @@ test("the admission bound keeps debt identity, deduplicates replays, and accepts
     const log = join(runtime.root, "goals", GOAL, "rollout-event-log.jsonl");
     await writeFile(log, history.map(event => JSON.stringify(event)).join("\n") + "\n");
     const observed = await preflight(runtime.root);
-    assert.deepEqual(observed.recovery_admissions, {count: RECOVERY_ADMISSION_LIMIT, owner_action_id: null});
+    assert.deepEqual(observed.recovery_admissions,
+      {count: RECOVERY_ADMISSION_LIMIT, owner_action_id: null, checkpoint});
     const decide = (facts: JsonObject, missing = observed.missing_receipts) => reduceUnsettledHostTurnRecovery({
       schema_version: UNSETTLED_HOST_TURN_RECOVERY_REQUEST_SCHEMA,
       goal_id: GOAL, agent_id: AGENT, candidate, missing_receipts: missing,
@@ -281,7 +282,10 @@ test("the admission bound keeps debt identity, deduplicates replays, and accepts
       runtime_root: runtime.root, goal_id: GOAL, agent_id: AGENT,
       exclude_turn_instance_id: "current", owner_action_id: "explicit-owner-resume",
     });
-    assert.deepEqual(owner.recovery_admissions, {count: 0, owner_action_id: "explicit-owner-resume"});
+    assert.deepEqual(owner.recovery_admissions, {
+      count: 0, owner_action_id: "explicit-owner-resume",
+      checkpoint: {...checkpoint, recovery_owner_action_id: "explicit-owner-resume"},
+    });
     const replay = await preflight(runtime.root, "recovery-c");
     assert.equal((replay.recovery_admissions as JsonObject).count, 2);
   } finally {
@@ -304,8 +308,10 @@ test("losing an owner activation projection cannot renew its exhausted allowance
       history.map(event => JSON.stringify(event)).join("\n") + "\n");
     // Controller activation has no owner id. Keep the latest recorded owner
     // epoch, without counting admissions before that owner's explicit reset.
-    assert.deepEqual((await preflight(runtime.root)).recovery_admissions,
-      {count: 3, owner_action_id: "current-owner"});
+    assert.deepEqual((await preflight(runtime.root)).recovery_admissions, {
+      count: 3, owner_action_id: "current-owner",
+      checkpoint: {...checkpoint, recovery_owner_action_id: "current-owner"},
+    });
   } finally {
     await runtime.close();
   }
@@ -418,14 +424,19 @@ test("exact preflight filters stale owners before selecting the newest Turn", as
     const result = await withSourceAdmission(
       runtime.root,
       instanceB,
-      async (binding) => await preflightPriorHostTurnCloseout({
-        schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
-        runtime_root: runtime.root,
-        goal_id: GOAL,
-        agent_id: AGENT,
-        exclude_turn_instance_id: "current-turn",
-        ...binding,
-      }),
+      async (binding) => {
+        const request = {
+          schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+          runtime_root: runtime.root,
+          goal_id: GOAL,
+          agent_id: AGENT,
+          exclude_turn_instance_id: "current-turn",
+          ...binding,
+        };
+        const borrowed = await preflightPriorHostTurnCloseout({...request, borrow_source_admission: true});
+        assert.equal(candidateFrom(borrowed).prior_turn_instance_id, "turn-b");
+        return await preflightPriorHostTurnCloseout(request);
+      },
     );
     assert.equal(candidateFrom(result).prior_turn_instance_id, "turn-b");
 

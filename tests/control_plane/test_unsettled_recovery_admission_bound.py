@@ -1,8 +1,11 @@
 """Recovery admissions are bounded per original debt, never treated as spend."""
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
+from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _spend_run_count, _write_fixture,
@@ -73,6 +76,20 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
                               "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
                               "--no-global-sync", "--suppress-external-sinks", cwd=project)
         assert rc == 0, result
+    if reset == "owner_resume":
+        rc, upgraded = _run_cli(registry, runtime, *guard, "--turn-instance-id", "wait-2")
+        assert rc == 0 and upgraded["should_run"] is True, upgraded
+        assert upgraded["heartbeat_receipt"]["status"] == "upgraded"
+        assert upgraded["heartbeat_receipt"]["event_id"] != wait["heartbeat_receipt"]["event_id"]
+        assert upgraded["unsettled_host_turn_recovery"]["admissions_without_progress"] == 0
+        rc, replay = _run_cli(registry, runtime, *guard, "--turn-instance-id", "wait-2")
+        assert rc == 0 and replay["should_run"] is True, replay
+        assert replay["heartbeat_receipt"]["event_id"] == upgraded["heartbeat_receipt"]["event_id"]
+        rows = [event for event in load_rollout_events(rollout_event_log_path(runtime, GOAL_ID))
+                if event["run_id"] == "wait-2"]
+        assert [event["details"]["should_run"] for event in rows] == [False, True]
+        assert rows[-1]["details"]["recovery_effect_id"] == effect
+
     rc, after = _run_cli(registry, runtime, *guard, "--turn-instance-id", "after-progress")
     assert rc == 0, after
     if reset == "blocked_closeout":
@@ -82,7 +99,8 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
         assert after["unsettled_host_turn_recovery"]["admissions_without_progress"] == 3
     else:
         debt = after["unsettled_host_turn_recovery"]
-        assert after["should_run"] is True and debt["admissions_without_progress"] == 0, after
+        assert after["should_run"] is True, after
+        assert debt["admissions_without_progress"] == int(reset == "owner_resume"), after
         assert debt["prior_turn_instance_id"] == "owed-original"
         assert debt["settlement_effect_id"] == effect
         if reset == "writeback":
@@ -149,4 +167,67 @@ def test_owner_resume_survives_controller_lifecycle(
     rc, next_guard = _run_cli(registry, runtime, *guard, "--turn-instance-id", "after-noop")
     assert rc == 0 and next_guard["should_run"] is True, next_guard
     assert next_guard["unsettled_host_turn_recovery"]["admissions_without_progress"] == 1 + int(intermediate_guard)
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_only_one_process_can_take_the_last_recovery_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+
+    def read(turn: str, *scoping: str) -> dict:
+        rc, payload = _run_cli(registry, runtime, *guard, "--turn-instance-id", turn, *scoping)
+        assert rc == 0, payload
+        return payload
+
+    original = read("owed-original", "--todo-id", TODO_ID)
+    assert original["heartbeat_receipt"]["closeout_required"] is True
+    effect = original["heartbeat_receipt"]["settlement_identity"]["effect_id"]
+    for index in range(2):
+        granted = read(f"prior-recovery-{index}")
+        assert granted["should_run"] is True
+        assert granted["unsettled_host_turn_recovery"]["admissions_without_progress"] == index
+
+    log = rollout_event_log_path(runtime, GOAL_ID)
+    before_preview = log.read_bytes()
+    rc, preview = _run_cli(registry, runtime, *guard, "--turn-instance-id", "preview-recovery", "--dry-run")
+    assert rc == 1 and preview["reason"] == "turn-scoped `quota should-run` cannot use --dry-run", preview
+    assert log.read_bytes() == before_preview
+
+    start = Barrier(3)
+
+    def claim_last(turn: str) -> tuple[str, dict]:
+        start.wait(timeout=15)
+        return turn, read(turn)
+
+    with ThreadPoolExecutor(max_workers=3) as workers:
+        results = dict(workers.map(claim_last, (f"racing-recovery-{i}" for i in range(3))))
+    granted_turns = [turn for turn, payload in results.items() if payload["should_run"] is True]
+    assert len(granted_turns) == 1, {
+        turn: (payload.get("should_run"), payload.get("reason_code")) for turn, payload in results.items()
+    }
+    winner, = granted_turns
+    for turn, payload in results.items():
+        debt = payload["unsettled_host_turn_recovery"]
+        assert debt["settlement_effect_id"] == effect
+        if turn == winner:
+            assert debt["admissions_without_progress"] == 2
+        else:
+            assert debt["admissions_without_progress"] == 3
+            assert payload["reason_code"] == "unsettled_recovery_admission_limit"
+
+    replay = read(winner)
+    assert replay["heartbeat_receipt"]["event_id"] == results[winner]["heartbeat_receipt"]["event_id"]
+    exhausted = read("after-race")
+    assert exhausted["should_run"] is False
+    assert exhausted["unsettled_host_turn_recovery"]["admissions_without_progress"] == 3
+    grants = [
+        event["run_id"] for event in load_rollout_events(log)
+        if event.get("details", {}).get("recovery_effect_id") == effect
+        and event["details"].get("should_run") is True
+    ]
+    assert sorted(grants) == sorted(["prior-recovery-0", "prior-recovery-1", winner])
     assert _spend_run_count(runtime) == 0

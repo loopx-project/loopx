@@ -49,6 +49,7 @@ import {
 import {
   parseQuotaAccountingOwner,
   quotaOwnerOwnsProjection,
+  withBorrowedQuotaAccountingOwner,
   withQuotaAccountingOwner,
   type QuotaAccountingOwner,
 } from "./source_admission.ts";
@@ -98,6 +99,7 @@ interface PreflightRequest {
   owner: QuotaAccountingOwner;
   owner_projection: JsonObject;
   owner_action_id: string | null;
+  borrow_source_admission: boolean;
 }
 
 function decodePreflightRequest(value: unknown): PreflightRequest {
@@ -115,6 +117,12 @@ function decodePreflightRequest(value: unknown): PreflightRequest {
     runtimeRoot,
     goalId,
   });
+  if (request.borrow_source_admission !== undefined && typeof request.borrow_source_admission !== "boolean") {
+    throw new EffectRuntimeRequestError("borrow_source_admission must be a boolean");
+  }
+  if (request.borrow_source_admission === true && owner.kind !== "exact_source") {
+    throw new EffectRuntimeRequestError("borrow_source_admission requires exact source admission");
+  }
   return {
     runtime_root: runtimeRoot,
     goal_id: goalId,
@@ -123,6 +131,7 @@ function decodePreflightRequest(value: unknown): PreflightRequest {
       request.exclude_turn_instance_id,
     ),
     owner_action_id: optionalHeartbeatString(request.owner_action_id),
+    borrow_source_admission: request.borrow_source_admission === true,
     owner,
     owner_projection: owner.kind === "alias"
       ? {}
@@ -186,7 +195,8 @@ function recoveryAdmissions(
         (details.recovery_missing_spend && !checkpoint.recovery_missing_spend)) break;
     admittedTurns.add(requireNonEmptyString(event.run_id, "recovery admission run_id"));
   }
-  return {count: admittedTurns.size, owner_action_id: ownerActionId};
+  return {count: admittedTurns.size, owner_action_id: ownerActionId,
+    checkpoint: {...checkpoint, recovery_owner_action_id: ownerActionId}};
 }
 
 function settlementReadbackRequest(
@@ -295,7 +305,8 @@ export async function preflightPriorHostTurnCloseout(
   value: unknown,
 ): Promise<JsonObject> {
   const request = decodePreflightRequest(value);
-  return await withQuotaAccountingOwner(
+  const withOwner = request.borrow_source_admission ? withBorrowedQuotaAccountingOwner : withQuotaAccountingOwner;
+  return await withOwner(
     request.owner,
     async () => preflightPriorHostTurnCloseoutForOwner(request),
   );

@@ -234,10 +234,19 @@ renews the allowance. The Goal activation record retains the last Owner
 resume through later Controller Stop and Resume transitions. Resuming a
 Goal that is already active leaves the recorded allowance in place.
 
+Each new recovery grant checks its admission basis under the receipt append
+lock. A contender with a stale basis reevaluates the same Turn. When an unbound
+waiting Turn becomes eligible after resume, its first positive recovery
+receipt is appended under the same lock and subsequent replays reuse it.
+
 同一原始 Turn 的缺失回执没有减少时，恢复准入有次数上限，按已提交的不同 guard
 准入计数。相同 guard 重放和宿主完成事件均保持原计数。验证到回执进展或 Owner
 显式恢复 Goal 后重新计算。Goal 激活记录会保留最近一次 Owner 恢复，后续
 Controller 停止或恢复均沿用该记录。对已启用的 Goal 再次恢复会保留既有额度。
+
+新的恢复准入会在持有回执追加锁时复核准入依据。依据已变化的并发请求用同一 Turn
+重新判定。未绑定的等待 Turn 在恢复后取得资格时，在同一把锁内追加首次准入回执，
+后续重放复用该回执。
 
 An admitted advancement Todo can also become persistently `blocked` through
 its ordinary owner-authorized lifecycle. Its original Turn then offers the
