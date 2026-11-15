@@ -542,16 +542,16 @@ def test_managed_work_never_commits_without_current_independent_postcondition(st
         observation.write_text("not ready")
     if fault == "stopped_after_model":
         from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
-        original_start = CodexAppServerAdapter.start_turn
+        original_start = CodexAppServerAdapter.start_native_task_turn
 
-        def stopped(adapter, message, sink):
-            response = original_start(adapter, message, sink)
+        def stopped(adapter, message, sink, policy):
+            response = original_start(adapter, message, sink, policy)
             registry = json.loads(runtime.registry_path.read_text())
             registry["goals"][0]["activation"] = dict(STOPPED_ACTIVATION)
             runtime.registry_path.write_text(json.dumps(registry))
             return response
 
-        monkeypatch.setattr(CodexAppServerAdapter, "start_turn", stopped)
+        monkeypatch.setattr(CodexAppServerAdapter, "start_native_task_turn", stopped)
     calls = capture.read_bytes()
     accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"], operation_id="unqualified", todo_id=todo_id)
     completed = finish(runtime, accepted)
@@ -561,6 +561,10 @@ def test_managed_work_never_commits_without_current_independent_postcondition(st
     if fault == "missing_validator":
         assert observation.read_text() == "ready"
         assert not [json.loads(row) for row in capture.read_bytes()[len(calls):].splitlines() if json.loads(row)["method"] == "turn/start"]
+    if fault == "stopped_after_model":
+        dispatched = [json.loads(row) for row in capture.read_bytes()[len(calls):].splitlines()]
+        assert sum(row["method"] == "turn/start" for row in dispatched) == 1
+        assert json.loads(runtime.registry_path.read_text())["goals"][0]["activation"]["state"] == "stopped"
     after = capture.read_bytes()
     assert not service.submit(session["session_id"], agent_id=actor["agent_id"], operation_id="unqualified", todo_id=todo_id)[1]
     assert capture.read_bytes() == after

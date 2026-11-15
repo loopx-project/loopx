@@ -483,16 +483,21 @@ an existing observation. They can contain private Goal context and must not be
 included in public logs or artifacts.
 
 Host retry validates and reuses the original journal's capture. Before native
-Codex or an external stdio Host launches with a verified selected Todo, the
-current complete contract must still match the original task body, required write scopes and
-required capabilities. Progress notes do not invalidate that work. A mismatch
-returns `current_turn_work_changed` before dispatching the model. For stdio,
-the shared process supervisor holds the launch guard through spawn. The
-journal records the refused attempt and its original capture remains readable.
-Use a fresh eligible Turn for the changed task. Keep original captures and receipts for
-readback. Reading detail does not invoke quota or spend a slot. Current source
-admission, cancellation, workspace/lease and mutation checks retain their
-existing owners; the observation grants no fresh authority.
+Codex or an external stdio Host dispatches a bound Todo, the current complete
+contract must match the original task body, required write scopes, required
+capabilities and execution lease key when present. Progress notes and renewal
+of the same lease preserve that match. A changed declaration or lease key
+returns `current_turn_work_changed` before dispatch.
+
+For local canonical work, the Todo and lease writers share the dispatch lock
+from the live check through process spawn or the native `turn/start` send. A
+writer that commits first changes the inputs to the live check. A writer that
+arrives after the check can continue once dispatch completes, while the Host
+runs. Registry contention can refuse dispatch with `goal_authority_unavailable`.
+The journal retains the original capture and identity for retry or readback.
+Use a fresh eligible Turn for changed work. Reading detail consumes no quota.
+Source admission, cancellation, workspace and mutation authority remain with
+their existing owners.
 Missing, corrupt, wrong-identity or source-hash-mismatched captures refuse Host
 reinvocation. Restore the original evidence rather than reconstructing it from
 a new guard. A capture published before a journal write failure is retained;
@@ -514,10 +519,16 @@ blocks resume. Journal inspection can report the invalid work contract without
 performing recovery or a debit. Retain the historical reader until the last
 supported journal and its recovery window are reconciled.
 
-原生 Codex 和外部 stdio Host 启动前会用当前完整契约复核所选 Todo 的已验证正文、
-所需写入范围和能力。只改进度备注可以继续。改变工作声明会在模型调用前返回
-`current_turn_work_changed`。stdio 进程由共用的进程管理器在准入锁内启动。
-journal 记录已拒绝的尝试。变更后的工作使用新的合格 Turn，原捕获与回执仍可读回。
+原生 Codex 和外部 stdio Host 派发已绑定 Todo 前，使用当前完整契约复核原正文、
+所需写入范围、能力和已有执行租约键。只改进度备注或续期同一租约仍可继续。
+工作声明或租约键改变时，在派发前返回 `current_turn_work_changed`。
+
+对本地权威工作，从实时检查到进程启动或发送原生 `turn/start`，派发与 Todo 和
+租约写入共用同一锁。写入先提交时，实时检查读取变更后的事实。写入在检查后到达时，
+可以在派发完成、Host 仍运行时继续。遇到 registry 写入竞争，派发可以返回
+`goal_authority_unavailable`。journal 保留原捕获与身份，用于重试或读回。
+变更后的工作通过新的合格 Turn 执行。读取详情不扣额。来源准入、取消、工作区和
+写入权限继续由原模块维护。
 
 恢复预览和 journal 解释共用同一个 typed plan reader。受支持的历史记录保留原版本和
 字节。显式声明不支持的 plan、envelope 或动作签名版本及覆盖范围时，恢复会停止。

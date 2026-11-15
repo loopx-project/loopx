@@ -21,6 +21,7 @@ from ..effect_program import (
 )
 from ..goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
+    FirstPartyHostLaunchRejected,
     FirstPartyHostRuntimeRejected,
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
@@ -1059,7 +1060,8 @@ def _host_result_stage(
         except FirstPartyHostRuntimeRejected as exc:
             # Stdio checks the Goal only before spawn. A native Host can reject
             # after dispatch too, so retain reconciliation for other failures.
-            if host_runner is not None and exc.code != "current_turn_work_changed":
+            if (host_runner is not None and not isinstance(exc, FirstPartyHostLaunchRejected)
+                    and exc.code != "current_turn_work_changed"):
                 raise
             rejected_launch = exc.code
             host_observation = {"ok": False, "reason": str(exc), "failure_kind": "contract_rejected"}
