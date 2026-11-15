@@ -26,6 +26,8 @@ import {canonicalReadRoot} from "./local_promotion_fixture.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {inspectGoalAcceptance, refineGoalAcceptanceOutcome} from "../../loopx/control_plane/goals/acceptance_authority.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {exportLocalToPgGenesisSeed, setupPostgreSqlAuthoritySchemaAndRole} from "../../loopx/control_plane/coordination/postgresql_authority_seed.ts";
+import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {
   authorityStoreCommitFixture as commit,
@@ -37,6 +39,7 @@ const pool = connectionString ? new Pool({ connectionString, max: 12 }) : null;
 const STORE_IDENTITY = `postgresql:${"b".repeat(32)}`;
 const TENANT_SCOPED_TABLES = [
   "authority_heads",
+  "authority_checkpoints",
   "authority_commits",
   "authority_events",
   "authority_receipts",
@@ -59,20 +62,11 @@ function quotedRole(role: string): string {
 }
 
 async function createRuntimeRole(role: string): Promise<void> {
-  const identifier = quotedRole(role);
-  await pool!.query(`CREATE ROLE ${identifier} NOLOGIN`);
-  await pool!.query(`GRANT USAGE ON SCHEMA loopx_control_plane TO ${identifier}`);
-  await pool!.query(
-    `GRANT SELECT ON loopx_control_plane.authority_store_metadata TO ${identifier}`,
-  );
-  await pool!.query(
-    `GRANT SELECT, INSERT, UPDATE ON loopx_control_plane.authority_heads TO ${identifier}`,
-  );
-  await pool!.query(
-    `GRANT SELECT, INSERT ON loopx_control_plane.authority_commits,
-       loopx_control_plane.authority_events,
-       loopx_control_plane.authority_receipts TO ${identifier}`,
-  );
+  const result = await setupPostgreSqlAuthoritySchemaAndRole(database!, {
+    storeIdentity: STORE_IDENTITY,
+    runtimeRole: role,
+  });
+  assert.equal(result.status, "installed", result.reason);
 }
 
 function databaseForRuntimeRole(value: Pool, role: string): PostgreSqlAuthorityDatabase {
@@ -690,10 +684,46 @@ if (database && installed) {
       tenant_id: secondTenant,
       goal_id: goalId,
     });
-    assert.equal((await first.commitAuthority(commit(null, "operation-a", 1, 1))).status, "applied");
+    const root = await mkdtemp(join(tmpdir(), "pg-genesis-source-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const source = new FileAuthorityStore(root, goalId);
+    const synthetic = {goal_id: goalId, counter: 1, detail: "stable fixture"};
+    assert.equal((await source.commitAuthority({
+      operation_id: "local-fixture", expected_provider_revision: null,
+      events: [], receipts: [], next_projection: synthetic,
+    })).status, "applied");
+    const seed = {runtimeRoot: root, goalId, tenantId: firstTenant, localStore: source,
+      storeIdentity: STORE_IDENTITY, targetDatabase: runtimeDatabase, execute: true};
+    const genesis = await exportLocalToPgGenesisSeed(seed);
+    assert.equal(genesis.status, "seeded", genesis.reason);
+    assert.equal((await exportLocalToPgGenesisSeed(seed)).provider_revision, genesis.provider_revision);
+    assert.equal((await exportLocalToPgGenesisSeed({...seed, storeIdentity: `postgresql:${"d".repeat(32)}`})).status, "failed");
     assert.equal((await second.commitAuthority(commit(null, "operation-b", 1, 1))).status, "applied");
-    assert.equal((await first.loadAuthority()).status, "loaded");
     assert.equal((await second.readReceipt("operation-b")).status, "found");
+    let revision = genesis.provider_revision;
+    for (let cursor = 2; cursor <= 67; cursor++) {
+      const result = await first.commitAuthority({
+        expected_provider_revision: revision,
+        operation_id: `append-${cursor}`,
+        events: [{counter: cursor}],
+        receipts: [{verified_cursor: cursor}],
+        next_projection: {...synthetic, counter: cursor},
+      });
+      assert.equal(result.status, "applied", JSON.stringify(result));
+      if (result.status === "applied") revision = result.provider_revision;
+    }
+    const page = await first.scanCommitted("62", 4);
+    assert.equal(page.status, "page");
+    if (page.status !== "page") assert.fail(JSON.stringify(page));
+    assert.deepEqual(page.transactions.map(row => row.projection.counter), [63, 64, 65, 66]);
+    assert.deepEqual(page.transactions[2]?.events, [{counter: 65}]);
+    assert.deepEqual(page.transactions[2]?.receipts, [{verified_cursor: 65}]);
+    assert.equal(page.has_more, true);
+    assert.equal((await first.readReceipt("append-65")).status, "found");
+    const original = await first.readReceipt("append-65");
+    assert.deepEqual(await first.readReceipts(["append-65", "operation-b", "append-65"]), {
+      status: "receipts", results: [original, {status: "missing"}, original],
+    });
 
     await queryAsRuntimeRole(runtimePool, role, async (client) => {
       for (const table of TENANT_SCOPED_TABLES) {
@@ -715,6 +745,14 @@ if (database && installed) {
         assert.deepEqual(scoped.rows, [{ tenant_id: firstTenant }]);
       }
       await client.query("ROLLBACK");
+
+      for (const statement of [
+        "UPDATE loopx_control_plane.authority_checkpoints SET projection = '{}'::jsonb",
+        "DELETE FROM loopx_control_plane.authority_checkpoints",
+        "UPDATE loopx_control_plane.authority_commits SET projection_digest = ''",
+        "DELETE FROM loopx_control_plane.authority_commits",
+        "CREATE TABLE loopx_control_plane.forbidden (id text)",
+      ]) await assert.rejects(client.query(statement), /permission denied/);
 
       await client.query("BEGIN");
       await client.query(
@@ -741,6 +779,58 @@ if (database && installed) {
         /permission denied/,
       );
     });
+  });
+
+  test("PostgreSQL scans a mixed retained history and rejects corruption before the requested cursor", async t => {
+    await installed;
+    const tenantId = `tenant-${randomUUID()}`;
+    const goalId = `goal-${randomUUID()}`;
+    t.after(() => cleanScope(tenantId, goalId));
+    const store = new PostgreSqlAuthorityStore(database!, {tenant_id: tenantId, goal_id: goalId});
+    const projection = (counter: number) => ({goal_id: goalId, counter});
+    const scope = [tenantId, goalId];
+    // Full-projection rows use the released schema's insert shape. Do not
+    // synthesize missing deltas or rewrite these historical records in setup.
+    await pool!.query(
+      `INSERT INTO loopx_control_plane.authority_heads (tenant_id, goal_id, provider_revision, cursor, head)
+       VALUES ($1, $2, 2, 2, $3)`, [...scope, projection(2)]);
+    for (const cursor of [1, 2]) {
+      await pool!.query(
+        `INSERT INTO loopx_control_plane.authority_commits
+           (tenant_id, goal_id, cursor, provider_revision, operation_id, projection)
+         VALUES ($1, $2, $3, $3, $4, $5)`, [...scope, cursor, `legacy-${cursor}`, projection(cursor)]);
+    }
+    await pool!.query(
+      `INSERT INTO loopx_control_plane.authority_receipts (tenant_id, goal_id, cursor, receipt_index, receipt)
+       VALUES ($1, $2, 2, 0, $3)`, [...scope, {before_upgrade: true}]);
+    const original = await store.readReceipt("legacy-2");
+    assert.equal(original.status, "found");
+    assert.equal((await setupPostgreSqlAuthoritySchemaAndRole(database!, {storeIdentity: STORE_IDENTITY})).status, "installed");
+    let revision = `${STORE_IDENTITY}:2`;
+    for (const cursor of [3, 4, 5]) {
+      const result = await store.commitAuthority({operation_id: `new-${cursor}`,
+        expected_provider_revision: revision, next_projection: projection(cursor),
+        events: [], receipts: [{after_upgrade: cursor}]});
+      if (result.status !== "applied") assert.fail(JSON.stringify(result));
+      revision = result.provider_revision;
+    }
+    assert.deepEqual(await store.readReceipt("legacy-2"), original);
+    const page = await store.scanCommitted("1", 3);
+    if (page.status !== "page") assert.fail(JSON.stringify(page));
+    assert.deepEqual(page.transactions.map(row => row.projection), [2, 3, 4].map(projection));
+
+    const tamper = {schema_version: "authority_state_delta_v0", operations: [{op: "set", path: ["counter"], value: 999}]};
+    await pool!.query(
+      `UPDATE loopx_control_plane.authority_commits SET delta=$3
+       WHERE tenant_id=$1 AND goal_id=$2 AND cursor=3`, [...scope, tamper]);
+    const corrupt = await store.scanCommitted("3", 1);
+    assert.equal(corrupt.status, "failed");
+    assert.match("reason" in corrupt ? corrupt.reason : "", /digest mismatch/);
+    await pool!.query(
+      "DELETE FROM loopx_control_plane.authority_commits WHERE tenant_id=$1 AND goal_id=$2 AND cursor=3", scope);
+    const missing = await store.scanCommitted("3", 1);
+    assert.equal(missing.status, "failed");
+    assert.match("reason" in missing ? missing.reason : "", /window is incomplete/);
   });
 } else {
   test("PostgreSQL authority-store integration (set LOOPX_TEST_POSTGRES_URL)", { skip: true }, () => {});
@@ -836,7 +926,7 @@ test("PostgreSQL provider evicts and awaits cleanup-uncertain read connections",
         }
         if (text.includes("authority_store_metadata")) {
           return {
-            rows: [{ schema_version: "loopx_postgresql_authority_store_v0", store_identity: STORE_IDENTITY }],
+            rows: [{ schema_version: "loopx_postgresql_authority_store_v1", store_identity: STORE_IDENTITY }],
             rowCount: 1,
           };
         }

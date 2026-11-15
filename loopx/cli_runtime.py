@@ -62,6 +62,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"sync-global",
 		"uninstall-project",
 		"version",
+		"postgres",
 		"host-mode-plan",
 		"migrate-local-state",
 	}
@@ -77,7 +78,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands", "version",
 	"bootstrap", "connect", "configure-goal", "start-goal", "bootstrap-command-pack",
 	"register-agent", "bind-agent-thread",
-	"authority-archive", "coordination-shadow", "extension", "slash-commands",
+	"authority-archive", "postgres", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
@@ -492,6 +493,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.authority_archive import register_authority_archive_command
 
 		register_authority_archive_command(subparsers, add_subcommand_format)
+	elif command == "postgres":
+		from .cli_commands.postgres import register_postgres_commands
+
+		register_postgres_commands(subparsers, add_subcommand_format)
 	elif command == "coordination-shadow":
 		from .cli_commands.coordination_shadow import register_coordination_shadow_command
 
@@ -662,6 +667,13 @@ def _dispatch_common_command(
 		from .cli_commands.authority_archive import handle_authority_archive_command
 
 		return handle_authority_archive_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "postgres":
+		from .cli_commands.postgres import handle_postgres_command
+
+		return handle_postgres_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
