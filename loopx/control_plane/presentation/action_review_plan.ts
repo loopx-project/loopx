@@ -648,8 +648,10 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     && textValue(createPlan.expected_store_identity);
   // The server may fail before any checkpoint is saved. The same apply still
   // owns the reviewed source and must revalidate it before the first write.
-  const interruptedBeforePlan = createAttemptFailed && failure?.retry_safe === true && proposal.checkpoint == null
-    && Array.isArray(proposal.available_transitions) && proposal.available_transitions.includes("apply");
+  const interruptedBeforePlan = proposal.checkpoint == null
+    && Array.isArray(proposal.available_transitions) && proposal.available_transitions.includes("apply")
+    && ((createAttemptFailed && failure?.retry_safe === true)
+      || (proposal.status === "applying" && proposal.creation_retry_available === true));
   if (todoCreation && ["failed", "applying"].includes(String(proposal.status))
       && proposal.permission_classification === "durable_write"
       && failure?.retry_safe !== false

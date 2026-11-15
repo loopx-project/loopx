@@ -69,6 +69,10 @@ test("a failed create without a plan can retry only the original review", () => 
     assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
   }
   assert.equal(compileActionReviewPlan({...proposal, status: "stale"}).prohibitRegeneration, undefined);
+  const applying = {...proposal, status: "applying", failure: null};
+  assert.equal(compileActionReviewPlan(applying).interaction, "pending");
+  assert.equal(compileActionReviewPlan({...applying, creation_retry_available: true}).retryOriginal, true);
+  assert.equal(compileActionReviewPlan({...applying, creation_retry_available: true, checkpoint: {steps: {}}}).retryOriginal, undefined);
 });
 
 test("confirmed Task dispatch resolves only to the receipt's own execution Turn", () => {

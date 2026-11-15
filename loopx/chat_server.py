@@ -1406,7 +1406,7 @@ class ChatRequestHandler(
         ) or None
         status = _compact_text((query.get("status") or [""])[0], limit=80) or None
         try:
-            proposals = self.server.action_store.list(
+            proposals = self.server.action_service.list_proposals(
                 goal_id=goal_id,
                 context_kind=context_kind,
                 status=status,

@@ -200,6 +200,25 @@ def test_uncommitted_confirmation_rejects_changed_basis(confirmation, monkeypatc
     assert _snapshot(runtime) == before_retry
 
 
+def test_unprepared_monitor_confirmation_rejects_a_new_revision(confirmation, monkeypatch):
+    service, registry, runtime, _ = confirmation
+    proposal_id = _preview(service, "monitor.create", "unprepared-monitor")
+    with monkeypatch.context() as faults:
+        def interrupted(*args, **kwargs):
+            raise OSError("interrupted before the create plan")
+
+        faults.setattr(service.store, "save_checkpoint", interrupted)
+        with pytest.raises(OSError, match="before the create plan"):
+            service.apply(proposal_id)
+    assert service.load(proposal_id)["checkpoint"] is None
+    assert not _snapshot(runtime)["todos"]
+    add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent", text="Independent Todo")
+    before_retry = _snapshot(runtime)
+    rejected = service.apply(proposal_id)["proposal"]
+    assert rejected["status"] == "stale"
+    assert _snapshot(runtime) == before_retry
+
+
 def test_concurrent_monitor_confirmation_uses_one_schedule(confirmation, monkeypatch):
     service, _, runtime, _ = confirmation
     proposal_id = _preview(service, "monitor.create", "concurrent")
@@ -217,6 +236,9 @@ def test_concurrent_monitor_confirmation_uses_one_schedule(confirmation, monkeyp
         pending = pool.submit(service.apply, proposal_id)
         try:
             assert entered.wait(10)
+            live = service.load(proposal_id)
+            assert live["status"] == "applying" and live["checkpoint"] is None
+            assert "creation_retry_available" not in live
             with pytest.raises(ActionConflictError, match="in progress"):
                 service.apply(proposal_id)
         finally:

@@ -1355,9 +1355,10 @@ class ChatActionService(
             evidence = ["Canonical LoopX Todo dry-run validated the proposal."]
             permission = "durable_write"
         elif action_kind == "monitor.create":
-            source = resolve_chat_todo_source(self, normalized["goal_id"])
-            fingerprint = self._monitor_create_fingerprint(source)
-            evidence = ["Canonical LoopX contracts validated the bounded request shape."]
+            goal_id = normalized["goal_id"]
+            source = resolve_chat_todo_source(self, goal_id)
+            fingerprint = self._monitor_create_fingerprint(source, self._create_authority(source, goal_id))
+            evidence = ["The original Goal's Todo authority and current revision validated the Monitor preview."]
             permission = "durable_write"
         elif action_kind == "run.correct":
             fingerprint = self._session_fingerprint(
@@ -1502,7 +1503,14 @@ class ChatActionService(
         )
 
     def load(self, proposal_id: str) -> dict[str, Any] | None:
-        return self.store.load(proposal_id)
+        proposal = self.store.load(proposal_id)
+        return self._project_creation_recovery(proposal) if proposal is not None else None
+
+    def list_proposals(
+        self, *, goal_id: str | None, context_kind: str | None, status: str | None,
+    ) -> list[dict[str, Any]]:
+        proposals = self.store.list(goal_id=goal_id, context_kind=context_kind, status=status)
+        return [self._project_creation_recovery(proposal) for proposal in proposals]
 
     def cancel(self, proposal_id: str) -> dict[str, Any]:
         return self.store.cancel(proposal_id)
