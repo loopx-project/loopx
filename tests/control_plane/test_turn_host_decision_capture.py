@@ -221,6 +221,340 @@ def test_generic_dispatch_checks_complete_goal_before_host(
         assert state["eligibility"]["state"] == "waiting"
 
 
+@pytest.mark.parametrize("mutation,expected", [
+    ("inspection_key_route", "LoopX Turn CLI inspection requires the explicit run-once execution surface"),
+    ("key_route", "LoopX Turn plan has no valid transaction turn_key"),
+    ("route_false", "staged route refused"),
+    ("route_integer", "staged route refused"),
+    ("route_string", "staged route refused"),
+    ("route_none", "staged route refused"),
+    ("route_mapping", "staged route refused"),
+    ("route_fallback", "LoopX Turn route is not host executable"),
+])
+def test_staged_capture_rechecks_aliased_plan_guards_before_effects(
+    complete_host_request, tmp_path, monkeypatch, mutation, expected,
+):
+    from loopx.control_plane.turn_driver import executor
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+
+    request, original = complete_host_request
+    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=original,
+        host="generic-cli", execution_mode="isolated-headless",
+        turn_instance_id="staged-alias-guards")
+    runtime = tmp_path / "staged-alias-runtime"
+    captures = []
+    effects = []
+    original_stage = executor.stage_turn_decision_capture
+
+    def stage_then_mutate(*args, **kwargs):
+        capture = original_stage(*args, **kwargs)
+        captures.append(capture)
+        # A frozen capture still shares nested mutable plan fields. Mutate
+        # only after the real source binding, so the incoming checks pass.
+        if mutation == "inspection_key_route":
+            capture.plan["boundary"]["inspection_only"] = True
+        if mutation in {"inspection_key_route", "key_route"}:
+            capture.plan["transaction"]["turn_key"] = "invalid turn key"
+        route_flag = {
+            "route_integer": 1, "route_string": "true", "route_none": None,
+            "route_mapping": {"enabled": True},
+        }.get(mutation, False)
+        capture.plan["route"]["would_invoke_host"] = route_flag
+        capture.plan["error"] = "" if mutation == "route_fallback" else "staged route refused"
+        return capture
+
+    def unexpected_effect(*args, **kwargs):
+        effects.append((args, kwargs))
+        raise AssertionError("a staged guard refusal must precede execution effects")
+
+    monkeypatch.setattr(executor, "stage_turn_decision_capture", stage_then_mutate)
+    with pytest.raises(ValueError) as refused:
+        executor.run_loopx_turn_once(plan, host_runner=unexpected_effect,
+            project=tmp_path / "project", runtime_root=runtime, goal_id=original["goal_id"],
+            timeout_seconds=5, execute=True, writeback=unexpected_effect,
+            spend=unexpected_effect, scheduler=unexpected_effect, admit_start=unexpected_effect,
+            confirm_start=unexpected_effect, decision_capture_payload=original,
+            require_decision_capture=True)
+    assert str(refused.value) == expected
+    assert len(captures) == 1 and effects == []
+    assert not captures[0].path.exists()
+    journal = turn_journal_path(runtime, goal_id=original["goal_id"],
+        turn_key=request["turn_key"])
+    assert not journal.exists()
+
+
+@pytest.mark.parametrize("mutation,expected", [
+    ("contract", "complete Turn decision content integrity mismatch"),
+    ("source_hash", "complete Host request differs from captured source"),
+    ("capture_key", "complete Host request capture binding differs"),
+    ("adapter", "complete Turn plan requires one source without an executor adapter"),
+])
+def test_staged_capture_rechecks_source_and_header_before_effects(
+    complete_host_request, tmp_path, monkeypatch, mutation, expected,
+):
+    from copy import deepcopy
+    from loopx.control_plane.turn_driver import executor
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+
+    request, original = complete_host_request
+    original = deepcopy(original)
+    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=original,
+        host="generic-cli", execution_mode="isolated-headless",
+        turn_instance_id="staged-source-guards")
+    captures = []
+    original_stage = executor.stage_turn_decision_capture
+
+    def stage_then_mutate(*args, **kwargs):
+        capture = original_stage(*args, **kwargs)
+        captures.append(capture)
+        if mutation == "contract":
+            capture.plan["work_contract"]["agent_identity"]["agent_id"] = "changed-agent"
+        elif mutation == "source_hash":
+            capture.plan["source_decision_hash"] = "sha256:" + "0" * 64
+        elif mutation == "capture_key":
+            capture.plan["detail_ref"]["captured_decision"]["turn_key"] = "sha256:" + "0" * 64
+        else:
+            capture.plan["turn_envelope"] = request["turn_envelope"]
+        return capture
+
+    def unexpected_effect(*_args, **_kwargs):
+        raise AssertionError("a staged source refusal must precede execution effects")
+
+    runtime = tmp_path / "staged-source-runtime"
+    monkeypatch.setattr(executor, "stage_turn_decision_capture", stage_then_mutate)
+    with pytest.raises((ValueError, RuntimeError)) as refused:
+        executor.run_loopx_turn_once(plan, host_runner=unexpected_effect,
+            project=tmp_path / "project", runtime_root=runtime, goal_id=original["goal_id"],
+            timeout_seconds=5, execute=True, writeback=unexpected_effect,
+            spend=unexpected_effect, scheduler=unexpected_effect, admit_start=unexpected_effect,
+            decision_capture_payload=original, require_decision_capture=True)
+    assert str(refused.value) == expected
+    assert len(captures) == 1 and not captures[0].path.exists()
+    assert not turn_journal_path(runtime, goal_id=original["goal_id"],
+        turn_key=request["turn_key"]).exists()
+
+
+@pytest.mark.parametrize("optional_context", [False, True])
+def test_staged_capture_preserves_optional_bridge_startup_diagnostic(
+    complete_host_request, tmp_path, monkeypatch, optional_context,
+):
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.runtime.node_probe import NodeProbe, NodeProbeOutcome
+    from loopx.control_plane.turn_driver import executor
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+
+    request, original = complete_host_request
+    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=original,
+        host="generic-cli", execution_mode="isolated-headless",
+        turn_instance_id="staged-bridge-failure")
+    original_carrier = json.dumps(plan, ensure_ascii=False)
+    original_stage = executor.stage_turn_decision_capture
+    original_request = effect_runtime.effect_runtime_request
+    captures, operations, probes = [], [], []
+
+    def observe_request(method, params, **kwargs):
+        operations.append((method, params.get("operation")))
+        return original_request(method, params, **kwargs)
+
+    def missing_node(**_kwargs):
+        probes.append("missing")
+        return NodeProbe(NodeProbeOutcome.MISSING)
+
+    def stage_then_lose_bridge(*args, **kwargs):
+        capture = original_stage(*args, **kwargs)
+        captures.append(capture)
+        if optional_context:
+            capture.plan["turn_context_contributions"] = [{
+                "hook_id": "synthetic-context", "readback_slots": [],
+            }]
+        # A new disposable locator selects the real startup failure path;
+        # no serving runtime or active developer process is retired.
+        monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "missing-node-runtime")
+        monkeypatch.setattr(effect_runtime, "_probe_node", missing_node)
+        monkeypatch.setattr(effect_runtime, "effect_runtime_request", observe_request)
+        return capture
+
+    def unexpected_effect(*_args, **_kwargs):
+        raise AssertionError("bridge startup refusal must precede execution effects")
+
+    runtime = tmp_path / "staged-bridge-runtime"
+    monkeypatch.setattr(executor, "stage_turn_decision_capture", stage_then_lose_bridge)
+    with pytest.raises(effect_runtime.EffectRuntimeNodeProbeError) as refused:
+        executor.run_loopx_turn_once(plan, host_runner=unexpected_effect,
+            project=tmp_path / "project", runtime_root=runtime, goal_id=original["goal_id"],
+            timeout_seconds=5, execute=True, writeback=unexpected_effect,
+            spend=unexpected_effect, scheduler=unexpected_effect, admit_start=unexpected_effect,
+            decision_capture_payload=original, require_decision_capture=True)
+    assert refused.value.diagnostic_code == "node_unavailable"
+    assert str(refused.value) == "LoopX Effect runtime requires Node.js 22.22.3 or newer on PATH"
+    assert len(probes) == (2 if optional_context else 1)
+    assert len(operations) == len(probes)
+    if optional_context:
+        assert operations[0] == ("quota.turn_envelope.evaluate", "host_context_binding")
+    assert operations[-1][0] == "quota.turn_envelope.evaluate"
+    assert operations[-1][1] in {"host_context", "host_dispatch_context"}
+    assert len(captures) == 1 and not captures[0].path.exists()
+    assert not turn_journal_path(runtime, goal_id=original["goal_id"],
+        turn_key=request["turn_key"]).exists()
+    assert json.dumps(plan, ensure_ascii=False) == original_carrier
+    assert json.dumps(captures[0].observation, ensure_ascii=False) == json.dumps(original, ensure_ascii=False)
+    assert not list(runtime.rglob("*.jsonl"))
+
+
+@pytest.mark.parametrize("current,child_limit", [(True, 2), (True, True), (False, 2)])
+def test_staged_dispatch_preserves_complete_request_values(
+    complete_host_request, tmp_path, monkeypatch, current, child_limit,
+):
+    from copy import deepcopy
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.turn_driver import executor
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+
+    _, original = complete_host_request
+    source = deepcopy({key: value for key, value in original.items()
+        if key not in {"schema_version", "contract_binding"}})
+    source["future_task_data"] = {"numbers": [2**60 + 1, 1.0, -0.0],
+        "text": "Preserve all original requirements.  \n保留原要求。"}
+    source["interaction_contract"]["agent_context"] = {"contributions": [
+        {"capability_id": "multi_subagent", "facts": {"max_children": child_limit}},
+    ]}
+    contract = turn_envelope.compose_turn_decision(source)
+    envelope = turn_envelope.build_turn_envelope(contract)
+    plan = build_loopx_turn_plan(envelope, host="generic-cli", execution_mode="isolated-headless",
+        turn_instance_id="staged-request-values", **({"work_contract": contract} if current else {}))
+    if not current:
+        # Retain the published transitional adapter decoder as a control.
+        plan["work_contract"] = contract
+    plan["goal_ref"] = {"goal_id": original["goal_id"], "instance_id": "synthetic-instance"}
+    plan["delegation_context"] = {"allowed": False, "detail": "preserve delegation"}
+    plan["child_operations"] = [{"operation": "synthetic-child-observation"}]
+    plan["subagent_execution_topology"] = {"state": "synthetic-topology"}
+    captured, dispatched, admissions = [], [], []
+    original_stage = executor.stage_turn_decision_capture
+    original_check = turn_envelope.complete_turn_host_source
+
+    def observe_stage(*args, **kwargs):
+        capture = original_stage(*args, **kwargs)
+        captured.append(capture)
+        return capture
+
+    def observe_dispatch(request, **kwargs):
+        if kwargs.get("operation") == "host_dispatch_context":
+            dispatched.append(request)
+        return original_check(request, **kwargs)
+
+    def deny_start(admission):
+        admissions.append(admission)
+        return {"admitted": False, "reason": "synthetic interval wait"}
+
+    def unexpected_effect(*_args, **_kwargs):
+        raise AssertionError("interval wait must not publish or execute")
+
+    runtime = tmp_path / "staged-values-runtime"
+    monkeypatch.setattr(executor, "stage_turn_decision_capture", observe_stage)
+    monkeypatch.setattr(turn_envelope, "complete_turn_host_source", observe_dispatch)
+    result = executor.run_loopx_turn_once(plan, host_runner=unexpected_effect,
+        project=tmp_path / "project", runtime_root=runtime, goal_id=original["goal_id"],
+        timeout_seconds=5, execute=True, writeback=unexpected_effect,
+        spend=unexpected_effect, scheduler=unexpected_effect, admit_start=deny_start,
+        decision_capture_payload=contract, require_decision_capture=True)
+    assert result["status"] == "interval_wait"
+    assert len(captured) == len(dispatched) == len(admissions) == 1
+    request = dispatched[0]
+    assert request["schema_version"] == "loopx_turn_host_request_v1"
+    assert "turn_envelope" not in request
+    assert request["turn_key"] == plan["transaction"]["turn_key"]
+    assert request["route"] == plan["route"]["kind"]
+    assert request["session"] == plan["session"]
+    assert request["result_contract"] == {"schema_version": "loopx_turn_result_v0",
+        "completed_phases": ["host_execute", "typed_result"], "stdout": "one public-safe JSON object"}
+    assert request["goal_ref"] == plan["goal_ref"] and request["goal_ref"] is not plan["goal_ref"]
+    for field in ("delegation_context", "child_operations", "subagent_execution_topology"):
+        assert request[field] == plan[field]
+    assert request.get("turn_instance_id") == (None if child_limit is True else "staged-request-values")
+    assert json.dumps(request["work_contract"], ensure_ascii=False) == json.dumps(contract, ensure_ascii=False)
+    assert request["source_decision_hash"] == contract["contract_binding"]["content_hash"]
+    capture_ref = request["detail_ref"]["captured_decision"]
+    assert capture_ref["path"] == str(captured[0].path)
+    assert capture_ref["turn_key"] == request["turn_key"]
+    assert capture_ref["source_hash_ref"] == "$.source_decision_hash"
+    assert not captured[0].path.exists()
+    assert not turn_journal_path(runtime, goal_id=original["goal_id"], turn_key=request["turn_key"]).exists()
+
+
+@pytest.mark.parametrize("optional_context", [False, True])
+@pytest.mark.parametrize("failure", ["snapshot_oversized", "transport_permission"])
+def test_staged_capture_preserves_bridge_transport_failure(
+    complete_host_request, tmp_path, monkeypatch, optional_context, failure,
+):
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.turn_driver import executor
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+
+    request, original = complete_host_request
+    plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=original,
+        host="generic-cli", execution_mode="isolated-headless",
+        turn_instance_id="staged-transport-failure")
+    original_carrier = json.dumps(plan, ensure_ascii=False)
+    original_stage = executor.stage_turn_decision_capture
+    original_request = effect_runtime.effect_runtime_request
+    captures, operations = [], []
+
+    def observe_request(method, params, **kwargs):
+        operations.append((method, params.get("operation"), kwargs.get("large_local_snapshot", False)))
+        return original_request(method, params, **kwargs)
+
+    def denied_connection(*_args, **_kwargs):
+        raise PermissionError("synthetic transport denial")
+
+    def stage_then_fail_transport(*args, **kwargs):
+        capture = original_stage(*args, **kwargs)
+        captures.append(capture)
+        if optional_context:
+            capture.plan["turn_context_contributions"] = [{
+                "hook_id": "synthetic-context", "readback_slots": [],
+            }]
+        monkeypatch.setattr(effect_runtime, "effect_runtime_request", observe_request)
+        if failure == "snapshot_oversized":
+            # Exercise the existing encoder and offloaded-snapshot fallback
+            # with bounded local limits, without allocating a huge fixture.
+            monkeypatch.setattr(effect_runtime, "MAX_REQUEST_BYTES", 1024)
+            monkeypatch.setattr(effect_runtime, "MAX_LOCAL_SNAPSHOT_BYTES", 512)
+        else:
+            monkeypatch.setattr(effect_runtime.socket, "create_connection", denied_connection)
+        return capture
+
+    def unexpected_effect(*_args, **_kwargs):
+        raise AssertionError("transport refusal must precede execution effects")
+
+    runtime = tmp_path / "staged-transport-runtime"
+    monkeypatch.setattr(executor, "stage_turn_decision_capture", stage_then_fail_transport)
+    with pytest.raises((effect_runtime.EffectRuntimeRejected, effect_runtime.EffectRuntimeHostPermissionError)) as refused:
+        executor.run_loopx_turn_once(plan, host_runner=unexpected_effect,
+            project=tmp_path / "project", runtime_root=runtime, goal_id=original["goal_id"],
+            timeout_seconds=5, execute=True, writeback=unexpected_effect,
+            spend=unexpected_effect, scheduler=unexpected_effect, admit_start=unexpected_effect,
+            decision_capture_payload=original, require_decision_capture=True)
+    if failure == "snapshot_oversized":
+        assert refused.value.diagnostic_code == "request_too_large"
+        assert str(refused.value) == "TypeScript Effect runtime local snapshot is oversized"
+        assert [item[2] for item in operations] == ([False, True] * (2 if optional_context else 1))
+    else:
+        assert refused.value.diagnostic_code == "runtime_host_permission_denied"
+        assert str(refused.value) == ("Host permission denied access to the local TypeScript Effect runtime "
+            "before request dispatch; no capability operation was executed")
+        assert [item[2] for item in operations] == ([False] * (2 if optional_context else 1))
+    if optional_context:
+        assert operations[0][:2] == ("quota.turn_envelope.evaluate", "host_context_binding")
+    assert operations[-1][0] == "quota.turn_envelope.evaluate"
+    assert operations[-1][1] in {"host_context", "host_dispatch_context"}
+    assert len(captures) == 1 and not captures[0].path.exists()
+    assert not turn_journal_path(runtime, goal_id=original["goal_id"], turn_key=request["turn_key"]).exists()
+    assert json.dumps(plan, ensure_ascii=False) == original_carrier
+    assert json.dumps(captures[0].observation, ensure_ascii=False) == json.dumps(original, ensure_ascii=False)
+    assert not list(runtime.rglob("*.jsonl"))
+
+
 def test_typed_result_recovery_does_not_start_a_pending_goal_host(
     complete_host_request, tmp_path,
 ):

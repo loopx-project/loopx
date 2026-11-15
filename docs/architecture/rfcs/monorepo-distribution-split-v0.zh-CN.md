@@ -3462,3 +3462,29 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
 - **边界：**本次保护资格证据来源，不改变生产准入，也不认证 wheel 字节或模型
   执行。固定源码／产物检查、真实模型采纳、完整 D2/D5 成本、R1/M3 和原十项要求
   仍需分别验证；保留历史失败，完成前仍需完整原目标回归。
+
+### 2026-11-15 — 复用 staged Host 的最终来源检查
+
+- **缺口：**capture staging 后构造临时请求，在 `host_dispatch_context` 前紧接着
+  重复 `host_context`。完整组装仍有实际作用：frozen capture 的嵌套 plan 仍有
+  可变别名。
+- **增量：**公开请求 builder 与 staged dispatch 共享原 inspection、turn-key、
+  route guards、来源组装、可选 context、subagent 和 native-child metadata。
+  仅 staged complete-v1 plan 生成含 `work_contract`、不含 `turn_envelope` 的
+  Host-v1 请求时省去嵌套 `host_context`；原 carrier 转换和最终 dispatch 检查仍在
+  准入与发布之前。其它形状保留原 finish，不跨准入、发布或后续效果保留 checked
+  result。
+- **证据：**File／SQLite 基线与候选对照覆盖 42 个 guard、别名、carrier、数字／
+  文本、interval-wait 和 bridge 失败场景。精确 startup、transport permission、
+  offloaded snapshot 大小诊断保留原 carrier，发布与 ledger 效果为零。刻意丢弃
+  goal reference 能使独立值 oracle 失败。staged operation trace 少一次
+  `host_context`，仍保留一次 `host_dispatch_context`。候选及 `main@37a79decfe99`
+  与 C1 #8266 `638b7e3c23f0` 的干净组合分别构建真实 Core wheel，各通过 15 个
+  identity、执行／checkpoint、回放、journal 查看、进程丢失／stale lease 和无效
+  产物检查。C1 来源两 arm 使用同一 direct-complete-source planner API；先前
+  不兼容 keyword 的 setup 失败保留。上述检查使用 Python 3.13.5、Node 26.0.0，
+  wheel、RECORD、source 与 runtime 来源分别绑定。
+- **边界：**本次省去一次重复 bridge projection，不改变 typed source owner、默认
+  激活、capture 发布、恢复或结算边界。它不证明总延迟、完整成本或真实模型改善，
+  也不完成 D2/D5 闭包、R1/M3 或 C1 默认切换。保留历史失败和原十项要求；完成前
+  仍需完整原目标回归，随后才准备 EdgeBench。
