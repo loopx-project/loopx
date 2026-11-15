@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, TypedDict
 
 from ..agent_registry import registered_agent_ids_for_goal
 from ..chat import apply_prepared_todo_review, plan_reviewed_todo_create, todo_create_was_duplicate
-from ..chat_action_store import action_checkpoint_steps
+from ..chat_action_store import action_checkpoint_steps, is_todo_create_recovery
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )
@@ -15,7 +16,7 @@ from ..control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 from ..control_plane.todos.provider_projection import (
     projection_delivery_requires_ack, settle_canonical_todo_projection,
 )
-from ..file_lock import try_exclusive_file_lock
+from ..file_lock import LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED, lock_holder_liveness, try_exclusive_file_lock
 from .todo_source import ChatTodoSource, ChatTodoSourceChanged, resolve_chat_todo_source
 
 
@@ -39,12 +40,14 @@ class ChatTodoCreationMixin:
             store_identity=authority["store_identity"], source_authority=authority["source_authority"])
 
     @staticmethod
-    def _monitor_create_fingerprint(source: ChatTodoSource) -> str:
+    def _monitor_create_fingerprint(source: ChatTodoSource, authority: ReviewedCreateAuthority) -> str:
         from ..chat_actions import _digest
 
         return _digest({
             "source_identity": source.source_identity,
             "registry_sha256": source.registry_sha256,
+            "store_identity": authority["store_identity"],
+            "provider_revision": authority["provider_revision"],
         })
 
     def _save_create_plan(
@@ -97,13 +100,26 @@ class ChatTodoCreationMixin:
             "provider_revision": error.payload.get("current_provider_revision"),
         }))
 
-    def _creation_lock(self, proposal_id: str):
+    def _creation_lock_path(self, proposal_id: str) -> Path:
         from ..chat_actions import _opaque
 
         key = _opaque(proposal_id, field="proposal_id")
-        return try_exclusive_file_lock(
-            self.store.root / "task-starts" / f"{key}.json", operation="confirm_task_start",
-        )
+        return self.store.root / "task-starts" / f"{key}.json"
+
+    def _creation_lock(self, proposal_id: str):
+        return try_exclusive_file_lock(self._creation_lock_path(proposal_id), operation="confirm_task_start")
+
+    def _project_creation_recovery(self, proposal: dict[str, Any]) -> dict[str, Any]:
+        if proposal.get("status") != "applying" or proposal.get("checkpoint") is not None:
+            return proposal
+        if not is_todo_create_recovery(proposal) or (proposal.get("context") or {}).get("binding_id"):
+            return proposal
+        # Read the holder record without acquiring the lock. Apply still takes
+        # the same kernel fence and validates the current reviewed source.
+        liveness, _ = lock_holder_liveness(self._creation_lock_path(proposal["proposal_id"]))
+        if liveness in {LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED}:
+            return {**proposal, "creation_retry_available": True}
+        return proposal
 
     def _pending_create_projection(
         self, proposal: dict[str, Any], *, todo_id: str, operation_id: str,
@@ -156,7 +172,7 @@ class ChatTodoCreationMixin:
         steps = action_checkpoint_steps(proposal)
         if "todo_create_prepared" not in steps:
             authority = self._create_authority(source, goal_id)
-            fingerprint = self._monitor_create_fingerprint(source)
+            fingerprint = self._monitor_create_fingerprint(source, authority)
             if fingerprint != proposal["expected_state_fingerprint"]:
                 return self._create_no_write(proposal, fingerprint)
         agent_id = str(parameters["agent_id"])

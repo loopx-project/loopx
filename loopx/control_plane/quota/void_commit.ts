@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, isAbsolute, join } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -9,6 +9,7 @@ import {
   nextQuotaAccountingArtifactPaths,
   parseQuotaAccountingIndex,
   quotaAccountingIndexDigest,
+  readQuotaSpendEventFromRun,
   renderQuotaSlotMarkdown,
   type QuotaAccountingArtifactPrepareContext,
   type QuotaAccountingArtifactPreparation,
@@ -365,59 +366,6 @@ function compactDecision(value: unknown): JsonObject {
   };
 }
 
-async function readTargetEvent(
-  runsDir: string,
-  run: JsonObject,
-  goalId: string,
-): Promise<JsonObject | null> {
-  const inline = jsonObject(run.quota_event);
-  if (inline) return inline;
-  if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
-  let targetPath: string;
-  try {
-    targetPath = await realpath(resolve(run.json_path.trim()));
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-  const relativePath = relative(await realpath(runsDir), targetPath);
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${sep}`) ||
-    isAbsolute(relativePath)
-  ) {
-    throw new EffectRuntimeRequestError(
-      "quota spend json_path must stay inside the goal runs directory",
-    );
-  }
-  let content: string;
-  try {
-    content = await readFile(targetPath, "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-    throw error;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(content);
-  } catch {
-    throw new EffectRuntimeRequestError("quota spend JSON artifact is malformed");
-  }
-  const record = requiredObject(value, "quota spend JSON artifact");
-  if (
-    record.classification !== QUOTA_SLOT_SPENT_CLASSIFICATION ||
-    (record.goal_id !== undefined && record.goal_id !== goalId)
-  ) {
-    throw new EffectRuntimeRequestError(
-      "quota spend JSON artifact identity does not match its index row",
-    );
-  }
-  return jsonObject(record.quota_event);
-}
-
 async function findTargetSpend(
   runsDir: string,
   records: readonly JsonObject[],
@@ -429,7 +377,7 @@ async function findTargetSpend(
     if (String(run.goal_id || goalId) !== goalId) continue;
     if (String(run.generated_at ?? "") !== generatedAt) continue;
     if (run.classification !== QUOTA_SLOT_SPENT_CLASSIFICATION) continue;
-    const event = await readTargetEvent(runsDir, run, goalId);
+    const event = await readQuotaSpendEventFromRun(runsDir, run, goalId);
     if (event?.event_type !== QUOTA_SLOT_SPENT_CLASSIFICATION) continue;
     requireQuotaOwnerProjection(owner, run.goal_ref, "quota void target");
     requireQuotaOwnerProjection(

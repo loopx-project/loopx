@@ -137,7 +137,8 @@ async function verify(provider, interruptedStep) {
   const exited = once(child, "exit");
   const lines = createInterface({input: child.stdout})[Symbol.asyncIterator]();
   let timer;
-  const beforeWrite = interruptedStep === "todo_create_prepared";
+  const lostRequest = interruptedStep === "applying";
+  const beforeWrite = interruptedStep !== "todo_created";
   const capturePrefix = provider + "-" + interruptedStep;
   try {
     const origin = await Promise.race([
@@ -184,18 +185,27 @@ async function verify(provider, interruptedStep) {
         await openConfirmation();
         const drawer = page.getByRole("dialog");
         const initial = await snapshot();
-        const injected = page.waitForResponse(response => response.url().endsWith(path + "/apply"));
+        const injected = lostRequest
+          ? page.waitForEvent("requestfailed", {predicate: request => request.url().endsWith(path + "/apply")})
+          : page.waitForResponse(response => response.url().endsWith(path + "/apply"));
         await drawer.getByRole("button", {name: /^(Confirm and apply|确认并应用)$/}).click();
         const failure = await injected;
-        assert.equal(failure.status(), 424);
-        const failed = (await failure.json()).proposal;
-        assert.equal(failed.proposal_id, id);
-        assert.equal(failed.failure.error_code, "canonical_action_failed");
-        assert.equal(failed.failure.retry_safe, true);
+        const saved = lostRequest
+          ? (await (await fetch(origin + path)).json()).proposal
+          : (await failure.json()).proposal;
+        assert.equal(saved.proposal_id, id);
+        if (lostRequest) {
+          assert.equal(saved.status, "applying");
+          assert.equal(saved.failure, null);
+        } else {
+          assert.equal(failure.status(), 424);
+          assert.equal(saved.failure.error_code, "canonical_action_failed");
+          assert.equal(saved.failure.retry_safe, true);
+        }
         const interrupted = await snapshot();
         const lost = interrupted.lost[id];
         if (beforeWrite) {
-          assert.equal(failed.checkpoint, null);
+          assert.equal(saved.checkpoint, null);
           assert.deepEqual(interrupted, initial);
         } else {
           assert.ok(lost?.receipt_id && interrupted.ids.includes(lost.todo_id));
@@ -231,6 +241,12 @@ async function verify(provider, interruptedStep) {
           assert.deepEqual(recovered, interrupted);
         }
         assert.deepEqual(attempted, [path + "/apply", path + "/apply"]);
+        if (lostRequest) {
+          const [code, replay] = await post(path + "/apply");
+          assert.equal(code, 200);
+          assert.deepEqual(replay.proposal.receipt, proposal.receipt);
+          assert.deepEqual(await snapshot(), recovered);
+        }
         await drawer.getByRole("button", {name: /^(View updated Goal|查看更新后的 Goal)$/}).waitFor();
         await page.screenshot({path: resolve(output, capturePrefix + "-" + width + "-result.png")});
         console.log(provider + " " + width + "px: " + interruptedStep + "; original proposal and one Todo write across reload");
@@ -264,7 +280,7 @@ async function verify(provider, interruptedStep) {
 
 try {
   await mkdir(output, {recursive: true});
-  for (const interruptedStep of ["todo_created", "todo_create_prepared"]) {
+  for (const interruptedStep of ["applying", "todo_create_prepared", "todo_created"]) {
     for (const provider of ["file", "sqlite"]) await verify(provider, interruptedStep);
   }
 } finally {

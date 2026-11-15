@@ -14,6 +14,7 @@ import {
   heartbeatReceiptBinding,
   heartbeatReceiptDetails,
   heartbeatReceiptFactFromEvent,
+  normalizeHeartbeatReplanObligationId,
   selectEffectiveHeartbeatReceipt,
   type HeartbeatReceiptBinding,
   type HeartbeatReceiptFact,
@@ -30,12 +31,20 @@ export interface PriorHostTurnCloseoutCandidate extends JsonObject {
   /** The Todo id or autonomous replan obligation id, per `binding_kind`. */
   binding_id: string;
   settlement_effect_id: string | null;
+  /** The effective guard admitted a replan under this Todo's settlement identity. */
+  admitted_todo_replan?: true;
+}
+
+interface CloseoutCandidateCheck {
+  candidate: PriorHostTurnCloseoutCandidate;
+  requireWritebackForRecovery: boolean;
 }
 
 function candidate(
   binding: HeartbeatReceiptBinding,
   turnInstanceId: string,
   fact: HeartbeatReceiptFact,
+  admittedTodoReplan: boolean,
 ): PriorHostTurnCloseoutCandidate {
   return {
     prior_turn_instance_id: turnInstanceId,
@@ -43,21 +52,26 @@ function candidate(
     binding_kind: binding.binding_kind,
     binding_id: binding.binding_id,
     settlement_effect_id: binding.settlement_effect_id,
+    ...(admittedTodoReplan ? {admitted_todo_replan: true as const} : {}),
   };
 }
 
 function admitsAutonomousReplan(event: JsonObject, fact: HeartbeatReceiptFact): boolean {
-  if (fact.replan_obligation_id === null || fact.settlement_effect_id === null) return false;
   const guard = heartbeatReceiptDetails(event);
-  return guard.semantic_replan_obligation_id === fact.replan_obligation_id
+  const obligationId = normalizeHeartbeatReplanObligationId(guard.semantic_replan_obligation_id);
+  return fact.settlement_effect_id !== null && obligationId !== null
+    && (fact.todo_id !== null || obligationId === fact.replan_obligation_id)
     && guard.interaction_mode === "autonomous_replan" && guard.ok === true && guard.should_run === true
     && guard.must_attempt_work === true && guard.delivery_allowed === false && guard.quiet_noop_allowed === false;
 }
 
 /**
- * Select prior Turns eligible for closeout readback. Guard preflight requires
- * an explicit closeout marker. Refresh recovery can also discover an admitted
- * replan-only binding without making it a later Turn's admission prerequisite.
+ * Select prior Turns eligible for closeout readback. A Todo-bound replan
+ * carries the Todo settlement identity and a separate semantic obligation.
+ * It did not deliver a Todo, so its closeout marker can be false. Fresh
+ * admission requires a verified outstanding writeback for this binding.
+ * Explicit pending-closeout discovery can also find admitted replans before
+ * writeback, whether their settlement identity is a Todo or an obligation.
  *
  * Every prior Turn is identity-validated, so a conflicting receipt fails the
  * read instead of being hidden behind a newer Turn. Results are newest first
@@ -74,8 +88,8 @@ export function selectCloseoutCandidates(
   goalId: string,
   agentId: string,
   excludeTurnInstanceId: string | null,
-  { includeAdmittedReplans } = { includeAdmittedReplans: false },
-): { candidates: PriorHostTurnCloseoutCandidate[]; turnsValidated: number } {
+  { includeUnwrittenReplans } = { includeUnwrittenReplans: false },
+): { candidates: CloseoutCandidateCheck[]; turnsValidated: number } {
   const perTurn = new Map<string, { fact: HeartbeatReceiptFact; value: JsonObject }[]>();
   const firstRecorded = new Map<string, number>();
   for (const event of receipts) {
@@ -100,7 +114,7 @@ export function selectCloseoutCandidates(
     }
   }
 
-  const candidates: PriorHostTurnCloseoutCandidate[] = [];
+  const candidates: CloseoutCandidateCheck[] = [];
   const currentPosition = excludeTurnInstanceId === null
     ? undefined : firstRecorded.get(excludeTurnInstanceId);
   let validated = 0;
@@ -112,10 +126,14 @@ export function selectCloseoutCandidates(
     // must not conceal a conflicting persisted settlement binding.
     if (currentPosition !== undefined && firstRecorded.get(turnInstanceId)! >= currentPosition) continue;
     const fact = heartbeatReceiptFactFromEvent(effective);
-    if (!fact.closeout_required && !(includeAdmittedReplans && admitsAutonomousReplan(effective, fact))) continue;
     const binding = heartbeatReceiptBinding(goalId, agentId, fact);
     if (binding === null) continue;
-    candidates.push(candidate(binding, turnInstanceId, fact));
+    const admittedReplan = admitsAutonomousReplan(effective, fact);
+    const admittedTodoReplan = admittedReplan && binding.binding_kind === "todo";
+    if (!fact.closeout_required && !admittedTodoReplan &&
+        !(includeUnwrittenReplans && admittedReplan)) continue;
+    candidates.push({candidate: candidate(binding, turnInstanceId, fact, admittedTodoReplan),
+      requireWritebackForRecovery: !fact.closeout_required && !includeUnwrittenReplans});
   }
   return {candidates, turnsValidated: validated};
 }
@@ -147,18 +165,27 @@ function bundleFailed(readback: JsonObject, step: string): boolean {
 
 /**
  * The closeout receipts a candidate's settlement readback still lacks, or
- * null when that readback already validates the Turn's settlement.
+ * null when the Turn's settlement validates, or undefined when a candidate
+ * without a closeout marker has no verified writeback.
  */
-export function missingCloseoutReceipts(readback: JsonObject): string[] | null {
+export function missingCloseoutReceipts(
+  readback: JsonObject, requireWriteback: boolean,
+): string[] | null | undefined {
   if (readback.found === true && !bundleFailed(readback, "settlement")) {
     return null;
   }
   const missingReceipts: string[] = [];
   if (readback.found !== true || bundleFailed(readback, "writeback")) {
+    if (requireWriteback) return undefined;
     missingReceipts.push(WRITEBACK_RECEIPT);
   }
   if (readback.found !== true || bundleFailed(readback, "spend")) {
     missingReceipts.push(SPEND_RECEIPT);
   }
   return missingReceipts;
+}
+
+/** Only an exact writeback can leave the original debit as the sole debt. */
+export function awaitingQuotaSpend(missing: readonly string[]): boolean {
+  return missing.length === 1 && missing[0] === SPEND_RECEIPT;
 }

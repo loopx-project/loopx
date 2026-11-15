@@ -1,6 +1,7 @@
 import type {DecisionOutcome, ResumeState} from "../todos/user_completion_types.js";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {goalCreationOutcome, type GoalCreationOutcome} from "../goals/creation_outcome.ts";
+import {goalCreationExecutionReview, type GoalCreationExecutionReview} from "../goals/creation_execution_review.ts";
 
 export type ActionReviewIdentity = {
   schemaVersion: "action_review_plan_v0";
@@ -102,6 +103,9 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   /** New Session routing only. Recorded Sessions recover through creationProgress;
    * this identity decision does not certify Task acceptance or execution. */
   creationSession?: {managedAgentId: string};
+  /** Explicit fresh creation intent; admission and effective approval are
+   * independently checked before the original native Task is dispatched. */
+  creationExecution?: GoalCreationExecutionReview;
   /** Accepted dispatch bound to its original Turn. It does not establish a result. */
   taskExecution?: { goalId: string; todoId: string; sessionId: string; turnId: string };
 };
@@ -556,6 +560,8 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const prohibitRegeneration = todoCreation && (createAttemptFailed || proposal.status === "applying"
     || Object.hasOwn(steps ?? {}, "todo_create_prepared") || Object.hasOwn(steps ?? {}, "todo_created"));
   const creationProgress = goalCreationProgress(proposal);
+  const creationExecution = proposal.action_kind === "goal.create" && parameters
+    ? goalCreationExecutionReview(parameters) : undefined;
   // Older already-dispatched creations retain their original semantics. A
   // failed write retries its original CAS even after a response was lost.
   const creationOutcome = creationProgress?.todoIds && (!creationProgress.sessionId && !creationProgress.firstTurn
@@ -582,6 +588,7 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     ...(prohibitRegeneration ? {prohibitRegeneration: true as const} : {}),
     ...(creationOutcome ? { creationOutcome } : {}),
     ...(creationSession ? { creationSession } : {}),
+    ...(creationExecution ? { creationExecution } : {}),
   });
   const held = (
     interaction: "gated" | "refresh" | "repair" | "pending" | "completed" | "inactive",
@@ -645,8 +652,10 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     && textValue(createPlan.expected_store_identity);
   // The server may fail before any checkpoint is saved. The same apply still
   // owns the reviewed source and must revalidate it before the first write.
-  const interruptedBeforePlan = createAttemptFailed && failure?.retry_safe === true && proposal.checkpoint == null
-    && Array.isArray(proposal.available_transitions) && proposal.available_transitions.includes("apply");
+  const interruptedBeforePlan = proposal.checkpoint == null
+    && Array.isArray(proposal.available_transitions) && proposal.available_transitions.includes("apply")
+    && ((createAttemptFailed && failure?.retry_safe === true)
+      || (proposal.status === "applying" && proposal.creation_retry_available === true));
   if (todoCreation && ["failed", "applying"].includes(String(proposal.status))
       && proposal.permission_classification === "durable_write"
       && failure?.retry_safe !== false

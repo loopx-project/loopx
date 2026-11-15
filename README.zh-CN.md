@@ -174,6 +174,10 @@ LoopX 把这套**开源、Harness 中立**的控制面直接做成可运行基�
 文件、定时计划与恢复状态跨天数、跨重启、跨 harness 保持持久。重新打开项目时，
 可以检查上一轮的状态与证据，再继续下一项允许执行的工作。
 
+新建默认 Codex Goal 时，先核对任务和工作区权限，再确认**创建 Goal 并开始首轮**。
+原任务在独立检查和额度就绪后沿原对话继续执行，普通消息保持只读。
+等待、结果核对和恢复见[工作区指南](docs/guides/personal-workspace-user-guide.md#在原对话执行已检查的任务--run-the-checked-original-task)。
+
 LoopX 将这些长程控制状态汇入 Personal Workspace。你可以在一个页面中：
 
 - 看清哪些事项正在等你、执行中、观察中、已安排或已停止；

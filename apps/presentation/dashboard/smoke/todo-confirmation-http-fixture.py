@@ -20,6 +20,10 @@ from loopx.control_plane.todos.mutation_api import add_goal_todo
 from loopx.control_plane.todos import provider_projection
 
 
+class InterruptedConfirmation(BaseException):
+    """End the request before Chat can persist a failure response."""
+
+
 def main(provider, interrupted_step):
     with TemporaryDirectory(prefix="loopx-confirmation-fixture-") as directory, pytest.MonkeyPatch.context() as patch:
         scratch = Path(directory)
@@ -34,6 +38,9 @@ def main(provider, interrupted_step):
             add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent", text=content)
 
         def interrupt(self, proposal_id, *, step, receipt, **kwargs):
+            if interrupted_step == "applying" and step == "todo_create_prepared" and proposal_id not in interrupted:
+                interrupted.add(proposal_id)
+                raise InterruptedConfirmation()
             if step == interrupted_step and proposal_id not in interrupted and not display["hold"]:
                 interrupted.add(proposal_id)
                 if step == "todo_created":
@@ -58,6 +65,9 @@ def main(provider, interrupted_step):
                     try:
                         return super().do_POST()
                     except (BrokenPipeError, ConnectionResetError):
+                        return
+                    except InterruptedConfirmation:
+                        self.close_connection = True
                         return
                 self._read_json()
                 add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent", text="Independent authority update")

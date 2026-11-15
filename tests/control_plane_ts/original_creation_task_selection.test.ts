@@ -29,6 +29,8 @@ test("unavailable canonical authority is not a display selection", () => {
 
 const policyInput = () => ({host: "codex-app-server", actor: {schema_version: "loopx_managed_session_actor_v0", goal_id: "goal",
   agent_id: "agent", workspace_path: "/exercise"}, validation: {todo_id: "original", state: "ready"},
+task_lease: {schema_version: "task_lease_v0", status: "active", goal_id: "goal", todo_id: "original",
+  owner: "agent", version: 1, write_scopes: [] as string[]},
 authority: {_work_identity: {goal_id: "goal", agent_id: "agent", todo_id: "original"},
   execution_preparation: {todo_id: "original", agent_id: "agent", state: "ready", delivery_allowed: true},
   should_run: true, normal_delivery_allowed: true, goal_boundary: {}}});
@@ -37,7 +39,17 @@ test("a native Task or its confirmed checks do not grant workspace writes", () =
   assert.deepEqual(canonicalNativeTaskSandboxPolicy(policyInput()), {type: "readOnly", networkAccess: false});
 });
 
-for (const scope of ["cart.py", "outputs/**"]) test(`narrow ${scope} approval is never widened to the workspace`, () => {
+test("workspace approval cannot widen the current Task lease", () => {
+  const input = policyInput();
+  input.authority.goal_boundary = {checkpointed_boundary_authority: {
+    schema_version: "checkpointed_boundary_authority_v0", active_count: 1, active_write_scope: ["**"]}};
+  input.task_lease.write_scopes = ["cart.py"];
+  assert.deepEqual(canonicalNativeTaskSandboxPolicy(input), {type: "readOnly", networkAccess: false});
+  input.task_lease.todo_id = "other";
+  assert.throws(() => canonicalNativeTaskSandboxPolicy(input), /same current execution lease/);
+});
+
+for (const scope of ["cart.py", "outputs/**"]) test(`narrow ${scope} approval cannot grant the whole native workspace`, () => {
   const input = policyInput();
   input.authority.goal_boundary = {checkpointed_boundary_authority: {
     schema_version: "checkpointed_boundary_authority_v0", active_count: 1, active_write_scope: [scope]}};
@@ -48,9 +60,21 @@ test("the original admitted Task uses the already approved workspace with networ
   const input = policyInput();
   input.authority.goal_boundary = {checkpointed_boundary_authority: {
     schema_version: "checkpointed_boundary_authority_v0", active_count: 1, active_write_scope: ["**"]}};
-  assert.deepEqual(canonicalNativeTaskSandboxPolicy(input), {type: "workspaceWrite", writableRoots: ["/exercise"],
-    networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true});
+  const expected = {type: "workspaceWrite", writableRoots: ["/exercise"], networkAccess: false,
+    excludeTmpdirEnvVar: true, excludeSlashTmp: true};
+  assert.deepEqual(canonicalNativeTaskSandboxPolicy(input), expected);
+  input.task_lease.write_scopes = ["**"];
+  assert.deepEqual(canonicalNativeTaskSandboxPolicy(input), expected);
 });
+
+for (const scope of ["src/*.py", "src/[ab].py", "../outside/**", "/outside/file"]) {
+  test(`unrepresentable ${scope} approval is never converted to a broader directory`, () => {
+    const input = policyInput();
+    input.authority.goal_boundary = {checkpointed_boundary_authority: {
+      schema_version: "checkpointed_boundary_authority_v0", active_count: 1, active_write_scope: [scope]}};
+    assert.deepEqual(canonicalNativeTaskSandboxPolicy(input), {type: "readOnly", networkAccess: false});
+  });
+}
 
 for (const count of [undefined, 0]) test(`an approval without an active count of ${count} grants no workspace writes`, () => {
   const input = policyInput();
