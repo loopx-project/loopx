@@ -1,6 +1,10 @@
 import brandIconLight from '../assets/loo-icon-paper.svg';
 import brandIconDark from '../assets/loo-icon-dark.svg';
 import { Fragment, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import type { LoopxGoal } from '../loopx/status';
+import { SidebarGoals } from './SidebarGoals';
+
+const EMPTY_SET: Set<string> = new Set();
 import type { ExternalSession, HostInfo, SearchHit, Section, Thread } from '../api';
 import type { AgentMarkInfo } from '../thread-cache';
 import { clockLabel } from '../timeline';
@@ -12,7 +16,6 @@ import { timeAgo } from '../sessions';
 import { deliveredPreview } from '../timeline';
 import { HostSwitcher } from './Hosts';
 import { Menu } from './Menu';
-import { PetBustImage, type PetBust } from './Pet';
 import type { HostIconName } from '@calli/extension-api';
 import { HostIcon } from '../extensions/ui';
 import { AgentMark, IconBell, IconChevron, IconClock, IconClose, IconDesktop, IconEdit, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSparkle, IconServer } from './icons';
@@ -63,12 +66,13 @@ interface Props {
   onThreadMenu: (thread: Thread, x: number, y: number) => void;
   onSectionMenu: (section: Section, x: number, y: number) => void;
   onNewSection: () => void;
-  onOpenTodos?: () => void;
-  onOpenDesk?: () => void;
-  deskActive?: boolean;
-  petBust?: PetBust | null;
-  /** The plan page is what the main area shows. */
-  todosActive?: boolean;
+  onOpenSteward?: () => void;
+  stewardActive?: boolean;
+  /** The LoopX core's goals, shown as a group under the nav; read-only here. */
+  goals?: LoopxGoal[];
+  needsYouGoals?: Set<string>;
+  activeGoalId?: string | null;
+  onOpenGoal?: (goalId: string) => void;
   /** Opens the machines page, listed behind the nav's "more" button unless it is on screen. */
   onOpenMachines?: () => void;
   machinesActive?: boolean;
@@ -160,11 +164,12 @@ export function Sidebar({
   onThreadMenu,
   onSectionMenu,
   onNewSection,
-  onOpenTodos,
-  onOpenDesk,
-  deskActive = false,
-  petBust,
-  todosActive = false,
+  onOpenSteward,
+  stewardActive = false,
+  goals = [],
+  needsYouGoals = EMPTY_SET,
+  activeGoalId = null,
+  onOpenGoal,
   onOpenMachines,
   machinesActive = false,
   onOpenSchedules,
@@ -684,11 +689,8 @@ export function Sidebar({
                     <IconEdit size={17} /> {t('sidebar.newThread')}
                   </button>
                 ),
-                onOpenDesk && <button key="desk" className={`side-link${deskActive ? ' active' : ''}`} aria-current={deskActive ? 'page' : undefined} onClick={onOpenDesk}>
-                  {petBust ? <PetBustImage bust={petBust} height={compact ? 30 : 24} slot={compact ? 21 : 17} /> : <IconSparkle size={compact ? 21 : 17} />} {t('pet.name')}
-                </button>,
-                onOpenTodos && <button key="todos" className={`side-link${todosActive ? ' active' : ''}`} aria-current={todosActive ? 'page' : undefined} onClick={onOpenTodos}>
-                  <IconList size={compact ? 21 : 17} /> {t('todos.title')}
+                onOpenSteward && <button key="steward" className={`side-link${stewardActive ? ' active' : ''}`} aria-current={stewardActive ? 'page' : undefined} onClick={onOpenSteward}>
+                  <IconSparkle size={compact ? 21 : 17} /> {t('sidebar.steward')}
                 </button>,
                 // Views an extension pins (the board) keep a row of their own; the machines wait behind "more".
                 ...extensionNav.map((entry) => (
@@ -730,6 +732,9 @@ export function Sidebar({
               />
             )}
           </div>
+        )}
+        {!down && !search.trim() && goals.length > 0 && onOpenGoal && (
+          <SidebarGoals goals={goals} needsYou={needsYouGoals} activeGoalId={activeGoalId} onOpenGoal={onOpenGoal} />
         )}
         {!down && groups}
         {/* Reading the machine's sessions, or importing one, went wrong: said here, where the rows

@@ -82,16 +82,16 @@ import { SideChat } from './components/SideChat';
 import { McpPage } from './components/McpPage';
 import { TeamsPage } from './components/TeamsPage';
 import { teamRecipient } from './teams';
-import type { PetStatus, PlanQuota, TeamSummary } from './api';
+import type { PlanQuota, TeamSummary } from './api';
 import { ExploreDialog } from './components/ExploreDialog';
 import { needsExplore, exploreSummary } from './personal-explore';
-import { Pet, PetBustImage, PetPortrait, usePetBust } from './components/Pet';
 import { PersonalSettingsDialog } from './components/PersonalSettingsDialog';
-import { buildDesk } from './desk';
 import { SkillsPage } from './components/SkillsPage';
 import { SchedulesPage } from './components/SchedulesPage';
-import { AssistantHome } from './components/AssistantPanel';
-import { TodosPage } from './components/TodosPage';
+import { GoalWorkPage } from './components/GoalWorkPage';
+import { StewardPage } from './components/StewardPage';
+import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
+import { needsYouGoalIds } from './loopx/status';
 import { ActivityPage } from './components/ActivityPage';
 import { GoalBar, GoalConfirm, GoalPermissionPicker, LoopxToggle } from './components/LoopxGoal';
 import { defaultGoalPermission, fetchGoalCapabilities, goalOf, lx, type GoalAgentCapability, type GoalPermission } from './loopx/launch';
@@ -107,7 +107,7 @@ import { ExtensionView } from './extensions/ExtensionView';
 import { machineSummaries, threadMachine, parseThreadLink } from './extensions/project';
 import { createThreadFeed } from './extensions/thread-feed';
 import { cachedAgentMarks, cachedThreads, rememberAgentMarks, rememberThreads } from './thread-cache';
-import { cachedAgents, cachedDraft, cachedModels, cachedPet, rememberAgents, rememberDraft, rememberModels, rememberPetBust, rememberPetStatus } from './host-cache';
+import { cachedAgents, cachedDraft, cachedModels, rememberAgents, rememberDraft, rememberModels } from './host-cache';
 import { clampSidebarWidth, defaultSidebarWidth, projectDir, savedSidebarWidth, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, type HostSource } from './sidebar';
 import { enabledViews, extensionHash, looksLikeExtensionRoute, resolveExtensionRoute } from './extensions/routes';
 import { AgentPicker, type DiscoveredAccount, type DiscoveredAgent, effortsForModel, imagesBlocked, imagesNote, modelName, speedsForModel, ModelPicker, PermissionPicker, UsageMeter, WorkspacePicker } from './components/Pickers';
@@ -170,6 +170,7 @@ const isNearBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.cl
 /** The plan page's address. Threads have none: the main area showing a thread is the plain URL. */
 const TODOS_HASH = '#/todos';
 const DESK_HASH = '#/desk';
+const STEWARD_HASH = '#/steward';
 const SKILLS_HASH = '#/skills';
 const TEAMS_HASH = '#/teams';
 const AGENTS_HASH = '#/agents';
@@ -180,13 +181,19 @@ const OBSERVABILITY_HASH = '#/observability';
 const MACHINES_HASH = '#/machines';
 const EXTENSIONS_HASH = '#/extensions';
 /** The hub's own pages. Any other `#/…` may be an extension's view; see extensions/routes.ts. */
-const CORE_ROUTES = ['#/settings', AGENTS_HASH, TEAMS_HASH, TODOS_HASH, DESK_HASH, SKILLS_HASH, MCP_HASH, SCHEDULES_HASH, ACTIVITY_HASH, OBSERVABILITY_HASH, MACHINES_HASH, EXTENSIONS_HASH];
+const CORE_ROUTES = ['#/settings', AGENTS_HASH, TEAMS_HASH, STEWARD_HASH, '#/goals', SKILLS_HASH, MCP_HASH, SCHEDULES_HASH, ACTIVITY_HASH, OBSERVABILITY_HASH, MACHINES_HASH, EXTENSIONS_HASH];
 
-type MainView = 'settings' | 'agents' | 'teams' | 'thread' | 'todos' | 'desk' | 'schedules' | 'activity' | 'observability' | 'machines' | 'skills' | 'mcp' | 'extensions' | 'ext';
+type MainView = 'settings' | 'agents' | 'teams' | 'thread' | 'goal' | 'steward' | 'schedules' | 'activity' | 'observability' | 'machines' | 'skills' | 'mcp' | 'extensions' | 'ext';
 
 function quotaAccount(path: string): string | undefined {
   if (!path.startsWith('quota/')) return undefined;
   try { return decodeURIComponent(path.slice('quota/'.length)); } catch { return path.slice('quota/'.length); }
+}
+
+/** The Goal id a `#/goals/<id>` address names. */
+function goalIdForHash(hash: string): string | null {
+  const id = hash.startsWith('#/goals/') ? decodeURIComponent(hash.slice('#/goals/'.length)) : '';
+  return id ? id : null;
 }
 
 /** The page an address opens; null for none (a thread). Skills and MCP are the hub's own machinery, which the demo has none of. */
@@ -195,11 +202,12 @@ function viewForHash(hash: string, connected: boolean): MainView | null {
   if (hash.startsWith('#/machines/')) return 'machines';
   if (hash === '#/settings' || hash.startsWith('#/settings/')) return 'settings';
   if (hash.startsWith('#/thread/')) return null;
-  // The desk's address may name the drawer tab it was left on (#/desk/desk, #/desk/sessions…).
-  if (hash === DESK_HASH || hash.startsWith(`${DESK_HASH}/`)) return 'desk';
+  if (hash.startsWith('#/goals/')) return 'goal';
+  // The assistant desk and its matters list are gone; their addresses open the steward, their successor.
+  if (hash === DESK_HASH || hash.startsWith(`${DESK_HASH}/`) || hash === TODOS_HASH) return 'steward';
   switch (hash) {
-    case TODOS_HASH:
-      return 'todos';
+    case STEWARD_HASH:
+      return 'steward';
     case SCHEDULES_HASH:
       return 'schedules';
     case ACTIVITY_HASH:
@@ -499,26 +507,18 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [todos, setTodos] = useState<Todo[]>([]);
   const [todosLoading, setTodosLoading] = useState(true);
   const [todosError, setTodosError] = useState('');
-  // Her shape as this device last saw her, so she is on the first frame rather than popping in.
-  const [keptPet] = useState(() => (keepThreads ? cachedPet(hostId) : null));
-  const [petStatus, setPetStatus] = useState<PetStatus | null>(() => keptPet ? { installing: false, error: null, ...keptPet.status } : null);
-  const petBust = usePetBust(api, petStatus, keptPet?.bust ? { url: api.petFrame(keptPet.status.id, 'idle', 0), bust: keptPet.bust } : null);
-  useEffect(() => {
-    if (api.demo) return; let live = true;
-    // An older hub has no pets endpoint: the sidebar keeps its plain icon.
-    void api.pet().then(status => { if (live) setPetStatus(status); }).catch(() => undefined);
-    return () => { live = false; };
-  }, [api]);
+  // The LoopX core status: the Goals group, the work pages and the steward brief all read this.
+  const loopxRead = useLoopxStatus(token);
+  const loopxStatus = loopxRead.status;
+  const loopxNeedsYou = useMemo(() => needsYouGoalIds(loopxStatus?.attention ?? []), [loopxStatus]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   /** What the main area shows: a thread (or the blank one a new thread starts from), one of the hub's pages, or an extension's view. */
   // Those pages have addresses of their own, so a reload or a bookmark lands back on them.
   const [threadLink, setThreadLink] = useState(() => window.location.hash.startsWith('#/thread/') ? window.location.hash : null);
   const [schedulePath, setSchedulePath] = useState(() => window.location.hash.startsWith('#/schedules/') ? window.location.hash.slice('#/schedules/'.length) : '');
+  /** The goal the work page shows, from its address. */
+  const [goalPath, setGoalPath] = useState(() => goalIdForHash(window.location.hash) ?? '');
   const [machinePath, setMachinePath] = useState(() => window.location.hash.startsWith('#/machines/') ? window.location.hash.slice('#/machines/'.length) : '');
-  /** The desk drawer's tab in the address, so a reload lands with the drawer as it was left. */
-  // The assistant home puts its entries in this bar rather than a second bar of its own.
-  const [deskSlot, setDeskSlot] = useState<HTMLDivElement | null>(null);
-  const [deskPath, setDeskPath] = useState(() => /^#\/desk\/(desk|sessions|matters)$/.test(window.location.hash) ? window.location.hash.slice('#/desk/'.length) : '');
   const [settingsPath, setSettingsPath] = useState(() => start === 'machines' ? 'machines' : window.location.hash.replace(/^#\/settings\/?/, ''));
   // `list`: the phone's thread list was open, so closing settings goes back to it.
   const settingsOrigin = useRef<{ view: MainView; thread: string | null; hash: string; scroll: number; pinned: boolean; entry: string; list: boolean } | null>(null);
@@ -1001,11 +1001,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return () => { live = false; };
   }, [api, threads.length]);
   const onRouterThread = Boolean(selected && routerThreadId === selected.id);
-  // Her portrait heads the conversation; once it scrolls away the title carries her face instead.
-  const [portraitAway, setPortraitAway] = useState(false);
-  const routerTitle = portraitAway && petBust
-    ? <span className="topbar-pet"><PetBustImage bust={petBust} height={22} slot={22} /><span>{t('pet.name')}</span></span>
-    : t('pet.name');
+  const routerTitle = t('pet.name');
   const latestSegment = selected ? latestHandoverThread(selected, threads) : null;
   const viewingEarlier = Boolean(selected && latestSegment && latestSegment.id !== selected.id);
   const mergedHandover = !api.demo && singleSegmentId !== selectedId && Boolean(selected?.handover?.mode === 'continue' || viewingEarlier);
@@ -1025,8 +1021,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [api, selectedId, threads]);
   useEffect(() => { setAgentsOpen(false); setDraftCollaboration(false); setCollaborationDirectories([]); }, [selectedId, hostId]);
   const onSettings = view === 'settings';
-  const onDesk = view === 'desk' && !selectedId;
-  const onTodos = view === 'todos' && !selectedId;
+  const onGoal = view === 'goal' && !selectedId;
+  const onSteward = view === 'steward' && !selectedId;
   const onSchedules = view === 'schedules' && !selectedId;
   const onActivity = view === 'activity' && !selectedId;
   const onAgents = view === 'agents' && !selectedId;
@@ -1041,9 +1037,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const extOpen = onExt && extensions && extTarget ? resolveExtensionRoute(extTarget, extensions) : null;
   const extName = extOpen ? extensions?.find((e) => e.manifest.id === extOpen.extensionId)?.manifest.name[locale()] ?? extOpen.extensionId : '';
   /** The name of the page the main area shows instead of a thread, for the top bar; null on a thread. */
-  const viewTitle = onSettings ? t('sidebar.settings') : onDesk ? t('desk.title') : onObservability ? t('obs.title') : onMachines ? t('hosts.machines') : onAgents ? t('agents.title') : onTeams ? t('teams.title') : onTodos
-    ? t('todos.title')
-    : onSchedules
+  const viewTitle = onSettings ? t('sidebar.settings') : onGoal ? t('loopx.goalsGroup') : onSteward ? t('loopx.steward') : onObservability ? t('obs.title') : onMachines ? t('hosts.machines') : onAgents ? t('agents.title') : onTeams ? t('teams.title') : onSchedules
       ? t('sidebar.schedules')
       : onActivity
         ? t('activity.title')
@@ -1111,12 +1105,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const extWant = onExt ? (extOpen ? extensionHash(extOpen) : extTarget ?? '') : '';
   useEffect(() => {
     if (threadLink) return;
-    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onDesk ? `${DESK_HASH}${deskPath ? `/${deskPath}` : ''}` : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onTodos ? TODOS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
+    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onGoal ? `#/goals/${encodeURIComponent(goalPath)}` : onSteward ? STEWARD_HASH : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
     if (window.location.hash !== want) {
       window.history.replaceState(window.history.state, '', want || window.location.pathname + window.location.search);
     }
     appHref.current = window.location.pathname + window.location.search + window.location.hash;
-  }, [schedulePath, machinePath, deskPath, onSettings, settingsPath, onDesk, onObservability, onMachines, onAgents, onTeams, onTodos, onActivity, onSkills, onSchedules, onMcp, onExtensions, extWant, threadLink]);
+  }, [schedulePath, machinePath, goalPath, onSettings, settingsPath, onGoal, onSteward, onObservability, onMachines, onAgents, onTeams, onActivity, onSkills, onSchedules, onMcp, onExtensions, extWant, threadLink]);
 
   // Whether the directory a new thread would start in is a git repository. Asked once per directory picked.
   useEffect(() => {
@@ -1163,7 +1157,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         setView(next);
         if (next === 'schedules') setSchedulePath(hash.startsWith('#/schedules/') ? hash.slice('#/schedules/'.length) : '');
       if (next === 'machines') setMachinePath(hash.startsWith('#/machines/') ? hash.slice('#/machines/'.length) : '');
-        if (next === 'desk') setDeskPath(hash.startsWith(`${DESK_HASH}/`) ? hash.slice('#/desk/'.length) : '');
+        if (next === 'goal') setGoalPath(goalIdForHash(hash) ?? '');
         if (next === 'settings') setSettingsPath(hash.replace(/^#\/settings\/?/, ''));
         if (next === 'ext') setExtTarget(hash);
         setDrawer(false);
@@ -1393,8 +1387,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // event: unchanged answers must not touch storage.
   useEffect(() => { if (keepThreads && agentsKnown) rememberAgents(hostId, agents); }, [keepThreads, agentsKnown, hostId, agents]);
   useEffect(() => { if (keepThreads) rememberModels(hostId, modelsByAgent); }, [keepThreads, hostId, modelsByAgent]);
-  useEffect(() => { if (keepThreads && petStatus) rememberPetStatus(hostId, petStatus); }, [keepThreads, hostId, petStatus]);
-  useEffect(() => { if (keepThreads && petBust && petStatus?.installed) rememberPetBust(hostId, petBust); }, [keepThreads, hostId, petBust, petStatus]);
   useEffect(() => {
     if (!keepThreads || selected || !draftAgent) return;
     rememberDraft(hostId, { agent: draftAgent, cwd: draftScratch ? '' : draftCwd, scratch: draftScratch && scratchAvailable });
@@ -2198,27 +2190,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     else onHost?.(machine, { thread: id });
   };
 
-  // The plan page takes the place of a thread, so no thread is open while it is.
-  // `finds` lays the new finds out on arrival, for a matter her conversation asked the person to confirm.
-  const [deskFinds, setDeskFinds] = useState(false);
-  const openDesk = (finds = false) => navigate(() => {
-    setSelectedId(null); setView('desk'); setDrawer(false); setDeskFinds(finds);
+  // The LoopX steward page and the goal work pages take the place of a thread, so no thread is open on them.
+  const openSteward = () => navigate(() => {
+    setSelectedId(null); setView('steward'); setDrawer(false);
   });
-  // She now sits over every page; the desk still feeds her what to say and what to step back from.
-  const petGreeting = useMemo(() => {
-    if (!onDesk || todosLoading || todosError) return null;
-    const desk = buildDesk(todos, new Date());
-    return { you: desk.quadrants.now.length, first: desk.first[0]?.todo.text ?? null };
-  }, [onDesk, todos, todosLoading, todosError]);
-  const [deskSpread, setDeskSpread] = useState(false);
-  // The caret for her composer: the pet's talk entry bumps it, wherever the person is.
-  const [chatFocus, setChatFocus] = useState(0);
-  // A matter her reply named: the desk opens that pile, wherever the person is when they tap it.
-  const [revealTodo, setRevealTodo] = useState<string | null>(null);
-  const openTodoFromPet = (id: string) => {
-    if (!onDesk) openDesk(false);
-    setRevealTodo(id);
-  };
+  const openGoal = (goalId: string) => navigate(() => {
+    setGoalPath(goalId); setSelectedId(null); setView('goal'); setDrawer(false);
+  });
   const [exploreOpen, setExploreOpen] = useState(false);
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null);
   const [setupNotice, setSetupNotice] = useState<{ text: string; at: number } | null>(null);
@@ -2232,11 +2210,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return () => { live = false; };
   }, [api, personal]);
   const openExplore = () => navigate(() => setExploreOpen(true));
-  const openTodos = () => navigate(() => {
-    setSelectedId(null);
-    setView('todos');
-    setDrawer(false);
-  });
   const openSchedules = (path = '') => navigate(() => {
     setSchedulePath(path);
     setSelectedId(null);
@@ -2809,7 +2782,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       ...(!demo ? [
         { id: 'push', label: t('push.title'), icon: IconBell, render: () => <PushSettingsDialog api={api} onClose={closeSettings} /> },
         { id: 'feishu', label: t('feishu.title'), icon: IconSideChat, render: () => <FeishuSettingsDialog api={api} agents={agents} onClose={closeSettings} /> },
-        { id: 'assistant', label: t('personal.settings'), icon: IconSparkle, render: () => <AssistantSettingsPage api={api} agents={agents} setupNeeded={setupNeeded} onExplore={openExplore} path={settingsPath || 'assistant'} onNavigate={openSettings} onSave={setPersonal} /> },
         { id: 'handover', label: t('auto.title'), icon: IconAgents, render: () => <HandoverSettingsDialog api={api} agents={agents} onClose={closeSettings} /> },
       ] : []),
     ] },
@@ -2963,13 +2935,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onThreadMenu={(thread, x, y) => openMachineMenu(thread.id, { x, y })}
           onSectionMenu={threadActions.openSectionMenu}
           onNewSection={threadActions.newSection}
-          onOpenTodos={showcase ? undefined : openTodos}
-          todosActive={onTodos}
-          onOpenMachines={showcase ? undefined : () => openMachines()}
-          machinesActive={onMachines}
-          onOpenDesk={showcase ? undefined : () => openDesk()}
-          deskActive={onDesk || onRouterThread}
-          petBust={petBust}
+          onOpenSteward={showcase ? undefined : openSteward}
+          stewardActive={onSteward}
+          goals={loopxStatus?.goals ?? []}
+          needsYouGoals={loopxNeedsYou}
+          activeGoalId={onGoal ? goalPath : null}
+          onOpenGoal={openGoal}
           onOpenSchedules={showcase ? undefined : openSchedules}
           onOpenDesktop={hasDesktop ? () => { setDrawer(false); setDesktop('open'); } : undefined}
           desktopRunning={desktop === 'minimized'}
@@ -3043,7 +3014,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               </button>
             )}
           </div>
-          {onDesk && !selected && <div className="topbar-desk" ref={setDeskSlot} />}
           {selected && (
             <div className="topbar-actions">
               {/* The thread at a glance: one panel for the team, the plan, the changes, the pictures
@@ -3252,37 +3222,24 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               onError={handleError}
             />
           </div>
-        ) : onDesk ? (
-          <div key="desk" className="scroller">
-            <AssistantHome key={setupNotice?.at} setupNeeded={setupNeeded} onExplore={openExplore} api={api} todos={todos} loading={todosLoading} error={todosError} threads={threads} agents={agents}
-              personal={personal} personalError={personalError} refreshKey={todosKey} onReload={reloadTodos}
-              // Not `pick`: the assistant home's rows and links can name a thread this list no longer
-              // holds (archived since it was read); openThreadById still opens it, and says so
-              // honestly when nothing answers, instead of the empty new-thread page.
-              onPersonalChange={setPersonal} onPersonalRetry={reloadPersonal} onOpenThread={openThreadById} onOpenPlans={openTodos}
-              onConfigure={() => openSettings('assistant')} threadsKnown={threadsKnown}
-              openFinds={deskFinds} onFindsOpened={() => setDeskFinds(false)}
-              onSpreadChange={setDeskSpread} revealTodoId={revealTodo} onRevealTodo={() => setRevealTodo(null)}
-              path={deskPath} onPathChange={setDeskPath}
-              focusSignal={chatFocus} headerSlot={deskSlot} />
+        ) : onGoal ? (
+          // A document, not a conversation: starts at the top, like the other pages.
+          <div key="goal" className="scroller">
+            <GoalWorkPage
+              goalId={goalPath}
+              goals={loopxStatus?.goals ?? []}
+              attention={loopxStatus?.attention ?? []}
+              failure={loopxRead.failure}
+              onRetry={() => void 0}
+            />
           </div>
-        ) : onTodos ? (
-          // A scroller of its own: the thread's one pins itself to the bottom, a document starts at the top.
-          <div key="todos" className="scroller">
-            <TodosPage
-              agents={agents}
-              personal={personal}
-              personalError={personalError}
-              onPersonalChange={setPersonal}
-              onPersonalRetry={reloadPersonal}
-              api={api}
-              todos={todos}
-              threads={threads}
-              refreshKey={todosKey}
-              onReload={reloadTodos}
-              onChange={setTodos}
-              onOpenThread={pick}
-              onError={handleError}
+        ) : onSteward ? (
+          <div key="steward" className="scroller">
+            <StewardPage
+              goals={loopxStatus?.goals ?? []}
+              attention={loopxStatus?.attention ?? []}
+              failure={loopxRead.failure}
+              onOpenGoal={openGoal}
             />
           </div>
         ) : onActivity ? (
@@ -3293,7 +3250,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         ) : (
         <div key="thread" className="scroller" ref={scrollerRef} onScroll={onScroll} {...gestureProps}>
           {selected && <TurnRuler key={selected.id} threadId={selected.id} scrollerRef={scrollerRef} previews={turnPreviewMap} turnIds={rulerTurnIds} onJump={turnId => setJump({ threadId: selected.id, turnId })} />}
-          {onRouterThread && petStatus?.installed && <PetPortrait api={api} status={petStatus} onAway={setPortraitAway} />}
           {selected && eventsLoading && <div className="loading-note">{t('common.loading')}</div>}
           {showcase && selected && !eventsLoading && !timeline.items.length && showcase.intro(selected.id)}
           {selected ? (
@@ -3301,7 +3257,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               key={`${handoverHistoryKey(selected, threads)}:${mergedHandover}`}
               api={api} thread={selected} merged={mergedHandover} ready={historyReady} agentLabel={agentLabel}
               laterOf={latestSegment ? thread => laterSegment(thread, latestSegment, threads) : undefined}
-              onOpenFinds={onRouterThread ? () => openDesk(true) : undefined}
               onBrowseOlder={() => { stickToBottom.current = false; setAtBottom(false); }}
               canFork={thread => ({ enabled: Boolean(thread.agentSessionId && capsOf(thread.agent)?.fork), any: Boolean(capsOf(thread.agent)?.forkAt) })}
               onSegmentFork={(thread, turn) => threadActions.forkAt(thread, turn)}
@@ -3598,27 +3553,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onOpenQuota={agents.some((a) => !a.hidden && a.capabilities.quota) ? () => openSettings('quota') : undefined}
           onRunCommand={(text) => void send(text, []).catch(() => undefined)}
           onClose={() => setStatusOpen(false)}
-        />
-      )}
-      {exploreOpen && <ExploreDialog api={api} onClose={() => setExploreOpen(false)} onApplied={(draft, saved) => {
-        setPersonal(saved.personal); setSetupNeeded(false); setExploreOpen(false);
-        setSetupNotice({ text: exploreSummary(draft), at: Date.now() });
-      }} />}
-      {api && (
-        <Pet
-          api={api}
-          greeting={petGreeting}
-          setupNeeded={setupNeeded} onExplore={openExplore} setupNotice={setupNotice}
-          spreadOpen={deskSpread}
-          desk={onDesk}
-          place={!onPage ? 'thread' : 'corner'}
-          threads={threads}
-          onOpenThread={pick}
-          onStatusChange={setPetStatus}
-          onConfigure={() => openSettings('assistant')}
-          onChat={() => { if (!onDesk) openDesk(false); setChatFocus(n => n + 1); }}
-          todos={todos.filter(todo => !todo.done)}
-          onOpenTodo={openTodoFromPet}
         />
       )}
       {onboardOpen && (

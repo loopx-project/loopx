@@ -2851,4 +2851,35 @@ export const ja: Messages = {
   'overview.diffFailed': 'このターンの diff を読み込めませんでした',
   'overview.diffEmpty': 'このターンには diff がありません',
   'overview.diffWindow': (shown: number, older: number) => `最新 ${shown} 件の変更を表示、それ以前の ${older} 件は非表示`,
+
+  // LoopX: goals, steward, goal work page
+  'loopx.goalsGroup': 'Goals',
+  'loopx.needsYouShort': 'あなた',
+  'loopx.needsYouCount': (n: number) => `${n} 件があなた待ち`,
+  'loopx.needsYou': 'あなたの対応待ち',
+  'loopx.needsYouEmpty': 'あなた待ちの項目はありません。',
+  'loopx.attentionUnknown': 'この Goal の対応待ち項目はまだ読めていません。',
+  'loopx.vitals': '概況',
+  'loopx.vitalUserTodos': 'あなたのタスク',
+  'loopx.vitalAgentTodos': 'Agent のタスク',
+  'loopx.vitalDone': '完了',
+  'loopx.vitalWaitingOn': '待ち相手',
+  'loopx.sinceLine': (done: number, decisions: number, blocked: number) => {
+    const parts: string[] = [];
+    if (done) parts.push(`新しく完了 ${done}`);
+    if (decisions) parts.push(`新しい決定 ${decisions}`);
+    if (blocked) parts.push(`新しくブロック ${blocked}`);
+    return `前回見てから：${parts.join('、')}`;
+  },
+  'loopx.objective': '目標',
+  'loopx.notConnected': 'LoopX コアは未接続です（プロキシ未整備または Python サービス停止中）。',
+  'loopx.badData': (detail: string) => `LoopX 状態の解析に失敗：${detail}`,
+  'loopx.unavailable': (detail: string) => `LoopX コアは利用できません：${detail}`,
+  'loopx.steward': 'LoopX 管家',
+  'loopx.stewardConversation': '管家との会話',
+  'loopx.stewardHint': '管家との会話は LoopX コアが提供します。接続準備中です。',
+  'loopx.stewardBrief': 'ブリーフ',
+  'loopx.running': '実行中',
+  'loopx.runningEmpty': '実行中の Goal はありません。',
+  'sidebar.steward': 'LoopX 管家',
 };

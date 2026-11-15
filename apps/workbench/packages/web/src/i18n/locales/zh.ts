@@ -2853,6 +2853,37 @@ export const zh = {
   'overview.diffFailed': '这一轮的 diff 没有读到',
   'overview.diffEmpty': '这一轮没有留下 diff',
   'overview.diffWindow': (shown: number, older: number) => `显示最近 ${shown} 次修改，另有 ${older} 次更早的未显示`,
+
+  // LoopX: goals, steward, goal work page
+  'loopx.goalsGroup': 'Goals',
+  'loopx.needsYouShort': '你',
+  'loopx.needsYouCount': (n: number) => `${n} 件需要你`,
+  'loopx.needsYou': '待你处理',
+  'loopx.needsYouEmpty': '没有等你的事。',
+  'loopx.attentionUnknown': '这个 Goal 的待处理事项尚未读到。',
+  'loopx.vitals': '概况',
+  'loopx.vitalUserTodos': '你的待办',
+  'loopx.vitalAgentTodos': 'Agent 待办',
+  'loopx.vitalDone': '已完成',
+  'loopx.vitalWaitingOn': '在等',
+  'loopx.sinceLine': (done: number, decisions: number, blocked: number) => {
+    const parts: string[] = [];
+    if (done) parts.push(`新完成 ${done}`);
+    if (decisions) parts.push(`新决定 ${decisions}`);
+    if (blocked) parts.push(`新阻塞 ${blocked}`);
+    return `自上次看过：${parts.join('，')}`;
+  },
+  'loopx.objective': '目标',
+  'loopx.notConnected': 'LoopX 核心尚未接入（反代未就绪或 Python 服务未启动）。',
+  'loopx.badData': (detail: string) => `LoopX 状态解析失败：${detail}`,
+  'loopx.unavailable': (detail: string) => `LoopX 核心暂不可用：${detail}`,
+  'loopx.steward': 'LoopX 管家',
+  'loopx.stewardConversation': '管家会话',
+  'loopx.stewardHint': '管家会话由 LoopX 核心提供，正在接入。',
+  'loopx.stewardBrief': '简报',
+  'loopx.running': '进行中',
+  'loopx.runningEmpty': '没有进行中的 Goal。',
+  'sidebar.steward': 'LoopX 管家',
 };
 
 export type Messages = typeof zh;

@@ -2855,4 +2855,35 @@ export const en: Messages = {
   'overview.diffFailed': 'Could not read this turn\'s diff',
   'overview.diffEmpty': 'No diff was left in this turn',
   'overview.diffWindow': (shown: number, older: number) => `Latest ${shown} changes shown; ${older} older ${older === 1 ? 'change' : 'changes'} not shown`,
+
+  // LoopX: goals, steward, goal work page
+  'loopx.goalsGroup': 'Goals',
+  'loopx.needsYouShort': 'you',
+  'loopx.needsYouCount': (n: number) => `${n} ${n === 1 ? 'item' : 'items'} need you`,
+  'loopx.needsYou': 'Needs you',
+  'loopx.needsYouEmpty': 'Nothing is waiting on you.',
+  'loopx.attentionUnknown': "This goal's attention items have not been read yet.",
+  'loopx.vitals': 'Vitals',
+  'loopx.vitalUserTodos': 'Your tasks',
+  'loopx.vitalAgentTodos': 'Agent tasks',
+  'loopx.vitalDone': 'Done',
+  'loopx.vitalWaitingOn': 'Waiting on',
+  'loopx.sinceLine': (done: number, decisions: number, blocked: number) => {
+    const parts: string[] = [];
+    if (done) parts.push(`${done} newly done`);
+    if (decisions) parts.push(`${decisions} new decision${decisions === 1 ? '' : 's'}`);
+    if (blocked) parts.push(`${blocked} newly blocked`);
+    return `Since you looked: ${parts.join(', ')}`;
+  },
+  'loopx.objective': 'Objective',
+  'loopx.notConnected': 'The LoopX core is not connected yet (proxy not ready, or the Python service is down).',
+  'loopx.badData': (detail: string) => `LoopX status failed to parse: ${detail}`,
+  'loopx.unavailable': (detail: string) => `The LoopX core is unavailable: ${detail}`,
+  'loopx.steward': 'LoopX steward',
+  'loopx.stewardConversation': 'Steward conversation',
+  'loopx.stewardHint': 'The steward conversation is served by the LoopX core; wiring in progress.',
+  'loopx.stewardBrief': 'Brief',
+  'loopx.running': 'Running',
+  'loopx.runningEmpty': 'No running goals.',
+  'sidebar.steward': 'LoopX steward',
 };
