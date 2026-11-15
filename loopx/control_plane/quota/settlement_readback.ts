@@ -136,12 +136,15 @@ interface ResultBundle extends JsonObject {
 interface MatchedSpendRecords {
   run: JsonObject | null;
   receipt: JsonObject | null;
+  admissionSource?: unknown;
 }
 
 interface SpendTerms {
   slots: unknown;
   source: unknown;
 }
+
+const ORIGINAL_TURN_SPEND_SLOTS = 1;
 
 type SettlementProgressState = "identity_required" | "writeback_required" |
   "writeback_receipt_required" | "spend_required" | "spend_receipt_required" | "settled";
@@ -707,7 +710,7 @@ function spendResult(
 function committedSpendReceiptSource(event: JsonObject | null): string | null {
   if (event === null || !optionalString(event.event_id)) return null;
   const {slots, source} = details(event);
-  return slots === 1 && (source === "heartbeat" || source === "visible-goal")
+  return slots === ORIGINAL_TURN_SPEND_SLOTS && (source === "heartbeat" || source === "visible-goal")
     ? source : null;
 }
 
@@ -1312,6 +1315,7 @@ function readQuotaSettlementFromRequest(
   if (matchedSpend) {
     matchedSpend.run = spendRun;
     matchedSpend.receipt = spendEvent;
+    matchedSpend.admissionSource = receiptDetails.quota_spend_source;
   }
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
@@ -1548,7 +1552,17 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
           matchedSpend.run, request.goal_id)
         : null;
       const ledger = {slots: retained?.slots ?? undefined, source: retained?.source ?? undefined};
-      const conflict = spendTermsConflict(ledger, receipt);
+      let conflict = spendTermsConflict(ledger, receipt);
+      if (retained === null && matchedSpend.run !== null && matchedSpend.receipt !== null) {
+        // An index row identifies the original debit, but does not provide its
+        // terms. Check explicit receipt terms against the matching admission.
+        const source = matchedSpend.admissionSource ?? undefined;
+        conflict = spendTermsConflict(
+          {slots: ORIGINAL_TURN_SPEND_SLOTS, source}, receipt, "the original Turn admission",
+        ) ?? (source === undefined && receipt.source !== undefined
+          ? "the original Turn admission has no verifiable billing source for the quota spend receipt"
+          : null);
+      }
       if (conflict !== null && spendRequest === null) {
         throw new EffectRuntimeRequestError(conflict, "malformed_settlement_state");
       }
@@ -1592,10 +1606,14 @@ function spendReceiptTerms(event: JsonObject | null): SpendTerms {
   };
 }
 
-function spendTermsConflict(ledger: SpendTerms, receipt: SpendTerms): string | null {
+function spendTermsConflict(
+  recorded: SpendTerms,
+  receipt: SpendTerms,
+  description = "the recorded debit",
+): string | null {
   for (const field of ["slots", "source"] as const) {
-    if (ledger[field] !== undefined && receipt[field] !== undefined && ledger[field] !== receipt[field]) {
-      return `the recorded debit and quota spend receipt disagree on ${field}`;
+    if (recorded[field] !== undefined && receipt[field] !== undefined && recorded[field] !== receipt[field]) {
+      return `${description} and quota spend receipt disagree on ${field}`;
     }
   }
   return null;
@@ -1625,8 +1643,8 @@ function originalSpendRejection(
   const source = replaySource ?? authorizedSource ?? fallbackSource;
   // First debit and receipt repair must match admission. A fully receipted
   // replay must match the existing debit and cannot append another charge.
-  if (proposed.slots !== 1 || proposed.source !== source) {
-    return rejectedSpend(`original Turn settlement requires --slots 1 --source ${String(source)}`);
+  if (proposed.slots !== ORIGINAL_TURN_SPEND_SLOTS || proposed.source !== source) {
+    return rejectedSpend(`original Turn settlement requires --slots ${ORIGINAL_TURN_SPEND_SLOTS} --source ${String(source)}`);
   }
   const slotsConflict = recordedSlots !== undefined && recordedSlots !== proposed.slots;
   const sourceConflict = recordedSource !== undefined && recordedSource !== source;

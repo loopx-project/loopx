@@ -227,9 +227,15 @@ def test_exact_spend_and_combined_replay_reject_disagreeing_billing_terms(tmp_pa
     index = log.parent / "runs" / "index.jsonl"
     receipt_log = log.read_text(encoding="utf-8")
     initial_index = index.read_bytes()
+    debit_record, = (record for line in initial_index.splitlines()
+                     if (record := json.loads(line))["classification"] == "quota_slot_spent")
+    artifact = Path(debit_record["json_path"])
+    assert artifact.resolve().is_relative_to(runtime.resolve())
     for field, bad_value in ((None, None), ("slots", 2), ("source", "visible-goal"),
                               ("missing", None), ("legacy_empty", ""), ("legacy_empty", None),
-                              ("missing_artifact", None)):
+                              ("missing_artifact", None), ("missing", None), ("legacy_empty", None),
+                              ("slots", 2), ("source", "visible-goal"),
+                              ("unknown_admission_source", None), ("unknown_legacy_terms", None)):
         rows = [json.loads(line) for line in receipt_log.splitlines()]
         receipt, = (row for row in rows if row["event_kind"] == "quota_spend" and row["agent_id"] == AGENT_ID)
         details = receipt["details"]
@@ -241,20 +247,33 @@ def test_exact_spend_and_combined_replay_reject_disagreeing_billing_terms(tmp_pa
         elif field == "legacy_empty":
             details.update(slots=bad_value, source=bad_value)
         elif field == "missing_artifact":
-            debit_record, = (record for line in initial_index.splitlines()
-                             if (record := json.loads(line))["classification"] == "quota_slot_spent")
-            artifact = Path(debit_record["json_path"])
-            assert artifact.resolve().is_relative_to(runtime.resolve())
             artifact.rename(tmp_path / "legacy-unavailable-spend.json")
+        elif field in ("unknown_admission_source", "unknown_legacy_terms"):
+            admission, = (row for row in rows if row["event_kind"] == "quota_should_run")
+            assert admission["details"].pop("quota_spend_source") == "heartbeat"
+            if field == "unknown_legacy_terms":
+                details.pop("slots")
+                details.pop("source")
         elif field is not None:
             details[field] = bad_value
         log.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
         before = log.read_bytes()
-        for command in (debit, combined):
+        missing_artifact = not artifact.exists()
+        # A caller cannot make a conflicting source valid by supplying that
+        # same source on replay once only the index and receipt remain.
+        commands = (combined, debit) if missing_artifact else (debit, combined)
+        if field == "source" and missing_artifact:
+            commands += ((*spend, "--slots", "1", "--source", bad_value),)
+        for command in commands:
             rc, replay = _run_cli(registry, runtime, *command, cwd=project)
-            if field in ("slots", "source"):
+            if field in ("slots", "source", "unknown_admission_source"):
                 assert rc != 0 and not replay["ok"], replay
-                assert f"quota spend receipt disagree on {field}" in (replay.get("reason") or replay.get("error") or ""), replay
+                basis = "original Turn admission" if missing_artifact else "recorded debit"
+                diagnostic = replay.get("reason") or replay.get("error") or ""
+                expected = ("original Turn admission has no verifiable billing source"
+                            if field == "unknown_admission_source"
+                            else f"{basis} and quota spend receipt disagree on {field}")
+                assert expected in diagnostic, replay
                 assert replay.get("settlement_progress", {}).get("state") != "settled", replay
                 assert not replay.get("settlement_owed"), replay
             else:
