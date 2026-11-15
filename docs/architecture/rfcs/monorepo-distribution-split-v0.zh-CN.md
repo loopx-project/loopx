@@ -3413,3 +3413,165 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   真实 model/context 连续性、D2/D5 闭包、渐进 Standard 旅程、可比完整成本、完整
   V1–V5/V10、R1/M3 和 C1 切换保持 open。完成前仍需完整原目标回归，随后才准备
   EdgeBench。
+
+### 2026-11-15 — 在显式材料操作中才加载库存 provider
+
+- **缺口：**读取静态内容配置描述时会导入 Material Lifecycle 库存包，在没有请求
+  材料操作前便加载 apply、intake、ranking 和 revision owner。
+- **增量：**既有 reference adapter 仅在调用 `inspect_reference_materials` 时加载
+  该 provider；配置描述、内容 search/capture/draft、TypeScript reference owner
+  和既有 Python 库存 owner 继续使用原契约。
+- **证据：**以 `main@35c5efbd4b90` 为基线，新进程返回完全相同的配置描述，
+  LoopX 导入图由 108 降至 88 个模块，不再加载 18 个材料模块和两个 project-skill
+  模块。`configure-goal --help` 的输出和 39 个模块保持一致。显式库存操作继续
+  使用原始材料字节、验证和私有产物边界。
+- **边界：**本次减少配置加载，不减少安装包大小或 execute/replay 的导入。
+  复用 C1 的既有组合和 owner；完整 D2/D5 闭包、真实模型采纳、可比完整成本、
+  R1/M3、C1 切换及完整原目标回归仍未完成。
+
+### 2026-11-15 — Turn 读取时按需加载新决策与报告生产函数
+
+- **缺口：**查看 journal 时会导入新 Turn 决策 owner；检查待处理报告时，也会在
+  未选择相应操作前导入进展 snapshot 和发布函数。
+- **增量：**保留既有决策和报告 owner，在实际调用点加载。审批重试仍读取原 Todo
+  来源；发布函数仅在执行时导入，并早于任何报告产物写入。报告准入、订阅检查、
+  恢复和公开导出继续使用原契约，不新增 dispatcher、状态词汇或决策 owner。
+- **证据：**以 `main@c5ff8fdc32b6` 为基线，新 source-checkout CLI 进程使用
+  既有 Core 工作负载、File 和 SQLite、`checkpoint=None`，执行的 LoopX 导入图由
+  515 降至 512，回放由
+  432 降至 429，journal 查看由 363 降至 211 个模块。执行 RPC 数保持 File 223、
+  SQLite 222；回放保持 12，查看保持一次。回放仍加载原 Turn 决策模块。这些结果
+  证明加载范围减少，未证明总延迟、完整成本改善或 standalone／拆包资格。
+- **组合与边界：**本切片与 C1 #8266 的 `638b7e3c23f0` 版本组合，复用其既有
+  complete-source、selected-work、准入、context 和结算 owner。安装包大小、模型
+  采纳、完整 D2/D5 闭包、可比完整成本、R1/M3 与 C1 切换保持未验证。保留历史失败
+  和原十项要求；完成前仍需完整原目标回归，随后才准备 EdgeBench。
+
+### 2026-11-15 — Core 资格验证前检查真实安装来源
+
+- **缺口：**Core 测试 fixture 只信任解释器环境变量；指向普通 editable checkout
+  也能通过执行测试，即使实际没有安装 standalone Core。
+- **增量：**每个 opt-in Core 资格用例在 Task 准备前检查版本一致、拒绝普通发行包
+  共装和 editable Core，并将实际导入包与 Core 安装记录对应。既有 identity 检查
+  通过该 fixture 共享，namespace、help、manifest 和 doctor 验证保留；未启用 opt-in
+  仍明确报告 skip。
+- **证据：**旧普通源码环境通过用例并派发十次 CLI。普通包、共装、source shadow、
+  缺失 `loopx/__init__.py` 的 RECORD 条目和 PEP660 editable 五种反例现在都在 fixture setup 阶段失败，Task／
+  CLI 派发为零。真实 Core wheel 通过 identity 及 File／SQLite 执行、回放和查看。
+  原 host、validator 和执行 oracle 均未改变。
+- **边界：**本次保护资格证据来源，不改变生产准入，也不认证 wheel 字节或模型
+  执行。固定源码／产物检查、真实模型采纳、完整 D2/D5 成本、R1/M3 和原十项要求
+  仍需分别验证；保留历史失败，完成前仍需完整原目标回归。
+
+### 2026-11-15 — 复用 staged Host 的最终来源检查
+
+- **缺口：**capture staging 后构造临时请求，在 `host_dispatch_context` 前紧接着
+  重复 `host_context`。完整组装仍有实际作用：frozen capture 的嵌套 plan 仍有
+  可变别名。
+- **增量：**公开请求 builder 与 staged dispatch 共享原 inspection、turn-key、
+  route guards、来源组装、可选 context、subagent 和 native-child metadata。
+  仅 staged complete-v1 plan 生成含 `work_contract`、不含 `turn_envelope` 的
+  Host-v1 请求时省去嵌套 `host_context`；原 carrier 转换和最终 dispatch 检查仍在
+  准入与发布之前。其它形状保留原 finish，不跨准入、发布或后续效果保留 checked
+  result。
+- **证据：**File／SQLite 基线与候选对照覆盖 42 个 guard、别名、carrier、数字／
+  文本、interval-wait 和 bridge 失败场景。精确 startup、transport permission、
+  offloaded snapshot 大小诊断保留原 carrier，发布与 ledger 效果为零。刻意丢弃
+  goal reference 能使独立值 oracle 失败。staged operation trace 少一次
+  `host_context`，仍保留一次 `host_dispatch_context`。候选及 `main@37a79decfe99`
+  与 C1 #8266 `638b7e3c23f0` 的干净组合分别构建真实 Core wheel，各通过 15 个
+  identity、执行／checkpoint、回放、journal 查看、进程丢失／stale lease 和无效
+  产物检查。C1 来源两 arm 使用同一 direct-complete-source planner API；先前
+  不兼容 keyword 的 setup 失败保留。上述检查使用 Python 3.13.5、Node 26.0.0，
+  wheel、RECORD、source 与 runtime 来源分别绑定。
+- **边界：**本次省去一次重复 bridge projection，不改变 typed source owner、默认
+  激活、capture 发布、恢复或结算边界。它不证明总延迟、完整成本或真实模型改善，
+  也不完成 D2/D5 闭包、R1/M3 或 C1 默认切换。保留历史失败和原十项要求；完成前
+  仍需完整原目标回归，随后才准备 EdgeBench。
+
+### 2026-11-15 — PR 等待观察在权限复查后加载
+
+- **缺口：**执行性 Turn 的组合在解析观察权限前导入 PR reconciler 及其 metadata／
+  content provider，即使 hook 不可用也会加载。provider 导入失败还会逃出可选
+  观察原有的故障边界。
+- **变化：**既有 producer 在 invocation-time capability 检查成功后，于原 provider
+  `try` 内导入 reconciler。注册和调用仍分别检查权限，保留撤销行为；没有新增
+  wrapper、缓存决策、激活 flag 或 policy owner。Python 仍承担稳定的 GitHub
+  provider／transport adapter；typed selection、权限、authority 和观察 cadence
+  继续由既有 owner 持有。
+- **证据：**独立进程的 blocked-provider 反例覆盖未授权、权限撤销、权限源不可用，
+  以及导入失败时读取／效果为 unknown。八类配对 hook 场景冻结时钟，比较确定性
+  返回、权限检查与 provider 调用；源码 File／SQLite 检查保留 provider 成功、失败、响应丢失、cadence
+  和完整源诊断。独立安装的两份 Core wheel 执行获权的 File／SQLite 观察和 canonical
+  Todo 回读，并覆盖执行、回放、进程丢失与非法 artifact。原 consumer 套件在两侧
+  保留四个一致的 setup 失败；独立的当前 carrier 协议 fixture 不替代这些记录。
+- **边界：**不可用观察不加载其 provider 闭包，获权观察保留既有行为。本次是有界
+  默认闭包增量；首次获权调用现在把 deferred import 纳入既有 `duration_ms` 观察
+  窗口，不证明真实计时等价或性能收益。它不完成 D2／D5、真实模型／上下文采用、完整成本改善、原十项验收
+  或 C1 切换。保留历史源码、失败和 seal；完成前仍需完整原目标回归，随后才准备
+  EdgeBench。
+
+### 2026-11-15 — 仅为请求的 capability editor 求 provider options
+
+- **缺口：**即使解析未启用的 periodic-report 订阅，也会构造全部 editor definitions，
+  查询未选中的 `codex_chat` profiles 和 steward options；无关 provider 不可用时
+  会阻断本次 metadata。
+- **增量：**现有 editor 仅为 `codex_chat` 查询原 profile owner，仅为 `codex_chat`
+  或 `steward_executor` 查询原 steward vocabulary helper。所选字段、scopes、
+  nullable options、helper 顺序与异常、配置 precedence 和 detached outputs 保留
+  原契约；unknown editor 仍只读，且不查询 provider。
+- **证据：**全部 20 个已注册 editor、unknown／empty 输入有完整基线与候选对照，
+  包括 nullable resolution 和 detached outputs。新进程中的 provider 不可用反例
+  及所选原 owner 的正反例通过。此前 `main@2b156284c4f4` 与 C1 #8266 snapshot
+  `1a3740cf9e6e` 仅 overlay editor 的 Core 证据保留在原范围内。重新资格化分别
+  从 `main@fef679d18192` 加入本 editor，以及它与当前 C1 `1a3740cf9e6e` 的无
+  冲突合并来源构建独立真实 Core wheel；均通过 metadata 检查及 File／SQLite
+  执行、回放和回读。
+- **边界：**本次收窄 metadata discovery，不改变安装的 capability 内容或 activation。
+  全 Settings 旅程、真实模型采纳、总成本、自然进程 drain、完整 D2/D5 闭包、
+  R1/M3、完整 C1 验收及其默认切换仍未资格化。
+
+### 2026-11-15 — 打包所选 manager discovery 的既有 projection
+
+- **缺口：**普通 wheel 遗漏了既有的 `manager_context/discovery_projection.ts`
+  资源。已授权的多来源 Agent discovery 到达 `manager.discovery.project` 后，
+  lazy handler 导入缺失文件而失败；源码 checkout 和 Core 已包含原 typed projection。
+- **增量：**普通发行包的 package data 将该包既有 TypeScript 资源与 skill 一起打包。
+  原 projection、caller、授权和 lazy dispatch 继续由原 owner 持有，不增加并行
+  decision owner 或 activation setting。
+- **验证：**原 package data 下的真实 setuptools 构建回归失败，包含资源后通过。
+  installed ordinary，以及 C1 #8266
+  `1c578cfe85c23db40605843a0afc1d9d37caad39` 加入本补丁的实际组合，分别按自身
+  source、wheel 和 RECORD 资格化。所选 projection 检查覆盖有界且标明来源的结果、
+  来源不可用的回读和非法 bounds；未选中的 dispatch 保留 lazy loading。
+- **边界：**本次修复所选发行包资源，不完成完整 D2/D5 闭包、真实模型／上下文
+  采用、完整成本改善、完整 R1/M3 验收或 C1 默认切换。历史失败、预算和 checkpoints
+  保留各自原范围。
+
+### 2026-11-15 — 既有 opt-out 提前跳过自动 usage 观察
+
+- **缺口：**Python observation hints 识别的环境 opt-out 少于原 TypeScript usage
+  owner。`LOOPX_USAGE_PING=off`、`CI=1` 或 `DO_NOT_TRACK=yes` 仍可能调度观察，
+  包括 binding／native metadata 发现，之后 TypeScript 才拒绝发送。
+- **增量：**一个 negative-only host hint 保留原 owner 各变量的 trim／case 语义，
+  提前跳过自动 CLI、Host、quota、direct-cycle 和 detached observation。
+  `LOOPX_USAGE_PING=yes`、`CI=false` 仍通过该 hint，`DO_NOT_TRACK=false` 仍阻断。
+  正向 decision、notice、consent、generation、state 和发送继续由 TypeScript
+  持有；允许路径的 payload 和业务错误保留原契约。
+- **证据：**源码基线 `main@2e52541f909089181e7415e0d796f6d413c83dbf` 的真实 CLI
+  反例启动六个 detached Node 子进程，每个上述 opt-out 各两个，均返回 blocked；
+  相同候选回放启动零个，CLI 结果和 fixture state 保持不变。源码验证通过
+  107 个 Python、55 个 TypeScript 测试。固定 fixture／clocks 的八个允许环境
+  场景保留 48 个完整 observation request 与 Host 错误行为；该 payload 对照
+  在本地捕获 dispatch，并与真实 transport 测试并列，范围不同。
+- **安装范围：**候选及其与 C1 #8266 当前
+  `1a3740cf9e6ebad337f17967452693a9050edc81` 的实际组合，各自全新 non-editable
+  only-Core 安装通过相同三个真实 selected `version` CLI opt-out 场景，observer
+  子进程为零，业务 JSON 与 fixture state 保持不变。每个组合还通过 22 个 metadata
+  场景及三个使用真实 File／SQLite authority 的原 Core 正确性场景，并保留 31 份
+  raw CLI command 记录。冷 metadata 范围是每个组合一个 fresh process 内含 20 个未选 ID，不能算作
+  20 次冷进程。product payload 经 source、wheel、RECORD 与安装文件独立绑定。
+- **边界：**本次资格化已测试的源码与 installed-Core 自动 observer 隔离，包括
+  current-C1 实际组合；不证明完整 process／network 闭包、自然进程
+  drain、实测 overhead 或完整成本收益、真实模型采用、完整 D2/D5、R1/M3、
+  Goal 完成或 C1 默认切换。保留既有 checkpoints、失败、预算和验收要求。

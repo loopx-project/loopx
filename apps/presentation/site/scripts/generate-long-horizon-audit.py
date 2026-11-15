@@ -323,3 +323,166 @@ for language in ("en", "zh"):
         "v2: 372 records, 249 reported transitions; 7 outcomes unreconciled from published counts. Latest: 25 reviews, 17 scored transitions.\nRow counts: improved / flat / reported regression / unreconciled. Published aggregates do not establish causal benefit.")
     fig.text(.03,.025,footer,fontsize=10,color="#475569",linespacing=1.6)
     save(fig, f"images/edgebench-feedback-and-memory/stride-yardstick-closed-loop-{language}.svg")
+
+    # 4. EdgeBench Controlled Two-Arm Explore + Stride: context-on vs context-off score comparison (10 tasks)
+    two_arm = DATA["stride_context_on_off_comparison"]
+    arm_tasks = {row["task"]: row for row in two_arm["tasks"]}
+    ordered_norm_names = ["ANN", "FFmpeg", "VLIW", "Grid", "Ad", "Rust", "OpenTTD", "Codec", "Portfolio"]
+    norm_rows = [arm_tasks[name] for name in ordered_norm_names]
+
+    fig = plt.figure(figsize=(14.6, 7.8))
+    gs = fig.add_gridspec(
+        1, 2, width_ratios=[1.25, 1.05],
+        left=.18, right=.98, bottom=.175, top=.805, wspace=.11,
+    )
+    left = fig.add_subplot(gs[0, 0])
+    right = fig.add_subplot(gs[0, 1])
+
+    y_pos = list(range(len(norm_rows)))
+    on_vals = [r["context_on_norm"] for r in norm_rows]
+    off_vals = [r["context_off_norm"] for r in norm_rows]
+    off_bar_color = "#94a3b8"
+
+    left.barh([y - .18 for y in y_pos], on_vals, height=.32,
+              color=TEAL, label=("Explore + Stride + context-on" if not zh else "Explore + Stride + context-on（开启上下文交付）"))
+    left.barh([y + .18 for y in y_pos], off_vals, height=.32,
+              color=off_bar_color, label=("Explore + Stride + context-off" if not zh else "Explore + Stride + context-off（关闭上下文交付）"))
+
+    tag_map_zh = {
+        "ANN": "ANN (QPS↑ · 历史7臂Stride)",
+        "FFmpeg": "FFmpeg (原生↑ · OFF早停)",
+        "VLIW": "VLIW (周期↓ · OFF 14h45m)",
+        "Grid": "Grid (总分↓ · 等时长 ~18h)",
+        "Ad": "Ad (总分↑ · OFF 8h47m)",
+        "Rust": "Rust (原生↑ · 等时长 ~18h)",
+        "OpenTTD": "OpenTTD (原生↑ · 均<18h)",
+        "Codec": "Codec (原生↑ · OFF 12h38m)",
+        "Portfolio": "Portfolio (分↑ · 等时长 18h)",
+    }
+    tag_map_en = {
+        "ANN": "ANN (QPS↑ · 7-arm Stride)",
+        "FFmpeg": "FFmpeg (score↑ · OFF early stop)",
+        "VLIW": "VLIW (cycles↓ · OFF 14h45m)",
+        "Grid": "Grid (cost↓ · ~18h matched)",
+        "Ad": "Ad (score↑ · OFF 8h47m)",
+        "Rust": "Rust (score↑ · ~18h matched)",
+        "OpenTTD": "OpenTTD (score↑ · both <18h)",
+        "Codec": "Codec (score↑ · OFF 12h38m)",
+        "Portfolio": "Portfolio (score↑ · 18h matched)",
+    }
+    left.set_yticks(y_pos, [(tag_map_zh if zh else tag_map_en)[r["task"]] for r in norm_rows], fontsize=9.7)
+    left.invert_yaxis()
+    left.set_xlim(0, 134)
+    left.set_xticks([0, 25, 50, 75, 100])
+    left.set_xlabel("EdgeBench 百分制归一分 (/100，越高越优；含 ↓ 指标已方向归一化)" if zh else "EdgeBench normalized score (/100, higher is better)", fontsize=9.5)
+    left.set_title(
+        "A. 固定 Stride 下 context-on vs context-off 百分制对照" if zh else "A. Fixed Stride: context-on vs context-off (/100)",
+        loc="left", pad=14, fontsize=11.0, fontweight="bold",
+    )
+    left.set_axisbelow(True)
+    left.grid(axis="x", color="#e2e8f0", linewidth=.7)
+    left.tick_params(axis="both", length=0)
+
+    for idx, r in enumerate(norm_rows):
+        diff = r["context_on_norm"] - r["context_off_norm"]
+        anchor = max(r["context_on_norm"], r["context_off_norm"])
+        if r["task"] == "Rust":
+            txt = f"{r['context_on_norm']:.2f} vs {r['context_off_norm']:.2f} (+0.0044)"
+            col = TEAL
+            fw = "bold"
+        elif diff > 0:
+            txt = f"+{diff:.2f} ({r['context_on_norm']:.2f} vs {r['context_off_norm']:.2f})"
+            col = TEAL
+            fw = "bold"
+        else:
+            txt = f"{diff:.2f} ({r['context_on_norm']:.2f} vs {r['context_off_norm']:.2f})"
+            col = "#b45309"
+            fw = "bold"
+        left.text(anchor + 2.2, idx, txt, va="center", fontsize=8.8, fontweight=fw, color=col)
+
+    right.axis("off")
+    right.set_title(
+        "B. 原生关键差值（含 Borden）与反例边界" if zh else "B. Native score deltas (Borden) & counterexamples",
+        loc="left", pad=14, fontsize=11.0, fontweight="bold",
+    )
+    borden = arm_tasks["Borden"]
+    cards_two_arm = (
+        [
+            (
+                "第 10 题（无 /100 标度）：Borden 等时长 ~18h\n"
+                f"• context-on（18h02m）：{borden['context_on_native']}（17 次有效）\n"
+                f"• context-off（17h59m）：{borden['context_off_native']}（17 次有效）\n"
+                "→ +35 分（+77.8%，同构等时长显著拉升）。",
+                "#f0fdfa", "#99f6e4",
+            ),
+            (
+                "关键原生分数增幅（固定 Explore + Stride）\n"
+                "• ANN (QPS ↑)：7,159 vs 3,746（+91.1%, +33.51 百分分）\n"
+                "• FFmpeg (原生 ↑)：2.7086 vs 1.9929（+35.9%, OFF 早停）\n"
+                "• VLIW (周期 ↓)：1,042 vs 1,097（−55 周期 / −5.0%）\n"
+                "• Grid (代价 ↓)：2,197 vs 2,311（−114 / −4.9%, ~18h）",
+                "#f8fafc", "#cbd5e1",
+            ),
+            (
+                "10 题总盘：ON 7 项占先 vs OFF 3 项领先\n"
+                "• 等时长 ~18h（4 题）：3 胜（Borden/Grid/Rust 微先），\n"
+                "  1 反例（Portfolio 13.62 vs 39.44）\n"
+                "• 非等时长或历史对照（6 题）：ON 领先 4 题，\n"
+                "  OFF 领先 2 题（Codec 70.79 / OpenTTD 33.09M）",
+                "#fffbeb", "#fcd34d",
+            ),
+        ]
+        if zh else
+        [
+            (
+                "Task #10 (no /100 scale): Borden (~18h matched)\n"
+                f"• context-on (18h02m): {borden['context_on_native']} (17 valid)\n"
+                f"• context-off (17h59m): {borden['context_off_native']} (17 valid)\n"
+                "→ +35 pts (+77.8%, duration-matched gain).",
+                "#f0fdfa", "#99f6e4",
+            ),
+            (
+                "Key native deltas under fixed Explore + Stride\n"
+                "• ANN (QPS ↑): 7,159 vs 3,746 (+91.1%, +33.51 pts)\n"
+                "• FFmpeg (score ↑): 2.7086 vs 1.9929 (+35.9%, OFF early stop)\n"
+                "• VLIW (cycles ↓): 1,042 vs 1,097 (−55 cycles / −5.0%)\n"
+                "• Grid (cost ↓): 2,197 vs 2,311 (−114 / −4.9%, ~18h)",
+                "#f8fafc", "#cbd5e1",
+            ),
+            (
+                "10-task summary: 7 ON ahead/edge vs 3 OFF ahead\n"
+                "• Matched ~18h (4): 3 ON wins (Borden/Grid/Rust),\n"
+                "  1 counterexample (Portfolio 13.62 vs 39.44)\n"
+                "• Historical / <18h (6): 4 ON ahead, 2 OFF ahead\n"
+                "  (Codec 68.89 vs 70.79; OpenTTD 30.27M vs 33.09M)",
+                "#fffbeb", "#fcd34d",
+            ),
+        ]
+    )
+    y_starts = [.98, .63, .28]
+    for y_box, (txt, face, edge) in zip(y_starts, cards_two_arm):
+        right.text(.01, y_box, txt, transform=right.transAxes, va="top", fontsize=9.1,
+                   linespacing=1.50, bbox={"boxstyle": "round,pad=.60", "facecolor": face, "edgecolor": edge})
+
+    fig.suptitle(
+        "EdgeBench 十题同构效果对照：固定 Explore + Stride 下的 Context ON vs OFF"
+        if zh else
+        "EdgeBench 10-task controlled comparison: Context ON vs OFF under Explore + Stride",
+        fontsize=14.6, fontweight="bold", y=.955,
+    )
+    sub_two_arm = (
+        "固定 Explore + Stride 框架（context-on 开启 Progressive 与周期内差分）。10 题中 context-on 7 题占先，完整保留 3 项反例与真实时长差。"
+        if zh else
+        "Holding Explore + Stride constant (context-on adds progressive reads + cycle deltas). Ahead on 7/10 tasks, retaining 3 counterexamples and runtime gaps."
+    )
+    fig.text(.5, .88, sub_two_arm, ha="center", fontsize=9.9, color="#475569")
+    fig.legend(*left.get_legend_handles_labels(), loc="lower center", ncol=2, frameon=False, bbox_to_anchor=(.45, .078), fontsize=9.6)
+    footer_two_arm = (
+        "口径说明：截取自 EdgeBench 同构两臂实测（2026-11-12 22:40 CST 快照）。Borden 无百分制换算故在右栏 B 单列原生分（80 vs 45）。\n"
+        "Grid、Borden、Rust、Portfolio 四题双臂均已跑满约 18h（15m 容差内）；ANN 取自历史七臂对应 Stride 配置；其余 5 题存在至少一臂未满 18h。本图仅检验开关的组内方向性效果。"
+        if zh else
+        "Basis: EdgeBench controlled two-arm snapshot at 2026-11-12 22:40 CST. Borden has no /100 scale and appears in native points in Panel B (80 vs 45).\n"
+        "Grid, Borden, Rust, and Portfolio are ~18h duration-matched (within 15m); ANN uses the matching Stride pair from the 7-arm study; remaining 5 pairs have <18h runs. Checks within-harness direction only."
+    )
+    fig.text(.03, .018, footer_two_arm, fontsize=8.9, color="#475569", linespacing=1.45)
+    save(fig, f"images/context-delivery/stride-context-on-vs-off-{language}.svg")

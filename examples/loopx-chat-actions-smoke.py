@@ -124,6 +124,7 @@ class FakeRuntimeController:
             agent_id=str(kwargs["agent_id"]),
             adapter_kind="fake",
             upstream_thread_id="thread-goal-create",
+            upstream_mode="chat" if kwargs["agent_id"] == "codex" else "default",
             channel_id=channel,
         )
         return session, False

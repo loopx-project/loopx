@@ -19,7 +19,6 @@ from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.digest_envelope import sha256_envelope
 from ...history import load_registry
 from .field_shapes import REPORT_IDENTITY_PATTERN
-from .todo_source import read_report_todo_source
 from ...registry import (
     atomic_write_json,
     find_registry_goal,
@@ -36,11 +35,6 @@ from .request_action import (
     periodic_report_request_intents,
     request_entry_for_intent,
     settle_periodic_report_request,
-)
-from .project_progress_snapshot import build_project_progress_snapshot
-from .incremental import (
-    build_periodic_report_publication_candidate,
-    write_periodic_report_publication_candidate,
 )
 from .machine_defaults import (
     build_periodic_report_delivery_authority,
@@ -175,6 +169,8 @@ def _superseding_approval_revision(
     approval_scope = str(receipt.get("approval_scope") or "")
     if receipt.get("status") != "approval_pending" or not approval_scope:
         return None
+    from .todo_source import read_report_todo_source
+
     _, items = read_report_todo_source(
         registry_path=registry_path, goal_id=goal_id, runtime_root=runtime_root
     )
@@ -513,6 +509,8 @@ def _progress_facts(
     available_capabilities: Any = None,
     allow_empty: bool = False,
 ) -> list[dict[str, Any]]:
+    from .project_progress_snapshot import build_project_progress_snapshot
+
     from ...control_plane.todos.todo_index import (
         MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
     )
@@ -1316,6 +1314,11 @@ def _consume_pending_periodic_report_intent(
     }
     if not execute:
         return result
+
+    from .incremental import (
+        build_periodic_report_publication_candidate,
+        write_periodic_report_publication_candidate,
+    )
 
     receipt_path = _receipt_path(
         runtime_root,

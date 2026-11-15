@@ -325,16 +325,17 @@ export const typedActionsScenario = {
       }
       const writesBeforeSelection = api.durableWriteCount;
       await drawer.getByRole("button", { name: /Workspace 1/ }).click();
-      const confirmCreatedGoal = drawer.getByRole("button", { name: "创建 Goal", exact: true });
-      await confirmCreatedGoal.waitFor({ state: "visible" });
+      const create = drawer.getByRole("button", { name: "创建 Goal", exact: true });
+      await create.waitFor({ state: "visible" });
       const regenerated = api.actionPreviews.at(-1);
       if (regenerated?.normalized_parameters.workspace_ref !== "workspace-fixture") {
         throw new Error(`Stored workspace selection did not regenerate the Goal preview: ${JSON.stringify(regenerated)}`);
       }
-      assert.equal(regenerated.normalized_parameters.start_execution, undefined,
-        "Choosing a workspace for a saved create-only proposal must not add an execution request");
+      if (regenerated.normalized_parameters.start_execution !== storedWorkspaceGate.normalized_parameters.start_execution) {
+        throw new Error("Workspace selection changed the saved execution intent");
+      }
       if (api.durableWriteCount !== writesBeforeSelection) throw new Error("Selecting a workspace applied without confirmation");
-      await confirmCreatedGoal.click();
+      await create.click();
       await page.getByText("已应用，LoopX 状态将刷新。", { exact: true }).waitFor({ state: "visible" });
       if (!api.actionApplies.includes(regenerated.proposalId)) throw new Error("Confirmation did not apply the regenerated preview");
       if (api.durableWriteCount !== writesBeforeSelection + 1) throw new Error("Confirmation did not write exactly one Goal");

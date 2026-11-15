@@ -6,8 +6,8 @@
 <meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="en_US"><meta property="og:title" content="An Agent needs a way to look things up, too"><meta property="og:description" content="One voice task, from choosing facts to fitting the first read, preserving exact values, and recovering without replaying work."><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../blog.css">
 </head><body><a class="skip-link" href="#main">Skip to content</a>
 <header class="site-header"><a class="brand" href="../../"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="Main navigation"><a href="../">Blog</a><a href="../../docs/book/">Docs</a></nav><div class="header-actions"><a class="language" href="../zh/context-delivery/" lang="zh-CN" hreflang="zh-CN">中文</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
-<main id="main"><div class="article-heading"><a class="back" href="../">← All articles</a><p class="eyebrow">Context delivery</p><h1>An Agent needs a way to look things up, too</h1><p class="lead">Read necessary facts first, reuse verified structures within a compaction cycle, and recover the complete baseline when continuity is lost.</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">November 1, 2026</time><span>·</span><span>Updated November 12</span></div></div>
-<div class="article-layout"><aside class="toc"><details><summary>On this page</summary><nav aria-label="On this page"><a href="#four-stage-cascade">Four mechanisms and their baselines</a><a href="#multitask-context-byte-ratios">8-task single-layer vs stacked</a><a href="#ablation-evidence">Multi-task and layered ablation</a><a href="#example">Follow one task: give an assistant voice input</a><a href="#known-paths">When you know the locations, read them together</a><a href="#discover">When the structure is unfamiliar, index the relevant subtree</a><a href="#requirements">See requirements first, then open their evidence</a><a href="#stage-scopes">Read scope before choosing</a><a href="#sharing">Share exact records within one delivery</a><a href="#cycle">On the next continuation, deliver what changed</a><a href="#native-path">When enabled, the default output is a reading entrypoint</a><a href="#first-read-budget">The first response has to arrive complete</a><a href="#transport-cost">Count the trips and the copies</a><a href="#recovery">Recover missing context while preserving the original work</a><a href="#evidence">What the measurements establish</a><a href="#reproduce">Read the same material yourself</a></nav></details></aside><article class="prose"><p>Long-running work accumulates material: the original goal, later constraints, attempted routes, failed experiments and current progress. Sending everything again on each continuation repeats more and more content; keeping only a summary can make the original basis of a decision difficult to recover.</p>
+<main id="main"><div class="article-heading"><a class="back" href="../">← All articles</a><p class="eyebrow">Context delivery</p><h1>An Agent needs a way to look things up, too</h1><p class="lead">Read necessary facts first, reuse verified structures within a compaction cycle, and recover the complete baseline when continuity is lost.</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">November 1, 2026</time><span>·</span><span>Updated November 14</span></div></div>
+<div class="article-layout"><aside class="toc"><details><summary>On this page</summary><nav aria-label="On this page"><a href="#four-stage-cascade">Four mechanisms and their baselines</a><a href="#multitask-context-byte-ratios">8-task single-layer vs stacked</a><a href="#context-on-vs-off-scores">10-task scores: Context ON vs OFF</a><a href="#ablation-evidence">Multi-task and layered ablation</a><a href="#example">Follow one task: give an assistant voice input</a><a href="#known-paths">When you know the locations, read them together</a><a href="#discover">When the structure is unfamiliar, index the relevant subtree</a><a href="#requirements">See requirements first, then open their evidence</a><a href="#stage-scopes">Read scope before choosing</a><a href="#sharing">Share exact records within one delivery</a><a href="#cycle">On the next continuation, deliver what changed</a><a href="#native-path">When enabled, the default output is a reading entrypoint</a><a href="#first-read-budget">The first response has to arrive complete</a><a href="#transport-cost">Count the trips and the copies</a><a href="#recovery">Recover missing context while preserving the original work</a><a href="#evidence">What the measurements establish</a><a href="#reproduce">Read the same material yourself</a></nav></details></aside><article class="prose"><p>Long-running work accumulates material: the original goal, later constraints, attempted routes, failed experiments and current progress. Sending everything again on each continuation repeats more and more content; keeping only a summary can make the original basis of a decision difficult to recover.</p>
 <p>Selective JSON Pointer lookup by itself is straightforward—it folds long-tail history not needed for the immediate decision. The core mechanism in LoopX's context delivery is <strong>compaction-cycle-bounded structured delta context</strong>: complete sources are saved first, unchanged typed subtrees are reused exactly against a verified baseline within the active <code>context_epoch</code>, and any host compaction or digest mismatch atomically resets to a fresh complete baseline rather than chaining dangling deltas.</p>
 <h2 id="results">Evidence: separate context comparisons, cycle deltas and task ablation</h2>
 <h3 id="four-stage-cascade">Four mechanisms, with separate measurement baselines</h3>
@@ -111,6 +111,101 @@
 </details>
 
 <p class="muted">Basis and source: the published eight task rows sum to 7,285,951 B / 22,408,690 B = 32.5% for Progressive across all 213 wakes. Delta and first-screen shares of approximately 35.8% and 3.0% / 5.0% cover only the 112 in-cycle wakes. Their Full denominator was published rounded as 12.53 MB; it is not the 213-wake total. This is an aggregate recalculation, not a new experiment or an independent audit of per-wake logs. <a href="../data/long-horizon-audit.json">Public aggregate data and provenance</a>.</p><p>Implementation status: <a href="https://github.com/loopx-project/loopx/pull/8266">#8266</a> remains an open C1 proposal. The final merged scope of <a href="https://github.com/loopx-project/loopx/pull/8304">#8304</a> preserves precision while reusing ordering and a verified digest. These cohort bytes do not establish a shipped unified Controller/Worker gain.</p>
+<h3 id="context-on-vs-off-scores">Ten-task controlled comparison: Context ON vs Context OFF under fixed Explore + Stride</h3>
+<p>Cutting packet bytes only matters if long-horizon task performance holds up or improves. From the <strong>EdgeBench 10-task evaluation (2026-11-12 22:40 CST snapshot)</strong>, we isolate the controlled two-arm contrast holding the same <code>Explore + Stride</code> harness fixed: <code>Explore + context-on</code> (progressive reading + compaction-cycle structured delta enabled) vs <code>Explore + context-off</code> (both disabled), testing only what switching Context Delivery on vs off changes within that chassis.</p>
+<ul>
+<li><strong>Ten-task tally (7 ahead or slight edge vs 3 OFF ahead):</strong> under fixed <code>Explore + Stride</code>, enabling Context Delivery puts <code>Explore + context-on</code> ahead of or slightly ahead of <code>context-off</code> on <strong>7 of 10 tasks</strong>—including <strong>Borden</strong> (<code>80 vs 45</code>, +77.8%), <strong>ANN</strong> (<code>7,159 vs 3,746 QPS</code>, +91.1%), and <strong>Grid</strong> (<code>2,197 vs 2,311</code> cost, −114)—while explicitly preserving all 3 counterexamples where <code>context-off</code> scores higher.</li>
+<li><strong>Strictly duration-matched ~18h pairs (4 tasks within the 15-minute tolerance):</strong> 3 wins to 1—<strong>Borden</strong> rises from <code>45</code> to <strong><code>80</code> (+35 pts / +77.8%)</strong>; <strong>Grid</strong> total cost (lower is better) improves from <code>2,311</code> to <strong><code>2,197</code> (−114 / −4.9%, +2.35 normalized pts)</strong>; <strong>Rust</strong> (both <code>17h57m</code>) shows a slight native edge for <code>context-on</code> (<strong><code>27.1801 vs 27.1757</code></strong>); the matched 18h counterexample is <strong>Portfolio</strong> (both <code>18h00m</code>, <code>13.62 vs 39.44</code>, OFF wins).</li>
+<li><strong>Historical Stride slice &amp; incomplete-duration pairs (6 tasks, runtimes stated explicitly):</strong> using the matching Stride pair from the historical seven-arm ANN cohort, <code>context-on</code> reaches <strong><code>7,159 QPS</code></strong> vs <code>context-off</code> <strong><code>3,746 QPS</code> (+91.1%, +33.51 normalized pts)</strong>; <strong>FFmpeg</strong> reaches <code>2.7086 vs 1.9929</code> (+35.9%, OFF stopped early pending rerun); <strong>VLIW</strong> cycles (lower is better) improve to <code>1,042 vs 1,097</code> (−55 cycles / −5.0%, OFF historical 14h45m); <strong>Ad</strong> reaches <code>49.67B vs 49.63B</code> (ON 18h00m vs OFF 8h47m host-startup hang). The two remaining counterexamples are <strong>Codec</strong> (ON full 18h00m <code>68.89</code> vs OFF <code>70.79</code> in 12h38m despite a model-service block) and <strong>OpenTTD</strong> (both Explore arms &lt;18h, ON <code>30,266,729</code> vs OFF <code>33,090,430</code>).</li>
+</ul>
+<p class="muted">Reconciling two figures with the ablation section below: (1) this section's <strong>ANN</strong> pair (<code>3,746 vs 7,159 QPS</code>) comes from the two <em>Stride-enabled</em> Explore arms in the seven-arm cohort (<code>Explore + Stride + context-off / on</code>); <a href="#ablation-evidence">#ablation-evidence</a> separately lists the <em>without-Stride</em> Explore baseline (<code>Explore · Context off 5,766</code> and <code>Explore · Context on 6,020</code>) from that study, so the two tables describe distinct arm pairs. (2) <strong>Grid</strong> here (<code>2,197 vs 2,311</code>) reports the completed ~18h pair within 15-minute tolerance (with <code>context-on</code> via same-session continuation), whereas #ablation-evidence retains the earlier unmatched-duration “Historical Grid” counterexample (Off 2054 &lt; On+Stride 2088) for historical continuity.</p>
+<figure class="diagram"><p class="diagram-label">EdgeBench 10-task controlled score comparison (fixed Explore + Stride: Context ON vs OFF)</p><a href="../images/context-delivery/stride-context-on-vs-off-en.svg" target="_blank" rel="noopener" aria-label="Open the 10-task controlled Context ON vs OFF score chart at full size"><img src="../images/context-delivery/stride-context-on-vs-off-en.svg" alt="EdgeBench 10-task controlled Explore + Stride Context ON vs OFF scores: 7 tasks ahead or slight edge (ANN +91.1%, Borden +77.8%, Grid −114), retaining Portfolio, Codec, and OpenTTD counterexamples" width="1460" height="780" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>A: Nine tasks with normalized EdgeBench scores (/100, direction-normalized so higher is better), ordered by <code>ON − OFF</code> delta, showing arm runtime status. B: Native-point summary including task #10 <strong>Borden</strong> (no /100 scale, matched ~18h: 80 vs 45), key native deltas, and counterexample disclosures.</figcaption></figure>
+<details><summary>Expand the 10-task controlled score and runtime table</summary>
+<div class="table-scroll" role="region" tabindex="0" aria-label="EdgeBench 10-task controlled Explore + context-on vs context-off score table"><table style="min-width:860px">
+<thead>
+<tr>
+<th>Task (metric &amp; direction)</th>
+<th>Duration parity</th>
+<th style="text-align:right">Explore + context-on<br><span class="muted" style="font-weight:400">Native (/100 · duration · valid)</span></th>
+<th style="text-align:right">Explore + context-off<br><span class="muted" style="font-weight:400">Native (/100 · duration · valid)</span></th>
+<th style="text-align:right">ON vs OFF delta</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Borden</strong> (score ↑)</td>
+<td>Matched ~18h</td>
+<td style="text-align:right"><strong>80</strong> (— · 18h02m · 17 valid)</td>
+<td style="text-align:right">45 (— · 17h59m · 17 valid)</td>
+<td style="text-align:right"><strong>+35 (+77.8%)</strong></td>
+</tr>
+<tr>
+<td><strong>Grid</strong> (total cost ↓)</td>
+<td>Matched ~18h</td>
+<td style="text-align:right"><strong>2,197</strong> (67.20 · 17h57m · 17 valid)</td>
+<td style="text-align:right">2,311 (64.85 · 17h59m · 13 valid)</td>
+<td style="text-align:right"><strong>−114 (−4.9%, +2.35 pts)</strong></td>
+</tr>
+<tr>
+<td><strong>Rust</strong> (score ↑)</td>
+<td>Matched ~18h</td>
+<td style="text-align:right"><strong>27.1801</strong> (27.18 · 17h57m · 10 valid)</td>
+<td style="text-align:right">27.1757 (27.18 · 17h57m · 10 valid)</td>
+<td style="text-align:right"><strong>+0.0044 (tied / slight edge)</strong></td>
+</tr>
+<tr>
+<td><strong>Portfolio</strong> (score / 100 ↑)</td>
+<td>Matched 18h <strong>counterex.</strong></td>
+<td style="text-align:right">13.62 (13.62 · 18h00m · 17 valid)</td>
+<td style="text-align:right"><strong>39.44</strong> (39.44 · 18h00m · 17 valid)</td>
+<td style="text-align:right">−25.82 pts (OFF wins)</td>
+</tr>
+<tr>
+<td><strong>ANN</strong> (QPS ↑)</td>
+<td>7-arm Stride cohort</td>
+<td style="text-align:right"><strong>7,159</strong> (43.17 · 6 valid)</td>
+<td style="text-align:right">3,746 (9.66 · 4 valid)</td>
+<td style="text-align:right"><strong>+3,413 (+91.1%, +33.51 pts)</strong></td>
+</tr>
+<tr>
+<td><strong>FFmpeg</strong> (score ↑)</td>
+<td>OFF early stop</td>
+<td style="text-align:right"><strong>2.7086</strong> (16.17 · 18h01m · 16 valid)</td>
+<td style="text-align:right">1.9929 (11.19 · early stop · 6 valid)</td>
+<td style="text-align:right"><strong>+0.7157 (+35.9%, +4.98 pts)</strong></td>
+</tr>
+<tr>
+<td><strong>VLIW</strong> (cycles ↓)</td>
+<td>OFF 14h45m hist.</td>
+<td style="text-align:right"><strong>1,042</strong> (97.25 · 17h57m · 14 valid)</td>
+<td style="text-align:right">1,097 (93.82 · 14h45m · 12 valid)</td>
+<td style="text-align:right"><strong>−55 cycles (−5.0%, +3.43 pts)</strong></td>
+</tr>
+<tr>
+<td><strong>Ad</strong> (total score ↑)</td>
+<td>OFF 8h47m hang</td>
+<td style="text-align:right"><strong>49,673,040,827</strong> (79.30 · 18h00m · 16 valid)</td>
+<td style="text-align:right">49,631,904,944 (78.33 · 8h47m · 7 valid)</td>
+<td style="text-align:right"><strong>+41.14M (+0.97 pts)</strong></td>
+</tr>
+<tr>
+<td><strong>Codec</strong> (score ↑)</td>
+<td>OFF 12h38m <strong>counterex.</strong></td>
+<td style="text-align:right">68.89 (68.89 · 18h00m · 13 valid)</td>
+<td style="text-align:right"><strong>70.79</strong> (70.79 · 12h38m · 11 valid)</td>
+<td style="text-align:right">−1.90 pts (OFF wins)</td>
+</tr>
+<tr>
+<td><strong>OpenTTD</strong> (score ↑)</td>
+<td>Both &lt;18h <strong>counterex.</strong></td>
+<td style="text-align:right">30,266,729 (62.02 · 10h47m · 10 valid)</td>
+<td style="text-align:right"><strong>33,090,430</strong> (62.99 · early stop · 7 valid)</td>
+<td style="text-align:right">−2.82M (−0.97 pts, OFF wins)</td>
+</tr>
+</tbody>
+</table></div>
+</details>
+<p class="muted">Measurement and scope boundary: these are C1 mixed-cohort exploratory observations (active solver duration accumulated after excluding downtime). This section holds <code>Explore + Stride</code> constant solely to examine the directional effect of toggling context delivery (<code>Context ON</code> vs <code>Context OFF</code>) within the harness; because resumed sessions and incomplete durations remain, it does not establish an isolated C2 causal proof. Whole-system iso-budget Pareto comparisons against zero-overhead external baselines belong to a separate question addressed in Layer 2 of <a href="../edgebench-feedback-and-memory/">EdgeBench feedback and memory</a>. Structured records live in <a href="../data/long-horizon-audit.json">public aggregate data</a>.</p>
 <h3 id="ablation-evidence">Multi-task and layered ablation: benefit chain and boundary counterexamples</h3>
 <p>In <strong>EdgeBench ANN vector search optimization (<code>gpt-6.1-sol / xhigh</code>, 18h, subject to <code>Recall@10 ≥ 0.95</code>)</strong> and cross-task ablations, we separate <code>Context Delivery</code> (progressive selection and cycle deltas) from <code>Stride</code> (evidence-conditioned experiment sizing), auditing selected control-packet bytes, main-session model input tokens, and local/early-window counterexamples side by side (reconciled from archived trajectories and receipts by <code>@shangzh0</code>):</p>
 <figure class="diagram"><p class="diagram-label">Multi-task ablation and layered accounting</p><a href="../images/context-delivery/context-delivery-ablation-en.svg" target="_blank" rel="noopener" aria-label="Open the Context Delivery and Stride ablation chart at full size"><img src="../images/context-delivery/context-delivery-ablation-en.svg" alt="Progressive Context Delivery and Stride Ablation: ANN 18h Peak QPS Progression and Layered Token/Byte Savings vs Boundary Counterexamples" width="1180" height="860" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>Top (A): ANN 18h six-arm peak valid throughput QPS (<code>Recall@10 ≥ 0.95</code>). Bottom (B): Layered control-packet byte and main-session input token savings vs <code>Context off</code> (left, negative) alongside disclosed local/early-window overhead and cross-task counterexamples (right, positive). Open image for full size.</figcaption></figure>
