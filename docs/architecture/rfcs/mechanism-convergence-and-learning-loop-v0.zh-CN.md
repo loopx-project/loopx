@@ -265,6 +265,8 @@ Vision packet 中保留已有内联 `explore_result`，由原 Explore owner 解�
 File/SQLite [公开 Turn 检查](../../../tests/control_plane/test_explore_settlement_attachment.py)
 覆盖独立验证的产物、关闭/省略及非法输入、已提交重放，以及从原 Run 恢复中断的交付。
 恢复保持原 Run 不变、Host 调用一次，且仅在请求的交付完成后扣额一次。
+覆盖最后一个 Todo 及带后继的完成路径；完成 Todo 前先执行原附件预检。
+被该预检拒绝的非法或未启用输入使 Todo 保持 open，且不产生主写回或扣额。
 这些检查取得调用边界资格；native 模型采用、完整预算收益、其他后端资格及在途
 执行提案的集成仍开放。
 

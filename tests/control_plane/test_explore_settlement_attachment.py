@@ -133,23 +133,42 @@ def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path,
     assert any(h.get("capability_id") == "explore" for h in hooks) == (mode != "off")
 
 
+def _write_attachment_turn_fixture(tmp_path, provider, kind):
+    from tests.test_loopx_turn_driver import _write_live_fixture
+
+    extra = {}
+    if kind == "terminal":
+        extra = {"todo_metadata_extra": "no_followup=true"}
+    elif kind == "successor":
+        extra = {
+            "todo_metadata_extra": "successor_todo_ids=todo_fixture0002",
+            "extra_agent_todo_lines": (
+                "- [ ] [P2] Continue the public fixture.",
+                "  <!-- loopx:todo todo_id=todo_fixture0002 status=open task_class=advancement_task priority=P2 -->",
+            ),
+        }
+    return _write_live_fixture(tmp_path, provider=provider, **extra)
+
+
+@pytest.mark.parametrize("kind", ["progress", "completion", "terminal", "successor"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("mode,attachment", [("evidence", "valid"), ("off", "omitted"),
                                            ("off", "valid"), ("evidence", "invalid")])
-def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mode, attachment):
+def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mode, attachment, kind):
     import hashlib
     import subprocess
     import sys
     from tests.control_plane.test_quota_settlement_cli import _spend_run_count
     from loopx.configure_goal import configure_goal
+    from loopx.control_plane.todos.list_readback import list_goal_todos
     from loopx.capabilities.explore.result_log import (
         build_explore_result_projection, load_explore_result_events_strict,
     )
     from tests.test_loopx_turn_driver import (
-        _write_live_fixture, _completion_host_and_validation_scripts, _turn_run_once_completion_argv,
+        _completion_host_and_validation_scripts, _turn_run_once_completion_argv,
     )
 
-    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    project, runtime, registry = _write_attachment_turn_fixture(tmp_path, provider, kind)
     configure_goal(registry_path=registry, goal_id="loopx-turn-fixture", execute=True, explore_mode=mode)
     workspace = project / "host-workspace"
     workspace.mkdir()
@@ -183,7 +202,8 @@ def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mo
         if attachment == "invalid":
             vision["explore_result"]["input_revision"] = ""
     host, validator = _completion_host_and_validation_scripts()
-    host = host.replace('"result_kind": "validated_completion"', '"result_kind": "validated_progress"')
+    if kind == "progress":
+        host = host.replace('"result_kind": "validated_completion"', '"result_kind": "validated_progress"')
     host = host.replace('"vision_unchanged_reason": "The active goal may have further work.",',
         '"vision_unchanged_reason": "", "path_delta_mode": "unchanged",\n'
         f'    "agent_vision_json": {json.dumps(vision)!r},\n'
@@ -200,10 +220,15 @@ def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mo
                             capture_output=True, text=True, timeout=120)
     packet = json.loads(result.stdout)
     log = explore_result_log_path(runtime, "loopx-turn-fixture")
+    todo = list_goal_todos(
+        registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="loopx-turn-fixture", todo_id="todo_fixture0001",
+    )["todo"]
     if attachment == "invalid" or mode == "off" and attachment != "omitted":
         assert result.returncode != 0, packet
         assert isinstance(packet.get("error"), str) and packet["error"]
         assert state.read_bytes() == before_state
+        assert todo["status"] == "open" and todo["claimed_by"] == "codex-fixture"
         assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 0
         runs = runtime / "goals/loopx-turn-fixture/runs"
         assert not any(json.loads(path.read_text()).get("classification") == "fixture_completion"
@@ -212,6 +237,7 @@ def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mo
         return
     assert result.returncode == 0, result.stdout + result.stderr
     assert packet["status"] == "committed" and packet["quota_slot_spend_count"] == 1
+    assert todo["status"] == ("open" if kind == "progress" else "done")
     if attachment == "omitted":
         assert not log.exists()
         return
@@ -230,23 +256,25 @@ def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mo
     assert not any(recovered["effects"].values()) and log.read_bytes() == before
 
 
+@pytest.mark.parametrize("kind", ["progress", "completion", "terminal", "successor"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatch, provider):
+def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatch, provider, kind):
     import contextlib
     import io
     import sys
     from loopx.cli import main
     from loopx.configure_goal import configure_goal
+    from loopx.control_plane.todos.list_readback import list_goal_todos
     from loopx.capabilities.explore import result_writeback
     from loopx.capabilities.explore.result_log import (
         build_explore_result_projection, load_explore_result_events_strict,
     )
     from tests.control_plane.test_quota_settlement_cli import _spend_run_count
     from tests.test_loopx_turn_driver import (
-        _write_live_fixture, _completion_host_and_validation_scripts, _turn_run_once_completion_argv,
+        _completion_host_and_validation_scripts, _turn_run_once_completion_argv,
     )
 
-    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    project, runtime, registry = _write_attachment_turn_fixture(tmp_path, provider, kind)
     configure_goal(registry_path=registry, goal_id="loopx-turn-fixture", execute=True, explore_mode="evidence")
     workspace = project / "host-workspace"
     workspace.mkdir()
@@ -265,7 +293,8 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
                            "status": "confirmed", "evidence_refs": ["result:original-attachment"]},
     }
     host, validator = _completion_host_and_validation_scripts()
-    host = host.replace('"result_kind": "validated_completion"', '"result_kind": "validated_progress"')
+    if kind == "progress":
+        host = host.replace('"result_kind": "validated_completion"', '"result_kind": "validated_progress"')
     host = host.replace('request = json.load(sys.stdin)',
         'request = json.load(sys.stdin)\n'
         'counter = pathlib.Path("host-count.txt")\n'
@@ -310,6 +339,11 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
     assert (workspace / "host-count.txt").read_text() == "1"
     assert original.read_bytes() == original_bytes
     assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
+    todo = list_goal_todos(
+        registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="loopx-turn-fixture", todo_id="todo_fixture0001",
+    )["todo"]
+    assert todo["status"] == ("open" if kind == "progress" else "done")
     log = explore_result_log_path(runtime, "loopx-turn-fixture")
     events = load_explore_result_events_strict(log, goal_id="loopx-turn-fixture")
     findings = build_explore_result_projection(events, goal_id="loopx-turn-fixture")["findings"]

@@ -207,7 +207,10 @@ then uses the original attachment parser and delivery owner. A failed delivery
 leaves quota unspent and recovers from the original Run on the same Turn;
 completed replay repeats neither Host work, finding ingestion nor quota spend.
 Off mode with an omitted attachment creates no finding; supplied invalid or
-disabled attachments reject before primary writeback.
+disabled attachments reject before Todo completion and primary writeback. The
+completion path uses the same capability preflight before lifecycle effects;
+the primary writer still checks it again at commit. An omitted attachment adds
+no capability preflight, and recovery retains already committed completion.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use

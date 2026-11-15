@@ -271,7 +271,9 @@ and delegates parsing and delivery to the original Explore owner. File/SQLite
 cover independently validated artifacts, off/omitted and rejected inputs,
 committed replay, and interrupted delivery recovered from the original Run.
 Recovery preserves that Run, invokes the Host once, and debits once only after
-the requested delivery finishes. These checks qualify the caller boundary;
+the requested delivery finishes. Terminal and successor completion are covered;
+the original attachment preflight runs before completing a Todo. Inputs rejected
+by that preflight leave it open without primary writeback or debit. These checks qualify the caller boundary;
 native model adoption, complete-budget benefit, other backend qualification
 and integration of the in-flight execution proposals remain open.
 

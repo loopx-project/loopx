@@ -247,6 +247,20 @@ def execute_turn_run_once(
                 refresh["error"] = "Primary writeback committed; retry this original Turn to deliver Explore evidence"
             return refresh
 
+        def split_candidate_vision(
+            result: dict[str, object],
+        ) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+            return split_explore_result_input(
+                dict(result["agent_vision"]) if isinstance(result.get("agent_vision"), dict) else None,
+                None,
+                scope_context=dict(
+                    registry_path=registry_path, runtime_root_override=str(runtime_root),
+                    goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                    todo_id=settlement_identity.todo_id,
+                    turn_instance_id=settlement_identity.turn_instance_id,
+                ),
+            )
+
         def refresh_candidate(
             result: dict[str, object],
             *,
@@ -266,16 +280,7 @@ def execute_turn_run_once(
             # Diagnostics already live in the journal's typed host_result.
             # Do not overwrite task context before refresh can reject a result.
             progress_observation = result.get("progress_observation")
-            vision, explore_result = split_explore_result_input(
-                dict(result["agent_vision"]) if isinstance(result.get("agent_vision"), dict) else None,
-                None,
-                scope_context=dict(
-                    registry_path=registry_path, runtime_root_override=str(runtime_root),
-                    goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
-                    todo_id=settlement_identity.todo_id,
-                    turn_instance_id=settlement_identity.turn_instance_id,
-                ),
-            )
+            vision, explore_result = split_candidate_vision(result)
             return refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
@@ -463,6 +468,19 @@ def execute_turn_run_once(
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
             prior = completion_readback()
             if prior is None:
+                # A rejected attachment must not leave the Todo completed.
+                # The primary writer still rechecks the same capability owner
+                # before commit; this preview authorizes no later effects.
+                _, attachment = split_candidate_vision(result)
+                if attachment is not None:
+                    from ..capabilities.explore.result_writeback import prepare_result_attachment
+
+                    prepare_result_attachment(
+                        attachment, registry_path=registry_path, runtime_root=runtime_root,
+                        goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                        todo_id=settlement_identity.todo_id,
+                        turn_instance_id=settlement_identity.turn_instance_id,
+                    )
                 completion = todo_completion(result, effect_ref=effect_ref)
             else:
                 # Completion may have atomically retired the execution lease
