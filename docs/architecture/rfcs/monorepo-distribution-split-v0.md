@@ -4425,3 +4425,29 @@ view shows its independently checked result in the same conversation.
   or execute/replay imports. It reuses C1's existing composition and owners;
   complete D2/D5 closure, actual-model adoption, comparable full costs, R1/M3,
   C1 cutover and full original-goal regression remain open.
+
+### 2026-11-15 — Defer fresh decisions and report production on Turn reads
+
+- **Gap:** journal inspection imported the fresh Turn decision owner, while
+  pending-report inspection imported progress snapshots and publication helpers
+  before those operations were selected.
+- **Delta:** retain the existing decision and report owners, loading them at
+  their actual call sites. Approval retries still read the original Todo source;
+  publication imports occur only on execution, before any report artifact write.
+  Report admission, subscription checks, recovery and public exports retain
+  their existing contracts. No new dispatcher, state vocabulary or decision
+  owner is introduced.
+- **Evidence:** fresh source-checkout CLI processes on `main@c5ff8fdc32b6`,
+  running the existing Core workload on File and SQLite with `checkpoint=None`,
+  reduce execution imports from 515 to
+  512, replay from 432 to 429, and journal inspection from 363 to 211 LoopX
+  modules. Execution RPC counts remain 223 for File and 222 for SQLite; replay
+  remains 12 and inspection remains one. Replay still loads the original Turn
+  decision module. These are measured loading deltas, not a total latency or
+  complete-cost improvement or standalone/split-package qualification.
+- **Composition and boundary:** the slice composes with C1 #8266 at
+  `638b7e3c23f0` through its existing complete-source, selected-work, admission,
+  context and settlement owners. Installed package size, model adoption,
+  complete D2/D5 closure, comparable full costs, R1/M3 and C1 cutover remain
+  unqualified. Preserve prior failures and the original ten requirements; full
+  original-goal regression still precedes completion and EdgeBench preparation.
