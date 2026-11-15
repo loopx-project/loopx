@@ -1,5 +1,6 @@
 """Reviewed App creates must retain their revision through the actual write."""
 import json
+from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection
 from threading import Thread
 
@@ -63,6 +64,7 @@ def test_http_create_uses_goal_runtime(tmp_path, monkeypatch, provider, route, k
         return response.status, json.loads(response.read())
 
     text = "Review the project index"
+    after_interrupted_create = None
     try:
         if kind == "todo-review":
             intent = {"goal_id": "goal-a", "text": text}
@@ -111,11 +113,48 @@ def test_http_create_uses_goal_runtime(tmp_path, monkeypatch, provider, route, k
 
         assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
         assert text not in state.read_text()
+        if kind == "monitor.create" and route == "registered":
+            original_registration = registry.read_text()
+
+            def retarget_at_write(**kwargs):
+                changed = json.loads(original_registration)
+                changed["common_runtime_root"] = str(decoy_root)
+                registry.write_text(json.dumps(changed))
+                return add_goal_todo(**kwargs)
+
+            with monkeypatch.context() as fault:
+                fault.setattr("loopx.chat_actions.add_goal_todo", retarget_at_write)
+                code, refused = request("POST", apply_path, confirmation)
+            assert code == 409 and refused["proposal"]["status"] == "stale", refused
+            assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+            assert read_canonical_todos_if_promoted(runtime_root=decoy_root, goal_id="goal-a") == decoy
+            registry.write_text(original_registration)
+            code, preview = request("POST", f"{action_path}/regenerate", {})
+            assert code == 201, preview
+            apply_path = f"/api/actions/{preview['proposal']['proposal_id']}/apply"
+
+            def interrupt_after_create(*args, **kwargs):
+                raise OSError("Interrupted after the reviewed Monitor was created")
+
+            monitor_time = datetime.now(timezone.utc).replace(microsecond=0)
+            monkeypatch.setattr("loopx.chat_actions.now_utc", lambda: monitor_time)
+            monkeypatch.setattr("loopx.control_plane.todos.provider_create.now_local", lambda: monitor_time.isoformat())
+            with monkeypatch.context() as fault:
+                fault.setattr(store, "apply", interrupt_after_create)
+                code, interrupted = request("POST", apply_path, confirmation)
+            assert code == 424 and interrupted["error_code"] == "canonical_action_failed", interrupted
+            after_interrupted_create = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+            assert int(after_interrupted_create["cursor"]) == int(before["cursor"]) + 1
+            created, = after_interrupted_create["todos"]
+            assert datetime.fromisoformat(created["next_due_at"]) == monitor_time + timedelta(hours=2)
+            monitor_time += timedelta(minutes=1)
         code, applied = request("POST", apply_path, confirmation)
         assert code == 200, applied
         receipt = applied["receipt"] if kind == "todo-review" else applied["proposal"]["receipt"]
         todo_id = receipt["todo_id"] if kind == "todo-review" else receipt["resource_ids"]["todo_id"]
         saved = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+        if after_interrupted_create is not None:
+            assert saved == after_interrupted_create
         assert len(saved["todos"]) == 1
         todo = saved["todos"][0]
         assert todo["todo_id"] == todo_id and text in todo["text"]
@@ -223,8 +262,11 @@ def test_changed_intent_cannot_apply_another_preview(tmp_path, monkeypatch, prov
 @pytest.mark.parametrize("change", [
     "same", "directory", "runtime", "registration", "store", "unrelated_todo",
     "edited_todo", "lost_assignment_checkpoint", "directory_during_assignment",
+    "legacy_same", "legacy_runtime", "legacy_unrelated_todo", "legacy_edited_todo",
 ])
 def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypatch, provider, change):
+    legacy = change.startswith("legacy_")
+    change = change.removeprefix("legacy_")
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     goal_id = "goal-a"
     original_registry, original_root, _ = promoted_create_fixture(tmp_path / "original", provider=provider)
@@ -255,6 +297,9 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
     checkpoint = store.save_checkpoint
 
     def write_checkpoint(proposal_id, *, step, receipt):
+        if legacy and step == "todo_created":
+            # The older action store retained the exact create receipt and Todo id.
+            receipt = {key: receipt[key] for key in ("todo_id", "canonical_receipt")}
         saved = checkpoint(proposal_id, step=step, receipt=receipt)
         if step == "todo_created":
             raise OSError("Interrupted after creating the Todo and before assigning it")
@@ -315,7 +360,12 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
             replacement_root.rename(original_root)
         if change in {"directory", "runtime", "registration", "store"}:
             code, denied = post(path, {})
-            assert code == 400 and "receipt" not in denied, denied
+            if legacy:
+                assert code == 409 and denied["error_code"] == "protected_action", denied
+                assert denied["proposal"]["checkpoint"]["steps"]["todo_created"] == created
+                assert todo_id in denied["gate"]["summary"]
+            else:
+                assert code == 400 and "receipt" not in denied, denied
             if change == "store":
                 assert read(original_root) == replacement
                 original_root.rename(replacement_root)
@@ -346,8 +396,12 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
                 agent_id="agent-a", text="A different assignment")
             edited = read(original_root)
             code, denied = post(path, {})
-            assert code == 400 and "receipt" not in denied, denied
-            assert "original receipt" in str(denied)
+            if legacy:
+                assert code == 409 and denied["error_code"] == "protected_action", denied
+                assert denied["proposal"]["checkpoint"]["steps"]["todo_created"] == created
+            else:
+                assert code == 400 and "receipt" not in denied, denied
+                assert "original receipt" in str(denied)
             assert read(original_root) == edited and read(replacement_root) == replacement
             return
         if change in {"unrelated_todo", "lost_assignment_checkpoint"}:

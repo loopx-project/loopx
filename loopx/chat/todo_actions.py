@@ -37,7 +37,7 @@ class ChatTodoActionMixin:
     def _apply_todo_create(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any],
     ) -> dict[str, Any]:
-        from ..chat_actions import _opaque
+        from ..chat_actions import ProtectedActionGate, _opaque
 
         goal_id = str(parameters["goal_id"])
         source = resolve_chat_todo_source(self, goal_id)
@@ -53,12 +53,27 @@ class ChatTodoActionMixin:
             if not isinstance(canonical_receipt, dict):
                 raise ValueError("Todo creation checkpoint is malformed")
             binding = todo_step.get("source")
-            if not isinstance(binding, dict):
-                raise ValueError("The created Task predates source binding. Recover the original Todo before assigning it.")
-            source.require_review(binding)
             current_fingerprint = str(
                 proposal.get("expected_state_fingerprint") or ""
             )
+            if binding is None:
+                if agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
+                    raise ValueError("the selected Agent is no longer registered for this Goal")
+                try:
+                    authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
+                    binding = source.recover_legacy_creation(
+                        todo_id=todo_id, preview_id=current_fingerprint, receipt=canonical_receipt, authority=authority,
+                    )
+                except (ChatTodoSourceChanged, LocalCoordinationAuthorityUnavailable) as error:
+                    raise ProtectedActionGate("todo.create", gate={
+                        "kind": "canonical_authority_required",
+                        "summary": f"The original confirmation recorded Todo {todo_id}. Its assignment source could not be verified.",
+                        "next_action": "Restore the original Goal source and retry, or review the assignment from the existing Todo.",
+                    }) from error
+                self.store.save_checkpoint(proposal_id, step="todo_created", receipt={**todo_step, "source": binding})
+            if not isinstance(binding, dict):
+                raise ValueError("Todo creation checkpoint source is malformed")
+            source.require_review(binding)
         else:
             if agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
                 raise ValueError("the selected Agent is no longer registered for this Goal")

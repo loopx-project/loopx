@@ -282,17 +282,17 @@ export async function executeCoordinationTodoCreate(
   }
   const todoId = requireAuthorityStoreId(input.todo.todo_id, "todo id");
   const readModel = canonicalAuthorityObject(head.head.todo_read_model, "Todo read model");
-  // A derived due time belongs to the first result, never to the retry identity.
-  const {todo} = input;
-  const needsInitialDue = todo.role === "agent" && todo.task_class === "continuous_monitor" &&
-    todo.next_due_at == null && todo.cadence != null;
-  const initialDue = needsInitialDue
-    ? planMonitorSchedule(input.now.toISOString(), todo.cadence).next_due_at : null;
-  const plannedInput = initialDue === null ? input : {...input, todo: {...todo, next_due_at: initialDue}};
-  const plan = planCoordinationTodoCreate(plannedInput, projection.todos, readModel.schema_version);
+  const plan = planCoordinationTodoCreate(input, projection.todos, readModel.schema_version);
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
   if (plan.status !== "planned") return {...plan, provider_revision: head.provider_revision, cursor: head.cursor};
-  const created = canonicalAuthorityObject(plan.todo, "created Todo");
+  // An implicit due time belongs to a new record. Duplicate matching compares
+  // the submitted configuration and respects any explicitly requested due time.
+  const planned = canonicalAuthorityObject(plan.todo, "created Todo");
+  const needsInitialDue = planned.role === "agent" && planned.task_class === "continuous_monitor" &&
+    planned.next_due_at == null && planned.cadence != null;
+  const initialDue = needsInitialDue
+    ? planMonitorSchedule(input.now.toISOString(), planned.cadence).next_due_at : null;
+  const created = initialDue === null ? planned : {...planned, next_due_at: initialDue};
   if (input.dry_run) {
     return {
       schema_version: COORDINATION_TODO_CREATE_RESULT_SCHEMA,

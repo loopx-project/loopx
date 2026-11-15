@@ -1211,6 +1211,10 @@ class ChatActionService(
         agent_id = str(parameters["agent_id"])
         if agent_id not in registered_agent_ids_for_goal(source.goal):
             raise ValueError("monitor Agent must be registered for the Goal")
+        authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
+        revision = authority.get("provider_revision") if authority else None
+        if not isinstance(revision, str) or not revision:
+            raise ValueError("The Goal's Todo authority revision is unavailable")
         stop_condition = str(parameters.get("stop_condition") or "").strip()
         resume_when = None
         if (
@@ -1220,25 +1224,35 @@ class ChatActionService(
             not in {"watch_only", "watch-only", "watch", "continuous", "never"}
         ):
             resume_when = stop_condition
-        metadata = _monitor_metadata(parameters)
+        metadata = _monitor_metadata(parameters, schedule=False)
         if not (
             metadata.get("expires_at") or resume_when or metadata.get("watch_only")
         ):
             metadata["watch_only"] = "true"
-        result = add_goal_todo(
-            **source.writer_scope(),
-            routing_registry_witness=source.routing_registry_witness,
-            goal_id=goal_id,
-            role="agent",
-            text=_monitor_text(parameters) or str(parameters["target"]),
-            task_class="continuous_monitor",
-            action_kind="observe",
-            claimed_by=agent_id,
-            agent_id=agent_id,
-            resume_when=resume_when,
-            monitor_metadata=metadata,
-            dry_run=False,
-        )
+        try:
+            result = add_goal_todo(
+                **source.writer_scope(),
+                routing_registry_witness=source.routing_registry_witness,
+                expected_registry_sha256=source.registry_sha256,
+                expected_provider_revision=revision,
+                goal_id=goal_id,
+                role="agent",
+                text=_monitor_text(parameters) or str(parameters["target"]),
+                task_class="continuous_monitor",
+                action_kind="observe",
+                claimed_by=agent_id,
+                agent_id=agent_id,
+                resume_when=resume_when,
+                monitor_metadata=metadata,
+                dry_run=False,
+            )
+        except LocalCoordinationAuthorityUnavailable as error:
+            if error.code not in {"provider_revision_mismatch", "authority_source_changed"}:
+                raise
+            stale = self.store.apply(proposal_id, current_state_fingerprint=_digest({
+                "conflict": error.code, "expected": current_fingerprint,
+            }), receipt={})
+            return {"proposal": stale, "turn": None}
         todo_id = _opaque(result.get("todo_id"), field="todo_id")
         receipt = {
             "receipt_id": _digest(
