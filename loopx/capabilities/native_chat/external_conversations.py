@@ -27,12 +27,7 @@ from ...control_plane.quota.automation_cadence_readback import (
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import (
-    FileChatDiscovery,
-    external_source_route_path,
-    later_equivalent_source_input,
-    source_control_fields,
-)
+from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, source_control_fields
 from .steward_commands import todo_confirmation_readback
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
