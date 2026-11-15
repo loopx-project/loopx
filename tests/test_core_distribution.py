@@ -467,6 +467,15 @@ def _spends(runtime):
 
 def test_installed_core_goal_lifecycle_preserves_work_and_resumes_execution(core_python, task):
     workspace, runtime, registry, arguments = task
+    host_started = workspace / "lifecycle-host-started"
+    host_script = workspace / "lifecycle-host.py"
+    host_script.write_text(
+        "import pathlib\npathlib.Path('lifecycle-host-started').write_text('started')\n" + HOST_SOURCE,
+    )
+    arguments = list(arguments)
+    arguments[arguments.index("--host-adapter-command-json") + 1] = json.dumps(
+        [core_python, "-I", str(host_script)],
+    )
     todo_argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "todo", "list", "--goal-id", GOAL]
     original_todo = json.loads(_run(core_python, todo_argv, workspace).stdout)["todos"][0]
@@ -502,14 +511,18 @@ def test_installed_core_goal_lifecycle_preserves_work_and_resumes_execution(core
         if state == "stopped":
             blocked = json.loads(_run(core_python, arguments, workspace, expected=1).stdout)
             assert blocked["ok"] is False, blocked
-            assert blocked["effects"]["host_invoked"] is False
-            assert blocked["effects"]["state_written"] is False
-            assert blocked["effects"]["quota_spent"] is False
+            # An entered executor preserves uncertainty in its error response.
+            # Independent fixture observations below establish actual effects.
+            for effect in ("host_invoked", "state_written", "quota_spent"):
+                value = blocked["effects"][effect]
+                assert value is False or value is None, blocked
         assert _spends(runtime) == 0
+        assert not host_started.exists()
         assert not (workspace / "host-invocations").exists()
         assert not (workspace / "squares.json").exists()
     result = json.loads(_run(core_python, arguments, workspace).stdout)
     key = _assert_committed(core_python, workspace, runtime, result)
+    assert host_started.read_text() == "started"
     replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", key], workspace).stdout)
     _assert_committed(core_python, workspace, runtime, replay)
     assert replay["effects"]["host_invoked"] is False
