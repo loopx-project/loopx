@@ -28,9 +28,9 @@ export function servicePolicy(identity = serviceIdentity) {
     principals: ["a", "b"].map(actor => ({principal_id: `principal-${actor}`,
       credential_sha256: createHash("sha256").update(credentials[actor as "a" | "b"]).digest("hex"),
       grants: [{tenant_id: "tenant-one", goal_id: "goal-one", actor_id: `actor-${actor}`,
-        operations: ["read", "claim", "progress", "renew", "release"]}]}))};
+        operations: ["read", "claim", "progress", "renew", "release", "complete", "block", "defer", "todo_add", "snapshot"]}]}))};
 }
-export function claimRequest(actor: "a" | "b", todo = "todo_one", id = `claim-${todo}`): RemoteAuthorityRequest {
+export function claimRequest(actor: "a" | "b", todo = "todo_one", id = `claim-${todo}`): Extract<RemoteAuthorityRequest, {operation: "claim"}> {
   return {schema_version: REMOTE_AUTHORITY_REQUEST, tenant_id: "tenant-one", goal_id: "goal-one",
     actor_id: `actor-${actor}`, store_identity: serviceIdentity, todo_id: todo, operation: "claim", request_id: id};
 }

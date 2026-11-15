@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from ...agent_registry import normalize_registered_agents
+from ...agent_registry import load_goal_from_registry, normalize_registered_agents
 from ...ark_managed_agent_host import build_ark_managed_agent_host_contract
 from ...execution_profile import (
     TURN_GRANULARITY_FINE,
@@ -664,6 +664,14 @@ def build_heartbeat_prompt(
     if fine_grained:
         payload["turn_granularity"] = TURN_GRANULARITY_FINE
         payload["turn_mode"] = "fine_grained"
+    if registry_path:
+        from ..coordination.remote_authority_gateway import (
+            get_remote_authority_projection,
+            remote_authority_config,
+        )
+
+        if cfg := remote_authority_config(load_goal_from_registry(Path(registry_path), goal_id)):
+            payload["remote_authority"] = get_remote_authority_projection(goal_id, cfg)
     payload["agent_model"] = AgentRuntimeModel.PEER_V1.value
     return _prune_prompt_metadata(payload, thin=thin, brief=brief)
 
