@@ -72,53 +72,79 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
   useEffect(() => {
     if (busy) return;
     let active = true;
-    let currentRequest: AbortController | undefined;
+    let settingsRequest: AbortController | undefined;
+    let diagnosticsRequest: {controller: AbortController; revision: number} | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     function cancel() {
       active = false;
       clearTimeout(timer);
-      currentRequest?.abort();
+      settingsRequest?.abort();
+      diagnosticsRequest?.controller.abort();
     }
-    async function read() {
+    function scheduleSettings(delayMs: number) {
+      clearTimeout(timer);
+      timer = setTimeout(() => void readSettings(), delayMs);
+    }
+    function bindingChanged(cause: unknown) {
+      return cause instanceof ChatApiError && cause.payload.http_status === 409;
+    }
+    async function readDiagnostics(current: PrivateConversationSettings) {
+      const controller = new AbortController();
+      diagnosticsRequest = {controller, revision: current.revision};
+      const {signal} = controller;
+      setDiagnosticsUnavailable(false);
+      try {
+        const fresh = await fetchPrivateConversationDiagnostics(current, AbortSignal.any([signal, AbortSignal.timeout(30000)]));
+        if (!signal.aborted) setDiagnostics(fresh);
+      } catch (cause) {
+        if (signal.aborted) return;
+        setDiagnostics(null);
+        if (bindingChanged(cause)) {
+          settingsRequest?.abort();
+          setSettings(null);
+          setSettingsUnavailable(false);
+          scheduleSettings(500);
+        } else {
+          setDiagnosticsUnavailable(true);
+        }
+      } finally {
+        if (diagnosticsRequest?.controller === controller) diagnosticsRequest = undefined;
+      }
+    }
+    async function readSettings(refreshDiagnostics = false) {
       if (!active) return;
       clearTimeout(timer);
-      // A manual refresh must read authorization even while diagnostics wait.
-      currentRequest?.abort();
+      settingsRequest?.abort();
+      if (refreshDiagnostics) diagnosticsRequest?.controller.abort();
       const request = new AbortController();
-      currentRequest = request;
+      settingsRequest = request;
       const {signal} = request;
-      let hasSettings = false;
       let nextReadMs = 5000;
       try {
         const current = await fetchPrivateConversationSettings(AbortSignal.any([signal, AbortSignal.timeout(5000)]));
         if (signal.aborted) return;
-        hasSettings = true;
         setSettings(current);
         setSettingsUnavailable(false);
-        setDiagnosticsUnavailable(false);
-        const fresh = await fetchPrivateConversationDiagnostics(current, AbortSignal.any([signal, AbortSignal.timeout(30000)]));
-        if (signal.aborted) return;
-        setDiagnostics(fresh);
-        setDiagnosticsUnavailable(false);
+        // Keep polling authorization while a single diagnostics read for this revision is in flight.
+        if (refreshDiagnostics || diagnosticsRequest?.revision !== current.revision) {
+          diagnosticsRequest?.controller.abort();
+          void readDiagnostics(current);
+        }
       } catch (cause) {
         if (signal.aborted) return;
+        diagnosticsRequest?.controller.abort();
+        diagnosticsRequest = undefined;
         setDiagnostics(null);
-        if (cause instanceof ChatApiError && cause.payload.http_status === 409) {
-          setSettings(null);
-          setSettingsUnavailable(false);
-          nextReadMs = 500;
-        } else if (hasSettings) {
-          setDiagnosticsUnavailable(true);
-        } else {
-          setSettings(null);
-          setSettingsUnavailable(true);
-        }
+        setSettings(null);
+        const changed = bindingChanged(cause);
+        setSettingsUnavailable(!changed);
+        if (changed) nextReadMs = 500;
       } finally {
-        if (!signal.aborted) timer = setTimeout(() => void read(), nextReadMs);
+        if (!signal.aborted) scheduleSettings(nextReadMs);
       }
     }
-    connectionRead.current = {cancel, refresh: () => void read()};
-    void read();
+    connectionRead.current = {cancel, refresh: () => void readSettings(true)};
+    void readSettings();
     return () => {cancel(); connectionRead.current = null;};
   }, [busy, refreshAfterMutation]);
 
@@ -153,6 +179,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
     finally {
       // A failed stop may follow a committed revocation. Read its current
       // revision and exact recovery target even when the mutation returned 400.
+      setSettings(null);
       setRefreshAfterMutation(value => value + 1);
       setBusy(false);
     }
