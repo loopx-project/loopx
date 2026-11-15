@@ -214,48 +214,27 @@ Python 只复用 OS I/O；准入、声明、期限、源/租约见证和完成�
 
 ## Linked User completion effects
 
-### Monitor observations of a User prerequisite
+### Monitor observations and User gates
 
-A Monitor observation and a User gate completion have different identities.
-When authorized work includes confirming an externally supplied prerequisite,
-read the exact User gate and validate the actual evidence before settling the
-Monitor poll. Record the satisfied prerequisite through the existing lifecycle:
+A Monitor observation and a User gate completion have different identities and
+different owners. An observation is evidence: a file appearing, a changed hash or
+a successful external job never completes or approves a User gate, and the
+Monitor contract projects no gate completion command. When a due Monitor is
+admitted while the agent has open User gates, its actions carry a read-only
+notice instead.
 
-```sh
-loopx --registry '<registry>' --runtime-root '<runtime>' --format json todo complete \
-  --goal-id example --role user --todo-id '<verified-user-gate-id>' \
-  --agent-id agent-a --decision-outcome approve --evidence '<verified prerequisite evidence>'
-```
+Two attempts stay rejected by their existing owners: completing the gate with
+the Monitor Turn (`settlement binding does not match the original quota
+guard`), and attaching evidence through a plain `todo update`
+(`handoff_mode_requires_lease`). The agent records the observation with
+`quota monitor-poll`, reports the observed evidence as the gate's pending user
+action, and yields. The gate owner completes it through the User lifecycle with
+their own decision; the linked target then resumes for a fresh guarded Turn.
 
-This command deliberately has no Monitor `--turn-instance-id` or Monitor claim
-proof. It is an unscoped User lifecycle completion, subject to the gate's own
-registered actor, binding, ownership and lease checks. An eligible open User
-gate can use the existing atomic auto-acquire/release path. Active foreign
-leases and unrelated authority remain protected. A plain `todo update` with
-evidence is neither a gate decision nor a substitute for execution proof.
-
-Observation does not grant authority: a file appearing, a changed hash, or a
-successful external job cannot supply a missing human approval. If the user
-still owns a decision, surface the exact action and retain the gate. Confirming
-an already-authorized evidence prerequisite does not require inventing another
-human decision. An unchanged observation can still satisfy an unresolved gate;
-do not restrict reconciliation to `material_change=true`.
-
-Read the completion's `unblock_resume` and remaining requirements. The exact
-linked target can become `open`; `resume_when=todo_done:<gate-id>` becomes
-satisfied only after the gate completes, not merely after the file appears.
-Finish the Monitor observation using its original binding. A committed
-`quota monitor-poll` settles that Turn without quota spend and cannot be reused
-to settle the gate or independent delivery. Yield for a fresh guarded Turn;
-the host reevaluates the newly runnable target and obtains its own managed claim
-before delivery. A poll already committed before reconciliation must not be
-rebound; reconcile during the next admitted observation instead.
-
-Retire a Monitor when its declared stop condition is met. A one-time file watch
-may stop once its authorized handoff is complete; a Monitor declared to continue
-until dependent delivery is validated remains active until that outcome. A
-changed hash alone neither completes the Monitor nor justifies endless polling
-of a prerequisite whose authorized handoff is ready.
+Work that may continue on an observed change without an owner decision does not
+belong behind a User gate. Emit it from the observation itself with
+`quota monitor-poll --material-change --next-agent-todo ...`: the successor is an
+independent runnable Agent Todo, admitted by its own fresh guard.
 
 An admitted `todo complete --decision-outcome approve|reject|cancel` now commits
 its exact linked Agent Todo effects in the **same** provider transaction as the

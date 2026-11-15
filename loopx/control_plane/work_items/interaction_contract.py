@@ -463,33 +463,16 @@ def _due_monitor_cli_actions(
     ]
 
 
-def _monitor_user_gate_handoff_actions(
-    payload: Mapping[str, object], *, runtime_root: str | None, registry_path: str | None,
-) -> list[str]:
-    prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path, host_shell=True)
-    identity = payload.get("agent_identity")
-    actor = str(identity.get("agent_id") or "<registered-agent>") if isinstance(identity, Mapping) else "<registered-agent>"
-    return [
-        (
-            "Before settling the Monitor poll, reconcile a User gate whose prerequisite was observed, "
-            "even when the observation is unchanged. Read the exact gate and validate its condition. "
-            "Only record an already-authorized prerequisite or an actual owner decision; "
-            "a changed hash never grants approval. If an owner decision is still missing, surface that action and wait."
-        ),
-        (
-            "For that verified, authorized gate only: "
-            f"{prefix} --format json todo complete --goal-id {shlex.quote(str(payload.get('goal_id') or '<GOAL_ID>'))}"
-            f" --role user --todo-id '<verified-user-gate-id>' --agent-id {shlex.quote(actor)}"
-            " --decision-outcome approve --evidence '<verified prerequisite evidence>'"
-        ),
-        (
-            "This is a separate User lifecycle completion, without the Monitor's Turn or claim proof. "
-            "The gate's own authority and lease checks still apply, including supported auto-acquire/release. "
-            "Read unblock_resume; remaining prerequisites keep the target blocked. Then settle this Monitor "
-            "with the poll below and yield. Independent delivery needs a fresh guarded Turn; do not rebind this Turn. "
-            "Retire the Monitor only when its declared stop condition is met."
-        ),
-    ]
+# Observation is evidence, never an owner decision: no completion command is projected.
+# Keep the text free of quote characters; consumers shlex-split every action.
+MONITOR_USER_GATE_NOTICE = (
+    "A Monitor observation never completes or approves a User gate, even when it observes what that gate "
+    "is waiting for. Do not pass the id or claim proof of this Turn to a gate completion, and do not attach "
+    "evidence to the gate through todo update. Record the observation with the poll below; an open gate "
+    "stays the decision of its owner, so report the observed evidence as that pending user action and yield. "
+    "Work that may continue on an observed change without an owner decision belongs in the successor of "
+    "that poll (--material-change with --next-agent-todo), not behind a User gate."
+)
 
 
 def _turn_scoped_cli_settlement_context(
@@ -1466,13 +1449,9 @@ def _build_interaction_cli_channel(
     if not isinstance(work_lane, Mapping):
         work_lane = {}
     if primary_monitor is not None and turn_instance_id and open_user_gate_todo_items(payload.get("user_todo_summary")):
-        # Keep the Monitor instruction first; reconcile the gate before the poll settles this Turn.
+        # Keep the Monitor instruction first; the notice precedes the poll it qualifies.
         actions = channel["next_cli_actions"]
-        channel["next_cli_actions"] = [
-            *actions[:1],
-            *_monitor_user_gate_handoff_actions(payload, runtime_root=runtime_root, registry_path=registry_path),
-            *actions[1:],
-        ]
+        channel["next_cli_actions"] = [*actions[:1], MONITOR_USER_GATE_NOTICE, *actions[1:]]
     auxiliary_monitor = work_lane.get("auxiliary_monitor_poll")
     if not isinstance(auxiliary_monitor, Mapping):
         auxiliary_monitor = None
