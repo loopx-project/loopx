@@ -914,15 +914,24 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 
 
 def _standalone_core() -> bool:
-	from importlib.util import find_spec
-
-	if find_spec("loopx.cli") is not None:
-		return False
 	from importlib.metadata import PackageNotFoundError, distribution
 	from .python_install_owner import installed_loopx_distribution
 
+	# Do not discover the optional full CLI, even for selected-command help.
+	# Metadata must own this imported file, not a wheel shadowed by source.
 	try:
-		return installed_loopx_distribution(distribution).name == "loopx-core"
+		installed = installed_loopx_distribution(distribution)
+		if installed.name != "loopx-core":
+			return False
+		expected = Path(__file__).resolve()
+		for item in installed.files or ():
+			if not item.as_posix().endswith("loopx/cli_runtime.py"):
+				continue
+			record_path = Path(item.as_posix())
+			located = record_path if record_path.is_absolute() else Path(item.locate())
+			if located.resolve() == expected:
+				return True
+		return False
 	except PackageNotFoundError:
 		return False
 

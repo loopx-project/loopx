@@ -51,6 +51,13 @@ raise SystemExit(code)
     (["performance-diagnosis", "inspect", "--profile", "missing.json"], 2),
     (["--format", "invalid", "performance-diagnosis", "inspect", "--help"], 2),
     (["--registry"], 2),
+    (["--cli-bin", "candidate cli", "performance-diagnosis", "--help"], 0),
+    (["--cli-bin=candidate cli", "performance-diagnosis", "plan", "--help"], 0),
+    (["--cli-bin"], 2),
+    # Top-level help precedes parsing even when it follows a value-taking option.
+    (["--cli-bin", "--help"], 0),
+    (["performance-diagnosis", "inspect", "--help", "--top", "invalid"], 0),
+    (["performance-diagnosis", "inspect", "--top", "invalid", "--help"], 2),
 ])
 def test_parser_matches_full_cli(args: list[str], code: int) -> None:
     full = run_cli("loopx.cli", args)
@@ -144,3 +151,78 @@ raise SystemExit(main(['performance-diagnosis', *{action!r}, '--help']))
     )
     assert result.returncode == 0, result.stderr
     assert "usage:" in result.stdout
+
+
+@pytest.mark.parametrize("installation", ["ordinary", "core", "foreign-core", "unrecorded-core", "missing"])
+@pytest.mark.parametrize("route", [[], ["--cli-bin", "candidate cli"], ["--cli-bin=candidate cli"]])
+@pytest.mark.parametrize("operation", ["help", "missing-facade", "broken-dependency"])
+def test_installation_route_without_optional_discovery(
+    tmp_path: Path, installation: str, route: list[str], operation: str,
+) -> None:
+    # Real metadata/RECORD parsing, with the installation boundary supplied by
+    # the fixture. A foreign core must not claim the imported source checkout.
+    script = f"""
+import importlib.abc
+import importlib.metadata as metadata
+import json
+from pathlib import Path
+import sys
+from loopx import cli_runtime
+from loopx.command_invocation import loopx_cli_argv
+
+installation = {installation!r}
+operation = {operation!r}
+name = 'loopx' if installation == 'ordinary' else 'loopx-core'
+directory = Path({str(tmp_path)!r}) / 'fixture.dist-info'
+directory.mkdir()
+(directory / 'METADATA').write_text('Name: ' + name + '\\nVersion: 1.0\\n')
+module = Path(cli_runtime.__file__).resolve()
+if installation == 'foreign-core':
+    module = Path({str(tmp_path)!r}) / 'foreign' / 'loopx' / 'cli_runtime.py'
+if installation != 'unrecorded-core':
+    (directory / 'RECORD').write_text(module.as_posix() + ',,\\n')
+def distribution(requested):
+    if installation == 'missing' or requested != name:
+        raise metadata.PackageNotFoundError(requested)
+    return metadata.PathDistribution(directory)
+metadata.distribution = distribution
+
+class OptionalFacade(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'loopx.cli':
+            if operation == 'help':
+                raise AssertionError('help discovered optional CLI')
+            missing = 'loopx.cli' if operation == 'missing-facade' else 'broken_inner_dependency'
+            raise ModuleNotFoundError('No module named ' + repr(missing), name=missing)
+sys.meta_path.insert(0, OptionalFacade())
+def audit(event, args):
+    if event in ('subprocess.Popen', 'os.system', 'os.posix_spawn', 'socket.connect', 'socket.getaddrinfo'):
+        raise AssertionError('routing attempted ' + event)
+sys.addaudithook(audit)
+route = {route!r}
+with cli_runtime.cli_invocation_route(route):
+    print(json.dumps(loopx_cli_argv()), flush=True)
+arguments = ['--help'] if operation == 'help' else ['dashboard']
+raise SystemExit(cli_runtime.main([*route, *arguments]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=15,
+        env={**os.environ, "PATH": str(tmp_path / "no-executables"), "LOOPX_USAGE_PING": "0"},
+    )
+    expected_route = (
+        ["candidate cli", "--cli-bin", "candidate cli"] if route else
+        [sys.executable, "-I", "-m", "loopx.entrypoint"] if installation == "core" else
+        ["loopx"]
+    )
+    assert json.loads(result.stdout.splitlines()[0]) == expected_route, result.stderr
+    if operation == "help":
+        assert result.returncode == 0, result.stderr
+    elif operation == "missing-facade" and installation == "core":
+        assert result.returncode == 2
+        assert "unavailable in the standalone core" in result.stderr
+        assert "Traceback" not in result.stderr
+    else:
+        assert result.returncode == 1
+        missing = "loopx.cli" if operation == "missing-facade" else "broken_inner_dependency"
+        assert "ModuleNotFoundError: No module named " + repr(missing) in result.stderr
+        assert "unavailable in the standalone core" not in result.stderr

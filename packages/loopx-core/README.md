@@ -16,9 +16,11 @@ uv pip install --python /tmp/loopx-core-env/bin/python /tmp/loopx-core-dist/loop
 /tmp/loopx-core-env/bin/loopx doctor --installation-only --deep --format json
 ```
 
-Python 3.11+ is required. Import and help do not need Node. Executing governed
-tasks requires a qualified Node runtime (22.22.3+ and the existing SQLite
-reliability checks), an explicitly selected host and its own prerequisites.
+Python 3.11+ is required. Import and help do not need Node. Help selects the
+installation from distribution metadata and its recorded module ownership,
+without discovering the optional full CLI. Executing governed tasks requires a
+qualified Node runtime (22.22.3+ and the existing SQLite reliability checks),
+an explicitly selected host and its own prerequisites.
 Use the existing `turn run-once --host generic-cli` entry, a separate validation
 command, `turn inspect-journal` and `--resume-turn-key` for execution and recovery.
 Start with one natural-language goal in your existing model host:
