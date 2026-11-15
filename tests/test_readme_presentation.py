@@ -29,7 +29,7 @@ class LinkedImages(HTMLParser):
             self.link = None
 
 
-@pytest.mark.parametrize("readme", ["README.md", "README.zh-CN.md"])
+@pytest.mark.parametrize("readme", ["README.md", "README.zh-CN.md", "README.ja.md"])
 def test_trending_achievement_is_linked_once_in_readme_hero(readme: str) -> None:
     text = (REPO_ROOT / readme).read_text(encoding="utf-8")
     document = LinkedImages()

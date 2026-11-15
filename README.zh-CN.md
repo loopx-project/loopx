@@ -14,7 +14,7 @@
 
 [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[快速上手](#快速开始) · [为什么需要 LoopX](#为什么需要-loopx) · [7×24 常驻架构](#always-on-agents) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
+[快速上手](#快速开始) · [为什么需要 LoopX](#为什么需要-loopx) · [7×24 常驻架构](#always-on-agents) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md) · [日本語](README.ja.md)
 
 </div>
 
