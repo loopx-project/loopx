@@ -625,6 +625,18 @@ send deadline and remain unknown even when the upstream has received some bytes.
 
 ## Results, timeout and recovery
 
+Docker-based controllers can use
+`benchmark.runtime.docker_checkpoint.capture_docker_worker` to verify a
+prepared capture request, pause the exact source container, and seal its
+files and evaluator capsule. Supply the native capture callback and its
+bank from the benchmark adapter. The callback runs under the writer barrier
+and returns the digest of the capsule it wrote at the assigned destination.
+EdgeBench supplies its SForge evaluator and source phase deadline through
+this entry point. An operator with a deadline-free solving phase can pass
+a null phase path and explicitly allow an open phase. The worker capture
+and sealing windows still bound the handoff.
+
+
 ### Live session observation
 
 Frequent capacity and liveness polls may use

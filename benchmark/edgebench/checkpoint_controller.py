@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
+from benchmark.runtime.docker_checkpoint import _physical, _remaining
 from benchmark.runtime.scheduler import read_phase_deadline
 from benchmark.runtime.worker import PHASE_WORK_RESERVE_SECONDS
 
@@ -31,13 +32,6 @@ from benchmark.runtime.worker import PHASE_WORK_RESERVE_SECONDS
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None  # Never forward controller credentials to another origin.
-
-
-def _physical(path: Path) -> Path:
-    path = Path(path)
-    if not path.is_absolute() or path.resolve(strict=True) != path:
-        raise ValueError("Controller paths must be normalized, physical and absolute")
-    return path
 
 
 def _controller(path: Path) -> dict:
@@ -181,13 +175,6 @@ def _activation_result(result: dict, body: dict) -> None:
     if (set(result) != expected or any(result.get(k) != v for k, v in body.items())
             or not isinstance(result.get("token"), str) or not result["token"]):
         raise ValueError("Native activation result differs from the original request")
-
-
-def _remaining(deadline: float) -> float:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("Checkpoint capture window closed")
-    return remaining
 
 
 def capture(controller_file: Path, *, token: str, capture_id: str, destination: Path,

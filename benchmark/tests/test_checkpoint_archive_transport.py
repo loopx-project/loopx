@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from benchmark.edgebench import checkpoint_worker as worker
+from benchmark.runtime import docker_checkpoint as worker
 
 
 class ArchiveStream:

@@ -104,7 +104,7 @@ def test_ordinary_controller_stages_root_private_native_configuration(writer, tm
 
 
 def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_path):
-    from benchmark.edgebench.checkpoint_worker import _archive
+    from benchmark.runtime.docker_checkpoint import _archive
     container, _ = writer
     assert container.exec_run(["python", "-c", "from pathlib import Path; "
         "p=Path('/private-state'); p.mkdir(mode=0o700); "
@@ -118,7 +118,7 @@ def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_
     "retention", "retention_default", "retention_off", "retention_pin", "retention_failure", "continued_clock"])
 def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writer, tmp_path, monkeypatch, fault):
     from loopx.control_plane.effect_runtime import effect_runtime_result
-    from benchmark.edgebench.checkpoint_worker import _archive
+    from benchmark.runtime.docker_checkpoint import _archive
     from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
 
     source, _, first, _, files, grades = controllers
@@ -156,11 +156,11 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         from benchmark.edgebench import checkpoint_supervisor
         original = checkpoint_supervisor._archive
         reads = []
-        def interrupted_archive(*args):
+        def interrupted_archive(*args, **kwargs):
             reads.append(True)
             if len(reads) == 1:
                 raise tarfile.ReadError("request removed during Docker archive")
-            return original(*args)
+            return original(*args, **kwargs)
         monkeypatch.setattr(checkpoint_supervisor, "_archive", interrupted_archive)
     if fault == "late_native":
         from benchmark.edgebench import checkpoint_worker
@@ -258,7 +258,7 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
 @pytest.mark.parametrize("seal_within_phase,expire_phase", [(True, False), (False, False), (True, True)])
 def test_post_release_sealing_preserves_captured_bytes_and_original_phase(
         controllers, writer, tmp_path, monkeypatch, seal_within_phase, expire_phase):
-    from benchmark.edgebench import checkpoint_worker
+    from benchmark.runtime import docker_checkpoint as checkpoint_worker
     from loopx.control_plane.effect_runtime import effect_runtime_result
 
     source, _, first, _, files, grades = controllers
@@ -339,7 +339,7 @@ def test_paused_sqlite_capture_retains_committed_wal_not_pending_transaction(
 def test_sqlite_companion_failure_cannot_publish_an_older_valid_database(
         controllers, writer, tmp_path, monkeypatch, fault):
     from docker.errors import APIError
-    from benchmark.edgebench import checkpoint_worker
+    from benchmark.runtime import docker_checkpoint as checkpoint_worker
 
     source, _, first, _, files, grades = controllers
     container, request = writer
@@ -494,7 +494,7 @@ def test_full_export_volume_releases_real_archive_and_writer(
         controllers, writer, tmp_path, monkeypatch):
     import errno
     from contextlib import contextmanager
-    from benchmark.edgebench import checkpoint_worker as worker
+    from benchmark.runtime import docker_checkpoint as worker
 
     source, _, first, _, files, _ = controllers
     container, request = writer
@@ -624,7 +624,7 @@ def test_rejected_pause_preserves_foreign_barrier(
 
 
 def test_capture_budget_is_shared_and_exhaustion_releases_writer(controllers, writer, tmp_path, monkeypatch):
-    from benchmark.edgebench import checkpoint_worker
+    from benchmark.runtime import docker_checkpoint as checkpoint_worker
 
     source, _, first, _, files, grades = controllers
     container, request = writer
@@ -689,7 +689,7 @@ def test_one_progressing_archive_expires_without_stranding_writer(
         controllers, writer, tmp_path, monkeypatch, stage):
     from contextlib import contextmanager
     import requests
-    from benchmark.edgebench import checkpoint_worker as worker
+    from benchmark.runtime import docker_checkpoint as worker
 
     source, _, first, _, files, grades = controllers
     container, request = writer
