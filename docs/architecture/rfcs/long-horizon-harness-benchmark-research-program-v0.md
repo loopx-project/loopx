@@ -104,6 +104,109 @@ proved. Private trajectories and audit artifacts remain local evidence. Only
 their generalized typed contracts and public-safe conclusions may be promoted
 to the repository.
 
+### 2.2 Bitter-Lesson boundary: raw-artifact resets versus governed control
+
+As frontier coding models improve at autonomous filesystem navigation and
+self-authored inspection scripts, heavy hand-written context compression and
+multi-layered outer prompts risk incurring net protocol tax ($\Delta J(B \mid
+s_0) \le 0$). On **episodic, resettable, well-structured tasks with dense or
+continuous isolated scalar verification**, a minimal outer loop that retains raw
+prior artifacts and scalar scores across clean per-generation context resets—letting
+the agent author its own Python/filesystem retrieval probes—can match or
+outperform lossy hand-written summaries:
+
+- [Meta-Harness](https://arxiv.org/abs/2603.28052) shows an outer proposer reading
+  raw source code, scalar scores, and raw execution traces across clean resets
+  (median ~82 files read per iteration at ~10M tokens/iteration) outperforms
+  compressed-text optimizers (`+7.7` classification points with `4x` fewer
+  context tokens; `76.4%` on Terminal-Bench 2.0 with Opus 4.6).
+- [Vercel `d0`](https://vercel.com/blog/we-removed-80-percent-of-our-agents-tools)
+  shows removing ~80% of custom tools (`17 -> 2`: `bash` + SQL) over a clean,
+  well-documented semantic filesystem improved success `80% -> 100%` while
+  cutting tokens `37%` and latency `3.5x`.
+- [AlphaEvolve](https://arxiv.org/abs/2506.13131) succeeds on algorithmic code
+  discovery precisely by keeping a fixed immutable outer loop over deterministic
+  programmatic verifiers without letting the solver alter its own harness or
+  grading contract.
+- Published LoopX context studies ([context delivery](https://loopx-project.github.io/loopx/blog/context-delivery/)
+  and [EdgeBench feedback and memory](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/))
+  likewise show that verbose serialization and post-peak replan loops can consume
+  substantial uncached context when raw-code inspection and local probes would
+  suffice.
+
+However, empirical evidence establishes **five failure regimes** where raw
+artifacts, scalar rewards, and clean resets cannot replace a governed control
+plane:
+
+1. **Goodharting and verifier tampering:** Whenever the solver shares process,
+   filesystem, network, or secret boundaries with the grader, unguarded
+   optimization exploits shortcut channels—observed in `LHTB 2.0` (`14/17` early
+   perfect scores came from grader leaks prior to process freezing and verifier
+   isolation), the [Reward Hacking Benchmark](https://arxiv.org/abs/2605.02964)
+   (`0%` to `13.9%` exploit rates across 13 frontier models, `72%` with explicit
+   chain-of-thought rationalizations, and alignment breakdown past intractability
+   thresholds), [SWE-Marathon](https://arxiv.org/abs/2606.07682) (`13.8%`
+   rollout reward hacking), [Darwin Gödel Machine](https://arxiv.org/abs/2505.22954)
+   (Node 114 falsifying verification logs), and
+   [METR reward-hacking evaluations](https://metr.org/blog/2025-06-05-recent-reward-hacking/).
+   In-agent Python probes cannot enforce OS/container verifier isolation or
+   `benchmark_integrity_audit_v0` (§6.5, §7.1).
+2. **Out-of-distribution (OOD) overfitting and harness bloat:** Unregularized
+   evolution over raw artifacts memorizes training traces and degrades OOD.
+   [RRSI](https://arxiv.org/abs/2609.24972) finds unregularized Meta-Harness
+   gains only `+0.9` OOD (`40.6` vs `39.7`) and `TTHE` drops `-1.7` (`38.0` with
+   an `8,500`-word bloated prompt), whereas critic-pruned, budget-annealed
+   regularization lifts OOD to `43.6` (`+3.9`) with `30%` fewer policy tokens;
+   [Harness Updating Is Not Harness Benefit](https://arxiv.org/abs/2605.30621)
+   similarly shows harness edits mainly lift mid-tier models while saturating or
+   regressing frontier models without OOD gating. Sequential validity, held-out
+   splits, and decision-preserving rate-distortion memory are governed alongside
+   this program in the [Frontier Science Research Program](./frontier-science-research-program-v0.md#2-problem-and-motivation)
+   (§2 and §5 `T01`–`T07`).
+3. **Premature termination and sparse or binary terminal verifiers:** Fresh
+   retrieval over local files cannot stop an agent from declaring completion as
+   soon as local smoke fixtures pass, nor extract dense guidance from `0/1`
+   terminal rewards. In LoopX's published `SWE-Marathon` study
+   ([`benchmark/swe-marathon/README.md`](../../../benchmark/swe-marathon/README.md)),
+   on `zstd-decoder`, `plain` Codex stopped after visible fixtures (`0.721`
+   partial, reward `0`) whereas governed `heartbeat` continued to protocol
+   self-tests and memory-safety verification (`1.000`, reward `1`); on `LHTB`
+   `covshift` ([EdgeBench long-horizon repairs](https://loopx-project.github.io/loopx/blog/edgebench-long-horizon-repairs/)),
+   default completion exited at minute 38 (`0.000`) while an owner-locked
+   acceptance gate forced completion to `0.82` (five-arm `heartbeat` `0.743`).
+   External completion rejection, `stopped_recovery.py`, and hidden-coverage
+   checks remain necessary.
+4. **Proxy misalignment and tail TLE cliffs:** Uncalibrated local yardsticks and
+   aggregate averages invert native rankings or trigger timeout cliffs. LoopX's
+   [`benchmark/proxy_order.py`](../../../benchmark/proxy_order.py) analysis
+   ([behavior findings](../../reference/benchmark-behavior-findings.md#compare-a-local-proxy-with-released-scores))
+   shows local proxies reversing native acceptance ordering;
+   [DuoDiscover](https://arxiv.org/abs/2610.17184) shows adding uncalibrated
+   yardsticks *degraded* performance (`12.85x / 69.12%` to `10.33x / 66.91%`,
+   with `41%`–`45%` of yardsticks invalidating across code edits) until explicit
+   fidelity gating lifted outcomes to `14.93x / 80.80%`; and
+   [LangChain's Terminal-Bench 2.0 study](https://www.langchain.com/blog/improving-deep-agents-with-harness-engineering)
+   showed uniform `xhigh` reasoning dropped accuracy (`63.6% -> 53.9%`) via
+   timeout cliffs without phase-aware effort control. Governed yardstick
+   calibration and tail-latency pressure gating remain necessary safeguards around
+   native optimization.
+5. **Stateful dependency-DAG, coverage, and workspace/settlement invariants:**
+   Multi-unit dependency frontiers, non-episodic environments, linked-worktree
+   patch normalization, and idempotent settlement cannot be repaired by solver
+   scripts inside the container. [LoopsBench](https://arxiv.org/abs/2608.00267)
+   (`112` tasks, `>5,300` dependency-DAG units) holds even top loop-enabled SOTA
+   at `25.00%`; on `EdgeBench` `New Foundations Consistency`, an explicit
+   declaration-coverage ledger broke an early `91.9412` plateau up to `92.3419`
+   ([EdgeBench feedback and memory](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/));
+   and real benchmark infrastructure requires host-owned invariants such as
+   [`workspace_delivery.py`](../../../benchmark/deepswe-gptxhigh-v1/workspace_delivery.py)
+   (normalizing linked-worktree diffs back to `/app`),
+   [`frontiercs2/README.md`](../../../benchmark/frontiercs2/README.md) (`v2.patch`
+   tmpfs `docker exec` streaming and durable admission recovery), and
+   [`widesearch/pier/README.md`](../../../benchmark/widesearch/pier/README.md)
+   (`$HOME` bind mounts, numeric `reward.json` validation, and
+   `provider_credential_shell_excluded`).
+
 ## 3. Benchmark Primer and Fit Analysis
 
 Benchmark counts and leaderboard values in this section are an informative
@@ -364,6 +467,86 @@ The six must still be reported in their native metric spaces; StartupBench
 rubrics, LoopsBench verifier tiers, and WideSearch Item F1 must not be averaged
 into one number or into the ALE/LHTB/DeepSWE results.
 
+### 3.8 External Benchmark Survey and Priority Ranking (2026-11)
+
+This 2026-11-15 audit updates the August 2026 six-benchmark primer (§3.1–§3.7)
+and guides integration sequencing (§9, §11) across EdgeBench and 20 external
+benchmarks. Rankings weigh four empirical criteria: (1) remaining frontier
+headroom against pure base-model scaling, (2) verifier determinism, resistance to
+Goodharting, and availability of continuous or multi-unit progress signals, (3)
+direct stress on the five governed failure regimes (§2.2), and (4) repository
+readiness (`benchmark/` holds `52,031` `.py` LOC across `177` files: `27,338`
+tests, `9,082` `runtime/`, `6,899` `edgebench/`, `4,433` `deepswe*`, `1,430`
+`swe-marathon/`, `1,285` `frontiercs2*`, `596` `LHTB/`, `592` `widesearch/`,
+`376` root helpers) versus Linux x86\_64 Docker, GPU, and cloud requirements.
+
+**Shared prerequisite before scaling multi-arm studies:** Scaling new Harbor,
+cloud, or GPU benchmark runs is gated on converging adapters onto the unified
+`benchmark/runtime/` Turn/Harbor entrypoint with matching native Stop-hook
+baseline parity and clean E0–E2 lifecycle, integrity, and countability gates
+(§11.2), rather than cloning bespoke per-benchmark runners.
+
+#### Priority Matrix
+
+| Tier | Benchmark | Tasks & Horizon | Reward / Verifier Shape | Frontier Headroom & Regime Signal | Engineering Readiness & Platform Constraints |
+|---|---|---|---|---|---|
+| **P0** | **EdgeBench** | Continuous algorithmic optimization (`12h–18h` runs) | Deterministic online cooldown judge; scalar task metrics (higher/lower by task) | Strong Iso-Budget Pareto separation (`New Foundations 92.3419`, `ANN 7,159 QPS`, while strong Stop-hook `Official` still leads on `Portfolio 53.87`, `Grid 1,791`) | **Ready & evaluated** (`edgebench/` `6,899` LOC); requires **Linux x86\_64 Docker + SForge `iptables`** (macOS Docker socket lacks network boundary) |
+| **P0** | **FrontierCS-2** | `48` public / `150` total (`13` domains); `5h`, `3–100` capped train calls | Deterministic hidden-workload Driver/Judge; binary `PASS` (must beat reference on *every* metric/workload) + `FCI`/`FDI` scalar | Top of 12 evaluated agents passes **`58%`**, **`16/48` at `0%`**; directly tests proxy calibration and multi-metric resistance | **Pilot bridge ready** (`frontiercs2*` `1,285` LOC, `v2.patch` transport repair; frozen v1 `batch_local_counting` archive is `score_countable=false`, `integrity_qualified=false`; `0` countable LoopX outcomes yet); **Linux x86\_64 Docker required** (macOS ARM Rosetta/QEMU breaks seccomp); EKS+Modal eval `~$1,400`/48 tasks |
+| **P0** | **LHTB / LHTB 2.0** | `v1: 46` (`90m`); `v2.0: 77` (`46` orig + `31` reconstruction, `3h` w/ `30m` ckpts) | Continuous scalar `[0,1]` + 6-stage ladder (`R>=0.95`/`1.0`) + frozen-process Harbor binary rejection loop | `v1` LoopX `0.4948` vs Goal `0.4475` / Plain `0.4218` (unequal budgets); `v2.0` top `0.692` (`37/77`); `14/17` early perfect leaks proved verifier-isolation need | **`v1` Harbor adapter ready** (`LHTB/` `596` LOC); **`LHTB 2.0` has `0` LOC** in repo; non-GPU Docker / Daytona |
+| **P0** | **LoopsBench** | `112` dependency-DAG tasks (`>5,300` units, `8` langs) | Deterministic unit + regression tests along ready DAG frontier (`incomplete` / `partial` / `complete`) | Top loop-enabled SOTA **`25.00%`** (`Opus-4.7` + Claude Code + outer loop); built specifically for outer-loop DAG & regression invariants | **`0` active code** in `benchmark/` (planned in §3.5/§9.5); non-GPU Linux x86\_64 Docker preferred |
+| **P1** | **SWE-Marathon** | `20` ultra-long tasks (`15`-task v1.1 subset in-repo); `avg 27.2M tok`/run | Multi-layer adversarial verifier; binary solve + continuous `partial_score` | `v1` `<30%` frontier solve, **`13.8%` rollout reward hacking**; in-repo `30%` timeout `0.333 (5/15)` HB vs `0.267 (4/15)` Plain/Goal | **Ready & evaluated** (`swe-marathon/` `1,430` LOC); `amd64` multi-lang Docker; high token & wall-time cost (`1,592m–2,375m` per 15-task arm) |
+| **P1** | **PaperBenchX** *(preferred over PaperBench)* | `93` papers (`12` areas / `6` non-ML sciences, `>3,000` criteria); `4–24h` (med `7h`) | Clean-from-scratch replay + deterministic checks & shared LLM-Judge (`>=90%` full pass) | Mean rubric `27.53–59.08%`, **`14%` full reproduction** (`>=90%`) — sharper validation gap & broader stacks than `PaperBench` (`20` ICML'24 papers, `24–36h`, `26.0%` SOTA) | **`0` code** in repo (`~2–4 wk` lift); heavy Linux Docker + domain stacks (`HFSS`, `Meep`, `GPU4PySCF`, `Habitat`) + Judge API secret isolation |
+| **P1** | **ALE (Agents' Last Exam)** *(distinct from `ALE-Bench`)* | `1,500+` taxonomy (`v1.1: 122`: `119` CPU / `3` GPU, `78` Docker); multi-hour VMs | Post-run hidden reference `evaluate()`, scalar `[0,1]` | `<1%` full pass on hardest tier; tests cross-surface CLI+GUI professional transfer | **`0` active code** in repo (planned §3.1/§9.1; `~2–4 wk` lift); hard **GCP/GCE VM + CUA MCP** dependency (not locally runnable on macOS) |
+| **P1** | **WideSearch** | `200` (`100 EN + 100 ZH`, `18` industries); `44+` pages / `~2.3h` human time | Automated atomic table grader (`Item F1` / `Row F1` + binary `SR`); non-deterministic live web drift | Frontier `SR <= 5.1%` (`o3` multi-agent `5.1%`, single-agent `4.5%`, `Gemini 2.5 Pro 4.3%`); high fit for completeness/fan-out, low–med for iterative RSI | **Adapter + `pier` templates ready** (`widesearch/` `592` LOC, `0` executed runs); requires Linux/cloud `$HOME` bind mounts (macOS `/tmp` fails Colima) & `permitted_solving` network |
+| **P1** | **KernelBench / AlgoTune** | `KernelBench`: `250` PyTorch/CUDA ops (`L1–L3`+`L4`); `AlgoTune`: `154` SciPy/sklearn/CVXPY funcs | Deterministic correctness + GPU (`fast_p`) or CPU geom-mean speedup | `KernelBench` `<20% fast_1`; `AlgoTune` `AlgoTuner 1.72x` (`~2.05x` frontier); pure objective speedup for evolutionary/RLVR loops | **`0` code** in repo; `KernelBench` requires **NVIDIA CUDA/Triton GPU Linux/Modal** (impossible on Mac); `AlgoTune` requires **pinned multi-core Linux x86\_64** timing host |
+| **P2** | **ALE-Bench (SakanaAI)** *(distinct from `ALE`)* | `40` AtCoder Heuristic Contest tasks (`C++/Rust/Py`, `300+` cases); `150`-step loops | Deterministic relative heuristic score | Strong 1-shot vs iterative separation; trails human consistency | **`0` active code** in repo; heavy multi-core Linux/AWS Docker; upstream rules bar bundling private seeds/inputs |
+| **P2** | **StartupBench** | `97` deliverable tasks (`DOCX/XLSX/PPTX/PDF`, `6` domains, `25.3` rubrics/task) | Evidence views + weighted Agent-as-Judge `0–100` (`pass >= 90`, `92%` human agr.) | Top avg `Kimi-k3 73.67`, top `pass@1` `GPT-5.6-sol 31.27%`; low–med RSI fit (open-ended deliverable rubric) | **`0` active code** in repo (planned §3.4/§9.4); multi-turn office-artifact API + Judge boundary; non-GPU |
+| **P2** | **MLE-bench** | `75` Kaggle tasks (`22` Lite `158 GB`, `3.3 TB` total); `24h` std (LB paused `2026-04`) | Deterministic Kaggle metric + medal thresholds | Main SOTA `64.44±1.18%`; contamination risk on older Kaggle comps | **`0` active code** in repo; prohibitive infra (`36 vCPU`, `440 GB RAM`, `24 GB A10 GPU`, `3.3 TB` disk, Kaggle auth/LFS) |
+| **P2** | **tb-science** *(episodic transfer samples only; **excluded from RSI**)* | `96` merged tasks + `366` open PRs; Harbor format | **100% binary `1/0` `reward.txt`** (`public` agent vs `no-network` verifier) | High frontier difficulty on selected PRs, but **unsuitable for RSI** (zero per-gen gradient, no train/held-out split, CI-locked single horizon) | **`0` code** in repo (`~1–2 wk` Harbor lift); `ci_checks/check-task-timeout.sh` hard-locks **`28800s` (`8h`)**; Linux x86\_64 Docker preferred |
+| **Control-Only / Deprioritized** | **DeepSWE** | `113` original tasks (`91` repos, `5` langs) | Hand-written behavioral verifiers (`0/1` binary, `1.4%` judge disagreement) | `v1.1` **approaching saturation around a `74%` three-way frontier tie**; retain only as sanity/regression control | **Ready** (`4,433` LOC w/ `workspace_delivery.py`); Linux Docker host worker required; historical v1 arms unequal-budget |
+| **Control-Only / Deprioritized** | **SWE-bench Pro** | `v1: 1,865` (`731` pub); `v2: 642` + `HARD-51` | Patch + unit tests (`0/1` binary; `32.4%` judge disagreement) | **`HARD-51` up to `98.0%`** — saturating under base-model scaling | **`0` active code** in repo; `linux/amd64` Docker images (`ghcr.io`), non-native on Mac ARM |
+| **Control-Only / Deprioritized** | **CORE-Bench** | `270` (`90` papers, `3` diffs); via HAL | Output-question binary match | Rose `21% -> 95%` (Opus 4.5 after Anthropic fixed tolerances/scaffold bugs) — saturated | **`0` code** in repo; Docker/Azure (`Python`/`R`) |
+| **Control-Only / Deprioritized** | **ScienceAgentBench** | `102` (`44` papers); `30m` Docker runs | Valid Execution + rubric/code check | `32.4%–42.2%` (`o1-preview`); single-script scope limits long-horizon control separation | **`0` code** in repo; `30m` / 8-thread Docker |
+| **Control-Only / Deprioritized** | **BixBench** | `60` capsules / `205` Qs (`v1.5`); `24–48h` 5-rep | Binary exact-match MCQ / LLM-Judge open answer | `17%` open-answer (older baselines, lacks 2026 SOTA); high 5-replica binary cost | **`0` code** in repo; high multi-replica API cost |
+| **Control-Only / Deprioritized** | **FrontierScience** | `160` QA items (`100` Olympiad + `60` Research) | Short-answer + 10-pt rubric | `GPT-5.2 77%` Olympiad / `25%` Research; no interactive repo/sandbox loop | **`0` code** in repo; API reasoning only |
+| **Control-Only / Deprioritized** | **RE-Bench** *(deprecated)* | `7` ML R&D tasks (`2h–32h`) | Deterministic ML eval (clock/memory exploit history) | **Deprecated upstream** (`METR/RE-Bench`); superseded by `FrontierCS-2`, `PaperBenchX`, and `KernelBench` | **`0` code** in repo; Linux x86\_64 + NVIDIA CUDA GPU required |
+
+#### Key Operational Disambiguations and Exclusions
+
+1. **`ALE` versus `SakanaAI/ALE-Bench` (and non-existent `"ALE Science"`):**
+   No public benchmark or track named `"ALE Science"` exists. `ALE`
+   ([`rdi-berkeley/agents-last-exam`](https://github.com/rdi-berkeley/agents-last-exam))
+   is a broad professional CLI+GUI suite containing science subdomains, whereas
+   `ALE-Bench` ([`SakanaAI/ALE-Bench`](https://github.com/SakanaAI/ALE-Bench))
+   covers AtCoder Heuristic Contest algorithmic optimization. They are ranked
+   separately above (`P1` vs `P2`).
+2. **Why `tb-science` is excluded from RSI and retained only for episodic transfer:**
+   Following the `laude-institute` to `harbor-framework` migration,
+   [`harbor-framework/terminal-bench-science`](https://github.com/harbor-framework/terminal-bench-science)
+   is a scientific suite separate from `terminal-bench-2` (`89` general tasks at
+   `900s` default timeout). Despite `96` merged tasks and `366` open PRs,
+   `tb-science` is **not suited for iterative RSI loops**: CI
+   (`ci_checks/check-task-timeout.sh`) hard-locks `[agent] timeout_sec == 28800.0`
+   (`8h`), `reward.txt` is **100% binary `1/0`** (even when internal scorers compute
+   continuous metrics), there is no train/held-out split, `[agent] network_mode` is
+   `public`, and `rubrics/task-implementation.toml` rejects open-ended
+   hypothesis tasks. Retain only hard episodic transfer samples (e.g., Lean
+   formalization `#2530`, `#2197`, `#2653`, `#2629`, biology `#1518`, physics
+   `#2804`, or hosted GPU control `#2531`).
+3. **`PaperBenchX` over legacy `PaperBench`, and `DeepSWE` terminology:**
+   `PaperBenchX` (`93` cross-discipline non-ML science papers with clean replay)
+   replaces legacy `PaperBench` (`20` ICML'24 ML papers) as the primary `P1`
+   reproduction target. `DeepSWE` here designates Datacurve's `113`-task
+   benchmark ([`datacurve-ai/deep-swe`](https://deepswe.datacurve.ai/)),
+   distinct from Agentica's `DeepSWE-Preview` model; its saturation near `74%`
+   shifts new `C2`/`C3` causal investment toward `P0`/`P1` benchmarks.
+4. **Platform execution constraints:** Do not run score-countable benchmarks for Linux-seccomp,
+   `iptables`, CUDA, or multi-core timing suites (`EdgeBench`, `FrontierCS-2`,
+   `KernelBench`, `AlgoTune`, `SWE-bench Pro`, `tb-science`) on macOS ARM64
+   Rosetta/QEMU emulation; run them on pinned Linux x86\_64 (and dedicated CUDA
+   or cloud hosts where required), and avoid macOS `/tmp` bind mounts on Colima
+   (`widesearch/pier/README.md`).
+
 ## 4. Claim Ladder
 
 Every public result must name the highest claim level it supports.
@@ -421,7 +604,14 @@ family” are not identity.
 The program distinguishes four arm types:
 
 1. **Native baseline**: the benchmark's supported reference scaffold or a
-   declared CLI harness with no LoopX control.
+   declared CLI harness with no LoopX control. On **episodic RSI and scalar
+   optimization tracks**, Native baseline evaluations must additionally account
+   for or include a zero-protocol-tax **Raw-Artifact Reset Baseline** (`all prior
+   artifacts + scalar scores` across clean per-generation context resets, using
+   only the model's native filesystem/Python retrieval without LoopX packets,
+   ledgers, or outer control overhead), so any **Governed LoopX** claim proves
+   causal uplift beyond self-authored retrieval rather than winning against
+   strawman lossy context compression (§2.2).
 2. **Passive LoopX**: identical worker decisions and benchmark contract, with
    read-only LoopX observation and compact settlement.
 3. **Governed LoopX**: a declared LoopX profile may affect continuation,
@@ -1599,6 +1789,7 @@ This is a living research RFC, not a frozen benchmark snapshot.
 | 2026-08-23 | Add an engineering readiness ladder and bounded delivery-slice rules so repository construction is tracked separately from C0--C4 research claims. |
 | 2026-08-25 | Add StartupBench, LoopsBench, and WideSearch to the benchmark primer and integration plan as a second, complementary trio; require native metrics per benchmark and keep benchmark material out of reusable LoopX state. |
 | 2026-10-16 | Archive [feedback-first observations](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md) separately from active practice. Runner source-subset and configuration-projection corrections remain E0/E1 work; mixed-profile, interrupted and running observations do not close E2/E3 or isolate a planning effect. General guard re-entry relaxation is deferred pending affected-caller validation. |
+| 2026-11-15 | Codify the Bitter-Lesson boundary and five governed control-plane failure regimes (§2.2), require a zero-protocol-tax Raw-Artifact Reset Baseline on episodic RSI / scalar optimization tracks (§5.2), and adopt the 2026-11 benchmark portfolio ranking (§3.8): **P0** (`EdgeBench`, `FrontierCS-2`, `LHTB / LHTB 2.0`, `LoopsBench`), **P1** (`SWE-Marathon`, `PaperBenchX` over `PaperBench`, `ALE` distinct from `ALE-Bench`, `WideSearch`, `KernelBench` / `AlgoTune`), **P2** (`ALE-Bench`, `StartupBench`, `MLE-bench`, `tb-science` episodic transfer samples only—excluded from RSI due to CI-locked `28800s` budget and 100% binary `reward.txt`), and **Control-Only / Deprioritized** (`DeepSWE`, `SWE-bench Pro`, `CORE-Bench`, `ScienceAgentBench`, `BixBench`, `FrontierScience`, deprecated `RE-Bench`), gating multi-arm expansion on unified `benchmark/runtime/` + Stop-hook E0–E2 readiness and Linux x86\_64 / GPU hosts. |
 
 ## 18. References
 
@@ -1607,11 +1798,13 @@ This is a living research RFC, not a frozen benchmark snapshot.
 - [Agents' Last Exam evaluation framework](https://github.com/rdi-berkeley/agents-last-exam)
 - [Long-Horizon Terminal Benchmark repository](https://github.com/zli12321/LHTB)
 - [LHTB benchmark report](https://zli12321.github.io/LHTB/index.html)
+- [LHTB paper](https://arxiv.org/abs/2607.08964)
 - [DeepSWE project and leaderboard](https://deepswe.datacurve.ai/)
 - [DeepSWE paper](https://arxiv.org/abs/2607.07946)
 - [DeepSWE run guide](https://deepswe.datacurve.ai/run)
 - [StartupBench project](https://startupbench.github.io/)
 - [StartupBench paper](https://startupbench.github.io/assets/StartupBench.pdf)
+- [StartupBench arXiv](https://arxiv.org/abs/2608.17800)
 - [LoopsBench project](https://loopsbench.ai/)
 - [LoopsBench repository](https://github.com/microsoft/Loopsbench)
 - [LoopsBench paper](https://arxiv.org/abs/2608.00267)
@@ -1620,6 +1813,59 @@ This is a living research RFC, not a frozen benchmark snapshot.
 - [WideSearch repository](https://github.com/ByteDance-Seed/WideSearch)
 - [WideSearch paper](https://arxiv.org/abs/2508.07999)
 - [WideSearch dataset](https://huggingface.co/datasets/ByteDance-Seed/WideSearch)
+- [EdgeBench repository](https://github.com/ByteDance-Seed/EdgeBench)
+- [FrontierCS-2 project](https://frontier-cs.org/)
+- [FrontierCS-2 repository](https://github.com/FrontierCS/FrontierCS-2)
+- [FrontierCS-2 paper](https://arxiv.org/abs/2610.29932)
+- [SWE-Marathon repository](https://github.com/abundant-ai/swe-marathon)
+- [SWE-Marathon paper](https://arxiv.org/abs/2606.07682)
+- [PaperBenchX repository](https://github.com/UniPat-AI/PaperBenchX)
+- [PaperBenchX paper](https://arxiv.org/abs/2610.39744)
+- [PaperBench reference implementation](https://github.com/openai/frontier-evals/tree/main/project/paperbench)
+- [PaperBench paper](https://arxiv.org/abs/2504.01848)
+- [KernelBench repository](https://github.com/ScalingIntelligence/KernelBench)
+- [KernelBench paper](https://arxiv.org/abs/2502.10517)
+- [AlgoTune repository](https://github.com/oripress/AlgoTune)
+- [AlgoTune paper](https://arxiv.org/abs/2507.15887)
+- [ALE-Bench (SakanaAI) repository](https://github.com/SakanaAI/ALE-Bench)
+- [ALE-Bench paper](https://arxiv.org/abs/2506.09050)
+- [MLE-bench repository](https://github.com/openai/mle-bench)
+- [MLE-bench paper](https://arxiv.org/abs/2410.07095)
+- [Terminal-Bench Science project](https://www.terminal-bench-science.ai/)
+- [Terminal-Bench Science repository](https://github.com/harbor-framework/terminal-bench-science)
+- [SWE-bench Pro repository](https://github.com/scaleapi/SWE-bench_Pro-os)
+- [SWE-bench Pro paper](https://arxiv.org/abs/2509.16941)
+- [CORE-Bench repository](https://github.com/siegelz/core-bench)
+- [CORE-Bench paper](https://arxiv.org/abs/2409.11363)
+- [ScienceAgentBench repository](https://github.com/OSU-NLP-Group/ScienceAgentBench)
+- [ScienceAgentBench paper](https://arxiv.org/abs/2410.05080)
+- [BixBench repository](https://github.com/Future-House/BixBench)
+- [BixBench paper](https://arxiv.org/abs/2503.00096)
+- [RE-Bench (deprecated) repository](https://github.com/METR/RE-Bench)
+- [RE-Bench paper](https://arxiv.org/abs/2411.15114)
+- [Meta-Harness paper](https://arxiv.org/abs/2603.28052)
+- [Meta-Harness repository](https://github.com/stanford-iris-lab/meta-harness)
+- [RRSI paper](https://arxiv.org/abs/2609.24972)
+- [RRSI repository](https://github.com/google-research/rrsi)
+- [Harness Updating Is Not Harness Benefit](https://arxiv.org/abs/2605.30621)
+- [Agentic Harness Engineering (AHE)](https://arxiv.org/abs/2604.25850)
+- [Self-Harness](https://arxiv.org/abs/2606.09498)
+- [Reward Hacking Benchmark (RHB)](https://arxiv.org/abs/2605.02964)
+- [DuoDiscover paper](https://arxiv.org/abs/2610.17184)
+- [AlphaEvolve paper](https://arxiv.org/abs/2506.13131)
+- [Darwin Gödel Machine (DGM) paper](https://arxiv.org/abs/2505.22954)
+- [Darwin Gödel Machine repository](https://github.com/jennyzzt/dgm)
+- [LangChain: Improving Deep Agents with harness engineering](https://www.langchain.com/blog/improving-deep-agents-with-harness-engineering)
+- [Vercel `d0`: We removed 80% of our agent's tools](https://vercel.com/blog/we-removed-80-percent-of-our-agents-tools)
+- [METR: Recent frontier models are reward hacking](https://metr.org/blog/2025-06-05-recent-reward-hacking/)
+- [Anthropic: Demystifying evals for AI agents](https://www.anthropic.com/research/demystifying-evals-for-ai-agents)
+- [Anthropic: Effective harnesses for long-running agents](https://www.anthropic.com/research/effective-harnesses-for-long-running-agents)
+- [Anthropic: Harness design for long-running application development](https://www.anthropic.com/research/harness-design-long-running-apps)
+- [LoopX: Context delivery study](https://loopx-project.github.io/loopx/blog/context-delivery/)
+- [LoopX: EdgeBench feedback and memory study](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)
+- [LoopX: EdgeBench long-horizon repairs](https://loopx-project.github.io/loopx/blog/edgebench-long-horizon-repairs/)
+- [Frontier Science Research Program v0](./frontier-science-research-program-v0.md)
+- [Exploratory benchmark behavior findings](../../reference/benchmark-behavior-findings.md)
 - [Benchmark research workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md)
 - [DeepSWE research practice](https://github.com/huangruiteng/loopx/blob/main/benchmark/deepswe/README.md)
 - [Legacy benchmark history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)
