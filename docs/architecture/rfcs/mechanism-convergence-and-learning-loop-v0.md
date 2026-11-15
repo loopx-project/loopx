@@ -305,6 +305,18 @@ this path; the obsolete test consumer failed before its reader migration.
 This is scripted local execution and caller qualification. Actual model
 adoption, calibration, matched-budget and cross-task benefit remain unproven.
 
+Backend names also need actual provider evidence. The shared
+[local authority fixture](../../../tests/control_plane/canonical_authority_fixture.py)
+now rejects unsupported providers before storage or writer-fence effects;
+[CLI controls](../../../tests/control_plane/test_canonical_authority_fixture.py)
+verify actual File/SQLite readback and preserve state on rejection. Previously,
+a PostgreSQL label silently initialized File authority. The existing
+[PostgreSQL remote task candidate](../../reference/remote-authority-task-service-v0.md)
+is separately qualified through real TLS, restricted roles, task lifecycle and
+read-only quota observation. It admits no ordinary host Turn. These service
+checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
+adding another execution profile to this slice.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

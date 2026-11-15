@@ -291,6 +291,17 @@ soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成�
 这取得脚本式本地执行与调用方资格；实际模型采用、校准、同预算与跨任务
 收益仍未证明。
 
+后端名称也须有实际 provider 证据。共享的
+[本地 authority fixture](../../../tests/control_plane/canonical_authority_fixture.py)
+现于存储或 writer-fence 副作用前拒绝不支持的 provider；
+[CLI 对照](../../../tests/control_plane/test_canonical_authority_fixture.py)
+验证真实 File/SQLite 回读及拒绝时状态不变。此前 PostgreSQL 标签会静默
+初始化 File authority。既有
+[PostgreSQL remote task 候选](../../reference/remote-authority-task-service-v0.md)
+另经真实 TLS、受限角色、任务生命周期和只读 quota 观察验证，仍不准入普通
+host Turn。因此这些服务检查不能取得普通 PostgreSQL 反馈 Turn 资格，
+也不构成本切片新增执行 profile 的理由。
+
 首个任务须确有反馈或方法选择需求。已有链完整时直接复用；有缺口时由真实消费者证明并修复，不为配合示例制造失败。运行实验、训练模型和发布过程各沿原权限，本文不占用其他 lane 配额或预设 PR 数。
 
 ## 12. 待确认的关键选择
