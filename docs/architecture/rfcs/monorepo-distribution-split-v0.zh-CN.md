@@ -3306,3 +3306,38 @@ R1/M3、C1 切换和原目标回归仍未完成资格验证。
   Goal 安装可信检查器，不授权模型或 browser 命令，也不完成首个 Task 自动采用。
   完整 V1–V5/V10、原生模型与 context 保留、D2/D5 闭包、渐进控制、可比完整成本、
   R1/M3 和 C1 切换仍未通过资格验证；原验收与完整目标回归门继续保留。
+
+### 2026-11-15 — 首个 Goal 保留原注册会话
+
+- **缺口：**默认 Codex Goal 创建打开了未分配的 Goal 会话。重入可能再开旧式
+  会话；打开响应丢失后可能选中后来创建的 Session，回执也未复核实际存储身份。
+- **增量：**既有 TypeScript presentation owner 为新的默认 Codex Session 选择
+  注册 Agent 身份。Chat owner 将打开操作绑定到原创建操作，只复用已发布的原
+  Session，并在派发和回执交付前核对实际 Goal、Agent、路由、生命周期及 workspace。
+  未知 reservation、无法确认或不明确的历史原会话会停止恢复。已有记录的旧式 Session、显式原生
+  token budget 和其他 endpoint 保留原路径。前端通过既有目录、Session 与历史
+  reader 进入原 Agent 会话；无效回执显示恢复入口，不另开会话。
+- **证据：**隔离的真实 Chat/Core/File/SQLite 测试覆盖有明确 owner 检查时采用原
+  Task、检查缺失或失败时拒绝、历史保留、并发打开已发布 Session、响应丢失、原
+  action 重放及身份变化。未改变的运行时兼容测试在不可变基线与候选均通过 106
+  项。presentation reducer 通过 27 项测试，56 组 base/head 向量保留所有非路由
+  字段。浏览器检查覆盖填充后的桌面／窄屏、reload、无效回执，以及一次重新连接
+  恢复原历史。
+- **可维护性：**Session 读回在既有 Chat Session 入口 owner 复用。Runtime
+  coordinator 因精确打开接口与早期身份门由 2,503 增至 2,524 行；reviewed ceiling 记录这一
+  有界增量，没有重复读回逻辑或新增执行管线。这不是延迟、默认闭包或完整成本资格。
+- **边界：**普通首消息及后续消息仍为普通只读 Chat。有明确检查的原 Task 使用
+  既有 Native owner；本次不自动提供可信检查器，也不自动采用每个回复。恢复证据
+  覆盖已发布 Session，不覆盖尚未记录的原生 thread-start 效果。真实原生尝试失败：
+  当前配置的模型不受所选账号支持。合成成功与 account-read readiness 不能覆盖
+  该负面结果。完整 V1–V5/V10、模型／context 保留、D2/D5 闭包、渐进控制、可比
+  完整成本、R1/M3 及 C1 切换仍未通过资格验证。原十项要求保留，完成前仍需完整
+  原目标回归。
+
+当前入口设计将原回复与消息输入保留在一起，重入沿记录的 Session，不选择另一条
+会话。下方桌面与窄屏参考图使用 packaged frontend、真实 SQLite/Chat owner 和
+合成回复，未验证的验收状态继续可见；它们说明展示边界，不构成模型或成果资格。
+
+![桌面的原 Goal 会话](assets/goal-entry-original-session-desktop.webp)
+
+![窄屏的原 Goal 会话](assets/goal-entry-original-session-narrow.webp)

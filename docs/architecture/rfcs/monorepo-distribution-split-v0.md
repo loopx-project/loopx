@@ -4257,3 +4257,52 @@ File/SQLite negative cases guard this boundary without changing valid activation
   Task adoption. Full V1–V5/V10, native-model/context retention, D2/D5 closure,
   progressive controls, comparable complete costs, R1/M3 and C1 cutover remain
   unqualified; preserve original acceptance and full-goal regression gates.
+
+### 2026-11-15 — First Goal retains its original registered conversation
+
+- **Gap:** default Codex Goal creation opened an unassigned Goal conversation.
+  Re-entry could open another legacy conversation; a lost opening response
+  could select a later Session, and the receipt did not re-read stored identity.
+- **Delta:** the existing TypeScript presentation owner selects the registered
+  Agent identity for a new default Codex Session. The Chat owner binds opening
+  to the original creation operation, reuses only that published Session and
+  rechecks the actual Goal, Agent, route, lifetime and workspace before dispatch
+  and receipt delivery. Unknown reservations and unidentified or ambiguous
+  historical originals hold recovery. Existing recorded legacy Sessions, explicit native token budgets and
+  other endpoints retain their paths. The frontend enters the original Agent
+  conversation through existing directory, Session and history readers; invalid
+  receipts expose recovery instead of opening another conversation.
+- **Evidence:** isolated real Chat/Core/File/SQLite tests exercise original-Task
+  adoption with explicit owner checks, missing/failed-check refusal, retained
+  history, concurrent published-Session opening, lost responses, original-action
+  replay and changed identities. The unchanged runtime compatibility corpus
+  passes 106 cases on both the immutable base and candidate. The presentation
+  reducer passes its 27-case suite and preserves all non-routing fields in
+  56 base/head vectors. Browser checks cover populated desktop/narrow views,
+  reload, invalid receipts and one reconnect restoring original history.
+- **Maintainability:** Session readback is shared in the existing Chat Session
+  entry owner. The Runtime coordinator grows from 2,503 to 2,524 lines for the
+  exact opening seam and early identity fence; its reviewed ceiling records that bounded change rather
+  than duplicating readback or adding another execution pipeline. This is no
+  latency, default-closure or complete-cost qualification.
+- **Boundary:** ordinary first and subsequent messages remain ordinary read-only
+  Chat. An explicitly checked original Task uses the existing Native owner;
+  this does not automatically provide a trusted checker or adopt every reply.
+  Recovery evidence covers published Sessions, not an unrecorded native
+  thread-start effect. A real native attempt failed: its configured model is
+  unsupported by the selected account. Synthetic success and account-read
+  readiness do not override that negative result. Full V1–V5/V10, model/context
+  retention, D2/D5 closure, progressive controls, comparable complete costs,
+  R1/M3 and C1 cutover remain unqualified. Preserve the original ten requirements
+  and run full original-goal regression before completion.
+
+The current entry design keeps the original reply and message input together.
+Re-entry follows the recorded Session rather than selecting a new conversation.
+These desktop and narrow references show the packaged frontend with its real
+SQLite/Chat owners and synthetic replies; the unverified acceptance remains
+visible. They illustrate the presentation boundary, not model or outcome
+qualification.
+
+![Original Goal conversation on desktop](assets/goal-entry-original-session-desktop.webp)
+
+![Original Goal conversation at a narrow viewport](assets/goal-entry-original-session-narrow.webp)
