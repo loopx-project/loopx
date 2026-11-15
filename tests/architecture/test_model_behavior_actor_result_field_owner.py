@@ -15,11 +15,14 @@ value set shared with ``_ACTOR_RESULT_FIELDS`` is invisible to a name-keyed scan
 This guard keys on the **folded value** instead, so a renamed restatement is
 caught and a same-name-different-value neighbour is never swept.
 
-Enforcement is keyed on the **field binding**, not on every same-value literal
-in the two validation entry-point files: the owner binds ``_ACTOR_RESULT_FIELDS``
-exactly once at module level, and the consumer borrows that object (identity) and
-binds no field set of its own. The two normalizers' accepted keys are pinned by
-behavioural parity, so a migration that silently changed them fails here.
+Enforcement is keyed on the **field binding** and its **actual usage**, not on
+every same-value literal in the two validation entry-point files: the owner binds
+``_ACTOR_RESULT_FIELDS`` exactly once at module level, and the consumer borrows
+that object (identity) and binds no field set of its own. A distinguishable-set
+regression perturbs the borrowed object and requires each normalizer's unknown-key
+check to follow it, so a renamed equal-value local copy cannot silently take over
+validation. Behavioural parity additionally pins the accepted keys, so a migration
+that silently changed them fails here.
 
 Every other same-value literal -- including independent data in the *same* file,
 e.g. an ordered ``preview_columns()`` presentation tuple -- is **advisory** only
@@ -212,6 +215,30 @@ def test_the_four_owner_fields_are_not_unknown_to_either() -> None:
     with pytest.raises(ValueError) as consumer_error:
         consumer.normalize_onboarding_model_behavior_actor_result(raw, phase="entry")
     assert "unknown actor result field" not in str(consumer_error.value)
+
+
+@pytest.mark.parametrize(
+    "module,normalize",
+    [
+        (owner, owner.normalize_model_behavior_actor_result),
+        (consumer, consumer.normalize_onboarding_model_behavior_actor_result),
+    ],
+    ids=["owner", "consumer"],
+)
+def test_each_normalizer_unknown_check_tracks_the_owner_object(
+    module, normalize, monkeypatch
+) -> None:
+    # Usage regression: a renamed equal-value local copy must not be able to take
+    # over the unknown-key check while the imported owner object is kept only for
+    # show. Perturb the borrowed object with a distinguishable set; the normalizer's
+    # rejection must follow it. A local copy ignores the perturbation and keeps
+    # accepting the removed key, so this fails.
+    monkeypatch.setattr(module, "_ACTOR_RESULT_FIELDS", frozenset(FIELDS - {"tool_calls"}))
+    raw = {key: None for key in FIELDS}
+    kwargs = {"phase": "entry"} if module is consumer else {}
+    with pytest.raises(ValueError) as err:
+        normalize(raw, **kwargs)
+    assert str(err.value) == "unknown actor result field(s): tool_calls"
 
 
 # --- the census bites every restatement form and leaves the others ----------------------
