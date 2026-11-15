@@ -278,8 +278,12 @@ native model adoption, complete-budget benefit, other backend qualification
 and integration of the in-flight execution proposals remain open.
 
 The same source checkpoint also rejects public quota CLI spending while a
-requested Turn attachment is pending: its writeback receipt follows successful
-delivery, and recovery delivers the original Run before repairing that receipt.
+requested attachment is pending. Both ordinary Turn and `refresh-state` receipt
+writers finish attachment delivery first; ordinary and combined refresh recovery
+deliver the verified original Run before repairing its receipt. File/SQLite
+failure controls cover progress, completion, terminal and successor Runs, plus
+interrupted first CLI delivery. Failure leaves no writeback receipt or debit;
+recovery preserves the original Run, invokes the Host once and debits once.
 The opted-in reader honors the verified successor history prefix during a
 wall-clock rollback while retaining the original work window and strict fallback
 for captures without a prefix. File/SQLite regressions cover both rejected early

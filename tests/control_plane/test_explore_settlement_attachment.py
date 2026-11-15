@@ -258,7 +258,8 @@ def test_turn_inline_result_uses_existing_writeback_owner(tmp_path, provider, mo
 
 @pytest.mark.parametrize("kind", ["progress", "completion", "terminal", "successor"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatch, provider, kind):
+@pytest.mark.parametrize("recovery", ["turn", "refresh", "combined_refresh"])
+def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatch, provider, kind, recovery):
     import contextlib
     import io
     import sys
@@ -269,6 +270,7 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
     from loopx.capabilities.explore.result_log import (
         build_explore_result_projection, load_explore_result_events_strict,
     )
+    from loopx.rollout_event_log import rollout_event_log_path
     from tests.control_plane.test_quota_settlement_cli import _spend_run_count
     from tests.test_loopx_turn_driver import (
         _completion_host_and_validation_scripts, _turn_run_once_completion_argv,
@@ -333,7 +335,8 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
     # The public quota entrypoint must observe the same pending delivery as
     # the Turn driver, rather than treating its primary Run as settled.
     from tests.control_plane.test_quota_settlement_cli import _run_cli
-    identity = json.loads(original_bytes)["settlement_identity"]
+    original_run = json.loads(original_bytes)
+    identity = original_run["settlement_identity"]
     spend_rc, premature = _run_cli(registry, runtime, "quota", "spend-slot",
         "--goal-id", identity["goal_id"], "--agent-id", identity["agent_id"],
         "--todo-id", identity["todo_id"], "--turn-instance-id", identity["turn_instance_id"],
@@ -341,7 +344,51 @@ def test_turn_recovers_requested_delivery_from_original_run(tmp_path, monkeypatc
     assert spend_rc != 0 and not premature.get("appended"), premature
     assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 0
     assert original.read_bytes() == original_bytes
+    event_log = rollout_event_log_path(runtime, identity["goal_id"])
+
+    def writeback_receipts():
+        return [row for line in event_log.read_text().splitlines()
+                if (row := json.loads(line))["event_kind"] == "refresh_state"]
+
+    assert writeback_receipts() == []
+    refresh_argv = ["--registry", str(registry), "--runtime-root", str(runtime),
+                    "--format", "json", "refresh-state",
+                    "--goal-id", identity["goal_id"], "--agent-id", identity["agent_id"],
+                    "--todo-id", identity["todo_id"], "--turn-instance-id", identity["turn_instance_id"],
+                    "--classification", original_run["classification"],
+                    "--delivery-outcome", original_run["delivery_outcome"],
+                    "--delivery-batch-scale", original_run["delivery_batch_scale"]]
+    if recovery == "combined_refresh":
+        refresh_argv.append("--settle-turn")
+    if recovery != "turn":
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(refresh_argv)
+        failed_refresh = json.loads(output.getvalue())
+        assert rc != 0 and not failed_refresh["ok"], json.dumps(failed_refresh, indent=2)
+        assert failed_refresh.get("refresh_recovery", {}).get("decision") == "repair_receipt", json.dumps(failed_refresh, indent=2)
+        assert not failed_refresh.get("receipt_repaired"), failed_refresh
+        assert writeback_receipts() == []
+        assert _spend_run_count(runtime, goal_id=identity["goal_id"]) == 0
+        assert not explore_result_log_path(runtime, identity["goal_id"]).exists()
+        assert original.read_bytes() == original_bytes
+        assert (workspace / "host-count.txt").read_text() == "1"
     available = True
+    if recovery != "turn":
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(refresh_argv)
+        repaired = json.loads(output.getvalue())
+        assert rc == 0 and repaired["ok"] and repaired["receipt_repaired"], json.dumps(repaired, indent=2)
+        assert len(writeback_receipts()) == 1
+        assert original.read_bytes() == original_bytes
+        if recovery == "refresh":
+            spend_rc, spent = _run_cli(registry, runtime, "quota", "spend-slot",
+                "--goal-id", identity["goal_id"], "--agent-id", identity["agent_id"],
+                "--todo-id", identity["todo_id"], "--turn-instance-id", identity["turn_instance_id"],
+                "--source", "heartbeat", "--slots", "1", "--execute", cwd=workspace)
+            assert spend_rc == 0 and spent["settlement_progress"]["state"] == "settled", spent
+        assert _spend_run_count(runtime, goal_id=identity["goal_id"]) == 1
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         rc = main([*argv, "--resume-turn-key", failed["resume_turn_key"], "--retry-failed-turn"])

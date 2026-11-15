@@ -215,8 +215,10 @@ completion path uses the same capability preflight before lifecycle effects;
 the primary writer still checks it again at commit. An omitted attachment adds
 no capability preflight, and recovery retains already committed completion.
 The quota writeback receipt is published only after requested attachment delivery
-finishes. The public quota CLI rejects a debit while that receipt is missing;
-recovery delivers from the original Run before repairing the receipt.
+finishes in both `turn run-once` and `refresh-state`. The public quota CLI rejects
+a debit while that receipt is missing. Ordinary refresh and
+`refresh-state --settle-turn` recovery deliver the verified original Run before
+repairing its receipt; a failed attachment leaves the same recovery pending without a debit.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use
