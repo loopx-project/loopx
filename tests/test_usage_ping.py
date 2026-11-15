@@ -6,6 +6,7 @@ import io
 import os
 import runpy
 import select
+import shutil
 import socket
 import subprocess
 import sys
@@ -308,6 +309,90 @@ def test_first_disclosure_respects_policy_overrides(isolated, monkeypatch, capsy
     assert usage_ping.begin('status') is None
     assert not usage_ping.state_path().exists()
     assert capsys.readouterr().err == ''
+
+
+@pytest.mark.parametrize('switch,value', [
+    ('LOOPX_USAGE_PING', 'off'), ('LOOPX_USAGE_PING', ' FALSE '),
+    ('LOOPX_USAGE_PING', '\ufeffOFF\ufeff'), ('DO_NOT_TRACK', 'yes'),
+    ('DO_NOT_TRACK', 'false'), ('CI', '1'), ('CI', ' YES '),
+])
+@pytest.mark.parametrize('current_notice', [False, True])
+def test_environment_opt_out_skips_automatic_cli_transport(
+    isolated, monkeypatch, capsys, switch, value, current_notice,
+):
+    # Real business dispatch and enabled hints prevent missing state or consent
+    # from masking automatic disclosure or warm-command transport attempts.
+    usage_ping.state_path().write_text(json.dumps({
+        'generation': 'fixture', 'consent': 'enabled',
+        'notice': {'version': 6 if current_notice else 0},
+    }))
+    monkeypatch.setenv(switch, value)
+    attempts = []
+
+    def unavailable_command():
+        attempts.append('transport')
+        raise OSError('fixture transport unavailable')
+
+    monkeypatch.setattr(usage_ping, '_command', unavailable_command)
+    assert main(['version', '--format', 'json']) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)['ok'] is True
+    assert captured.err == ''
+    assert attempts == []
+
+
+@pytest.mark.parametrize('switch,value', [
+    ('LOOPX_USAGE_PING', 'off'), ('DO_NOT_TRACK', 'yes'), ('CI', '1'),
+])
+@pytest.mark.parametrize('producer', ['finish', 'verified_return', 'direct', 'python_child'])
+def test_environment_opt_out_fences_late_or_direct_observation(
+    isolated, monkeypatch, switch, value, producer,
+):
+    usage_ping.state_path().write_text(json.dumps({
+        'generation': 'fixture', 'consent': 'enabled', 'notice': {'version': 6},
+    }))
+    monkeypatch.setenv(switch, value)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('opt-out spawned a child'))
+    monkeypatch.setattr(usage_ping, '_pin_caller_paths', lambda *a: pytest.fail('opt-out resolved caller paths'))
+    if producer == 'finish':
+        usage_ping.finish(('fixture', time.monotonic()), 'version', 0)
+    elif producer == 'verified_return':
+        usage_ping.observe_verified_return()
+    else:
+        usage_ping._detach({'path': 'caller-relative-state'}, command=(
+            [sys.executable, '-P', '-m', 'loopx.usage_goal'] if producer == 'python_child' else None
+        ))
+
+
+def test_environment_hint_matches_the_typescript_owner():
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('TypeScript owner parity requires the supported Node runtime')
+    # DNT differs from CI/PING. JS trims FEFF but not U+0085; Python's default
+    # strip has the opposite behavior for these two characters.
+    values = ['', '0', '1', 'false', 'true', 'no', 'off', 'yes', 'unknown',
+              ' FALSE ', ' OFF ', ' YES ', '\ufeff0\ufeff', '\ufeffOFF\ufeff',
+              '\ufefffalse\ufeff', '\u00850\u0085', '\u0085off\u0085']
+    environments = [{}] + [{key: value} for key in ('LOOPX_USAGE_PING', 'DO_NOT_TRACK', 'CI') for value in values]
+    environments += [
+        {'LOOPX_USAGE_PING': 'yes', 'DO_NOT_TRACK': '0', 'CI': 'false'},
+        {'LOOPX_USAGE_PING': 'off', 'DO_NOT_TRACK': 'yes', 'CI': '1'},
+    ]
+    owner = (Path(usage_ping.__file__).parent / 'control_plane/runtime/usage_statistics.ts').as_uri()
+    script = f'''import {{ blockedBy }} from {json.dumps(owner)};
+let input=''; for await (const chunk of process.stdin) input+=chunk;
+const reasons=JSON.parse(input).map(env=>blockedBy({{consent:'disabled'}},
+  {{env,version:'1.0.0',python:'3.13',channel:'source'}},'unused'));
+process.stdout.write(JSON.stringify(reasons));'''
+    result = subprocess.run([node, '--no-warnings', '--experimental-strip-types', '--input-type=module', '-e', script],
+                            input=json.dumps(environments), capture_output=True, text=True, timeout=20, check=True)
+    reasons = json.loads(result.stdout)
+    assert len(reasons) == len(environments)
+    for env, reason in zip(environments, reasons):
+        # Disabled consent makes the existing owner return before filesystem or
+        # sending when no environment suppressor exists; this does not enable it.
+        expected = reason in {'LOOPX_USAGE_PING', 'DO_NOT_TRACK', 'CI'}
+        assert usage_ping._environment_suppressed(env) is expected, (env, reason)
 
 
 def test_real_agent_cli_keeps_json_clean_and_sends_only_after_disclosure(isolated, collector, monkeypatch):
