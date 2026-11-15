@@ -19,8 +19,9 @@ Enforcement is keyed on the **field binding** and its **actual usage**, not on
 every same-value literal in the two validation entry-point files: the owner binds
 ``_ACTOR_RESULT_FIELDS`` exactly once at module level, and the consumer borrows
 that object (identity) and binds no field set of its own. A distinguishable-set
-regression perturbs the borrowed object and requires each normalizer's unknown-key
-check to follow it, so a renamed equal-value local copy cannot silently take over
+regression perturbs the borrowed object in both directions -- adding a field and
+removing one -- and requires each normalizer's unknown-key check to follow it, so
+a renamed equal-value local copy or an import-time alias cannot silently take over
 validation. Behavioural parity additionally pins the accepted keys, so a migration
 that silently changed them fails here.
 
@@ -217,27 +218,108 @@ def test_the_four_owner_fields_are_not_unknown_to_either() -> None:
     assert "unknown actor result field" not in str(consumer_error.value)
 
 
+EXTENSION_FIELD = "shared_extension"
+
+
+def _owner_valid_result() -> dict[str, object]:
+    return {
+        "schema_version": owner.MODEL_BEHAVIOR_ACTOR_RESULT_SCHEMA_VERSION,
+        "actor_ref": "actor:qualification",
+        "decision": {
+            "schema_version": owner.MODEL_BEHAVIOR_DECISION_SCHEMA_VERSION,
+            "decision": "execute",
+            "selected_todo_id": None,
+            "user_action_required": False,
+            "must_attempt_work": True,
+            "delivery_allowed": True,
+            "quiet_noop_allowed": False,
+            "external_write_requested": False,
+            "intended_action_kinds": ["read"],
+            "reason_codes": ["baseline_ok"],
+        },
+        "tool_calls": [],
+    }
+
+
+_ENTRY_CONTRACT = {
+    "route": "select_goal",
+    "goal_id": None,
+    "agent_id": None,
+    "action_command_ids": [],
+    "host_loop_activation_available": False,
+    "host_loop_activation_after_todo_write": False,
+    "requested_host_surface": None,
+    "host_surface": None,
+    "activation_method": None,
+    "visible_goal_command_available": False,
+    "writes_now": False,
+    "spends_quota_now": False,
+}
+
+
+def _onboarding_valid_result() -> dict[str, object]:
+    return {
+        "schema_version": consumer.ONBOARDING_MODEL_BEHAVIOR_RESULT_SCHEMA_VERSION,
+        "actor_ref": "actor:qualification",
+        "decision": {
+            "schema_version": (
+                consumer.ONBOARDING_MODEL_BEHAVIOR_DECISION_SCHEMA_VERSION
+            ),
+            "phase": "entry",
+            "next_action": "select_goal",
+            "semantic_contract": dict(_ENTRY_CONTRACT),
+            "reason_codes": ["baseline_ok"],
+        },
+        "tool_calls": [],
+    }
+
+
 @pytest.mark.parametrize(
-    "module,normalize",
+    "module,normalize,build_valid,kwargs",
     [
-        (owner, owner.normalize_model_behavior_actor_result),
-        (consumer, consumer.normalize_onboarding_model_behavior_actor_result),
+        pytest.param(
+            owner,
+            owner.normalize_model_behavior_actor_result,
+            _owner_valid_result,
+            {},
+            id="owner",
+        ),
+        pytest.param(
+            consumer,
+            consumer.normalize_onboarding_model_behavior_actor_result,
+            _onboarding_valid_result,
+            {"phase": "entry"},
+            id="consumer",
+        ),
     ],
-    ids=["owner", "consumer"],
 )
-def test_each_normalizer_unknown_check_tracks_the_owner_object(
-    module, normalize, monkeypatch
+def test_each_normalizer_follows_the_owner_object_in_both_directions(
+    module, normalize, build_valid, kwargs, monkeypatch
 ) -> None:
-    # Usage regression: a renamed equal-value local copy must not be able to take
-    # over the unknown-key check while the imported owner object is kept only for
-    # show. Perturb the borrowed object with a distinguishable set; the normalizer's
-    # rejection must follow it. A local copy ignores the perturbation and keeps
-    # accepting the removed key, so this fails.
-    monkeypatch.setattr(module, "_ACTOR_RESULT_FIELDS", frozenset(FIELDS - {"tool_calls"}))
-    raw = {key: None for key in FIELDS}
-    kwargs = {"phase": "entry"} if module is consumer else {}
+    # Usage regression, both directions, on each entry point's own known-legal
+    # result: a renamed equal-value local copy (or an import-time alias) must not
+    # take over the unknown-key check while the imported owner object is only for
+    # show. Only a check that reads the borrowed name on every call follows both
+    # perturbations.
+    baseline = normalize(build_valid(), **kwargs)
+
+    # The shared definition GAINS a field: a payload carrying it must still be
+    # accepted, and the canonical projection is unchanged. A local cap that lacks
+    # the new name rejects it here, which the removal direction alone cannot see.
+    monkeypatch.setattr(
+        module, "_ACTOR_RESULT_FIELDS", frozenset(FIELDS | {EXTENSION_FIELD})
+    )
+    extended = build_valid()
+    extended[EXTENSION_FIELD] = "extension"
+    assert normalize(extended, **kwargs) == baseline
+
+    # The shared definition LOSES a member: the same known-legal payload must be
+    # rejected by that member.
+    monkeypatch.setattr(
+        module, "_ACTOR_RESULT_FIELDS", frozenset(FIELDS - {"tool_calls"})
+    )
     with pytest.raises(ValueError) as err:
-        normalize(raw, **kwargs)
+        normalize(build_valid(), **kwargs)
     assert str(err.value) == "unknown actor result field(s): tool_calls"
 
 
