@@ -30,7 +30,23 @@ data["goals"].append(other)
 registry.write_text(json.dumps(data), encoding="utf-8")
 runtime = Path(data["common_runtime_root"])
 store, sessions = ChatActionStore(runtime / "chat/actions"), ChatSessionStore(runtime)
-controller = fixture["FakeRuntimeController"](sessions)
+
+
+class WorkspaceRuntimeController(fixture["FakeRuntimeController"]):
+    def __init__(self, store: ChatSessionStore, registry_path: Path, runtime_root: Path) -> None:
+        super().__init__(store)
+        self.store = store
+        self.registry_path = registry_path
+        self.coordination_runtime_root = runtime_root
+
+    def resume_session_queue(self, *, session_id: str, work_dir: Path, objective: str) -> None:
+        # Observe the queue target at the synthetic dispatch boundary.
+        session = self.store.load_session(session_id)
+        assert session is not None
+        assert Path(session["managed_workspace_path"]) == Path(work_dir)
+
+
+controller = WorkspaceRuntimeController(sessions, registry, runtime)
 # One Dashboard-configured workspace that no Goal uses yet.
 configured = root / "docs-site"
 configured.mkdir()
