@@ -4715,12 +4715,14 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
 
 
 @pytest.mark.parametrize(
-    ("agent_type", "expected_source"),
+    ("agent_type", "runtime_profile", "expected_source"),
     (
         # Kiro CLI drives an in-session `/goal` loop and settles as a visible Goal.
-        ("kiro-cli", "visible-goal"),
+        ("kiro-cli", "kiro_cli", "visible-goal"),
         # Hosts that stay on generic_cli keep the heartbeat spend unchanged.
-        ("opencode", "heartbeat"),
+        ("opencode", "generic_cli", "heartbeat"),
+        ("manual", "generic_cli", "heartbeat"),
+        ("other-agent", "generic_cli", "heartbeat"),
     ),
 )
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -4729,23 +4731,23 @@ def test_host_runtime_profile_selects_spend_source_through_real_settlement(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     agent_type: str,
+    runtime_profile: str,
     expected_source: str,
     provider: str,
     explicit_off: bool,
 ) -> None:
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-    from loopx.host_loop_activation import build_host_loop_activation_packet, scheduler_command_binding_for_agent_type
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
-    runtime_profile = scheduler_command_binding_for_agent_type(agent_type)["runtime_profile"]
     _initialize_fixture_authority(project, runtime, provider=provider)
-    packet = build_host_loop_activation_packet(
-        agent_type=agent_type, goal_id=GOAL_ID, agent_id=AGENT_ID,
-        registry=str(registry_path), runtime_root=str(runtime), registered_agents=[AGENT_ID],
-        available_capabilities=["shell", "filesystem_read"],
-    )
+    rc, onboard = _run_cli(registry_path, runtime, "agent-onboard", "--project", str(project),
+        "--agent-type", agent_type, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--available-capability", "shell", "--available-capability", "filesystem_read", cwd=project)
+    assert rc == 0, onboard
+    packet = onboard["host_loop_activation"]
+    assert packet["activation_allowed"] is True and packet["agent_id"] == AGENT_ID
     # The installed Core may emit its own Python module launcher. Execute the
     # generated argv in the package under test for both installation shapes.
     environment = {**os.environ,

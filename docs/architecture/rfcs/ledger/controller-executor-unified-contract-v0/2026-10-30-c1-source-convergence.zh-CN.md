@@ -2319,3 +2319,21 @@ EdgeBench CLI、SForge／Harbor 启动配置、普通 worker 唤醒与 checkpoin
 23.1 KB 增至 48.4–48.5 KB，Markdown 从 2.4 KB 增至 48.2 KB。该显式入口保留有界
 writer，待实际调用方的替代路径通过验收再退役。历史解码器在受支持的恢复窗口内继续
 服务未结原记录。实际 Kiro 会话采用，以及和原 quota 的模型成果与完整成本对照仍需验证。
+
+### 生成的外部 CLI 启动器使用完整工作契约
+
+手动 shell 和自定义外部驱动现在从 onboarding 与 bootstrap 获得既有的
+`generic_cli` 配置。Agent 和 Turn 均已绑定时，生成的 guard 走共享完整来源。
+上一版本的启动命令返回后续操作文字，缺少绑定的结算计划。新的 guard 携带原 Todo
+与 Turn 做持久写回和一次心跳扣额。显式关闭交付时以内联方式返回完整来源。
+
+相对 `e3d470c1903f` 的十六组本地对照实跑生成的 onboarding 和 heartbeat 命令、
+捕获与读回、相同夹具产物的验证、写回、扣额及重试。基线夹具在结算时显式提供
+原 Turn。两类启动器均在 File 和 SQLite 上恢复旧版无版本捕获，错误 Agent 被拒绝，
+原 Turn 只扣额一次。
+
+从执行生成的 heartbeat 命令起计，计入完整引用读回和结算后，默认交付每轮的 CLI 输出
+从 58.3 KB 增至 71.2–71.3 KB，显式关闭从 50.3 KB 增至 61.2–61.3 KB。Full 安装通过
+`agent-onboard` 生成命令，独立 Core 可运行生成的 heartbeat 及其 quota、捕获和结算命令。
+已复制的启动器可经原 onboarding 入口重新生成，为新工作采用完整来源。手写 raw CLI 和
+显式有界 v0 保留兼容入口。模型实际采用和完整成本仍需原 quota 单会话对照。

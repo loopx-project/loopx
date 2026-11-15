@@ -69,6 +69,8 @@ def scheduler_command_binding_for_agent_type(
         "kiro-cli": SchedulerRuntimeProfile.KIRO_CLI_VISIBLE,
         "deepseek-harness": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "deepseek-harness-native": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
+        "manual": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
+        "other-agent": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
     }.get(canonical)
     if runtime_profile is not None:
         return {"runtime_profile": runtime_profile.value}
@@ -1228,7 +1230,7 @@ def _manual_activation(commands: dict[str, str]) -> dict[str, Any]:
         },
         "activation_steps": [
             "Generate the heartbeat-prompt JSON task body or equivalent lifecycle prompt.",
-            "Configure the external loop driver to call quota should-run before each delivery slice.",
+            "Configure the external loop driver to run the generated quota should-run command before each delivery slice.",
             "Record evidence/writeback and spend quota only after validated delivery work.",
         ],
         "success_criteria": [

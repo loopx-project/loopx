@@ -769,6 +769,7 @@ Benchmark checkpoint 预检按自身调用选择普通或完整来源校验，�
 | Codex CLI `/goal` JSON | 从初次 guard 到选题和恢复，均由运行配置选择完整来源。写回和扣额由 Agent 执行。 |
 | 绑定 Turn 的 Kiro CLI JSON | 生成的薄心跳为对应 Agent 和 Turn 选择完整来源。显式关闭时以内联方式交付。可见 Goal 写回和扣额沿用原结算身份，无 Turn 的检查及此前保存的捕获沿用原读取入口。 |
 | 绑定 Turn 的通用 CLI JSON，含 DSH | 显式 `generic_cli` 配置及 Agent、Turn 身份选择完整来源。生成的心跳 guard、Todo 选题和恢复保留原 Turn、交付设置及 Agent 负责的心跳扣额。显式关闭时以内联方式交付完整来源，选题和结算恢复继续关闭交付。只读取调度判断的入口沿用观测路径。 |
+| 启动器生成的手动 shell 和自定义外部驱动 | onboarding 和 bootstrap 命令选择同一个 `generic_cli` 入口。绑定后的 guard 返回同一 Turn 的写回和扣额计划。已有副本可重新生成，为新工作选择完整来源。原捕获沿用现有读取器。 |
 | 其他普通 quota 和 thin heartbeat | 保留现有紧凑决定与结算，直到实际调用方通过验收。已保存的未签名捕获沿原来源和固定引用恢复。 |
 | 显式 `--complete-turn` 和托管 handoff | 在选题和 lease 准备中保留经校验的完整来源。ready capture 丢失完整来源版本和绑定时，只允许回执诊断。 |
 | 显式 `--turn-envelope` | 渐进或差分开启时使用完整来源。上下文交付显式关闭、差分未启用时，CLI 展示同一次组合产生的有界 v0 兼容视图。EdgeBench 归档对照沿用原记录中的产品和 runner 版本。 |

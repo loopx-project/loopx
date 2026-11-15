@@ -185,6 +185,8 @@ def test_codex_ide_plugin_is_an_exact_host_type_with_visible_goal_activation() -
         ("opencode", "generic_cli"),
         ("traex-cli", "generic_cli"),
         ("pi", "generic_cli"),
+        ("manual", "generic_cli"),
+        ("other-agent", "generic_cli"),
     ),
 )
 def test_first_class_hosts_bind_one_runtime_profile(

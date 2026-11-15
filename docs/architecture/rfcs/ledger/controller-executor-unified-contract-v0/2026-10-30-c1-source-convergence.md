@@ -3120,3 +3120,30 @@ bounded writer until its callers have a qualified replacement. Historical
 decoders serve unsettled original records during the supported recovery window.
 The original-quota model outcome and full-cost comparison and live Kiro
 session adoption require separate validation.
+
+### Complete work for generated external CLI launchers
+
+Manual shell and custom external drivers now receive the existing
+`generic_cli` profile from onboarding and bootstrap. The normal generated
+guard for a selected Agent and Turn takes the shared complete-source path.
+The prior launch command emitted follow-up text without a bound settlement
+plan. The new guard carries the original Todo and Turn through writeback
+and one heartbeat debit. Explicit Off returns the full source inline.
+
+Against `e3d470c1903f`, sixteen local pairs ran generated onboarding and
+heartbeat commands, captured and read the selected work, checked the same
+fixture result, and wrote back, debited and retried. The baseline harness
+supplied the original Turn explicitly during settlement. File and SQLite
+also recovered the old unversioned captures. A wrong Agent was refused
+and the original Turn debited once on each backend for each launcher.
+
+Per-turn CLI output, including full reference reads and settlement, grew from
+58.3 KB to 71.2–71.3 KB with default delivery and from 50.3 KB to 61.2–61.3 KB
+with explicit Off. The comparison starts at the generated heartbeat
+invocation. The Full installation generates the command through
+`agent-onboard`. The standalone Core runs that generated heartbeat and
+its quota, capture and settlement commands. Refresh copied launchers using
+the existing onboarding entry to adopt the complete source for new work.
+Handwritten raw CLI and the explicit bounded v0 route retain their
+compatibility surface. Model adoption and full cost require the original-quota
+single-session comparison.
