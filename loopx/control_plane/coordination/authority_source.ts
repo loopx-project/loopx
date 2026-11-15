@@ -15,6 +15,19 @@ export const AUTHORITY_SOURCE_CHANGED = {
   reason: "Todo authority registration changed; review the current state before continuing",
 } as const;
 
+function decodeRegistryWitness(value: unknown, field: string): {path: string; sha256: string} {
+  const witness = requireJsonObject(value, field);
+  if (typeof witness.path !== "string" || !isAbsolute(witness.path) ||
+      typeof witness.sha256 !== "string" || !BARE_SHA256_PATTERN.test(witness.sha256)) {
+    throw new TypeError(`${field} requires an absolute path and SHA-256 digest`);
+  }
+  return {path: witness.path, sha256: witness.sha256};
+}
+
+async function registryMatches(witness: {path: string; sha256: string}): Promise<boolean> {
+  return createHash("sha256").update(await readFile(witness.path)).digest("hex") === witness.sha256;
+}
+
 export function registryAuthoritySourceCheck(
   input: JsonObject, witnessed: boolean, expectedDigest: unknown = null,
 ): AuthoritySourceCheck {
@@ -25,16 +38,15 @@ export function registryAuthoritySourceCheck(
     return uncheckedAuthoritySource;
   }
   const source = requireJsonObject(input.registry_source, "registry_source");
-  if (typeof source.path !== "string" || !isAbsolute(source.path) ||
-      typeof source.sha256 !== "string" || !BARE_SHA256_PATTERN.test(source.sha256)) {
-    throw new TypeError("registry_source requires an absolute path and SHA-256 digest");
-  }
   // Copy primitive values: later mutation of the decoded request cannot change
   // the witness while an awaited store operation or validation effect runs.
-  const path = source.path, digest = source.sha256;
+  const witness = decodeRegistryWitness(source, "registry_source");
+  const routing = Object.hasOwn(source, "routing_registry")
+    ? decodeRegistryWitness(source.routing_registry, "registry_source.routing_registry")
+    : undefined;
   return async () => {
-    if (expectedDigest != null && expectedDigest !== digest) return false;
-    try { return createHash("sha256").update(await readFile(path)).digest("hex") === digest; }
+    if (expectedDigest != null && expectedDigest !== witness.sha256) return false;
+    try { return await registryMatches(witness) && (routing === undefined || await registryMatches(routing)); }
     catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
       throw error;
