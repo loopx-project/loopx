@@ -111,11 +111,19 @@ function historicalAckDelta(
   const ackTurn = typeof ack.turn_instance_id === "string" ? ack.turn_instance_id.trim() : "";
   const generated = typeof ack.generated_at === "string"
     ? parseTodoTimestampMicros(ack.generated_at) : null;
+  // Compact generated_at is the whole-second run clock. Admission
+  // guard_recorded_at often keeps a fractional receipt instant, so a
+  // whole-second stamp in the admission second is post-admission. A
+  // fractional stamp still has to be strictly later than that instant.
+  const admissionSecond = admitted / 1_000_000n * 1_000_000n;
+  const afterAdmission = generated !== null && (generated % 1_000_000n === 0n
+    ? generated >= admissionSecond
+    : generated > admitted);
   const outcomes = strings(delta.outcomes);
   const satisfying = strings(delta.satisfying_outcomes);
   return ack.schema_version === "autonomous_replan_ack_v0" && ack.recorded === true &&
     ack.goal_id === goal && ack.agent_id === agent && ackTurn && ackTurn !== guardTurn &&
-    generated !== null && generated > admitted &&
+    generated !== null && afterAdmission &&
     delta.schema_version === "replan_semantic_delta_v0" && delta.accepted === true &&
     delta.obligation_id === selected && outcomes.length > 0 && satisfying.length > 0 &&
     outcomes.every(outcome => KNOWN_OUTCOMES.has(outcome)) &&
