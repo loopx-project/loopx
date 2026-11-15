@@ -20,7 +20,6 @@ from ..control_plane.turn_driver import (
     build_loopx_turn_plan,
     load_loopx_turn_plan_from_journal,
 )
-from .turn_decision import build_fresh_turn_decision_owner
 from .turn_inspection import handle_turn_journal_inspection
 from .turn_registration import register_turn_commands as register_turn_commands
 from .turn_rendering import (
@@ -310,6 +309,8 @@ def handle_turn_command(
             from ..capabilities.explore.turn_context import turn_context_projector
 
             def read_decision_owner():
+                from .turn_decision import build_fresh_turn_decision_owner
+
                 return build_fresh_turn_decision_owner(
                     args,
                     registry_path=registry_path,
