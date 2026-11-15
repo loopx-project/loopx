@@ -27,7 +27,7 @@ from ...control_plane.quota.automation_cadence_readback import (
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import FileChatDiscovery, later_equivalent_source_input, source_control_fields
+from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, source_control_fields
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -548,7 +548,7 @@ class ChatExternalConversations:
             # route already owns the fence, leave this request unchanged for
             # the existing worker's next fresh visit, rather than admitting
             # from an observation that waited behind that route.
-            with try_exclusive_file_lock(self.root / "source-fences" / f"{row['binding_id']}.{row['source']['source_ref']}.json", operation="route_external_chat_request") as acquired:
+            with try_exclusive_file_lock(external_source_route_path(self.root, row["binding_id"], row["source"]["source_ref"]), operation="route_external_chat_request") as acquired:
                 if acquired is None:
                     return row
                 current = self.bindings.read()
@@ -740,7 +740,7 @@ class ChatExternalConversations:
             proof = recovered.get("native_observation")
         selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
         source = source_observation(selected)
-        with try_exclusive_file_lock(self.root / "source-fences" / f"{row['binding_id']}.{row['source']['source_ref']}.json",
+        with try_exclusive_file_lock(external_source_route_path(self.root, row["binding_id"], row["source"]["source_ref"]),
                                      operation="route_external_chat_request") as acquired:
             if acquired is None:
                 return row
@@ -826,8 +826,7 @@ class ChatExternalConversations:
             raise ValueError("invalid historical answer source")
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(path, operation="admit_external_chat_request"):
-            with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json",
-                                     operation="route_external_chat_request"):
+            with exclusive_file_lock(external_source_route_path(self.root, binding_id, source["source_ref"]), operation="route_external_chat_request"):
                 selected = self.bindings.resolve(binding_id=binding_id, **source, include_observation=True)
                 if source_preflight(deepcopy(selected)) is not None:
                     raise ValueError("source preflight must verify or raise")
@@ -1391,7 +1390,8 @@ class ChatExternalConversations:
         # A duplicate waits on its own request before taking the route fence;
         # it must not hold up other messages while native cancellation runs.
         with exclusive_file_lock(path, operation="admit_external_chat_request"):
-            with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"):
+            with exclusive_file_lock(external_source_route_path(self.root, binding_id, source["source_ref"]),
+                                     operation="route_external_chat_request"):
                 # Resolve and verify the source inside both fences before
                 # creating or replaying any canonical request.
                 selected = resolve_external_admission_source(self.bindings, binding_id, source, source_preflight)
