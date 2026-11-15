@@ -334,9 +334,10 @@ def test_host_restart_recovers_legacy_source_and_full_return_once(tmp_path, monk
         "--decision", "adopt", "--reason", "Read exact source")
     cli(root, registry, "reviewer", "report", "--request-id", peer["request_id"],
         "--reply-text", "Review found no gap.")
-    returned = cli(root, registry, "agent-a", "read")
+    returned = cli(root, registry, "agent-a", "read", "--turn-instance-id", "turn-peer-source")
     assert returned["peer_returns"]["items"][0]["request_id"] == peer["request_id"]
-    cli(root, registry, "agent-a", "acknowledge-return", "--request-id", peer["request_id"])
+    cli(root, registry, "agent-a", "acknowledge-return", "--request-id", peer["request_id"],
+        "--turn-instance-id", "turn-peer-source", "--disposition", "accepted")
     cli(root, registry, "agent-a", "acknowledge", "--request-id", receipt["request_id"],
         "--decision", "adopt", "--reason", "Adopt peer result")
     cli(root, registry, "agent-a", "report", "--request-id", receipt["request_id"],

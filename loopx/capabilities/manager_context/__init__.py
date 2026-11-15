@@ -228,7 +228,8 @@ def deliver(
 
 
 def turn_start_hook(
-    runtime_root: Path, registry_path: Path, goal_id: str, agent_id: str, *, model_read: bool = False
+    runtime_root: Path, registry_path: Path, goal_id: str, agent_id: str, *, model_read: bool = False,
+    turn_instance_id: str | None = None,
 ):
     from ...control_plane.capability_hooks import (
         TurnStartHookRegistration,
@@ -297,6 +298,7 @@ def turn_start_hook(
             goal_id,
             "--agent-id",
             agent_id,
+            *(["--turn-instance-id", turn_instance_id] if turn_instance_id else []),
         ]
     )
     return TurnStartHookRegistration(

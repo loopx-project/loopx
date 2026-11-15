@@ -83,7 +83,10 @@ inside the cloud sandbox. Only connect trusted, appropriately isolated servers.
 The existing `python -m loopx.collaboration_mcp` server can be selected with its
 operator-bound registry, runtime, Goal, Agent and workspace argv. Select only
 the needed `read_context`, `assess_request`, `request_peer`, `return_result`,
-and `consume_peer_result` tools. Those existing tools own semantic requests,
+and `consume_peer_result` tools. The collaboration server validates the
+host-bound `LOOPX_TURN_*` scope and uses `LOOPX_TURN_KEY` for result delivery
+and acknowledgement; the model does not select that identity. Those existing
+tools own semantic requests,
 adoption and return; they do not launch workers. This adapter transports their
 calls without creating another Inbox or adding manager-specific authority.
 

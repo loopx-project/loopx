@@ -260,8 +260,9 @@ def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, mon
         assert cid in json.dumps(cli("reviewer", "read"))
         cli("reviewer", "acknowledge", "--request-id", cid, "--decision", "adopt", "--reason", "Independent source check")
         cli("reviewer", "report", "--request-id", cid, "--reply-text", "Corrected free cash flow is 25. Periods are not comparable.")
-        assert "Corrected free cash flow is 25" in json.dumps(cli("coordinator", "read"))
-        cli("coordinator", "acknowledge-return", "--request-id", cid)
+        assert "Corrected free cash flow is 25" in json.dumps(cli("coordinator", "read", "--turn-instance-id", "turn-peer"))
+        cli("coordinator", "acknowledge-return", "--request-id", cid,
+            "--turn-instance-id", "turn-peer", "--disposition", "accepted")
         cli("coordinator", "report", "--request-id", request_id, "--reply-text",
             "Adopted the peer finding: corrected cash flow is 25; no growth inference across different periods.")
         assert not pending(root, "other", "unrelated")["items"]

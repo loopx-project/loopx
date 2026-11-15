@@ -6,9 +6,12 @@ from .goal_instance_scope import collaboration_goal_scope
 from .inbox import read_inbox_transaction
 
 
-def delegation_read_command(root, registry, goal_id, agent_id):
-    return shlex.join(["loopx", "--registry", str(registry), "--runtime-root", str(root),
-        "manager-inbox", "read", "--goal-id", goal_id, "--agent-id", agent_id])
+def delegation_read_command(root, registry, goal_id, agent_id, *, turn_instance_id=None):
+    command = ["loopx", "--registry", str(registry), "--runtime-root", str(root),
+        "manager-inbox", "read", "--goal-id", goal_id, "--agent-id", agent_id]
+    if turn_instance_id:
+        command.extend(["--turn-instance-id", turn_instance_id])
+    return shlex.join(command)
 
 
 def read_delegation_turn_context(root: Path, registry: Path, goal_id: str, agent_id: str,

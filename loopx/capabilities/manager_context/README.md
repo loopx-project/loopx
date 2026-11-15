@@ -249,6 +249,13 @@ work-context sources, while the full result text remains behind the existing
 `manager-inbox read` command. This preserves asynchronous pull semantics and
 does not interrupt an active Turn or treat visibility as consumption.
 
+Ordinary peer results may therefore wait for the next work Turn. Cancellation,
+blocking and priority-control paths keep their existing immediate handling. The
+required read is bound to that Turn and records a separate `model_turn` supply
+fact; a transport or operator pre-read without a Turn identity cannot consume
+the result. If the Turn is interrupted before a valid read and disposition, the
+same result remains eligible for the next Turn.
+
 Outgoing requests to an original project conversation use the same typed address
 reader as explicit peer returns. The agenda retains that conversation recipient
 and its current revision without inventing a Goal/Agent receiver. A changed
@@ -734,6 +741,8 @@ Use the same registry, runtime root, Goal and Agent for every page. The scoped
 MCP equivalent is `read_context(cursor=<next_cursor>)`; a call without arguments
 still reads the first page. A cursor survives process restart and removal or
 completion of its anchor request. It is a navigation position, not a grant.
+When the MCP runs inside a managed work Turn, the host-bound Turn identity is
+used for result delivery and is never accepted from model tool arguments.
 Each call checks current registration and records reads only for returned requests.
 `next_cursor: null` ends this scan, not the outstanding work. Pages are live,
 ordered by request id; restart without a cursor to find new requests sorted
@@ -904,9 +913,13 @@ Retry the same update with the same id and text. Each update has its own
 after verified delivery of the preceding result. Unknown delivery blocks later
 sends rather than allowing them to overtake it. Peer readers acknowledge the
 specific returned key with `acknowledge-return --result-key <key>` after reading
-it; consuming the first result does not consume later updates. MCP callers use
-the corresponding `return_result(update_id=...)` and
-`consume_peer_result(result_key=...)`. Full texts stay in immutable receipts;
+it in the current work Turn. `accepted` and `rejected` consume that result;
+`deferred` records the review but keeps it visible on the next Turn. Consuming
+the first result does not consume later updates. MCP callers use the corresponding
+`return_result(update_id=...)` and
+`consume_peer_result(disposition=..., result_key=...)`; the MCP host binds the
+current Turn identity and does not expose it as a model-selected argument.
+Full texts stay in immutable receipts;
 the typed publication planner receives identities and content digests.
 
 The Chat server hosts a cheap local receipt pump (no model calls and no Codex
@@ -1130,11 +1143,15 @@ same commands as a manager request. The original requester receives it in
 a read until the requester explicitly consumes the result:
 
 ```sh
-loopx manager-inbox read --goal-id allocation --agent-id builder
+loopx manager-inbox read --goal-id allocation --agent-id builder \
+  --turn-instance-id <current-turn-id>
 loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \
-  --request-id <peer-request-id>
+  --request-id <peer-request-id> --turn-instance-id <current-turn-id> \
+  --disposition accepted
 ```
 
+Use `--disposition deferred` when the current Turn will not yet use or reject the
+result; it remains in next-Turn attention under the same message identity.
 Consumption does not mark a Todo done or certify peer acceptance. The requester
 checks the actual artifact, incorporates or rejects the findings, and reports
 the original owner conclusion through its original request. A second review

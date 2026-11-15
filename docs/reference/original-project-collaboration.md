@@ -103,8 +103,10 @@ result. A failure before saved model output remains visible and cannot be
 silently rerun as a new Turn under the same identity.
 
 Read the result through the requester's existing manager inbox and use
-`acknowledge-return` / MCP `consume_peer_result` to record consumption after
-checking it. The saved requester route is verified at dispatch, source control,
+`acknowledge-return` with the current Turn identity and disposition, or the
+Turn-bound MCP `consume_peer_result`, to record acceptance, deferral or rejection
+after checking it. Deferral keeps the same result visible on the next Turn. The
+saved requester route is verified at dispatch, source control,
 requester read and consumption. Results do not automatically go to the
 recipient conversation's external audience.
 

@@ -110,10 +110,11 @@ def test_cli_recovers_later_context_without_concluding_deferred_requests(inbox):
         "--decision", "adopt", "--reason", "Check the corrected reserve.")
     cli(root, registry, "report", "--request-id", chosen,
         "--reply-text", "Reserve check passed; capacity remains unverified.")
-    returned = cli(root, registry, agent="sender")["peer_returns"]["items"]
+    returned = cli(root, registry, "read", "--turn-instance-id", "turn-page", agent="sender")["peer_returns"]["items"]
     assert [(row["request_id"], row["text"]) for row in returned] == [
         (chosen, "Reserve check passed; capacity remains unverified.")]
-    cli(root, registry, "acknowledge-return", "--request-id", chosen, agent="sender")
+    cli(root, registry, "acknowledge-return", "--request-id", chosen,
+        "--turn-instance-id", "turn-page", "--disposition", "accepted", agent="sender")
     assert "peer_returns" not in cli(root, registry, agent="sender")
     assert ids(cli(root, registry)) == expected[:20]
     assert chosen not in ids(cli(root, registry, "read", "--cursor", first["next_cursor"]))
