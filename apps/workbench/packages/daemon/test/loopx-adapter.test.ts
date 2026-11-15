@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { goalAgentFor, LoopxBindings, permissionAvailable, type LoopxBinding } from '../src/adapters/loopx/binding.js';
 import { goalContextBlock } from '../src/adapters/loopx/context.js';
 import { goalCreateRequest, workspaceRef } from '../src/adapters/loopx/core.js';
-import { GoalStateCache, projectGoalState } from '../src/adapters/loopx/status.js';
+import { GoalStateCache, projectGoalState, readGoalState } from '../src/adapters/loopx/status.js';
 
 const payload = (over: Record<string, unknown> = {}) => ({
   goal_filter: 'g1',
@@ -87,4 +87,8 @@ test('the core review request opens no session and uses the dashboard\'s workspa
   assert.equal(request.normalized_parameters.completion_criteria, 'tests pass');
   assert.match(request.normalized_parameters.objective, /^do it 完成条件：tests pass$/);
   assert.equal(request.idempotency_key, 'workbench-goal.create-op');
+});
+
+test('a CLI that is missing is reported as unavailable, never as an empty Goal', async () => {
+  await assert.rejects(readGoalState('g1', { command: ['/nonexistent/loopx-binary'] }, 5000), /loopx_unavailable/);
 });
