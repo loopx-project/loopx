@@ -3381,3 +3381,34 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
 ![桌面的原已检查 Task](assets/goal-entry-original-task-desktop.webp)
 
 ![窄屏的原已检查 Task 结果](assets/goal-entry-original-task-narrow.webp)
+
+### 2026-11-15 — 确认创建后沿原 Task 继续执行
+
+- **缺口：**「创建 Goal 并开始首轮」只创建只读对话，未保留可执行的原 Task 请求；
+  权限选择也未通过既有 authority owner 发布选定的 workspace 批准。
+- **增量：**明确支持的 Codex 创建意图在既有 action checkpoint／receipt 中保留
+  原 Goal、lifetime、Agent、Task、Session 与原生线程来源。确认的 workspace 选择
+  通过既有 boundary-authority owner 只发布一次。既有 Session queue 仅在当前独立
+  检查和准入允许时消费该请求；确认检查、Task GET 或 UI 观察不能自行创建执行。
+- **权限与恢复：**当前 Goal 批准和实际 Task lease 必须覆盖整个原 workspace，
+  窄范围保持只读。同一受保护原生 frame 发送直接 workspace policy，并固定唯一
+  runtime workspace root；之后普通 Chat 重新断言只读。不重放原生发布未知的操作。
+  重启仅恢复同一已证明尚未执行的 queued operation；来源／线程变化或未结束的
+  acceptance 保持恢复拒绝。等待请求在收到信号后重读，不定时空查。
+  初始 quota hold 让原创建保持可重试，不发布缺少已请求开始的不可变成功回执。
+  队列重读期间原操作结束，也不会遗留已排队的普通追问。已保存请求的当前 Task
+  准入受阻时保留等待；准备和派发重读既有 typed admission，之后仍由原生 launch
+  guard 判断是否执行，预检不替代最终授权。
+- **证据：**packaged UI、真实 Chat/Core/SQLite 与脚本原生协议把原购物车 Task
+  执行到未改变的六行为 oracle 通过；保留只读失败和被拒绝的完成声明，再经既有
+  Continue 控件推进剩余工作。创建 replay／reload 不增加 Task 派发或批准。桌面／
+  窄屏的长对话及结果读回已验证。Codex 0.142.2 源码评审和独立 OS 控制支持 root
+  替换及 outside／symlink／home／tmp／network 拒绝；这些控制未在同一 Turn 中
+  执行模型工具。Named-profile deep-merge 反例保留为负证据，不作为交付机制。
+- **组合与边界：**复用 C1 的身份、验证、准入、context 和结算 owner；source 与
+  installed-Core 组合证据和 installed Chat／真实原生模型资格分别保留。历史创建
+  不加载新增执行 adapter。[当前使用指南](../../guides/personal-workspace-user-guide.md#在原对话执行已检查的任务--run-the-checked-original-task)
+  说明批准范围、等待和恢复旅程。本次推进 V2/V4/R1 集成，原十项要求仍未完成。
+  真实 model/context 连续性、D2/D5 闭包、渐进 Standard 旅程、可比完整成本、完整
+  V1–V5/V10、R1/M3 和 C1 切换保持 open。完成前仍需完整原目标回归，随后才准备
+  EdgeBench。

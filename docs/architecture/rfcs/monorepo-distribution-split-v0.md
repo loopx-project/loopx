@@ -4360,3 +4360,47 @@ view shows its independently checked result in the same conversation.
 ![Original checked Task on desktop](assets/goal-entry-original-task-desktop.webp)
 
 ![Original checked Task result at a narrow viewport](assets/goal-entry-original-task-narrow.webp)
+
+### 2026-11-15 — Confirmed creation continues through its original Task
+
+- **Gap:** “Create Goal and start first run” created a read-only conversation
+  without retaining an executable original-Task request. The permission choice
+  did not publish the selected workspace approval through its authority owner.
+- **Delta:** an explicit supported Codex creation intent retains its original
+  Goal, lifetime, Agent, Task, Session and native-thread provenance in the
+  existing action checkpoint and receipt. The confirmed workspace choice uses
+  the existing boundary-authority owner once. The existing Session queue consumes
+  that saved request only after current independent checks and admission permit
+  work; check confirmation and Task GET/UI observation cannot invent execution.
+- **Authority and recovery:** current Goal approval and the actual Task lease
+  must cover the whole original workspace. Narrow scopes remain read-only. One
+  guarded native frame supplies the direct workspace policy and pins its only
+  runtime workspace root; subsequent ordinary Chat reasserts read-only. Unknown
+  native publication is not replayed. Restart may resume only the same proven
+  unstarted queued operation; changed sources, threads and unfinished acceptance
+  hold recovery. Pending requests re-read after signals, not periodic polling.
+  An initial quota hold keeps creation retryable instead of publishing an
+  immutable success without its requested start. Terminalization during a
+  queue re-read cannot strand already queued ordinary follow-ups. A saved
+  request whose current Task admission is held stays pending; preparation and
+  dispatch re-read the existing typed admission, and the native launch guard
+  still decides execution after that observation.
+- **Evidence:** the packaged UI with real Chat/Core/SQLite and scripted native
+  protocol completes the original cart Task against its unchanged six-behavior
+  oracle, retains readonly failure and rejected completion, and resumes remaining
+  work through the existing Continue control. Creation replay/reload adds no
+  Task dispatch or approval. Desktop/narrow populated conversation and result
+  readback are qualified. Source review of Codex 0.142.2 and independent OS
+  controls support root replacement and outside/symlink/home/tmp/network refusal;
+  those controls do not execute a model tool in that same Turn. Named-profile
+  deep-merge counterexamples remain negative evidence, not a shipped mechanism.
+- **Composition and boundary:** reuse the C1 identity, validation, admission,
+  context and settlement owners; preserve source and installed-Core combination
+  evidence separately from installed Chat/native-model qualification. Historical
+  creation does not load the new execution adapter. The
+  [current user guide](../../guides/personal-workspace-user-guide.md#在原对话执行已检查的任务--run-the-checked-original-task)
+  explains the approved scope, waiting and recovery journey. This advances
+  V2/V4/R1 integration without completing the original ten requirements. Live
+  model/context continuity, D2/D5 closure, progressive Standard journeys,
+  comparable full costs, full V1–V5/V10, R1/M3 and C1 cutover remain open. Run full
+  original-goal regression before completion and subsequent EdgeBench preparation.

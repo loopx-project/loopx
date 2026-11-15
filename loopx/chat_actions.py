@@ -1024,6 +1024,12 @@ class ChatActionService(
                 step="first_turn_gated",
                 receipt={"outcome": "first_turn_gated", "gate": first_turn_gate},
             )
+            if creation_plan.get("creationExecution"):
+                # An applied receipt is immutable. Keep this confirmed start
+                # retryable until its original Session/request is retained;
+                # quota denial cannot silently discard the requested work.
+                raise ValueError("The original Goal and Task are retained, but their first Turn admission is held. "
+                    + first_turn_gate["summary"] + " Retry this same creation when its allowance is ready.")
         if session_id:
             session = read_original_session(session_id=session_id)
         original_task_request = None

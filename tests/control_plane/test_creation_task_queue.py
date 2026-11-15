@@ -11,7 +11,6 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
@@ -25,8 +24,8 @@ from loopx.control_plane.coordination.local_authority import read_canonical_todo
 from loopx.capabilities.native_chat.project_context import ChatProjectContexts
 
 
-def create_requested_task(host, *, requested=True):
-    actions, request, controller, _, _, _ = host
+def preview_requested_task(host, *, requested=True):
+    request = host[1]
     parameters = {"goal_id": "cart-repair", "title": "Cart repair",
         "objective": "Repair cart.py according to README.md and unchanged checks.py.",
         "completion_criteria": "The six existing checks pass without changing checks.py.",
@@ -38,7 +37,12 @@ def create_requested_task(host, *, requested=True):
         "summary": "Repair the cart using its existing checks", "idempotency_key": "cart-queue-request",
         "context": {"kind": "goal_channel", "goal_id": "workspace"}, "normalized_parameters": parameters})
     assert status == 201, preview
-    proposal = preview["proposal"]
+    return preview["proposal"]
+
+
+def create_requested_task(host, *, requested=True):
+    actions, request, controller, _, _, _ = host
+    proposal = preview_requested_task(host, requested=requested)
     status, applied = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
     assert status == 202, applied
     ids = applied["proposal"]["receipt"]["resource_ids"]
@@ -392,3 +396,58 @@ def test_pending_creation_rechecks_only_after_a_content_free_signal(environment,
     assert len(count) > before
     assert controller.store.turn_for_client(ids["session_id"],
         "managed." + creation["receipt"]["original_task_request"]["operation_id"]) is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_creation_terminal_during_queue_read_keeps_the_original_ordinary_followup(environment, cart_host, monkeypatch, provider):
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    environment[0](provider)
+    _, request, controller, capture, project, runtime = cart_host
+    # Retain real acceptance and FIFO state while controlling only dispatch.
+    # The queue worker must observe the native completion at the second read,
+    # after it has already cached the original queued operation.
+    monkeypatch.setattr(controller, "resume_session_queue", lambda **_kwargs: None)
+    start = controller._start_accepted_turn_worker
+    monkeypatch.setattr(controller, "_start_accepted_turn_worker",
+        lambda **kwargs: False if kwargs["loopx_execution"] else start(**kwargs))
+    creation, ids, check = create_requested_task(cart_host)
+    saved = creation["receipt"]["original_task_request"]
+    sid = ids["session_id"]
+    assert request(f"/api/actions/{check['proposal_id']}/apply", {})[0] == 200
+    native, created = ManagedSessionTurn(controller).submit(sid,
+        agent_id=saved["agent_id"], operation_id=saved["operation_id"],
+        todo_id=saved["todo_id"], _creation_request=saved)
+    assert created and native["status"] == "queued"
+    followup, created = controller.enqueue_turn(session_id=sid,
+        client_turn_id="ordinary-after-original", message="Read the original results.",
+        work_dir=project, objective="Retain the original cart repair.", origin="web")
+    assert created and followup["status"] == "queued"
+    before = capture.read_bytes()
+    original_read = controller.store.turn_for_client
+    terminalized = []
+    def finish_native_before_consumer_read(session_id, client_id):
+        if not terminalized and session_id == sid and client_id == "managed." + saved["operation_id"]:
+            terminalized.append(native["turn_id"])
+            controller._fail_queue_preparation(sid, native["turn_id"],
+                OSError("synthetic native worker exit before consumer read"))
+        return original_read(session_id, client_id)
+    monkeypatch.setattr(controller.store, "turn_for_client", finish_native_before_consumer_read)
+    worker = threading.Thread(target=controller._drain_session_queue,
+        kwargs={"session_id": sid, "work_dir": project, "objective": "Retain the original cart repair."})
+    controller.session_queue_workers.add(sid)
+    controller.session_queue_threads[sid] = worker
+    worker.start()
+    worker.join(timeout=20)
+    assert not worker.is_alive(), "the original queue did not reconcile terminal work"
+    assert terminalized == [native["turn_id"]]
+    assert controller.store.load_turn(sid, native["turn_id"])["status"] == "failed"
+    assert controller.store.load_turn(sid, followup["turn_id"])["status"] == "completed"
+    assert controller.store.load_session(sid)["active_turn_id"] is None
+    assert sid not in controller.session_queue_workers
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    starts = [row for row in calls if row.get("method") == "turn/start"]
+    assert len(starts) == 1  # Only the already requested ordinary follow-up.
+    assert starts[0]["params"]["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
+    assert "runtimeWorkspaceRoots" not in starts[0]["params"]
+    assert not any(row.get("method") == "thread/start" for row in calls)
+    assert task_row(runtime, saved["todo_id"])["status"] == "open"

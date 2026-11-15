@@ -480,6 +480,10 @@ class ManagedSessionTurn:
                 registry_path=controller.registry_path, session_id=session_id)
             with commit():
                 admitted = self.admit(request, selection_recovery=selection_recovery)
+                if _creation_request is not None:
+                    self._validation_source(request, _creation_request["todo_id"])
+                    if not self._creation_allowance(request):
+                        raise ValueError("the original creation task has no current preparation admission")
                 accepted = self.store.accept_managed_turn(session_id, client_turn_id=client_id,
                     message="Advance the currently admitted native LoopX work.",
                     display_message="生成本期定时报告。" if report_window is not None else
@@ -491,6 +495,15 @@ class ManagedSessionTurn:
 
     def _dispatch_accepted_turn(self, turn: dict[str, Any], admitted: dict[str, Any]) -> None:
         session_id = turn["session_id"]
+        request = turn.get("loopx_request") or {}
+        if "creation_request" in request:
+            from ...attached_session import managed_session_goal_commit
+            with managed_session_goal_commit(store=self.store, registry_path=self.controller.registry_path,
+                    session_id=session_id)():
+                admitted = self.admit(request, turn=turn)
+                self._validation_source(request, request["todo_id"])
+                if not self._creation_allowance(request):
+                    return  # Retain the accepted, unstarted operation for a fresh state signal.
         try:
             session = self.store.load_session(session_id)
             if admitted["observation_only"]:
@@ -526,13 +539,50 @@ class ManagedSessionTurn:
                         session_id=session_id)():
                     admitted = self.admit(request, turn=existing)
                     self._validation_source(request, creation["todo_id"])
+                    if not self._creation_allowance(request):
+                        return True
                 self._dispatch_accepted_turn(existing, admitted)
                 return True
             self.admit(request)
             self._validation_source(request, creation["todo_id"])
+            if not self._creation_allowance(request):
+                return True
         self.submit(session_id, agent_id=creation["agent_id"], operation_id=creation["operation_id"],
             todo_id=creation["todo_id"], _creation_request=creation)
         return True
+
+    def _creation_allowance(self, request: dict[str, Any]) -> bool:
+        """Read the existing typed selected-work admission, without binding or effects.
+
+        Preparation may require the native owner to claim a lease. Its final
+        admission and launch guards still own execution after this observation.
+        """
+        from ...status import collect_status, AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
+        from ...control_plane.quota.live_decision import build_live_quota_should_run_decision
+        from ...control_plane.scheduler.execution_context import scheduler_execution_context_for_turn
+        from ...control_plane.work_items.action_selection_contract import current_action_selection_admission
+        from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+        actor = request["actor"]
+        root = self.controller.coordination_runtime_root
+        status = collect_status(registry_path=self.controller.registry_path,
+            runtime_root_override=str(root), limit=AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
+            goal_id=actor["goal_id"], agent_lane_id=actor["agent_id"],
+            available_capabilities=None, include_presentation_projections=False)
+        decision = build_live_quota_should_run_decision(status,
+            goal_id=actor["goal_id"], agent_id=actor["agent_id"], available_capabilities=None,
+            include_scheduler_detail=False, codex_app_current_rrule=None,
+            registry_path=self.controller.registry_path, runtime_root=root,
+            requested_action_todo_id=request["todo_id"], turn_instance_id=request["turn_instance_id"],
+            workspace_path=Path(actor["workspace_path"]),
+            goal_ref=capture_first_party_host_goal_ref(registry_path=self.controller.registry_path,
+                goal_id=actor["goal_id"]),
+            scheduler_execution_context=scheduler_execution_context_for_turn(
+                host="codex-app-server", execution_mode="isolated-headless"))
+        agent = (decision.get("interaction_contract") or {}).get("agent_channel") or {}
+        _, admitted = current_action_selection_admission(decision,
+            requested_todo_id=request["todo_id"], agent_must_attempt=agent.get("must_attempt") is True,
+            agent_delivery_allowed=agent.get("delivery_allowed"))
+        return admitted
 
     def _validation_source(self, request: dict[str, Any], todo_id: str) -> dict[str, Any]:
         from ...control_plane.effect_runtime import effect_runtime_result

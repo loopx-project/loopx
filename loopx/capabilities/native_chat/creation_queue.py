@@ -63,7 +63,7 @@ def project_creation_request(facts: dict[str, Any] | None) -> dict[str, Any] | N
 
 
 def consume_creation_request(controller: Any, session_id: str) -> bool:
-    """Return whether this queue still retains work; never retry a terminal Turn."""
+    """Return whether this creation needs attention, never replaying its Turn."""
     facts = creation_request_facts(controller, session_id)
     if facts is None or facts["proposal"].get("status") not in ("applying", "applied"):
         return False

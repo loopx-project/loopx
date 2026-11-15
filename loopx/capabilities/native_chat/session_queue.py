@@ -47,7 +47,21 @@ def _drain_session_queue_events(controller: Any, *, session_id: str, work_dir: P
                         except (OSError, ValueError, RuntimeError):
                             pending = True
                         if not pending:
-                            return
+                            # The native worker can terminalize after this
+                            # queue cached its queued state. Reconcile the
+                            # current FIFO instead of retiring with ordinary
+                            # messages stranded behind the released operation.
+                            current = controller.store.load_session(session_id)
+                            latest = controller.store.load_turn(session_id, active_turn_id)
+                            if current is None:
+                                return
+                            if (current.get("active_turn_id") != active_turn_id
+                                    or latest and latest.get("status") in TERMINAL_TURN_STATES):
+                                continue
+                            # A still-active unknown operation grants no
+                            # dispatch. Keep its worker until a state signal.
+                            wakeup.wait()
+                            continue
                     if active.get("status") not in TERMINAL_TURN_STATES:
                         # An admitted or unknown native operation retains
                         # its original worker/result; never restore it as an
