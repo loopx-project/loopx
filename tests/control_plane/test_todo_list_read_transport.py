@@ -1,8 +1,10 @@
 """Fresh CLI reads retain provider, filter, error and presentation semantics."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -206,3 +208,139 @@ def test_todo_help_does_not_load_mutation_owners():
     result = subprocess.run([sys.executable, "-c", script], cwd=REPO,
                             capture_output=True, text=True, timeout=45, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Public 1.3.1 coordination_state_contract_v0.json, release 20261112T094058Z.
+# Keep the released declaration literal: deriving it from the current contract
+# would let a removed historical obligation disappear from this regression.
+_RELEASE_131_TODO_FIELDS = (
+    "index done text schema_version todo_id role status priority title archive_state "
+    "source_section task_class action_kind task_domain capability_binding_ref "
+    "task_repository pr_number pr_events continuation_policy removed_continuation_policy "
+    "required_write_scopes required_capabilities needs target_capabilities "
+    "explore_result_node_refs decision_scope required_decision_scopes decision_outcome "
+    "decision_amendment_operation_id decision_scope_outcomes claimed_by created_by "
+    "last_actor_agent_id bound_agent goal_bound blocks_agent excluded_agents global_gate "
+    "unblocks_todo_id unblocks_todo_ids depends_on_todo_ids resume_when "
+    "resume_monitor_generation resume_condition resume_ready no_followup successor_todo_ids "
+    "completion_continuation completion_recovery completion_receipt_id retirement_receipt_id "
+    "restored_from_todo_id restoration_receipt_id legacy_terminal_resolution replan_obligation_id "
+    "target_key cadence next_due_at expires_at watch_only last_checked_at result_hash "
+    "consecutive_no_change material_change material_change_generation max_no_change_before_replan "
+    "monitor_effect_id note note_history review_round_history review_gate_paused review_epoch_id "
+    "review_unresolved_findings next_action validation skip_reason evidence evidence_corrections "
+    "latest_evidence reason completed_at completion_turn_key completion_result updated_at "
+    "superseded_by completion_validation_required completion_validation_sha256 "
+    "completion_validation_display completion_validation_revision "
+    "completion_validation_revision_history handoff_note"
+).split()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("record_kind", ["canonical", "domain"])
+def test_list_preserves_released_131_authority_without_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, record_kind: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "state.md"
+    registry = tmp_path / "registry.json"
+    state.write_text("# Synthetic historical Goal\n\n## Agent Todo\n\n- [ ] Display decoy\n")
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(runtime),
+        "goals": [{"id": GOAL, "repo": str(tmp_path), "state_file": state.name,
+                   "coordination": {"registered_agents": ["agent-a"]}}],
+    }))
+    records = [
+        {
+            "schema_version": "todo_item_v0", "todo_id": "todo_archive",
+            "role": "agent", "status": "done", "done": True,
+            "text": "[P2] Preserve the historical acceptance receipt.",
+            "priority": "P2", "title": "Preserve the historical acceptance receipt.",
+            "archive_state": "archive", "source_section": "Completed Work Archive", "index": 1,
+            "completion_receipt_id": "synthetic-completion-receipt",
+            "retirement_receipt_id": "synthetic-retirement-receipt",
+            "evidence": "Synthetic acceptance evidence; never a live Goal.",
+            "no_followup": True,
+        },
+        {
+            "schema_version": "todo_item_v0", "todo_id": "todo_pending",
+            "role": "agent", "status": "open", "done": False,
+            "text": "[P0] Preserve dependencies and paused review before executing.",
+            "priority": "P0", "title": "Preserve dependencies and paused review before executing.",
+            "archive_state": "active", "source_section": "Agent Todo", "index": 1,
+            "task_class": "advancement_task", "claimed_by": "agent-a",
+            "depends_on_todo_ids": ["todo_archive"],
+            "review_gate_paused": True, "review_epoch_id": "synthetic-review-epoch",
+            "note": "Reading this requirement does not authorize execution.",
+        },
+    ]
+    fields = list(_RELEASE_131_TODO_FIELDS)
+    if record_kind == "domain":
+        fields = [field for field in fields if field not in ("index", "source_section")]
+        for record in records:
+            record["schema_version"] = "todo_domain_record_v0"
+            del record["index"]
+            del record["source_section"]
+    # Only encoding is shared with the persisted protocol, never expected output.
+    records_digest = hashlib.sha256(json.dumps(
+        records, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    initialized = initialize_canonical_authority(runtime, GOAL, {
+        "schema_version": "loopx_coordination_runtime_shadow_projection_v0",
+        "goal_id": GOAL, "handoff_mode": "soft_claim", "todos": records, "leases": [],
+        "todo_read_model": {
+            "schema_version": f"loopx_todo_{record_kind}_read_record_v0",
+            "contract_fields": fields, "todo_count": 2, "records_sha256": records_digest,
+        },
+    }, state_path=state, provider=provider)
+
+    def authority_contents() -> dict[str, bytes | tuple[str, ...]]:
+        contents = {}
+        for path in sorted(runtime.rglob("*")):
+            if not path.is_file() or path.name.endswith(("-wal", "-shm")):
+                continue
+            data = path.read_bytes()
+            if data.startswith(b"SQLite format 3\0"):
+                # Compare every logical table, including receipts/events and head.
+                # WAL checkpointing is storage maintenance, not authority mutation.
+                connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+                try:
+                    contents[str(path.relative_to(runtime))] = tuple(connection.iterdump())
+                finally:
+                    connection.close()
+            else:
+                contents[str(path.relative_to(runtime))] = data
+        return contents
+
+    original_authority = authority_contents()
+    original_state = state.read_bytes()
+    try:
+        for expected in records:
+            result = subprocess.run(
+                [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+                 "--runtime-root", str(runtime), "--format", "json", "todo", "list",
+                 "--goal-id", GOAL, "--todo-id", expected["todo_id"]],
+                cwd=REPO, capture_output=True, text=True, timeout=45,
+                env={**os.environ, "PYTHONPATH": str(REPO)}, check=False,
+            )
+            # Check non-mutation even on refusal, before demanding compatibility.
+            assert state.read_bytes() == original_state
+            assert authority_contents() == original_authority
+            assert result.returncode == 0, result.stdout + result.stderr
+            listed = json.loads(result.stdout)
+            assert listed["ok"] and listed["read_only"] and listed["dry_run"]
+            assert listed["todo_detail_projection"]["source_complete"] is True
+            assert listed["authority_read"]["source_authority"] == f"{provider}_v0"
+            assert listed["authority_read"]["provider_revision"] == initialized["provider_revision"]
+            assert listed["authority_read"]["legacy_fallback_used"] is False
+            for field, value in expected.items():
+                assert listed["todo"][field] == value, field
+    finally:
+        subprocess.run(
+            [sys.executable, "-c",
+             "from loopx.control_plane.effect_runtime import effect_runtime_result;"
+             "effect_runtime_result('runtime.shutdown', {}, retry_safe=False)"],
+            cwd=REPO, capture_output=True, text=True, timeout=30, check=True,
+        )
