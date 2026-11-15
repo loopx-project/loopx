@@ -476,7 +476,28 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.TERMINAL_CLOSEOUT)
+            if args.host == "codex-cli":
+                # Builtin completion has already retired the original lease.
+                # Verify the exact terminal receipt; never start another completion.
+                observed = terminal_closeout_resolver(effect_ref)
+                receipt = observed.get("payload")
+                if observed.get("kind") == "committed" and isinstance(receipt, dict):
+                    return receipt
+                return {
+                    "ok": False,
+                    "appended": False,
+                    "reason": observed.get("reason") or "Builtin terminal completion receipt is missing",
+                }
             return todo_completion(result, effect_ref=effect_ref)
+
+        def codex_writeback(
+            result: dict[str, object], *, effect_ref: str,
+        ) -> dict[str, object]:
+            # Accountable refresh requires durable controller validation even for
+            # a predeclared terminal Todo. Other hosts keep their existing order.
+            if result.get("result_kind") == "validated_completion":
+                return completion_writeback(result, effect_ref=effect_ref)
+            return writeback(result, effect_ref=effect_ref)
 
         def current_status() -> dict[str, object]:
             return collect_turn_status_payload(
@@ -898,7 +919,8 @@ def execute_turn_run_once(
             retry_failed=bool(args.retry_failed_turn),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
-            writeback=writeback if args.execute else None,
+            writeback=(codex_writeback if args.host == "codex-cli" else writeback)
+            if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             completion_intent=completion_intent if args.execute else None,
             terminal_closeout=terminal_closeout if args.execute else None,

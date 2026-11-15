@@ -1850,6 +1850,7 @@ def _write_live_fixture(
                         },
                         "quota": {"compute": 1.0, "window_hours": 24},
                         "coordination": {
+                            **({"handoff_mode": handoff_mode} if handoff_mode != "soft_claim" else {}),
                             "agent_model": "peer_v1",
                             "registered_agents": ["codex-fixture"],
                             "agent_profiles": {
