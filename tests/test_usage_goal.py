@@ -86,6 +86,48 @@ def test_disabled_observer_starts_no_worker_or_process(tmp_path, monkeypatch):
         pass
 
 
+@pytest.mark.parametrize("switch,value", [
+    ("LOOPX_USAGE_PING", "off"), ("DO_NOT_TRACK", "yes"),
+    ("DO_NOT_TRACK", "false"), ("CI", "1"), ("CI", " YES "),
+])
+@pytest.mark.parametrize("entrypoint", ["host", "quota", "direct_cycle"])
+def test_environment_opt_out_skips_host_and_binding_work(tmp_path, monkeypatch, switch, value, entrypoint):
+    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
+    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(switch, value)
+    usage_ping.state_path().write_text(json.dumps({"generation": "fixture", "consent": "enabled"}))
+    workers, sends, bindings = [], [], []
+    monkeypatch.setattr(threading.Thread, "start", lambda worker: workers.append(worker.name))
+    monkeypatch.setattr(usage_ping, "_detach", sends.append)
+    if entrypoint == "host":
+        error = ValueError("original Host failure")
+        with pytest.raises(ValueError) as caught:
+            with usage_goal.observe_goal_execution(tmp_path, "fixture-goal"):
+                raise error
+        assert caught.value is error
+    else:
+        registry, rollout = _bound_fixture(tmp_path, monkeypatch)
+        original = usage_goal._bound_codex_session
+
+        def read_binding(*args):
+            result = original(*args)
+            bindings.append(result)
+            return result
+
+        monkeypatch.setattr(usage_goal, "_bound_codex_session", read_binding)
+        if entrypoint == "quota":
+            usage_goal.observe_quota_cycle(registry_path=registry, runtime_root=tmp_path, goal_id="goal",
+                                           agent_id="agent", turn_id="turn", phase="start", at=0, host="codex-app")
+        else:
+            usage_goal._dispatch_cycle({"path": str(usage_ping.state_path()), "generation": "fixture",
+                "registry": str(registry), "runtime": str(tmp_path), "goal": "goal", "agent": "agent",
+                "turn": "turn", "phase": "start", "at": 0, "host": "codex-app"})
+    assert workers == []
+    assert sends == []
+    assert bindings == []
+
+
 def test_periodic_observation_does_not_need_turn_completion(tmp_path, monkeypatch):
     monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
     usage_ping.state_path().write_text(json.dumps({"generation": "fixture", "consent": "enabled"}))

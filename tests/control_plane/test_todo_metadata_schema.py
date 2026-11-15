@@ -4,11 +4,38 @@ import pytest
 
 from loopx.control_plane.todos.contract import (
     format_todo_metadata_line,
+    metadata_line_for_todo_block,
     parse_todo_metadata_line,
 )
 from loopx.control_plane.todos.active_state_todo_parser import (
     parse_active_state_todos,
 )
+
+
+def test_todo_metadata_edits_preserve_the_exact_validation_declaration() -> None:
+    metadata = "  <!-- loopx:todo todo_id=todo_schema001 status=open validation_command=python3%20-m%20pytest validation_label=check -->"
+    parsed = parse_todo_metadata_line(metadata)
+    assert parsed is not None
+    assert format_todo_metadata_line(**parsed) == metadata
+
+    updated = metadata_line_for_todo_block(parsed, {
+        "validation_command": "python3 -c 'if True:\n    pass'",
+        "validation_label": " \t ",
+        "note": " two  spaces ",
+    })
+    assert updated is not None and updated.splitlines() == [updated]
+    restored = parse_todo_metadata_line(updated)
+    assert restored is not None
+    assert restored["validation_command"] == "python3 -c 'if True:\n    pass'"
+    assert restored["validation_label"] == " \t "
+    assert restored["note"] == "two spaces"
+
+    updated_note = metadata_line_for_todo_block(restored, {"note": "Still exact"})
+    assert updated_note is not None
+    assert parse_todo_metadata_line(updated_note) == {**restored, "note": "Still exact"}
+    assert parse_todo_metadata_line(
+        "  <!-- loopx:todo validation_command=%20 validation_command_argv=%09 -->"
+    ) is None
 
 
 def test_todo_metadata_round_trip_preserves_canonical_values() -> None:

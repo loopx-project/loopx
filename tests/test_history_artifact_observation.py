@@ -231,3 +231,17 @@ def test_index_read_errors_still_propagate(tmp_path):
     index.mkdir()
     with pytest.raises(OSError):
         load_index_snapshot(index)
+
+
+def test_undecodable_run_rows_require_an_explicit_partial_read(tmp_path):
+    index = tmp_path / "index.jsonl"
+    original = b'{"summary":"Verified run"}\n{"summary":"\xe7\x9b\n'
+    index.write_bytes(original)
+
+    with pytest.raises(UnicodeDecodeError):
+        load_index_snapshot(index)
+    partial = load_index_snapshot(index, include_artifact_status=False, skip_invalid_encoding=True)
+    assert partial.records == [{"summary": "Verified run"}]
+    assert (partial.raw_count, partial.invalid_count) == (2, 1)
+    assert partial.digest == f"sha256:{hashlib.sha256(original).hexdigest()}"
+    assert index.read_bytes() == original

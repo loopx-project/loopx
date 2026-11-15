@@ -272,11 +272,20 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         reading = preflight_context_instruction(env, source_path, guard_digest,
             receipt["turn_id"], guide_in_host=guide_in_host)
     else:
-        view_path = guard_path.with_name("checkpoint-start-view.json")
-        view_path.write_text(guard_run.stdout, encoding="utf-8")
-        view_path.chmod(0o600)
-        reading = (f"Read the complete CLI view at {view_path} before work, then follow its interaction_contract "
-            "and replan review/writeback reads when present. ")
+        from loopx.command_invocation import loopx_cli_argv
+        from loopx.control_plane.runtime.document_io import atomic_write_state_text
+        from loopx.control_plane.turn_driver.decision_capture import (
+            CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
+        )
+
+        view_path = capture_root / "checkpoint-start-view.json"
+        view = guard_run.stdout
+        atomic_write_state_text(view_path, view, private=True)
+        reader = context_capture_read_command(view_path, hashlib.sha256(view.encode("utf-8")).hexdigest(),
+            page_bytes=8000, max_page_output_bytes=8000, reader_argv=loopx_cli_argv(env["LOOPX_CLI"]))
+        reading = ("Read the complete saved CLI view before work, then follow its interaction_contract "
+            "and replan review/writeback reads when present.\n```sh\n" + reader + "\n```\n"
+            + CONTEXT_CAPTURE_PAGE_GUIDANCE + " ")
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)

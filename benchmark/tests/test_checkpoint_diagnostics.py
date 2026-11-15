@@ -36,6 +36,7 @@ def isolated_runtime(tmp_path_factory):
 @pytest.mark.parametrize("fault,exception_kind,runtime_kind,code", [
     ("expired", "EffectRuntimeRejected", "request_rejected", "checkpoint_capture_window_closed"),
     ("missing", "EffectRuntimePermanentIOError", "io_permanent", "io_not_found"),
+    ("archive_missing", "NotFound", None, None),
     ("directory", "EffectRuntimePermanentIOError", "io_permanent", "io_is_directory"),
     ("unexpected", "EffectRuntimeInternalError", "internal_failure", "unexpected_handler_error"),
     ("untyped", "ValueError", None, None),
@@ -118,6 +119,9 @@ def test_failed_capture_replies_once_after_releasing_source(
 
     def source_archive(*args, **kwargs):
         assert worker.attrs["State"]["Paused"]
+        if fault == "archive_missing":
+            events.append("archive_missing")
+            raise docker.errors.NotFound("provider body " + token + " " + str(tmp_path))
         return candidate
 
     monkeypatch.setattr(worker_module, "_archive", held_archive)
@@ -143,6 +147,7 @@ def test_failed_capture_replies_once_after_releasing_source(
             error = ValueError("provider body " + token)
             # Attributes alone must not make an arbitrary provider exception trusted.
             error.error_kind, error.diagnostic_code = admin, token
+            error.checkpoint_component_id = "code"
             raise error
         if fault == "expired":
             request = {**request, "deadline_epoch_ms": 0}
@@ -174,7 +179,8 @@ def test_failed_capture_replies_once_after_releasing_source(
     assert supervisor.failure is None
     assert storage_probes == [points, points / nonce]
     assert worker.attrs["State"] == {"Running": True, "Paused": False}
-    assert events == ["pause", "probe", "unpause", "client_close", "reply_transfer", "reply_publish"]
+    failure_step = "archive_missing" if fault == "archive_missing" else "probe"
+    assert events == ["pause", failure_step, "unpause", "client_close", "reply_transfer", "reply_publish"]
     assert candidate.read_bytes() == b"original source bytes\n"
     assert not (points / nonce).exists() and not (bank / nonce).exists()
     assert (bank / ".loopx-worker-attempts" / nonce).is_dir()
@@ -185,6 +191,8 @@ def test_failed_capture_replies_once_after_releasing_source(
                 "ok": False, "error_kind": exception_kind}
     if runtime_kind is not None:
         expected["runtime_failure"] = {"error_kind": runtime_kind, "diagnostic_code": code}
+    if fault == "archive_missing":
+        expected["missing_component_id"] = "code"
     assert receipt == expected
     for private in (token, admin, str(tmp_path), "provider body", "invalid JSON"):
         assert private not in json.dumps(receipt)

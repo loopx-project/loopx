@@ -131,7 +131,7 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
   </ul>;
   return <article ref={article} className="research-case-study" lang={study.language === 'zh' ? 'zh-CN' : 'en'}>
     <header className="case-opening">
-      <p className="case-eyebrow">{scope.case_id} <span>· {zh ? 'Case 深度解读' : 'Case study'}</span></p>
+      <p className="case-eyebrow">{scope.case_id}</p>
       <h2>{study.title}</h2>
       <div className="case-lead"><MarkdownText text={study.summary}/></div>
       {historical ? <p className="case-read-warning" role="status">{zh ? '来源已变化或暂不可读。下文保留注册时的解读与证据快照，不能视作当前结果。' : 'The source changed or is unavailable. This reading and its evidence snapshot describe the registered version, not current results.'}</p> : null}

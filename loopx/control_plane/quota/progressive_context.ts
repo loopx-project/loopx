@@ -954,16 +954,14 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // A staged replan has already replaced inline acceptance with a pinned
   // review reader. Deliver its first action and ordering without writeback.
   const replan = object(context.replan_action_packet);
+  const replanRequired = context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+    && replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required"
+    && replan.settlement_only !== true;
   let replanReversal: ReturnType<typeof scopedReplanYardstickReversal>;
-  if (context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
-      replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required" &&
-      replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
+  if (replanRequired && typeof replan.review === "string" && replan.review) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
-  } else if (context.schema_version === "loopx_turn_envelope_v1" &&
-      context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED && replan?.schema_version === "replan_action_packet_v0" &&
-      replan.decision === "replan_required" &&
-      replan.settlement_only !== true) {
+  } else if (replanRequired && context.schema_version === "loopx_turn_envelope_v1") {
     // The complete contract already carries the review facts: use its own
     // obligations and the indexed outcome paths below, without another writer.
     for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
@@ -1001,8 +999,13 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const selectingBeforeWork = context.ok === true && context.should_run === true &&
     channel?.delivery_allowed === false && cli?.spend_allowed_now === false &&
     cli.spend_after_validation === false && hasUnboundActionSelection(cli);
-  const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && channel?.must_attempt === true && (channel.delivery_allowed === true || selectingBeforeWork)
+  const normalWork = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && (channel?.delivery_allowed === true || selectingBeforeWork);
+  // The same pending owner read applies before a required replan. Delivery
+  // remains disabled while that review is being settled.
+  const replanningBeforeWork = replanRequired && context.ok === true && context.should_run === true
+    && cli?.spend_allowed_now === false;
+  const requiredInboxReads = (normalWork || replanningBeforeWork) && channel?.must_attempt === true
     && Array.isArray(channel.required_reads)
     ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;

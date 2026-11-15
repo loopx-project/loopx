@@ -186,12 +186,16 @@ function lifecycleSource(request: JsonObject): JsonObject {
     const updated = typeof item.updated_at === "string" ? parseTodoTimestampMicros(item.updated_at) : null;
     // A successor bound to this review can add its dependency after admission.
     // It closes the live frontier, but cannot remove the admitted source. The
-    // exact original trigger/digest checks below still fence reconstruction;
-    // an ambiguous timestamp or a different review keeps the existing edge.
+    // exact original trigger/digest checks below still fence reconstruction.
+    // This review id is created at admission, and canonical Todo timestamps are
+    // whole seconds, so an updated_at in the admission second or later is
+    // post-admission (the same bound closeout already uses). An earlier
+    // second, a different review, or a missing or invalid timestamp keeps the
+    // existing edge.
     const reviewSuccessor = typeof request.selected_obligation_id === "string" &&
       item.replan_obligation_id === request.selected_obligation_id &&
       item.claimed_by === agent && item.last_actor_agent_id === agent &&
-      updated !== null && updated > admitted;
+      updated !== null && updated >= admissionSecond;
     return {id: todoId(item.todo_id), advancement: taskClass(item) === "advancement_task",
       unblocks: reviewSuccessor ? null : todoId(item.unblocks_todo_id),
       resumes: !reviewSuccessor && resume.startsWith("todo_done:") ? todoId(resume.slice(10)) : null};

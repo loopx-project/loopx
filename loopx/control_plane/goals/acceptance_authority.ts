@@ -1,5 +1,5 @@
 import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome,
-  outcomeContextNavigation, outcomePlanningReadback} from "./outcome_requirements.ts";
+  outcomeContextNavigation, outcomePlanningReadback, serializeGoalOutcomes} from "./outcome_requirements.ts";
 /** Acceptance effects use the existing canonical head, CAS and operation journal.
  * Only trusted local owner/host adapters may invoke these mutation exports. */
 import {isAbsolute} from "node:path";
@@ -164,7 +164,7 @@ async function commit(store: AuthorityStore, request: JsonObject, head: Authorit
       goal_ref: goalRef,
     };
     const outcomes = bindGoalOutcomesStateOwner(head.head, String(request.goal_id), goalRef);
-    if (outcomes !== null) next.goal_outcomes = outcomes;
+    if (outcomes !== null) next.goal_outcomes = serializeGoalOutcomes(outcomes);
   }
   next.goal_acceptance = committedState ?? clearedGoalAcceptance(
     readGoalAcceptanceAuthority(head.head, String(request.goal_id)).configuration_revision + 1, goalRef);
@@ -219,7 +219,7 @@ export async function refineGoalAcceptanceOutcome(store: AuthorityStore, value: 
   const goalId = String(request.goal_id), goalRef = requestGoalRef(request);
   const state = refineGoalOutcome(head.head, goalId, goalRef, request.actor_agent_id as string | null, request.refinement,
     request.reviewed_work_update);
-  const next: JsonObject = {...head.head, goal_outcomes: state};
+  const next: JsonObject = {...head.head, goal_outcomes: serializeGoalOutcomes(state)};
   // Bind a first exact-lifetime declaration to the same lifecycle owner as checks.
   if (goalRef !== null && readGoalAcceptanceLifecycle(head.head, goalId) === null) {
     const plan = planLifecycleTransition(head.head, goalId, {kind: "bind_existing", goal_ref: goalRef});
@@ -230,8 +230,11 @@ export async function refineGoalAcceptanceOutcome(store: AuthorityStore, value: 
   const result = {goal_id: goalId, operation_id: request.operation_id, goal_acceptance_contract: projectGoalAcceptance(next, goalId)};
   if (request.dry_run === true) return source(store, {status: "planned", changed: false, dry_run: true, provider_revision: head.provider_revision, ...result});
   const committed = await command.receipt.commit(store, {operation_id: String(request.operation_id), expected_provider_revision: head.provider_revision,
+    // Replay already reconstructs the current projection. Record-format receipts
+    // retain operation identity without copying the growing contract per edit.
     next_projection: next, events: [{schema_version: RECEIPT_SCHEMA, kind: "goal_outcome_refined", goal_id: goalId,
-      operation_id: request.operation_id, revision: state.revision}], receipts: [{...command.identity, result}]});
+      operation_id: request.operation_id, revision: state.revision}], receipts: [{...command.identity,
+        result: state.schema_version === "loopx_goal_outcomes_v0" ? result : {...result, goal_acceptance_contract: {}}}]});
   return replayWithCurrentProjection(store, committed, goalId);
 }
 
@@ -535,7 +538,7 @@ export async function transitionGoalAcceptanceLifecycle(
       : transition.kind === "reconcile_recreated" ? transition.retired_goal_ref : null;
     if (initialOwner !== null) {
       const outcomes = bindGoalOutcomesStateOwner(observation.authority.head, goalId, initialOwner);
-      if (outcomes !== null) next.goal_outcomes = outcomes;
+      if (outcomes !== null) next.goal_outcomes = serializeGoalOutcomes(outcomes);
     }
   }
   const result = {

@@ -64,6 +64,7 @@ from .control_plane.quota.settlement import (
     settlement_result_payload,
 )
 from .control_plane.quota.ledger_readback import (
+    QUOTA_EVENT_UNREADABLE_EVENT_INVALID,
     QUOTA_EVENT_UNREADABLE_REASONS,
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
@@ -399,7 +400,17 @@ def goal_quota_with_spend_ledger(
     current_time = now or datetime.now(timezone.utc).astimezone()
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
-    window_start = current_time - timedelta(hours=int(payload["window_hours"]))
+    try:
+        # Ledger timestamps are UTC, so the cutoff is computed in UTC: doing the
+        # subtraction in the host's offset can underflow (or not) at a different
+        # instant and make the same ledger count differently per host timezone.
+        window_start = current_time.astimezone(timezone.utc) - timedelta(
+            hours=int(payload["window_hours"])
+        )
+    except OverflowError:
+        # A window longer than datetime can represent still covers every
+        # representable event. It must not crash the Goal-wide history read.
+        window_start = datetime.min.replace(tzinfo=timezone.utc)
     contributions: list[tuple[str, str, int]] = []
     spend_event_count = 0
     void_event_count = 0
@@ -463,6 +474,26 @@ def goal_quota_with_spend_ledger(
     if void_event_count:
         payload["void_event_count"] = void_event_count
     return payload
+
+
+def quota_with_unreadable_index_rows(quota: dict[str, Any], count: int) -> dict[str, Any]:
+    """Report run-index rows that could not be read as unreadable quota events.
+
+    A row that is not text cannot be classified, so it may hold a spend or a
+    void. The remaining quota is then unknown, which ``quota_status`` already
+    treats as a ledger integrity failure rather than a zero spend.
+    """
+
+    if count <= 0:
+        return quota
+    reasons = quota.get("unreadable_event_reasons")
+    return {
+        **quota,
+        "unreadable_event_count": _int_number(quota.get("unreadable_event_count"), default=0) + count,
+        "unreadable_event_reasons": sorted(
+            {*(reasons if isinstance(reasons, list) else []), QUOTA_EVENT_UNREADABLE_EVENT_INVALID}
+        ),
+    }
 
 
 def quota_status(
@@ -1613,7 +1644,7 @@ def spend_quota_slot(
             "goal_id": safe_goal_id,
             "reason": "effect_ref must be a non-empty string when provided",
         }
-    if normalized_effect_ref:
+    if normalized_effect_ref and not turn_instance_id:
         if not raw_runtime_root:
             return {
                 "ok": False,
@@ -1680,6 +1711,7 @@ def spend_quota_slot(
         and not replan_obligation_id
     )
     settlement_readback = None
+    spend_request = {"slots": slots, "source": source}
     if (
         not turn_instance_id
         and raw_runtime_root
@@ -1698,6 +1730,7 @@ def spend_quota_slot(
             allow_unbound_binding=recover_unbound_visible_goal,
             registry_path=registry_path,
             goal_ref=goal_ref,
+            spend_request=spend_request,
         )
         inferred_result = (
             settlement_readback.identity
@@ -1736,6 +1769,7 @@ def spend_quota_slot(
                 replan_obligation_id=replan_obligation_id,
                 registry_path=registry_path,
                 goal_ref=goal_ref,
+                spend_request=spend_request,
             )
         if settlement_readback is None:
             raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -1755,6 +1789,18 @@ def spend_quota_slot(
                 "settlement_result": settlement_result_payload(guard_result),
             }
         identity = guard_result.value
+        refusal = settlement_readback.spend_request_rejection
+        if refusal is not None:
+            return {
+                "ok": False,
+                "mode": "spend-slot",
+                "dry_run": not execute,
+                "appended": False,
+                "goal_id": safe_goal_id,
+                "settlement_identity": identity.as_dict(),
+                "settlement_result": settlement_result_payload(refusal),
+                "reason": refusal.failure.reason if refusal.failure else "invalid original Turn spend",
+            }
         spent_result = settlement_readback.settlement
         if spent_result.failure is None:
             return {

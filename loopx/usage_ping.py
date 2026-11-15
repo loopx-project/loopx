@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,12 +140,25 @@ def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, A
     return payload
 
 
+def _environment_suppressed(environment: Mapping[str, str] | None = None) -> bool:
+    """Negative-only host hint; the TS owner still decides every observation."""
+    env = os.environ if environment is None else environment
+    # Match ECMAScript String.trim, including FEFF and excluding U+0085.
+    whitespace = (" \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+                  "\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff")
+    return (
+        env.get("LOOPX_USAGE_PING", "").strip(whitespace).lower() in {"0", "false", "no", "off"}
+        or env.get("DO_NOT_TRACK", "").strip(whitespace) not in {"", "0"}
+        or env.get("CI", "").strip(whitespace).lower() not in {"", "0", "false"}
+    )
+
+
 def begin(command: str) -> tuple[str, float] | None:
     """Read a small host hint; do not start a synchronous Node process on warm commands."""
     _observation.set({})
     # Negative-only scheduling hints for common unattended environments. These
     # cannot authorize collection; TS still checks every supported switch value.
-    if os.environ.get("LOOPX_USAGE_PING") == "0" or os.environ.get("DO_NOT_TRACK") == "1" or os.environ.get("CI") == "true":
+    if _environment_suppressed():
         return None
     # Whole-runtime migration includes this machine state. Detached observation
     # would invalidate its preview or rollback receipt even with other hosts stopped.
@@ -239,6 +253,8 @@ def _pin_caller_paths(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _detach(request: dict[str, Any], *, command: list[str] | None = None) -> None:
+    if _environment_suppressed():
+        return
     request = _pin_caller_paths(request)
     kwargs: dict[str, Any] = {"stdin": subprocess.PIPE, "stdout": subprocess.DEVNULL,
                               "stderr": subprocess.DEVNULL, "close_fds": True,

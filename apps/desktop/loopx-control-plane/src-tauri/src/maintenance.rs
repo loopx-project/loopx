@@ -34,7 +34,6 @@ pub struct Maintenance {
     phase_started: Mutex<Option<Instant>>,
     separately_managed_runtime: AtomicBool,
     automatic_update_checked: AtomicBool,
-    prepared_update_checked: AtomicBool,
     background_update: Mutex<BackgroundUpdate>,
     incomplete_app_installation: AtomicBool,
     manual_failure_pending: AtomicBool,
@@ -331,26 +330,7 @@ impl Maintenance {
         // A queued explicit action must become the final snapshot writer.
         if let Err(error) = &result {
             let details = self.failure_details(error, channel);
-            // A rejected prepared archive has not replaced the running App.
-            // app_install_failed additionally certifies the previous target,
-            // qualified runtime and retired journal. Keep its diagnostics,
-            // but do not tell the boot page startup has stopped while local
-            // service startup is about to continue. Unknown/incomplete and
-            // explicit-operation failures retain their recovery boundary.
-            if self.prepared_update_checked.load(Ordering::Acquire)
-                && matches!(
-                    error.as_str(),
-                    "update_download_or_signature_failed" | "app_install_failed"
-                )
-                && !self.incomplete_app_installation.load(Ordering::Acquire)
-                && !self.manual_failure_pending.load(Ordering::Acquire)
-                && !self.busy.load(Ordering::Acquire)
-            {
-                *self.last_failure.lock().unwrap() = json!({"phase":"error","details":details});
-                self.publish("connecting", json!({}));
-            } else {
-                self.publish("error", details);
-            }
+            self.publish("error", details);
         }
         result.map(Some)
     }
@@ -484,18 +464,8 @@ impl Maintenance {
                 if !runtime_error {
                     // These exact codes come from Core's activation receipt;
                     // arbitrary service diagnostics remain private.
-                    let code = match error.as_str() {
-                        "chat_work_pending" => "chat_work_pending",
-                        "chat_state_unverified" => "chat_state_unverified",
-                        "chat_service_unverified" => "chat_service_unverified",
-                        "service_runtime_alignment_unavailable" => {
-                            "service_runtime_alignment_unavailable"
-                        }
-                        "service_runtime_alignment_failed" => "service_runtime_alignment_failed",
-                        "service_runtime_route_unverified" => "service_runtime_route_unverified",
-                        "service_runtime_rollback_failed" => "service_runtime_rollback_failed",
-                        _ => "service_start_failed",
-                    };
+                    let code = crate::services::activation_error_code(&error)
+                        .unwrap_or("service_start_failed");
                     let mut details = json!({"code":code});
                     if crate::services::runtime_alignment_error(code) {
                         let failed_at = now();
@@ -1224,7 +1194,10 @@ fn runtime_state_publishes_own_phase(error: &str) -> bool {
     )
 }
 
-fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, String> {
+fn resume_runtime(
+    app: &AppHandle,
+    endpoints: &crate::service_endpoints::ServiceEndpoints,
+) -> Result<crate::services::SelectedRuntime, String> {
     use crate::runtime_ancestry::compare_official_commits;
     use crate::runtime_selection::{
         is_private_runtime, prefer_current_bundle, prefer_discovered_runtime,
@@ -1240,10 +1213,30 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     }
     let state = app.state::<Maintenance>();
     let _guard = state.acquire()?;
+    let private_executable = bundled_runtime::private_executable(app)?;
+    let current = crate::services::SelectedRuntime {
+        executable: selection.executable.clone(),
+        identity: installed.clone(),
+    };
+    // Opening an existing workspace must not require a different CLI's
+    // provider/account environment to replace healthy managed services. A
+    // terminal upgrade still owes its frozen target; private QA and explicit
+    // developer pins retain their existing route. Probe before ancestry/network
+    // discovery, and let ServiceSet recheck before handing over the window.
+    if !selection.environment_override
+        && !endpoints.isolated
+        && !state.upgrade_request.get().is_some_and(Option::is_some)
+        && crate::services::runtime_ready(&current, endpoints)
+    {
+        state.separately_managed_runtime.store(
+            !is_private_runtime(&selection.executable, &private_executable),
+            Ordering::Release,
+        );
+        return Ok(current);
+    }
     let bundled = bundled_runtime::identity(app)?;
     let candidate =
         crate::runtime_selection::bundled_runtime_candidate(app.package_info(), &bundled)?;
-    let private_executable = bundled_runtime::private_executable(app)?;
     // Only a launch-time developer override pins a runtime. Ordinary launches
     // reconcile discovery, a previous choice, and the App-owned installation.
     if !selection.environment_override {
@@ -1342,11 +1335,6 @@ fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, S
     // chosen by the automatic freshness rule. Private preparation promotes
     // only after qualification; interruption is retried normally.
     bundled_runtime::finish_legacy_journal(app)?;
-    if let Err(error) = crate::runtime_selection::remember(app, &selection) {
-        // A preference is an optimization, not a requirement to use a
-        // qualified runtime. Re-discovery remains available on next launch.
-        eprintln!("LoopX runtime preference was not saved: {error}");
-    }
     state.separately_managed_runtime.store(
         selection.environment_override
             || !is_private_runtime(&selection.executable, &private_executable),
@@ -1374,72 +1362,46 @@ fn automatic_app_update(app: &AppHandle) {
     } else {
         "stable"
     };
-    if request.is_none() {
-        if state.prepared_update_checked.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        // Ordinary launch consumes only an already prepared local archive.
-        // No network request precedes the usable local runtime. Installation
-        // happens before any App-owned service exists, never during a Turn.
-        #[cfg(target_os = "macos")]
-        {
-            let state = &*state;
-            let result = tauri::async_runtime::block_on(state.run_automatic_update(
-                channel,
-                async {
-                    crate::prepared_update::load(
-                        &prepared_directory(app)?,
-                        &app.package_info().version.to_string(),
-                        channel,
-                        updater_public_key(app)?,
-                    )
-                },
-                |prepared| async move {
-                    state.supersede_update_observation();
-                    let target = prepared.version;
-                    let version = target.clone();
-                    install_verified_app(app, target, move || {
-                        crate::macos_update::install_prepared(&version, &prepared.bytes)
-                    })
-                    .await?;
-                    Ok(())
-                },
-                || app.restart(),
-            ));
-            if let Err(error) = result {
-                eprintln!("LoopX prepared App update deferred: {error}");
-            }
-        }
-        // Windows has no staged-replacement archive to consume: the pinned
-        // plugin installs only from a checked feed, so an ordinary launch
-        // performs the bounded check and applies the verified installer
-        // before any App-owned service exists. A failed check or launch
-        // leaves the installed App usable and keeps its diagnostics.
-        #[cfg(target_os = "windows")]
-        {
-            let result: Result<Option<()>, String> =
-                tauri::async_runtime::block_on(state.run_automatic_update(
-                    channel,
-                    async {
-                        let url = endpoint(channel)?;
-                        let checked =
-                            perform(app, "check", channel, url.clone(), Duration::from_secs(3))
-                                .await?;
-                        Ok((checked["phase"] == "available").then_some(url))
-                    },
-                    |url| async move {
-                        perform(app, "apply", channel, url, Duration::from_secs(3)).await?;
-                        Ok(())
-                    },
-                    || app.restart(),
-                ));
-            if let Err(error) = result {
-                eprintln!("LoopX automatic App update deferred: {error}");
-            }
-        }
+    // A normal macOS open is not an update transaction. Even a cached
+    // archive requires verification, replacement and restart; keep all of
+    // that off the route to an already usable workspace. The existing panel
+    // and terminal upgrade remain the explicit installation entrypoints.
+    if request.is_none() && !cfg!(target_os = "windows") {
         return;
     }
     if state.automatic_update_checked.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(request) = request.filter(|request| request.target.is_some()) {
+        let result = tauri::async_runtime::block_on(state.run_automatic_update(
+            channel,
+            async {
+                // Both no-update and replacement processes use this frozen
+                // candidate. A cache miss never falls back to network at boot.
+                let prepared = request.prepared_target(
+                    &app.package_info().version.to_string(),
+                    updater_public_key(app)?,
+                )?;
+                if prepared.is_none() {
+                    state.publish("up_to_date", json!({"channel":channel}));
+                }
+                Ok(prepared)
+            },
+            |prepared| async move {
+                let target = prepared.version;
+                let version = target.clone();
+                install_verified_app(app, target, move || {
+                    crate::macos_update::install_prepared(&version, &prepared.bytes)
+                })
+                .await?;
+                Ok(())
+            },
+            || app.restart(),
+        ));
+        if let Err(error) = result {
+            eprintln!("LoopX prepared terminal upgrade failed: {error}");
+        }
         return;
     }
     // A CLI-requested upgrade is an explicit operation, not an ordinary open.
@@ -1471,6 +1433,85 @@ fn automatic_app_update(app: &AppHandle) {
     }
     // An unavailable feed/signature never certifies freshness or prevents use
     // of the installed App. Diagnostics retain the failed check.
+}
+
+#[cfg(target_os = "macos")]
+async fn prepare_terminal_candidate(
+    update: Option<Update>,
+    current: &str,
+    channel: &str,
+    key: &str,
+    automatic_root: &std::path::Path,
+    request_root: &std::path::Path,
+) -> Result<String, String> {
+    let Some(update) = update else {
+        return Ok(current.into());
+    };
+    let cached = crate::prepared_update::peek(automatic_root, current, channel, key)
+        .ok()
+        .flatten()
+        .filter(|cached| cached.version == update.version && cached.signature == update.signature);
+    let bytes = if let Some(cached) = cached {
+        cached.bytes
+    } else {
+        download_update(&update, |_, _| {}).await?
+    };
+    crate::prepared_update::save(
+        request_root,
+        channel,
+        &update.version,
+        &update.signature,
+        &bytes,
+    )?;
+    Ok(update.version)
+}
+
+// The installed App remains the signature/channel owner. This bounded helper
+// has no window, single-instance callback or service lifecycle: the CLI waits
+// for preparation before asking the existing window to quit.
+#[cfg(target_os = "macos")]
+pub fn prepare_terminal_upgrade(context: tauri::Context<tauri::Wry>) {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            app.set_activation_policy(tauri::ActivationPolicy::Prohibited);
+            let outcome = tauri::async_runtime::block_on(async {
+                let handle = app.handle();
+                let request = crate::upgrade_request::UpgradeRequest::from_args(
+                    &std::env::args().collect::<Vec<_>>(),
+                    handle
+                        .path()
+                        .app_local_data_dir()
+                        .map_err(|_| "update_unavailable")?,
+                    handle.package_info().version.to_string(),
+                    Value::Null,
+                )
+                .ok_or("invalid_update_action")?;
+                let channel = &request.channel;
+                let update =
+                    find_update(handle, channel, endpoint(channel)?, Duration::from_secs(30))
+                        .await?;
+                let target = prepare_terminal_candidate(
+                    update,
+                    &handle.package_info().version.to_string(),
+                    channel,
+                    updater_public_key(handle)?,
+                    &prepared_directory(handle)?,
+                    &request.preparation_directory(),
+                )
+                .await?;
+                Ok::<_, String>(json!({"ok":true,"channel":channel,"target":target}))
+            });
+            let code = if outcome.is_ok() { 0 } else { 1 };
+            println!(
+                "{}",
+                outcome.unwrap_or_else(|code| json!({"ok":false,"code":code}))
+            );
+            app.handle().exit(code);
+            Ok(())
+        })
+        .run(context)
+        .expect("native upgrade preparation");
 }
 
 pub fn start_background_update(app: &AppHandle) {
@@ -1561,7 +1602,7 @@ pub fn start_services(
         .get_or_init(Instant::now);
     automatic_app_update(app);
     let result = app.state::<Maintenance>().reconcile_services(|| {
-        let runtime = match resume_runtime(app) {
+        let runtime = match resume_runtime(app, endpoints) {
             Ok(runtime) => runtime,
             Err(error) => {
                 // Runtime states publish the phase that explains them before they
@@ -1584,6 +1625,18 @@ pub fn start_services(
         .map_err(|e| e.to_string())
     });
     if let Ok(Some(services)) = &result {
+        // Discovery is not adoption. Failed starts must preserve the previous
+        // usable choice; an ephemeral developer pin must not become a default.
+        if !std::env::var("LOOPX_BIN").is_ok_and(|value| !value.trim().is_empty()) {
+            let selection = crate::runtime_selection::Selection {
+                executable: services.runtime().executable.clone(),
+                explicit: false,
+                environment_override: false,
+            };
+            if let Err(error) = crate::runtime_selection::remember(app, &selection) {
+                eprintln!("LoopX runtime preference was not saved: {error}");
+            }
+        }
         if let Some(Some(request)) = app.state::<Maintenance>().upgrade_request.get() {
             request.services_ready(services.runtime_identity());
         }
@@ -1603,7 +1656,7 @@ pub fn restore_services_after_update_failure(
     state.restore_services(|| {
         // Progress would replace the failure snapshot with "connecting"; this
         // start exists only to hand the live window its runtime back.
-        let runtime = resume_runtime(app)?;
+        let runtime = resume_runtime(app, endpoints)?;
         crate::services::ServiceSet::start(&runtime, endpoints, |_pending| {})
             .map_err(|error| error.to_string())
     })
@@ -1985,17 +2038,9 @@ mod tests {
     }
 
     #[test]
-    fn rejected_prepared_update_keeps_diagnostics_without_false_boot_stop() {
-        for (usable, discard_ok, prepared) in [
-            (true, true, true),
-            (false, true, true),
-            (true, false, true),
-            (true, true, false),
-        ] {
+    fn requested_update_failure_keeps_its_recovery_boundary() {
+        for (usable, discard_ok) in [(true, true), (false, true), (true, false)] {
             let state = Maintenance::default();
-            state
-                .prepared_update_checked
-                .store(prepared, Ordering::Release);
             let code =
                 finalize_install_failure(&state, usable, platform_uses_install_journal(), || {
                     if discard_ok {
@@ -2012,27 +2057,23 @@ mod tests {
             ));
             assert_eq!(result.unwrap_err(), code);
             assert_eq!(state.last_failure.lock().unwrap()["details"]["code"], code);
-            if usable && prepared && (discard_ok || !platform_uses_install_journal()) {
-                assert_eq!(state.status_snapshot()["phase"], "connecting");
+            assert_eq!(state.status_snapshot()["phase"], "error");
+            if usable && (discard_ok || !platform_uses_install_journal()) {
                 assert_eq!(
                     state.last_failure.lock().unwrap()["details"]["journal_discarded"],
                     platform_uses_install_journal()
                 );
-                assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
-            } else {
-                assert_eq!(state.status_snapshot()["phase"], "error");
             }
         }
     }
 
     #[test]
-    fn prepared_signature_rejection_is_optional_but_unknown_failures_are_not() {
+    fn requested_update_signature_and_unknown_failures_remain_visible() {
         for (code, phase) in [
-            ("update_download_or_signature_failed", "connecting"),
+            ("update_download_or_signature_failed", "error"),
             ("backup_failed", "error"),
         ] {
             let state = Maintenance::default();
-            state.prepared_update_checked.store(true, Ordering::Release);
             let error = tauri::async_runtime::block_on(state.run_automatic_update(
                 "stable",
                 async { Err::<Option<()>, String>(code.into()) },
@@ -2620,6 +2661,10 @@ mod tests {
     #[test]
     fn failed_alignment_recovers_automatically_after_backoff() {
         for code in [
+            "native_account_work_pending",
+            "native_observer_provider_binding_required",
+            "native_observer_provider_upgrade_required",
+            "native_observer_requires_target_runtime",
             "service_runtime_alignment_unavailable",
             "service_runtime_route_unverified",
             "service_runtime_alignment_failed",
@@ -2632,6 +2677,7 @@ mod tests {
                     state.reconcile_services_with_clock::<()>(|| clock.get(), || Err(code.into())),
                     Err(code.into())
                 );
+                assert_eq!(state.snapshot.lock().unwrap()["details"]["code"], code);
                 assert_eq!(
                     state.snapshot.lock().unwrap()["details"]["retry_after_ms"],
                     delay * 1000

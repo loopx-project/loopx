@@ -576,7 +576,7 @@ def test_todo_claim_validation_preserves_exact_diagnostics(
     assert str(exc_info.value) == expected
 
 
-@pytest.mark.parametrize("command", ["add", "list", "supersede"])
+@pytest.mark.parametrize("command", ["add", "list"])
 @pytest.mark.parametrize("operation_id", ["retry-one", ""])
 def test_claim_operation_id_is_not_silently_ignored_by_other_commands(command, operation_id):
     args = build_parser().parse_args([
@@ -586,7 +586,7 @@ def test_claim_operation_id_is_not_silently_ignored_by_other_commands(command, o
         validate_shared_todo_options(args)
 
 
-@pytest.mark.parametrize("command", ["update", "complete"])
+@pytest.mark.parametrize("command", ["update", "complete", "supersede"])
 @pytest.mark.parametrize("operation_id", ["retry-one", ""])
 def test_managed_claim_reference_is_retained_for_the_execution_owner(command, operation_id):
     args = build_parser().parse_args([

@@ -1020,6 +1020,7 @@ def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(t
     "matching", "bounded", "different", "missing", "incomplete", "omitted", "unknown",
     "bad_counts", "small", "held", "missing_instruction", "selection",
     "selection_unavailable_route", "selection_spend_allowed", "selection_different_read",
+    "replan", "replan_bounded", "replan_missing_read", "replan_different_read", "replan_no_attempt", "replan_settlement",
 ])
 def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp_path, decision, route):
     command = "loopx manager-inbox read --goal-id fixture --agent-id author"
@@ -1027,7 +1028,7 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
         "capability_id": "manager-context", "hook_id": "manager.context_inbox",
         "ordering": "before_work", "command": command}
     purpose = "保留原反馈与验收材料。" * (4 if route == "small" else 48)
-    bounded = route in {"bounded", "missing_instruction"}
+    bounded = route in {"bounded", "missing_instruction", "replan_bounded"}
     agenda = {"count_unit": "request", "incoming_count": 3 if bounded or route == "bad_counts" else 2,
         "outgoing_count": 1,
         "items": [{"request_id": f"request-{index}", "next_action": purpose} for index in range(3)],
@@ -1052,12 +1053,19 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
                 "candidate_discovery_args": "todo list --goal-id fixture --status open"}}
                 if route != "selection_unavailable_route" else {}),
         }
+    if route.startswith("replan"):
+        decision.update(normal_delivery_allowed=False, effective_action="autonomous_replan_required",
+            execution_obligation={"must_attempt_work": route != "replan_no_attempt"},
+            replan_action_packet={"schema_version": "replan_action_packet_v0", "decision": "replan_required",
+                "settlement_only": route == "replan_settlement",
+                "review": "loopx quota replan-view --replan-stage review"})
+        channel.update(delivery_allowed=False, must_attempt=route != "replan_no_attempt")
     channel["work_context"]["sources"].append({**read, "content": {
         "ok": True, "read_complete": False, "unfinished_delegations": agenda,
     }})
-    if route != "missing":
+    if route not in {"missing", "replan_missing_read"}:
         required = ({**read, "command": command + " --agent-id other"}
-                    if route in {"different", "selection_different_read"} else read)
+                    if route in {"different", "selection_different_read", "replan_different_read"} else read)
         channel["required_reads"].append(required)
 
     view = native_context_capture_view(decision, tmp_path)
@@ -1065,7 +1073,7 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
     prefix = "/interaction_contract/agent_channel/work_context/sources/3/content"
     assert values[prefix + "/read_complete"] is False
     agenda_path = prefix + "/unfinished_delegations"
-    if route in {"matching", "bounded", "selection"}:
+    if route in {"matching", "bounded", "selection", "replan", "replan_bounded"}:
         assert agenda_path not in values and agenda_path + "/items" not in values
         for field in ("incoming_count", "outgoing_count", "scan_complete"):
             assert values[f"{agenda_path}/{field}"] == agenda[field]
@@ -1075,6 +1083,9 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
         else:
             assert agenda_path + "/instruction" not in values
         assert read in values["/interaction_contract/agent_channel/required_reads"]
+        if route.startswith("replan"):
+            assert values["/replan_action_packet/review"] == decision["replan_action_packet"]["review"]
+            assert values["/interaction_contract/agent_channel/delivery_allowed"] is False
     else:
         assert values[agenda_path] == agenda
     detail = read_context_capture(Namespace(capture_file=view["recovery"]["path"],

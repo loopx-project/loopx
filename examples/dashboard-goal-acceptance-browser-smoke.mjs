@@ -16,7 +16,7 @@ const payload = JSON.parse(execFileSync(python, ["-c", "import runpy,tempfile,js
 const dashboardDir = resolve(root, "apps/presentation/dashboard");
 const server = packaged
   ? spawn(python, ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" })
-  : startViteDashboardServer({ dashboardDir, port });
+  : await startViteDashboardServer({ dashboardDir, port });
 let browser;
 try {
   await waitForHttp(`http://127.0.0.1:${port}/`);

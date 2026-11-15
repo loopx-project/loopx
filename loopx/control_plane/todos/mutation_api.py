@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_from_registry
-from ...state_refresh import now_local
 from .contract import (
     TODO_STATUS_OPEN,
     normalize_todo_id,
@@ -123,12 +122,11 @@ def add_goal_todo(
         if excluded_agents is not None
         else None
     )
-    updated_at = now_local()
     authoring_scope = plan_todo_creation_scope(
         role=role, goal_id=goal_id, registered_agents=registered_agents,
         unblocks_todo_id=normalize_todo_id(unblocks_todo_id),
         unblocks_todo_id_declared=bool(unblocks_todo_id),
-        monitor_metadata=monitor_metadata, generated_at=updated_at,
+        monitor_metadata=monitor_metadata,
         intent={
             "task_class": task_class, "status": status, "actor_agent_id": agent_id,
             "claimed_by": claimed_by, "bound_agent": bound_agent, "goal_bound": goal_bound,
@@ -188,7 +186,6 @@ def add_goal_todo(
             "validation_timeout_seconds": validation_timeout_seconds,
             **normalized_monitor_metadata,
             "note": note,
-            "updated_at": updated_at,
         },
         project=project,
         state_file=state_file,

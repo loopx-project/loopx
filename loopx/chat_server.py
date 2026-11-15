@@ -67,6 +67,7 @@ from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
     parse_chat_history_selection,
+    prepare_chat_history_session,
     read_chat_history_selection,
 )
 from .control_plane.goals.active_state_metadata import active_state_section_text
@@ -929,11 +930,9 @@ class ChatRequestHandler(
     def _session_snapshot(self, session_id: str) -> None:
         try:
             selection = parse_chat_history_selection(parse_qs(urlparse(self.path).query, keep_blank_values=True))
-            # A historical Turn read must not recover an unrelated execution.
-            if selection["turn_id"] is None:
-                self.server.runtime_controller.recover_exited_turn(session_id)
             store = self.server.chat_store
-            session = store.load_session(session_id) or {}
+            session = prepare_chat_history_session(store, session_id, selection,
+                recover_turn=self.server.runtime_controller.recover_exited_turn)
             media = self.server.private_media_history
             contexts = getattr(self.server.runtime_controller, "project_contexts", None)
             bindings = getattr(contexts, "conversation_bindings", None)
@@ -942,8 +941,8 @@ class ChatRequestHandler(
                 self.server.runtime_controller.coordination_runtime_root, store, session_id,
                 registry=self.server.registry_path, selection=selection,
                 project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None,
-                project_provider=lambda rows: project_private_reply_history(
-                    store, session, rows))
+                project_provider=lambda rows: self._link_history_images(
+                    session_id, session, selection, project_private_reply_history(store, session, rows)))
             if markers and "session" in payload:
                 payload["session"] = media.summary(payload["session"], markers)
             self._send_json(payload)
@@ -953,31 +952,6 @@ class ChatRequestHandler(
             self._send_error(str(exc), status=400)
         except OSError:
             self._send_error("Chat history is temporarily unavailable", status=503)
-
-    def _managed_native_turn(self, session_id: str, *, execute: bool = False) -> None:
-        from .capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
-        service = ManagedSessionTurn(self.server.runtime_controller)
-        try:
-            if execute:
-                body = self._read_json()
-                if set(body) - {"agent_id", "operation_id", "todo_id"}:
-                    raise ValueError("unsupported managed Turn arguments")
-                turn, created = service.submit(session_id, **body)
-                return self._send_json({"ok": True, "session_id": session_id, "turn": turn, "created": created}, status=202)
-            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            sources = query.get("calendar_task_sources", ["false"])
-            if sources not in (["true"], ["false"]):
-                raise ValueError("calendar_task_sources must be one true or false value")
-            include_sources = sources == ["true"]
-            if include_sources and (set(query) - {"calendar_task_sources", "agent_id", "operation_id"}
-                    or any(len(values) != 1 for values in query.values())):
-                raise ValueError("select one original managed Session and Agent for Task sources")
-            self._send_json(service.inspect(session_id, agent_id=query.get("agent_id", [None])[0],
-                operation_id=query.get("operation_id", [None])[0], include_calendar_task_sources=include_sources))
-        except KeyError:
-            self._send_error("chat session was not found", status=404)
-        except (TypeError, ValueError, RuntimeError) as exc:
-            self._send_error(str(exc), status=409, error_code="managed_turn_unavailable")
 
     def _list_sessions(self) -> None:
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
@@ -2033,6 +2007,9 @@ def serve_chat(
     server.delegation_wake_service = DelegationWakeService(
         server.runtime_controller, goal_context=_wake_goal_context
     ).start()
+    # Resume only retained, explicitly confirmed creation requests through the
+    # existing Session queue. Its owner rechecks source, native work and gates.
+    server.runtime_controller.resume_creation_requests()
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
     print(f"Agent boundary: local adapters, project grant {project_workspace_grant}, approval policy never", flush=True)

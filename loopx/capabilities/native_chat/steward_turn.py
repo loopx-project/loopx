@@ -819,7 +819,14 @@ class StewardTurnHost:
 
             adapter.session._launch_guard = launch
             try:
-                response = adapter.start_turn(prompt, event_sink)
+                if managed_turn and not governance_work:
+                    from ...control_plane.effect_runtime import effect_runtime_result
+                    policy = effect_runtime_result("collaboration.session.managed_turn.sandbox_policy", {
+                        "host": request["host"], "actor": actor, "authority": authority,
+                        "validation": managed_turn.validation_basis["plan"], "task_lease": managed_lease})
+                    response = adapter.start_native_task_turn(prompt, event_sink, policy)
+                else:
+                    response = adapter.start_turn(prompt, event_sink)
             finally:
                 adapter.session._launch_guard = previous_guard
             current()  # Revocation/stop/retarget after a long model call wins.

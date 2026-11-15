@@ -8,8 +8,7 @@ import shlex
 from typing import Any
 
 from ...command_invocation import loopx_cli_argv
-from ...install_contract import powershell_literal
-from ...project_prompt import host_command
+from ...install_contract import render_host_cli_command
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
@@ -153,6 +152,7 @@ class QuotaSpendPrecheck:
     settlement: SettlementResult[dict[str, Any]]
     progress: dict[str, Any] | None
     spend_run_present: bool
+    spend_request_rejection: SettlementResult[dict[str, Any]] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,9 +183,7 @@ class QuotaSettlementReadback:
 
 
 def render_owed_host_command(argv: list[str]) -> str:
-    # The PowerShell launcher scans its arguments as strings, including numbers.
-    quote = powershell_literal if os.name == "nt" else shlex.quote
-    return " ".join([host_command(argv[0]), *(quote(arg) for arg in argv[1:])])
+    return render_host_cli_command(argv)
 
 
 def attach_settlement_progress(
@@ -236,13 +234,22 @@ def attach_settlement_progress(
     }
     # PowerShell quoting applies to every argument, even with an unquoted launcher.
     # Keep the argv for the composed CLI so it does not have to parse shell text.
-    if os.name == "nt":
+    if os.name == "nt" or route[0].lower().endswith(".ps1"):
         argv = shlex.split(command)
         owed.update(command=render_owed_host_command(argv), command_argv=argv)
     payload["settlement_owed"] = owed
 
 
 def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
+    recovery = payload.get("settlement_recovery")
+    if isinstance(recovery, dict):
+        identity = recovery["settlement_identity"]
+        lines = [f"- Pending settlement: `{identity['turn_instance_id']}`", recovery["instruction"]]
+        for command in recovery["next_cli_actions"]:
+            lines.extend(["", "```sh", command, "```"])
+        return lines
+    if payload.get("settlement_recovery_error"):
+        return [f"- Settlement recovery could not be read: {payload['settlement_recovery_error']}"]
     progress = payload.get("settlement_progress")
     if not isinstance(progress, dict):
         return []
@@ -418,6 +425,7 @@ def read_quota_spend_precheck(
     allow_unbound_binding: bool = False,
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
+    spend_request: Mapping[str, Any] | None = None,
 ) -> QuotaSpendPrecheck | None:
     """Read the identity and replay controls before building a fresh preview."""
 
@@ -432,6 +440,7 @@ def read_quota_spend_precheck(
             "infer_turn_instance_id": infer_turn_instance_id,
             "allow_unbound_binding": allow_unbound_binding,
             "spend_precheck": True,
+            **({"spend_request": dict(spend_request)} if spend_request is not None else {}),
         },
         registry_path=registry_path,
         goal_ref=goal_ref,
@@ -446,6 +455,10 @@ def read_quota_spend_precheck(
         settlement=_readback_result(payload.get("settlement")),
         progress=_optional_readback_record(payload.get("progress")),
         spend_run_present=spend_run_present,
+        spend_request_rejection=(
+            _readback_result(payload["spend_request_rejection"])
+            if "spend_request_rejection" in payload else None
+        ),
     )
 
 
@@ -460,6 +473,7 @@ def read_heartbeat_settlement(
     infer_turn_instance_id: bool = False,
     allow_unbound_binding: bool = False,
     resolve_original_binding: bool = False,
+    pending_closeout: bool = False,
     refresh_retry: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
@@ -486,6 +500,7 @@ def read_heartbeat_settlement(
                 else {}
             ),
             **({"resolve_original_binding": True} if resolve_original_binding else {}),
+            **({"pending_closeout": True} if pending_closeout else {}),
             **({"refresh_retry": refresh_retry} if refresh_retry is not None else {}),
             **({"borrow_source_admission": True} if borrow_source_admission else {}),
             **(

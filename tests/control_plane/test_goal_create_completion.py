@@ -180,13 +180,15 @@ def test_creation_does_not_rebase_a_conflicted_completion_write(environment, app
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("fault", ["declaration_response", "first_turn_response"])
+@pytest.mark.parametrize("fault", ["declaration_response", "admission_read", "admission_decision", "first_turn_response",
+                                  "first_turn_response_then_read_failure", "first_turn_response_then_denial"])
 def test_managed_creation_retains_requirements_before_one_host_dispatch(environment, app, monkeypatch, provider, fault):
     import runpy
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
     from loopx.capabilities.native_chat.project_context import ChatProjectContexts
     from loopx.control_plane.goals import acceptance
+    from loopx import chat_actions, status as status_owner
 
     configure, _, _, project, runtime = environment
     _, request, service = app
@@ -203,8 +205,14 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
         project_contexts=ChatProjectContexts([project]))
     service.chat_store, service.runtime_controller = chat, controller
     proposal = preview_goal(request)
-    target = acceptance if fault == "declaration_response" else controller
-    method = "refine_goal_outcome" if fault == "declaration_response" else "submit_turn"
+    target, method = {
+        "declaration_response": (acceptance, "refine_goal_outcome"),
+        "admission_read": (status_owner, "collect_status"),
+        "admission_decision": (chat_actions, "build_quota_should_run"),
+        "first_turn_response": (controller, "submit_turn"),
+        "first_turn_response_then_read_failure": (controller, "submit_turn"),
+        "first_turn_response_then_denial": (controller, "submit_turn"),
+    }[fault]
     original = getattr(target, method)
 
     def lose_response(*args, **kwargs):
@@ -214,11 +222,27 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
     monkeypatch.setattr(target, method, lose_response)
     try:
         status, failed = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
-        assert status == 424, failed
+        assert status == (400 if fault.startswith("admission_") else 424), failed
         assert inspect(project, runtime)["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 1
-        if fault == "declaration_response":
-            assert chat.list_sessions(goal_id="report") == [], "an uncertain declaration must block Host startup"
+        if not fault.startswith("first_turn_response"):
+            assert chat.list_sessions(goal_id="report") == [], "uncertain requirements or admission must block Host startup"
+            assert not capture.exists(), "no native request may precede a verified first-Turn admission"
+        retained = inspect(project, runtime)["goal_acceptance_contract"]
         monkeypatch.setattr(target, method, original)
+        confirmed = None
+        admission_calls = []
+        if fault.startswith("first_turn_response_then_"):
+            sid = chat.list_sessions(goal_id="report")[0]["session_id"]
+            accepted = chat.turn_for_client(sid, f"goal-start-{proposal['proposal_id']}")
+            confirmed = controller.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)
+            assert confirmed["status"] == "completed"
+            def changed_admission(*args, **kwargs):
+                admission_calls.append(True)
+                if fault.endswith("read_failure"):
+                    raise TimeoutError("The later admission source is unavailable")
+                return {"should_run": False, "state": "throttled", "reason": "No new work is eligible"}
+            monkeypatch.setattr(status_owner if fault.endswith("read_failure") else chat_actions,
+                "collect_status" if fault.endswith("read_failure") else "build_quota_should_run", changed_admission)
         submit = controller.submit_turn
 
         def assert_retained_then_submit(*args, **kwargs):
@@ -230,11 +254,123 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
         status, recovered = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
         assert status == 202, recovered
         ids = recovered["proposal"]["receipt"]["resource_ids"]
+        original_session = chat.load_session(ids["session_id"])
+        assert original_session["managed_agent_id"] == "codex"
+        assert original_session["channel_id"] == "agent.codex"
+        assert ids["managed_agent_id"] == original_session["managed_agent_id"]
+        assert ids["channel_id"] == original_session["channel_id"]
+        assert ids["goal_instance_id"] == original_session.get("goal_instance_id")
+        if confirmed is not None:
+            assert ids["session_id"] == sid and ids["turn_id"] == confirmed["turn_id"]
+            assert admission_calls == [], "confirmed first work is readback, not a new admission"
+            assert recovered.get("gate") is None
         controller.wait_for_turn(session_id=ids["session_id"], turn_id=ids["turn_id"], timeout_sec=10)
         assert len(chat.list_sessions(goal_id="report")) == 1
         starts = [json.loads(line) for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
         assert len(starts) == 1
-        assert inspect(project, runtime)["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 1
+        assert inspect(project, runtime)["goal_acceptance_contract"] == retained
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("agent_id", ["", "codex"])
+def test_creation_without_a_host_does_not_require_work_admission(environment, app, monkeypatch, agent_id):
+    from loopx import status as status_owner
+
+    store, request, _ = app
+    proposal = preview_goal(request, agent_id=agent_id, completion_criteria=CRITERIA if agent_id else "")
+    admission_calls = []
+    def unavailable(*args, **kwargs):
+        admission_calls.append(True)
+        raise TimeoutError("Admission is unavailable for new model work")
+    monkeypatch.setattr(status_owner, "collect_status", unavailable)
+    status, created = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
+    assert status == 200, created
+    assert created["proposal"]["receipt"]["outcome"] == "goal_created"
+    assert "session_id" not in created["proposal"]["receipt"]["resource_ids"]
+    assert "first_session_opened" not in store.load(proposal["proposal_id"])["checkpoint"]["steps"]
+    assert admission_calls == [], "configuration-only creation never dispatches model work"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("mode", ["soft_claim", "hard_lease"])
+def test_confirmed_task_start_recovers_the_same_claim_and_dispatch(environment, app, monkeypatch, provider, mode):
+    import runpy
+
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, _, _, project, runtime = environment
+    store, request, service = app
+    configure(provider, mode=mode)
+    goal = preview_goal(request)
+    status, created = request(f"/api/actions/{goal['proposal_id']}/apply", {})
+    assert status == 200, created
+
+    capture, binary = runtime / "task-native-requests.jsonl", runtime / "task-codex"
+    source = runpy.run_path(str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py"))["FAKE_CODEX"]
+    binary.write_text(source.replace('    method = request.get("method")',
+        f'    with open({str(capture)!r}, "a") as stream:\n        stream.write(json.dumps(request) + "\\n")\n'
+        '    method = request.get("method")'))
+    binary.chmod(0o700)
+    chat = ChatSessionStore(runtime / "chat")
+    controller = ChatRuntimeController(store=chat, codex_bin=str(binary), registry_path=service.registry_path,
+        project_contexts=ChatProjectContexts([project]))
+    service.chat_store, service.runtime_controller = chat, controller
+
+    try:
+        status, preview = request("/api/actions/preview", {
+            "action_kind": "todo.create", "summary": "Start the appendix check", "idempotency_key": "start-appendix",
+            "context": {"kind": "goal", "goal_id": "report"},
+            "normalized_parameters": {"goal_id": "report", "text": "Verify the supporting appendix",
+                                      "agent_id": "codex", "start_execution": True},
+        })
+        assert status == 201, preview
+        proposal_id = preview["proposal"]["proposal_id"]
+        apply = f"/api/actions/{proposal_id}/apply"
+        save_checkpoint = store.save_checkpoint
+
+        service.runtime_controller = None
+        status, unavailable = request(apply, {})
+        assert status == 400 and "Runtime Controller" in unavailable["error"], unavailable
+        todo_id = store.load(proposal_id)["checkpoint"]["steps"]["todo_created"]["todo_id"]
+        partial = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="report", include_leases=True)
+        assert [todo.get("claimed_by") for todo in partial["todos"] if todo["todo_id"] == todo_id] == [None]
+        assert partial["leases"] == []
+        service.runtime_controller = controller
+
+        def lose_claim_response(*args, **kwargs):
+            if kwargs.get("step") == "todo_assigned":
+                raise OSError("Lost the response after committing the Task assignment")
+            return save_checkpoint(*args, **kwargs)
+
+        monkeypatch.setattr(store, "save_checkpoint", lose_claim_response)
+        status, failed = request(apply, {})
+        assert status == 424, failed
+        assert store.load(proposal_id)["checkpoint"]["steps"]["todo_created"]["todo_id"] == todo_id
+        authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="report", include_leases=True)
+        assert [todo["claimed_by"] for todo in authority["todos"] if todo["todo_id"] == todo_id] == ["codex"]
+        assert chat.list_sessions(goal_id="report") == []
+
+        monkeypatch.setattr(store, "save_checkpoint", save_checkpoint)
+        status, recovered = request(apply, {})
+        assert status == 202, recovered
+        ids = recovered["proposal"]["receipt"]["resource_ids"]
+        assert ids["todo_id"] == todo_id
+        turn = controller.wait_for_turn(session_id=ids["session_id"], turn_id=ids["turn_id"], timeout_sec=10)
+        assert turn["status"] == "completed"
+        sessions = chat.list_sessions(goal_id="report")
+        assert [session["channel_id"] for session in sessions] == [f"task.{todo_id}"]
+        messages = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert [row["params"]["sandbox"] for row in messages if row.get("method") == "thread/start"] == ["workspace-write"]
+        assert sum(row.get("method") == "turn/start" for row in messages) == 1
+        status, replay = request(apply, {})
+        assert status == 202 and replay["proposal"]["receipt"] == recovered["proposal"]["receipt"]
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="report", include_leases=True) == authority
+        assert [(lease["todo_id"], lease["owner"]) for lease in authority["leases"]] == (
+            [(todo_id, "codex")] if mode == "hard_lease" else [])
     finally:
         controller.close()
 

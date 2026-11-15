@@ -1,0 +1,55 @@
+.research-human-attention { margin-block: 20px; padding-block: 16px; border-block-start: 1px solid var(--pw-line); }
+.research-human-attention > .research-usage-heading { margin-bottom: 20px; flex-wrap: wrap; }
+.research-attention-scope { margin-inline-start: auto; color: var(--pw-muted); font-size: var(--text-caption); }
+.research-attention-overview { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, 1fr); gap: 32px; align-items: center; }
+.research-attention-breakdown { display: flex; gap: 24px; align-items: center; min-width: 0; }
+.research-attention-donut { position: relative; width: 160px; height: 160px; flex-shrink: 0; }
+.research-attention-donut svg { display: block; width: 100%; height: 100%; }
+.research-attention-donut circle { fill: none; stroke: var(--attention-color, var(--pw-track)); stroke-width: 14px; }
+.research-attention-donut .research-attention-ring-track { stroke: var(--pw-line); }
+.research-attention-total { position: absolute; inset: 0; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.research-attention-total strong { font-size: 40px; font-weight: 500; line-height: 1.1; color: var(--pw-text); }
+.research-attention-total span { color: var(--pw-muted); font-size: var(--text-caption); }
+.research-human-attention .research-attention-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; margin: 0; flex: 1; min-width: 0; }
+.research-attention-counts div { min-width: 0; }
+.research-attention-counts dt { display: flex; align-items: center; gap: 7px; color: var(--pw-text); }
+.research-attention-counts dt svg { flex-shrink: 0; color: var(--attention-color); }
+.research-attention-counts dd { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 0 25px; }
+.research-attention-counts dd strong { font-weight: 500; }
+.research-attention-counts dd span { color: var(--pw-muted); font-size: var(--text-caption); }
+.research-human-attention [data-kind="clarification"] { --attention-color: var(--pw-blue); }
+.research-human-attention [data-kind="correction"] { --attention-color: var(--pw-caution); }
+.research-human-attention [data-kind="review"] { --attention-color: var(--pw-green); }
+.research-human-attention [data-kind="approval"] { --attention-color: color-mix(in srgb, var(--pw-blue) 60%, var(--pw-red)); }
+.research-human-attention [data-kind="status"] { --attention-color: color-mix(in srgb, var(--pw-blue) 55%, var(--pw-muted)); }
+.research-human-attention [data-kind="other"] { --attention-color: var(--pw-muted); }
+.research-human-attention .research-attention-times { display: grid; gap: 20px; margin: 0; }
+.research-attention-time dt { display: flex; align-items: center; gap: 7px; color: var(--pw-muted); }
+.research-attention-time dd { margin: 6px 0 0; }
+.research-attention-time dd > strong { font-size: 24px; font-weight: 500; color: var(--pw-text); }
+.research-attention-time-track { height: 5px; overflow: hidden; margin-block: 8px; border-radius: 3px; background: var(--pw-line); }
+.research-attention-time-track span { display: block; height: 100%; background: var(--pw-blue); }
+.attention-waiting .research-attention-time-track span { background: var(--pw-caution); }
+.research-attention-time-track[data-observed="false"], .research-attention-necessity-track [data-necessity="unknown"] { background: repeating-linear-gradient(135deg, var(--pw-line) 0 4px, var(--pw-track) 4px 6px); }
+.research-attention-time-coverage, .research-attention-window { color: var(--pw-muted); font-size: var(--text-caption); }
+.research-attention-window { margin: 10px 0 0; text-align: end; }
+.research-attention-opportunity { margin-block: 20px; }
+.research-attention-necessity-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; }
+.research-attention-necessity-legend span { color: var(--pw-muted); font-size: var(--text-caption); }
+.research-attention-necessity-legend [data-necessity="avoidable"] { color: var(--pw-amber); font-size: var(--text-body); }
+.research-attention-necessity-track { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin-top: 9px; }
+.research-attention-necessity-track span { height: 100%; }
+.research-attention-necessity-track [data-necessity="avoidable"] { background: var(--pw-caution); }
+.research-attention-necessity-track [data-necessity="required"] { background: var(--pw-track); }
+.research-attention-detail summary { cursor: pointer; }
+.research-attention-opportunities, .research-attention-events { padding-inline-start: 20px; }
+.research-attention-opportunities li, .research-attention-events li { margin-block: 14px; }
+.research-attention-opportunities button { margin: 4px 8px 4px 0; }
+.research-attention-events time { display: block; color: var(--pw-muted); font-size: var(--text-caption); }
+.research-attention-detail p, .research-attention-detail button, .research-attention-events dl { overflow-wrap: anywhere; }
+.research-attention-events dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; }
+.research-attention-events dd { margin: 0; }
+.research-attention-pages { display: flex; align-items: center; gap: 12px; }
+@media (max-width: 1120px) { .research-attention-overview { grid-template-columns: 1fr; gap: 24px; } .research-human-attention .research-attention-times { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; } }
+@media (max-width: 600px) { .research-attention-breakdown { gap: 16px; } .research-attention-donut { width: 128px; height: 128px; } .research-human-attention .research-attention-counts { grid-template-columns: 1fr; gap: 10px; } .research-attention-counts > div { display: flex; align-items: baseline; gap: 8px; } .research-attention-counts dd { margin: 0 0 0 auto; gap: 8px; } .research-attention-counts dd span { min-width: 44px; text-align: end; } .research-attention-counts dt { min-width: 0; } .research-attention-overview { gap: 20px; } }
+@media (max-width: 420px) { .research-attention-donut { width: clamp(96px, 32vw, 128px); height: clamp(96px, 32vw, 128px); } .research-attention-counts dt { overflow-wrap: anywhere; } .research-attention-counts dd span { min-width: 38px; } .research-attention-time dt { min-height: 2lh; align-items: flex-start; } }

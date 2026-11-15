@@ -44,6 +44,14 @@ def main() -> None:
             store.create_session(goal_id="research", agent_id="codex", adapter_kind="codex_app_server",
                                  upstream_thread_id=session_id, channel_id=channel, session_id=session_id)
             store.append_message(session_id, role="agent", text=text, message_id="answer")
+        if "--find" in sys.argv:
+            store.append_message("old", role="agent", message_id="long-evidence",
+                                 text="## Earlier acceptance decision\n\n" + "Original reviewed material. " * 300
+                                 + "\n\nKeep the lunar evidence. 保留原始证据。")
+            store.append_message("current", role="user", message_id="correction",
+                                 text="Please retain LUNAR evidence in the final report.")
+            store.append_message("current", role="agent", message_id="latest",
+                                 text="The lunar evidence is retained. Awaiting the next independent check.")
         before = {str(path.relative_to(store.sessions_root)): path.read_bytes()
                   for path in store.sessions_root.rglob("*") if path.is_file()}
         server = ChatHTTPServer(("127.0.0.1", 0), HistoryReadFault)

@@ -159,6 +159,7 @@ def test_live_intent_can_follow_settled_quota_without_reopening_work(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from types import SimpleNamespace
+    from loopx.control_plane.effect_program import SettlementIdentity, SettlementResult
     from loopx.control_plane.quota import live_decision
     from loopx.control_plane.capability_hooks import (
         InteractionProjectionHookRegistration,
@@ -168,6 +169,10 @@ def test_live_intent_can_follow_settled_quota_without_reopening_work(
     # Receipt identity/refusal is covered through the real CLI settlement tests;
     # this case isolates composition with the real typed hook decoder.
     monkeypatch.setattr(live_decision, "read_heartbeat_settlement", lambda *args, **kwargs: SimpleNamespace(
+        identity=SettlementResult.pure(SettlementIdentity(
+            goal_id="settled-fixture", agent_id="fixture-agent",
+            todo_id="todo_settled", turn_instance_id="settled-fixture-turn",
+        )),
         replay_phase=ReceiptBoundReplayPhase.SETTLED, monitor_phase=None,
     ))
     command = "loopx periodic-report consume-pending --goal-id settled-fixture --agent-id fixture-agent --execute"

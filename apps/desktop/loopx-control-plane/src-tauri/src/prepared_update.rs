@@ -107,12 +107,40 @@ pub(crate) fn load(
     channel: &str,
     public_key: &str,
 ) -> Result<Option<PreparedUpdate>, String> {
+    read(root, current, channel, public_key, CacheRead::Consume)
+}
+
+/// Preparation may reuse a verified archive, but cannot retire another
+/// channel's cache while its original workspace is still running.
+pub(crate) fn peek(
+    root: &Path,
+    current: &str,
+    channel: &str,
+    public_key: &str,
+) -> Result<Option<PreparedUpdate>, String> {
+    read(root, current, channel, public_key, CacheRead::Reuse)
+}
+
+enum CacheRead {
+    Consume,
+    Reuse,
+}
+
+fn read(
+    root: &Path,
+    current: &str,
+    channel: &str,
+    public_key: &str,
+    mode: CacheRead,
+) -> Result<Option<PreparedUpdate>, String> {
     let Some(value) = metadata(root)? else {
         return Ok(None);
     };
     let version = value["version"].as_str().ok_or(INVALID)?;
     if value["channel"] != channel || !is_newer(current, version, channel) {
-        clear(root)?;
+        if matches!(mode, CacheRead::Consume) {
+            clear(root)?;
+        }
         return Ok(None);
     }
     let bytes = fs::read(root.join(archive_name(&value)?)).map_err(|_| INVALID)?;

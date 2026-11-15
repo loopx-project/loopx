@@ -959,6 +959,7 @@ export type ChatSessionSnapshot = {
   session: ChatSessionSummary;
   messages: ChatVisibleMessage[];
   active_turn: Record<string, unknown> | null;
+  selected_turn?: {turn_id: string; status: string; terminal: boolean; error?: string};
   // Derived from one complete, verified read. Never persisted or an authority grant.
   verifiedHistoryBasis?: string;
   message_page?: {
@@ -1092,8 +1093,24 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
   return readChatSessionHistory(session, signal, turnId);
 }
 
+export async function fetchConfirmedTaskTurn(
+  {goalId, todoId, sessionId, turnId}: {goalId: string; todoId: string; sessionId: string; turnId: string},
+  signal: AbortSignal,
+) {
+  const history = await readChatSessionHistory(sessionId, signal, turnId, undefined, undefined, {taskScope: {goalId, todoId}});
+  const turn = history.selected_turn;
+  if (history.session.goal_id !== goalId || history.session.channel_id !== `task.${todoId}`
+    || turn?.turn_id !== turnId || typeof turn.status !== "string" || !turn.status
+    || typeof turn.terminal !== "boolean" || (turn.error !== undefined && typeof turn.error !== "string")) {
+    throw new Error("The original Task Turn could not be verified.");
+  }
+  return {turn, messages: history.messages};
+}
+
 async function readChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string,
-  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void): Promise<ChatSessionSnapshot> {
+  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void,
+  {linkImages = false, taskScope}: {linkImages?: boolean; taskScope?: {goalId: string; todoId: string}} = {},
+): Promise<ChatSessionSnapshot> {
   const sessionId = typeof session === "string" ? session : session.session_id;
   // A delegation has the original Session ID; pin its first verified page's
   // scope. History discovery callers keep validating against their own source.
@@ -1110,10 +1127,15 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
     signal?.throwIfAborted();
     const query = new URLSearchParams({message_limit: "200"});
     if (turnId !== undefined) query.set("turn_id", turnId);
+    if (taskScope) {
+      query.set("task_goal_id", taskScope.goalId);
+      query.set("task_todo_id", taskScope.todoId);
+    }
     if (cursor !== null) query.set("message_cursor", cursor);
     const snapshot = await requestJson<ChatSessionSnapshot>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
-      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)]) : AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)});
+      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)]) : AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS),
+        headers: historyImageHeaders(linkImages)});
     signal?.throwIfAborted();
     const expected = expectedSession;
     const sameSource = snapshot.session?.session_id === sessionId && (!expected || sameHistorySource(snapshot.session, expected));
@@ -1167,7 +1189,13 @@ function historyBasisMatches(basis: string, count: number) {
     && match[2].length === Math.ceil(count / 200) * 64;
 }
 
-async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: ChatSessionSnapshot) {
+function historyImageHeaders(linkImages: boolean): HeadersInit | undefined {
+  // The linked bytes are same-origin resources. A separately configured Chat
+  // server still uses the compatible inline representation.
+  return linkImages && !configuredChatOrigin ? {"X-LoopX-History-Images": "linked"} : undefined;
+}
+
+async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: ChatSessionSnapshot, linkImages: boolean) {
   const basis = saved.verifiedHistoryBasis;
   if (!basis || !sameHistorySource(saved.session, session) || !historyBasisMatches(basis, saved.messages.length)) return null;
   const query = new URLSearchParams({message_limit: "200", known_history: basis});
@@ -1175,7 +1203,7 @@ async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: C
   try {
     snapshot = await requestJson<typeof snapshot>(
       "/api/chat/sessions/" + encodeURIComponent(session.session_id) + "?" + query,
-      {signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)});
+      {signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS), headers: historyImageHeaders(linkImages)});
   } catch (error) {
     // A service rollback may no longer accept this optional argument.
     if (error instanceof ChatApiError && error.payload.http_status === 400) return null;
@@ -1296,11 +1324,26 @@ function sameHistoryRevision(current: ChatSessionSummary, read: ChatSessionSumma
     && current.status === read.status;
 }
 
-function historyTransportUnavailable(error: unknown) {
-  if (!(error instanceof ChatApiError) || error.payload.error_code !== "chat_api_unavailable") return false;
-  const status = error.payload.http_status;
+function hasPendingReturnDelivery(snapshot: ChatSessionSnapshot) {
+  // The owner also projects explicit_unverified when its receipt cannot be
+  // read. That projection can recover; a recorded terminal failure does not.
+  const pending = ({status, error}: {status: string; error?: string | null}) =>
+    status !== "delivered" && status !== "superseded"
+      && (status !== "explicit_unverified" || error === "delivery_state_unreadable");
+  return snapshot.messages.some(message =>
+    (message.return_delivery && pending(message.return_delivery))
+    || (message.collaborations ?? (message.collaboration ? [message.collaboration] : []))
+      .some(request => request.returns.some(pending))
+  );
+}
+
+function historyTransportUnavailable(error: unknown, allowPlain503 = false) {
+  if (!(error instanceof ChatApiError) || error.payload.session_invalidated === true) return false;
+  const {error_code: code, http_status: status} = error.payload;
+  // Bound private history can be confirmed separately when its store returns a plain 503.
+  if (allowPlain503 && status === 503 && code === undefined) return true;
   // A response body can be interrupted after successful history headers.
-  return status === undefined || status === 200 || Number(status) >= 500;
+  return code === "chat_api_unavailable" && (status === undefined || status === 200 || Number(status) >= 500);
 }
 
 export type ChatHistory = {
@@ -1328,38 +1371,51 @@ export async function fetchChatHistory(options: {
   const exact = Boolean(options.bound || options.managed);
   const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS))]}
     : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS) });
-  const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  const priorSnapshots = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  const known = new Map(priorSnapshots);
   const pending = previous?.pendingBoundSnapshot;
   const current = listed.sessions[0];
+  const retained = !options.managed && pending && options.bound?.bindingId === pending.bindingId && current
+    && sameHistorySource(current, pending.snapshot.session) ? pending.snapshot : undefined;
+  const pendingReturnBasis = retained && hasPendingReturnDelivery(retained) ? retained : undefined;
   // This discovery happened after the retained read. An unchanged exact
-  // source and revision satisfy the pending check without fetching its pages.
-  if (!options.managed && pending && pending.bindingId === options.bound?.bindingId && current
-    && sameHistoryRevision(current, pending.snapshot.session)) {
-    known.set(current.session_id, pending.snapshot);
+  // source and revision can qualify a retained read with no outstanding returns.
+  if (current && retained && !pendingReturnBasis && sameHistoryRevision(current, retained.session)) {
+    known.set(current.session_id, retained);
   }
   const pendingReads = new Map(previous?.pendingReads);
   for (const id of pendingReads.keys()) if (!listed.sessions.some(session => session.session_id === id)) pendingReads.delete(id);
   // A failed historical read is not an empty transcript. Retrying only the
   // missing snapshots keeps this recovery read-only and bounds repeated work.
   const missing = listed.sessions.filter((session) => {
-    const saved = known.get(session.session_id)?.session;
-    return !saved || (exact && !sameHistoryRevision(session, saved));
+    const saved = known.get(session.session_id);
+    // Return receipts can be written after the answer text. The bound suffix
+    // proof checks the displayed prefix, including delivery state.
+    return !saved || (exact && !sameHistoryRevision(session, saved.session))
+      || (Boolean(options.bound) && (hasPendingReturnDelivery(saved)
+        || (priorSnapshots.has(session.session_id) && previous?.unavailableSessionIds.includes(session.session_id))));
   });
   if (exact) for (const session of missing) known.delete(session.session_id);
   const results = await Promise.allSettled(missing.map(async (session) => {
     const savedProgress = pendingReads.get(session.session_id);
     if (savedProgress && !sameHistorySource(savedProgress.first.session, session)) pendingReads.delete(session.session_id);
     const progress = pendingReads.get(session.session_id);
-    const saved = options.bound && !progress && previous?.snapshots.find(row => row.session.session_id === session.session_id);
+    // A retained read with pending returns is still private. Use it only as
+    // the basis for a fresh proof of the visible prefix through the same source.
+    const saved = options.bound && !progress && (pendingReturnBasis?.session.session_id === session.session_id
+      ? pendingReturnBasis : priorSnapshots.get(session.session_id));
     let snapshot: ChatSessionSnapshot;
     try {
-      snapshot = (saved ? await tryResumeChatSessionHistory(session, saved) : null)
+      const linkImages = Boolean(options.bound);
+      snapshot = (saved ? await tryResumeChatSessionHistory(session, saved, linkImages) : null)
         ?? await readChatSessionHistory(session, undefined, undefined, progress,
-          checkpoint => pendingReads.set(session.session_id, checkpoint));
+          checkpoint => pendingReads.set(session.session_id, checkpoint), {linkImages});
     } catch (error) {
       // Reuse the hook's existing retry schedule only for a lost transport.
       // Revoked sources, invalid pages and stale cursors must start a fresh read.
-      if (!historyTransportUnavailable(error)) pendingReads.delete(session.session_id);
+      if (!historyTransportUnavailable(error, Boolean(options.bound && !options.managed))) {
+        pendingReads.delete(session.session_id);
+      }
       throw error;
     }
     pendingReads.delete(session.session_id);
@@ -1382,7 +1438,7 @@ export async function fetchChatHistory(options: {
           throw new Error("The original Session scope changed during history read.");
         }
       } catch (error) {
-        if (options.managed || read?.status !== "fulfilled" || !historyTransportUnavailable(error)) throw error;
+        if (options.managed || read?.status !== "fulfilled" || !historyTransportUnavailable(error, true)) throw error;
         return {
           messages: [],
           sessions: listed.sessions,
@@ -1398,12 +1454,28 @@ export async function fetchChatHistory(options: {
   for (const result of results) {
     if (result.status === "fulfilled") known.set(result.value.session.session_id, result.value);
   }
-  const snapshots = listed.sessions.flatMap((session) => known.has(session.session_id) ? [known.get(session.session_id)!] : []);
+  let sessions = listed.sessions;
+  let usingStaleBoundHistory = false;
+  const failed = results[0];
+  const saved = current && priorSnapshots.get(current.session_id);
+  if (options.bound && !options.managed && failed?.status === "rejected" && historyTransportUnavailable(failed.reason, true)
+    && current && saved && sameHistorySource(current, saved.session)) {
+    // Keep only an already proven transcript. If the binding changed while the
+    // failed read was in flight, rechecking it here keeps this path fail-closed.
+    const confirmed = await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+    if (!sameHistorySource(confirmed, saved.session)) {
+      throw new Error("The original Session scope changed during history read.");
+    }
+    sessions = [confirmed];
+    known.set(confirmed.session_id, saved);
+    usingStaleBoundHistory = true;
+  }
+  const snapshots = sessions.flatMap((session) => known.has(session.session_id) ? [known.get(session.session_id)!] : []);
   return {
     messages: mergeChatSessionMessages(snapshots),
-    sessions: listed.sessions,
+    sessions,
     snapshots,
-    unavailableSessionIds: listed.sessions.filter((session) => !known.has(session.session_id)).map((session) => session.session_id),
+    unavailableSessionIds: sessions.filter(session => usingStaleBoundHistory || !known.has(session.session_id)).map(session => session.session_id),
     pendingReads,
   };
 }
@@ -1623,6 +1695,77 @@ export async function steerChatTurn(sessionId: string, turnId: string, message: 
     throw new ChatApiError("追加指令的回执不匹配，请保留草稿并检查当前状态。", { error_code: "steer_receipt_mismatch" });
   }
   return receipt;
+}
+
+const managedTaskTurnSchema = z.object({
+  session_id: z.string().min(1), turn_id: z.string().min(1), client_turn_id: z.string().min(1), status: z.string().min(1),
+  origin: z.literal("native_loopx"), loopx_execution: z.literal(true),
+  loopx_request: z.object({operation: z.literal("native_turn"), todo_id: z.string().min(1),
+    actor: z.object({goal_id: z.string().min(1), agent_id: z.string().min(1), session_id: z.string().min(1)})}),
+}).passthrough();
+const managedTaskCreationRequestSchema = z.object({
+  creation_operation_id: z.string().min(1), operation_id: z.string().min(1),
+  goal_id: z.string().min(1), goal_instance_id: z.string().min(1).nullable(), agent_id: z.string().min(1),
+  session_id: z.string().min(1), todo_id: z.string().min(1),
+  permission: z.enum(["read_only", "workspace_write_on_confirmation"]), write_scope: z.array(z.string().min(1)),
+});
+const taskCreationReadback = {creation_request: managedTaskCreationRequestSchema.optional(),
+  creation_turn: managedTaskTurnSchema.nullable().optional()};
+const managedTaskEntrySchema = z.object({ok: z.literal(true), session_id: z.string().min(1),
+  managed_agent_id: z.string().nullable(), registered_agents: z.array(z.string()), available: z.boolean(), reason: z.string().optional(),
+  task: z.discriminatedUnion("state", [
+    z.object({todo_id: z.string().min(1), state: z.literal("ready"), source: z.string().min(1), canonical_done: z.boolean(),
+      observation: z.object({check_count: z.number().int().nonnegative(), pinned_file_count: z.number().int().nonnegative(),
+        basis_sha256: z.string().min(1)}), reason: z.string().optional(), ...taskCreationReadback}),
+    z.object({todo_id: z.string().nullable(), state: z.literal("unbound"), source: z.null(), canonical_done: z.literal(false),
+      reason: z.string().optional(), ...taskCreationReadback}),
+  ]), turn: managedTaskTurnSchema.nullable(),
+});
+export type ManagedTaskEntry = z.infer<typeof managedTaskEntrySchema>;
+export type ManagedTaskTurn = z.infer<typeof managedTaskTurnSchema>;
+
+function verifyManagedTaskTurn(turn: ManagedTaskTurn, target: ManagedConversationTarget, operationId: string, todoId?: string) {
+  const actor = turn.loopx_request.actor;
+  if (turn.session_id !== target.sessionId || turn.client_turn_id !== `managed.${operationId}`
+    || actor.session_id !== target.sessionId || actor.goal_id !== target.goalId || actor.agent_id !== target.agentId
+    || todoId !== undefined && turn.loopx_request.todo_id !== todoId) throw new Error("The original Task Turn identity changed.");
+}
+
+/** Read the Core-selected original Task; preparation and check adoption grant no launch. */
+export async function fetchManagedTaskEntry(target: ManagedConversationTarget, options: {operationId?: string; todoId?: string; signal?: AbortSignal} = {}) {
+  const session = await resolveManagedChatSession(target, options.signal);
+  const query = new URLSearchParams({original_task: "true", agent_id: target.agentId});
+  if (options.operationId !== undefined) query.set("operation_id", options.operationId);
+  const result = managedTaskEntrySchema.parse(await requestJson<unknown>(
+    `/api/chat/sessions/${encodeURIComponent(target.sessionId)}/native-turn?${query}`, {signal: options.signal}));
+  if (result.session_id !== target.sessionId || result.managed_agent_id !== target.agentId || !result.registered_agents.includes(target.agentId)) {
+    throw new Error("The original Task entry is unavailable from this Agent.");
+  }
+  if (result.turn) {
+    if (!options.operationId) throw new Error("The Task read returned an unrelated operation.");
+    verifyManagedTaskTurn(result.turn, target, options.operationId, options.todoId);
+  }
+  const creation = result.task.creation_request;
+  if (creation) {
+    if (creation.operation_id !== `goal-create-${creation.creation_operation_id}`
+      || creation.goal_id !== target.goalId || creation.goal_instance_id !== session.goal_instance_id
+      || creation.agent_id !== target.agentId || creation.session_id !== target.sessionId
+      || result.task.todo_id !== null && creation.todo_id !== result.task.todo_id
+      || result.task.creation_turn === undefined) throw new Error("The original creation request identity changed.");
+    if (result.task.creation_turn) verifyManagedTaskTurn(result.task.creation_turn, target, creation.operation_id, creation.todo_id);
+  } else if (result.task.creation_turn) throw new Error("The creation Turn has no original request.");
+  return result;
+}
+
+/** Only an explicit owner operation calls the existing native Task admission. */
+export async function startManagedTaskTurn(target: ManagedConversationTarget, todoId: string, operationId: string, signal?: AbortSignal) {
+  await resolveManagedChatSession(target, signal);
+  const result = z.object({ok: z.literal(true), session_id: z.string(), turn: managedTaskTurnSchema, created: z.boolean()}).parse(
+    await requestJson<unknown>(`/api/chat/sessions/${encodeURIComponent(target.sessionId)}/native-turn`, {method: "POST", signal,
+      body: JSON.stringify({agent_id: target.agentId, operation_id: operationId, todo_id: todoId})}));
+  if (result.session_id !== target.sessionId) throw new Error("The original Task Session changed during launch.");
+  verifyManagedTaskTurn(result.turn, target, operationId, todoId);
+  return result;
 }
 
 export type LoopXModeSnapshot = {

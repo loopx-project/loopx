@@ -11,6 +11,7 @@ from ...control_plane.goals.first_party_host_admission import (
 from ...control_plane.goals.source_session_registry_state import exact_goal_ref
 from ...orchestration import compact_orchestration_policy
 from .native_child_receipts import load_native_child_activity, record_native_child
+from .native_child_result_inbox import acknowledge_native_child_result
 
 
 def register_native_child_commands(subparsers, add_format):
@@ -18,7 +19,7 @@ def register_native_child_commands(subparsers, add_format):
         "native-child", help="Record or read typed host-native child activity for an admitted Turn."
     )
     add_format(parser)
-    parser.add_argument("native_child_action", choices=("record", "read"))
+    parser.add_argument("native_child_action", choices=("record", "read", "acknowledge-result"))
     parser.add_argument("--goal-id", required=True)
     parser.add_argument("--agent-id", required=True)
     parser.add_argument("--turn-instance-id", required=True)
@@ -35,6 +36,9 @@ def register_native_child_commands(subparsers, add_format):
                         "for result/deferred/rejected. Accepted reviews use evidence/validation refs instead.")
     parser.add_argument("--evidence-ref", help="Public-safe opaque reference for accepted evidence.")
     parser.add_argument("--validation-ref", help="Public-safe opaque reference for parent validation.")
+    parser.add_argument("--result-id", help="Stable native child result identity returned by manager-inbox read.")
+    parser.add_argument("--disposition", choices=("accepted", "deferred", "rejected"),
+                        help="Parent disposition after the result was delivered and reviewed.")
     parser.add_argument("--execute", action="store_true", help="Append the receipt; otherwise preview only.")
 
 
@@ -56,27 +60,46 @@ def handle_native_child_command(args, registry_path, runtime_root, print_payload
         goal = load_goal_from_registry(registry_path, args.goal_id)
         if goal is None or args.agent_id not in registered_agent_ids_for_goal(goal):
             raise ValueError("coordinator is not registered for this Goal")
-        orchestration = compact_orchestration_policy(goal.get("spawn_policy"))
-        if not (
-            orchestration.get("mode") == "multi_subagent"
-            and orchestration.get("spawn_allowed") is True
-            and int(orchestration.get("max_children") or 0) > 0
-        ):
-            raise ValueError("native child receipts require enabled multi_subagent policy")
-        configured_limit = int(orchestration["max_children"])
+        configured_limit = None
+        if args.native_child_action != "acknowledge-result":
+            orchestration = compact_orchestration_policy(goal.get("spawn_policy"))
+            if not (
+                orchestration.get("mode") == "multi_subagent"
+                and orchestration.get("spawn_allowed") is True
+                and int(orchestration.get("max_children") or 0) > 0
+            ):
+                raise ValueError("native child receipts require enabled multi_subagent policy")
+            configured_limit = int(orchestration["max_children"])
         if args.native_child_action == "read":
             if any((args.operation_id, args.stage, args.operation, args.outcome,
                     args.entrypoint_id, args.reason_code, args.evidence_ref,
-                    args.validation_ref, args.execute)):
+                    args.validation_ref, args.result_id, args.disposition, args.execute)):
                 raise ValueError("read accepts only goal, agent and Turn identity")
             payload = {"ok": True, "native_child_activity": load_native_child_activity(
                 runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
                 turn_instance_id=args.turn_instance_id, configured_limit=configured_limit,
                 registry_path=registry_path, goal_ref=goal_ref,
             )}
+        elif args.native_child_action == "acknowledge-result":
+            if any((args.operation_id, args.stage, args.operation, args.outcome,
+                    args.entrypoint_id, args.reason_code, args.evidence_ref,
+                    args.validation_ref)) or not args.result_id or not args.disposition:
+                raise ValueError("acknowledge-result requires only result-id and disposition")
+            if not args.execute:
+                payload = {"ok": True, "preview": True, "result_id": args.result_id,
+                           "disposition": args.disposition}
+            else:
+                payload = acknowledge_native_child_result(
+                    runtime_root=runtime_root, goal_id=args.goal_id,
+                    agent_id=args.agent_id, turn_instance_id=args.turn_instance_id,
+                    result_id=args.result_id,
+                    disposition=args.disposition, goal_ref=goal_ref,
+                )
         else:
             if not args.operation_id or not args.stage or not args.outcome:
                 raise ValueError("record requires operation-id, stage and outcome")
+            if args.result_id or args.disposition:
+                raise ValueError("record does not accept result acknowledgement fields")
             payload = record_native_child(
                 runtime_root=runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
                 turn_instance_id=args.turn_instance_id, operation_id=args.operation_id,
@@ -96,6 +119,11 @@ def handle_native_child_command(args, registry_path, runtime_root, print_payload
 def render_native_child(payload):
     if not payload["ok"]:
         return str(payload["error"])
+    if "native_child_activity" not in payload:
+        return (
+            f"Native child result {payload['result_id']} "
+            f"{'would be ' if payload.get('preview') else ''}{payload['disposition']}."
+        )
     activity = payload["native_child_activity"]
     return (
         f"Native child activity for {activity['turn_instance_id']}: "

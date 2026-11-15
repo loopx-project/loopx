@@ -48,13 +48,52 @@ def loopx_cli_argv(cli_bin: str | None = None) -> list[str]:
     return [program] if program == "loopx" else [program, "--cli-bin", program]
 
 
+def validate_context_reader_route(route: object) -> list[str]:
+    """Validate the existing absolute CLI route grammar."""
+    if not isinstance(route, list) or not route or not all(isinstance(arg, str) for arg in route):
+        raise ValueError("reader reference has an invalid CLI route")
+    validate_cli_bin(route[0])
+    if not os.path.isabs(route[0]):
+        raise ValueError("reader reference has an invalid CLI route")
+    if route[1:] in ([], ["-m", "loopx.entrypoint"], ["-I", "-m", "loopx.entrypoint"],
+                     ["--cli-bin", route[0]]):
+        return route
+    raise ValueError("reader reference has an invalid CLI route")
+
+
+def same_context_reader_route(current: list[str], recorded: list[str]) -> bool:
+    """Require the current executable to be the one bound by the private reader."""
+    if not current or not os.path.isabs(current[0]):
+        return False
+    current_entry = validate_context_reader_route(current)
+    recorded_entry = validate_context_reader_route(recorded)
+    if current_entry[1:2] == ["--cli-bin"]:
+        current_entry = current_entry[:1]
+    if recorded_entry[1:2] == ["--cli-bin"]:
+        recorded_entry = recorded_entry[:1]
+    if current_entry == recorded_entry:
+        return True
+    if (len(recorded_entry) == 1 and len(current_entry) > 1 and sys.argv
+            and sys.orig_argv[1:2] == sys.argv[:1] and os.path.isabs(sys.argv[0])):
+        # A console script is run by its shebang interpreter. The normal
+        # route describes the interpreter, while this reference names the
+        # actual script. A module launch has -m in the original argv.
+        current_entry = sys.argv[:1]
+    if current_entry[1:] != recorded_entry[1:]:
+        return False
+    try:
+        return Path(current_entry[0]).samefile(recorded_entry[0])
+    except OSError:
+        return False
+
+
 def cli_option_args(flag: str, value: object) -> list[str]:
     """Keep a legal option-looking value from becoming another CLI option."""
     text = str(value)
     return [f"{flag}={text}"] if text.startswith("-") else [flag, text]
 
 
-def current_loopx_cli_argv() -> list[str]:
+def current_loopx_cli_argv(*, preserve_override: bool = True) -> list[str]:
     """Pin captured readers to this installed release or explicit CLI.
 
     A native Host can run from a project outside the source checkout. An ambient
@@ -63,7 +102,7 @@ def current_loopx_cli_argv() -> list[str]:
     importable; invoking its Python without that launcher can load a stale module.
     """
     route = loopx_cli_argv()
-    if route != ["loopx"]:
+    if route != ["loopx"] and (preserve_override or route[1:2] != ["--cli-bin"]):
         return route
 
     release_root_text = os.environ.get("LOOPX_RELEASE_ROOT", "").strip()
