@@ -40,7 +40,7 @@ try {
       turn_id: null, text: i === 18 ? longText : `Original conversation record ${i + 1} / 原会话记录 ${i + 1}：${i % 2 ? "failed check retained" : "unverified work retained"}`,
       created_at: `2026-01-01T00:00:${String(i).padStart(2, "0")}Z`})).map((row, i) => i === 18 ? {...row, role: "agent"} : row));
     const writes = [], discovery = [];
-    let mode = "ready";
+    let mode = scenario === "creation" ? "pending-creation" : "ready";
     const creationRequest = {creation_operation_id: proposalId, operation_id: `goal-create-${proposalId}`, goal_id: goalId,
       goal_instance_id: null, agent_id: owner, session_id: sessionId, todo_id: "original-task", permission: "workspace_write_on_confirmation", write_scope: ["**"]};
     const creationTurn = {session_id: sessionId, turn_id: "original-creation-native-turn", client_turn_id: `managed.${creationRequest.operation_id}`,
@@ -67,7 +67,7 @@ try {
         return route.fulfill({json: {ok: true, session_id: sessionId, managed_agent_id: owner, registered_agents: [owner], available: true,
           task: {todo_id: creationRequest.todo_id, state: "ready", source: "goal-creation", canonical_done: false,
             observation: {check_count: 6, pinned_file_count: 1, basis_sha256: "original-confirmed-checks"},
-            creation_request: creationRequest, creation_turn: creationTurn}, turn: null}});
+            creation_request: creationRequest, creation_turn: mode === "pending-creation" ? null : creationTurn}, turn: null}});
       }
       if (url.pathname === "/api/chat/sessions" && request.method() === "GET" && url.searchParams.has("managed_agent_id")) {
         discovery.push([url.searchParams.get("goal_id"), url.searchParams.get("managed_agent_id")]);
@@ -116,6 +116,13 @@ try {
       await original.waitFor();
       if (scenario === "creation") {
         const control = page.getByRole("region", {name: "当前任务", exact: true});
+        const pending = control.getByRole("button", {name: "等待", exact: true});
+        await pending.waitFor();
+        assert.equal(await pending.isDisabled(), true);
+        await control.getByRole("status").filter({hasText: "已提交，等待执行"}).waitFor();
+        assert.equal(writes.filter(row => row.path.endsWith("/native-turn")).length, 0);
+        mode = "ready";
+        await page.reload({waitUntil: "domcontentloaded"});
         await control.getByRole("button", {name: "继续当前任务", exact: true}).waitFor();
         for (const [label, viewport] of [["desktop", {width: 1440, height: 960}], ["narrow", {width: 390, height: 844}]]) {
           await page.setViewportSize(viewport);

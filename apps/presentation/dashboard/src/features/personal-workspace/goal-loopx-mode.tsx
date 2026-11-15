@@ -182,7 +182,8 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
         <button type="button" className="goal-loopx-primary" disabled={busy || waiting || !ready && !error}
           onClick={() => error ? setRefresh(value => value + 1) : void start()}>
           <Play size={14}/>{error ? (zh ? "重新读取" : "Refresh") : busy ? (zh ? "正在提交…" : "Submitting…")
-            : waiting ? (zh ? "正在推进" : "Working") : attempt ? (zh ? "继续当前任务" : "Continue Task") : (zh ? "开始当前任务" : "Start Task")}
+            : running ? (zh ? "正在推进" : "Working") : waiting ? (zh ? "等待" : "Waiting")
+            : attempt ? (zh ? "继续当前任务" : "Continue Task") : (zh ? "开始当前任务" : "Start Task")}
         </button>
       </div>
     </div>
