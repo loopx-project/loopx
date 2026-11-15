@@ -55,6 +55,14 @@ class FirstPartyHostRuntimeRejected(RuntimeError):
         self.code = code
 
 
+class FirstPartyHostLaunchRejected(FirstPartyHostRuntimeRejected):
+    """A launch guard refused entry before the Host could receive the Turn."""
+
+    def __init__(self, code: str, *, session_prepared: bool = False) -> None:
+        super().__init__(code)
+        self.session_prepared = session_prepared
+
+
 @dataclass(frozen=True, slots=True)
 class FirstPartyHostTurnEffectAdmission:
     goal_admission: FirstPartyHostGoalAdmission
@@ -556,11 +564,16 @@ class FirstPartyHostGoalAdmission:
         Turn binding supplies its full current admission check. This lifecycle
         witness alone does not certify quota/health. Hold only through dispatch.
         """
-        if self.source_profile:
-            with self.current_lifetime(operation=operation):
-                yield
-            return
-        with self._legacy_lifetime(operation=operation, launch=True):
+        guard = (
+            self.current_lifetime(operation=operation)
+            if self.source_profile
+            else self._legacy_lifetime(operation=operation, launch=True)
+        )
+        with ExitStack() as scope:
+            try:
+                scope.enter_context(guard)
+            except FirstPartyHostRuntimeRejected as exc:
+                raise FirstPartyHostLaunchRejected(exc.code) from exc
             yield
 
     def require_running(self, *, operation: str) -> None:

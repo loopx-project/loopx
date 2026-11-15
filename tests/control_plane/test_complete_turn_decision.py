@@ -709,8 +709,8 @@ def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("complete", [False, True], ids=["ordinary", "complete"])
-def test_visible_goal_binding_command_preserves_explicit_source(tmp_path, monkeypatch, provider, complete):
+@pytest.mark.parametrize("complete", [False, True], ids=["codex-default", "explicit-complete"])
+def test_visible_goal_binding_command_preserves_complete_source(tmp_path, monkeypatch, provider, complete):
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from tests.control_plane.test_quota_settlement_cli import (
         _heartbeat_receipt_count, _initialize_fixture_authority, _run_generated_cli,
@@ -737,18 +737,12 @@ def test_visible_goal_binding_command_preserves_explicit_source(tmp_path, monkey
         argv = shlex.split(command)
         assert argv[argv.index("--context-delivery") + 1] == "off"
         assert argv[argv.index("--delta-delivery") + 1] == "off"
-    else:
-        # Decode the ordinary presentation without introducing a new default.
-        monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "off")
-    turn = "visible-goal-explicit-source"
+    turn = "visible-goal-complete-source"
     code, bound = _run_generated_cli(command.replace("<unique-work-iteration-id-reuse-on-retry>", turn),
         registry_path=registry, cwd=project)
     assert code == 0, bound
-    if complete:
-        assert_complete_turn_decision(unbound)
-        assert_complete_turn_decision(bound)
-    else:
-        assert all("schema_version" not in packet and "contract_binding" not in packet for packet in (unbound, bound))
+    assert_complete_turn_decision(unbound)
+    assert_complete_turn_decision(bound)
     assert bound["normal_delivery_allowed"] and bound["selected_todo"]["todo_id"] == TODO_ID
     identity = bound["heartbeat_receipt"]["settlement_identity"]
     assert identity == bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]

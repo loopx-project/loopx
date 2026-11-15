@@ -21,6 +21,7 @@ from ..effect_program import (
 )
 from ..goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
+    FirstPartyHostLaunchRejected,
     FirstPartyHostRuntimeRejected,
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
@@ -957,13 +958,17 @@ def _run_host_runner(
                 else {}
             ),
         }
-    except FirstPartyHostRuntimeRejected as exc:
-        # This check is issued only by the original-work comparison before
-        # model dispatch. Other refusals can still need reconciliation.
-        if exc.code != "current_turn_work_changed":
-            raise
-        return {"ok": False, "reason": str(exc), "failure_kind": "contract_rejected",
-                "launch_rejection_code": exc.code}
+    except FirstPartyHostLaunchRejected as exc:
+        return {
+            "ok": False,
+            "reason": str(exc),
+            "failure_kind": "contract_rejected",
+            "launch_rejection_code": exc.code,
+            "recovery_kind": "resume_session" if exc.session_prepared else None,
+        }
+    except FirstPartyHostRuntimeRejected:
+        # A refusal during or after dispatch still needs reconciliation.
+        raise
     except Exception as exc:  # noqa: BLE001 - host adapters fail closed at boundary
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if not isinstance(value, dict):
@@ -1070,7 +1075,7 @@ def _host_result_stage(
             recovery_kind = host_observation.get("recovery_kind")
             if recovery_kind is not None:
                 journal["host_recovery"] = build_host_recovery_record(recovery_kind)
-            else:
+            elif rejected_launch is None:
                 journal.pop("host_recovery", None)
             persist_journal(journal)
             terminal = execution_payload(
@@ -1085,6 +1090,7 @@ def _host_result_stage(
             return None, [], terminal
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
+    journal.pop("host_recovery", None)
 
     recorded_plan = journal.get("plan")
     validation = validate_loopx_turn_host_result(
@@ -1786,7 +1792,8 @@ def run_loopx_turn_once(
                 journal.pop("validation_stage", None)
             journal.pop("reason", None)
             journal.pop("receipt", None)
-            journal.pop("host_recovery", None)
+            # Keep the original session recovery requirement until the next
+            # Host observation. A guard refusal can leave the session intact.
             journal.pop("host_failure", None)
             journal["status"] = "in_progress"
             persist_journal(journal)

@@ -2988,13 +2988,19 @@ request. The external process and in-process Host then receive the same checked
 transport; the external stdin writer does not reconstruct a legacy adapter.
 The legacy conversion remains at the boundary for saved transitional plans.
 
-An exact native retry still reads the original capture. If the selected Todo's
-required body, write scope or capabilities changed, the pre-dispatch refusal
-now records a contract rejection for the original attempt. It does not leave an
-unresolved dispatch intent. Other unexpected interruptions still require
-original-attempt reconciliation. A changed task needs a fresh eligible Turn;
-previous capture bytes and completed effects retain their original identity.
+An exact native retry still reads the original capture. A refusal on entry to
+the launch guard records a contract rejection for the attempt with no model
+dispatch. This covers a missing required capability and changed work. The
+journal retains the original session recovery requirement. If the operation
+Host has already bound a session before the model launch guard refuses, the
+next explicit retry must resume that session. Restoring the original work and
+its capabilities permits that retry through the current guard. Changed work
+requires a fresh eligible Turn. Unknown dispatch outcomes still require
+reconciliation of the original attempt.
 
-The File/SQLite cases exercise unchanged retries, task changes before retry,
-explicit historical input and subprocess stdin. They use isolated synthetic
-Hosts; this does not qualify actual installed Hosts or model outcomes.
+File/SQLite cases exercise unchanged retries, capability and task changes,
+recovery in the original session, historical formats, and subprocess stdin.
+Visible Codex CLI JSON follows the complete source through the generated
+Turn-binding command, including when complete output is implicit. The generic
+quota control retains its compact response. The tests use isolated synthetic
+Hosts. Installed Hosts and model outcomes require separate acceptance.
