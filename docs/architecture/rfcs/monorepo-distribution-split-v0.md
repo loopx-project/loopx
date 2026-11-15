@@ -4505,3 +4505,35 @@ view shows its independently checked result in the same conversation.
   actual-model improvements, full D2/D5 closure, R1/M3 or C1 default cutover.
   Preserve prior failures and the original ten requirements; full original-goal
   regression still precedes completion and EdgeBench preparation.
+
+### 2026-11-15 — Load PR wait observation after permission recheck
+
+- **Gap:** composing an executing Turn imported PR reconciliation and its
+  metadata/content providers before resolving observation permission, even
+  when the hook was unavailable. A provider import failure escaped the optional
+  observation failure boundary.
+- **Delta:** the existing producer imports the reconciler inside its provider
+  `try`, after the invocation-time capability check succeeds. Registration and
+  invocation retain their separate permission checks and revocation behavior.
+  No wrapper, cached decision, new activation flag or policy owner is added.
+  Python remains the stable GitHub provider/transport adapter; typed selection,
+  permissions, authority and observation cadence retain their existing owners.
+- **Evidence:** fresh-process blocked-provider cases cover denied, revoked and
+  unavailable permission, plus import failure with unknown reads/effects.
+  Eight matched hook scenarios use a frozen clock to compare deterministic
+  returns, permission checks and provider calls;
+  source File/SQLite checks retain provider success, failure, response loss,
+  cadence and full-source diagnostics. Separate installed Core wheels execute
+  authorized File/SQLite observation and canonical Todo readback, alongside
+  execution, replay, process-loss and invalid-artifact checks. The original
+  consumer suite retains four matching setup failures on both arms; a separate
+  current-carrier protocol fixture does not replace those records.
+- **Boundary:** unavailable observation avoids loading its provider closure;
+  granted observation keeps the existing behavior. This is a bounded default
+  closure increment. The first granted invocation now includes deferred imports
+  in the existing `duration_ms` observation window; real timing equivalence or
+  performance gains are not qualified. It does not establish full D2/D5,
+  actual-model/context adoption, complete-cost
+  improvement, original-ten acceptance or C1 cutover. Preserve prior sources,
+  failures and seals; full original-goal regression still precedes completion
+  and EdgeBench preparation.

@@ -3488,3 +3488,25 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   激活、capture 发布、恢复或结算边界。它不证明总延迟、完整成本或真实模型改善，
   也不完成 D2/D5 闭包、R1/M3 或 C1 默认切换。保留历史失败和原十项要求；完成前
   仍需完整原目标回归，随后才准备 EdgeBench。
+
+### 2026-11-15 — PR 等待观察在权限复查后加载
+
+- **缺口：**执行性 Turn 的组合在解析观察权限前导入 PR reconciler 及其 metadata／
+  content provider，即使 hook 不可用也会加载。provider 导入失败还会逃出可选
+  观察原有的故障边界。
+- **变化：**既有 producer 在 invocation-time capability 检查成功后，于原 provider
+  `try` 内导入 reconciler。注册和调用仍分别检查权限，保留撤销行为；没有新增
+  wrapper、缓存决策、激活 flag 或 policy owner。Python 仍承担稳定的 GitHub
+  provider／transport adapter；typed selection、权限、authority 和观察 cadence
+  继续由既有 owner 持有。
+- **证据：**独立进程的 blocked-provider 反例覆盖未授权、权限撤销、权限源不可用，
+  以及导入失败时读取／效果为 unknown。八类配对 hook 场景冻结时钟，比较确定性
+  返回、权限检查与 provider 调用；源码 File／SQLite 检查保留 provider 成功、失败、响应丢失、cadence
+  和完整源诊断。独立安装的两份 Core wheel 执行获权的 File／SQLite 观察和 canonical
+  Todo 回读，并覆盖执行、回放、进程丢失与非法 artifact。原 consumer 套件在两侧
+  保留四个一致的 setup 失败；独立的当前 carrier 协议 fixture 不替代这些记录。
+- **边界：**不可用观察不加载其 provider 闭包，获权观察保留既有行为。本次是有界
+  默认闭包增量；首次获权调用现在把 deferred import 纳入既有 `duration_ms` 观察
+  窗口，不证明真实计时等价或性能收益。它不完成 D2／D5、真实模型／上下文采用、完整成本改善、原十项验收
+  或 C1 切换。保留历史源码、失败和 seal；完成前仍需完整原目标回归，随后才准备
+  EdgeBench。
