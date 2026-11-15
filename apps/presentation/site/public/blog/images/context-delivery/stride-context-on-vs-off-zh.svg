@@ -1,0 +1,434 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1051.2pt" height="561.6pt" viewBox="0 0 1051.2 561.6" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.2, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 561.6
+L 1051.2 561.6
+L 1051.2 0
+L 0 0
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 189.216 463.32
+L 622.432567 463.32
+L 622.432567 109.512
+L 189.216 109.512
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path d="M 189.216 463.32
+L 189.216 109.512
+" clip-path="url(#pe722031e78)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_2"/>
+     <g id="text_1">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="189.216" y="475.42" transform="rotate(-0 189.216 475.42)">0</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path d="M 270.039986 463.32
+L 270.039986 109.512
+" clip-path="url(#pe722031e78)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_4"/>
+     <g id="text_2">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="270.039986" y="475.42" transform="rotate(-0 270.039986 475.42)">25</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path d="M 350.863973 463.32
+L 350.863973 109.512
+" clip-path="url(#pe722031e78)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_6"/>
+     <g id="text_3">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="350.863973" y="475.42" transform="rotate(-0 350.863973 475.42)">50</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path d="M 431.687959 463.32
+L 431.687959 109.512
+" clip-path="url(#pe722031e78)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_8"/>
+     <g id="text_4">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="431.687959" y="475.42" transform="rotate(-0 431.687959 475.42)">75</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_9">
+      <path d="M 512.511946 463.32
+L 512.511946 109.512
+" clip-path="url(#pe722031e78)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_10"/>
+     <g id="text_5">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="512.511946" y="475.42" transform="rotate(-0 512.511946 475.42)">100</text>
+     </g>
+    </g>
+    <g id="text_6">
+     <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #334155" x="405.824284" y="488.99" transform="rotate(-0 405.824284 488.99)">EdgeBench 百分制归一分 (/100，越高越优；含 ↓ 指标已方向归一化)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_11"/>
+     <g id="text_7">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="142.364126" transform="rotate(-0 185.716 142.364126)">ANN (QPS↑ · 历史7臂Stride)</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_12"/>
+     <g id="text_8">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="179.419845" transform="rotate(-0 185.716 179.419845)">FFmpeg (原生↑ · OFF早停)</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_13"/>
+     <g id="text_9">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="216.475563" transform="rotate(-0 185.716 216.475563)">VLIW (周期↓ · OFF 14h45m)</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_14"/>
+     <g id="text_10">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="253.531282" transform="rotate(-0 185.716 253.531282)">Grid (总分↓ · 等时长 ~18h)</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_15"/>
+     <g id="text_11">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="290.587" transform="rotate(-0 185.716 290.587)">Ad (总分↑ · OFF 8h47m)</text>
+     </g>
+    </g>
+    <g id="ytick_6">
+     <g id="line2d_16"/>
+     <g id="text_12">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="327.642718" transform="rotate(-0 185.716 327.642718)">Rust (原生↑ · 等时长 ~18h)</text>
+     </g>
+    </g>
+    <g id="ytick_7">
+     <g id="line2d_17"/>
+     <g id="text_13">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="364.698437" transform="rotate(-0 185.716 364.698437)">OpenTTD (原生↑ · 均&lt;18h)</text>
+     </g>
+    </g>
+    <g id="ytick_8">
+     <g id="line2d_18"/>
+     <g id="text_14">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="401.754155" transform="rotate(-0 185.716 401.754155)">Codec (原生↑ · OFF 12h38m)</text>
+     </g>
+    </g>
+    <g id="ytick_9">
+     <g id="line2d_19"/>
+     <g id="text_15">
+      <text style="font-size: 9.7px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="185.716" y="438.809874" transform="rotate(-0 185.716 438.809874)">Portfolio (分↑ · 等时长 18h)</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 189.216 125.594182
+L 328.78286 125.594182
+L 328.78286 137.452012
+L 189.216 137.452012
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 189.216 162.6499
+L 241.492954 162.6499
+L 241.492954 174.50773
+L 189.216 174.50773
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 189.216 199.705619
+L 503.621307 199.705619
+L 503.621307 211.563449
+L 189.216 211.563449
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 189.216 236.761337
+L 406.470875 236.761337
+L 406.470875 248.619167
+L 189.216 248.619167
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 189.216 273.817056
+L 445.589685 273.817056
+L 445.589685 285.674886
+L 189.216 285.674886
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 189.216 310.872774
+L 277.087838 310.872774
+L 277.087838 322.730604
+L 189.216 322.730604
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 189.216 347.928493
+L 389.724145 347.928493
+L 389.724145 359.786323
+L 189.216 359.786323
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 189.216 384.984211
+L 411.934577 384.984211
+L 411.934577 396.842041
+L 189.216 396.842041
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 189.216 422.03993
+L 233.248908 422.03993
+L 233.248908 433.89776
+L 189.216 433.89776
+z
+" clip-path="url(#pe722031e78)" style="fill: #0f766e"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 189.216 138.93424
+L 220.446388 138.93424
+L 220.446388 150.79207
+L 189.216 150.79207
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 189.216 175.989959
+L 225.392816 175.989959
+L 225.392816 187.847789
+L 189.216 187.847789
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="patch_14">
+    <path d="M 189.216 213.045677
+L 492.532256 213.045677
+L 492.532256 224.903507
+L 189.216 224.903507
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="patch_15">
+    <path d="M 189.216 250.101396
+L 398.873421 250.101396
+L 398.873421 261.959226
+L 189.216 261.959226
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 189.216 287.157114
+L 442.453714 287.157114
+L 442.453714 299.014944
+L 189.216 299.014944
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="patch_17">
+    <path d="M 189.216 324.212833
+L 277.087838 324.212833
+L 277.087838 336.070663
+L 189.216 336.070663
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="patch_18">
+    <path d="M 189.216 361.268551
+L 392.860116 361.268551
+L 392.860116 373.126381
+L 189.216 373.126381
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="patch_19">
+    <path d="M 189.216 398.32427
+L 418.0772 398.32427
+L 418.0772 410.1821
+L 189.216 410.1821
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="patch_20">
+    <path d="M 189.216 435.379988
+L 316.723921 435.379988
+L 316.723921 447.237818
+L 189.216 447.237818
+z
+" clip-path="url(#pe722031e78)" style="fill: #94a3b8"/>
+   </g>
+   <g id="text_16">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="335.895371" y="141.361126" transform="rotate(-0 335.895371 141.361126)">+33.51 (43.17 vs 9.66)</text>
+   </g>
+   <g id="text_17">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="248.605465" y="178.416845" transform="rotate(-0 248.605465 178.416845)">+4.98 (16.17 vs 11.19)</text>
+   </g>
+   <g id="text_18">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="510.733818" y="215.472563" transform="rotate(-0 510.733818 215.472563)">+3.43 (97.25 vs 93.82)</text>
+   </g>
+   <g id="text_19">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="413.583386" y="252.528282" transform="rotate(-0 413.583386 252.528282)">+2.35 (67.20 vs 64.85)</text>
+   </g>
+   <g id="text_20">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="452.702196" y="289.584" transform="rotate(-0 452.702196 289.584)">+0.97 (79.30 vs 78.33)</text>
+   </g>
+   <g id="text_21">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="284.200349" y="326.639718" transform="rotate(-0 284.200349 326.639718)">27.18 vs 27.18 (+0.0044)</text>
+   </g>
+   <g id="text_22">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #b45309" x="399.972627" y="363.695437" transform="rotate(-0 399.972627 363.695437)">-0.97 (62.02 vs 62.99)</text>
+   </g>
+   <g id="text_23">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #b45309" x="425.189711" y="400.751155" transform="rotate(-0 425.189711 400.751155)">-1.90 (68.89 vs 70.79)</text>
+   </g>
+   <g id="text_24">
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #b45309" x="323.836432" y="437.806874" transform="rotate(-0 323.836432 437.806874)">-25.82 (13.62 vs 39.44)</text>
+   </g>
+   <g id="text_25">
+    <text style="font-weight: 700; font-size: 11px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="189.216" y="95.512" transform="rotate(-0 189.216 95.512)">A. 固定 Stride 下 context-on vs context-off 百分制对照</text>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="text_26">
+    <g id="patch_21">
+     <path d="M 669.913103 176.64816
+L 865.422337 176.64816
+Q 870.882337 176.64816 870.882337 171.18816
+L 870.882337 116.58816
+Q 870.882337 111.12816 865.422337 111.12816
+L 669.913103 111.12816
+Q 664.453103 111.12816 664.453103 116.58816
+L 664.453103 171.18816
+Q 664.453103 176.64816 669.913103 176.64816
+z
+" style="fill: #f0fdfa; stroke: #99f6e4; stroke-linejoin: miter"/>
+    </g>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 126.68916)">第 10 题（无 /100 标度）：Borden 等时长 ~18h</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 140.33916)">• context-on（18h02m）：80（17 次有效）</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 153.98916)">• context-off（17h59m）：45（17 次有效）</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 167.393887)">→ +35 分（+77.8%，同构等时长显著拉升）。</text>
+   </g>
+   <g id="text_27">
+    <g id="patch_22">
+     <path d="M 669.913103 314.13096
+L 927.670603 314.13096
+Q 933.130603 314.13096 933.130603 308.67096
+L 933.130603 240.42096
+Q 933.130603 234.96096 927.670603 234.96096
+L 669.913103 234.96096
+Q 664.453103 234.96096 664.453103 240.42096
+L 664.453103 308.67096
+Q 664.453103 314.13096 669.913103 314.13096
+z
+" style="fill: #f8fafc; stroke: #cbd5e1; stroke-linejoin: miter"/>
+    </g>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 250.108194)">关键原生分数增幅（固定 Explore + Stride）</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 263.976452)">• ANN (QPS ↑)：7,159 vs 3,746（+91.1%, +33.51 百分分）</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 277.393976)">• FFmpeg (原生 ↑)：2.7086 vs 1.9929（+35.9%, OFF 早停）</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 291.276452)">• VLIW (周期 ↓)：1,042 vs 1,097（−55 周期 / −5.0%）</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 304.926452)">• Grid (代价 ↓)：2,197 vs 2,311（−114 / −4.9%, ~18h）</text>
+   </g>
+   <g id="text_28">
+    <g id="patch_23">
+     <path d="M 669.913103 437.96376
+L 913.797368 437.96376
+Q 919.257368 437.96376 919.257368 432.50376
+L 919.257368 364.25376
+Q 919.257368 358.79376 913.797368 358.79376
+L 669.913103 358.79376
+Q 664.453103 358.79376 664.453103 364.25376
+L 664.453103 432.50376
+Q 664.453103 437.96376 669.913103 437.96376
+z
+" style="fill: #fffbeb; stroke: #fcd34d; stroke-linejoin: miter"/>
+    </g>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 374.359026)">10 题总盘：ON 7 项占先 vs OFF 3 项领先</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 387.759487)">• 等时长 ~18h（4 题）：3 胜（Borden/Grid/Rust 微先），</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 401.65476)">  1 反例（Portfolio 13.62 vs 39.44）</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 415.059487)">• 非等时长或历史对照（6 题）：ON 领先 4 题，</text>
+    <text style="font-size: 9.1px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #0f172a" transform="translate(669.913103 428.540994)">  OFF 领先 2 题（Codec 70.79 / OpenTTD 33.09M）</text>
+   </g>
+   <g id="text_29">
+    <text style="font-weight: 700; font-size: 11px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="666.274084" y="95.512" transform="rotate(-0 666.274084 95.512)">B. 原生关键差值（含 Borden）与反例边界</text>
+   </g>
+  </g>
+  <g id="text_30">
+   <text style="font-weight: 700; font-size: 14.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #0f172a" x="525.6" y="37.828" transform="rotate(-0 525.6 37.828)">EdgeBench 十题同构效果对照：固定 Explore + Stride 下的 Context ON vs OFF</text>
+  </g>
+  <g id="text_31">
+   <text style="font-size: 9.9px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #475569" x="525.6" y="67.392" transform="rotate(-0 525.6 67.392)">固定 Explore + Stride 框架（context-on 开启 Progressive 与周期内差分）。10 题中 context-on 7 题占先，完整保留 3 项反例与真实时长差。</text>
+  </g>
+  <g id="text_32">
+   <text style="font-size: 8.9px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #475569" transform="translate(31.536 538.127989)">口径说明：截取自 EdgeBench 同构两臂实测（2026-11-12 22:40 CST 快照）。Borden 无百分制换算故在右栏 B 单列原生分（80 vs 45）。</text>
+   <text style="font-size: 8.9px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #475569" transform="translate(31.536 551.4912)">Grid、Borden、Rust、Portfolio 四题双臂均已跑满约 18h（15m 容差内）；ANN 取自历史七臂对应 Stride 配置；其余 5 题存在至少一臂未满 18h。本图仅检验开关的组内方向性效果。</text>
+  </g>
+  <g id="legend_1">
+   <g id="patch_24">
+    <path d="M 215.3445 507.2547
+L 234.5445 507.2547
+L 234.5445 500.5347
+L 215.3445 500.5347
+z
+" style="fill: #0f766e"/>
+   </g>
+   <g id="text_33">
+    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="242.2245" y="507.2547" transform="rotate(-0 242.2245 507.2547)">Explore + Stride + context-on（开启上下文交付）</text>
+   </g>
+   <g id="patch_25">
+    <path d="M 482.031 507.2547
+L 501.231 507.2547
+L 501.231 500.5347
+L 482.031 500.5347
+z
+" style="fill: #94a3b8"/>
+   </g>
+   <g id="text_34">
+    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="508.911" y="507.2547" transform="rotate(-0 508.911 507.2547)">Explore + Stride + context-off（关闭上下文交付）</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pe722031e78">
+   <rect x="189.216" y="109.512" width="433.216567" height="353.808"/>
+  </clipPath>
+ </defs>
+</svg>

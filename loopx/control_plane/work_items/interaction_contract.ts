@@ -59,6 +59,11 @@ function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject | null)
  * This read model never relaxes an existing Turn binding or settlement fence.
  * Unknown dependencies retain their bounded observation/replan policy. */
 export function projectBlockedSuccessorWaitObservation(request: JsonObject): JsonObject {
+  if (request.effective_action === EffectiveAction.MONITOR_QUIET_SKIP) {
+    // The automatic heartbeat must distinguish a proven future clock from a
+    // quiet Monitor result that still counts towards the blocked-wait limit.
+    return {required: projectSchedulerArbitration(request).scheduled_recheck_after_seconds === undefined};
+  }
   const wait = exactBlockedSuccessorWait(request);
   return {required: !!wait && pendingAutomaticSuccessor(request, wait) === null};
 }
