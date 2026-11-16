@@ -2880,8 +2880,13 @@ export const zh = {
   'loopx.unavailable': (detail: string) => `LoopX 核心暂不可用：${detail}`,
   'loopx.steward': 'LoopX 管家',
   'loopx.stewardConversation': '管家会话',
-  'loopx.stewardHello': '管家在看护你的 Goal。问它现状、风险，或让它推动哪一件。',
-  'loopx.stewardAsk': '问管家…',
+  'loopx.stewardHelloTitle': '今天要推进什么？',
+  'loopx.stewardAskInput': '问管家…',
+  'loopx.stewardAskLabel': '开场问题',
+  'loopx.stewardAsk.status': '现在有什么要我看的？',
+  'loopx.stewardAsk.risks': '各 Goal 有什么风险？',
+  'loopx.stewardAsk.push': '帮我推进最该动的一个',
+  'loopx.stewardBriefCount': (n: number) => `简报 · ${n} 件等你`,
   'loopx.stewardSteps': '管家正在做',
   'loopx.stopping': '正在停止…',
   'loopx.queueFull': '队列已满，这条没有送出。',
@@ -3076,12 +3081,12 @@ export const zh = {
   'loopx.goal.status.connected_without_run': '已关联，待执行',
   'loopx.goal.status.active_state_agent_todo': '有待推进的任务',
   'loopx.goal.status.state_refreshed': '状态已刷新',
-};
-
-export type Messages = typeof zh;
   'loopx.goal.status.active_state_user_gate': '等你决定',
   'loopx.goal.status.active_state_user_todo': '有待你处理的任务',
   'loopx.goal.status.state_incomplete': '状态记录不完整',
   'loopx.goal.status.state_projection_gap': '状态记录有缺口',
   'loopx.goal.status.run_artifact_missing': '运行产物缺失',
   'loopx.goal.status.unknown': '状态未知',
+};
+
+export type Messages = typeof zh;

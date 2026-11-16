@@ -15341,11 +15341,20 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   text-align: center;
 }
 
-.goal-page,
-.steward-page {
+.goal-page {
   max-width: 720px;
   margin: 0 auto;
   padding: 24px 20px 48px;
+}
+
+/* The steward page is the chat: it owns the viewport height the scroller gives it. */
+.steward-page.is-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 10px 0 0;
 }
 
 .goal-masthead {
@@ -15394,8 +15403,7 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 }
 
 .goal-needs h2,
-.goal-objective h2,
-.steward-brief h2 {
+.goal-objective h2 {
   margin: 16px 0 8px;
   font-size: 13px;
   font-weight: 600;
@@ -15407,10 +15415,27 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .goal-failure { margin: 8px 0; font-size: 13px; }
 .goal-objective p { margin: 4px 0; font-size: 14px; }
 
-.steward-head { margin-bottom: 12px; }
-.steward-head h1 { margin: 0; font-size: 20px; font-weight: 700; }
+.steward-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px 10px;
+}
+.steward-head h1 { margin: 0; font-size: 17px; font-weight: 700; }
+.steward-brief-btn {
+  margin-left: auto;
+  padding: 5px 12px;
+  border: 1px solid var(--line, rgba(31, 30, 28, 0.12));
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.steward-brief-panel { display: flex; flex-direction: column; min-width: 260px; max-width: 340px; }
+.steward-brief-panel h2 { margin: 12px 0 4px; font-size: 12px; font-weight: 600; color: var(--faint); }
+.steward-brief-panel h2:first-child { margin-top: 0; }
 
-.steward-hint { margin: 0 0 20px; color: var(--faint); font-size: 13px; }
+.steward-hint { margin: 0 0 8px; color: var(--faint); font-size: 13px; }
 
 .steward-row {
   display: flex;
@@ -15432,16 +15457,56 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 
 /* ── Batch B: the steward conversation, the Goal tabs, lifecycle and todo rows ── */
 
-.steward-conversation {
+.steward-chat {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 20px;
+  padding: 0 20px;
 }
 
+.steward-chat-failure {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 20px;
+}
+.steward-chat-failure p { margin: 0; font-size: 13px; }
+
+/* The greeting an empty conversation opens on: one question, a few one-tap asks. */
+.steward-greeting {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 12px 0 24px;
+  text-align: center;
+}
+.steward-greeting-mark { font-size: 0; line-height: 0; }
+.steward-greeting-mark .loo-dark { display: none; }
+[data-theme='dark'] .steward-greeting-mark .loo-light { display: none; }
+[data-theme='dark'] .steward-greeting-mark .loo-dark { display: inline; }
+.steward-greeting h2 { margin: 0; font-size: 19px; font-weight: 700; }
+.steward-greeting-asks { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.steward-ask {
+  padding: 7px 14px;
+  border: 1px solid var(--line, rgba(31, 30, 28, 0.12));
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 13px;
+  cursor: pointer;
+}
+.steward-ask:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); }
+
 .steward-messages {
-  max-height: min(52vh, 480px);
-  min-height: 160px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 12px;
   border-radius: var(--radius, 10px);
@@ -15450,6 +15515,9 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   flex-direction: column;
   gap: 8px;
 }
+
+/* The greeting replaces the pane; flex above would otherwise out-shout [hidden]. */
+.steward-messages[hidden] { display: none; }
 
 .steward-row-msg { display: flex; }
 .steward-row-msg.user { justify-content: flex-end; }
@@ -15589,7 +15657,8 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 @media (max-width: 640px) {
   .goal-vitals { flex-wrap: wrap; }
   .goal-vital { flex: 1 1 40%; }
-  .steward-messages { max-height: 44vh; }
+  .steward-head { padding: 0 12px 8px; }
+  .steward-chat { padding: 0 12px; }
   .steward-row-msg .bubble { max-width: 92%; }
   .goal-tabs { overflow-x: auto; }
 }
