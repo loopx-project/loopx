@@ -22,6 +22,7 @@ from ..effect_runtime import (
     EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
+from ..scheduler.arbitration import SchedulerArbitration
 from ..scheduler.execution_context import SchedulerExecutionContextResolution
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..todos.todo_semantics import todo_item_task_class
@@ -410,7 +411,7 @@ def apply_unsettled_host_turn_recovery_if_required(
     agent_id: str | None,
     current_turn_instance_id: str | None,
     available_capabilities: list[str] | None,
-    include_scheduler_detail: bool,
+    project_scheduler_hint: Callable[..., dict[str, Any]],
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
@@ -433,12 +434,14 @@ def apply_unsettled_host_turn_recovery_if_required(
     )
     if verdict is None:
         return False
-    return _apply_recovery_projection(
+    arbitration = _apply_recovery_projection(
         payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
         current_turn_instance_id=current_turn_instance_id, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
-        include_scheduler_detail=include_scheduler_detail,
     )
+    if verdict["recovery"].get("state") == "attention_required":
+        payload["scheduler_hint"] = project_scheduler_hint(payload, arbitration=arbitration)
+    return True
 
 
 def apply_receipt_bound_wait_recovery(
@@ -529,8 +532,7 @@ def _apply_recovery_projection(
     payload: dict[str, Any], *, verdict: Mapping[str, Any], registry_path: Path, runtime_root: Path,
     current_turn_instance_id: str | None, available_capabilities: list[str] | None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
-    include_scheduler_detail: bool = False,
-) -> bool:
+) -> SchedulerArbitration:
     recovery = verdict["recovery"]
     obligation = verdict["obligation"]
     attention = recovery.get("state") == "attention_required"
@@ -619,11 +621,4 @@ def _apply_recovery_projection(
         cli_channel["spend_allowed_now"] = obligation.get("spend_allowed_now") is True
         cli_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     payload["interaction_contract"] = interaction_contract
-    if attention:
-        from ..scheduler.scheduler_hint import build_scheduler_hint
-
-        payload["scheduler_hint"] = build_scheduler_hint(
-            payload, arbitration=arbitration, scheduler_execution_context=scheduler_execution_context,
-            available_capabilities=available_capabilities, include_detail=include_scheduler_detail,
-        )
-    return True
+    return arbitration
