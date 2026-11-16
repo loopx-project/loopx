@@ -313,6 +313,14 @@ one finding and receipt, spends once, and checks effect-free replay plus rejecte
 new capture. This repairs the existing recovery contract without a new owner or
 activation; installed Hosts, other backends and benefit retain their own gates.
 
+The replay and new-capture assertions execute inside the recovery fixture.
+An earlier test update put that block in the no-evidence test: the recovery
+cases skipped those assertions, while ordinary settlement failed on undefined
+fixture names. Moving the existing block to its owning scope restores both
+checks without changing runtime logic. File/SQLite recovery, effect-free replay,
+new disabled capture refusal and ordinary no-evidence settlement now run through
+the public CLI; earlier results retain their original narrower coverage.
+
 Backend names also need actual provider evidence. The shared
 [local authority fixture](../../../tests/control_plane/canonical_authority_fixture.py)
 now rejects unsupported providers before storage or writer-fence effects;

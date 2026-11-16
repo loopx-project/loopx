@@ -434,6 +434,35 @@ def test_turn_recovers_requested_delivery_from_original_run(
     findings = build_explore_result_projection(events, goal_id="loopx-turn-fixture")["findings"]
     assert len(findings) == 1 and findings[0]["evidence_refs"] == ["result:original-attachment"]
 
+    if with_yardstick:
+        assert len(writeback_receipts()) == 1
+        original_log = log.read_bytes()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            replay_rc = main([*argv, "--resume-turn-key", failed["resume_turn_key"]])
+        replay = json.loads(output.getvalue())
+        assert replay_rc == 0 and not any(replay["effects"].values()), replay
+        assert log.read_bytes() == original_log and original.read_bytes() == original_bytes
+        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
+        # A separate new capture stays subject to disabled configuration.
+        new_workspace = project / "new-disabled-workspace"
+        new_workspace.mkdir()
+        new_host = new_workspace / "host.py"
+        new_host.write_text(host)
+        new_argv = list(argv)
+        new_argv[new_argv.index("--project") + 1] = str(new_workspace)
+        new_argv[new_argv.index("--host-adapter-command-json") + 1] = json.dumps([sys.executable, str(new_host)])
+        new_argv += ["--turn-instance-id", "new-disabled-yardstick"]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            new_rc = main(new_argv)
+        rejected = json.loads(output.getvalue())
+        assert new_rc != 0, rejected
+        assert rejected["error"] == "work yardstick capture requires explicit yardstick_enabled configuration"
+        assert log.read_bytes() == original_log and original.read_bytes() == original_bytes
+        assert len(writeback_receipts()) == 1
+        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
+
 
 @pytest.mark.parametrize("mode", ["evidence", "planning"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -465,34 +494,6 @@ def test_ordinary_cli_settlement_without_evidence_does_not_create_graph(tmp_path
     assert _spend_run_count(runtime) == 1
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
 
-    if with_yardstick:
-        assert len(writeback_receipts()) == 1
-        original_log = log.read_bytes()
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            replay_rc = main([*argv, "--resume-turn-key", failed["resume_turn_key"]])
-        replay = json.loads(output.getvalue())
-        assert replay_rc == 0 and not any(replay["effects"].values()), replay
-        assert log.read_bytes() == original_log and original.read_bytes() == original_bytes
-        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
-        # A separate new capture stays subject to disabled configuration.
-        new_workspace = project / "new-disabled-workspace"
-        new_workspace.mkdir()
-        new_host = new_workspace / "host.py"
-        new_host.write_text(host)
-        new_argv = list(argv)
-        new_argv[new_argv.index("--project") + 1] = str(new_workspace)
-        new_argv[new_argv.index("--host-adapter-command-json") + 1] = json.dumps([sys.executable, str(new_host)])
-        new_argv += ["--turn-instance-id", "new-disabled-yardstick"]
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            new_rc = main(new_argv)
-        rejected = json.loads(output.getvalue())
-        assert new_rc != 0, rejected
-        assert rejected["error"] == "work yardstick capture requires explicit yardstick_enabled configuration"
-        assert log.read_bytes() == original_log and original.read_bytes() == original_bytes
-        assert len(writeback_receipts()) == 1
-        assert _spend_run_count(runtime, goal_id="loopx-turn-fixture") == 1
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

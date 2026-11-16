@@ -297,6 +297,12 @@ soft claim/hard lease 及历史反馈仅作上下文：保留独立验证的成�
 并验证重放无副作用及新捕获拒绝。这修复既有恢复合同，不新增 owner 或 activation；
 已安装 Host、其它后端及收益仍沿各自门禁。
 
+重放和新捕获断言现于恢复 fixture 内执行。此前测试更新将该块放在无证据测试中：
+恢复用例未执行这些断言，普通结算则因 fixture 名称未定义而失败。将既有断言块
+移回所属作用域恢复两类检查，不改变 runtime 逻辑。File/SQLite 恢复、无副作用
+重放、新 disabled 捕获拒绝及普通无证据结算现经公开 CLI 执行；此前结果保留
+其原有、更窄的覆盖范围。
+
 后端名称也须有实际 provider 证据。共享的
 [本地 authority fixture](../../../tests/control_plane/canonical_authority_fixture.py)
 现于存储或 writer-fence 副作用前拒绝不支持的 provider；
