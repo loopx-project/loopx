@@ -3,24 +3,23 @@
 :root[data-theme='dark'] { --loopx-blue: #7b97f2; --loopx-blue-soft: color-mix(in srgb, #7b97f2 16%, transparent); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --loopx-blue: #7b97f2; --loopx-blue-soft: color-mix(in srgb, #7b97f2 16%, transparent); } }
 .composer-loopx { gap: 6px; padding: 0 8px; }
-.composer-loopx img.brand-icon { display: block; flex: none; }
-/* The mark is a shape, not a colour: the theme's ink like every other icon, and when the mode is
-   on, black with the crab in white. Spelled with :hover so the generic tool-button hover (one
-   :not() stronger) cannot wash the black out from under the pointer. */
+.composer-loopx svg { flex: none; }
+/* The mark is a shape, not a colour: drawn in currentColor, the theme's ink like every other icon,
+   and when the mode is on, white on black. Spelled with :hover so the generic tool-button hover
+   (one :not() stronger) cannot wash the black out from under the pointer. */
 .composer-loopx.active,
 .composer-loopx.active:hover:not(:disabled),
 .composer-loopx.active[aria-expanded='true'] {
   color: var(--surface);
   background: var(--text);
 }
-.composer-loopx.active img.brand-icon { filter: brightness(0) invert(1); }
 .composer-loopx-label { font-size: 12.5px; font-weight: 600; }
 .composer-goal-permission { width: auto !important; padding: 0 10px; gap: 6px; }
 .composer-goal-permission-name { font-size: 12.5px; }
 
 .goal-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 32px; margin: 0 1px 8px; padding: 6px 12px; border: 1px solid var(--loopx-blue); border-radius: var(--radius, 12px); background: var(--loopx-blue-soft); color: var(--text); font-size: 12.5px; }
 .goal-bar.stale { border-style: dashed; }
-.goal-bar img { flex: none; }
+.goal-bar svg { flex: none; }
 .goal-bar-title { font-weight: 650; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .goal-bar-status { color: var(--text); }
 .goal-bar-status.warn { color: var(--muted); }

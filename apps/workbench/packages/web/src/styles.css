@@ -15421,6 +15421,9 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   white-space: nowrap;
 }
 
+/* The group's fold chevron sits right after its label, not pinned to the sidebar's far edge. */
+.sidebar-goals-head .sidebar-goal-title { flex: none; }
+
 .sidebar-goal-badge {
   flex-shrink: 0;
   min-width: 16px;
@@ -15511,6 +15514,8 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   color: var(--text);
   text-align: left;
   cursor: pointer;
+  /* At narrow widths every column must give way inside the row, never paint past its right edge. */
+  overflow: hidden;
 }
 .goals-row-main:hover { background: var(--hover); }
 
@@ -15556,9 +15561,11 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   overflow: hidden;
   white-space: nowrap;
 }
-.goals-row-sub .goals-row-agents { flex: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+/* Fixed columns that yield gracefully: each keeps its width while there is room and
+   truncates with an ellipsis, not a hard clip, when the row runs out of space. */
+.goals-row-sub .goals-row-agents { flex: 0 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .goals-row-sub .goals-row-task { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.goals-row-count, .goals-row-recent { flex: none; width: 64px; color: var(--faint); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.goals-row-count, .goals-row-recent { flex: 0 1 64px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
 .goals-pin { color: var(--faint); }
 .goals-pin.on { color: var(--text); }
 .goals-empty { margin: 24px 0; color: var(--faint); font-size: 13px; }

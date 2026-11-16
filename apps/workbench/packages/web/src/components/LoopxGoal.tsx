@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import loopxIconLight from '../assets/loo-icon-paper.svg';
-import loopxIconDark from '../assets/loo-icon-dark.svg';
 import '../loopx/loopx.css';
 import { applyGoal, defaultGoalPermission, fetchGoalBar, LoopxError, permissionCopy, previewGoal, statusWord,
   type GoalAgentCapability, type GoalBarRead, type GoalBinding, type GoalPermission, type GoalPreview } from '../loopx/launch';
 import { t } from '../i18n';
 import { Dialog } from './Dialog';
-import { IconCheck, IconHand, IconShield } from './icons';
+import { IconCheck, IconHand, IconShield, LooMark } from './icons';
 import { Popover } from './Popover';
 
 /** The LoopX mark next to the voice button: turns a new conversation into a Goal conversation. */
@@ -14,9 +12,8 @@ export function LoopxToggle({ active, onToggle, disabledReason }: { active: bool
   const title = disabledReason ?? (active ? t('loopx.goal.cancelMode') : t('loopx.goal.handOver'));
   return (
     <button type="button" className={`tool-btn composer-loopx${active ? ' active' : ''}`} disabled={Boolean(disabledReason)} onClick={onToggle} title={title} aria-label={title} aria-pressed={active}>
-      {/* The mark follows the theme's own ink, like every other icon; active wears it in white on black. */}
-      <img className="brand-icon loo-light" src={loopxIconLight} alt="" width={18} height={18} />
-      <img className="brand-icon loo-dark" src={loopxIconDark} alt="" width={18} height={18} />
+      {/* One mark, drawn in currentColor: the theme's ink at rest, white on the black active pill. */}
+      <LooMark size={18} />
       {active && <span className="composer-loopx-label">LoopX</span>}
     </button>
   );
@@ -69,8 +66,7 @@ export function GoalBar({ token, threadId, binding, running, title }: { token: s
   const open = (g: { open: number; total: number } | undefined) => g ? `${g.open}/${g.total}` : '—';
   return (
     <div className={`goal-bar${read?.freshness === 'unavailable' ? ' stale' : ''}`} role="status" data-testid="goal-bar">
-      <img className="brand-icon loo-light" src={loopxIconLight} alt="" width={16} height={16} />
-      <img className="brand-icon loo-dark" src={loopxIconDark} alt="" width={16} height={16} />
+      <LooMark size={16} />
       <span className="goal-bar-title" title={binding.goalId}>{state && state.title !== binding.goalId ? state.title : title || binding.goalId}</span>
       {state ? <span className="goal-bar-status">{statusWord(state.status)}</span>
         : <span className="goal-bar-status warn">{read ? t('loopx.goal.stateUnavailable') : t('loopx.goal.reading')}</span>}

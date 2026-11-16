@@ -20,6 +20,34 @@ export const AgentMark = ({ path, size = 16 }: { path: string; size?: number }) 
   </svg>
 );
 
+/** The LoopX crab as a monochrome shape: every stroke and fill is currentColor, so the theme's
+    ink carries it at rest and white takes over on the active black pill — no bitmap filtering,
+    no per-theme variants, nothing solid behind the mark. */
+export const LooMark = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 1024 1024" fill="none" aria-hidden="true">
+    <g transform="translate(-24.5 15.6) scale(1.0687)">
+      <g fill="none" stroke="currentColor" strokeWidth={56} strokeLinecap="round">
+        <path d="M300 650L206 676" />
+        <path d="M318 700L236 762" />
+        <path d="M370 740L312 818" />
+        <path d="M600 752L640 822" />
+        <path d="M650 712L716 760" />
+      </g>
+      <path fill="none" stroke="currentColor" strokeWidth={80} strokeLinecap="round" d="M600 580C660 540 700 480 712 420" />
+      <path fill="currentColor" stroke="currentColor" strokeWidth={45} strokeLinejoin="round" d="M740.1 322.9L713.9 192.4A127.5 127.5 0 1 1 616.2 274.4Z" />
+      <path fill="none" stroke="currentColor" strokeWidth={50} strokeLinecap="round" d="M320 600C270 580 240 548 228 512" />
+      <path fill="currentColor" stroke="currentColor" strokeWidth={21} strokeLinejoin="round" d="M220.5 472.6L275.9 444.9A59.5 59.5 0 1 1 216.8 410.7Z" />
+      <path fill="currentColor" d="M450 480C590 480 676 560 676 650C676 740 584 786 450 786C316 786 256 728 256 644C256 556 318 480 450 480Z" />
+      <path stroke="currentColor" strokeWidth={42} strokeLinecap="round" d="M404 500L380 410" />
+      <circle cx={380} cy={410} r={44} fill="currentColor" />
+      <path stroke="currentColor" strokeWidth={42} strokeLinecap="round" d="M506 500L520 408" />
+      <circle cx={520} cy={408} r={44} fill="currentColor" />
+      <circle cx={245} cy={283} r={98} fill="none" stroke="currentColor" strokeWidth={58} />
+      <circle cx={514} cy={206} r={98} fill="none" stroke="currentColor" strokeWidth={58} />
+    </g>
+  </svg>
+);
+
 export const IconMenu = (p: { size?: number }) => (
   <Svg {...p}>
     <path d="M4 7h16M4 12h16M4 17h10" />
