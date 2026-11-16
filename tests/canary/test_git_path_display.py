@@ -528,7 +528,8 @@ def test_check_json_keeps_project_local_config_under_a_byte_root(
     assert payload["ok"] is False
     messages = "\n".join(str(item) for item in payload["errors"])
     assert "leak.md:1: internal_task_id" in messages, payload
-    expected_root = "git-bytes:" + repr(os.fsencode(str(root)))
-    assert payload["registry"] == expected_root + "/.loopx/registry.json"
-    assert payload["runtime_root"] == expected_root + "/.loopx/runtime"
+    # The label carries the whole pathname, so compare the bytes each field
+    # recovers instead of gluing an unescaped suffix onto a closed literal.
+    assert display_path_bytes(payload["registry"]) == os.fsencode(registry)
+    assert display_path_bytes(payload["runtime_root"]) == os.fsencode(runtime_root)
     assert json.dumps(payload, ensure_ascii=False).encode("utf-8")
