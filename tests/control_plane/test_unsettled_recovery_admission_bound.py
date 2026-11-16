@@ -194,8 +194,19 @@ def test_recovery_wait_keeps_observed_app_schedule_and_acknowledgement(
     drifted = guard("drifted-wait")["scheduler_hint"]["app_automation"]
     assert drifted["stateful_backoff"]["host_observation"]["current_rrule"] == short_rrule
     assert drifted["stateful_backoff"]["host_observation"]["status"] == "drift_detected"
-    assert drifted["host_action"] == "update_current_heartbeat_rrule"
+    # Without an owner cadence floor, an observed schedule is preserved.
+    assert drifted["host_action"] == "none"
     assert drifted["recommended_rrule"] == matching_rrule
+    assert not {"ack_hint", "fallback_hint", "failure_hint"}.intersection(drifted)
+
+    automation.unlink()
+    missing = guard("missing-automation", "--include-detail", "scheduler")
+    assert missing["reason_code"] == "unsettled_recovery_admission_limit"
+    app = missing["scheduler_hint"]["app_automation"]
+    assert app["host_observation"]["available"] is False
+    assert app["host_action"] == "none"
+    assert not app["ack_required"]
+    assert not {"ack_hint", "fallback_hint", "failure_hint"}.intersection(app)
     assert _spend_run_count(runtime) == 0
 
 
