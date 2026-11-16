@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from pathlib import Path
 
 from ..pi_goal_mode.installation import inspect_pi_installations, render_pi_installation_markdown
 from ..slash_command_install import install_slash_commands, render_slash_command_install_markdown
@@ -132,7 +133,19 @@ def register_slash_commands_command(
     parser.add_argument(
         "--with-agy-hooks",
         action="store_true",
-        help="Optionally install a disabled Antigravity Stop recovery hook; bind a Goal, Agent and native conversation before enabling it.",
+        help="Optionally install an Antigravity Stop recovery hook; pass --goal-id, --agent-id, and --conversation-id (or bind via bind-agent-thread --with-agy-hooks) to enable it.",
+    )
+    parser.add_argument(
+        "--goal-id",
+        help="Optional Goal id bound into the Antigravity Stop recovery hook when using --with-agy-hooks.",
+    )
+    parser.add_argument(
+        "--agent-id",
+        help="Optional Agent id bound into the Antigravity Stop recovery hook when using --with-agy-hooks.",
+    )
+    parser.add_argument(
+        "--conversation-id",
+        help="Optional Antigravity Conversation ID bound into the Stop recovery hook when using --with-agy-hooks.",
     )
     parser.add_argument(
         "--opencode-home",
@@ -173,6 +186,22 @@ def handle_slash_commands_command(
         print_payload(payload, output_format(args), render_pi_installation_markdown)
         return 0 if payload["ok"] else 1
     if args.install or args.uninstall or args.dry_run:
+        effective_cli_bin = (
+            args.cli_bin
+            if args.cli_bin != "loopx"
+            else (getattr(args, "control_cli_bin", None) or args.cli_bin)
+        )
+        agy_goal_id = getattr(args, "goal_id", None)
+        agy_registry = (
+            str(Path(args.registry).expanduser().resolve())
+            if agy_goal_id and getattr(args, "registry", None)
+            else None
+        )
+        agy_runtime_root = (
+            str(Path(args.runtime_root).expanduser().resolve())
+            if agy_goal_id and getattr(args, "runtime_root", None)
+            else None
+        )
         payload = install_slash_commands(
             execute=bool((args.install or args.uninstall) and not args.dry_run),
             uninstall=bool(args.uninstall),
@@ -180,7 +209,7 @@ def handle_slash_commands_command(
             with_agy_mcp=bool(getattr(args, "with_agy_mcp", False)),
             with_agy_hooks=bool(getattr(args, "with_agy_hooks", False)),
             surfaces=args.surface,
-            cli_bin=args.cli_bin,
+            cli_bin=effective_cli_bin,
             include_legacy_aliases=not bool(args.no_legacy_aliases),
             codex_home=args.codex_home,
             claude_home=args.claude_home,
@@ -189,6 +218,11 @@ def handle_slash_commands_command(
             cursor_home=args.cursor_home,
             zcode_home=getattr(args, "zcode_home", None),
             agy_home=getattr(args, "agy_home", None),
+            agy_goal_id=agy_goal_id,
+            agy_agent_id=getattr(args, "agent_id", None),
+            agy_conversation_id=getattr(args, "conversation_id", None),
+            agy_runtime_root=agy_runtime_root,
+            agy_registry=agy_registry,
             pi_project=args.pi_project,
             pi_scope=args.pi_scope,
         )

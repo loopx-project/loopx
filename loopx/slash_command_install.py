@@ -199,7 +199,7 @@ def _command_prompt_specs(*, cli_bin: str, include_legacy_aliases: bool) -> list
             "argument_hint": "[--fine-grained] [--new-peer] [--capability-route issue-fix] [task text]",
             "instructions": [
                 "Visible command arguments: `$ARGUMENTS`.",
-                "Identify the exact current host surface (codex-app, trae_app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, agy, kiro-cli, deepseek-harness, or ark-managed-agent).",
+                "Identify the exact current host surface (codex-app, trae_app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, antigravity-app, agy, kiro-cli, deepseek-harness, or ark-managed-agent).",
                 _loopx_start_goal_arguments_instruction(
                     cli_bin=cli_bin,
                     host_surface=None,
@@ -208,6 +208,7 @@ def _command_prompt_specs(*, cli_bin: str, include_legacy_aliases: bool) -> list
                 "During first planning, follow the shared goal_requirements_guidance: reuse existing owner-approved requirements and declare only missing source-grounded overall requirements through the existing outcome owner, link actual Todos and read back the canonical declaration. Preserve existing requirements on resume; maximum timeout is not a minimum work commitment and independent executable checks stay optional.",
                 "When the host explicitly supplies a `loopx_task_planning_v0` packet from `loopx todo plan` for a registered Goal/Agent, execute that bounded planning checkpoint instead of starting another Goal. Follow its shared planner, requirement declaration/readback and Todo delta in the same invocation, then return actual Todo ids for readback. Its caller-owned execution_handoff retains host activation and quota; do not create a planning Todo, execute task work, or claim delivery during the checkpoint.",
                 "For a Codex App heartbeat, run the returned activation command, require ok=true, and save its `LoopX managed heartbeat bootstrap v2` task_body through automation_update. The saved loader fetches the current thin contract on every wake; do not persist a raw thin/compact/full execution body. Preserve the current goal, registered agent, task binding and existing schedule; read back the automation through the same App.",
+                f"For an Antigravity App fixed resident session (`antigravity-app` / `agy`), read `<user_information>` `Conversation ID` (or `$ANTIGRAVITY_CONVERSATION_ID`), bind it once via `{cli_bin} bind-agent-thread --goal-id <goal-id> --thread-id <conversation-id> --host-surface agy --agent-id <agent-id> --with-agy-hooks --execute` and `{cli_bin} sync-global` (updating `~/.gemini/config/hooks.json` `Stop` recovery with the active `{cli_bin}` path and `--conversation-id`; do not create a `new-conversation` `sidecar.json` for a fixed session). On every wake, run `{cli_bin} --format json heartbeat-prompt --thin --runtime-profile antigravity_app --goal-id <goal-id> --agent-id <agent-id>`, follow `task_body` only when `ok=true`, perform peer code/doc edits and `quota should-run` inside an isolated `.worktrees/` git worktree (keeping the main checkout clean for `workspace_guard`), and before ending every turn (settled, `waiting_external`, or idle) unless stopped, call `schedule(DurationSeconds=max(180, recommended_interval_minutes * 60), TimerCondition=\"any\", Prompt=...)` (`180`s floor; `3 -> 6 -> 10`m backoff) without shell `sleep`.",
                 "If the packet exposes a goal-selection gate, rerun one exact choice before any mutation.",
                 "When authoring task Todos, treat `--action-kind` as the documented extensible public-safe token: choose a short task-relevant value such as `implement`, `test`, or `review`; do not search the LoopX source for an allowlist.",
                 "Consume the turn-start quota JSON packet exactly once: read the complete output directly or save it and query it with `jq`; never pipe it through `head` or `tail`, and never rerun the turn-start call to recover hidden fields. A host whose runtime mints Turn identity uses `--begin-turn`; every other host passes its own `--turn-instance-id`. When selection is required, choose the Todo and use `interaction_contract.cli_channel.selection_command` with the returned Turn identity before mutation.",
@@ -919,6 +920,12 @@ def _merge_managed_hooks_json(
     cli_bin: str,
     uninstall: bool,
     execute: bool,
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    runtime_root: str | None = None,
+    conversation_id: str | None = None,
+    registry: str | None = None,
+    resolve_local_executable: bool = True,
 ) -> str:
     """Add or remove the managed ``loopx`` Stop recovery hook in Antigravity ``hooks.json``."""
     marker_path = config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME
@@ -970,7 +977,15 @@ def _merge_managed_hooks_json(
 
     if existing is not None and not loopx_owned:
         return "skipped_user_owned_hooks_entry"
-    entry = build_antigravity_hooks_template(cli_bin=cli_bin)[MANAGED_MCP_KEY]
+    entry = build_antigravity_hooks_template(
+        cli_bin=cli_bin,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        runtime_root=runtime_root,
+        conversation_id=conversation_id,
+        registry=registry,
+        resolve_local_executable=resolve_local_executable,
+    )[MANAGED_MCP_KEY]
     if not execute:
         return "unchanged" if existing == entry and not legacy_owned else "would_write"
     if existing == entry and not legacy_owned:
@@ -991,6 +1006,36 @@ def _merge_managed_hooks_json(
     return "written"
 
 
+def sync_antigravity_hooks(
+    *,
+    cli_bin: str = "loopx",
+    agy_home: str | None = None,
+    uninstall: bool = False,
+    execute: bool,
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    runtime_root: str | None = None,
+    conversation_id: str | None = None,
+    registry: str | None = None,
+    resolve_local_executable: bool = True,
+) -> dict[str, str]:
+    """Preview or update Antigravity ``hooks.json`` with the managed Stop recovery hook."""
+    config_path = _antigravity_config_home(agy_home) / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
+    status = _merge_managed_hooks_json(
+        config_path=config_path,
+        cli_bin=cli_bin,
+        uninstall=uninstall,
+        execute=execute,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        runtime_root=runtime_root,
+        conversation_id=conversation_id,
+        registry=registry,
+        resolve_local_executable=resolve_local_executable,
+    )
+    return {"path": str(config_path), "status": status}
+
+
 def install_slash_commands(
     *,
     execute: bool,
@@ -1009,6 +1054,11 @@ def install_slash_commands(
     zcode_home: str | None = None,
     zcode_agents_home: str | None = None,
     agy_home: str | None = None,
+    agy_goal_id: str | None = None,
+    agy_agent_id: str | None = None,
+    agy_conversation_id: str | None = None,
+    agy_runtime_root: str | None = None,
+    agy_registry: str | None = None,
     kiro_home: str | None = None,
     pi_project: str | None = None,
     pi_scope: str = "project",
@@ -1309,6 +1359,11 @@ def install_slash_commands(
             cli_bin=cli_bin,
             uninstall=uninstall,
             execute=execute,
+            goal_id=agy_goal_id,
+            agent_id=agy_agent_id,
+            runtime_root=agy_runtime_root,
+            conversation_id=agy_conversation_id,
+            registry=agy_registry,
         )
         installed.append(
             {
