@@ -90,6 +90,28 @@ depending on the executor:
 
 ## Goal Review Cadence
 
+Fresh autonomous replan work shares the Goal's compute window. Once
+`spent_slots >= allowed_slots`, its extra allowance is **zero**: `quota should-run`
+returns the existing typed `throttled_skip` action rather than admitting a
+replan wakeup. A pending replan remains pending until rolling-window accounting
+restores allowance or the owner increases the existing compute budget. This
+also applies when a focus or external wait masks the exhausted window. Replan
+still precedes monitor quiet and lane waits while compute remains available.
+Recovery of a positively admitted replan keeps its original Goal, Agent, Turn
+and obligation when the window later fills. Verified writeback still uses the
+original settlement plan, including qualified no-debit closeouts. If the
+spend owner rejects the debit because the window is full, retry that same
+settlement when allowance returns. Owner Stop and zero compute pause
+automatic execution.
+
+新的自主重规划与 Goal 共用算力窗口。`spent_slots >= allowed_slots` 时，额外额度为
+**零**；`quota should-run` 使用现有的 typed `throttled_skip`，不再为待处理的重规划
+唤醒模型。等待滚动窗口恢复额度，或 owner 提高已有算力预算后重新判断；focus 或
+外部等待不会豁免这一限制。有剩余额度时，重规划仍优先于 monitor quiet 和 lane wait。
+已有准入收据的重规划在额度用尽后仍按原 Goal、Agent、Turn 和义务恢复；已验证的
+写回沿原结算计划收尾，仍支持符合条件的免扣额收尾。扣额责任方因窗口已满拒绝扣额时，
+等额度恢复后重试同一笔结算。Owner Stop 和零算力暂停自动执行。
+
 The product and benchmark runners default to review after **6 settled effective
 work Turns** in both standard and fine-grained modes. This changes the previous
 product threshold of five Turns and benchmark threshold of three Turns. Review
@@ -102,6 +124,12 @@ same Agent after its latest accepted replan acknowledgement. An accepted negativ
 work result can count; observation-only polls, duplicate retries, unspent
 writebacks and missing settlement receipts cannot. At the threshold, the next
 quota evaluation creates `periodic_review_due` through the existing replan path.
+For an explicitly selected Agent, receipt qualification uses that Agent's scope
+before interpreting semantic settlement fields, including during status collection
+for refresh and spend. A peer's invalid semantic receipt
+does not block this count; selecting the affected Agent or an unscoped history
+still reports the invalid receipt. This does not rewrite receipts or relax Goal
+instance ownership and shared log integrity checks.
 An evidence-linked review may retain the current approach; it does not require
 inventing a new plan, completing the open Todo, or declaring the Goal achieved.
 Review evidence from settled work for current source and acceptance applicability
@@ -225,6 +253,28 @@ writeback/spend chain. An exact typed blocked writeback with a bounded retry
 instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
+
+Repeated recovery admissions for the same bound prior Turn are limited when
+the missing receipts remain unchanged. The limit counts distinct committed
+guard admissions. Replaying a guard or receiving a host-completed event leaves
+that count as it was. Verified receipt progress or an explicit Owner resume
+renews the allowance. The Goal activation record retains the last Owner
+resume through later Controller Stop and Resume transitions. Resuming a
+Goal that is already active leaves the recorded allowance in place.
+
+Each new recovery grant checks its admission basis under the receipt append
+lock. A contender with a stale basis reevaluates the same Turn. When an unbound
+waiting Turn becomes eligible after resume, its first positive recovery
+receipt is appended under the same lock and subsequent replays reuse it.
+
+同一原始 Turn 的缺失回执没有减少时，恢复准入有次数上限，按已提交的不同 guard
+准入计数。相同 guard 重放和宿主完成事件均保持原计数。验证到回执进展或 Owner
+显式恢复 Goal 后重新计算。Goal 激活记录会保留最近一次 Owner 恢复，后续
+Controller 停止或恢复均沿用该记录。对已启用的 Goal 再次恢复会保留既有额度。
+
+新的恢复准入会在持有回执追加锁时复核准入依据。依据已变化的并发请求用同一 Turn
+重新判定。未绑定的等待 Turn 在恢复后取得资格时，在同一把锁内追加首次准入回执，
+后续重放复用该回执。
 
 An admitted advancement Todo can also become persistently `blocked` through
 its ordinary owner-authorized lifecycle. Its original Turn then offers the

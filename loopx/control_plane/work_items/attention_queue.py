@@ -190,6 +190,7 @@ def build_attention_queue(
     goal_id_filter: str | None = None,
     include_stopped_goal_context: bool = False,
     include_goal_channel_projection: bool = True,
+    agent_lane_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the executable attention queue or a stopped-Goal archive view.
 
@@ -336,6 +337,7 @@ def build_attention_queue(
                     autonomous_replan_obligation_from_runs=context.autonomous_replan_obligation_from_runs,
                     external_progress_review=external_progress_review,
                     effective_turn_cadence=effective_turn_cadence_context(goal, runtime_root, registry_path=context.registry_path),
+                    agent_lane_id=agent_lane_id,
                 )
                 item["quota"] = context.quota_status(
                     goal,

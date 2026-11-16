@@ -175,7 +175,7 @@ test("an open Vision reconstruction must come from the exact scoped receipt sour
   }
 });
 
-test("only plain vision and outcome reviews have a scalar receipt source", () => {
+test("scalar review sources exclude evidence windows and restricted duties", () => {
   const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
     obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
     stop_condition: "Stop at owner-only decisions.",
@@ -225,6 +225,35 @@ test("mixed vision/outcome recovery preserves the dominant policy without discha
       observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
     assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered,
       agent_vision: vision}).accepted, true);
+  }
+});
+
+test("Monitor lifecycle changes retain the admitted review without discharging it", () => {
+  const kind = "monitor_no_change_streak";
+  const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
+    obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
+    triggers: [{kind, todo_id: "todo_monitor", run_count: 5, threshold: 5}],
+    stop_condition: "Stop at owner-only decisions."};
+  const review = projectReplanSemantics({operation: "receipt_review_source", agent_id: "reviewer",
+    obligation: source}).review_source;
+  assert.deepEqual(review, {kind, stop_condition: source.stop_condition});
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "open", selected_obligation_id: source.obligation_id, current_obligation: null,
+    transition_candidates: [], agent_id: "reviewer", receipt_review: review};
+  const recovered = projectReplanSemantics(request).obligation as JsonObject;
+  assert.equal(recovered.obligation_id, source.obligation_id);
+  assert.equal(recovered.selection_binding, "heartbeat_receipt");
+  assert.deepEqual(recovered.triggers, [{kind}]);
+  assert.deepEqual(requiredSemanticOutcomes(recovered), requiredSemanticOutcomes(source));
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered}).accepted, false);
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered,
+    observation_delta: {delta_kinds: ["new_surface"]}}).accepted, true);
+  assert.throws(() => projectReplanSemantics({...request, guard_scoped: false}), /identity conflicts/);
+  for (const restriction of [{progress_baseline: {}}, {progress_window: []},
+    {capability_guard: {}}, {resolution_mode: "todo_lifecycle_settlement"},
+    {satisfying_semantic_outcomes: ["new_runnable_successor"]}]) {
+    assert.equal(projectReplanSemantics({operation: "receipt_review_source", agent_id: "reviewer",
+      obligation: {...source, ...restriction}}).review_source, null);
   }
 });
 
@@ -339,6 +368,21 @@ test("no-followup cannot hide an inconsistent vision behind another accepted out
   assert.equal(projectReplanSemantics({...request, agent_vision: vision}).reason_code, "no_followup_vision_path_inconsistent");
   const valid = projectReplanSemantics({...request, agent_vision: {state: "no_followup", path_delta: {outcome: "stop"}}});
   assert.equal(valid.accepted, true);
+});
+
+test("terminal input projection supplies coverage and vision without widening restricted exits", () => {
+  const result = projectReplanSemantics({operation: "requirements", obligation});
+  const contract = result.writeback_contract as JsonObject;
+  const terminal = contract.no_followup_requirements as JsonObject;
+  assert.deepEqual(terminal.cli_args, ["--progress-result-class", "no_followup",
+    "--progress-coverage-scope-id", "<coverage-scope-id>", "--progress-evidence-id", "<evidence-id>",
+    "--agent-vision-json", "<file>"]);
+  assert.deepEqual(terminal.vision_fields, {state: "no_followup", "path_delta.outcome": "stop"});
+  assert.deepEqual(terminal.preserve, ["vision_patch"]);
+  const restricted = projectReplanSemantics({operation: "requirements", obligation: {
+    ...obligation, satisfying_semantic_outcomes: ["new_concrete_blocker"],
+  }});
+  assert.equal((restricted.writeback_contract as JsonObject).no_followup_requirements, undefined);
 });
 
 test("external progress review: renamed identifiers discharge only behind new evidence; the plan may stand on evidence", () => {
@@ -649,17 +693,25 @@ test("a later durable exact ACK settles only its original receipt-bound Turn", (
   const request = {guard_scoped: true, selected_obligation_id: id,
     transition_candidates: [candidate], goal_id: goal, agent_id: agent,
     guard_recorded_at: "2026-08-01T00:00:01Z", guard_turn_instance_id: guardTurn};
-  assert.deepEqual(projectReplanSemantics({operation: "turn_transition", ...request}).semantic_delta, delta);
-  const obligation = projectReplanSemantics({operation: "receipt_bound_obligation", ...request,
-    current_obligation: null, replay_phase: "open"}).obligation as JsonObject;
-  assert.equal(obligation.obligation_id, id);
-  assert.equal(obligation.resolution_mode, "receipt_bound_replan_settlement");
-  const packet = obligation.settlement_action_packet as JsonObject;
-  assert.equal(packet.decision, "historical_ack_recorded");
-  assert.equal(packet.settlement_only, true);
-  assert.equal(packet.required_outcome, "durable_writeback_receipt");
-  assert.deepEqual(packet.semantic_delta, delta);
-  assert.equal((packet.writeback_contract as JsonObject).preferred_input, "exact_historical_ack");
+  const settled = (current: typeof request) => {
+    assert.deepEqual(projectReplanSemantics({operation: "turn_transition", ...current}).semantic_delta, delta);
+    const obligation = projectReplanSemantics({operation: "receipt_bound_obligation", ...current,
+      current_obligation: null, replay_phase: "open"}).obligation as JsonObject;
+    assert.equal(obligation.obligation_id, id);
+    assert.equal(obligation.resolution_mode, "receipt_bound_replan_settlement");
+    const packet = obligation.settlement_action_packet as JsonObject;
+    assert.equal(packet.decision, "historical_ack_recorded");
+    assert.equal(packet.settlement_only, true);
+    assert.equal(packet.required_outcome, "durable_writeback_receipt");
+    assert.deepEqual(packet.semantic_delta, delta);
+    assert.equal((packet.writeback_contract as JsonObject).preferred_input, "exact_historical_ack");
+  };
+  const rejected = (current: typeof request) => {
+    assert.equal(projectReplanSemantics({operation: "turn_transition", ...current}).semantic_delta, null);
+    assert.throws(() => projectReplanSemantics({operation: "receipt_bound_obligation", ...current,
+      current_obligation: null, replay_phase: "open"}), /identity conflicts/);
+  };
+  settled(request);
 
   const pending = projectReplanSemantics({operation: "receipt_bound_obligation", ...request,
     current_obligation: null, replay_phase: "settlement_pending"}).obligation as JsonObject;
@@ -670,10 +722,45 @@ test("a later durable exact ACK settles only its original receipt-bound Turn", (
 
   for (const missingGuard of [{guard_scoped: false}, {goal_id: null}, {agent_id: null},
     {guard_recorded_at: null}, {guard_turn_instance_id: null}]) {
-    const unbound = {...request, ...missingGuard};
-    assert.equal(projectReplanSemantics({operation: "turn_transition", ...unbound}).semantic_delta, null);
-    assert.throws(() => projectReplanSemantics({operation: "receipt_bound_obligation", ...unbound,
-      current_obligation: null, replay_phase: "open"}), /identity conflicts/);
+    rejected({...request, ...missingGuard});
+  }
+
+  // The whole-second run clock cannot order two writes inside the admission
+  // second. A bound refresh_state event whose recorded time and log position
+  // are both after admission can. The later Turn keeps its own turn id.
+  const boundWriteback = (generated_at: string, writeback_recorded_at: string, follows = true) => ({
+    historical_ack: {...historicalAck, generated_at, writeback_recorded_at,
+      writeback_follows_admission: follows, writeback_goal_id: goal, writeback_agent_id: agent,
+      writeback_turn_instance_id: laterTurn, writeback_obligation_id: id},
+  });
+  for (const guard_recorded_at of [
+    "2026-08-01T00:00:01Z", "2026-08-01T00:00:01.500Z", "2026-08-01T00:00:01.123456Z",
+  ]) {
+    for (const generated_at of ["2026-08-01T00:00:01Z", "2026-08-01T08:00:01+08:00"]) {
+      settled({...request, guard_recorded_at, transition_candidates: [
+        boundWriteback(generated_at, "2026-08-01T00:00:01.900000Z")]});
+      rejected({...request, guard_recorded_at, transition_candidates: [
+        {historical_ack: {...historicalAck, generated_at}}]});
+    }
+  }
+  const fractionalAdmission = {...request, guard_recorded_at: "2026-08-01T00:00:01.500Z"};
+  const sameSecondAck = boundWriteback("2026-08-01T00:00:01Z", "2026-08-01T00:00:01.900000Z");
+  rejected({...fractionalAdmission, transition_candidates: [
+    boundWriteback("2026-08-01T00:00:01Z", "2026-08-01T00:00:01.100Z")]});
+  rejected({...fractionalAdmission, transition_candidates: [
+    boundWriteback("2026-08-01T00:00:01Z", "2026-08-01T00:00:01.900000Z", false)]});
+  for (const broken of [
+    {writeback_goal_id: "goal-b"}, {writeback_agent_id: "peer"},
+    {writeback_turn_instance_id: guardTurn}, {writeback_obligation_id: "replan-2222222222222222"},
+  ]) {
+    rejected({...fractionalAdmission, transition_candidates: [
+      {historical_ack: {...sameSecondAck.historical_ack, ...broken}}]});
+  }
+  // A fractional ACK earlier in the admission second, and a previous whole
+  // second, stay pending even when a later event is attached.
+  for (const generated_at of ["2026-08-01T00:00:01.100Z", "2026-08-01T00:00:00Z"]) {
+    rejected({...fractionalAdmission, transition_candidates: [
+      boundWriteback(generated_at, "2026-08-01T00:00:01.900000Z")]});
   }
 
   const invalid = [
@@ -683,7 +770,7 @@ test("a later durable exact ACK settles only its original receipt-bound Turn", (
     {historical_ack: {...historicalAck, agent_id: "peer"}},
     {historical_ack: {...historicalAck, turn_instance_id: guardTurn}},
     {historical_ack: {...historicalAck, turn_instance_id: null}},
-    {historical_ack: {...historicalAck, generated_at: "2026-08-01T00:00:01Z"}},
+    {historical_ack: {...historicalAck, generated_at: "2026-08-01T00:00:00Z"}},
     {historical_ack: {...historicalAck, generated_at: "invalid"}},
     {historical_ack: {...historicalAck, semantic_delta: {...delta, schema_version: "wrong"}}},
     {historical_ack: {...historicalAck, semantic_delta: {...delta, accepted: false}}},
@@ -693,10 +780,7 @@ test("a later durable exact ACK settles only its original receipt-bound Turn", (
     {historical_ack: {...historicalAck, semantic_delta: {...delta, satisfying_outcomes: ["new_surface"]}}},
   ];
   for (const badCandidate of invalid) {
-    const changed = {...request, transition_candidates: [badCandidate]};
-    assert.equal(projectReplanSemantics({operation: "turn_transition", ...changed}).semantic_delta, null);
-    assert.throws(() => projectReplanSemantics({operation: "receipt_bound_obligation", ...changed,
-      current_obligation: null, replay_phase: "open"}), /identity conflicts/);
+    rejected({...request, transition_candidates: [badCandidate]});
   }
 });
 

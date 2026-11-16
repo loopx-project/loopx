@@ -1011,6 +1011,7 @@ export class LoopXContinuationDriver {
 
   private async evaluate(state: DriverState): Promise<boolean> {
     if (!this.ready(state)) return false
+    const session = state.agent.session
     const startedAt = performance.now()
     let stage: AdmissionStage = 'maintenance-slot'
     let admissionSignal: AbortSignal | undefined
@@ -1055,6 +1056,9 @@ export class LoopXContinuationDriver {
     } finally {
       if (!waitingForIdle && state.controller === controller) state.controller = undefined
     }
+
+    // Cancellation can land after the maintenance callback has built its plan.
+    if (admissionSignal?.aborted || state.agent.session !== session) return false
 
     if (plan.kind === 'wait') {
       if (plan.schedulerToken !== undefined) state.schedulerToken = plan.schedulerToken

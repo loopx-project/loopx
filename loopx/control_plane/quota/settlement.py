@@ -180,6 +180,7 @@ class QuotaSettlementReadback:
     native_child_admission: dict[str, Any] | None = None
     heartbeat_reentry_qualification: dict[str, Any] | None = None
     successor_replan_pending: bool = False
+    replan_execution_pending: bool = False
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -547,6 +548,7 @@ def read_heartbeat_settlement(
         native_child_admission=_optional_readback_record(payload.get("native_child_admission")),
         heartbeat_reentry_qualification=_optional_readback_record(payload.get("heartbeat_reentry_qualification")),
         successor_replan_pending=payload.get("successor_replan_pending") is True,
+        replan_execution_pending=payload.get("replan_execution_pending") is True,
         spend_run=_optional_readback_record(payload.get("spend_run")),
         heartbeat_receipt=_optional_readback_record(payload.get("heartbeat_receipt")),
         writeback_event=_optional_readback_record(payload.get("writeback_event")),

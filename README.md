@@ -14,7 +14,7 @@ progress, decisions and verifiable results so work can continue across sessions.
 
 [![Local-first state](https://img.shields.io/badge/local--first-state-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[Get started](#quick-start) · [Why LoopX](#why-loopx) · [24/7 Always-On](#always-on-agents) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
+[Get started](#quick-start) · [Why LoopX](#why-loopx) · [24/7 Always-On](#always-on-agents) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
 </div>
 
@@ -527,6 +527,12 @@ evidence → recovery; continuation → governance.
 | What needs human judgment? | Concrete user gates instead of a vague "waiting for owner." |
 | What evidence changed? | Compact run history, validation, blockers, and accepted writeback. |
 | May the loop continue? | Quota, capabilities, safe fallback, scheduler hints, and stop conditions. |
+
+Preview a Goal stop with `loopx goal-lifecycle --goal-id <id> --operation stop`;
+use `--operation resume` to restore eligibility. Apply the transition with
+`--actor-kind owner --execute`, retaining a fresh `--expected-state-fingerprint`
+when supplied by the Goal actions view. The ordinary and standalone
+[`loopx-core`](packages/loopx-core/README.md) CLI use the same lifecycle owner.
 
 <details>
 <summary>Architecture, control-plane surfaces and runtime responsibilities</summary>

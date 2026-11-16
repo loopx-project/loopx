@@ -1690,7 +1690,34 @@ def test_private_delivery_keeps_retired_steward_cards_out_of_image_recovery(
         runtime.close()
 
 
-@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished", "source-changed", "closed", "lost-ack", "message-crash",
+def assert_recovered_reply_waits_for_original_source(transport, provider, path, source_id, fault, monkeypatch):
+    original = provider.messages[source_id]
+    change = ({"deleted": True} if fault == "source-recalled-at-send" else {"content": "Edited during preview"})
+    changed = {**original, **change}
+    reply = transport._reply_runner
+
+    def preview_then_change(args):
+        result = reply(args)
+        if "--dry-run" in args and ("+messages-send" in args or "+messages-reply" in args):
+            provider.messages[source_id] = changed
+        return result
+
+    writes = list(provider.writes)
+    with monkeypatch.context() as send:
+        send.setattr(transport, "_reply_runner", preview_then_change)
+        delivered = transport.reconcile_request(path)
+    assert provider.messages[source_id] is changed
+    assert delivered == 0 and provider.writes == writes
+    pending = transport.core.read_request(path.stem)["native_result_recovery"]
+    assert pending["delivery_verified"] is False
+    assert transport.reconcile_request(path) == 0 and provider.writes == writes
+    provider.messages[source_id] = original
+    assert transport.reconcile_request(path) == 1
+    assert len(provider.writes) == len(writes) + 1
+
+
+@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished",
+    "source-changed", "source-edited-at-send", "source-recalled-at-send", "closed", "lost-ack", "message-crash",
     "historical", "historical-source-changed", "historical-stop"])
 def test_original_worker_recovers_native_result_without_replay(tmp_path, language_server, monkeypatch, case):  # noqa: F811
     from test_native_steward_private import steward
@@ -1777,7 +1804,11 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
                 pass
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
             runner=provider, cli_bin="lark-cli")
-        restarted.reconcile()
+        if case in {"source-edited-at-send", "source-recalled-at-send"}:
+            assert_recovered_reply_waits_for_original_source(
+                restarted, provider, path, event["message_id"], case, monkeypatch)
+        else:
+            restarted.reconcile()
         native = restarted.core.read_request(ref)
         recovered = native.get("native_result_recovery")
         if fault in {"source-changed", "closed", "stop"}:
@@ -4009,6 +4040,108 @@ def test_app_projection_refuses_a_replaced_provider_identity(ordinary):  # noqa:
         runtime.close()
 
 
+@pytest.mark.parametrize("fault", ["revoked", "provider_changed", "body_changed"])
+def test_app_projection_checks_current_authority_after_reading_original_source(ordinary, monkeypatch, fault):  # noqa: F811
+    store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
+    sid = original["session_id"]
+    transcript = store.sessions_root / sid / "messages.jsonl"
+    request_path = transport.root / f"{original['request_ref']}.json"
+    source_id = json.loads(request_path.read_text())["event"]["message_id"]
+    call = Provider.__call__
+    previewed = changed = False
+
+    def change_after_source_read(self, args, *pos, **kwargs):
+        nonlocal previewed, changed
+        result = call(self, args, *pos, **kwargs)
+        if "+messages-send" in args and "--dry-run" in args:
+            previewed = True
+        elif (previewed and not changed and "+messages-mget" in args
+                and args[args.index("--message-ids") + 1] == source_id):
+            if fault == "revoked":
+                transport.bindings.disconnect(original["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            elif fault == "provider_changed":
+                provider.profile_apps["notes-app"] = "cli_replaced_app"
+            else:
+                messages = store.messages(sid)
+                next(message for message in messages if message.get("turn_id") == turns[0])["text"] = "Changed during source read"
+                transcript.write_text("".join(json.dumps(message) + "\n" for message in messages))
+            changed = True
+        return result
+
+    try:
+        starts = ordinary[4].read_bytes()
+        monkeypatch.setattr(Provider, "__call__", change_after_source_read)
+        transport._web_projection_scan_at = 0
+        path, = transport._web_projection_paths()
+        assert transport.reconcile_request(path) == 0
+        assert changed and len(provider.writes) == before
+        assert ordinary[4].read_bytes() == starts
+        assert not any(phase.get("started") for phase in transport._read_web_projection_journal(path)["deliveries"].values())
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("lock_at", ["read", "writeback"])
+def test_busy_app_body_does_not_delay_feedback_for_another_session(ordinary, monkeypatch, lock_at):  # noqa: F811
+    from contextlib import ExitStack
+
+    from loopx.file_lock import exclusive_file_lock, lock_incident_path
+
+    _store, runtime, provider, transport = connect(ordinary)
+    try:
+        for profile in ("notes-app", "steward-app"):
+            event = provider.event(profile, f"feedback-source-{profile}", "Admit the original private conversation")
+            transport.admit(profile, event)
+            request = transport.core.read_request(identity_ref(transport._binding(profile)["provider_ref"], event["message_id"]))
+            sid = request["session_id"]
+            assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+            transport.reconcile_request(transport.root / f"{request['request_ref']}.json")
+            status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns", {"message": "New App input", "client_turn_id": "feedback"})
+            assert status == 202
+            assert runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+
+        transport._web_projection_scan_at = 0
+        busy, ready = sorted(transport._web_projection_paths())
+        targets = {}
+        for path in (busy, ready):
+            assert transport.reconcile_request(path) == 1
+            row = transport._read_web_projection_journal(path)
+            phase, = row["deliveries"].values()
+            assert phase["verified"] and phase["feedback"] == {}
+            targets[path] = (row["profile"], phase["attempt"]["message_ref"], "Get")
+
+        with ExitStack() as body_worker, monkeypatch.context() as patch:
+            body_lock = exclusive_file_lock(busy, operation="deliver_web_conversation_projection")
+            if lock_at == "read":
+                body_worker.enter_context(body_lock)
+            else:
+                feedback = transport._web_projection_feedback
+                busy_session = transport._read_web_projection_journal(busy)["session_id"]
+
+                def hold_body_after_feedback(row, message):
+                    feedback(row, message)
+                    if row["session_id"] == busy_session:
+                        assert targets[busy] in provider.reaction_creates
+                        body_worker.enter_context(body_lock)
+
+                patch.setattr(transport, "_web_projection_feedback", hold_body_after_feedback)
+
+            transport.reconcile_app_feedback()
+            assert not lock_incident_path(busy).exists()
+            busy_phase, = transport._read_web_projection_journal(busy)["deliveries"].values()
+            assert busy_phase["feedback"] == {}
+            assert (targets[busy] in provider.reaction_creates) == (lock_at == "writeback")
+            assert targets[ready] in provider.reaction_creates
+            ready_phase, = transport._read_web_projection_journal(ready)["deliveries"].values()
+            assert ready_phase["feedback"]["ok"]
+        transport.reconcile_app_feedback()
+        assert all(provider.reaction_creates.count(target) == 1 for target in targets.values())
+        busy_phase, = transport._read_web_projection_journal(busy)["deliveries"].values()
+        assert busy_phase["feedback"]["ok"]
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("fault", ["revoked", "app", "source", "session", "turn", "context_recovery"])
 def test_app_feedback_rechecks_exact_source_and_turn_after_mirror_delivery(ordinary, monkeypatch, fault):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
@@ -5236,7 +5369,10 @@ def test_group_status_and_recipient_commands_cannot_expose_private_sessions(ordi
 
 
 @pytest.mark.parametrize("owner_ready", [True, False])
-def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_widening(ordinary, monkeypatch, owner_ready):  # noqa: F811
+@pytest.mark.parametrize("response_form", ["legacy", "minimal"])
+def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_widening(
+    ordinary, monkeypatch, owner_ready, response_form,  # noqa: F811
+):
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
     import loopx.chat_lark_api as api
@@ -5266,6 +5402,7 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
             connection.close()
 
     path = "/api/chat/lark/private-conversations"
+    connect_path = f"{path}?response=minimal" if response_form == "minimal" else path
     body = {"app_ref": "notes-app", "project_ref": runtime.project_contexts.available()[0]["project_ref"],
         "executor_endpoint_id": "codex", "audience": "group", "group_ids": ["oc_community"]}
     provider.owner_ready = owner_ready
@@ -5274,22 +5411,45 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
         for bad in [{"group_ids": ["oc_not_selected"]}, {"group_ids": []},
                     {"group_ids": ["oc_community", "oc_community"]}, {"context_kind": "steward"},
                     {"executor_endpoint_id": "claude-code"}]:
-            assert request(path, {**body, **bad})[0] == 400
+            assert request(connect_path, {**body, **bad})[0] == 400
             assert transport.bindings.read() == original and not refreshes
-        status, response = request(path, body)
+        health_reads = []
+        read_health = transport.health
+
+        def observe_health():
+            health_reads.append(True)
+            return read_health()
+
+        monkeypatch.setattr(transport, "health", observe_health)
+        status, response = request(connect_path, body)
         assert status == 200, response
+        if response_form == "minimal":
+            assert response == {"ok": True}
+            assert not health_reads
+            status, response = request(path)
+            assert status == 200
+        assert health_reads == [True]
         saved = next(row for row in response["connections"] if row["app_ref"] == "notes-app")
         assert saved["audience"] == "group" and saved["group_count"] == 1
         assert saved["agent_candidates"] == saved["agent_targets"] == []
         assert str(ordinary[-1]) not in json.dumps(response)
         selected = request("/api/chat/lark/chats?app_ref=notes-app")[1]["chats"]
         assert [(row["chat_id"], row["selected"]) for row in selected] == [("oc_community", True), ("oc_second", False)]
-        assert request(path, body)[1]["revision"] == response["revision"]
+        status, retry = request(connect_path, body)
+        assert status == 200
+        if response_form == "minimal":
+            assert retry == {"ok": True} and health_reads == [True]
+        else:
+            assert retry["revision"] == response["revision"]
+        assert transport.bindings.read()["revision"] == response["revision"]
+        for malformed in ("", "legacy", "minimal&response=minimal"):
+            assert request(f"{path}?response={malformed}", body)[0] == 400
+            assert transport.bindings.read()["revision"] == response["revision"]
         assert refreshes == [True, True]
         assert not store.list_sessions() and not provider.writes
         if not owner_ready:
             frozen = transport.bindings.read()
-            assert request(path, {key: value for key, value in body.items() if key not in {"audience", "group_ids"}})[0] == 400
+            assert request(connect_path, {key: value for key, value in body.items() if key not in {"audience", "group_ids"}})[0] == 400
             assert transport.bindings.read() == frozen
     finally:
         server.shutdown()
@@ -5298,7 +5458,8 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
         runtime.close()
 
 
-def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(ordinary, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("progressive_read", [False, True])
+def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(ordinary, monkeypatch, progressive_read):  # noqa: F811
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.control_plane import chat_turn_acceptance, effect_runtime
 
@@ -5350,13 +5511,16 @@ def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(or
     server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    path = "/api/chat/lark/private-conversations"
+    if progressive_read:
+        path += f"?view=diagnostics&revision={transport.bindings.read()['revision']}"
 
     def snapshot():
         revision_reads.clear()
         queue_selections.clear()
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
-            connection.request("GET", "/api/chat/lark/private-conversations")
+            connection.request("GET", path)
             response = connection.getresponse()
             assert response.status == 200
             result = json.loads(response.read())
@@ -6729,6 +6893,96 @@ def test_http_authorization_read_does_not_wait_for_bot_health_or_delivery_histor
     finally:
         server.shutdown()
         server.server_close()
+        runtime.close()
+
+
+def test_http_settings_load_while_delivery_is_slow_and_reject_revoked_diagnostics(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    store, runtime, provider, transport = connect(ordinary)
+    bindings = transport.bindings
+    before = bindings.read()
+    revision = before["revision"]
+    removed = before["bindings"][0]["binding_id"]
+    sessions = store.list_sessions()
+    entered, release = threading.Event(), threading.Event()
+    health = transport.health
+    refreshes = []
+
+    def slow_health():
+        entered.set()
+        assert release.wait(10)
+        return health()
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(
+        health_snapshot=lambda: {}, refresh=lambda: refreshes.append(True), close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(query, *, method="GET", body=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request(method, "/api/chat/lark/private-conversations" + query,
+                               body=json.dumps(body) if body is not None else None,
+                               headers={"Content-Type": "application/json"} if body is not None else {})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    detail_url = f"?view=diagnostics&revision={revision}"
+    try:
+        assert read("?view=diagnostics")[0] == 400
+        assert read(f"{detail_url}&revision={revision}")[0] == 400
+        legacy_status, legacy = read("")
+        status, diagnostics = read(detail_url)
+        assert legacy_status == status == 200
+        assert legacy["stop_recoveries"] == diagnostics["stop_recoveries"]
+        monkeypatch.setattr(transport, "health", slow_health)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            delayed = executor.submit(read, detail_url)
+            try:
+                assert entered.wait(5)
+                status, settings = read("?view=settings")
+                assert status == 200 and not delayed.done()
+                assert settings["revision"] == revision
+                assert settings["app_steward_binding_id"] == legacy["app_steward_binding_id"]
+                assert "stop_recoveries" not in settings
+                assert all("pending_count" not in row and "agent_candidates" not in row for row in settings["connections"])
+                combined = [{**row, **details} for row, details in zip(
+                    settings["connections"], diagnostics["connections"], strict=True)]
+                assert combined == legacy["connections"]
+
+                body = {"binding_id": removed, "revision": revision}
+                mutation = executor.submit(read, "?response=minimal", method="DELETE", body=body)
+                assert mutation.result(timeout=4) == (200, {"ok": True})
+                assert not delayed.done()
+                status, after = read("?view=settings")
+                assert status == 200 and after["revision"] > revision
+                assert removed not in {row["binding_id"] for row in after["connections"]}
+                assert read(detail_url)[0] == 409  # A stale caller never waits for the scan.
+                assert read("?response=minimal", method="DELETE", body=body)[0] == 400
+            finally:
+                release.set()
+            status, late = delayed.result(timeout=12)
+            assert status == 409 and "connections" not in late
+        remaining, = after["connections"]
+        body = {"binding_id": remaining["binding_id"], "revision": after["revision"]}
+        invalid_status, _ = read("?response=minimal&response=legacy", method="DELETE", body=body)
+        assert invalid_status == 400 and read("?view=settings")[1] == after
+        status, legacy_disconnect = read("", method="DELETE", body=body)
+        assert status == 200 and legacy_disconnect["revision"] > after["revision"]
+        assert legacy_disconnect["connections"] == [] and "stop_recoveries" in legacy_disconnect
+        assert refreshes == [True, True]
+        assert store.list_sessions() == sessions
+        assert not provider.writes
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
         runtime.close()
 
 
