@@ -365,7 +365,7 @@ function runnerFixture(options: {
     runner: async (_file, args) => {
       calls.push([...args])
       if (args.at(-1) === '--version') {
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       }
       if (args.includes('resolve-agent-thread')) {
         const threadIdIndex = args.indexOf('--thread-id')
