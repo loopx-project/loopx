@@ -1,0 +1,129 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {transitionGoalAcceptanceLifecycle} from "../../loopx/control_plane/goals/acceptance_authority.ts";
+import type {GoalAcceptanceLifecycleTransition} from "../../loopx/control_plane/goals/acceptance_lifecycle.ts";
+import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {TODO_DOMAIN_ITEM_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
+import {executeCoordinationTodoCreate} from "../../loopx/control_plane/coordination/todo_create.ts";
+import {REMOTE_AUTHORITY_REQUEST, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
+import {REMOTE_AUTHORITY_SCOPED_READ_POLICY} from "../../loopx/control_plane/coordination/remote_authority_policy.ts";
+import {claimRequest, postgresRemoteFixture, serviceIdentity, servicePolicy} from "./remote_authority_fixture.ts";
+
+export function registerRemoteAuthorityReadAclConformance(connectionString: string | undefined) {
+  test("remote read ACL pins the Goal lifetime and projects only the caller's resources", {skip: !connectionString}, async t => {
+    const fixture = await postgresRemoteFixture(t, connectionString!);
+    const goal_id = "goal-one";
+    const a = {goal_id, goal_instance_id: "ginst_" + "a".repeat(32)};
+    const b = {goal_id, goal_instance_id: "ginst_" + "b".repeat(32)};
+    const {scopes, principals} = servicePolicy();
+    const policy = {schema_version: REMOTE_AUTHORITY_SCOPED_READ_POLICY,
+      scopes: scopes.map(scope => ({...scope, todo_read_acl: [
+        {goal_ref: a, todo_id: "todo_visible", principal_id: "principal-a", actor_id: "actor-a"},
+        {goal_ref: b, todo_id: "todo_next", principal_id: "principal-b", actor_id: "actor-b"},
+      ]})),
+      principals: principals.map((principal, index) => ({...principal, grants: principal.grants.map(grant => ({
+        ...grant, goal_ref: index === 0 ? a : b, operations: ["read", "snapshot"],
+      }))})),
+    };
+    await fixture.seed(["todo_visible", "todo_hidden"], {todo_visible: "unqualified source text", todo_hidden: "private hidden note"});
+    const legacy = await fixture.start();
+    const originalClaim = claimRequest("a", "todo_visible");
+    assert.equal((await fixture.client(legacy.endpoint, "a", originalClaim)).code, 0);
+    assert.equal((await fixture.client(legacy.endpoint, "b", claimRequest("b", "todo_hidden"))).code, 0);
+    await legacy.stop();
+    await fixture.writePolicy(policy);
+    const service = await fixture.start();
+    const scope = (actor: "a" | "b") => ({schema_version: REMOTE_AUTHORITY_REQUEST, goal_id,
+      tenant_id: "tenant-one", actor_id: `actor-${actor}`, store_identity: serviceIdentity} as const);
+    const snapshot = (actor: "a" | "b", todo_id?: string) =>
+      fixture.client(service.endpoint, actor, {...scope(actor), operation: "snapshot", ...(todo_id ? {todo_id} : {})});
+    const read = (actor: "a" | "b", todo_id: string) =>
+      fixture.client(service.endpoint, actor, {...scope(actor), operation: "read", todo_id});
+    function denied(response: Awaited<ReturnType<typeof read>>) {
+      assert.equal(response.code, 1);
+      assert.equal(response.value.status, "rejected");
+      assert.equal(response.value.reason_code, "remote_authority_scope_denied");
+      assert.deepEqual(Object.keys(response.value).sort(), ["reason_code", "request_sha256", "schema_version", "status"]);
+    }
+    async function transition(operation_id: string, step: GoalAcceptanceLifecycleTransition) {
+      const result = await transitionGoalAcceptanceLifecycle(fixture.store, {
+        goal_id, actor_agent_id: null, operation_id, transition: step,
+      });
+      assert.equal(result.status, "applied");
+    }
+
+    const unbound = await fixture.store.loadAuthority();
+    denied(await read("a", "todo_visible"));
+    denied(await snapshot("a"));
+    assert.deepEqual(await fixture.store.loadAuthority(), unbound);
+    await transition("bind-first-goal", {kind: "bind_existing", goal_ref: a});
+    const head = await fixture.store.loadAuthority();
+    assert.equal(head.status, "loaded");
+    if (head.status !== "loaded") throw new Error("Missing fixture head");
+
+    const visible = await read("a", "todo_visible");
+    assert.equal(visible.code, 0);
+    assert.equal(visible.value.schema_version, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE);
+    assert.deepEqual(visible.value.goal_ref, a);
+    assert.deepEqual(visible.value.todo, {todo_id: "todo_visible", status: "open", claimed_by: "actor-a"});
+    assert.equal((visible.value.lease as JsonObject).owner, "actor-a");
+    assert(!("idempotency_key" in (visible.value.lease as JsonObject)));
+    const first = await snapshot("a");
+    assert.equal(first.code, 0);
+    assert.deepEqual(first.value.goal_ref, a);
+    for (const field of ["todos", "leases"]) {
+      assert.deepEqual((first.value[field] as JsonObject[]).map(row => row.todo_id), ["todo_visible"]);
+    }
+    assert(!Object.hasOwn(first.value, "provider_revision"));
+    assert(!JSON.stringify(first.value).includes("unqualified source text"));
+    denied(await read("a", "todo_hidden"));
+    denied(await read("a", "todo_missing"));
+    denied(await snapshot("a", "todo_hidden"));
+    denied(await snapshot("b"));
+    denied(await fixture.client(service.endpoint, "a", {...scope("b"), operation: "snapshot"}));
+    denied(await fixture.client(service.endpoint, "a", originalClaim));
+    denied(await fixture.client(service.endpoint, "a", originalClaim, true));
+    assert.deepEqual(await fixture.store.loadAuthority(), head);
+
+    const hidden = (head.head.todos as JsonObject[]).find(todo => todo.todo_id === "todo_hidden")!;
+    assert.equal((await fixture.store.commitAuthority(prepareCoordinationProjectionCommit({
+      goal_id, projection: head.head, expected_provider_revision: head.provider_revision, operation_id: "change-hidden-todo",
+      mutations: [{kind: "todo_upsert", todo: {...hidden, note: "different private hidden note"}}],
+    }))).status, "applied");
+    assert.deepEqual((await snapshot("a")).value, first.value);
+
+    await fixture.writePolicy({...policy, scopes: policy.scopes.map(s => ({...s,
+      todo_read_acl: s.todo_read_acl.filter(entry => entry.principal_id !== "principal-a")}))});
+    denied(await snapshot("a"));
+    await fixture.writePolicy(servicePolicy());
+    const downgrade = await snapshot("a");
+    assert.equal(downgrade.value.status, "unavailable");
+    assert.equal(downgrade.value.reason_code, "remote_authority_policy_unavailable");
+    await fixture.writePolicy(policy);
+    assert.deepEqual((await snapshot("a")).value, first.value);
+
+    await transition("retire-first-goal", {kind: "retire", goal_ref: a});
+    denied(await snapshot("a"));
+    await transition("activate-second-goal", {kind: "activate_successor", retired_goal_ref: a, goal_ref: b});
+    const added = await executeCoordinationTodoCreate(fixture.store, {
+      goal_id, actor_agent_id: "actor-b", registered_agents: ["actor-a", "actor-b"],
+      operation_id: "create-successor-todo", dry_run: false, now: new Date(),
+      todo: {schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id: "todo_next", role: "agent",
+        status: "open", done: false, archive_state: "active", text: "Second lifetime task"},
+    });
+    assert.equal(added.status, "applied");
+    const successor = await fixture.store.loadAuthority();
+    denied(await snapshot("a"));
+    denied(await read("a", "todo_visible"));
+    denied(await read("a", "todo_next"));
+    denied(await read("b", "todo_visible"));
+    const second = await snapshot("b");
+    assert.equal(second.code, 0);
+    assert.deepEqual(second.value.goal_ref, b);
+    assert.deepEqual((second.value.todos as JsonObject[]).map(todo => todo.todo_id), ["todo_next"]);
+    assert.deepEqual(second.value.leases, []);
+    assert.equal((await read("b", "todo_next")).code, 0);
+    assert.deepEqual(await fixture.store.loadAuthority(), successor);
+  });
+}

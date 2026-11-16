@@ -1,7 +1,7 @@
 /** Candidate wire contract. Clients submit intentions, never authority facts. */
 import type {JsonObject} from "../effect_program.ts";
 import {canonicalAuthorityObject, canonicalAuthoritySha256,
-  requireAuthorityStoreId} from "./authority_store_codec.ts";
+  hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {POSTGRESQL_STORE_IDENTITY_PATTERN} from "./postgresql_authority_store.ts";
 import {taskLeaseOperationIdentity} from "../work_items/task_lease_operation_identity.ts";
 import {normalizeTodoId, normalizeGoalId, normalizeOwner} from "../work_items/task_lease_acquire.ts";
@@ -9,9 +9,11 @@ import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {parseIsoTimestamp} from "../runtime_timestamp.ts";
 import {normalizeTodoResumeWhen, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION} from "../todos/resume_condition.ts";
 import {normalizeTodoPriority} from "../todos/priority.ts";
+import {parseWireExactGoalRef, type WireExactGoalRef} from "../goals/acceptance_lifecycle.ts";
 
 export const REMOTE_AUTHORITY_REQUEST = "loopx_remote_authority_request_v0";
 export const REMOTE_AUTHORITY_RESPONSE = "loopx_remote_authority_response_v0";
+export const REMOTE_AUTHORITY_SCOPED_READ_RESPONSE = "loopx_remote_authority_scoped_read_response_v1";
 export const REMOTE_AUTHORITY_OPERATIONS = [
   "read", "claim", "progress", "renew", "release",
   "complete", "block", "defer", "todo_add", "snapshot",
@@ -173,16 +175,18 @@ export function remoteAuthorityOperationId(request: RemoteAuthorityRequest, prin
     request_id: requestId ?? ("request_id" in request ? request.request_id : "")})}`;
 }
 export function remoteAuthorityResponse(request: unknown, mode: RemoteAuthorityMode,
-  payload: JsonObject): JsonObject {
-  return {...payload, schema_version: REMOTE_AUTHORITY_RESPONSE,
+  payload: JsonObject, schema: typeof REMOTE_AUTHORITY_RESPONSE | typeof REMOTE_AUTHORITY_SCOPED_READ_RESPONSE = REMOTE_AUTHORITY_RESPONSE): JsonObject {
+  return {...payload, schema_version: schema,
     request_sha256: canonicalAuthoritySha256({mode, request})};
 }
 
 export function remoteAuthoritySnapshotDigest(request: RemoteAuthorityScope, revision: unknown,
-  todos: readonly unknown[], leases: readonly unknown[]): string {
-  return canonicalAuthoritySha256({schema_version: "loopx_goal_snapshot_receipt_v0",
-    tenant_id: request.tenant_id, goal_id: request.goal_id, store_identity: request.store_identity,
-    provider_revision: revision, todos, leases});
+  todos: readonly unknown[], leases: readonly unknown[], goalRef?: WireExactGoalRef): string {
+  const evidence = goalRef
+    ? {schema_version: REMOTE_AUTHORITY_SCOPED_READ_RESPONSE, goal_ref: goalRef}
+    : {schema_version: "loopx_goal_snapshot_receipt_v0", provider_revision: revision};
+  return canonicalAuthoritySha256({...evidence, tenant_id: request.tenant_id,
+    goal_id: request.goal_id, store_identity: request.store_identity, todos, leases});
 }
 
 function responseRequires(condition: unknown): asserts condition {
@@ -231,10 +235,11 @@ function responseTodo(raw: unknown, todoId?: string): string {
   return id;
 }
 
-function responseSnapshot(value: JsonObject, request: Extract<RemoteAuthorityRequest, {operation: "snapshot"}>): void {
+function responseSnapshot(value: JsonObject, request: Extract<RemoteAuthorityRequest, {operation: "snapshot"}>,
+  goalRef?: WireExactGoalRef): void {
   responseRequires(value.status === "snapshot" && value.goal_id === request.goal_id && value.store_identity === request.store_identity &&
     Array.isArray(value.todos) && Array.isArray(value.leases));
-  responseRevision(value.provider_revision, request);
+  if (!goalRef) responseRevision(value.provider_revision, request);
   const todoIds = value.todos.map(todo => responseTodo(todo, request.todo_id));
   const todoSet = new Set(todoIds);
   responseRequires(todoSet.size === todoIds.length);
@@ -246,7 +251,7 @@ function responseSnapshot(value: JsonObject, request: Extract<RemoteAuthorityReq
       !leaseIds.has(id) && !Object.hasOwn(lease, "idempotency_key"));
     leaseIds.add(id);
   }
-  responseRequires(value.receipt_sha256 === remoteAuthoritySnapshotDigest(request, value.provider_revision, value.todos, value.leases));
+  responseRequires(value.receipt_sha256 === remoteAuthoritySnapshotDigest(request, value.provider_revision, value.todos, value.leases, goalRef));
 }
 
 function responseCommand(raw: unknown, request: RemoteAuthorityRequest, operationId: string, historical: boolean): void {
@@ -301,9 +306,19 @@ function responseCommand(raw: unknown, request: RemoteAuthorityRequest, operatio
 export function decodeRemoteAuthorityResponse(raw: unknown, request: RemoteAuthorityRequest,
   mode: RemoteAuthorityMode): JsonObject {
   const value = canonicalAuthorityObject(raw, "remote authority response");
-  responseRequires(value.schema_version === REMOTE_AUTHORITY_RESPONSE &&
+  const scoped = value.schema_version === REMOTE_AUTHORITY_SCOPED_READ_RESPONSE;
+  responseRequires((value.schema_version === REMOTE_AUTHORITY_RESPONSE || scoped) &&
     value.request_sha256 === canonicalAuthoritySha256({mode, request}));
   responseRequires(typeof value.status === "string");
+  let goalRef: WireExactGoalRef | undefined;
+  if (scoped) {
+    responseRequires(mode === "execute" && (request.operation === "read" && value.status === "found"
+      || request.operation === "snapshot" && value.status === "snapshot"));
+    const fields = value.status === "found" ? ["todo", "lease"] : ["goal_id", "store_identity", "receipt_sha256", "todos", "leases"];
+    responseRequires(hasExactAuthorityKeys(value, ["schema_version", "request_sha256", "status", "goal_ref", ...fields]));
+    goalRef = parseWireExactGoalRef(value.goal_ref, "scoped read Goal");
+    responseRequires(goalRef.goal_id === request.goal_id);
+  }
   if (["rejected", "unavailable", "ambiguous"].includes(value.status)) {
     remoteAuthorityId(value.reason_code, "response reason");
     responseRequires(value.status !== "ambiguous" || mode === "execute" && request.operation !== "read" && request.operation !== "snapshot");
@@ -319,12 +334,12 @@ export function decodeRemoteAuthorityResponse(raw: unknown, request: RemoteAutho
   } else if (mode === "execute" && request.operation === "read") {
     if (value.status !== "missing") {
       responseRequires(value.status === "found");
-      responseRevision(value.provider_revision, request);
+      if (!goalRef) responseRevision(value.provider_revision, request);
       responseTodo(value.todo, request.todo_id);
       if (value.lease !== null) responseLease(value.lease, request, false);
     }
   } else if (mode === "execute" && request.operation === "snapshot") {
-    responseSnapshot(value, request);
+    responseSnapshot(value, request, goalRef);
   } else {
     responseRequires(mode === "execute" && request.operation !== "read" && request.operation !== "snapshot" && value.status === "result");
     responseCommand(value.result, request, responseOperationId(value.operation_id, request), false);

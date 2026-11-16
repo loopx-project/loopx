@@ -56,6 +56,41 @@ Revocation prevents subsequent admissions. A request already admitted under a
 policy snapshot may finish and retains that snapshot's revision in its receipt;
 revocation does not claim to undo an in-flight commit.
 
+### Scoped Todo reads
+
+For a read-only listener with resource authorization, set `schema_version` to
+`loopx_remote_authority_scoped_read_policy_v1` in the existing service policy.
+Each scope requires `todo_read_acl`, an array of entries with `goal_ref`,
+`todo_id`, `principal_id` and `actor_id`. Each credential grant also requires
+`goal_ref` with the exact `goal_id` and `goal_instance_id`. Grant `read` or
+`snapshot` for the actions the caller needs. The operator must approve each
+Todo and audience for that lifetime. Grant and ACL entries must agree with the
+service scope, authenticated principal and actor. An empty ACL grants no access.
+
+Launch the service with the scoped policy and use the current TLS client with
+the existing v0 request JSON. The server supplies the exact Goal reference
+from its private policy and verifies it against the active lifecycle on the
+same PostgreSQL head used to compose the response. Unbound, retiring and
+mismatched lifetimes deny access. A direct read or targeted snapshot outside
+the ACL returns rejection without revealing whether the Todo exists. Write
+commands and historical receipt recovery are denied by this policy.
+
+Scoped successes use `loopx_remote_authority_scoped_read_response_v1`. They
+return the exact Goal reference, authorized Todo status and assignment, and
+matching lease metadata. Snapshots also include role and priority. Free-form
+notes and lease keys are withheld. The snapshot receipt digest covers only the
+authorized projection and its scope. The global provider revision is withheld,
+so changing a hidden Todo leaves the returned view and digest intact. Clients
+that lack support for this response version report an unavailable read.
+
+Revoke access by replacing the policy with a new version of the same schema
+that removes the matching ACL entry or grant. The service pins the policy
+schema at startup and fails closed on a schema change during reload. Stop the
+listener to disable it. Keep the v0 policy for an explicitly configured
+legacy listener with trusted access to the whole Goal. Artifact versions,
+delegated sources, cross-person writes and historical receipt ACLs require
+separate qualification before they can be exposed.
+
 ## Commands and recovery
 
 POST JSON to `/v0/tasks/execute` with a `Bearer` credential. Every command includes

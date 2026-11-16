@@ -102,7 +102,7 @@ export async function postgresRemoteFixture(t: TestContext, connectionString: st
     });
   }
   const policyPath = join(tls.root, "policy.json");
-  async function writePolicy(policy = servicePolicy()) {
+  async function writePolicy(policy: unknown = servicePolicy()) {
     await writeFile(`${policyPath}.next`, JSON.stringify(policy), {mode: 0o600});
     await rename(`${policyPath}.next`, policyPath);
   }

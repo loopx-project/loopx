@@ -9,7 +9,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {decodeRemoteAuthorityRequest, decodeRemoteAuthorityResponse, remoteAuthorityOperationId,
-  remoteAuthorityResponse} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
+  remoteAuthorityResponse, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {decodeRemoteAuthorityPolicy, remoteAuthorityPolicyAdmission, readRemoteAuthorityPolicy} from "../../loopx/control_plane/coordination/remote_authority_policy.ts";
 import {RemoteAuthorityService} from "../../loopx/control_plane/coordination/remote_authority_service.ts";
@@ -74,6 +74,21 @@ test("missing-lease release responses require explicit no-op evidence", () => {
   for (const patch of [{released: true}, {changed: true}, {missing: false}, {lease: {}}, {status: "applied"}]) {
     assert.throws(() => decodeRemoteAuthorityResponse(wrap({...result, ...patch}), request, "execute"));
   }
+});
+
+test("scoped read responses require their Goal reference and exclude global authority metadata", () => {
+  const {request_id: _, ...scope} = claimRequest("a");
+  const request = decodeRemoteAuthorityRequest({...scope, operation: "read"});
+  const goal_ref = {goal_id: request.goal_id, goal_instance_id: "ginst_" + "a".repeat(32)};
+  const payload = {status: "found", goal_ref, todo: {todo_id: request.todo_id, status: "open"}, lease: null};
+  const wrap = (value: JsonObject) => remoteAuthorityResponse(request, "execute", value, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE);
+  assert.deepEqual(decodeRemoteAuthorityResponse(wrap(payload), request, "execute"), wrap(payload));
+  for (const invalid of [
+    {...payload, goal_ref: {goal_id: request.goal_id}},
+    {...payload, goal_ref: {...goal_ref, goal_id: "other-goal"}},
+    {...payload, provider_revision: `${request.store_identity}:2`},
+    {...payload, cursor: "2"},
+  ]) assert.throws(() => decodeRemoteAuthorityResponse(wrap(invalid), request, "execute"));
 });
 
 test("invalid policy cannot silently broaden or retain grants", async t => {
