@@ -506,7 +506,8 @@ function McpNoteDialog({ row, client, onClose, onDone, onError }: { row: McpRow 
   const server = entry?.server ?? null;
   const [kind, setKind] = useState<'command' | 'url'>(server && typeof server.url === 'string' ? 'url' : 'command');
   const [command, setCommand] = useState(typeof server?.command === 'string' ? server.command : '');
-  const [args, setArgs] = useState(Array.isArray(server?.args) ? server.args.map(String).join(' ') : '');
+  const initialArgs = Array.isArray(server?.args) ? server.args.map(String).join(' ') : '';
+  const [args, setArgs] = useState(initialArgs);
   const [env, setEnv] = useState(
     server?.env && typeof server.env === 'object' ? Object.entries(server.env as Record<string, unknown>).map(([k, v]) => `${k}=${v}`).join('\n') : '',
   );
@@ -518,7 +519,9 @@ function McpNoteDialog({ row, client, onClose, onDone, onError }: { row: McpRow 
     try {
       let config: Record<string, unknown> | null = null;
       if (kind === 'command' && command.trim()) {
-        config = { command: command.trim(), ...(args.trim() ? { args: splitArgs(args) } : {}) };
+        // Editing only the note must not reparse the display text and change argument boundaries.
+        const savedArgs = args === initialArgs && Array.isArray(server?.args) ? server.args : args.trim() ? splitArgs(args) : undefined;
+        config = { command: command.trim(), ...(savedArgs ? { args: savedArgs } : {}) };
         const envPairs = env
           .split('\n')
           .map((l) => l.trim())
