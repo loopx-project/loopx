@@ -5,7 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from ..chat import _stable_digest, apply_todo_review_preview, build_todo_review_preview
+from ..chat import CHAT_TODO_RECEIPT_SCHEMA_VERSION, _stable_digest, apply_todo_review_preview, build_todo_review_preview
 from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ..history import load_registry
@@ -45,11 +45,8 @@ class ChatTodoSource:
                 or binding.get("store_identity") != authority["store_identity"]):
             raise ChatTodoSourceChanged("The created Task's Todo store changed. Restore its original store before retrying.")
 
-    def current_assignment_revision(self, binding: dict[str, Any], authority: dict[str, Any], todo_id: str) -> str:
+    def todo_operation_receipt(self, operation_id: str, todo_id: str, source_authority: str) -> dict[str, Any]:
         goal_id = str(self.goal["id"])
-        operation_id = binding.get("operation_id")
-        if not isinstance(operation_id, str) or not operation_id:
-            raise ChatTodoSourceChanged("The original Task creation operation is unavailable.")
         result = effect_runtime_result("coordination.local_authority.operation_receipt", {
             "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
             "runtime_root": str(self.runtime_root),
@@ -58,14 +55,79 @@ class ChatTodoSource:
         }, timeout=15.0)
         receipts = result.get("receipts", []) if isinstance(result, dict) and result.get("status") == "found" else []
         if (not isinstance(receipts, list) or len(receipts) != 1 or not isinstance(receipts[0], dict)
-                or result.get("source_authority") != binding["source_authority"]
-                or result.get("provider_revision") != binding["provider_revision"]):
-            raise ChatTodoSourceChanged("The original Task creation receipt is unavailable. Inspect the original source before retrying.")
-        created = receipts[0]
-        todo = next((row for row in authority["todos"] if row["todo_id"] == todo_id), None)
+                or result.get("source_authority") != source_authority
+                or result.get("decision_read_from_provider") is not True or result.get("legacy_fallback_used") is not False
+                or not isinstance(result.get("provider_revision"), str)):
+            raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
+        receipt = receipts[0]
+        if receipt.get("goal_id") != goal_id or receipt.get("todo_id") != todo_id or receipt.get("operation_id") != operation_id:
+            raise ChatTodoSourceChanged("The original operation receipt does not identify this Todo.")
+        return result
+
+    def _created_todo_operation(self, operation_id: str, todo_id: str, source_authority: str) -> dict[str, Any]:
+        result = self.todo_operation_receipt(operation_id, todo_id, source_authority)
+        created = result["receipts"][0]
         if (created.get("schema_version") != "loopx_coordination_todo_create_receipt_v0"
-                or created.get("goal_id") != goal_id or created.get("todo_id") != todo_id
-                or created.get("operation_id") != operation_id or todo is None or created.get("todo") != todo):
+                or not isinstance(created.get("todo"), dict)):
+            raise ChatTodoSourceChanged("The original Task creation receipt does not identify this Todo.")
+        return result
+
+    def recover_legacy_creation(
+        self, *, todo_id: str, preview_id: str, receipt: dict[str, Any], authority: dict[str, Any],
+        require_unchanged: bool,
+    ) -> dict[str, Any]:
+        goal_id = str(self.goal["id"])
+        if (not preview_id or receipt.get("schema_version") != CHAT_TODO_RECEIPT_SCHEMA_VERSION
+                or receipt.get("preview_id") != preview_id or receipt.get("goal_id") != goal_id
+                or receipt.get("todo_id") != todo_id or receipt.get("status") != "applied"
+                or receipt.get("receipt_id") != _stable_digest({k: v for k, v in receipt.items() if k != "receipt_id"})):
+            raise ValueError("Todo creation checkpoint is malformed")
+        preview_revision = receipt.get("preview_revision")
+        if (receipt.get("outcome") != "todo_added" or not isinstance(preview_revision, str) or not preview_revision
+                or not authority or not authority.get("store_identity") or not authority.get("source_authority")):
+            raise ChatTodoSourceChanged("The original Task creation authority is unavailable.")
+        operation_id = f"chat-todo:{preview_id}"
+        result = self._created_todo_operation(operation_id, todo_id, authority["source_authority"])
+        cursor = result.get("cursor")
+        if not isinstance(cursor, str) or not cursor.isdecimal() or int(cursor) < 2:
+            raise ChatTodoSourceChanged("The original Task creation revision is unavailable.")
+
+        # The preview revision must be the predecessor of this operation in
+        # the same verified store, even if a replacement reused the Todo id.
+        original = effect_runtime_result("coordination.local_authority.todo_source", {
+            "schema_version": "loopx_local_coordination_todo_source_request_v0",
+            "runtime_root": str(self.runtime_root),
+            "goal_id": goal_id,
+            "source": {
+                "source_authority": authority["source_authority"],
+                "store_identity": authority["store_identity"],
+                "provider_revision": preview_revision,
+                "cursor": str(int(cursor) - 1),
+            },
+        }, timeout=15.0)
+        if (not isinstance(original, dict) or original.get("status") != "loaded"
+                or original.get("decision_read_from_provider") is not True or original.get("legacy_fallback_used") is not False):
+            raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
+        if require_unchanged:
+            todo = next((row for row in authority["todos"] if row["todo_id"] == todo_id), None)
+            if result["receipts"][0]["todo"] != todo:
+                raise ChatTodoSourceChanged("The created Task no longer matches its original receipt. Review it before assigning.")
+        return {
+            "operation_id": operation_id,
+            "provider_revision": result["provider_revision"],
+            "source_authority": authority["source_authority"],
+            "source_identity": self.source_identity,
+            "store_identity": authority["store_identity"],
+            "registry_sha256": self.registry_sha256,
+        }
+
+    def current_assignment_revision(self, binding: dict[str, Any], authority: dict[str, Any], todo_id: str) -> str:
+        operation_id = binding.get("operation_id")
+        if not isinstance(operation_id, str) or not operation_id:
+            raise ChatTodoSourceChanged("The original Task creation operation is unavailable.")
+        result = self._created_todo_operation(operation_id, todo_id, binding["source_authority"])
+        todo = next((row for row in authority["todos"] if row["todo_id"] == todo_id), None)
+        if result["provider_revision"] != binding["provider_revision"] or result["receipts"][0]["todo"] != todo:
             raise ChatTodoSourceChanged("The created Task no longer matches its original receipt. Review it before assigning.")
         return str(authority["provider_revision"])
 

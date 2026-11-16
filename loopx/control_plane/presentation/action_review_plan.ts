@@ -555,6 +555,21 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const steps = objectValue(objectValue(proposal.checkpoint)?.steps);
   const createPlan = objectValue(steps?.todo_create_prepared);
   const failure = objectValue(proposal.failure);
+  const createdTodo = objectValue(steps?.todo_created);
+  const createReceipt = objectValue(createdTodo?.canonical_receipt);
+  const originalTodoMatches = proposal.action_kind === "todo.create"
+    && textValue(createdTodo?.todo_id) && createdTodo?.todo_id === createReceipt?.todo_id
+    && textValue(parameters?.goal_id) && createReceipt?.goal_id === parameters?.goal_id
+    && createReceipt?.preview_id === identity.sourceFingerprint && createReceipt.status === "applied";
+  const creationContext = objectValue(proposal.context);
+  const legacyCreateMatches = originalTodoMatches && createdTodo !== null && !Object.hasOwn(createdTodo, "source")
+    && createReceipt?.schema_version === "loopx_chat_todo_receipt_v0"
+    && createReceipt.outcome === "todo_added" && textValue(createReceipt.receipt_id) && textValue(createReceipt.preview_revision)
+    && (creationContext?.goal_id == null || creationContext.goal_id === parameters?.goal_id)
+    && !textValue(creationContext?.binding_id);
+  const legacySourceGate = proposal.status === "gated" && legacyCreateMatches
+    && proposal.permission_classification === "durable_write"
+    && objectValue(proposal.gate)?.kind === "canonical_authority_required";
   const todoCreation = proposal.action_kind === "todo.create" || proposal.action_kind === "monitor.create";
   const createAttemptFailed = proposal.status === "failed" && failure?.error_code === "canonical_action_failed";
   const prohibitRegeneration = todoCreation && (createAttemptFailed || proposal.status === "applying"
@@ -598,7 +613,9 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   if (operationFrame?.kind === "inactive") return held("inactive", operationFrame.reason);
   // Lifecycle uses conservative fact precedence. Generic deferred proposals may
   // retain a historical gate; their existing status-based retry path is preserved.
-  if ((lifecycle && proposal.gate != null) || proposal.status === "gated") return held("gated", "authority_gate");
+  if ((lifecycle && proposal.gate != null) || (proposal.status === "gated" && !legacySourceGate)) {
+    return held("gated", "authority_gate");
+  }
   if ((lifecycle && proposal.stale != null) || proposal.status === "stale") return held("refresh", "stale_proposal");
   // Host readback may return an immutable terminal replay which never started.
   // Its acceptance id is still original, but cannot certify first-Turn startup.
@@ -631,12 +648,6 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       && creationProgress) {
     return {...finish({interaction: "review", canApply: true, reason: "goal_creation_retry"}), retryOriginal: true};
   }
-  const createdTodo = objectValue(steps?.todo_created);
-  const createReceipt = objectValue(createdTodo?.canonical_receipt);
-  const originalTodoMatches = proposal.action_kind === "todo.create"
-    && textValue(createdTodo?.todo_id) && createdTodo?.todo_id === createReceipt?.todo_id
-    && textValue(parameters?.goal_id) && createReceipt?.goal_id === parameters?.goal_id
-    && createReceipt?.preview_id === identity.sourceFingerprint && createReceipt.status === "applied";
   const pendingDisplay = (failure?.error_code === "canonical_create_projection_pending"
       && objectValue(failure.details)?.canonical_committed === true)
     || (objectValue(steps?.todo_assigned) ?? createdTodo)?.projection_delivery === "pending";
@@ -652,11 +663,6 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     && textValue(createdSource?.source_identity) && textValue(createdSource?.source_authority)
     && textValue(createdSource?.store_identity) && textValue(createdSource?.registry_sha256)
     && textValue(createdSource?.provider_revision) && textValue(createdSource?.operation_id);
-  // The server must still prove the legacy operation and its provider history.
-  const legacyCreateReadback = originalTodoMatches && !Object.hasOwn(createdTodo ?? {}, "source")
-    && parameters?.agent_id == null && parameters?.start_execution !== true
-    && createReceipt?.schema_version === "loopx_chat_todo_receipt_v0"
-    && createReceipt.outcome === "todo_added" && textValue(createReceipt.preview_revision);
   const preparedCreateMatches = createPlan?.operation_id === ("chat-create:" + identity.proposalId)
     && createPlan.preview_id === identity.sourceFingerprint
     && textValue(createPlan.source_identity) && textValue(createPlan.source_authority)
@@ -668,11 +674,11 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     && Array.isArray(proposal.available_transitions) && proposal.available_transitions.includes("apply")
     && ((createAttemptFailed && failure?.retry_safe === true)
       || (proposal.status === "applying" && proposal.creation_retry_available === true));
-  if (todoCreation && ["failed", "applying"].includes(String(proposal.status))
+  if (todoCreation && (["failed", "applying"].includes(String(proposal.status)) || legacySourceGate)
       && proposal.permission_classification === "durable_write"
       && failure?.retry_safe !== false
       && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
-      && (interruptedBeforePlan || preparedCreateMatches || recordedCreateMatches || legacyCreateReadback)) {
+      && (interruptedBeforePlan || preparedCreateMatches || recordedCreateMatches || legacyCreateMatches)) {
     return {...finish({interaction: "review", canApply: true,
       reason: pendingDisplay ? "canonical_create_projection_pending" : "todo_creation_retry"}), retryOriginal: true};
   }

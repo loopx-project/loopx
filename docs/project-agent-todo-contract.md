@@ -100,17 +100,22 @@ recoverable by its original proposal; it cannot be cancelled or regenerated.
 The Goal overview and conversation keep each pending confirmation separate.
 After upgrade, a create-only confirmation saved by an older version can
 recover its original receipt when the provider still proves the create and its
-reviewed predecessor revision. This recovery updates only the display. A stale
-preview that never started can still be regenerated. An uncommitted create requires
-the reviewed source and provider revision. Older control planes reject the
-source-bound v3 request before writing.
+reviewed predecessor revision. This recovery updates only the display. If the
+confirmation also requested assignment, retry checks that the Agent is still
+registered and the Todo still matches the original creation receipt before
+resuming assignment. If the source cannot be verified, the original card
+identifies the recorded Todo and shows how to recover. A stale preview that
+never started can still be regenerated. An uncommitted create requires the
+reviewed source and provider revision. Older control planes reject the source-bound
+v3 request before writing.
 
 确认 Chat 的 Todo 或 Monitor 提案时，先记录源注册表摘要、权威存储身份和修订号，再执行写入。
 重试沿用原操作 ID 和 Monitor 的首次到期时间。已提交的操作返回原回执，未提交的操作仍校验
 确认时的来源和修订号。刷新后仍可用原确认卡重试。任务已提交但展示还未更新时，不能取消或重新生成原确认。
 Goal 概览和对话保留各自独立的恢复入口。升级后，若权威库仍能验证旧版仅创建确认的原操作和审阅时的前一修订，
-用户可以取回原回执。该恢复只更新展示。尚未执行的过期预览仍可重新生成。来源绑定请求采用 v3 协议，
-旧版控制面会在写入前拒绝。
+用户可以取回原回执。该恢复只更新展示。如果原确认还要求指派，重试会先确认 Agent 仍在注册表中，
+且 Todo 仍与原创建回执一致，再接续指派。如果无法核验来源，原卡会显示已记录的 Todo 和恢复方式。
+尚未执行的过期预览仍可重新生成。来源绑定请求采用 v3 协议，旧版控制面会在写入前拒绝。
 
 For a caller-owned runtime that already registered its Goal/Agent, generate the
 model planning checkpoint before writing executable task Todos:

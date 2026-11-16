@@ -7,14 +7,12 @@ from typing import Any, TypedDict
 
 from ..agent_registry import registered_agent_ids_for_goal
 from ..chat import (
-    CHAT_TODO_RECEIPT_SCHEMA_VERSION, _stable_digest, apply_prepared_todo_review,
-    plan_reviewed_todo_create, todo_create_was_duplicate,
+    apply_prepared_todo_review, plan_reviewed_todo_create, todo_create_was_duplicate,
 )
 from ..chat_action_store import action_checkpoint_steps, is_todo_create_recovery
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )
-from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 from ..control_plane.todos.provider_projection import (
     projection_delivery_requires_ack, settle_canonical_todo_projection,
@@ -138,59 +136,22 @@ class ChatTodoCreationMixin:
 
     def _recover_create_display(
         self, source: ChatTodoSource, *, goal_id: str, todo_id: str, operation_id: str,
-        binding: dict[str, Any] | None, duplicate: bool = False,
-        legacy_preview_revision: str | None = None,
+        binding: dict[str, Any], duplicate: bool = False,
     ) -> str:
         # Repair presentation from the confirmed Goal, never from a new create
         # or assignment. A historical receipt only proves its original effect.
         snapshot = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
-        if binding is not None:
-            source.require_created_todo(binding, snapshot)
+        source.require_created_todo(binding, snapshot)
         if duplicate:
             # Semantic duplicates are no-ops and do not get a commit receipt.
-            verified = any(row.get("todo_id") == todo_id for row in snapshot["todos"])
+            if not any(row.get("todo_id") == todo_id for row in snapshot["todos"]):
+                raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
         else:
-            receipt = effect_runtime_result("coordination.local_authority.operation_receipt", {
-                "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
-                "runtime_root": str(source.runtime_root), "goal_id": goal_id, "operation_id": operation_id,
-            })
-            rows = receipt.get("receipts") if receipt.get("status") == "found" else None
-            verified = (receipt.get("source_authority") == snapshot["source_authority"]
-                        and receipt.get("decision_read_from_provider") is True
-                        and receipt.get("legacy_fallback_used") is False
-                        and isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)
-                        and rows[0].get("goal_id") == goal_id and rows[0].get("todo_id") == todo_id
-                        and rows[0].get("operation_id") == operation_id)
-            if verified and legacy_preview_revision is not None:
-                verified = (
-                    rows[0].get("schema_version") == "loopx_coordination_todo_create_receipt_v0"
-                    and self._legacy_create_has_reviewed_parent(source, goal_id, snapshot, receipt, legacy_preview_revision)
-                )
-        if not verified:
-            raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
+            source.todo_operation_receipt(operation_id, todo_id, snapshot["source_authority"])
         return settle_canonical_todo_projection(
             {}, registry_path=source.registry_path, runtime_root=source.runtime_root,
             goal_id=goal_id, expected_store_identity=snapshot["store_identity"],
         )["projection_delivery"]
-
-    @staticmethod
-    def _legacy_create_has_reviewed_parent(
-        source: ChatTodoSource, goal_id: str, snapshot: dict[str, Any],
-        operation: dict[str, Any], preview_revision: str,
-    ) -> bool:
-        cursor = operation.get("cursor")
-        if not isinstance(cursor, str) or not cursor.isdecimal() or int(cursor) <= 1:
-            return False
-        # The old reviewed create used a provider CAS. Its original revision
-        # must be the verified predecessor of the recorded create transaction.
-        parent = effect_runtime_result("coordination.local_authority.todo_source", {
-            "schema_version": "loopx_local_coordination_todo_source_request_v0",
-            "runtime_root": str(source.runtime_root), "goal_id": goal_id,
-            "source": {"provider_revision": preview_revision, "cursor": str(int(cursor) - 1),
-                       "source_authority": snapshot["source_authority"], "store_identity": snapshot["store_identity"]},
-        })
-        return (parent.get("status") == "loaded" and parent.get("decision_read_from_provider") is True
-                and parent.get("legacy_fallback_used") is False)
 
     def _apply_monitor_create(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
@@ -267,7 +228,7 @@ class ChatTodoCreationMixin:
     def _apply_todo_create(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any],
     ) -> dict[str, Any]:
-        from ..chat_actions import _opaque
+        from ..chat_actions import ProtectedActionGate, _opaque
 
         goal_id = str(parameters["goal_id"])
         source = resolve_chat_todo_source(self, goal_id)
@@ -284,30 +245,33 @@ class ChatTodoCreationMixin:
             if not isinstance(canonical_receipt, dict):
                 raise ValueError("Todo creation checkpoint is malformed")
             binding = todo_step.get("source")
-            if isinstance(binding, dict):
-                source.require_review(binding)
-                create_operation_id = binding["operation_id"]
-                delivery = todo_step.get("projection_delivery")
-                if not assignment_owns_display:
-                    delivery = self._recover_create_display(source, goal_id=goal_id, todo_id=todo_id,
-                        operation_id=create_operation_id, binding=binding,
-                        duplicate=canonical_receipt.get("already_exists") is True)
-            else:
-                if "source" in todo_step or agent_id or start_execution:
-                    raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
-                saved_id = canonical_receipt.get("receipt_id")
-                prior_revision = canonical_receipt.get("preview_revision")
-                if (canonical_receipt.get("schema_version") != CHAT_TODO_RECEIPT_SCHEMA_VERSION
-                        or canonical_receipt.get("preview_id") != current_fingerprint
-                        or canonical_receipt.get("goal_id") != goal_id or canonical_receipt.get("todo_id") != todo_id
-                        or canonical_receipt.get("status") != "applied" or canonical_receipt.get("outcome") != "todo_added"
-                        or not isinstance(prior_revision, str) or not prior_revision
-                        or saved_id != _stable_digest({key: value for key, value in canonical_receipt.items()
-                                                       if key != "receipt_id"})):
-                    raise ChatTodoSourceChanged("Restore the original Goal source to recover this Task confirmation.")
-                create_operation_id = f"chat-todo:{current_fingerprint}"
+            if "source" not in todo_step:
+                try:
+                    if agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
+                        raise ChatTodoSourceChanged("The selected Agent is no longer registered for the Goal")
+                    authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
+                    binding = source.recover_legacy_creation(
+                        todo_id=todo_id, preview_id=current_fingerprint, receipt=canonical_receipt, authority=authority,
+                        require_unchanged=bool(agent_id) or start_execution,
+                    )
+                except (ChatTodoSourceChanged, LocalCoordinationAuthorityUnavailable) as error:
+                    if not agent_id and not start_execution:
+                        raise
+                    raise ProtectedActionGate("todo.create", gate={
+                        "kind": "canonical_authority_required",
+                        "summary": f"The original confirmation recorded Todo {todo_id}. Its assignment source could not be verified.",
+                        "next_action": "Restore the original Goal source and retry, or review the assignment from the existing Todo.",
+                    }) from error
+                self.store.save_checkpoint(proposal_id, step="todo_created", receipt={**todo_step, "source": binding})
+            if not isinstance(binding, dict):
+                raise ValueError("Todo creation checkpoint source is malformed")
+            source.require_review(binding)
+            create_operation_id = _opaque(binding.get("operation_id"), field="operation_id")
+            delivery = todo_step.get("projection_delivery")
+            if not assignment_owns_display:
                 delivery = self._recover_create_display(source, goal_id=goal_id, todo_id=todo_id,
-                    operation_id=create_operation_id, binding=None, legacy_preview_revision=prior_revision)
+                    operation_id=create_operation_id, binding=binding,
+                    duplicate=canonical_receipt.get("already_exists") is True)
         else:
             if agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
                 raise ValueError("the selected Agent is no longer registered for this Goal")

@@ -16,7 +16,7 @@ from loopx.chat_actions import ChatActionService
 from loopx.chat.todo_source import ChatTodoSourceChanged
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos import provider_create
-from loopx.control_plane.todos.mutation_api import add_goal_todo
+from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -315,7 +315,10 @@ def test_witness_only_create_retains_existing_receipt_identity(confirmation):
     assert _snapshot(runtime) == saved
 
 
-def test_legacy_creation_recovers_only_the_receipt_from_the_reviewed_provider_history(confirmation, tmp_path):
+@pytest.mark.parametrize("edited_since_creation", [False, True])
+def test_legacy_creation_recovers_only_the_receipt_from_the_reviewed_provider_history(
+    confirmation, tmp_path, edited_since_creation,
+):
     service, registry, runtime, provider = confirmation
     text = "Verify the release checklist"
     request = {"goal_id": "goal-a", "text": text}
@@ -346,6 +349,15 @@ def test_legacy_creation_recovers_only_the_receipt_from_the_reviewed_provider_hi
         reopened.apply(proposal_id)
     assert _snapshot(other_runtime) == other
     assert _snapshot(runtime) == committed
+
+    if edited_since_creation:
+        update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id=todo_id,
+                         agent_id="agent-a", text="Review the updated release checklist")
+        edited = _snapshot(runtime)
+        assert edited["todos"][0]["todo_id"] == todo_id
+        assert edited["todos"][0]["title"] == "Review the updated release checklist"
+        assert edited["cursor"] != committed["cursor"]
+        committed = edited
 
     reopened = ChatActionService(store=service.store, registry_path=registry)
     recovered = reopened.apply(proposal_id)["proposal"]
