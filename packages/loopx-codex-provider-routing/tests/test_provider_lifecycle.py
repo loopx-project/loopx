@@ -1,9 +1,11 @@
 """Real loopback admission/drain and real detached provider replacement."""
 import importlib
+from http.client import HTTPResponse
 import io
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import threading
@@ -91,11 +93,132 @@ def test_authenticated_drain_preserves_admitted_stream_and_fences_new_work(owner
         client.join(5)
 
 
+def _send_partial_request(server, request):
+    connection = socket.create_connection(("127.0.0.1", server.server_port), timeout=3)
+    connection.sendall(request)
+    return connection
+
+
+@pytest.mark.parametrize("framing", ["short", "ambiguous", "transfer_encoded"])
+def test_invalid_model_request_framing_never_reaches_upstream(owner, framing):
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    body = b'{"model":"selected-model","input":"fixture"}'
+    calls = []
+
+    class Upstream:
+        def open(self, call, timeout):
+            calls.append(call.data)
+            response = io.BytesIO(b'{"ok":true}')
+            response.status, response.headers = 200, {"Content-Type": "application/json"}
+            return response
+
+    length = len(body) + 20 if framing == "short" else len(body)
+    extra_header = {
+        "short": b"",
+        "ambiguous": b"Content-Length: 1\r\n",
+        "transfer_encoded": b"Transfer-Encoding: chunked\r\n",
+    }[framing]
+    headers = (b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer worker\r\n"
+               + f"Content-Length: {length}\r\n".encode() + extra_header + b"\r\n")
+    server = relay.RelayServer(owner, {"port": 0, "token": "worker"}, opener=Upstream())
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        with _send_partial_request(server, headers + body) as client, HTTPResponse(client) as result:
+            client.shutdown(socket.SHUT_WR)
+            result.begin()
+            assert result.status == 400
+            assert json.loads(result.read())["error"]["code"] == "invalid_request"
+        assert calls == []
+        assert request(server, "/v1/responses", "worker", body=body) == (200, b'{"ok":true}')
+        assert calls == [body]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+
+
+def test_drain_releases_stalled_request_headers_and_body_without_waiting_for_clients(owner, monkeypatch):
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    accepted_headers, accepted_body = threading.Event(), threading.Event()
+    original_parse, original_admitted = relay.RelayHandler.parse_request, relay.RelayHandler._admitted
+
+    def parse_request(handler):
+        if handler.raw_requestline.startswith(b"GET /half"):
+            accepted_headers.set()
+        return original_parse(handler)
+
+    def admitted(handler):
+        if handler.path == "/v1/responses":
+            accepted_body.set()
+        return original_admitted(handler)
+
+    monkeypatch.setattr(relay.RelayHandler, "parse_request", parse_request)
+    monkeypatch.setattr(relay.RelayHandler, "_admitted", admitted)
+    calls = []
+
+    class Upstream:
+        def open(self, call, timeout):
+            calls.append(call.data)
+            raise AssertionError("Draining incomplete request reached the upstream")
+
+    server = relay.RelayServer(owner, {"port": 0, "token": "worker", "control_token": "control"}, opener=Upstream())
+    thread = threading.Thread(target=server.serve_forever)
+    closed = threading.Event()
+    def close_after_drain():
+        thread.join()
+        server.server_close()
+        closed.set()
+
+    closer = threading.Thread(target=close_after_drain)
+    thread.start()
+    closer.start()
+    try:
+        with (
+            _send_partial_request(server, b"GET /half HTTP/1.1\r\nHost: lo"),
+            _send_partial_request(server, b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\n"
+                                  b"Authorization: Bearer worker\r\nContent-Length: 40\r\n\r\n{"),
+        ):
+            assert accepted_headers.wait(3) and accepted_body.wait(3)
+            live = json.loads(request(server, "/runtime", "worker")[1])
+            assert request(server, "/control/drain", "control", body=b"", instance=live["instance_id"])[0] == 202
+            assert closed.wait(3)
+            assert server.runtime()["active_requests"] == 0
+            assert live["active_requests"] == 0 and calls == []
+    finally:
+        server.shutdown()
+        closer.join(5)
+
+
+def test_idle_body_read_closes_before_model_admission(owner, monkeypatch):
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    monkeypatch.setattr(relay.RelayHandler, "timeout", 0.2)
+    calls = []
+
+    class Upstream:
+        def open(self, call, timeout):
+            calls.append(call.data)
+            raise AssertionError("Incomplete request reached the upstream")
+
+    server = relay.RelayServer(owner, {"port": 0, "token": "worker"}, opener=Upstream())
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        incomplete = (b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer worker\r\n"
+                      b"Content-Length: 40\r\n\r\n{")
+        with _send_partial_request(server, incomplete) as client:
+            assert client.recv(1) == b""
+        assert calls == [] and server.runtime()["active_requests"] == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+
+
 def test_real_detached_old_build_replaced_once_with_same_routes_and_private_state(owner, monkeypatch):
     relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
     life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
     native = importlib.import_module("loopx_codex_provider_routing.native")
-    import socket
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]

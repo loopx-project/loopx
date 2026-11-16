@@ -91,8 +91,9 @@ configured steward route as well as the worker, without creating credentials.
 The model transport's ordinary `ensure` also performs reconciliation for its
 own route. An authenticated
 new-protocol daemon with a different loaded build stops new admissions, drains
-already accepted requests and releases its existing owner lock before one new
-daemon starts. The model, route credentials, key policy and message queue stay
+already admitted model requests, and releases its existing owner lock before one
+new daemon starts. It closes connections still sending headers or request bodies.
+The model, route credentials, key policy and message queue stay
 with their existing owners. A bounded timeout returns `api_relay_drain_pending`;
 read status later instead of forcing exit or replaying a Turn. Old `/health`
 response bytes remain compatible, but do not qualify version adoption.
@@ -165,15 +166,22 @@ is presented to OpenAI and rejected with `401 invalid_api_key`. Installers that
 add chat transports should write the relay endpoint into each provider
 definition and verify it on readback.
 
-A local authenticated transport sends the original selected model and Responses
-body to OpenAI. An explicit upstream quota rejection, 401, 403 or temporary 429 can
+A local authenticated transport sends the original selected model and complete
+Responses body to OpenAI. Model requests require one valid Content-Length and
+are eligible for dispatch after every declared byte has arrived. A connection
+that stalls while sending the request closes after ten seconds of inactivity.
+An explicit upstream quota rejection, 401, 403 or temporary 429 can
 try the next configured key before output. Each key is attempted at most once per
 request, with typed cooldowns; model permission failures are scoped to that model.
 Unknown network effects, ordinary request/server failures and any started stream
 are not retried on another key. No job replay, model substitution or synthetic
-completion is added. There are no background paid probes. The transport survives
-the Chat/App restart used for native handoff; disabling stops new admissions and
-drains already accepted requests before its process exits. With the policy off,
+completion is added. For HTTP/1.1 clients, the relay streams bytes as they arrive
+and leaves the response incomplete when an upstream transfer is truncated. A
+complete HTTP transfer alone does not prove a completed model response. A
+truncated rejection body or one larger than the 64 KiB inspection limit cannot
+trigger another key. There are no background paid probes. The transport survives
+the Chat/App restart used for native handoff. Disabling stops new admissions and
+drains admitted model requests before its process exits. With the policy off,
 an existing subscription is never routed through this transport.
 
 Version 0.15.2 recognizes the official `credit_balance_exhausted` error in both
