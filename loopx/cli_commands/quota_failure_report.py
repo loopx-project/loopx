@@ -304,7 +304,8 @@ def captured_quota_failure_view(
         context_capture_read_command, native_context_page_budget, write_initial_context_read_reference,
     )
     from .quota_context_reader import (
-        inline_context_read_fits, inline_context_recovery_budget, pinned_context_read_window,
+        compact_selection_fits_one_page, inline_context_read_fits,
+        inline_context_recovery_budget, pinned_context_read_window,
     )
 
     page_bytes, limit = native_context_page_budget()
@@ -365,6 +366,13 @@ def captured_quota_failure_view(
         except (OSError, ValueError):
             # Existing captures can remain readable when publishing reader metadata fails.
             reader, selected = None, None
+        if (original_decision and reservation is not None and reader is not None and selected is not None
+                and not compact_selection_fits_one_page(reader, selected,
+                    output_limit=limit, reader_argv=reservation.reader_argv)):
+            # A fragmented receipt-only cursor also prevents selecting the
+            # original replan/settlement actions. Reuse the reserved full-source
+            # reader; a receipt that fits still keeps its single-page recovery.
+            return _bounded_quota_transport_failure(dict(payload), limit, reservation, saved, digest)
         compact = reservation is not None and reader is not None
         read_size, read_limit = (None if compact else page_size), limit
         result = {"ok": False, "captured_decision": reference,

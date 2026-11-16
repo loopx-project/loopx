@@ -366,6 +366,17 @@ def inline_context_recovery_budget(path: Path, raw: bytes, digest: str, *, page_
     return output_limit
 
 
+def compact_selection_fits_one_page(reference_file: Path, content: bytes, *, output_limit: int,
+                                   reader_argv: list[str] | None) -> bool:
+    """Measure the actual compact receipt frame without widening its channel."""
+    try:
+        return _capture_page(reference_file, content, "", offset=0, size=max(1, len(content)),
+            output_limit=output_limit, instruction=False, select=[], reference_file=reference_file,
+            reader_argv=reader_argv, compact_reader=True)["eof"]
+    except ValueError:
+        return False
+
+
 def pinned_context_read_window(reference_file: Path, content: bytes, *, page_bytes: int,
                                output_limit: int, reader_argv: list[str] | None) -> tuple[int, int]:
     """Keep the caller's page budget when it can carry a verified selection."""
