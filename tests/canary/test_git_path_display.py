@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -533,3 +534,93 @@ def test_check_json_keeps_project_local_config_under_a_byte_root(
     assert display_path_bytes(payload["registry"]) == os.fsencode(registry)
     assert display_path_bytes(payload["runtime_root"]) == os.fsencode(runtime_root)
     assert json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+def test_check_exception_payload_projects_every_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exception branch uses whole-path labels before JSON serialization."""
+
+    from loopx.cli_commands import status
+
+    raw_root = "/tmp/repo\udcffname"
+    registry = Path(raw_root) / ".loopx" / "registry.json"
+    runtime_root = Path(raw_root) / "runtime"
+    args = SimpleNamespace(
+        scan_path=[raw_root], scan_root=raw_root, limit=5, format="json"
+    )
+    captured: dict[str, object] = {}
+
+    def fail(**_kwargs: object) -> dict[str, object]:
+        raise ValueError("goals must be a list")
+
+    monkeypatch.setattr(status, "check_contract", fail)
+    exit_code = status.handle_check_command(
+        args,
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        allow_missing_registry=False,
+        print_payload=lambda payload, fmt, _renderer: captured.update(
+            payload=payload, fmt=fmt
+        ),
+    )
+
+    assert exit_code == 1
+    decoded = json.loads(
+        json.dumps(captured["payload"], ensure_ascii=False).encode("utf-8")
+    )
+    assert decoded["errors"] == ["goals must be a list"]
+    assert display_path_bytes(decoded["registry"]) == os.fsencode(registry)
+    assert display_path_bytes(decoded["runtime_root"]) == os.fsencode(runtime_root)
+    assert display_path_bytes(decoded["scan_roots"][0]) == os.fsencode(raw_root)
+
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="non-UTF-8 Git paths are POSIX-only"
+)
+def test_check_json_exception_under_byte_root_is_decodable(
+    tmp_path: Path,
+) -> None:
+    """An invalid registry still returns a report a strict UTF-8 reader can parse."""
+
+    raw_root = b"repo\xffname"
+    root = Path(os.fsdecode(os.path.join(os.fsencode(tmp_path), raw_root)))
+    try:
+        os.mkdir(os.fsencode(root))
+    except (OSError, UnicodeEncodeError):
+        pytest.skip("this filesystem rejects the root name")
+    loopx_config = root / ".loopx"
+    loopx_config.mkdir()
+    registry = loopx_config / "registry.json"
+    registry.write_text(json.dumps({"goals": {}}), encoding="utf-8")
+    runtime_root = loopx_config / "runtime"
+    runtime_root.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "--format",
+            "json",
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime_root),
+            "check",
+            "--scan-root",
+            str(root),
+        ],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "PYTHONPATH": str(REPOSITORY_ROOT)},
+        check=False,
+        timeout=120,
+    )
+
+    payload = json.loads(result.stdout.decode("utf-8"))
+    assert result.returncode == 1, result.stderr
+    assert payload["ok"] is False
+    assert any("goals must be a list" in str(item) for item in payload["errors"])
+    assert display_path_bytes(payload["registry"]) == os.fsencode(registry)
+    assert display_path_bytes(payload["runtime_root"]) == os.fsencode(runtime_root)
+    assert display_path_bytes(payload["scan_roots"][0]) == os.fsencode(root)

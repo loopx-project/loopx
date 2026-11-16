@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_source_fixture
-from loopx.contract import check_contract
+from loopx.contract import check_contract, display_report_value
 from loopx.control_plane.goals.contract_health import (
     contract_error_diagnostic,
     contract_error_views,
     project_contract_health_for_goal,
 )
 from loopx.control_plane.quota.decision_summary import goal_status_health_ok
+from loopx.history import RunHistoryAudit
+from loopx.paths import display_path_bytes
 from loopx.control_plane.quota.should_run import (
     _apply_missing_state_health_guidance,
 )
@@ -225,6 +228,61 @@ def test_registry_goal_problem_keeps_its_goal_owner(tmp_path: Path) -> None:
     assert diagnostic["goal_id"] == GOAL_A_LONG
     status = {"contract": contract, "global_registry": {"ok": True}}
     assert goal_status_health_ok(status, goal_id=GOAL_A, fallback=False) is True
+
+
+def test_selected_goal_health_matches_raw_id_before_display_projection(
+    tmp_path: Path,
+) -> None:
+    """A display label must not remove the scope that selected the error."""
+
+    goal_id = "goal-byte\udcff"
+    registry_path = tmp_path / ".loopx" / "registry.json"
+    registry_path.parent.mkdir()
+    registry_path.write_text(
+        json.dumps({"goals": [{"id": goal_id}]}), encoding="utf-8"
+    )
+    runtime_root = tmp_path / "runtime"
+    audit = RunHistoryAudit(
+        registry_path=registry_path.resolve(),
+        runtime_root=runtime_root.resolve(),
+        goal_id=goal_id,
+        activation_state_filter=None,
+        include_runtime_goals=True,
+        goal_count=0,
+        run_count=0,
+        goals=(),
+    )
+
+    class Snapshot:
+        def read(self, **_kwargs: object) -> dict[str, list[object]]:
+            return {"todo_contract_rows": []}
+
+    contract = check_contract(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        scan_roots=[],
+        limit=5,
+        goal_id_filter=goal_id,
+        include_public_boundary_scan=False,
+        history_audit=audit,
+        todo_snapshot=Snapshot(),  # type: ignore[arg-type]
+    )
+
+    assert contract["ok"] is False
+    assert contract["goal_errors"][goal_id]
+    status = {"contract": contract, "global_registry": {"ok": True}}
+    assert (
+        goal_status_health_ok(status, goal_id=goal_id, fallback=True)
+        is False
+    )
+
+    projected = display_report_value(contract)
+    decoded = json.loads(
+        json.dumps(projected, ensure_ascii=False).encode("utf-8").decode("utf-8")
+    )
+    projected_goal_key = next(iter(decoded["goal_errors"]))
+    assert display_path_bytes(projected_goal_key) == os.fsencode(goal_id)
+    assert decoded["ok"] is False
 
 
 def test_selected_goal_health_keeps_global_errors_fail_closed() -> None:

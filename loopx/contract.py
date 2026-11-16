@@ -1772,9 +1772,7 @@ def check_contract(
         "checks": checks,
         "public_boundary_scan": public_boundary_scan,
     }
-    return project_contract_health_for_goal(
-        display_report_value(payload), goal_id=goal_id_filter,
-    )
+    return project_contract_health_for_goal(payload, goal_id=goal_id_filter)
 
 
 def display_report_value(value: Any) -> Any:
@@ -1794,7 +1792,9 @@ def display_report_value(value: Any) -> Any:
         return [display_report_value(item) for item in value]
     if isinstance(value, dict):
         return {
-            key: display_report_value(item) for key, item in value.items()
+            (display_path_text(key) if isinstance(key, str) else key):
+                display_report_value(item)
+            for key, item in value.items()
         }
     return value
 
