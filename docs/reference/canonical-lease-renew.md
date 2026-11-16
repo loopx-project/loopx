@@ -363,6 +363,25 @@ check also protects the legacy path; release at that generation remains legal.
 
 ## Commit, retry and readback
 
+Native callers can resolve a current proof for their retained execution through
+the existing typed inspection owner. The internal inspection request's optional
+`original_lease` binds the frozen execution; a valid reference returns
+`execution_proof` with the current key/version. The owner requires a currently
+effective canonical hard lease, unchanged execution facts (including owner,
+key, epoch, repository, scopes, workspace and unknown fields), and a version
+that has not moved backwards. Only version/expiry/update-time maintenance is
+excluded from the execution comparison. Ordinary inspection remains read-only
+and returns no proof when no reference was supplied. This neither acquires a
+lease nor grants execution: the subsequent mutation still checks current
+authority, expiry and provider CAS. A later renewal can make the observed proof
+stale; a release or new epoch cannot be adopted as normal renewal. No new CLI
+option or profile permission is introduced.
+
+Native调用者通过原typed inspection owner，以可选original_lease引用原执行，
+取得当前key/version。只有当前有效的canonical hard lease、相同执行语义及未倒退
+版本才返回proof；正常续租不迫使重做模型业务。未传引用的普通inspect保持原只读
+行为。proof不授予执行权、不代替提交时的权限/expiry/CAS；release和新epoch仍拒绝。
+
 One provider CAS commits the lease projection, event and original receipt.
 Maintenance operation identity includes operation, Goal, Todo, owner, execution
 key and expected version. The immutable request digest additionally binds TTL and the
