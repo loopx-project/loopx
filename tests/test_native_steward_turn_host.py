@@ -1109,6 +1109,67 @@ def test_inventory_replacement_during_context_read_never_forks_the_original_nati
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_managed_host_keeps_canonical_deadline_through_app_server_send(steward, tmp_path, monkeypatch, provider):
+    import time
+
+    from loopx.capabilities.native_chat import steward_commands
+    from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+    from loopx.extensions import process_runtime
+
+    service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    store, runtime, *_ = steward
+    run_command = steward_commands.native_command
+    launch_lifetime = FirstPartyHostGoalAdmission.launch_lifetime
+    send_frame = process_runtime.write_process_stdin_before_deadline
+    admitted_deadlines = []
+    crossed = []
+
+    def acquire_short_lease(controller, argv):
+        if argv[:2] == ["task-lease", "acquire"] and todo_id in argv:
+            argv = list(argv)
+            argv[argv.index("--ttl-seconds") + 1] = "12"
+        return run_command(controller, argv)
+
+    @contextlib.contextmanager
+    def observe_admission(admission, *, operation):
+        with launch_lifetime(admission, operation=operation) as expires_at_ms:
+            if operation == "native_conversation_turn_launch":
+                assert type(expires_at_ms) is int
+                admitted_deadlines.append(expires_at_ms)
+            yield expires_at_ms
+
+    def send_after_expiry(process, frame, **kwargs):
+        if json.loads(frame).get("method") == "turn/start":
+            assert len(admitted_deadlines) == 1
+            remaining = admitted_deadlines[0] / 1000 - time.time()
+            assert remaining > 0, "the active lease must reach the App Server transport"
+            time.sleep(remaining + .03)
+            crossed.append(admitted_deadlines[0])
+        return send_frame(process, frame, **kwargs)
+
+    monkeypatch.setattr(steward_commands, "native_command", acquire_short_lease)
+    monkeypatch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", observe_admission)
+    monkeypatch.setattr(process_runtime, "write_process_stdin_before_deadline", send_after_expiry)
+    before = capture.read_bytes()
+    accepted, created = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="expired-at-app-server-transport", todo_id=todo_id)
+    assert created
+    completed = runtime.wait_for_turn(session_id=accepted["session_id"], turn_id=accepted["turn_id"], timeout_sec=90)
+    assert len(crossed) == 1
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert all(row["method"] != "turn/start" for row in calls), [row["method"] for row in calls]
+    result = completed["response"]["native_loopx"]
+    assert result["error_code"] == "goal_launch_not_allowed", result
+    assert result["host_failure"]["kind"] == "contract_rejected"
+    assert not any(result["effects"].values())
+    current = cli(runtime, "todo", "list", "--goal-id", actor["goal_id"], "--todo-id", todo_id)["todo"]
+    assert not current["done"]
+    assert store.load_session(session["session_id"])["upstream_thread_id"] == session["upstream_thread_id"]
+    index = runtime.coordination_runtime_root / "goals" / actor["goal_id"] / "runs/index.jsonl"
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_managed_host_does_not_borrow_another_execution_lease(steward, tmp_path, monkeypatch, provider):
     service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
     store, runtime, *_ = steward

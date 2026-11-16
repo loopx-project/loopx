@@ -801,9 +801,10 @@ class StewardTurnHost:
                 observed = self._observe(actor)
                 with ExitStack() as stack:
                     try:
-                        if previous_guard is not None:
-                            stack.enter_context(previous_guard())
-                        stack.enter_context(launch_scope())
+                        previous_expiry = (
+                            stack.enter_context(previous_guard()) if previous_guard is not None else None
+                        )
+                        expires_at_ms = stack.enter_context(launch_scope())
                         stack.enter_context(nullcontext() if actor.get("schema_version") == "loopx_managed_session_actor_v0"
                             else exclusive_file_lock(self.bindings.path, operation="native_steward_launch"))
                         current(observed)
@@ -815,7 +816,9 @@ class StewardTurnHost:
                         # failure; exceptions after yield remain unknown.
                         from ...control_plane.turn_driver.host_failure import BuiltInHostError
                         raise BuiltInHostError(str(exc), failure_kind="contract_rejected") from exc
-                    yield
+                    if previous_expiry is not None and (expires_at_ms is None or previous_expiry < expires_at_ms):
+                        expires_at_ms = previous_expiry
+                    yield expires_at_ms
 
             adapter.session._launch_guard = launch
             try:
