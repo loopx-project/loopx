@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from loopx.command_invocation import loopx_cli_route
 from loopx.control_plane.heartbeat.rules import (
     SCHEDULER_HINT_APPLICATION_RULE,
     SCHEDULER_HINT_COMPACT_RULE,
@@ -405,12 +407,16 @@ def test_fallback_hint_keeps_a_concrete_projected_turn(tmp_path: Path) -> None:
     assert fallback["route_binding"]["turn_instance_bound"] is False
 
 
-def test_scheduler_followup_routes_preserve_turn_lineage(tmp_path: Path) -> None:
+@pytest.mark.parametrize("launcher", [(), ("-I", "-m", "loopx.entrypoint")])
+def test_scheduler_followup_routes_preserve_turn_lineage(
+    tmp_path: Path, launcher: tuple[str, ...],
+) -> None:
     payload = {
         "scheduler_hint": {
             "app_automation": {
                 "ack_hint": {
                     "cli_args": [
+                        *launcher,
                         "quota",
                         "scheduler-ack-current",
                         "--execute",
@@ -419,6 +425,7 @@ def test_scheduler_followup_routes_preserve_turn_lineage(tmp_path: Path) -> None
                 },
                 "failure_hint": {
                     "cli_args": [
+                        *launcher,
                         "quota",
                         "scheduler-fail-current",
                         "--execute",
@@ -429,16 +436,23 @@ def test_scheduler_followup_routes_preserve_turn_lineage(tmp_path: Path) -> None
     }
     turn_instance_id = "turn-scheduler-followup-001"
 
-    bind_scheduler_followup_cli_routes(
-        payload,
-        registry_path=tmp_path / "registry.json",
-        runtime_root=tmp_path / "runtime",
-        turn_instance_id=turn_instance_id,
-    )
+    with loopx_cli_route(None, default_argv=[sys.executable, *launcher]):
+        bind_scheduler_followup_cli_routes(
+            payload,
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime",
+            turn_instance_id=turn_instance_id,
+        )
 
     app_automation = payload["scheduler_hint"]["app_automation"]
     for hint_name in ("ack_hint", "failure_hint"):
         hint = app_automation[hint_name]
+        assert hint["cli_args"][:len(launcher) + 5] == [
+            *launcher,
+            "--registry", str((tmp_path / "registry.json").resolve()),
+            "--runtime-root", str((tmp_path / "runtime").resolve()),
+            "quota",
+        ]
         assert hint["cli_args"][-3:] == [
             "--turn-instance-id",
             turn_instance_id,

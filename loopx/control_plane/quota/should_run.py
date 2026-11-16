@@ -194,6 +194,7 @@ def _attach_quota_should_run_envelope(
 
 def _app_scheduler_state_read_observer(
     direct_sources: dict[str, dict[str, Any]],
+    observe_state: Callable[[Mapping[str, Any]], None] | None,
 ) -> Callable[[Mapping[str, Any]], None]:
     def record(readback: Mapping[str, Any]) -> None:
         previous = direct_sources.get("app_scheduler_state", {})
@@ -211,6 +212,8 @@ def _app_scheduler_state_read_observer(
             item_count=item_count,
             unreadable_count=unreadable_count,
         )
+        if observe_state is not None:
+            observe_state(readback)
 
     return record
 
@@ -578,6 +581,7 @@ def build_quota_should_run(
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    app_scheduler_state_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
     direct_sources: dict[str, dict[str, Any]] = {}
@@ -689,7 +693,7 @@ def build_quota_should_run(
             runtime_root=runtime_root,
             goal_ref=goal_ref,
             scheduler_state_read_observer=_app_scheduler_state_read_observer(
-                direct_sources
+                direct_sources, app_scheduler_state_observer,
             ),
         )
         _apply_missing_state_health_guidance(

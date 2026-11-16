@@ -5,7 +5,7 @@ from functools import partial
 import sys as _sys
 import json
 from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
@@ -498,13 +498,40 @@ def execute_turn_run_once(
                 "completion": completion["completion"],
             }
 
+        def codex_completes_before_refresh(result: dict[str, object]) -> bool:
+            # Unmarked Codex Turns complete the validated Todo before refresh.
+            # Retained result-work and checkpoint receipts own their established order.
+            return (args.host == "codex-cli" and not result.get("result_work_binding")
+                    and not current_checkpoint.enabled())
+
         def terminal_closeout(
             result: dict[str, object],
             *,
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.TERMINAL_CLOSEOUT)
+            if codex_completes_before_refresh(result):
+                # Builtin completion has already retired the original lease.
+                # Verify the exact terminal receipt; never start another completion.
+                observed = terminal_closeout_resolver(effect_ref)
+                receipt = observed.get("payload")
+                if observed.get("kind") == "committed" and isinstance(receipt, dict):
+                    return receipt
+                return {
+                    "ok": False,
+                    "appended": False,
+                    "reason": observed.get("reason") or "Builtin terminal completion receipt is missing",
+                }
             return todo_completion(result, effect_ref=effect_ref, terminal=True)
+
+        def codex_writeback(
+            result: dict[str, object], *, effect_ref: str,
+        ) -> dict[str, object]:
+            # Accountable refresh requires durable controller validation even for
+            # a predeclared terminal Todo. Other hosts keep their existing order.
+            if result.get("result_kind") == "validated_completion" and codex_completes_before_refresh(result):
+                return completion_writeback(result, effect_ref=effect_ref)
+            return writeback(result, effect_ref=effect_ref)
 
         def current_status() -> dict[str, object]:
             return collect_turn_status_payload(
@@ -965,6 +992,19 @@ def execute_turn_run_once(
             settlement_identity, run_direction,
             explicit_resume=bool(args.resume_turn_key and args.retry_failed_turn), goal_ref=goal_ref)
 
+        if args.host == "codex-cli" and goal_admission is not None:
+            request_lifetime = settlement_admission or nullcontext
+
+            @contextmanager
+            def codex_settlement_admission():
+                with request_lifetime():
+                    # Independent validation can outlive the running Goal.
+                    # Check the original authority before any settlement effect.
+                    goal_admission.require_running(operation="codex_cli_turn_settle")
+                    yield
+
+            settlement_admission = codex_settlement_admission
+
         def on_managed_start_admitted() -> None:
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
@@ -1026,7 +1066,8 @@ def execute_turn_run_once(
             retry_failed=bool(args.retry_failed_turn),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
-            writeback=writeback if args.execute else None,
+            writeback=(codex_writeback if args.host == "codex-cli" else writeback)
+            if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             post_result_checkpoint=current_checkpoint.enabled if args.execute else None,
             completion_intent=completion_intent if args.execute else None,

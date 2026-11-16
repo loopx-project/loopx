@@ -35,7 +35,7 @@ const ACCEPTANCE_HOLD_TRIGGERS = new Set(["goal_acceptance_stale", "goal_accepta
 // These review kinds carry no evidence window, capability or lifecycle duty.
 // A vision gap dominates the ordinary outcome gap's discharge policy, so the
 // same scalar receipt can retain a mixed review after its work links change.
-const SCALAR_REVIEW_KINDS = new Set(["goal_outcome_uncovered", "vision_acceptance_gap"]);
+const SCALAR_REVIEW_KINDS = new Set(["goal_outcome_uncovered", "vision_acceptance_gap", "monitor_no_change_streak"]);
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
 export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
@@ -593,7 +593,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation === "receipt_review_source") {
     const kinds = triggerKinds(obligation);
     const triggers = Array.isArray(obligation.triggers) ? obligation.triggers : [];
-    // Plain vision/outcome reviews share a scalar receipt source. Other mixed,
+    // Plain frontier reviews share a scalar receipt source. Other mixed,
     // restricted, lifecycle and capability obligations must retain their
     // source-specific evidence and discharge rules through their own owners.
     return {review_source: obligation.schema_version === "autonomous_replan_obligation_v0" &&
@@ -607,7 +607,8 @@ export function projectReplanSemantics(value: unknown): JsonObject {
       obligation.progress_baseline == null && obligation.progress_window == null &&
       triggers.every(trigger => object(trigger).progress_baseline == null && object(trigger).progress_window == null) &&
       typeof obligation.stop_condition === "string" && obligation.stop_condition.trim() && obligation.stop_condition.length <= 240
-      ? {kind: kinds.includes("vision_acceptance_gap") ? "vision_acceptance_gap" : "goal_outcome_uncovered",
+      // Fixed precedence keeps the selected kind independent of trigger order.
+      ? {kind: ["vision_acceptance_gap", "goal_outcome_uncovered", "monitor_no_change_streak"].find(kind => kinds.includes(kind)),
         stop_condition: obligation.stop_condition} : null};
   }
   if (request.operation === "transition_eligibility") {
