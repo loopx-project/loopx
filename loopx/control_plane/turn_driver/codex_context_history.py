@@ -33,6 +33,7 @@ _IO_CHUNK_BYTES = 64 * 1024
 _MAX_RECORD_BYTES = 16 * 1024 * 1024
 _MAX_SELECTED_REPLAY_READS = 32
 _MAX_COMPLETE_REREADS = 32
+_REPLAY_ERRORS = (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError)
 _SHELL_OUTPUT = re.compile(r"\AChunk ID: [^\r\n]+\nWall time: [0-9.]+ seconds\n"
     r"Process exited with code 0\n(?:Original token count: [0-9]+\n)?Output:\n(.*)\Z", re.DOTALL)
 
@@ -261,18 +262,38 @@ def _replayed_output_groups(anchor: dict[str, Any], snapshot: dict[str, Any], st
                     yield call_offset, _digest(group), group
 
 
+def _read_receipt(offset: int, digest: str, pages: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"native_offset": offset, "native_sha256": digest, "pages_sha256": _digest(pages)}
+
+
+def _matching_resume_session(state: dict[str, Any], event: dict[str, Any]) -> bool:
+    return (event.get("source") == "resume" and state.get("session_id") == event.get("session_id")
+            and state.get("cwd") == event.get("cwd"))
+
+
+def _verified_replay_capture(anchor: dict[str, Any], snapshot: dict[str, Any],
+                             stream: BinaryIO) -> tuple[bytes, dict[str, Any]] | None:
+    from .decision_capture import read_context_capture_file
+
+    reference = anchor.get("read_source")
+    if not _matching_replay_interval(anchor, snapshot, stream) or not isinstance(reference, dict):
+        return None
+    _, body, _ = read_context_capture_file(reference["path"], reference["sha256"], private=True)
+    return body, reference
+
+
 def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
              event: dict[str, Any]) -> bool:
-    from .decision_capture import capture_page_range, read_context_capture_file
+    from .decision_capture import capture_page_range
 
-    if not _matching_replay_interval(anchor, snapshot, stream):
+    reads, rereads = anchor.get("reads"), anchor.get("rereads", [])
+    if not isinstance(reads, list) or not reads or not isinstance(rereads, list):
         return False
-    reads, reference = anchor.get("reads"), anchor.get("read_source")
-    rereads = anchor.get("rereads", [])
-    if not isinstance(reads, list) or not reads or not isinstance(rereads, list) or not isinstance(reference, dict):
+    verified = _verified_replay_capture(anchor, snapshot, stream)
+    if verified is None:
         return False
+    body, reference = verified
     reads = [*reads, *rereads]
-    _, body, _ = read_context_capture_file(reference["path"], reference["sha256"], private=True)
     required = {(read["native_offset"], read["pages_sha256"]) for read in reads}
     ranges = []
     for offset, digest, group in _replayed_output_groups(anchor, snapshot, stream, event, reads):
@@ -290,13 +311,9 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
 
 def _replayed_selection_sections(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
                                  event: dict[str, Any]) -> dict[str, str]:
-    from .decision_capture import read_context_capture_file
-
     selections = anchor.get("selections")
-    if not isinstance(selections, dict) or not selections or not _matching_replay_interval(anchor, snapshot, stream):
+    if not isinstance(selections, dict) or not selections or _verified_replay_capture(anchor, snapshot, stream) is None:
         return {}
-    source = anchor["read_source"]
-    read_context_capture_file(source["path"], source["sha256"], private=True)
     reads = [read for selection in selections.values() for read in selection["reads"]]
     outputs = {(offset, digest) for offset, digest, _ in _replayed_output_groups(anchor, snapshot, stream, event, reads)}
 
@@ -347,12 +364,12 @@ def observe_native_read(state: dict[str, Any], event: dict[str, Any],
     try:
         with _snapshot(event) as (facts, stream):
             native_reader = _native_reader(stream, facts["observed_bytes"], event)
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+    except _REPLAY_ERRORS:
         return state
     if native_reader is None:
         return state
     offset, digest = native_reader
-    read = {"native_offset": offset, "native_sha256": digest, "pages_sha256": _digest(pages)}
+    read = _read_receipt(offset, digest, pages)
     start, reads = pending.get("native_reader_start"), pending.get("native_reads")
     if not isinstance(start, dict) or not isinstance(reads, list) or not _same_replay_source(start, facts):
         start, reads = {**facts, "reader_start": offset}, []
@@ -385,11 +402,11 @@ def observe_completed_native_reread(state: dict[str, Any], updated: dict[str, An
             if native_reader is None or native_reader[0] < anchor["reader_start"]:
                 return
             offset, digest = native_reader
-            read = {"native_offset": offset, "native_sha256": digest, "pages_sha256": _digest(pages)}
+            read = _read_receipt(offset, digest, pages)
         rereads = anchor.get("rereads", [])
         if read not in anchor["reads"] and read not in rereads:
             candidate["native_resume"] = {**anchor, "rereads": [*rereads, read][-_MAX_COMPLETE_REREADS:]}
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+    except _REPLAY_ERRORS:
         return
 
 
@@ -399,22 +416,20 @@ def native_resume_verified(state: dict[str, Any], event: dict[str, Any]) -> bool
     if not isinstance(candidate, dict):
         return False
     anchor = candidate.get("native_resume")
-    if (event.get("source") != "resume" or state.get("pending") or not isinstance(anchor, dict)
-            or state.get("session_id") != event.get("session_id") or state.get("cwd") != event.get("cwd")):
+    if state.get("pending") or not isinstance(anchor, dict) or not _matching_resume_session(state, event):
         return False
     try:
         with _snapshot(event) as (facts, stream):
             verified = _matches(anchor, facts, stream, event)
         return verified
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+    except _REPLAY_ERRORS:
         return False
 
 
 def native_resume_sections(state: dict[str, Any], event: dict[str, Any]) -> dict[str, str]:
     """Verify replay of exact selected outputs without claiming a whole capture read."""
     anchor = state.get("selected_resume")
-    if (event.get("source") != "resume" or not isinstance(anchor, dict)
-            or state.get("session_id") != event.get("session_id") or state.get("cwd") != event.get("cwd")
+    if (not _matching_resume_session(state, event) or not isinstance(anchor, dict)
             or anchor.get("scope") != state.get("read_scope") or anchor.get("epoch") != state.get("context_epoch")
             or anchor.get("read_source") != state.get("source_recovery")):
         return {}
@@ -422,7 +437,7 @@ def native_resume_sections(state: dict[str, Any], event: dict[str, Any]) -> dict
         with _snapshot(event) as (facts, stream):
             retained = _replayed_selection_sections(anchor, facts, stream, event)
         return retained
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+    except _REPLAY_ERRORS:
         return {}
 
 
@@ -486,7 +501,7 @@ def checkpoint_native_selection(state: dict[str, Any], updated: dict[str, Any],
                 observed = sections
         selections[selection] = {"reads": progress, "sections": observed, "total_bytes": page["total_bytes"]}
         updated["selected_resume"] = {**anchor, "selections": selections}
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+    except _REPLAY_ERRORS:
         return
 
 
@@ -524,5 +539,5 @@ def checkpoint_native_read(state: dict[str, Any], updated: dict[str, Any],
                 "reader_sha256": _region_digest(stream, reader_start, facts["observed_bytes"]),
                 "reads": reads, "read_source": {key: reference[key] for key in ("path", "sha256")}}
         candidate["native_resume"] = checkpoint
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+    except _REPLAY_ERRORS:
         return

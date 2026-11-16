@@ -10,7 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from shutil import rmtree
 from typing import Any
@@ -36,6 +36,7 @@ from ..control_plane.turn_driver.native_context_profile import (
 from .quota_context_reader import (
     budgeted_ready_opening,
     _bounded_context_read_failure,
+    _clamp_budget,
     _compact_context_restart,
     _capture_selection_transport_template,
     bind_capture_selection_transport as bind_capture_selection_transport,
@@ -53,6 +54,27 @@ from .quota_context_reader import (
 )
 
 _NATIVE_WIRE_FILENAME = "delivery.json"
+
+
+def _clamp_capture_budget(
+    max_page_output_bytes: int | None, *, require_positive: bool = False,
+) -> tuple[int, int]:
+    if require_positive and max_page_output_bytes is not None and max_page_output_bytes <= 0:
+        raise QuotaDecisionTransportError("Native context output limit must be positive.")
+    return _clamp_budget(native_context_page_budget(), max_page_output_bytes)
+
+
+def _json_pointer(key: str) -> str:
+    return "/" + key.replace("~", "~0").replace("/", "~1")
+
+
+def _root_selection_specs(keys: Iterable[str]) -> list[dict[str, Any]]:
+    return [{"path": [key], "pointer": _json_pointer(key)} for key in keys]
+
+
+def _stateless_opening_plan(document: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any] | None:
+    plan = _stateless_initial_read_plan(document, reference)
+    return plan if plan.get("ordinary_opening_rows") else None
 
 
 def quota_context_surface(payload: dict[str, Any], args: argparse.Namespace) -> str:
@@ -104,12 +126,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     """
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
-    if max_page_output_bytes is not None and max_page_output_bytes <= 0:
-        raise QuotaDecisionTransportError("Native context output limit must be positive.")
-    page_bytes, output_bytes = native_context_page_budget()
-    if max_page_output_bytes is not None:
-        output_bytes = min(output_bytes, max_page_output_bytes)
-        page_bytes = min(page_bytes, output_bytes)
+    page_bytes, output_bytes = _clamp_capture_budget(max_page_output_bytes, require_positive=True)
     # The generated opening crosses a tool boundary even when returned as a
     # command. Keep its inferred budget out of bulk and selection recovery.
     first_output_bytes = (output_bytes if max_page_output_bytes is not None
@@ -253,9 +270,10 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
     opening_observation = None
-    used_observed = (progressive_enabled and observed and "first_read_command" in result
+    used_observed = (progressive_enabled and observed is not None and "first_read_command" in result
         and observed["pointer_bytes"] <= first_output_bytes // 4)
     if used_observed:
+        assert observed is not None
         first = Path(observed["path"])
         result["first_read_reference"] = str(first)
         result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
@@ -269,12 +287,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result = budgeted_ready_opening(result, initial_read_plan, current_document, initial_read_content,
             page_bytes=first_page_bytes, output_bytes=first_output_bytes, reader_argv=reader_argv,
             context_directory=context_directory, observation=opening_observation)
-    if (progressive_enabled and (source_replan_review or replan_review) and "first_read_command" in result
+    active_replan_review = source_replan_review or replan_review
+    if (progressive_enabled and active_replan_review and "first_read_command" in result
             and (not page_attached or source_replan_review is not None)):
         try:
             path, digest = Path(current["path"]), current["sha256"]
             reader = source_replan_review
             if reader is None:
+                assert isinstance(replan_review, dict)
                 selections = []
                 for item in replan_review["selections"]:
                     if type(item) is int:
@@ -347,11 +367,7 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
         selection_command_args_template=transport, captured_decision_path=captured_decision_path,
         captured_recovery=captured_recovery, replan_review_source=replan_review_source,
         replan_reader_argv=reader_argv if stage_from_projection else None)
-    read_plan = None
-    if page_attached and args.initial_read:
-        plan = _stateless_initial_read_plan(required, reference)
-        if plan.get("ordinary_opening_rows"):
-            read_plan = plan
+    read_plan = _stateless_opening_plan(required, reference) if page_attached and args.initial_read else None
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         source_replan_review=review, initial_read_plan=read_plan,
         metadata={"context_delivery": native_context_activation(args),
@@ -362,8 +378,11 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
         reader_argv=reader_argv)
     readable = model_context_reference(view, reader_argv=reader_argv)
     if page_attached:
+        from ..command_invocation import current_loopx_cli_argv
+
         return _saved_context_read_page(args, readable, initial_reference=view.get("first_read_reference"),
-            initial_read_plan=read_plan, output_limit=attached_output_limit, reader_argv=reader_argv,
+            initial_read_plan=read_plan, output_limit=attached_output_limit,
+            reader_argv=reader_argv or current_loopx_cli_argv(),
             prioritize_opening=read_plan is not None)
     # Small results need no extra navigation. The complete original and required
     # captures remain available; never shrink by dropping current obligations.
@@ -374,13 +393,11 @@ def _saved_context_transport_failure(
     error: Exception, *, args: argparse.Namespace, receipt: dict[str, Any],
     recovery: dict[str, Any], reader_argv: list[str], source_unverified: bool = False,
 ) -> dict[str, Any]:
-    page_bytes, output_bytes = native_context_page_budget()
     limit = getattr(args, "max_page_output_bytes", None)
-    if isinstance(limit, int) and limit > 0:
-        output_bytes = min(output_bytes, limit)
-        page_bytes = min(page_bytes, output_bytes)
+    page_bytes, output_bytes = _clamp_capture_budget(limit if isinstance(limit, int) and limit > 0 else None)
     path, digest = Path(recovery["path"]), recovery["sha256"]
-    runtime_unavailable = source_unverified and isinstance(error, EffectRuntimeStartupError)
+    startup_error = error if source_unverified and isinstance(error, EffectRuntimeStartupError) else None
+    runtime_unavailable = startup_error is not None
     if source_unverified:
         instruction = (
             "The saved source could not be verified. Use recovery.command for diagnostic receipt readback. "
@@ -418,8 +435,8 @@ def _saved_context_transport_failure(
         "reason": " ".join(str(error).split())[:500],
         "heartbeat_receipt": receipt, "capture_sha256": args.capture_sha256,
         "recovery": readback, "instruction": instruction}
-    if runtime_unavailable:
-        failure["diagnostic_code"] = error.diagnostic_code
+    if startup_error is not None:
+        failure["diagnostic_code"] = startup_error.diagnostic_code
     attached = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
     if attached and args.format == "json" and type(limit) is int and limit > 0 and _json_output_size(failure) > limit:
         if runtime_unavailable:
@@ -553,12 +570,7 @@ def project_saved_context_capture(
 
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
-        page_bytes, output_bytes = native_context_page_budget()
-        if caller_output_limit is not None:
-            if caller_output_limit <= 0:
-                raise QuotaDecisionTransportError("Native context output limit must be positive.")
-            output_bytes = min(output_bytes, caller_output_limit)
-            page_bytes = min(page_bytes, output_bytes)
+        page_bytes, output_bytes = _clamp_capture_budget(caller_output_limit, require_positive=True)
 
         full_reference = _capture_read_reference(full_reference,
             page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
@@ -633,8 +645,7 @@ def project_saved_context_capture(
                 "path": str(cache / _NATIVE_WIRE_FILENAME),
                 "sha256": hashlib.sha256(_native_output_bytes(projected)).hexdigest(),
             }
-            plan = _stateless_initial_read_plan(projected, wire)
-            if plan.get("ordinary_opening_rows"):
+            if plan := _stateless_opening_plan(projected, wire):
                 initial_read_plan = plan
                 cold_opening = True
         native_view = native_context_capture_view(projected, cache,
@@ -804,7 +815,7 @@ def capture_decision(directory: Path | None, payload: dict[str, object], *,
                      args: argparse.Namespace | None = None, native_context: bool = False,
                      record_capture: Callable[[dict[str, object], str], None] | None = None) -> str | None:
     if directory is None:
-        return
+        return None
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
@@ -899,8 +910,7 @@ def budgeted_settlement_result(
         if fits(view) and "result_details" not in payload and "instruction" not in payload:
             return view
         # Large or unknown controls are mandatory selected reads, never cut text.
-        pointers = ["/" + key.replace("~", "~0").replace("/", "~1")
-            for key in payload if key not in deferred]
+        pointers = [_json_pointer(key) for key in payload if key not in deferred]
         snapshot_note = ""
         if supporting_fields is not None:
             snapshot_note = " Supporting snapshots remain available in the same immutable result."
@@ -983,6 +993,184 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
         return (request if isinstance(request, dict) else {}), capture_sha256
     except (OSError, ValueError, RecursionError):
         return {}, capture_sha256
+
+
+def _handle_context_config(
+    args: argparse.Namespace,
+    activation: dict[str, Any],
+    *,
+    print_payload: Callable[..., None],
+    registry_path: Path | None,
+    runtime_root_arg: str | None,
+) -> int:
+    from ..command_invocation import loopx_cli_argv
+    from ..control_plane.turn_driver.codex_context import codex_context_configuration
+
+    try:
+        if not activation["enabled"]:
+            payload: dict[str, Any] = {"ok": True, "context_delivery": activation}
+            print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+            return 0
+        directory = getattr(args, "codex_context_root", None) or args.codex_context_dir
+        if not directory:
+            raise ValueError("context-config requires codex-context-root or codex-context-dir")
+        machine_runtime = getattr(args, "_context_delivery_machine_runtime", None)
+        cli_argv = loopx_cli_argv()
+        if registry_path is not None:
+            cli_argv += ["--registry", str(registry_path.expanduser().resolve())]
+        hook_runtime = machine_runtime or runtime_root_arg
+        if hook_runtime:
+            cli_argv += ["--runtime-root", str(Path(hook_runtime).expanduser().resolve())]
+        config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
+            cli_argv=cli_argv, scenario=activation["scenario"], session_root=bool(getattr(args, "codex_context_root", None)),
+            inherit_machine=bool(machine_runtime), progressive_enabled=activation["progressive_enabled"])
+        explicit_options = "--context-delivery on" if activation["progressive_enabled"] else "--context-delivery off --delta-delivery auto"
+        payload = {"ok": True, "context_delivery": activation, "native_config": config,
+            "activation": "Apply config_overrides, merge hooks and append developer_instructions to the existing native configuration; "
+                "review and trust only these exact hooks in Codex. "
+                "Existing loaded threads may retain their original hook configuration; enabled/trusted "
+                "discovery is not session initialization or live adoption. Start/resume through the host "
+                "with the resulting configuration after active work reaches its normal safe boundary. "
+                + ("Machine defaults are re-read on each invocation; generated hooks inherit the same machine runtime. "
+                   "Omit per-command activation and location flags to retain that inheritance. " if machine_runtime else
+                   f"Pass {explicit_options} with the same declared host mode, context location and a decision-output-root to heartbeat-prompt/should-run. ")
+                +
+                "Verified saved files support progressive reads and exact deltas without a full model read; compaction starts a new full baseline on the next work Turn. "
+                "The generated output profile uses 64000-byte continuations and a 20000-token native history limit; "
+                "the same page profile applies without the shell override. Explicit smaller reader budgets remain available for truncated-range recovery. "
+                "Set --context-delivery off and remove the generated context configuration, including its output overrides, to restore ordinary output. "
+                "This command installs nothing and grants no execution authority."}
+    except (OSError, ValueError, TypeError) as exc:
+        payload = {"ok": False, "reason": str(exc)}
+    print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+    return 0 if payload["ok"] else 1
+
+
+def _handle_context_hook(
+    args: argparse.Namespace,
+    activation: dict[str, Any],
+    *,
+    registry_path: Path | None = None,
+    runtime_root_arg: str | None = None,
+) -> int:
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+    from ..control_plane.turn_driver.codex_context import (
+        CONTEXT_LIFECYCLE_HOOKS, codex_context_directory, codex_context_hook,
+        native_context_event_eligible, native_execution_preparation_request,
+        record_native_execution_preparation,
+    )
+    from ..control_plane.turn_driver.codex_execution_preparation import (
+        LegacyNativePreparationCapture,
+        codex_execution_preparation_context,
+        codex_execution_preparation_readback_context,
+        execute_codex_execution_preparation,
+    )
+
+    # Context transport remains read-only.  An exact typed Host preparation
+    # request may additionally execute its ordinary claim and fresh guard.
+    try:
+        if not activation["enabled"]:
+            print("{}")
+            return 0
+        raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+        event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
+        if (isinstance(event, dict) and native_context_event_eligible(event)
+                and isinstance(event.get("session_id"), str) and event["session_id"]
+                and event.get("hook_event_name") in CONTEXT_LIFECYCLE_HOOKS):
+            directory = codex_context_directory(directory=args.codex_context_dir,
+                root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
+            payload = codex_context_hook(directory, event)
+            request = None
+            additional = None
+            try:
+                workspace = Path(event.get("cwd") or "")
+                if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                    request = native_execution_preparation_request(directory, event)
+                if request is not None:
+                    if "claim_source_sha256" not in request or not request.get("turn_instance_id"):
+                        raise LegacyNativePreparationCapture()
+                    if request.get("readback_only") is True:
+                        additional = codex_execution_preparation_readback_context(request)
+                    else:
+                        # A resumed old pre-claim capture can still lead
+                        # to a newly composed native ready decision. Pin the
+                        # expected format of that new capture separately.
+                        if activation["scenario"] in {"codex_app_heartbeat", "codex_app_ssh_goal"}:
+                            request["complete_turn"] = True
+                        assert directory is not None
+                        capture = Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
+                        receipt = execute_codex_execution_preparation(
+                            request,
+                            cwd=workspace.resolve(),
+                            scenario=activation["scenario"],
+                            capture_directory=capture,
+                            context_directory=Path(directory),
+                        )
+                        record_native_execution_preparation(
+                            directory,
+                            event,
+                            source_sha256=request["source_sha256"],
+                            receipt=receipt,
+                            complete_turn=request.get("complete_turn") is True,
+                        )
+                        # Publish the decision that the Host just verified;
+                        # a model must not need a second guard to obtain its
+                        # Goal, task, requirements and settlement contract.
+                        source = capture / "decision.json"
+                        # The saved-capture reader never rereads authority or admits work.
+                        digest = receipt.pop("capture_sha256")
+                        receipt.pop("capture_path")
+                        receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
+                            **vars(args), "quota_command": "context-project",
+                            "capture_file": str(source),
+                            "capture_sha256": digest,
+                            "goal_id": request["goal_id"], "agent_id": request["agent_id"],
+                            "turn_instance_id": request["turn_instance_id"],
+                        }), hook_session=event["session_id"],
+                            require_complete_source=request.get("complete_turn") is True)
+                        context = receipt["context"]
+                        if context.get("ok") is False:
+                            recovery = context.get("recovery")
+                            if isinstance(recovery, dict) and isinstance(recovery.get("command"), str):
+                                context["recovery_command"] = recovery["command"]
+                            else:
+                                from ..command_invocation import current_loopx_cli_argv
+
+                                context["recovery_command"] = context_capture_read_command(
+                                    source, digest, reader_argv=current_loopx_cli_argv())
+                        additional = codex_execution_preparation_context(receipt)
+            except LegacyNativePreparationCapture as error:
+                additional = str(error)
+            except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
+                # Reconcile only the attempted source. A concurrent guard
+                # can replace recovery, so it must never be reserved here.
+                if request is not None and request.get("turn_instance_id"):
+                    readback = native_execution_preparation_request(directory, event,
+                        readback_for=request["source_sha256"])
+                    if readback is not None:
+                        additional = codex_execution_preparation_readback_context(readback)
+            if additional is not None:
+                existing = payload.get("hookSpecificOutput")
+                existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
+                payload["hookSpecificOutput"] = {
+                    "hookEventName": event["hook_event_name"],
+                    "additionalContext": " ".join(filter(None, [existing_context, additional])),
+                }
+            if (event["hook_event_name"] in ("PreCompact", "PostCompact")
+                    or event["hook_event_name"] == "SessionStart" and event.get("source") == "compact"):
+                from ..capabilities.machine_configuration.compaction_memory import compaction_memory_enabled
+                from ..paths import effective_runtime_root
+
+                if compaction_memory_enabled(effective_runtime_root(registry_path, runtime_root_arg)):
+                    from ..control_plane.turn_driver.compaction_memory import compaction_memory_hook
+
+                    payload = compaction_memory_hook(directory, event, payload, profile=activation["scenario"])
+        else:
+            payload = {}
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
+        payload = {}
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    return 0
 
 
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
@@ -1094,167 +1282,10 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             payload = {"ok": False, "reason": str(exc)}
             print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
             return 1
-    if args.quota_command == "context-config":
-        from ..command_invocation import loopx_cli_argv
-        from ..control_plane.turn_driver.codex_context import codex_context_configuration
-
-        try:
-            if not activation["enabled"]:
-                payload = {"ok": True, "context_delivery": activation}
-                print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
-                return 0
-            directory = getattr(args, "codex_context_root", None) or args.codex_context_dir
-            if not directory:
-                raise ValueError("context-config requires codex-context-root or codex-context-dir")
-            machine_runtime = getattr(args, "_context_delivery_machine_runtime", None)
-            cli_argv = loopx_cli_argv()
-            if registry_path is not None:
-                cli_argv += ["--registry", str(registry_path.expanduser().resolve())]
-            hook_runtime = machine_runtime or runtime_root_arg
-            if hook_runtime:
-                cli_argv += ["--runtime-root", str(Path(hook_runtime).expanduser().resolve())]
-            config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
-                cli_argv=cli_argv, scenario=activation["scenario"], session_root=bool(getattr(args, "codex_context_root", None)),
-                inherit_machine=bool(machine_runtime), progressive_enabled=activation["progressive_enabled"])
-            explicit_options = "--context-delivery on" if activation["progressive_enabled"] else "--context-delivery off --delta-delivery auto"
-            payload = {"ok": True, "context_delivery": activation, "native_config": config,
-                "activation": "Apply config_overrides, merge hooks and append developer_instructions to the existing native configuration; "
-                    "review and trust only these exact hooks in Codex. "
-                    "Existing loaded threads may retain their original hook configuration; enabled/trusted "
-                    "discovery is not session initialization or live adoption. Start/resume through the host "
-                    "with the resulting configuration after active work reaches its normal safe boundary. "
-                    + ("Machine defaults are re-read on each invocation; generated hooks inherit the same machine runtime. "
-                       "Omit per-command activation and location flags to retain that inheritance. " if machine_runtime else
-                       f"Pass {explicit_options} with the same declared host mode, context location and a decision-output-root to heartbeat-prompt/should-run. ")
-                    +
-                    "Verified saved files support progressive reads and exact deltas without a full model read; compaction starts a new full baseline on the next work Turn. "
-                    "The generated output profile uses 64000-byte continuations and a 20000-token native history limit; "
-                    "the same page profile applies without the shell override. Explicit smaller reader budgets remain available for truncated-range recovery. "
-                    "Set --context-delivery off and remove the generated context configuration, including its output overrides, to restore ordinary output. "
-                    "This command installs nothing and grants no execution authority."}
-        except (OSError, ValueError, TypeError) as exc:
-            payload = {"ok": False, "reason": str(exc)}
-        print_payload(payload, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
-        return 0 if payload["ok"] else 1
-    if args.quota_command == "context-hook":
-        import sys
-        from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-        from ..control_plane.turn_driver.codex_context import (
-            CONTEXT_LIFECYCLE_HOOKS, codex_context_directory, codex_context_hook,
-            native_context_event_eligible, native_execution_preparation_request,
-            record_native_execution_preparation,
-        )
-        from ..control_plane.turn_driver.codex_execution_preparation import (
-            LegacyNativePreparationCapture,
-            codex_execution_preparation_context,
-            codex_execution_preparation_readback_context,
-            execute_codex_execution_preparation,
-        )
-
-        # Context transport remains read-only.  An exact typed Host preparation
-        # request may additionally execute its ordinary claim and fresh guard.
-        try:
-            if not activation["enabled"]:
-                print("{}")
-                return 0
-            raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-            event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
-            if (isinstance(event, dict) and native_context_event_eligible(event)
-                    and isinstance(event.get("session_id"), str) and event["session_id"]
-                    and event.get("hook_event_name") in CONTEXT_LIFECYCLE_HOOKS):
-                directory = codex_context_directory(directory=args.codex_context_dir,
-                    root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
-                payload = codex_context_hook(directory, event)
-                request = None
-                additional = None
-                try:
-                    workspace = Path(event.get("cwd") or "")
-                    if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
-                        request = native_execution_preparation_request(directory, event)
-                    if request is not None:
-                        if "claim_source_sha256" not in request or not request.get("turn_instance_id"):
-                            raise LegacyNativePreparationCapture()
-                        if request.get("readback_only") is True:
-                            additional = codex_execution_preparation_readback_context(request)
-                        else:
-                            # A resumed old pre-claim capture can still lead
-                            # to a newly composed native ready decision. Pin the
-                            # expected format of that new capture separately.
-                            if activation["scenario"] in {"codex_app_heartbeat", "codex_app_ssh_goal"}:
-                                request["complete_turn"] = True
-                            capture = Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
-                            receipt = execute_codex_execution_preparation(
-                                request,
-                                cwd=workspace.resolve(),
-                                scenario=activation["scenario"],
-                                capture_directory=capture,
-                                context_directory=Path(directory),
-                            )
-                            record_native_execution_preparation(
-                                directory,
-                                event,
-                                source_sha256=request["source_sha256"],
-                                receipt=receipt,
-                                complete_turn=request.get("complete_turn") is True,
-                            )
-                            # Publish the decision that the Host just verified;
-                            # a model must not need a second guard to obtain its
-                            # Goal, task, requirements and settlement contract.
-                            source = capture / "decision.json"
-                            # The saved-capture reader never rereads authority or admits work.
-                            digest = receipt.pop("capture_sha256")
-                            receipt.pop("capture_path")
-                            receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
-                                **vars(args), "quota_command": "context-project",
-                                "capture_file": str(source),
-                                "capture_sha256": digest,
-                                "goal_id": request["goal_id"], "agent_id": request["agent_id"],
-                                "turn_instance_id": request["turn_instance_id"],
-                            }), hook_session=event["session_id"],
-                                require_complete_source=request.get("complete_turn") is True)
-                            context = receipt["context"]
-                            if context.get("ok") is False:
-                                recovery = context.get("recovery")
-                                if isinstance(recovery, dict) and isinstance(recovery.get("command"), str):
-                                    context["recovery_command"] = recovery["command"]
-                                else:
-                                    from ..command_invocation import current_loopx_cli_argv
-
-                                    context["recovery_command"] = context_capture_read_command(
-                                        source, digest, reader_argv=current_loopx_cli_argv())
-                            additional = codex_execution_preparation_context(receipt)
-                except LegacyNativePreparationCapture as error:
-                    additional = str(error)
-                except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
-                    # Reconcile only the attempted source. A concurrent guard
-                    # can replace recovery, so it must never be reserved here.
-                    if request is not None and request.get("turn_instance_id"):
-                        readback = native_execution_preparation_request(directory, event,
-                            readback_for=request["source_sha256"])
-                        if readback is not None:
-                            additional = codex_execution_preparation_readback_context(readback)
-                if additional is not None:
-                    existing = payload.get("hookSpecificOutput")
-                    existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
-                    payload["hookSpecificOutput"] = {
-                        "hookEventName": event["hook_event_name"],
-                        "additionalContext": " ".join(filter(None, [existing_context, additional])),
-                    }
-                if (event["hook_event_name"] in ("PreCompact", "PostCompact")
-                        or event["hook_event_name"] == "SessionStart" and event.get("source") == "compact"):
-                    from ..capabilities.machine_configuration.compaction_memory import compaction_memory_enabled
-                    from ..paths import effective_runtime_root
-
-                    if compaction_memory_enabled(effective_runtime_root(registry_path, runtime_root_arg)):
-                        from ..control_plane.turn_driver.compaction_memory import compaction_memory_hook
-
-                        payload = compaction_memory_hook(directory, event, payload, profile=activation["scenario"])
-            else:
-                payload = {}
-        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
-            payload = {}
-        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-        return 0
+        if args.quota_command == "context-config":
+            return _handle_context_config(args, activation, print_payload=print_payload,
+                registry_path=registry_path, runtime_root_arg=runtime_root_arg)
+        return _handle_context_hook(args, activation, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
     if args.quota_command == "context-project":
         payload = project_saved_context_capture(args)
         if project_page and payload.get("ok") is not True:
@@ -1327,7 +1358,7 @@ def _bounded_replan_writeback(args: argparse.Namespace, view: dict[str, Any]) ->
         raise ValueError("Could not save the verified writeback. Repair private capture storage and retry the original read.")
     path, digest = Path(reference["path"]), reference["sha256"]
     try:
-        selections = [{"path": [key], "pointer": "/" + key.replace("~", "~0").replace("/", "~1")} for key in view]
+        selections = _root_selection_specs(view)
         reader, selected = write_initial_context_read_reference(path, digest, view, selections)
         if len(selected) > MAX_REQUEST_BYTES:
             raise ValueError("The verified writeback exceeds the context reader size limit.")

@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 import json
 import os
 import shlex
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from ..command_invocation import current_loopx_cli_argv, same_context_reader_route, validate_context_reader_route
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
@@ -144,16 +144,16 @@ def _bind_capture_transport_options(template: str, args: argparse.Namespace, *,
     if handoff := getattr(args, "decision_handoff_socket", None):
         options["--decision-handoff-socket"] = handoff
     # Preserve a caller's explicit opt-out as well as opt-in.
-    if getattr(args, "context_delivery", None) is not None:
-        options["--context-delivery"] = args.context_delivery
-    if getattr(args, "delta_delivery", None) is not None:
-        options["--delta-delivery"] = args.delta_delivery
-    if getattr(args, "codex_context_dir", None):
-        options["--codex-context-dir"] = args.codex_context_dir
-    if getattr(args, "codex_context_root", None):
-        options["--codex-context-root"] = args.codex_context_root
-    if getattr(args, "max_page_output_bytes", None) is not None:
-        options["--max-page-output-bytes"] = str(args.max_page_output_bytes)
+    for attr, flag, truthy_only in (
+        ("context_delivery", "--context-delivery", False),
+        ("delta_delivery", "--delta-delivery", False),
+        ("codex_context_dir", "--codex-context-dir", True),
+        ("codex_context_root", "--codex-context-root", True),
+        ("max_page_output_bytes", "--max-page-output-bytes", False),
+    ):
+        value = getattr(args, attr, None)
+        if value is not None and (not truthy_only or value):
+            options[flag] = str(value)
     replacements: dict[str, str | None] = dict(options)
     if options.keys() & {"--codex-context-dir", "--codex-context-root"}:
         for option in ("--codex-context-dir", "--codex-context-root"):
@@ -232,7 +232,6 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     if best is None:
         raise ValueError("max-page-output-bytes cannot fit page metadata and one UTF-8 character; increase the limit for this same capture")
     return best
-
 
 
 def _render_capture_page(path: Path, text: str, digest: str, *, offset: int, total: int,
@@ -405,12 +404,6 @@ def pinned_context_read_window(reference_file: Path, content: bytes, *, page_byt
     return page_bytes, output_limit
 
 
-
-
-
-
-
-
 def _validate_context_page_window(offset: int, size: int, output_limit: int | None) -> None:
     from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
 
@@ -431,6 +424,26 @@ def _validate_pinned_selection(selection: dict[str, Any]) -> None:
         raise ValueError("reader selection reference is incomplete or unsupported")
 
 
+_Payload = TypeVar("_Payload", bound=Mapping[str, object])
+
+
+def _clamp_budget(
+    base_budget: tuple[int, int], max_page_output_bytes: int | None,
+) -> tuple[int, int]:
+    page_bytes, output_bytes = base_budget
+    if max_page_output_bytes is not None:
+        output_bytes = min(output_bytes, max_page_output_bytes)
+        page_bytes = min(page_bytes, output_bytes)
+    return page_bytes, output_bytes
+
+
+def _first_fitting_payload(candidates: Iterable[_Payload], limit: int) -> _Payload | None:
+    for candidate in candidates:
+        if _json_output_size(candidate) <= limit:
+            return candidate
+    return None
+
+
 def _bounded_context_read_failure(payload: dict[str, Any], limit: int | None, *,
                                   restart: Callable[[], str | None] | None = None,
                                   restart_fits: bool = True) -> dict[str, Any]:
@@ -444,17 +457,19 @@ def _bounded_context_read_failure(payload: dict[str, Any], limit: int | None, *,
         command = restart() if restart is not None else None
     if command is not None:
         located = {**diagnostic, "recovery_command": command}
-        for candidate in ({**located, "reason": payload["reason"],
-                           "recovery": "Read the same capture from offset zero. Do not rerun admission."},
-                          {**located, "reason": payload["reason"]}, located):
-            if _json_output_size(candidate) <= limit:
-                return candidate
+        if matched := _first_fitting_payload(
+            ({**located, "reason": payload["reason"],
+              "recovery": "Read the same capture from offset zero. Do not rerun admission."},
+             {**located, "reason": payload["reason"]}, located),
+            limit,
+        ):
+            return matched
     retry = "Retry this read with a larger output budget. Keep the original capture; do not rerun admission."
-    for candidate in ({**diagnostic, "reason": payload["reason"], "recovery": retry},
-                      {**diagnostic, "reason": payload["reason"]}, diagnostic, {"ok": False}):
-        if _json_output_size(candidate) <= limit:
-            return candidate
-    return {}
+    return _first_fitting_payload(
+        ({**diagnostic, "reason": payload["reason"], "recovery": retry},
+         {**diagnostic, "reason": payload["reason"]}, diagnostic, {"ok": False}),
+        limit,
+    ) or {}
 
 
 def _compact_context_restart(path: Path, digest: str, *, limit: int, page_bytes: int,
@@ -881,10 +896,9 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
         result["field_index"] = field_index
         if not fits():
             result.pop("field_index")  # Optional metadata must never displace recovery or instructions.
-    if not fits():
-        result.pop("overview")
-    if not fits():
-        result.pop("select_command")  # --select also works on the current recovery command.
+    for key in ("overview", "select_command"):
+        if key in result and not fits():
+            result.pop(key)
     if not fits() and "baseline_reference" in result:
         result["baseline_reference"].pop("command", None)  # Exact path/hash remain usable.
     if not fits():
@@ -896,12 +910,12 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
     return result
 
 
-def _native_output_bytes(value: dict[str, Any]) -> bytes:
+def _native_output_bytes(value: Mapping[str, object]) -> bytes:
     """Serialize a compact transport document with the capture file's LF."""
     return (json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
 
 
-def _json_output_size(value: dict[str, Any] | bytes) -> int:
+def _json_output_size(value: Mapping[str, object] | bytes) -> int:
     """Count compact JSON with the host's line ending, reusing serialized capture bytes."""
     if isinstance(value, bytes):
         return len(value) + len(os.linesep) - 1

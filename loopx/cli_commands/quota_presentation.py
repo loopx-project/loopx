@@ -44,12 +44,13 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
         app = source.get("app_automation")
         if isinstance(app, Mapping) and app.get("host_surface") == "antigravity_app":
             # The sidecar reads these existing scheduler fields directly.
-            hint["app_automation"] = select(
+            app_automation = select(
                 app, "recommended_interval_minutes", "recommended_rrule", "stateful_backoff",
             )
             for key in ("ack_hint", "failure_hint"):
                 if key in app:
-                    hint["app_automation"][key] = select(app[key], "cli_args")
+                    app_automation[key] = select(app[key], "cli_args")
+            hint["app_automation"] = app_automation
         for key, field in (("reset_policy", "reset_token"), ("cold_path_detail", "local_scheduler")):
             if key in source:
                 hint[key] = select(source[key], field)
@@ -80,8 +81,7 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
 
 
 def budgeted_spend_result(
-    payload: dict[str, object], args: argparse.Namespace, *,
-    runtime_root: Path, reader_argv: list[str],
+    payload: dict[str, object], args: argparse.Namespace, *, runtime_root: Path, reader_argv: list[str] | None,
 ) -> tuple[dict[str, object], int]:
     """Present an already evaluated spend, retaining failed-delivery controls."""
     from .quota_capture import budgeted_settlement_result, settlement_capture_failure_view
@@ -94,16 +94,18 @@ def budgeted_spend_result(
         return settlement_capture_failure_view(payload, output_bytes=args.max_page_output_bytes, error=exc), 1
 
 
-def native_quota_result(payload, args, *, capture_directory: Path,
-                        decision_identity, captured_payload, reader_argv, capture_id: str,
-                        progressive_enabled: bool):
+def native_quota_result(
+    payload: dict[str, object], args: argparse.Namespace, *, capture_directory: Path,
+    decision_identity: tuple[str, str], captured_payload: dict[str, object],
+    reader_argv: list[str] | None, capture_id: str, progressive_enabled: bool,
+) -> dict[str, object]:
     """IO presentation of the immutable decision, without another guard."""
-    from .quota_capture import (
-        context_capture_read_command, model_context_reference, native_context_capture_view, quota_context_surface,
-    )
+    from .quota_capture import native_context_capture_view, quota_context_surface
+    from .quota_context_reader import model_context_reference
     from ..control_plane.turn_driver.codex_context import (
         NativeContextSessionUnavailable, codex_context_directory, prepare_codex_context,
     )
+    from ..control_plane.turn_driver.decision_capture import context_capture_read_command
 
     try:
         directory = codex_context_directory(directory=args.codex_context_dir,
@@ -163,12 +165,12 @@ def _project_native_cli_settlement(payload: dict[str, object], *, explicit_compl
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, Mapping) else None
     todo = payload.get("selected_todo")
-    if not isinstance(cli, Mapping) or not isinstance(todo, Mapping):
+    if not isinstance(interaction, Mapping) or not isinstance(cli, Mapping) or not isinstance(todo, Mapping):
         return payload
     complete_scope = {}
     if explicit_complete:
         agent = payload.get("agent_identity")
-        channel = interaction.get("agent_channel") if isinstance(interaction, Mapping) else None
+        channel = interaction.get("agent_channel")
         # The typed owner needs eligibility, not another copy of Goal/context.
         complete_scope = {"complete_scope": {
             **{key: payload.get(key) for key in (
@@ -188,7 +190,7 @@ def _project_native_cli_settlement(payload: dict[str, object], *, explicit_compl
     if not projection:
         return payload
     return {**payload, "interaction_contract": {
-        **interaction, "cli_channel": _apply_context_projection_changes(dict(cli), projection),
+        **dict(interaction), "cli_channel": _apply_context_projection_changes(dict(cli), projection),
     }}
 
 
