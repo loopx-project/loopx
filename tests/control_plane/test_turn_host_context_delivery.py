@@ -78,8 +78,11 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
     assert source["schema_version"] == "loopx_turn_envelope_v1"
+    # Only the explicit historical fixture constructs v0. New CLI output stays
+    # complete even when the deprecated spelling is supplied with Off.
+    envelope = build_turn_envelope(source, captured_decision_path=str(capture / "decision.json"))
     if mode == "legacy_reference":
-        envelope = json.loads(produced.stdout)
+        assert json.loads(produced.stdout) == source
         assert envelope["schema_version"] == "loopx_turn_envelope_v0"
         signature = envelope["action_signature"]
         assert signature["matches"] is True
@@ -88,8 +91,6 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         )
         assert signature["source_decision_hash"] == source["contract_binding"]["content_hash"]
         assert Path(envelope["detail_ref"]["captured_decision"]["path"]).resolve() == (capture / "decision.json").resolve()
-    else:
-        envelope = build_turn_envelope(source, captured_decision_path=str(capture / "decision.json"))
     context = source["interaction_contract"].get("agent_context")
     assert bool(context) is (mode != "off")
     if not context:
