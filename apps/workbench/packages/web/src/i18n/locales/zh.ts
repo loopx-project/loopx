@@ -3136,6 +3136,7 @@ export const zh = {
   'goals.allGoals': '全部 Goals',
   'goals.noMatch': '没有匹配的 Goal。',
   'goals.none': '还没有 Goal。',
+  'access.linksNeedPermanent': '登录链接只能由永久 Token 查看和管理；换入永久 Token 后这里可以生成和作废。',
 };
 
 export type Messages = typeof zh;

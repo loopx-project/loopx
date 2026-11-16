@@ -3134,4 +3134,5 @@ export const ja: Messages = {
   'goals.allGoals': 'すべての Goal',
   'goals.noMatch': '一致する Goal はありません。',
   'goals.none': 'まだ Goal がありません。',
+  'access.linksNeedPermanent': 'リンクの表示と管理は永久トークンのみ可能です。置き換え後、ここで発行・失効できます。',
 };

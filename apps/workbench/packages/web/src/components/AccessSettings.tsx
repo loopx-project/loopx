@@ -36,12 +36,15 @@ export function AccessSettings({ token, auth, onReplaced }: {
   const input = useRef<HTMLInputElement>(null);
 
   const reload = () => {
+    // Only the permanent token may read this list; asking with a link would be answered 403, and
+    // that is not an error to show — the link section says why it stays empty instead.
+    if (auth?.kind !== 'permanent') return;
     setLinks(state => ({ ...state, busy: true }));
     void listLoginLinks(token)
       .then(list => setLinks({ links: list, error: null, busy: false }))
       .catch(cause => setLinks({ links: [], error: cause instanceof Error ? cause.message : String(cause), busy: false }));
   };
-  useEffect(reload, [token]);
+  useEffect(reload, [token, auth?.kind]);
 
   const check = async () => {
     const candidate = value.trim();
@@ -119,21 +122,23 @@ export function AccessSettings({ token, auth, onReplaced }: {
 
     <div className="access-block">
       <h3>{t('access.links')}</h3>
-      <button type="button" className="ghost" onClick={() => void make()}>{t('access.newLink')}</button>
-      {issued ? <div className="access-issued">
-        <input readOnly value={issued.url} aria-label={t('access.linkAddress')} onFocus={event => event.currentTarget.select()} />
-        <button type="button" onClick={() => void copy()}>{copied ? t('access.copied') : t('access.copy')}</button>
-        <p className="access-quiet">{t('access.issuedHint', day(issued.record.expiresAt))}</p>
-      </div> : null}
-      {links.error ? <p role="alert" className="access-error">{links.error}</p> : null}
-      {links.links.length ? <ul className="access-links">
-        {links.links.map(link => <li key={link.id} className={link.revokedAt ? 'revoked' : link.expiresAt && Date.parse(link.expiresAt) <= Date.now() ? 'expired' : ''}>
-          <span>{t('access.linkRow', day(link.createdAt), day(link.expiresAt))}</span>
-          {link.lastUsedAt ? <span className="access-quiet">{t('access.lastUsed', day(link.lastUsedAt))}</span> : null}
-          {link.revokedAt ? <span className="access-quiet">{t('access.revoked')}</span>
-            : <button type="button" className="ghost danger" disabled={links.busy} onClick={() => void revoke(link.id)}>{t('access.revoke')}</button>}
-        </li>)}
-      </ul> : !links.error ? <p className="access-quiet">{t('access.noLinks')}</p> : null}
+      {auth?.kind === 'link' ? <p className="access-quiet">{t('access.linksNeedPermanent')}</p> : <>
+        <button type="button" className="ghost" onClick={() => void make()}>{t('access.newLink')}</button>
+        {issued ? <div className="access-issued">
+          <input readOnly value={issued.url} aria-label={t('access.linkAddress')} onFocus={event => event.currentTarget.select()} />
+          <button type="button" onClick={() => void copy()}>{copied ? t('access.copied') : t('access.copy')}</button>
+          <p className="access-quiet">{t('access.issuedHint', day(issued.record.expiresAt))}</p>
+        </div> : null}
+        {links.error ? <p role="alert" className="access-error">{links.error}</p> : null}
+        {links.links.length ? <ul className="access-links">
+          {links.links.map(link => <li key={link.id} className={link.revokedAt ? 'revoked' : link.expiresAt && Date.parse(link.expiresAt) <= Date.now() ? 'expired' : ''}>
+            <span>{t('access.linkRow', day(link.createdAt), day(link.expiresAt))}</span>
+            {link.lastUsedAt ? <span className="access-quiet">{t('access.lastUsed', day(link.lastUsedAt))}</span> : null}
+            {link.revokedAt ? <span className="access-quiet">{t('access.revoked')}</span>
+              : <button type="button" className="ghost danger" disabled={links.busy} onClick={() => void revoke(link.id)}>{t('access.revoke')}</button>}
+          </li>)}
+        </ul> : !links.error ? <p className="access-quiet">{t('access.noLinks')}</p> : null}
+      </>}
     </div>
 
     <div className="access-block">

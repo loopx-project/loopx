@@ -1116,6 +1116,13 @@ export class AuthError extends Error {
   }
 }
 
+/** A 401 as an AuthError, carrying how a login link died when that is what happened. */
+async function authError(res: Response): Promise<AuthError> {
+  const body = await res.json().catch(() => ({})) as { auth_error?: string };
+  const code = body.auth_error === 'link_expired' || body.auth_error === 'link_revoked' ? body.auth_error : undefined;
+  return new AuthError('unauthorized', code);
+}
+
 export interface VoiceProvider {
   login?: 'ready' | 'required';
   id: string;
@@ -1585,7 +1592,7 @@ export class Api {
     const pending = (async () => {
       const video = isSupportedVideo(file);
       const res = await fetch(this.url(`/api/threads/${threadId}/${video ? 'videos' : 'files'}`), { method: 'POST', headers: this.headers({ 'Content-Type': file.type || 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) }), body: file });
-      if (res.status === 401) throw new AuthError('unauthorized');
+      if (res.status === 401) throw await authError(res);
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new ApiError(res.status === 404 ? t(video ? 'api.noVideos' : 'api.noFiles') : json.error ?? `HTTP ${res.status}`, json, res.status);
       return json as VideoRef;
@@ -1609,7 +1616,7 @@ export class Api {
   /** An image file in the thread's directory that the agent made or mentioned. Rejects if there is none. */
   async threadFile(threadId: string, path: string): Promise<Blob> {
     const res = await fetch(this.url(`/api/threads/${threadId}/files?path=${encodeURIComponent(path)}`), { headers: this.headers() });
-    if (res.status === 401) throw new AuthError('unauthorized');
+    if (res.status === 401) throw await authError(res);
     if (!res.ok) throw new ApiError(`HTTP ${res.status}`, {}, res.status);
     return res.blob();
   }
@@ -1689,7 +1696,7 @@ export class Api {
   /** An image attached to a turn. Fetched with the token, since an <img> tag cannot send it. */
   async attachment(threadId: string, attachmentId: string): Promise<Blob> {
     const res = await fetch(this.url(`/api/threads/${threadId}/attachments/${attachmentId}`), { headers: this.headers() });
-    if (res.status === 401) throw new AuthError('unauthorized');
+    if (res.status === 401) throw await authError(res);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.blob();
   }
@@ -1697,7 +1704,7 @@ export class Api {
   /** A remote member's result file, kept by the hub; fetched with the token and then saved by the page. */
   async coordinationResult(threadId: string, deliveryId: string): Promise<Blob> {
     const res = await fetch(this.url(`/api/threads/${threadId}/coordination/result/${encodeURIComponent(deliveryId)}`), { headers: this.headers() });
-    if (res.status === 401) throw new AuthError('unauthorized');
+    if (res.status === 401) throw await authError(res);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.blob();
   }
@@ -2192,7 +2199,7 @@ export class Api {
    */
   async stream<T = StoredEvent>(path: string, onEvent: (ev: T) => void, signal: AbortSignal, idleMs = STREAM_IDLE_MS, onOpen?: () => void): Promise<void> {
     const res = await fetch(this.url(path), { headers: this.headers({ Accept: 'text/event-stream' }), signal });
-    if (res.status === 401) throw new AuthError('unauthorized');
+    if (res.status === 401) throw await authError(res);
     if (!res.ok || !res.body) throw new Error(`stream failed: HTTP ${res.status}`);
     onOpen?.();
     const reader = res.body.getReader();
@@ -2296,7 +2303,7 @@ export class Api {
       headers: this.voiceHeaders({ Accept: 'text/event-stream' }),
       signal,
     });
-    if (res.status === 401) throw new AuthError('unauthorized');
+    if (res.status === 401) throw await authError(res);
     if (!res.ok || !res.body) throw new Error(`voice stream failed: HTTP ${res.status}`);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();

@@ -3138,4 +3138,5 @@ export const en: Messages = {
   'goals.allGoals': 'All Goals',
   'goals.noMatch': 'No Goal matches.',
   'goals.none': 'No Goals yet.',
+  'access.linksNeedPermanent': 'Links can only be seen and managed by the permanent token; once it is in, links are made and revoked here.',
 };
