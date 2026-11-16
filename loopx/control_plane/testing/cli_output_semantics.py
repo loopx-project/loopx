@@ -8,8 +8,66 @@ from typing import Any
 from loopx.control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 
 
+def _object(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _admission_costs(kind: str | None, fields: dict[str, Any]) -> dict[str, Any]:
+    costs = {}
+    for field, value in fields.items():
+        text = "" if value is None else json.dumps(value, ensure_ascii=False)
+        costs[field] = {"chars": len(text), "utf8_bytes": len(text.encode("utf-8"))}
+    return {"kind": kind, "costs": costs}
+
+
+def _bound_cli_plan(channel: dict[str, Any], identity: dict[str, Any]) -> bool:
+    plan = _object(channel.get("settlement_plan"))
+    steps = plan.get("ordered_steps")
+    return (
+        plan.get("schema_version") in {"quota_settlement_plan_v1", "quota_settlement_plan_v2"}
+        and identity.get("schema_version") == "quota_settlement_identity_v0"
+        and all(isinstance(identity.get(key), str) and identity[key]
+                for key in ("effect_id", "goal_id", "agent_id", "todo_id", "turn_instance_id"))
+        and plan.get("identity") == identity
+        and isinstance(steps, list)
+        and [_object(step).get("kind") for step in steps]
+        == ["validation", "durable_writeback", "quota_spend", "terminal_closeout"]
+        and all(_object(step).get("expected_receipt") for step in steps)
+    )
+
+
 def native_admission_observation(payload: Any) -> dict[str, Any] | None:
     """Measure reviewed admission carriers, without retaining their contents."""
+    source = _object(payload)
+    if source.get("schema_version") == "loopx_turn_envelope_v0":
+        writeback = _object(source.get("writeback"))
+        plan = _object(writeback.get("settlement_plan"))
+        identity = _object(plan.get("identity"))
+        selected = _object(_object(source.get("action")).get("selected_todo"))
+        bound = (_bound_cli_plan(writeback, identity) and identity.get("goal_id") == source.get("goal_id")
+                 and identity.get("agent_id") == source.get("agent_id")
+                 and identity.get("todo_id") == selected.get("todo_id"))
+        return _admission_costs("turn_bound_settlement" if bound else None, {
+            "settlement_plan": writeback.get("settlement_plan"),
+            "next_cli_actions": writeback.get("next_cli_actions"),
+            "compaction": source.get("compaction"),
+        })
+    if source.get("schema_version") == "loopx_turn_plan_v1":
+        work = _object(source.get("work_contract"))
+        progress = _object(work.get("first_delivery_progress"))
+        identity = _object(progress.get("settlement_identity"))
+        matched = (progress.get("schema_version") == "first_delivery_progress_v0"
+                   and progress.get("stage") == "result_review_pending"
+                   and progress.get("goal_completion_certified") is False
+                   and progress.get("quota_spent") is False
+                   and identity.get("schema_version") == "quota_settlement_identity_v0"
+                   and isinstance(identity.get("turn_instance_id"), str) and identity["turn_instance_id"]
+                   and identity.get("goal_id") == work.get("goal_id")
+                   and identity.get("agent_id") == _object(work.get("agent_identity")).get("agent_id")
+                   and identity.get("todo_id") == _object(work.get("selected_todo")).get("todo_id"))
+        return _admission_costs("turn_pending_progress" if matched else None, {
+            "first_delivery_progress": progress or None,
+        })
     queue = payload.get("attention_queue") if isinstance(payload, dict) else None
     if isinstance(queue, dict) and isinstance(queue.get("items"), list):
         progress = []
@@ -36,11 +94,17 @@ def native_admission_observation(payload: Any) -> dict[str, Any] | None:
         return None
     fields = ("heartbeat_receipt", "delivery_result_context", "reward_memory_recall",
               "planning_horizon", "action_portfolio", "first_delivery_progress")
-    costs = {}
-    for field in fields:
-        text = json.dumps(payload[field], ensure_ascii=False) if field in payload else ""
-        costs[field] = {"chars": len(text), "utf8_bytes": len(text.encode("utf-8"))}
-    return {"kind": _native_quota_admission_kind(payload), "costs": costs}
+    kind = _native_quota_admission_kind(payload)
+    channel = _object(_object(payload.get("interaction_contract")).get("cli_channel"))
+    identity = _object(_object(payload.get("heartbeat_receipt")).get("settlement_identity"))
+    plan_bound = kind == "delivery_result" and _bound_cli_plan(channel, identity)
+    if plan_bound:
+        kind = "delivery_result_bound_plan"
+    return _admission_costs(kind, {
+        **{field: payload.get(field) for field in fields},
+        "settlement_plan": channel.get("settlement_plan") if plan_bound else None,
+        "next_cli_actions": channel.get("next_cli_actions"),
+    })
 
 
 def _native_quota_admission_kind(payload: dict[str, Any]) -> str | None:
