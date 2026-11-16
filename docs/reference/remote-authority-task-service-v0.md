@@ -225,6 +225,11 @@ intent can then query retained historical receipts with that new binding.
 
 ## Running the candidate
 
+For a local PostgreSQL 16 server and HTTPS gateway, build the
+[self-hosted Compose bundle](../../examples/coordination/remote-authority-compose/README.en.md)
+from a pinned commit. The bundle boots an isolated starter Goal with two
+independent client credentials. [简体中文](../../examples/coordination/remote-authority-compose/README.md)
+
 Use the repository's qualified Node runtime and `npm ci --ignore-scripts`.
 Provision an isolated PostgreSQL authority schema/head using the existing
 provider administration path. The listener never installs schemas or seeds
