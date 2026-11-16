@@ -1659,7 +1659,7 @@ def test_inline_context_transition_is_bounded_one_time_and_fixture_scoped():
     assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
 
 
-def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
+def test_public_multi_subagent_probe_signs_original_settlement_plan(tmp_path):
     import runpy
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
@@ -1675,9 +1675,10 @@ def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
         rows = runner["_multi_subagent_rows"](probe, semantics, root)
     assert len(rows) == 1
     assert rows[0]["action_signature_coverages"] == [
-        "turn_envelope_action_dimensions_v4"
+        "turn_envelope_action_dimensions_v5"
     ]
     assert any("agent_context" in path for path in rows[0]["json_shape_paths"])
+    assert rows[0]["native_admission"]["kind"] == "turn_bound_settlement"
 
 
 def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None:
@@ -2215,13 +2216,13 @@ def test_failed_guard_guidance_cost_requires_complete_worker_clause_once(output_
         surface_id="heartbeat_prompt_thin", format=output_format, chars=1000,
         utf8_bytes=1000, compact_payload_chars=800 if output_format == "json" else None, lines=20,
         continuation_instructions=observe(rendered()))
-    growth = 90 if output_format == "json" else 89
+    growth = 146 if output_format == "json" else 145
     complete = observe(rendered(clause + "\n"))
     head = {**base, "chars": 1000 + growth, "utf8_bytes": 1000 + growth,
         "compact_payload_chars": 800 + growth if output_format == "json" else None,
         "continuation_instructions": complete}
     assert not _compare_row(base, head)["failures"]
-    assert _compare_row(base, head)["allowances"]["chars"] == 96
+    assert _compare_row(base, head)["allowances"]["chars"] == 160
     # Already-shipped guidance, partial obligations, metadata quotes and other
     # surfaces cannot inherit this first complete transition's allowance.
     assert _compare_row({**base, "continuation_instructions": complete}, head)["failures"]
@@ -2238,7 +2239,7 @@ def test_failed_guard_guidance_cost_requires_complete_worker_clause_once(output_
     ambiguous = observe(rendered(scope="\n```\n" + clause + "\nLang=user;\n"))
     assert ambiguous["failed_guard_recovery_before"] and ambiguous["failed_guard_recovery_after"]
     assert _compare_row(base, {**head, "continuation_instructions": ambiguous})["failures"]
-    assert _compare_row(base, {**head, "chars": 1097})["failures"]
+    assert _compare_row(base, {**head, "chars": 1161})["failures"]
     assert _compare_row(base, {**head, "lines": 23})["failures"]
     for surface in ("status", "quota_should_run", "heartbeat_prompt_compact"):
         wrong = f"surface/{surface}/small/{output_format}"
@@ -2349,3 +2350,42 @@ def test_first_delivery_status_cost_is_readback_only_and_one_time():
     assert not compare_cli_output_receipts(
         _receipt(grown), _receipt({**grown, "chars": grown["chars"] + 1_000}),
     )["ok"]
+
+
+@pytest.mark.parametrize("envelope", [False, True])
+def test_bound_settlement_cost_requires_exact_original_plan(envelope):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    from loopx.control_plane.testing.cli_output_semantics import native_admission_observation
+
+    quota = _admission_packet()
+    identity = quota["heartbeat_receipt"]["settlement_identity"]
+    identity["effect_id"] = "fixture-goal:fixture-agent:todo_fixture:work:original"
+    for field in ("delivery_result_context", "first_delivery_progress"):
+        quota[field]["settlement_identity"] = dict(identity)
+    if envelope:
+        packet = {"schema_version": "loopx_turn_envelope_v0", "goal_id": identity["goal_id"],
+                  "agent_id": identity["agent_id"], "action": {"selected_todo": quota["selected_todo"]},
+                  "writeback": {}}
+        channel = packet["writeback"]
+        row_id = "variant/quota_should_run_turn_envelope/small/json"
+    else:
+        packet = quota
+        channel = {}
+        quota["interaction_contract"] = {"cli_channel": channel}
+        row_id = "surface/quota_should_run/small/json"
+    base = _row(row_id=row_id, surface_id="quota_should_run", native_admission={
+        "kind": None, "costs": native_admission_observation(packet)["costs"],
+    })
+    plan = {"schema_version": "quota_settlement_plan_v1", "identity": dict(identity), "ordered_steps": [
+        {"kind": step, "expected_receipt": f"{step}_receipt", "command_template": "sample" * 300}
+        for step in ("validation", "durable_writeback", "quota_spend", "terminal_closeout")
+    ]}
+    channel["settlement_plan"] = plan
+    candidate = {**base, "native_admission": native_admission_observation(packet)}
+    for metric in ("chars", "utf8_bytes", "compact_payload_chars"):
+        candidate[metric] += len(json.dumps(plan))
+    assert not _compare_row(base, candidate)["failures"]
+    assert _compare_row({**base, "native_admission": candidate["native_admission"]}, candidate)["failures"]
+    assert _compare_row(base, {**candidate, "chars": candidate["chars"] + 1_000})["failures"]
+    plan["identity"]["todo_id"] = "another_todo"
+    assert _compare_row(base, {**candidate, "native_admission": native_admission_observation(packet)})["failures"]

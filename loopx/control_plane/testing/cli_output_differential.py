@@ -888,18 +888,24 @@ def _continuation_instruction_migration(
         # a boolean budget diagnostic's single-character variation; later
         # growth, other surfaces, lines and shapes receive no new allowance.
         chars += 544
+    bound_settlement_migrated = (
+        surface == "quota_should_run_turn_envelope"
+        and (base.get("turn_envelope_native_admission") or {}).get("kind") is None
+        and (candidate.get("turn_envelope_native_admission") or {}).get("kind") == "turn_bound_settlement"
+    )
     if (surface in {"loopx_turn_plan", "quota_should_run_turn_envelope"}
             and base.get("format") == candidate.get("format") == "markdown"
             and base.get("turn_budget_warning") is False and candidate.get("turn_budget_warning") is True
-            and (base.get("turn_envelope_cost_basis") or {}).get("objective_maintenance_before") is True
-            and (candidate.get("turn_envelope_cost_basis") or {}).get("objective_maintenance_after") is True):
-        # Measured warning appearance: +417/+419 chars and four lines. Preserve
+            and (bound_settlement_migrated or (
+                (base.get("turn_envelope_cost_basis") or {}).get("objective_maintenance_before") is True
+                and (candidate.get("turn_envelope_cost_basis") or {}).get("objective_maintenance_after") is True))):
+        # Measured warning appearance: up to +424 chars and four lines. Preserve
         # the warning and its target; paired JSON proves the reviewed cause.
         chars, lines = max(chars, 448), 4
     if row_id.startswith("surface/heartbeat_prompt_thin/") and migrated("failed_guard_recovery"):
-        # Same 96-row fixture: complete failed-guard guidance adds 90 JSON
-        # chars / 89 Markdown chars. No line, absolute or later-growth waiver.
-        chars += 96
+        # The retained original-Turn instruction adds 146 JSON chars and
+        # 145 Markdown chars. Line, absolute and later-growth guards still apply.
+        chars += 160
     if not chars:
         return {}, []
     return {
@@ -1009,8 +1015,7 @@ def _native_admission_migration(
 ) -> tuple[dict[str, int], list[str]]:
     """One-time measured cost of original-Turn admission, not general headroom."""
     before, after = base.get("native_admission"), candidate.get("native_admission")
-    if (base.get("surface_id") not in {"quota_should_run", "status"}
-            or candidate.get("row_id") != base.get("row_id")
+    if (candidate.get("row_id") != base.get("row_id")
             or base.get("format") != "json" or candidate.get("format") != "json"
             or not isinstance(before, dict) or before.get("kind") is not None
             or not isinstance(after, dict)):
@@ -1018,15 +1023,27 @@ def _native_admission_migration(
     carriers = {
         "delivery_result": (("heartbeat_receipt", "delivery_result_context", "reward_memory_recall",
                              "first_delivery_progress"), 6_400),
+        "delivery_result_bound_plan": (("heartbeat_receipt", "delivery_result_context", "reward_memory_recall",
+                                       "first_delivery_progress", "settlement_plan", "next_cli_actions"), 16_600),
         "replan": (("heartbeat_receipt", "reward_memory_recall", "planning_horizon", "action_portfolio"), 9_500),
-        "unbound": (("heartbeat_receipt", "reward_memory_recall"), 2_600),
+        "unbound": (("heartbeat_receipt", "reward_memory_recall", "planning_horizon", "action_portfolio"), 6_500),
         "progress": (("first_delivery_progress",), 900),
+        "turn_pending_progress": (("first_delivery_progress",), 900),
+        "turn_bound_settlement": (("settlement_plan", "next_cli_actions", "compaction"), 12_000),
     }
-    if after.get("kind") not in carriers:
+    kind = after.get("kind")
+    if kind not in carriers:
         return {}, []
-    if (after["kind"] == "progress") != (base.get("surface_id") == "status"):
+    expected_surface = "status" if kind == "progress" else "loopx_turn_plan" if kind == "turn_pending_progress" else "quota_should_run"
+    if base.get("surface_id") != expected_surface:
         return {}, []
-    fields, ceiling = carriers[after["kind"]]
+    if kind == "turn_pending_progress" and not base["row_id"].startswith("variant/loopx_turn_plan_transaction_detail/"):
+        return {}, []
+    if kind == "turn_bound_settlement" and not base["row_id"].startswith((
+        "variant/quota_should_run_turn_envelope/", "variant/quota_should_run_turn_envelope_multi_subagent/",
+    )):
+        return {}, []
+    fields, ceiling = carriers[kind]
     allowance = {}
     for metric in ("chars", "utf8_bytes"):
         try:

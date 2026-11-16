@@ -240,6 +240,8 @@ def _link_turn_warning_basis(rows: list[dict]) -> list[dict]:
             paired = by_id.get(row["row_id"].removesuffix("markdown") + "json")
             if paired is not None:
                 row["turn_envelope_cost_basis"] = paired["continuation_instructions"]
+                if row["variant_id"] == "quota_should_run_turn_envelope":
+                    row["turn_envelope_native_admission"] = paired["native_admission"]
     return rows
 
 

@@ -1408,8 +1408,10 @@ characters. The matched original-Turn selector fixture measures 24,409 →
 38,153 for scheduler and goal-boundary detail, and 24,732 → 38,476 for User
 Todo detail. The Turn envelope measures 7,894 → 19,082, or 10,987 → 21,895
 with multi-subagent enabled. Calibrate those JSON stdout ceilings to 39,000
-and 22,500 respectively. Markdown, line, differential growth and Turn
-envelope wire diagnostics retain their existing thresholds.
+and 22,500 respectively. The one-time differential allowances measure the
+newly bound plan, original-Turn readback and paired envelope warning. Later
+growth uses the standard limits. The Turn envelope still reports its 8 KiB
+performance target and overflow.
 
 同一 Windows 解释器和夹具路由下，完整内联的
 `quota should-run --context-delivery off` 小型夹具在 `02cc3381` 输出
@@ -1419,7 +1421,9 @@ envelope wire diagnostics retain their existing thresholds.
 24,409 → 38,153 个字符，User Todo 详情为 24,732 → 38,476 个字符。Turn
 envelope 为 7,894 → 19,082 个字符，启用多子 agent 时为 10,987 → 21,895
 个字符。分别将上述详情与 Turn envelope 的 JSON stdout 上限校准至 39,000
-与 22,500。Markdown、行数、差分增长和 Turn envelope 传输诊断继续使用原阈值。
+与 22,500。差分只为首次出现的绑定计划、原始 Turn 读回及其对应的 envelope
+告警计入实测增量。后续增长继续执行常规上限，Turn envelope 仍报告 8 KiB
+性能目标和超限值。
 
 Rebasing the original-direction recovery onto `5b224f094` retains the explicit
 failed-guard recovery instruction. With the same native Windows interpreter,
