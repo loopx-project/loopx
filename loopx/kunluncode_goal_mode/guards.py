@@ -83,6 +83,8 @@ def native_controller_cli_write_block(arguments: Any) -> dict[str, Any] | None:
             operation = f"task-lease {lease_command}".strip()
     elif command == "turn" and getattr(arguments, "turn_command", None) == "run-once":
         operation = "turn run-once"
+    elif command == "goal-lifecycle" and getattr(arguments, "execute", False):
+        operation = f"goal-lifecycle {getattr(arguments, 'operation', '')}".strip()
     elif command in {
         "archive-runtime",
         "configure-goal",

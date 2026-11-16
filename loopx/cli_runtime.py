@@ -86,6 +86,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"heartbeat-prompt",
 	"heartbeat-prequota",
 	"goal-acceptance",
+	"goal-lifecycle",
 	"host-mode-plan",
 	"capability",
 	"history",
@@ -533,6 +534,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.goal_acceptance import register_goal_acceptance_command
 
 		register_goal_acceptance_command(subparsers, add_subcommand_format)
+	elif command == "goal-lifecycle":
+		from .cli_commands.goal_lifecycle import register_goal_lifecycle_command
+
+		register_goal_lifecycle_command(subparsers)
 	elif command == "host-mode-plan":
 		from .cli_commands.host_mode_plan import register_host_mode_plan_command
 
@@ -618,6 +623,12 @@ def _dispatch_common_command(
 		return handle_goal_acceptance_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "goal-lifecycle":
+		from .cli_commands.goal_lifecycle import handle_goal_lifecycle_command
+
+		return handle_goal_lifecycle_command(
+			args, registry_path=registry_path, print_payload=print_payload,
 		)
 	if args.command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
