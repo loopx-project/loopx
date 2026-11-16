@@ -48,7 +48,7 @@ export function GoalWorkPage({ token, goalId, tab, onTab, goals, goalsLoaded, at
   tab: GoalTab;
   onTab: (tab: GoalTab) => void;
   goals: LoopxGoal[];
-  /** False while the status read is still on its way; a missing Goal is then "gone", not "loading". */
+  /** True only after a successful list read can establish that the Goal is absent. */
   goalsLoaded: boolean;
   attention: LoopxAttention[];
   failure: LoopxStatusFailure | null;
@@ -64,16 +64,16 @@ export function GoalWorkPage({ token, goalId, tab, onTab, goals, goalsLoaded, at
   const [refreshKey, setRefreshKey] = useState(0);
   const goal = goals.find(g => g.goalId === goalId) ?? null;
   const { detail } = useGoalDetail(token, goalId, refreshKey);
+  if (!goal && failure) return <div className="goal-page">
+    <header className="goal-masthead"><h1>{goalId}</h1></header>
+    <p role="alert" className="goal-failure">{failureLabel(failure)}</p>
+    {onRetry ? <button type="button" onClick={onRetry}>{t('common.retry')}</button> : null}
+  </div>;
   if (!goal && goalsLoaded) return <div className="goal-page">
     <header className="goal-masthead"><h1>{goalId}</h1></header>
     <p className="goal-empty">{t('loopx.goalGone')}</p>
   </div>;
   if (!goal) return <div className="goal-page"><div className="loading-note">{t('common.loading')}</div></div>;
-  if (!goal) return <div className="goal-page">
-    <header className="goal-masthead"><h1>{goalId}</h1></header>
-    <p role="alert" className="goal-failure">{failureLabel(failure)}</p>
-    {onRetry ? <button type="button" onClick={onRetry}>{t('common.retry')}</button> : null}
-  </div>;
   const changed = () => { setRefreshKey(key => key + 1); onChanged(); };
   return <div className="goal-page">
     <header className="goal-masthead">

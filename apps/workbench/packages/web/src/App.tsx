@@ -3306,10 +3306,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               tab={goalTab}
               onTab={setGoalTab}
               goals={loopxStatus?.goals ?? []}
-              goalsLoaded={!loopxRead.loading}
+              goalsLoaded={loopxStatus !== null && !loopxRead.loading}
               attention={loopxStatus?.attention ?? []}
               failure={loopxRead.failure}
-              onRetry={() => void 0}
+              onRetry={loopxRead.reload}
               onChanged={() => loopxRead.reload()}
               threads={threads}
               onOpenThread={openThreadById}
