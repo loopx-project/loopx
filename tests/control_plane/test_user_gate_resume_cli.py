@@ -22,6 +22,7 @@ def tmp_path(tmp_path_factory):
     "missing", "user", "other_goal", "other_lane", "unclaimed",
     "completed", "cancelled", "archived", "superseded", "deferred",
     "other_scope", "no_scope", "other_prerequisite", "future_time", "missing_capacity",
+    "monitor_change_on_gate",
 ])
 def test_gate_first_link_rejects_invalid_target_without_consuming_link(
     tmp_path, monkeypatch, provider, dry_run, invalid_target,
@@ -60,6 +61,12 @@ def test_gate_first_link_rejects_invalid_target_without_consuming_link(
         other = ("--required-decision-scope", "resource:action:inventory_file") if invalid_target == "other_scope" else ()
         invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
             "--claimed-by", "agent-a", *other, "--text", "Same-lane work outside this decision")["todo_id"]
+    elif invalid_target == "monitor_change_on_gate":
+        # Same gate id, but a Monitor-change wait: completing the gate cannot satisfy it.
+        invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
+            "--claimed-by", "agent-a", "--status", "blocked",
+            "--required-decision-scope", "resource:action:prices_file",
+            "--resume-when", f"monitor_changed:{gate['todo_id']}@inventory", "--text", "Use the prices later")["todo_id"]
     elif invalid_target in {"future_time", "missing_capacity"}:
         # Same lane and scope, but it also waits for a time or a capacity the gate cannot provide.
         wait = "resume_at:2099-01-01T00:00:00Z" if invalid_target == "future_time" else "capacity_available:browser"
