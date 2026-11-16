@@ -2,8 +2,8 @@
 
 - **RFC status:** Accepted (upon merge)
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal
-- **Feature status:** Experimental proposal; independently opt-in and off by default.
+- **Delivery maturity:** Partial: deterministic native restoration and Workbench opt-in; semantic consolidation and task benefit unqualified.
+- **Feature status:** Experimental; independently opt-in and off by default.
 - **Authors / owners:** AI-assisted proposal; context presentation, native-host, history-working-set and T02 maintainers.
 - **Created:** 2026-11-16
 - **Last normative revision:** 2026-11-17
@@ -13,9 +13,9 @@
 
 ## Document map and maintenance contract
 
-Sections 1–12 define this bounded proposal; §4 records audited code facts. The appendices contain sources and decision attribution. Accepted status takes effect only upon merge and accepts a design basis, not implemented behavior or measured benefit. This PR ships documentation only. Future execution records follow the [ledger contract](ledger/README.md); maintain both language mirrors together.
+Sections 1–12 define this bounded design; §4 records preimplementation code facts and §5.5 defines the implemented first profile. Accepted status takes effect only upon merge; it does not certify task benefit or product promotion. Execution evidence lives in the [ledger](ledger/sparse-compaction-working-memory-v0/2026-11-17-native-kernel-and-workbench.md), following the [ledger contract](ledger/README.md); maintain both language mirrors together.
 
-**Request versus proposal:** The requester asks to retain LoopX-recognizable structured information during context compaction, expects a sparser representation, identifies **FSoft-AI4Code/CodeWiki** as a reference, raises Manus's use of compression as memory as a research lead, and confirms that this is an **experimental feature**. These are the requested direction, not approval of the schema, integration or claimed improvement below. All concrete design choices and experimental targets in this RFC are AI proposals pending review. “Compaction” here means conversation-context reduction, not model-weight compression.
+**Request versus proposal:** The requester asks to retain LoopX-recognizable structured information during context compaction, expects a sparser representation, identifies **FSoft-AI4Code/CodeWiki** as a reference, raises Manus's use of compression as memory as a research lead, confirms an **experimental feature**, and authorizes kernel implementation with a Workbench switch. Concrete design choices remain AI-selected implementation proposals pending review; that authorization does not certify the schema or benefit. “Compaction” here means conversation-context reduction, not model-weight compression.
 
 ## 1. Decision summary
 
@@ -151,7 +151,19 @@ Activation must independently bind the selected Goal, Agent, root session and qu
 | Required reads and historical eligibility [LX4] | Memory is advisory; reduce only qualified historical support, never current required content | Pending read, live correction, unknown fields and signed/off/machine cases keep their original obligations |
 | Path-bound retained originals [LX6] | Claim only verified same-machine lifetime; source loss uses existing dependency/fallback rules | Restart, cleanup, deletion and revocation within the explicitly claimed scope |
 
-These are implementation acceptance obligations, not a claim that an unimplemented feature has passed compatibility tests. They add no parser to main and do not expand the default host or product surface.
+These are implementation acceptance obligations. The first profile's evidence is bounded by the execution ledger; it does not expand the default host qualification or establish every acceptance row.
+
+### 5.5 First implementation profile
+
+The implementation request adds the kernel path and a Workbench switch. The following are AI-selected implementation choices within that experimental scope, subject to review:
+
+- Register a separate machine preference, `compaction_memory`, defaulting to disabled. Workbench uses the existing preview/apply/readback transaction internally for one switch action. It applies only to that runtime's already-supported native root sessions, bound to the existing Goal/Agent/source capture at each hook; it installs no hooks and starts no work.
+- Keep the original native lifecycle unchanged. After its Pre/PostCompact handling, deterministically prepare an immutable derived view from the current exact capture. On SessionStart(compact), validate and restore that view alongside ordinary recovery. Child, foreign-session, unavailable-source and unsupported-profile paths retain ordinary behavior.
+- V0 retains exact bounded selected-work title/note facts where present, their original pointers, source binding and pending-read navigation. Long or unsupported facts remain original-source references; it neither parses arbitrary prose into decisions nor claims conversational semantic extraction. No source or required input is removed in this first profile and no additional model call occurs.
+- Publish immutable artifacts through the existing private writer and exact reader, with a separately replaceable local latest-view locator. Neither artifact nor locator is a work authority, Delta baseline or read receipt. Deduplicate the same source/view; keep references on disablement.
+- The preference has its own versioned namespace rather than extending current context settings. Scoped older context readers can continue reading their existing namespace. Older full-settings editors do not understand the experiment; disabling in Workbench removes its namespace, allowing downgrade to the prior configuration while retaining referenced memory files.
+
+Measure source-read, preparation, artifact and restored-view bytes on a bounded local fixture. These costs qualify the mechanism only; task benefit and semantic extraction remain later experiments. The machine-wide switch's scope and downgrade condition must be visible through existing settings help and readback.
 
 ## 6. Alternatives and trade-offs
 
@@ -194,7 +206,7 @@ Disablement stops new consolidation and adoption; later input uses existing deli
 | A9 | Independent experimental gate with identical inputs | Absent/off and enabled-but-out-of-scope paths match main, including settings failure, instructions, accepted inputs and IO; Progressive/Delta on alone never activates memory. |
 | A10 | Separate immutable memory and original readers | Original capture/reference bytes and original read obligations survive publication, retry and downgrade; memory cannot acknowledge native retention or invent a missing Turn. |
 
-Structural conformance cannot prove semantic usefulness. No A-row is passed by this documentation PR.
+Structural conformance cannot prove semantic usefulness. The ledger maps the bounded implementation evidence and remaining gaps; it does not close the complete A1–A10 matrix.
 
 ### 9.2 Does it actually help?
 
@@ -227,7 +239,7 @@ Expose effective enablement and supported host, current source binding/coverage,
 | M2: Utility comparison | B0/T1 outcome and full-cost comparison; T2 only for demonstrated missing semantic knowledge | Frozen sample/budgets/thresholds; §9.2 evidence, including negative results | Keep B0 or T1; no forced promotion |
 | M3: Product qualification | Enablement, inspection, failure/recovery and disablement through affected surfaces | A8, mixed-version/off parity; separately qualify broader hosts and retention | Disable optional view; preserve valid refs |
 
-First implementation candidates are narrow changes to `quota/progressive_context.ts` and `native_context_lifecycle.ts` for view/lifecycle semantics; `turn_driver/decision_capture.py`, `codex_context.py` and its history adapter for capture and host IO; existing context configuration/readback and their tests. Confirm the actual first caller before editing; reuse current source/reader contracts rather than a second memory service. No implementation or migration is part of this PR.
+The first implementation uses `quota/compaction_memory.ts` through the existing Turn-envelope dispatcher for view semantics, `turn_driver/compaction_memory.py` for private capture IO, and the existing native-hook CLI after ordinary lifecycle handling. A separate machine-configuration namespace and the existing Workbench editor own activation/readback. The original Progressive/Delta and lifecycle implementations remain unchanged. See the [operator reference](../../reference/required-work-context.md#experimental-compaction-working-memory) for the shipped profile; no source migration or new memory service is introduced.
 
 ## 12. Open decisions
 
@@ -242,9 +254,13 @@ First implementation candidates are narrow changes to `quota/progressive_context
 ## Appendix A: Evidence and decision record
 
 - Static audit: named LoopX sources rechecked against main `b9f2e2a516b58e62cbb0da6978625388322b5a90`; the original five source files are unchanged since `0c3b2fd21800`. CodeWiki README/update guide remains pinned at `7fcf9354f70a5468bc739d849055f8cbab9d46aa`; Manus uses its dated primary article. This does not certify current proprietary Manus internals or upstream implementation quality.
-- Request-confirmed direction: recognizable, sparser structure at compaction; AI4Code reference; experimental feature. Manus's exact compression-time memory-write behavior remains a lead, not a verified premise.
-- Proposed, unapproved: schema, field selection, host profile, lifecycle details, thresholds and implementation sequence. No runtime/default change, paid/model experiment, measured saving, host-install acceptance or product promotion has been performed.
-- No RFC is superseded, stored field removed or existing acceptance milestone closed. Future dated execution evidence belongs in the ledger only after real work exists.
+- Request-confirmed direction: recognizable, sparser structure at compaction; AI4Code reference; experimental feature; implement in the kernel with a Workbench switch. Manus's exact compression-time memory-write behavior remains a lead, not a verified premise.
+- AI-selected implementation choices: schema, field selection, host profile, lifecycle details and thresholds. The experimental implementation changes no default and starts no paid/task-benefit experiment. Local loopback native-input and packaged Workbench qualification are recorded in the ledger; installed-user acceptance, measured saving and product promotion remain open.
+- No RFC is superseded, stored field removed or existing acceptance milestone closed. Dated execution evidence belongs in the ledger.
+
+## Appendix B: Execution ledger
+
+Dated mechanism and product-path evidence lives in the [execution ledger](ledger/sparse-compaction-working-memory-v0/); it does not certify the complete acceptance matrix or promote the experiment.
 
 [CW1]: https://github.com/FSoft-AI4Code/CodeWiki/blob/7fcf9354f70a5468bc739d849055f8cbab9d46aa/README.md
 [CW2]: https://github.com/FSoft-AI4Code/CodeWiki/blob/7fcf9354f70a5468bc739d849055f8cbab9d46aa/guides/incremental-updates.md

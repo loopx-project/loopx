@@ -212,14 +212,14 @@ Paired diffs do not certify translation accuracy.
     remain unqualified; no runtime, default or experiment change.
 - [Sparse Working Memory at Context Compaction v0](sparse-compaction-working-memory-v0.md)
   ([中文版](sparse-compaction-working-memory-v0.zh-CN.md))
-  - **Delivery on `main`:** Experimental proposal only; independently opt-in,
-    off by default, with no runtime or default change in this RFC.
-  - **Current boundary:** A bounded T02 companion to history working sets:
-    consolidate source-bound working memory at compaction and retain or restore
-    a short recognizable structure. Compare deterministic sparse selection,
-    optional semantic consolidation and the current host path on accepted task
-    outcomes and complete costs. Host retention, expansion, utility and product
-    qualification remain open; no model experiment starts with this RFC.
+  - **Delivery on merge:** Partial experimental implementation; independent
+    machine opt-in, off by default, with a Workbench switch.
+  - **Current boundary:** Deterministic exact selected-work notes and references,
+    immutable private artifacts and additive native post-compaction restoration.
+    Actual native model-input and packaged settings checks are recorded in the
+    [ledger](ledger/sparse-compaction-working-memory-v0/2026-11-17-native-kernel-and-workbench.md).
+    Conversation semantic extraction, broad retention, task benefit and total-cost
+    reduction remain unqualified; no paid/task-benefit experiment starts here.
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
   ([中文版](typescript-control-plane-migration-v0.zh-CN.md))
   - **Delivery on `main`:** Substantially implemented; active migration.

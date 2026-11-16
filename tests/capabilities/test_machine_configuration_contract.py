@@ -350,6 +350,7 @@ def test_builtin_catalog_lists_every_owner_in_namespace_order() -> None:
     assert registry.namespace_ids == (
         "change_quality_qualification",
         "codex_chat",
+        "compaction_memory",
         "context_delivery",
         "explore_harness",
         "goal_storage",

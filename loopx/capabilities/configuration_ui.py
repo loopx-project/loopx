@@ -93,6 +93,11 @@ def capability_configuration_editor(
 
         codex_profiles = codex_profile_options()
     definitions: dict[str, dict[str, Any]] = {
+        "compaction_memory": {
+            "supported_scopes": ["machine"], "writable_scopes": ["machine"],
+            "fields": [_field("enabled", "Compaction working memory (experimental)", "boolean", required=True,
+                              description="On this device, save and restore a small source-bound view in already-supported native root sessions. No model calls or hook installation.")],
+        },
         "context_delivery": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
             "fields": [

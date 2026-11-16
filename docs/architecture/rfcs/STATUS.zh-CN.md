@@ -69,7 +69,7 @@
 | [RFC：共享 Goal 对齐与受治理 Amendment 协议（v0）](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | 已接受 | 无 | [2 条](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
 | [RFC：LoopX 共享控制面权威与可插拔状态 Provider（v0）](shared-goal-authority-state-provider-v0.zh-CN.md) | 已接受 | 无 | [24 条](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | 已接受 | none | — |
-| [RFC：上下文压缩时的稀疏工作记忆（v0）](sparse-compaction-working-memory-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：上下文压缩时的稀疏工作记忆（v0）](sparse-compaction-working-memory-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/sparse-compaction-working-memory-v0/) |
 | [RFC：Target、Yardstick 与 Stride 联合决策（v0）](target-yardstick-stride-decisions-v0.zh-CN.md) | 已接受 | none | — |
 | [RFC：LoopX 控制面 TypeScript 渐进迁移方向 v0](typescript-control-plane-migration-v0.zh-CN.md) | 已接受 | 无 | [27 条](ledger/typescript-control-plane-migration-v0/) |
 

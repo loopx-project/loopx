@@ -12,6 +12,11 @@ from .contract import MachineConfigurationNamespace, MachineConfigurationRegistr
 # and a reader loads only the namespaces it resolves.
 _BUILTIN_NAMESPACES = (
     (
+        "compaction_memory",
+        "loopx.capabilities.machine_configuration.compaction_memory",
+        "compaction_memory_machine_configuration_namespace",
+    ),
+    (
         "context_delivery",
         "loopx.capabilities.machine_configuration.context_delivery",
         "context_delivery_machine_configuration_namespace",

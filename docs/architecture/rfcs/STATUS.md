@@ -72,7 +72,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Accepted | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
 | [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [24 entries](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |
-| [RFC: Sparse Working Memory at Context Compaction (v0)](sparse-compaction-working-memory-v0.md) | Accepted | none | — |
+| [RFC: Sparse Working Memory at Context Compaction (v0)](sparse-compaction-working-memory-v0.md) | Accepted | none | [1 entry](ledger/sparse-compaction-working-memory-v0/) |
 | [RFC: Joint Target, Yardstick and Stride Decisions (v0)](target-yardstick-stride-decisions-v0.md) | Accepted | none | — |
 | [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [27 entries](ledger/typescript-control-plane-migration-v0/) |
 
