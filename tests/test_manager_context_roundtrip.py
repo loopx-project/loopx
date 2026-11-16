@@ -136,6 +136,34 @@ def test_frozen_private_reply_projects_original_text_without_mutating_model_inpu
     assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
 
 
+def test_saved_answer_reads_only_its_original_question_and_exact_answer(frozen_private_reply, private_snapshot):
+    store, session, turn, _, _, _, source_text, _ = frozen_private_reply
+    sid, tid = session["session_id"], turn["turn_id"]
+    answer = store.append_message(sid, role="agent", text="The saved answer", turn_id=tid)
+    store.append_message(sid, role="agent", text="Later answer from the same Turn", turn_id=tid)
+    no_turn = store.append_message(sid, role="agent", text="An older saved answer without a Turn")
+    other_session = store.create_session(goal_id="notes", agent_id="codex", adapter_kind="codex_app_server",
+                                         upstream_thread_id="another-conversation")
+    foreign = store.append_message(other_session["session_id"], role="agent", text="An answer from another Session")
+    journal = store.sessions_root / sid / "messages.jsonl"
+    before = journal.read_bytes()
+
+    response = private_snapshot(report_message_id=answer["message_id"])
+    assert response["session"]["session_id"] == sid
+    assert response["report_message_id"] == answer["message_id"]
+    assert response["active_turn"] is None
+    question, saved = response["messages"]
+    assert question["reply_context"]["source_text"] == source_text
+    assert saved == answer
+    assert private_snapshot(report_message_id=answer["message_id"], turn_id=tid) == response
+    assert private_snapshot(report_message_id=answer["message_id"], turn_id="unrelated-turn")["messages"] == []
+    assert private_snapshot(report_message_id=no_turn["message_id"])["messages"] == [no_turn]
+    for unavailable in (foreign["message_id"], question["message_id"]):
+        assert private_snapshot(report_message_id=unavailable)["messages"] == []
+    private_snapshot(report_message_id=answer["message_id"], message_limit=200, expected_status=400)
+    assert journal.read_bytes() == before
+
+
 def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
         frozen_private_reply, private_snapshot, monkeypatch):
     store, session, turn, request, *_ = frozen_private_reply

@@ -4040,6 +4040,108 @@ def test_app_projection_refuses_a_replaced_provider_identity(ordinary):  # noqa:
         runtime.close()
 
 
+@pytest.mark.parametrize("fault", ["revoked", "provider_changed", "body_changed"])
+def test_app_projection_checks_current_authority_after_reading_original_source(ordinary, monkeypatch, fault):  # noqa: F811
+    store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
+    sid = original["session_id"]
+    transcript = store.sessions_root / sid / "messages.jsonl"
+    request_path = transport.root / f"{original['request_ref']}.json"
+    source_id = json.loads(request_path.read_text())["event"]["message_id"]
+    call = Provider.__call__
+    previewed = changed = False
+
+    def change_after_source_read(self, args, *pos, **kwargs):
+        nonlocal previewed, changed
+        result = call(self, args, *pos, **kwargs)
+        if "+messages-send" in args and "--dry-run" in args:
+            previewed = True
+        elif (previewed and not changed and "+messages-mget" in args
+                and args[args.index("--message-ids") + 1] == source_id):
+            if fault == "revoked":
+                transport.bindings.disconnect(original["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            elif fault == "provider_changed":
+                provider.profile_apps["notes-app"] = "cli_replaced_app"
+            else:
+                messages = store.messages(sid)
+                next(message for message in messages if message.get("turn_id") == turns[0])["text"] = "Changed during source read"
+                transcript.write_text("".join(json.dumps(message) + "\n" for message in messages))
+            changed = True
+        return result
+
+    try:
+        starts = ordinary[4].read_bytes()
+        monkeypatch.setattr(Provider, "__call__", change_after_source_read)
+        transport._web_projection_scan_at = 0
+        path, = transport._web_projection_paths()
+        assert transport.reconcile_request(path) == 0
+        assert changed and len(provider.writes) == before
+        assert ordinary[4].read_bytes() == starts
+        assert not any(phase.get("started") for phase in transport._read_web_projection_journal(path)["deliveries"].values())
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("lock_at", ["read", "writeback"])
+def test_busy_app_body_does_not_delay_feedback_for_another_session(ordinary, monkeypatch, lock_at):  # noqa: F811
+    from contextlib import ExitStack
+
+    from loopx.file_lock import exclusive_file_lock, lock_incident_path
+
+    _store, runtime, provider, transport = connect(ordinary)
+    try:
+        for profile in ("notes-app", "steward-app"):
+            event = provider.event(profile, f"feedback-source-{profile}", "Admit the original private conversation")
+            transport.admit(profile, event)
+            request = transport.core.read_request(identity_ref(transport._binding(profile)["provider_ref"], event["message_id"]))
+            sid = request["session_id"]
+            assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+            transport.reconcile_request(transport.root / f"{request['request_ref']}.json")
+            status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns", {"message": "New App input", "client_turn_id": "feedback"})
+            assert status == 202
+            assert runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+
+        transport._web_projection_scan_at = 0
+        busy, ready = sorted(transport._web_projection_paths())
+        targets = {}
+        for path in (busy, ready):
+            assert transport.reconcile_request(path) == 1
+            row = transport._read_web_projection_journal(path)
+            phase, = row["deliveries"].values()
+            assert phase["verified"] and phase["feedback"] == {}
+            targets[path] = (row["profile"], phase["attempt"]["message_ref"], "Get")
+
+        with ExitStack() as body_worker, monkeypatch.context() as patch:
+            body_lock = exclusive_file_lock(busy, operation="deliver_web_conversation_projection")
+            if lock_at == "read":
+                body_worker.enter_context(body_lock)
+            else:
+                feedback = transport._web_projection_feedback
+                busy_session = transport._read_web_projection_journal(busy)["session_id"]
+
+                def hold_body_after_feedback(row, message):
+                    feedback(row, message)
+                    if row["session_id"] == busy_session:
+                        assert targets[busy] in provider.reaction_creates
+                        body_worker.enter_context(body_lock)
+
+                patch.setattr(transport, "_web_projection_feedback", hold_body_after_feedback)
+
+            transport.reconcile_app_feedback()
+            assert not lock_incident_path(busy).exists()
+            busy_phase, = transport._read_web_projection_journal(busy)["deliveries"].values()
+            assert busy_phase["feedback"] == {}
+            assert (targets[busy] in provider.reaction_creates) == (lock_at == "writeback")
+            assert targets[ready] in provider.reaction_creates
+            ready_phase, = transport._read_web_projection_journal(ready)["deliveries"].values()
+            assert ready_phase["feedback"]["ok"]
+        transport.reconcile_app_feedback()
+        assert all(provider.reaction_creates.count(target) == 1 for target in targets.values())
+        busy_phase, = transport._read_web_projection_journal(busy)["deliveries"].values()
+        assert busy_phase["feedback"]["ok"]
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("fault", ["revoked", "app", "source", "session", "turn", "context_recovery"])
 def test_app_feedback_rechecks_exact_source_and_turn_after_mirror_delivery(ordinary, monkeypatch, fault):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
