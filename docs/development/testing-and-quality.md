@@ -1399,6 +1399,28 @@ workflow costs less.
 
 ### Budget Failure Decisions
 
+The complete inline `quota should-run --context-delivery off` small fixture
+emits 23,483 JSON characters on `02cc3381` and 38,997 on `d047aab50` with the
+same native Windows interpreter and fixture route. The admitted Turn now
+includes its bound settlement plan, original result read and reward-memory
+recall. Calibrate the small JSON fixture ceiling from 29,000 to 40,000
+characters. The matched original-Turn selector fixture measures 24,409 →
+38,153 for scheduler and goal-boundary detail, and 24,732 → 38,476 for User
+Todo detail. The Turn envelope measures 7,894 → 19,082, or 10,987 → 21,895
+with multi-subagent enabled. Calibrate those JSON stdout ceilings to 39,000
+and 22,500 respectively. Markdown, line, differential growth and Turn
+envelope wire diagnostics retain their existing thresholds.
+
+同一 Windows 解释器和夹具路由下，完整内联的
+`quota should-run --context-delivery off` 小型夹具在 `02cc3381` 输出
+23,483 个 JSON 字符，在 `d047aab50` 输出 38,997 个。已准入的 Turn 现在携带绑定的
+结算计划、原始结果读取和奖励记忆召回。将小型 JSON 夹具上限从 29,000 调整至
+40,000。相同的原始 Turn 选择器夹具中，scheduler 与 goal-boundary 详情为
+24,409 → 38,153 个字符，User Todo 详情为 24,732 → 38,476 个字符。Turn
+envelope 为 7,894 → 19,082 个字符，启用多子 agent 时为 10,987 → 21,895
+个字符。分别将上述详情与 Turn envelope 的 JSON stdout 上限校准至 39,000
+与 22,500。Markdown、行数、差分增长和 Turn envelope 传输诊断继续使用原阈值。
+
 Rebasing the original-direction recovery onto `5b224f094` retains the explicit
 failed-guard recovery instruction. With the same native Windows interpreter,
 physical fixture root, 320-character scope, five capabilities and explicit CLI

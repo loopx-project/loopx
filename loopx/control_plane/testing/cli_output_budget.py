@@ -151,7 +151,10 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # ceilings change; original failures and line/growth guards remain.
             # The same explicitly imported fixture on base/head emits 24,099
             # JSON chars. Keep canonical provenance and complete User context.
-            "small": {"json": 29_000, "markdown": 10_000},
+            # The complete inline W07 admission now includes its bound
+            # settlement plan, original result read and recall evidence.
+            # The matched main/candidate fixture measures 23,483/38,997.
+            "small": {"json": 40_000, "markdown": 10_000},
             # Same 36-Todo / 12-run source: 38,432 -> 39,101 chars with
             # objective/evidence guidance; small and multi-agent paths unchanged.
             # Per-Todo and fixed semantic growth are accounted for separately.
@@ -460,7 +463,8 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 31_000, "markdown": 10_000},
+        # Original-Turn recovery retains the bound settlement plan (38,153 chars).
+        max_chars={"json": 39_000, "markdown": 10_000},
         max_lines={"json": 820, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -480,7 +484,8 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 35_000, "markdown": 10_000},
+        # The same retained plan and User Todo detail measure 38,476 chars.
+        max_chars={"json": 39_000, "markdown": 10_000},
         max_lines={"json": 900, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -490,7 +495,8 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 35_000, "markdown": 10_000},
+        # Original-Turn recovery with the boundary selector measures 38,153 chars.
+        max_chars={"json": 39_000, "markdown": 10_000},
         max_lines={"json": 900, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -522,11 +528,9 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_capsule", "action_signature"),
         markdown_anchor="# LoopX Turn Envelope",
-        # The same canonical fixture costs 10,681 JSON chars (12,268 with
-        # multi-subagent) on base/head. Rendering the instruction once reduces
-        # Markdown 4,996 -> 4,521 chars without removing source content.
-        # These stdout guards do not change the envelope's wire byte limit.
-        max_chars={"json": 13_000, "markdown": 4_800},
+        # Native W07 retains original-Turn settlement, measuring 19,082 JSON
+        # chars (21,895 with multi-subagent). This is the CLI stdout budget.
+        max_chars={"json": 22_500, "markdown": 4_800},
         max_lines={"json": 300, "markdown": 140},
     ),
     CliOutputModeVariantSpec(

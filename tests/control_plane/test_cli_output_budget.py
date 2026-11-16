@@ -15,7 +15,7 @@ import pytest
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.scheduler.execution_context import SchedulerRuntimeProfile
-from loopx.control_plane.testing.canary_harness import import_fixture_authority, temporary_canary_directory
+from loopx.control_plane.testing.canary_harness import import_fixture_authority
 from loopx.control_plane.testing.cli_output_budget import (
     CLI_OUTPUT_BUDGET_BY_ID,
     CLI_OUTPUT_BUDGET_SPECS,
@@ -1936,6 +1936,9 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
 
 
 def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
+    # The differential probe loads this fixture against older checkouts.
+    from loopx.control_plane.testing.canary_harness import temporary_canary_directory
+
     # A reproducible 128-character absolute root; directory depth can still
     # change JSON escaping cost. Keep full routes and this workload;
     # presentation-budget changes require matched base/head cost evidence.
