@@ -51,7 +51,8 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
       if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1"
         || snapshot.session.session_id !== sessionId) throw new Error("The saved Session changed during read.");
       const message = snapshot.messages.find((item) => item.message_id === messageId
-        && ["agent", "assistant"].includes(item.role));
+        && ["agent", "assistant"].includes(item.role)
+        && (turnId === null || item.turn_id === turnId));
       setLoaded({scope, value: message ? {kind: "ready", snapshot, message} : {kind: "missing", snapshot}});
     }).catch(() => { if (live) setLoaded({scope, value: {kind: "error"}}); });
     return () => {live = false; controller.abort(); copyAttempt.current += 1; document.title = previousTitle;};

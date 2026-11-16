@@ -156,6 +156,33 @@ async function checkReturnedFiles(ready, page, errors, writes) {
     await report.goto(legacy.toString());
     await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
 
+    // Earlier history readers accept unknown query arguments and return their
+    // complete v1 snapshot. Both existing and Turn-pinned links still open it.
+    await report.route(savedAnswerRequest, route => route.fulfill({json: snapshot}));
+    for (const address of [legacy, withTurn]) {
+      await report.goto(address.toString());
+      await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+      assert.equal(await report.locator("a[download]").count(), ready.files.length);
+    }
+    const wrongTurn = new URL(withTurn);
+    wrongTurn.searchParams.set("reportTurnId", "unrelated-turn");
+    await report.goto(wrongTurn.toString());
+    await report.getByText("This answer was not found. It may have been removed, or the link may be incorrect.").waitFor();
+    assert.equal(await report.locator("a[download]").count(), 0);
+    await report.unroute(savedAnswerRequest);
+
+    for (const invalid of [
+      {...snapshot, session: {...snapshot.session, session_id: "another-session"}},
+      {...snapshot, report_message_id: "another-message"},
+      {...snapshot, message_page: {next_cursor: "another-page"}},
+    ]) {
+      await report.route(savedAnswerRequest, route => route.fulfill({json: invalid}));
+      await report.goto(legacy.toString());
+      await report.getByText("Could not load this answer.").waitFor();
+      assert.equal(await report.locator("a[download]").count(), 0);
+      await report.unroute(savedAnswerRequest);
+    }
+
     const refusedReads = [];
     const observeRefusal = request => {
       if (new URL(request.url()).pathname === historyPath) refusedReads.push(new URL(request.url()));

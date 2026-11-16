@@ -978,7 +978,13 @@ export async function fetchSavedChatAnswer(sessionId: string, messageId: string,
   const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`;
   try {
     const snapshot = await requestJson<ChatSessionSnapshot & {report_message_id?: string}>(path, {signal});
-    if (snapshot.report_message_id !== messageId) throw new Error("The saved answer selection changed during read.");
+    // A legacy service can ignore the selector and return its complete v1
+    // snapshot. A conflicting marker or a partial history remains invalid.
+    if (Object.hasOwn(snapshot, "report_message_id")) {
+      if (snapshot.report_message_id !== messageId) throw new Error("The saved answer selection changed during read.");
+    } else if ("message_page" in snapshot || "history_resume" in snapshot) {
+      throw new Error("The saved answer history is incomplete.");
+    }
     return snapshot;
   } catch (error) {
     // Older Chat builds reject unknown history selectors before reading the
