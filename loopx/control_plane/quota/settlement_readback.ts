@@ -1549,7 +1549,7 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
       // Snapshot readers for history and guard discovery use the bounded index.
       const retained = matchedSpend.run !== null
         ? await readQuotaSpendEventFromRun(join(request.runtime_root, "goals", request.goal_id, "runs"),
-          matchedSpend.run, request.goal_id)
+          matchedSpend.run, request.goal_id, !spendPrecheck && request.refresh_retry === null)
         : null;
       const ledger = {slots: retained?.slots ?? undefined, source: retained?.source ?? undefined};
       let conflict = spendTermsConflict(ledger, receipt);

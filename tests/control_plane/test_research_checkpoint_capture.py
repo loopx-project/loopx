@@ -960,6 +960,19 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
     copied = read_heartbeat_settlement(copied_runtime,goal_id=cli.GOAL_ID,agent_id=cli.AGENT_ID,
         todo_id=cli.TODO_ID,turn_instance_id=cli.TURN_ID,registry_path=registry)
     assert copied.progress['state'] == 'settled' and copied.identity.value == source_settlement.identity.value
+    source_runs = runtime / "goals" / cli.GOAL_ID / "runs"
+    detached_runs = source_runs.rename(source_runs.with_name("detached-runs"))
+    try:
+        detached = read_heartbeat_settlement(
+            copied_runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+            todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID, registry_path=registry,
+        )
+        assert detached.progress["state"] == "settled"
+        assert detached.identity.value == source_settlement.identity.value
+        assert detached.spend.value == source_settlement.spend.value
+        assert cli._spend_run_count(copied_runtime) == 1
+    finally:
+        detached_runs.rename(source_runs)
     registry_copy = materialized/'components'/covered[str(registry)]/manifest['point_metadata']['loopx_state']['registry_member_path']
     assert registry_copy.read_bytes() == registry.read_bytes()
     assert manifest['research_point_qualified'] is False and manifest['execution_authority_granted'] is False

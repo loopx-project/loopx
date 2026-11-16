@@ -3360,3 +3360,18 @@ apostrophes. They read the original receipts within the limit and retain
 one guard and zero debits. At 96 bytes, both providers refuse before admission.
 Windows filesystem access control and the native Windows Python route
 still require a Windows host.
+
+### Read a committed debit after moving a checkpoint
+
+Exact settlement readback can use a debit copied into a different runs
+directory. The accounting reader matches the copied committed transaction
+receipt to the original index row, verifies the recorded artifact name,
+then checks the local debit against the receipt. Spend and void operations
+use their existing active-directory checks.
+
+Four File and SQLite cases failed at `a1f34097805a` because the copied
+index still pointed to the source directory. After the fix, they read the
+same settlement identity and debit after the source runs directory moves
+away. The reader rejects a missing artifact or committed receipt, an altered
+record, and a symbolic link to the original debit. The copied checkpoint
+and its receipts retain their original bytes.

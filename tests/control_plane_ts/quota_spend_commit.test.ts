@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  cp,
   readFile,
   mkdir,
   mkdtemp,
   readdir,
+  rename,
   rm,
+  symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -24,6 +27,7 @@ import {
 } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
 import { settlementIdentityPayload } from "../../loopx/control_plane/effect_program.ts";
+import { readQuotaSpendEventFromRun } from "../../loopx/control_plane/quota/accounting_artifact_transaction.ts";
 import {
   parseQuotaAccountingOwner,
   withQuotaAccountingOwner,
@@ -342,6 +346,69 @@ test("commit owns JSON, Markdown, index, and exact-effect replay", async (t) => 
   assert.equal(replayed.replayed, true);
   assert.equal(replayed.payload.appended, false);
   assert.equal((await readFile(indexPath, "utf8")).trim().split("\n").length, 1);
+});
+
+test("relocated readback requires the intact local debit and committed receipt", async (t) => {
+  const source = await tempRuntime(t);
+  const destination = await tempRuntime(t);
+  const written = await evaluateQuotaSpendCommit(request(source));
+  assert.equal(written.status, "written");
+  const sourceJson = String(written.payload.json_path);
+  const sourceRuns = dirname(sourceJson);
+  const copiedRuns = join(destination, "goals", goalId, "runs");
+  await cp(sourceRuns, copiedRuns, { recursive: true });
+  const artifact = join(copiedRuns, basename(sourceJson));
+  const indexPath = join(copiedRuns, "index.jsonl");
+  const indexBytes = await readFile(indexPath, "utf8");
+  const index = JSON.parse(indexBytes);
+  const artifactBytes = await readFile(artifact, "utf8");
+  const record = JSON.parse(artifactBytes);
+  const journalDir = join(copiedRuns, ".transactions", "quota-spend");
+  const [journalName] = await readdir(journalDir);
+  const journal = join(journalDir, journalName!);
+  const journalBytes = await readFile(journal, "utf8");
+  const receipt = JSON.parse(journalBytes);
+  const readRestored = () => readQuotaSpendEventFromRun(copiedRuns, index, goalId, true);
+
+  await assert.rejects(
+    () => readQuotaSpendEventFromRun(copiedRuns, index, goalId),
+    /quota spend json_path must stay inside the goal runs directory/,
+  );
+  const detachedRuns = join(source, "detached-runs");
+  await rename(sourceRuns, detachedRuns);
+  assert.deepEqual(await readRestored(), record.quota_event);
+  assert.equal(await readFile(indexPath, "utf8"), indexBytes);
+  assert.equal(await readFile(journal, "utf8"), journalBytes);
+  assert.equal(await readFile(artifact, "utf8"), artifactBytes);
+
+  await t.test("rejects a missing or uncommitted local receipt", async () => {
+    await unlink(journal);
+    await assert.rejects(readRestored, /matching local committed transaction receipt/);
+    await writeFile(journal, JSON.stringify({ ...receipt, status: "prepared" }), "utf8");
+    await assert.rejects(readRestored, /matching local committed transaction receipt/);
+    await writeFile(journal, journalBytes, "utf8");
+  });
+
+  await t.test("rejects an unbound path, missing artifact or changed debit body", async () => {
+    await assert.rejects(
+      () => readQuotaSpendEventFromRun(copiedRuns, { ...index, json_path: sourceJson + ".other" }, goalId, true),
+      /matching local committed transaction receipt/,
+    );
+    await unlink(artifact);
+    await assert.rejects(readRestored, /relocated quota spend JSON artifact is unavailable/);
+    await writeFile(artifact, JSON.stringify({
+      ...record,
+      quota_event: { ...record.quota_event, slots: record.quota_event.slots + 1 },
+    }), "utf8");
+    await assert.rejects(readRestored, /quota spend JSON artifact identity does not match/);
+    await writeFile(artifact, artifactBytes, "utf8");
+  });
+
+  await t.test("rejects a symlink to the exact original debit", { skip: process.platform === "win32" }, async () => {
+    await unlink(artifact);
+    await symlink(join(detachedRuns, basename(sourceJson)), artifact);
+    await assert.rejects(readRestored, /quota spend json_path must stay inside the goal runs directory/);
+  });
 });
 
 test("source owner rejects stale Goal A before writes and stamps Goal B", async (t) => {
