@@ -123,38 +123,13 @@ def test_pinned_powershell_launcher_settles_original_turn_once(
 
     action = [*prefix, *refresh, *(["--settle-turn"] if composed else [])]
     first = run(action)
-    if first["settlement_progress"]["state"] == "direction_pending":
-        assert not first.get("settlement_owed")
-        assert _spend_run_count(runtime) == 0
-        actions = first.get("next_cli_actions")
-        assert isinstance(actions, list) and len(actions) == 2, {
-            "settlement_progress": first["settlement_progress"],
-            "delivery_stage": (first.get("first_delivery_progress") or {}).get("stage"),
-            "result_context_present": first.get("result_work_context") is not None,
-            "checkpoint_decision": (first.get("vision_checkpoint") or {}).get("decision"),
-            "refresh_decision": (first.get("refresh_recovery") or {}).get("decision"),
-            "appended": first.get("appended"),
-        }
-        read, submit = actions
-        context = run(["-Command", read])
-        assert context["purpose"] == "supplement_checkpoint"
-        vision = tmp_path / "current-direction.json"
-        vision.write_text(json.dumps({
-            "schema_version": "goal_vision_replan_contract_v0",
-            "state": "vision_closed",
-            "vision_patch": {"acceptance_summary": "The original verified result is retained."},
-        }), encoding="utf-8")
-        submit = submit.replace("<read-context-id>", context["read_context_id"]).replace(
-            "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", str(vision).replace("'", "''"),
-        )
-        action = ["-Command", submit + (" --settle-turn" if composed else "")]
-        first = run(action)
     if not composed:
+        assert first["settlement_progress"]["state"] == "spend_required", first["settlement_progress"]
         owed = first["settlement_owed"]
         assert _spend_run_count(runtime) == 0
         action = ["-Command", owed["command"]]
         first = run(action)
-    assert first["settlement_progress"]["state"] == "settled"
+    assert first["settlement_progress"]["state"] == "settled", first["settlement_progress"]
     assert _spend_run_count(runtime) == 1
     if not composed:
         argv = owed["command_argv"]

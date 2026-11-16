@@ -85,7 +85,8 @@ if __name__ == "__main__":
 
     if len(sys.argv) != 3 or sys.argv[1] != "--write-private-json":
         raise SystemExit(2)
-    document = json.load(sys.stdin)
+    # The Node writer sends UTF-8 bytes even when the Windows ANSI code page differs.
+    document = json.loads(sys.stdin.buffer.read().decode("utf-8"))
     if not isinstance(document, dict):
         raise ValueError("private JSON document must be an object")
     atomic_write_private_json(Path(sys.argv[2]), document)
