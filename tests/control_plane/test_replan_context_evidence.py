@@ -305,17 +305,18 @@ def test_dense_context_uses_shared_private_snapshot_transport(monkeypatch):
     assert project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=[_run()]) == expected
 
 
-def _settled_pair():
-    identity = {"schema_version": "quota_settlement_identity_v0", "goal_id": "evidence-goal",
-        "agent_id": "agent-a", "todo_id": "todo-a", "turn_instance_id": "turn-a", "effect_id": "settlement-a"}
-    work = _run(**{key: identity[key] for key in ("todo_id", "turn_instance_id")},
+def _settled_pair(*, goal_id="evidence-goal", agent_id="agent-a", todo_id="todo-a", turn_instance_id="turn-a"):
+    effect_id = f"{goal_id}:{agent_id}:{todo_id}:{turn_instance_id}"
+    identity = {"schema_version": "quota_settlement_identity_v0", "goal_id": goal_id,
+        "agent_id": agent_id, "todo_id": todo_id, "turn_instance_id": turn_instance_id, "effect_id": effect_id}
+    work = _run(goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, turn_instance_id=turn_instance_id,
         settlement_identity=identity, recommended_action="Retain the negative finding and try the next route.",
         progress_observation={"schema_version": "typed_progress_observation_v0",
-            "result_class": "unchanged", "surface_id": "surface-a", "work_item_id": "todo-a"})
+            "result_class": "unchanged", "surface_id": "surface-a", "work_item_id": todo_id})
     accounting = {key: value for key, value in work.items() if key != "progress_observation"}
     accounting.update(classification="quota_slot_spent", generated_at="2026-08-18T01:00:01Z",
         quota_spend_commit={"schema_version": "quota_spend_commit_receipt_v0",
-            "effect_id": "settlement-a#quota_spend"})
+            "effect_id": f"{effect_id}#quota_spend"})
     return work, accounting
 
 
@@ -356,7 +357,7 @@ def test_matched_accounting_keeps_new_health_and_all_published_references(tmp_pa
 
 @pytest.mark.parametrize("change", [
     {"settlement_identity": None}, {"quota_spend_commit": None}, {"turn_instance_id": "turn-b"},
-    {"quota_spend_commit": {"schema_version": "future", "effect_id": "settlement-a#quota_spend"}},
+    {"quota_spend_commit": {"schema_version": "future", "effect_id": "evidence-goal:agent-a:todo-a:turn-a#quota_spend"}},
     {"quota_spend_commit": {"schema_version": "quota_spend_commit_receipt_v0", "effect_id": "other#quota_spend"}},
     {"classification": "future_accounting"}, {"recommended_action": "Keep an additional obligation."},
     {"delivery_outcome": "outcome_failure"},
@@ -391,10 +392,7 @@ def test_real_quota_cli_preserves_the_replan_obligation_while_reducing_accountin
     from test_replan_successor_guard_reentry import _fixture, _guard, GOAL, AGENT
 
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider)
-    work, accounting = _settled_pair()
-    for row in (work, accounting):
-        row.update(goal_id=GOAL, agent_id=AGENT)
-        row["settlement_identity"] = {**row["settlement_identity"], "goal_id": GOAL, "agent_id": AGENT}
+    work, accounting = _settled_pair(goal_id=GOAL, agent_id=AGENT)
     # Keep the fixture's existing required-vision evidence. This changes only
     # metadata in the disposable read model, never an active authority store.
     prior = index.read_text()
