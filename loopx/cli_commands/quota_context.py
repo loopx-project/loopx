@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..control_plane.coordination.local_authority import (
@@ -270,6 +270,13 @@ def validate_quota_command_context_request(
         raise QuotaCommandValidationError(
             "turn-scoped `quota should-run` cannot use --dry-run"
         )
+    if (
+        command == "should-run"
+        and heartbeat_turn_id is not None and scheduler_context is None
+        and not getattr(args, "turn_envelope", False)
+    ):
+        scheduler_context = replace(resolved_scheduler_context,
+            default_settlement_profile=SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP)
     return heartbeat_turn_id, scheduler_context, begin_turn
 
 

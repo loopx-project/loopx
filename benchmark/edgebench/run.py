@@ -126,9 +126,9 @@ def main(argv=None):
                         help="Opt-in private binding for native terminal proof, consumed by the controller")
     turn_view = parser.add_mutually_exclusive_group()
     turn_view.add_argument("--turn-envelope", action="store_true",
-                        help="Opt-in short heartbeat context with same-invocation full captures")
+                        help="Explicit compatibility view for heartbeat workers. The original capture uses the complete Turn contract")
     turn_view.add_argument("--complete-turn", action="store_true",
-                        help="Explicit complete v1 Turn contract with shared exact-Turn settlement; heartbeat workers only")
+                        help="Explicitly select the complete v1 Turn contract, already the default for heartbeat workers")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
     parser.add_argument("--execution-observation", choices=("local_probe",),
@@ -462,7 +462,7 @@ def main(argv=None):
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          validation_command=execution.validation_command,
-                         turn_envelope=args.turn_envelope,
+                         **({"turn_envelope": True} if args.turn_envelope else {}),
                          **({"complete_turn": True} if args.complete_turn else {}),
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}
@@ -548,7 +548,7 @@ def main(argv=None):
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": sforge_source if native_result_scope is not None else active_source_receipt(),
         "local_docker_images": local_docker_images,
-        **turn_envelope_receipt(explicit=args.turn_envelope, complete=args.complete_turn),
+        **turn_envelope_receipt(execution),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
         **({"execution_observation": args.execution_observation}
            if args.execution_observation is not None else {}),

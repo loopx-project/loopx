@@ -200,7 +200,17 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
         "Reuse inline facts; inspect missing context only, without polling or a per-Turn revision/check receipt.",
         "Retain root commitments; a proposal or adoption grants no permissions.",
     )
+    source_read = (
+        "Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops). "
+        "For selection/replan or missing details, follow returned read/recovery instructions "
+        "with original capture/identity; never re-admit. "
+        "Honor explicit full reads; keep capture/handoff flags on selection/same-Turn repair."
+    )
     return {
+        # Observe the whole ordered block in one string. This is fixture cost
+        # attribution, not prose-based runtime authority or retention proof.
+        "source_read_before": contains(outcome_prior_work) and not contains_folded(source_read),
+        "source_read_after": contains_folded(source_read),
         "objective_replan_before": contains(objective_replan_prior) and not any(
             contains(clause) for clause in objective_replan_clauses),
         "objective_replan_after": contains(objective_replan_prior + " " + " ".join(objective_replan_clauses)),

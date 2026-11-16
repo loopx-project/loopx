@@ -1044,7 +1044,7 @@ def test_real_cli_private_source_is_refused_before_provider_io(tmp_path, monkeyp
         "--agent-id", AGENT_ID, "--codex-app", "--context-delivery", "off",
         "--turn-instance-id", "qualification-private-source", cwd=project)
     assert rc == 0 and source["ok"] is True
-    candidate = compose_turn_decision(source)
+    candidate = source if source.get("schema_version") == "loopx_turn_envelope_v1" else compose_turn_decision(source)
     before = json.dumps(candidate, sort_keys=True)
     calls = []
     # Real CLI context includes private runtime routing. Complete-source

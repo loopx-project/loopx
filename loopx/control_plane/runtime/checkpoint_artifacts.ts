@@ -480,13 +480,29 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
       execution_authority_granted: false};
   }
   if (request.action === "select_replan") {
-    if (!hasExactAuthorityKeys(request, ["action", "quota", "goal_id", "agent_id", "turn_instance_id"])) {
+    const fields = ["action", "quota", "goal_id", "agent_id", "turn_instance_id"];
+    if (Object.hasOwn(request, "source_number_tokens")) fields.push("source_number_tokens");
+    if (Object.hasOwn(request, "allow_legacy_source")) fields.push("allow_legacy_source");
+    if (!hasExactAuthorityKeys(request, fields) ||
+        (Object.hasOwn(request, "allow_legacy_source") && request.allow_legacy_source !== true)) {
       throw new Error("checkpoint replan selection fields are invalid");
     }
-    return checkpointReplanIntent(requireJsonObject(request.quota, "checkpoint quota readback"),
-      requireNonEmptyString(request.goal_id, "checkpoint goal"),
-      requireNonEmptyString(request.agent_id, "checkpoint agent"),
-      requireNonEmptyString(request.turn_instance_id, "checkpoint Turn"));
+    const quota = requireJsonObject(request.quota, "checkpoint quota readback");
+    const goal = requireNonEmptyString(request.goal_id, "checkpoint goal");
+    const agent = requireNonEmptyString(request.agent_id, "checkpoint agent");
+    const turn = requireNonEmptyString(request.turn_instance_id, "checkpoint Turn");
+    if (quota.ok !== true || quota.goal_id !== goal) throw new EffectRuntimeRequestError("checkpoint requires a matching current quota readback");
+    // Live selection requires the complete carrier. Only the explicit sealed
+    // historical reader may accept an unversioned source; present bindings
+    // retain full validation before the shared replan identity owner runs.
+    if (request.allow_legacy_source !== true || Object.hasOwn(quota, "schema_version") ||
+        Object.hasOwn(quota, "contract_binding")) {
+      const {requireCompleteTurnDecision} = await import("../quota/turn_envelope.ts");
+      requireCompleteTurnDecision(quota, request.source_number_tokens);
+    } else if (Object.hasOwn(request, "source_number_tokens")) {
+      throw new EffectRuntimeRequestError("checkpoint source numbers require a complete Turn decision");
+    }
+    return checkpointReplanIntent(quota, goal, agent, turn);
   }
   if (request.action === "read_basis") {
     const keys = ["action", "root", "expected_sha256"];

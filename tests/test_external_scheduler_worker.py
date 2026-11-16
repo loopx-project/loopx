@@ -107,8 +107,10 @@ def _hint_payload(
             "local_scheduler": local_scheduler_directive
         }
     return {
+        "ok": True,
         "should_run": should_run,
         "effective_action": resolved_action,
+        "interaction_contract": {"agent_channel": {"must_attempt": should_run}},
         "scheduler_hint": scheduler_hint,
     }
 
@@ -120,8 +122,10 @@ def _waiting_payload(
     final_probe_enabled: bool = False,
 ) -> dict[str, object]:
     return {
+        "ok": True,
         "should_run": False,
         "effective_action": "backoff_until_state_change",
+        "interaction_contract": {"agent_channel": {"must_attempt": False}},
         "scheduler_hint": {
             "action": "backoff_until_state_change",
             "cadence_class": "quiet_wait",
@@ -171,9 +175,10 @@ def _args(
     )
 
 
-@pytest.mark.parametrize("admission", ["false", "true", 1, 0, None, [], {"allowed": True}, "missing"])
-def test_malformed_admission_never_launches_wake(tmp_path, admission):
+@pytest.mark.parametrize("admission", [True, False, "false", "true", 1, 0, None, [], {"allowed": True}, "missing"])
+def test_missing_interaction_contract_never_launches_wake(tmp_path, admission):
     payload = _hint_payload(should_run=True)
+    payload.pop("interaction_contract")
     payload["should_run"] = admission
     if admission == "missing":
         payload.pop("should_run")
@@ -188,8 +193,11 @@ def test_malformed_admission_never_launches_wake(tmp_path, admission):
     assert not marker.exists()
 
 
-def test_failed_decision_cannot_authorize_wake(tmp_path, monkeypatch):
-    payload = _hint_payload(should_run=True) | {"ok": False}
+@pytest.mark.parametrize("status", [{}, {"ok": False}, {"ok": 1}])
+def test_missing_or_failed_decision_cannot_authorize_wake(tmp_path, monkeypatch, status):
+    payload = _hint_payload(should_run=True)
+    payload.pop("ok")
+    payload.update(status)
     monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: payload)
     monkeypatch.setattr(worker, "_run_wake", lambda *a, **kw: pytest.fail("failed decision woke"))
     args = _args(fake_cli=tmp_path / "unused", state_file=tmp_path / "state.json", wake_cmd="unused")

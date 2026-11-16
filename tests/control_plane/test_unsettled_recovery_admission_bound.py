@@ -9,8 +9,57 @@ import pytest
 from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _spend_run_count, _write_fixture,
+    AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _run_cli, _spend_run_count, _write_fixture,
 )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_recovery_append_retry_keeps_the_guided_turn(tmp_path, monkeypatch, provider):
+    from loopx.cli import build_parser
+    from loopx.cli_commands import quota
+    from loopx.cli_rollout import append_cli_rollout_event
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from loopx.rollout_event_log import RolloutAppendPreconditionChanged
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    monkeypatch.chdir(project)
+    args = build_parser().parse_args([
+        "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--begin-turn",
+        "--runtime-profile", "codex_app_heartbeat", "--context-delivery", "off",
+    ])
+    attempts = []
+    starts = []
+    emitted = []
+    dispatch = quota._dispatch_quota_turn_start_hooks
+
+    def observe_start(*args, **kwargs):
+        starts.append(True)
+        return dispatch(*args, **kwargs)
+
+    def append_with_changed_precondition(payload, **options):
+        if options["event_kind"] == "quota_should_run":
+            attempts.append(options["run_id"])
+            if len(attempts) == 1:
+                raise RolloutAppendPreconditionChanged("fixture changes authority before append")
+        return append_cli_rollout_event(payload, **options)
+
+    monkeypatch.setattr(quota, "_dispatch_quota_turn_start_hooks", observe_start)
+    rc = quota.handle_quota_command(
+        args, registry_path=registry, runtime_root_arg=str(runtime),
+        print_payload=lambda payload, fmt, renderer: emitted.append(payload),
+        append_cli_rollout_event=append_with_changed_precondition,
+    )
+
+    assert rc == 0, emitted
+    [guard] = emitted
+    assert_complete_turn_decision(guard)
+    turn = guard["heartbeat_receipt"]["turn_instance_id"]
+    assert turn.startswith("guided-start:")
+    assert attempts == [turn, turn]
+    assert len(starts) == _heartbeat_receipt_count(runtime, turn) == 1
+    assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

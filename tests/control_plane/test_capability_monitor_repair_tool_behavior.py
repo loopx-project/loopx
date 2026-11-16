@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from control_plane.quota_context_fixture import context_reading_transport, latest_quota_payload
+from loopx.control_plane.todos.todo_semantics import todo_summary_monitor_schedule_gap_items
 from loopx.control_plane.testing.capability_monitor_repair_tool_behavior import (
     CAPABILITY_REPAIR_BLOCKED_TODO_ID,
     CAPABILITY_REPAIR_MONITOR_TODO_ID,
@@ -14,6 +16,7 @@ from loopx.control_plane.testing.capability_monitor_repair_tool_behavior import 
 )
 from loopx.control_plane.testing.model_tool_behavior import (
     QuotaToolContext,
+    ScriptedExecToolAction,
     scripted_assistant_response as _scripted_assistant_response,
     scripted_exec_tool_response as _tool_response,
 )
@@ -50,27 +53,18 @@ def test_real_quota_capability_repair_executes_before_monitor_fallback(
     assert "--available-capability filesystem_write" in fixture.quota_guard_command
     assert "--available-capability network" in fixture.quota_guard_command
     assert "--available-capability private_read" not in fixture.quota_guard_command
-    assert fixture.task_body.index(
-        "use selection_command when required"
-    ) < fixture.task_body.index(fixture.quota_guard_command)
-    requests: list[dict[str, Any]] = []
+    assert fixture.quota_guard_command in fixture.task_body
 
-    def transport(**kwargs: Any) -> Mapping[str, Any]:
-        request = json.loads(kwargs["body"])
-        requests.append(request)
-        if len(requests) == 1:
-            command = fixture.quota_guard_command.replace(
-                '"${LOOPX_TURN:?}"',
-                "turn-capability-001",
-            )
-        elif len(requests) == 2:
-            command = _callsite_command()
-        else:
-            command = _projected_reentry_command(request)
-        return _tool_response(
-            f"call-{len(requests)}",
-            command,
-        )
+    def repair_action(request):
+        channel = latest_quota_payload(request)["interaction_contract"]["cli_channel"]
+        return ScriptedExecToolAction(channel["runtime_capability_reentry"]["candidates"][0]["command"])
+
+    transport = context_reading_transport([
+        ScriptedExecToolAction(fixture.quota_guard_command),
+        ScriptedExecToolAction(_callsite_command()),
+        repair_action,
+    ])
+    requests = transport.requests
 
     receipt = DoubaoCapabilityMonitorRepairToolBehaviorActor(
         api_key="test-only-placeholder",
@@ -94,11 +88,10 @@ def test_real_quota_capability_repair_executes_before_monitor_fallback(
     assert receipt["blocked_todo_reentered"] is True
     assert receipt["same_turn_delivery_allowed"] is True
     assert receipt["monitor_fallback_avoided"] is True
-    assert receipt["observed_tool_sequence"] == [
-        "quota_should_run",
-        "capability_callsite",
-        "quota_reentry",
-    ]
+    sequence = receipt["observed_tool_sequence"]
+    assert sequence[0] == "quota_should_run"
+    assert sequence[1:-2] and set(sequence[1:-2]) == {"context_read"}
+    assert sequence[-2:] == ["capability_callsite", "quota_reentry"]
     assert receipt["boundary"] == {
         "raw_prompt_persisted": False,
         "raw_provider_response_persisted": False,
@@ -123,7 +116,7 @@ def test_real_quota_capability_repair_executes_before_monitor_fallback(
     )
     assert fixture.task_body in trigger_message
 
-    quota_result = QuotaToolContext.from_output(requests[1]["messages"][-1]["content"]).packet
+    quota_result = latest_quota_payload(requests[-1])
     # Native output is navigation, not an ordering of duplicated inline keys.
     # Preserve receipt metadata and validate the canonical repair owner below;
     # capability repair does not itself establish admission or settlement.
@@ -138,9 +131,8 @@ def test_real_quota_capability_repair_executes_before_monitor_fallback(
     assert CAPABILITY_REPAIR_TARGET_CAPABILITY in quota_result[
         "capability_gate"
     ]["repair_missing"]
-    assert quota_result["agent_todo_summary"]["monitor_schedule_gap_items"][0][
-        "todo_id"
-    ] == CAPABILITY_REPAIR_MONITOR_TODO_ID
+    monitors = todo_summary_monitor_schedule_gap_items(quota_result["agent_todo_summary"])
+    assert [row["todo_id"] for row in monitors] == [CAPABILITY_REPAIR_MONITOR_TODO_ID]
 
 
 def test_actor_rejects_capability_repair_before_quota(tmp_path: Path) -> None:

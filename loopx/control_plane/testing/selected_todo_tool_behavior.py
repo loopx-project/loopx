@@ -1081,7 +1081,7 @@ class DoubaoSelectedTodoToolBehaviorActor:
                     "root; resolve relative paths from the selected Todo there. "
                     "Choose each next action from the latest tool result. If quota "
                     "sets selection_required, choose any currently eligible Todo; "
-                    "selection_command is non-binding. Replace {todo_id}, then "
+                    "suggestions are non-binding. In selection_command replace {todo_id}, then "
                     "run exactly `<route_prefix> <command_args_template>` for the "
                     "second quota guard before delivery. Only when the visible "
                     "packet lacks the Todo identity you need, run exactly "

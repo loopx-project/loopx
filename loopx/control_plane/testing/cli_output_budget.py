@@ -7,6 +7,10 @@ from typing import Any, Literal
 from loopx.control_plane.heartbeat.agent_input import (
     HEARTBEAT_AGENT_INPUT_SCHEMA_VERSION,
 )
+from loopx.control_plane.quota.turn_envelope import (
+    COMPLETE_TURN_DECISION_VERSION,
+    COMPLETE_TURN_PLAN_SCHEMA_VERSION,
+)
 from loopx.control_plane.testing.cli_output_semantics import (
     action_signature_semantic_sha256,
     json_shape_paths as collect_json_shape_paths,
@@ -45,6 +49,7 @@ class CliOutputBudgetSpec:
     max_json_growth_chars_per_unit: int | None = None
     max_json_fixed_semantic_growth_chars: int = 0
     output_contract_version: str | None = None
+    markdown_output_contract_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,40 +146,23 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "selectors for scheduler, agent-todos, user-todos, goal-boundary, "
             "or all"
         ),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
+        markdown_output_contract_version=COMPLETE_TURN_DECISION_VERSION,
         max_chars={
-            # The same explicitly imported fixture on base/head emits 24,099
-            # JSON chars. Keep canonical provenance and complete User context.
-            "small": {"json": 25_000, "markdown": 10_000},
-            # Same 36-Todo / 12-run source: 38,432 -> 39,101 chars with
-            # objective/evidence guidance; small and multi-agent paths unchanged.
-            # Per-Todo and fixed semantic growth are accounted for separately.
-            # Canonical source witnesses use the full Markdown context carrier;
-            # the unchanged 36-Todo fixture emits 10,225 chars / 166 lines.
-            # Native Windows paired base/head both emit 40,701 JSON chars.
-            # Retain complete routes/context and bounded host-path headroom;
-            # line, per-Todo/fixed growth and all other ceilings stay unchanged.
-            # Inherited Stride adds its complete decision/axis/source contract:
-            # the same native fixture measures 35,597 -> 42,281 characters on POSIX
-            # and 42,501 characters on native Windows due to drive and backslash paths.
-            # Preserve the original 42,000 failure and the required semantics;
-            # calibrate this regression allowance to 43,000, leaving bounded headroom
-            # (~499 chars on Windows, ~719 chars on POSIX) without widening collection
-            # or production transport limits.
-            # The progressive oracle now also bounds the complete recovered body.
-            # The same fixture measures 50,795 JSON body chars and 16,857
-            # Markdown chars. Preserve the original 43,000 / 10,500 failures and
-            # calibrate only these two presentation ceilings to measured values
-            # plus bounded headroom.
-            "crowded": {"json": 51_000, "markdown": 17_000},
-            # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
-            # this candidate both emit 25,836 JSON characters (96 matched
-            # surface/mode measurements, no semantic or route differences).
-            # Preserve complete decision facts; calibrate only this synthetic
-            # presentation ceiling. The historical 25,500 failure remains;
-            # line/growth guards and production transport limits are unchanged.
-            "multi_agent": {"json": 26_500, "markdown": 7_000},
+            # The complete v1 source measures JSON/Markdown 22,931/22,954
+            # (small), 42,223/42,325 (crowded), and 26,239/26,339 (multi-agent).
+            # Native Windows small Markdown is 23,254. Retain the original
+            # 10,000/17,000/7,000 failures in the documented paired evidence.
+            # Only Markdown's complete-source presentation allowances change.
+            "small": {"json": 25_000, "markdown": 24_000},
+            # Reads across a clock tick retain last_read_at on two source rows:
+            # 42,941 -> 43,017 chars, exactly 76 chars of freshness evidence.
+            # Preserve the 43,000 failure and calibrate only this presentation
+            # guard, leaving 83 chars above the measured complete carrier.
+            "crowded": {"json": 51_000, "markdown": 43_100},
+            "multi_agent": {"json": 26_500, "markdown": 27_000},
         },
         max_lines={
             "small": {"json": 600, "markdown": 190},
@@ -444,9 +432,10 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail scheduler",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 31_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
+        max_chars={"json": 31_000, "markdown": 24_000},
         max_lines={"json": 820, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -454,9 +443,10 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail agent-todos",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 55_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
+        max_chars={"json": 55_000, "markdown": 24_500},
         max_lines={"json": 1_350, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -464,9 +454,10 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail user-todos",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 35_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
+        max_chars={"json": 35_000, "markdown": 24_000},
         max_lines={"json": 900, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -474,9 +465,10 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail goal-boundary",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 35_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
+        max_chars={"json": 35_000, "markdown": 24_000},
         max_lines={"json": 900, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -484,11 +476,12 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail vision",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
         # The complete captured Vision projection measures 58,393 JSON chars.
         # Preserve the original 55,000 failure; keep a 607-character allowance.
-        max_chars={"json": 59_000, "markdown": 10_000},
+        max_chars={"json": 59_000, "markdown": 24_000},
         max_lines={"json": 1_350, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -496,9 +489,10 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --include-detail all",
         output_formats=("json", "markdown"),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-        markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 85_000, "markdown": 10_000},
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
+        markdown_anchor="# LoopX Turn Envelope",
+        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
+        max_chars={"json": 85_000, "markdown": 24_500},
         max_lines={"json": 2_100, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -529,12 +523,11 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "boundary",
         ),
         markdown_anchor=None,
-        # Complete v1 retains the original source, session and transaction;
-        # the matched small fixture is 26,886 chars. Historical v0 keeps its
-        # 15,000 ceiling in its own checkout; default plan stays at 26,000.
+        # The same complete-contract callers reach 28,955 chars, including
+        # session and transaction metadata. The v0 15,000 failure is retained.
         max_chars={"json": 30_000},
         max_lines={"json": 380},
-        output_contract_version="loopx_turn_plan_v1",
+        output_contract_version=COMPLETE_TURN_PLAN_SCHEMA_VERSION,
     ),
     CliOutputModeVariantSpec(
         variant_id="loopx_turn_run_once_preview",
@@ -914,19 +907,11 @@ def assert_cli_output_baseline(
             f"{spec.surface_id}/{scenario}/{output_format} emitted "
             f"{measurement['lines']} lines; baseline ceiling is {max_lines}"
         )
-    if output_format == "markdown" and spec.markdown_anchor not in text:
-        raise AssertionError(
-            f"{spec.surface_id} markdown lost semantic anchor {spec.markdown_anchor!r}"
-        )
-    if output_format == "json":
-        payload = measurement.get("resolved_payload", measurement.get("payload"))
-        if not isinstance(payload, dict):
-            raise AssertionError(f"{spec.surface_id} did not emit a JSON object")
-        missing = [key for key in spec.semantic_json_keys if key not in payload]
-        if missing:
-            raise AssertionError(
-                f"{spec.surface_id} JSON lost semantic key(s): {', '.join(missing)}"
-            )
+    assert_cli_output_semantics(spec.surface_id, output_format=output_format,
+        text=text, measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
+        markdown_anchor=spec.markdown_anchor,
+        output_contract_version=(spec.output_contract_version if output_format == "json"
+                                 else spec.markdown_output_contract_version))
 
 
 def assert_cli_output_mode_variant(
@@ -952,23 +937,39 @@ def assert_cli_output_mode_variant(
             f"{spec.variant_id}/{output_format} emitted {measurement['lines']} lines; "
             f"variant ceiling is {spec.max_lines[output_format]}"
         )
+    assert_cli_output_semantics(spec.variant_id, output_format=output_format,
+        text=text, measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
+        markdown_anchor=spec.markdown_anchor, output_contract_version=spec.output_contract_version)
+
+
+def assert_cli_output_semantics(
+    output_id: str, *, output_format: OutputFormat, text: str,
+    measurement: dict[str, Any], semantic_json_keys: tuple[str, ...],
+    markdown_anchor: str | None, output_contract_version: str | None = None,
+) -> None:
+    """Qualify the versioned carrier independently of its size allowance."""
     if output_format == "markdown":
-        if spec.markdown_anchor not in text:
-            raise AssertionError(
-                f"{spec.variant_id} markdown lost semantic anchor "
-                f"{spec.markdown_anchor!r}"
-            )
-        return
-    payload = measurement.get("resolved_payload", measurement.get("payload"))
+        if markdown_anchor and markdown_anchor not in text:
+            raise AssertionError(f"{output_id} markdown lost semantic anchor {markdown_anchor!r}")
+        if output_contract_version is None:
+            return
+        # Markdown carries the same complete source or pinned progressive
+        # reference as JSON. A heading alone cannot qualify the contract.
+        try:
+            payload = json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+        except (IndexError, json.JSONDecodeError) as exc:
+            raise AssertionError(f"{output_id} lost its complete JSON carrier") from exc
+        if isinstance(payload, dict) and payload.get("schema_version") == "context_capture_navigation_v1":
+            payload = measurement.get("resolved_payload", payload)
+    else:
+        payload = measurement.get("resolved_payload", measurement.get("payload"))
     if not isinstance(payload, dict):
-        raise AssertionError(f"{spec.variant_id} did not emit a JSON object")
-    if spec.output_contract_version is not None and payload.get("schema_version") != spec.output_contract_version:
-        raise AssertionError(f"{spec.variant_id} output contract version mismatch")
-    missing = [key for key in spec.semantic_json_keys if key not in payload]
+        raise AssertionError(f"{output_id} did not emit a JSON object")
+    if output_contract_version is not None and payload.get("schema_version") != output_contract_version:
+        raise AssertionError(f"{output_id} output contract version mismatch")
+    missing = [key for key in semantic_json_keys if key not in payload]
     if missing:
-        raise AssertionError(
-            f"{spec.variant_id} JSON lost semantic key(s): {', '.join(missing)}"
-        )
+        raise AssertionError(f"{output_id} JSON lost semantic key(s): {', '.join(missing)}")
 
 
 def _assert_context_body_budget(measurement: dict[str, Any], *, max_chars: int, max_lines: int) -> None:
@@ -1011,6 +1012,8 @@ def public_manifest() -> dict[str, Any]:
                 "command": spec.command,
                 "qualification_policy": "explicit_opt_in_cold_path",
                 "formats": list(spec.output_formats),
+                **({"output_contract_version": spec.output_contract_version}
+                   if spec.output_contract_version is not None else {}),
             }
             for spec in CLI_OUTPUT_MODE_VARIANT_SPECS
         ],

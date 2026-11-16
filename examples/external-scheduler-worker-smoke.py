@@ -68,8 +68,10 @@ def _hint_payload(
             "local_scheduler": local_scheduler_directive
         }
     return {
+        "ok": True,
         "should_run": should_run,
         "effective_action": action,
+        "interaction_contract": {"agent_channel": {"must_attempt": should_run}},
         "scheduler_hint": scheduler_hint,
     }
 
@@ -142,13 +144,15 @@ def test_terminal_action_is_terminal() -> None:
 
 def test_missing_detail_fails_closed() -> None:
     payload = {
+        "ok": True,
         "should_run": False,
+        "interaction_contract": {"agent_channel": {"must_attempt": False}},
         "scheduler_hint": {"action": "backoff", "cadence_class": "quiet_wait"},
     }
     try:
         parse_tick(payload)
     except ValueError as exc:
-        assert "include-detail scheduler" in str(exc)
+        assert "--scheduler-observation" in str(exc)
     else:  # pragma: no cover - defensive
         raise AssertionError("parse_tick must fail closed without scheduler detail")
 

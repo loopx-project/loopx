@@ -164,7 +164,7 @@ function budget(value: unknown): Budget | null {
 
 /** Lazy rows retain validation precedence. In particular capability/user/terminal
  * returns never require a later progress budget or host retry policy. */
-export function decideLoopDisposition(params: JsonObject): JsonObject {
+export function decideLoopDisposition(params: JsonObject, requireCompleteDecision = false): JsonObject {
   const receipt = params.receipt == null ? null : object(params.receipt);
   let decision = object(params.decision);
   let route: LoopXTurnRouteValue = "contract_error";
@@ -199,7 +199,8 @@ export function decideLoopDisposition(params: JsonObject): JsonObject {
   const check = (name: string): void => {
     switch (name) {
       case "envelope":
-        if (decision.schema_version === COMPLETE_TURN_DECISION_VERSION || has(decision, "contract_binding")) {
+        if (requireCompleteDecision || decision.schema_version === COMPLETE_TURN_DECISION_VERSION ||
+            has(decision, "contract_binding")) {
           const checked = completePlanningFacts({payload: decision,
             source_number_tokens: params.decision_source_number_tokens});
           decision = {...object(checked.work), goal_id: checked.goal_id, agent_id: checked.agent_id};
@@ -354,9 +355,9 @@ export function decideManagedStep(params: JsonObject): JsonObject {
   for (const key of ["goal_id", "agent_id"])
     requireThat(!text(decision[key]) || text(decision[key]) === params[key], `fresh decision ${key} does not match the managed step`);
   const disposition = decideLoopDisposition({receipt: {...receipt, lineage: identity, host_failure: journal.host_failure}, decision,
-    integer_facts: integers, historical_route_text: params.historical_route_text,
+    integer_facts: integers,
     decision_source_number_tokens: params.decision_source_number_tokens,
-    predecessor_turn_key: params.predecessor_turn_key == null ? params.turn_key : params.predecessor_turn_key});
+    predecessor_turn_key: params.predecessor_turn_key == null ? params.turn_key : params.predecessor_turn_key}, true);
   const result: JsonObject = {schema_version: "loopx_turn_managed_step_v0", disposition: disposition.disposition,
     reason: disposition.reason, turn_key: params.turn_key, attempt};
   for (const key of ["lineage", "stop_scope", "goal_terminal", "continuation_required", "successor_todo_ids",

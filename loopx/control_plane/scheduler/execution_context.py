@@ -237,6 +237,9 @@ class SchedulerExecutionContextResolution:
     # Only the external Turn driver sets this in-process. A context supplied
     # to quota or recovered from its serialized projection cannot assert it.
     turn_driver_owned: bool = False
+    # A direct bound CLI can request the existing heartbeat plan without
+    # declaring a scheduler or changing the scheduler projection.
+    default_settlement_profile: SchedulerRuntimeProfile | None = None
 
     @property
     def ok(self) -> bool:
@@ -445,6 +448,17 @@ def scheduler_runtime_profile_for_execution_context(
     )
 
 
+def uses_codex_ssh_goal_profile(
+    runtime_profile: str | None,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+) -> bool:
+    if runtime_profile is not None:
+        return runtime_profile == SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE.value
+    return scheduler_runtime_profile_for_execution_context(
+        scheduler_execution_context
+    ) is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE
+
+
 def _render_scheduler_runtime_profile_args(
     profile: SchedulerRuntimeProfile,
 ) -> str:
@@ -476,9 +490,11 @@ def render_scheduler_execution_args(
                 f"unsupported scheduler runtime profile: {runtime_profile}"
             ) from exc
         return _render_scheduler_runtime_profile_args(profile)
-    if scheduler_execution_context is None:
-        return ""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
+    # Resolving an omitted scheduler can carry a settlement default. Its
+    # absence still contributes no scheduler arguments to a recovery command.
+    if resolution.context is None and resolution.supplied is None:
+        return ""
     if not resolution.ok or resolution.context is None:
         raise ValueError(
             "invalid scheduler_execution_context: " + "; ".join(resolution.errors)

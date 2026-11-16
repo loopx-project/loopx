@@ -12,10 +12,57 @@ import time
 
 import pytest
 
-from test_core_distribution import AGENT, GOAL, _command, _environment
+from test_core_distribution import AGENT, GOAL, _command, _environment, _run, _spends
 from test_core_distribution import core_python as core_python
 from test_core_distribution import task as task
-from test_core_distribution import _run, _spends
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.test_quota_settlement_cli import (
+    AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _initialize_fixture_authority,
+    _spend_run_count, _write_fixture,
+)
+
+
+def test_installed_core_ssh_complete_turn_settles_once(core_python, tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
+    environment = _environment(core_python)
+
+    def run_returned(command, *, replacements=None, extra=()):
+        argv = shlex.split(command)
+        if os.name == "nt" and argv[0] == "&":
+            argv = argv[1:]
+        assert Path(argv[0]).samefile(core_python)
+        assert argv[1:4] == ["-I", "-m", "loopx.entrypoint"]
+        if replacements:
+            argv = [replacements.get(word, word) for word in argv]
+        result = subprocess.run([*argv, *extra], cwd=project, env=environment,
+            capture_output=True, text=True, timeout=45)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    output = _run(core_python, [*prefix, "heartbeat-prompt", "--thin",
+        "--runtime-profile", "codex_app_ssh_goal", "--context-delivery", "off", *scope], project)
+    prompt = json.loads(output.stdout)
+    current = run_returned(prompt["quota_guard_command"], extra=("--todo-id", TODO_ID))
+    assert current["schema_version"] == "loopx_turn_envelope_v1"
+    identity = current["heartbeat_receipt"]["settlement_identity"]
+    plan = current["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan["identity"] == identity and _spend_run_count(runtime) == 0
+    template = next(step["command_template"] for step in plan["ordered_steps"]
+                    if step["kind"] == "durable_writeback")
+    replacements = {"<validated_progress>": "verified_installed_source", "<scale>": "implementation",
+                    "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}
+    settle_flags = ("--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+    first = run_returned(template, replacements=replacements, extra=settle_flags)
+    assert first["settlement_progress"]["state"] == "settled"
+    replay = run_returned(template, replacements=replacements, extra=settle_flags)
+    assert replay["idempotent_replay"] and replay["settlement_identity"] == first["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("explicit_route", [False, True])
