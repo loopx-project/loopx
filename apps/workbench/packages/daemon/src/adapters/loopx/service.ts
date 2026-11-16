@@ -8,7 +8,7 @@ import { isWithinWorkdirs, type Workdirs } from '../../workdirs.js';
 import type { ThreadManager } from '../../threads.js';
 import { goalAgentFor, LOOPX_PERMISSIONS, LoopxBindings, permissionAvailable, type LoopxBinding, type LoopxPermission } from './binding.js';
 import { goalContextBlock } from './context.js';
-import { applyProposal, CoreError, grantedWorkspaces, loadProposal, previewGoalCreate, workspaceRef, type GoalDraft } from './core.js';
+import { applyProposal, CoreError, goalLocale, grantedWorkspaces, loadProposal, previewGoalCreate, workspaceRef, type GoalDraft } from './core.js';
 import { coreUrl } from './proxy.js';
 import { cliFromEnv, GoalStateCache, readGoalState, type GoalState, type LoopxCli } from './status.js';
 
@@ -122,7 +122,7 @@ export class LoopxService implements LoopxHooks {
   }
 
   /** Step 1 of a launch: have the core review the Goal. Nothing is created yet. */
-  async preview(input: any) {
+  async preview(input: any, acceptLanguage?: unknown) {
     const { goalAgentId, permission } = this.pick(input.agent, input.permission);
     const ws = await this.workspace(input.cwd);
     const objective = asText(input.objective, 'objective');
@@ -132,7 +132,7 @@ export class LoopxService implements LoopxHooks {
     const draft: GoalDraft = {
       goalId: `goal-${operationId}`,
       title: (typeof input.title === 'string' && input.title.trim() ? input.title.trim() : Array.from(objective).slice(0, 80).join('')),
-      objective, completion, boundary, goalAgentId, workspaceRef: ws.ref, permission, operationId,
+      objective, completion, boundary, goalAgentId, workspaceRef: ws.ref, permission, operationId, locale: goalLocale(acceptLanguage),
     };
     try {
       const { proposal } = await previewGoalCreate(draft, this.core);
@@ -238,7 +238,7 @@ export class LoopxService implements LoopxHooks {
       send(res, 200, { workspaces: await grantedWorkspaces(this.core).catch((err) => { throw new HttpError(502, err.message, { code: 'loopx_core_unavailable' }); }) });
       return true;
     }
-    if (path === '/api/loopx/launch/preview' && method === 'POST') { send(res, 200, await this.preview(await body(req))); return true; }
+    if (path === '/api/loopx/launch/preview' && method === 'POST') { send(res, 200, await this.preview(await body(req), req.headers['accept-language'])); return true; }
     if (path === '/api/loopx/launch/apply' && method === 'POST') { send(res, 200, await this.apply(await body(req))); return true; }
     if (path === '/api/loopx/launch/join' && method === 'POST') { send(res, 200, await this.join(await body(req))); return true; }
     const goal = /^\/api\/loopx\/goal\/([^/]+)$/.exec(path);

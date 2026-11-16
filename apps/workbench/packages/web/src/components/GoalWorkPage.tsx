@@ -6,7 +6,7 @@ import { GoalAcceptance } from './GoalAcceptance';
 import { GoalFiles } from './GoalFiles';
 import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput } from '../loopx/since-you-looked';
 import { fetchGoalDetail, type LoopxGoalDetail } from '../loopx/goal-detail';
-import { goalOf } from '../loopx/launch';
+import { goalOf, statusWord } from '../loopx/launch';
 import { joinGoalConversation } from '../loopx/join';
 import type { LoopxAttention, LoopxGoal, LoopxStatusFailure } from '../loopx/status';
 
@@ -73,7 +73,7 @@ export function GoalWorkPage({ token, goalId, goals, goalsLoaded, attention, fai
     <header className="goal-masthead">
       <span className={`sidebar-goal-dot is-${goal.activationState}`} aria-hidden="true" />
       <h1>{goal.title}</h1>
-      <span className="goal-masthead-status">{detail?.status ?? goal.status}</span>
+      <span className="goal-masthead-status">{statusWord(detail?.status ?? goal.status)}</span>
       <div className="goal-masthead-actions">
         <GoalLifecycle token={token} goal={goal} onChanged={changed} />
       </div>

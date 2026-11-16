@@ -48,24 +48,35 @@ export interface GoalDraft {
   workspaceRef: string;
   permission: string;
   operationId: string;
+  /** The words the Goal's own fields are written in (the first task, the labels in the objective). Defaults to Chinese, as the core's first users read it. */
+  locale?: 'zh' | 'en';
 }
+
+/** `zh` for a Chinese Accept-Language, English for anything else. */
+export const goalLocale = (acceptLanguage: unknown): 'zh' | 'en' => (typeof acceptLanguage === 'string' && /^\s*zh/i.test(acceptLanguage) ? 'zh' : 'en');
+
+const WORDS = {
+  zh: { create: (title: string) => `创建 Goal：${title}`, completion: '完成条件', boundary: '执行边界', advanceUntil: (c: string) => `推进目标直到满足：${c}`, advance: (o: string) => `推进目标：${o}` },
+  en: { create: (title: string) => `Create Goal: ${title}`, completion: 'Completion', boundary: 'Boundary', advanceUntil: (c: string) => `Advance the goal until it is met: ${c}`, advance: (o: string) => `Advance the goal: ${o}` },
+} as const;
 
 /** The goal.create review request, shaped as the dashboard shapes it, plus open_session:false (loochat opens the thread). */
 export function goalCreateRequest(d: GoalDraft) {
   const compact = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const words = WORDS[d.locale ?? 'zh'], sep = d.locale === 'en' ? ': ' : '：';
   const objective = compact(d.objective), completion = compact(d.completion), boundary = compact(d.boundary);
   return {
     action_kind: 'goal.create',
     context: { kind: 'manager', goal_id: null },
     idempotency_key: `workbench-goal.create-${d.operationId}`,
-    summary: `创建 Goal：${d.title}`,
+    summary: words.create(d.title),
     normalized_parameters: {
       goal_id: d.goalId,
       title: d.title,
-      objective: compact([objective, completion ? `完成条件：${completion}` : '', boundary ? `执行边界：${boundary}` : ''].filter(Boolean).join('\n')),
+      objective: compact([objective, completion ? `${words.completion}${sep}${completion}` : '', boundary ? `${words.boundary}${sep}${boundary}` : ''].filter(Boolean).join('\n')),
       ...(completion ? { completion_criteria: completion } : {}),
       ...(boundary ? { execution_boundary: boundary } : {}),
-      initial_todos: [completion ? `推进目标直到满足：${completion}` : `推进目标：${objective}`.slice(0, 1000)],
+      initial_todos: [(completion ? words.advanceUntil(completion) : words.advance(objective)).slice(0, 1000)],
       agent_id: d.goalAgentId,
       permission: d.permission,
       workspace_ref: d.workspaceRef,

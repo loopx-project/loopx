@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { goalAgentFor, LoopxBindings, permissionAvailable, type LoopxBinding } from '../src/adapters/loopx/binding.js';
 import { goalContextBlock } from '../src/adapters/loopx/context.js';
-import { goalCreateRequest, workspaceRef } from '../src/adapters/loopx/core.js';
+import { goalCreateRequest, goalLocale, workspaceRef } from '../src/adapters/loopx/core.js';
 import { GoalStateCache, projectGoalState, readGoalState } from '../src/adapters/loopx/status.js';
 
 const payload = (over: Record<string, unknown> = {}) => ({
@@ -87,6 +87,18 @@ test('the core review request opens no session and uses the dashboard\'s workspa
   assert.equal(request.normalized_parameters.completion_criteria, 'tests pass');
   assert.match(request.normalized_parameters.objective, /^do it 完成条件：tests pass$/);
   assert.equal(request.idempotency_key, 'workbench-goal.create-op');
+});
+
+test('the Goal\'s own words follow the reader: Chinese for zh, English otherwise', () => {
+  assert.equal(goalLocale('zh-CN,zh;q=0.9'), 'zh');
+  assert.equal(goalLocale('en-US'), 'en');
+  assert.equal(goalLocale(undefined), 'en');
+  const draft = { goalId: 'goal-1', title: 'T', objective: 'do it', completion: 'tests pass', boundary: 'docs only', goalAgentId: 'codex', workspaceRef: 'workspace-x', permission: 'read_only', operationId: 'op' };
+  const en = goalCreateRequest({ ...draft, locale: 'en' });
+  assert.equal(en.normalized_parameters.objective, 'do it\nCompletion: tests pass\nBoundary: docs only'.replace(/\n/g, ' '));
+  assert.deepEqual(en.normalized_parameters.initial_todos, ['Advance the goal until it is met: tests pass']);
+  assert.equal(en.summary, 'Create Goal: T');
+  assert.deepEqual(goalCreateRequest({ ...draft, locale: 'zh' }).normalized_parameters.initial_todos, ['推进目标直到满足：tests pass']);
 });
 
 test('a CLI that is missing is reported as unavailable, never as an empty Goal', async () => {
