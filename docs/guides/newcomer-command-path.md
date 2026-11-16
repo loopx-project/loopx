@@ -55,6 +55,11 @@ of reconstructing the lifecycle from the full CLI catalog.
 
 ## One CLI Quickstart
 
+The [five-minute SQLite exercise](../product/use-cases/community/README.md)
+creates a disposable Goal and follows one Todo through a lease and
+evidence readback. See the [community FAQ](../product/use-cases/community/faq.md)
+for model replay, context measurements and shared authority.
+
 Use this when an agent asks for the manual shell path, or when you are setting
 up a fresh terminal without an agent driving the first step:
 

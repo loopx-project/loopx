@@ -6,6 +6,10 @@ that every capability is shipped**. This pack sits alongside the
 community entry, rather than the private owner's portfolio. It adds no routing
 keyword list, runtime authority, evaluation engine or scheduler.
 
+Use the [five-minute quickstart](README.md) and [community FAQ](faq.md)
+as versioned reference sources for onboarding, context, collaboration and
+FAQ updates. Verify the cited evidence against the version in each question.
+
 A member should be able to ask an ordinary project question, share an error,
 discuss a technical claim or request a bounded contribution. The assistant
 uses the authorized repository, skills and tools, investigates when necessary,

@@ -8,6 +8,7 @@ They do not grant domain providers core control-plane authority.
 - [Agent collaboration: dependent artifacts, review and result return](cross-runtime/README.md)
 - [Office operations](office-operations/README.md)
 - [Steward: an owner sentence becomes a confirmed team](steward/README.md)
+- [Community quickstart and FAQ](community/README.md) ([简体中文](community/README.zh-CN.md))
 
 ## Product golden queries
 
