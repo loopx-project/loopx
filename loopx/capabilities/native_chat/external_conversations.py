@@ -1366,11 +1366,70 @@ class ChatExternalConversations:
                 reason="owner_read_failed",
             )
 
+    def _source_session(self, selected: dict[str, Any], target: dict[str, Any] | None):
+        controller = self.controller
+        steward_candidate = authority = None
+        if target:
+            authority = self.bindings.resolve_agent_target(selected, target)
+            # Observation must retain failed or closed originals, so read the
+            # exact frozen target Session without lifecycle filtering.
+            current = next((candidate for candidate in controller.store.session_candidates(
+                goal_id=None, agent_id=selected["binding"]["executor_endpoint_id"],
+                channel_id=selected["channel_id"])
+                if candidate.get("session_id") == target["session_id"]),
+                controller.store.load_session(target["session_id"]))
+        else:
+            current = controller.store.latest_session(goal_id=None,
+            agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"])
+            if selected["binding"]["context_kind"] == "steward":
+                # A quota fallback keeps the original channel, source and Core
+                # Session. Agent filtering must not create another consumer or
+                # fork the conversation when its actual endpoint changed.
+                candidates = [item for item in controller.store.list_sessions(channel_id=selected["channel_id"])
+                              if item.get("status") in RESUMABLE_SESSION_STATES]
+                if candidates:
+                    latest = max(candidates, key=lambda item: str(item.get("created_at") or ""))
+                    steward_candidate = controller.store.load_session(latest["session_id"])
+                    allocation = (steward_candidate or {}).get("manager_executor_allocation")
+                    if isinstance(allocation, dict) and allocation.get("selection_policy") == "flexible":
+                        self.bindings.session_context(steward_candidate["steward_context"], session=steward_candidate)
+                        current = steward_candidate
+        return current, steward_candidate, authority
+
+    def capture_native_mention(self, binding: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+        """Observe local identities before provider IO, without granting input.
+
+        Do not wait behind an in-flight source admission. Current routing and
+        grants are checked again before the frozen target can receive anything.
+        """
+        choices = [item for item in self.pending() if item.get("binding_id") == binding["binding_id"]
+            and item["source"]["source_ref"] == source["source_ref"] and item.get("selection_recorded")]
+        previous = max(choices, key=lambda item: item.get("selection_order", 0)) if choices else None
+        target = previous.get("selection_target") if previous else None
+        current = self.controller.store.load_session(target["session_id"]) if target else None
+        if not target:
+            candidates = []
+            for _, session in self.controller.store.iter_session_metadata():
+                saved = session.get("steward_context") or session.get("project_context") or {}
+                allocation = session.get("manager_executor_allocation") or {}
+                if (saved.get("binding_id") == binding["binding_id"]
+                        and saved.get("source_ref") == source["source_ref"]
+                        and session.get("status") in RESUMABLE_SESSION_STATES
+                        and (session.get("agent_id") == binding["executor_endpoint_id"]
+                            or binding["context_kind"] == "steward" and allocation.get("selection_policy") == "flexible")):
+                    candidates.append(session)
+            current = max(candidates, key=lambda item: str(item.get("created_at") or ""), default=None)
+        return {"session_id": (current or {}).get("session_id"),
+            "target_turn_id": (current or {}).get("active_turn_id") or None,
+            "channel_id": (current or {}).get("channel_id")}
+
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
               message: str, command: str | None = None,
               attachments: list[dict[str, Any]] | None = None,
               origin: str = "lark", defer_background_stop: bool = False,
-              source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+              source_preflight: Callable[[dict[str, Any]], None] | None = None,
+              native_mention: bool = False,
+              native_mention_capture: dict[str, Any] | None = None) -> dict[str, Any]:
         import re
         if origin not in {"lark", "external"}:
             raise ValueError("unsupported external conversation origin")
@@ -1380,6 +1439,8 @@ class ChatExternalConversations:
             raise ValueError("unsupported external conversation command")
         if source_preflight is not None and not callable(source_preflight):
             raise ValueError("source preflight must be an in-process verifier")
+        if type(native_mention) is not bool or native_mention and (source_preflight is None or command is not None):
+            raise ValueError("native mentions require their original provider preflight")
         # These references enter the lock path before authority is resolved.
         # Check path-safe shape here; the typed owner checks current grants
         # and provider identity after both fences are acquired.
@@ -1394,9 +1455,13 @@ class ChatExternalConversations:
                                      operation="route_external_chat_request"):
                 # Resolve and verify the source inside both fences before
                 # creating or replaying any canonical request.
-                selected = resolve_external_admission_source(self.bindings, binding_id, source, source_preflight)
+                # Freeze a mention's original Session/Turn before its fenced
+                # source IO. A slow verifier cannot retarget a later Turn.
+                selected = resolve_external_admission_source(self.bindings, binding_id, source,
+                    None if native_mention else source_preflight)
                 expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
-                            "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
+                            "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin,
+                            **({"native_mention": True, "mention_capture": deepcopy(native_mention_capture)} if native_mention else {})}
                 recovering_request = path.exists()
                 if recovering_request:
                     row = _read_json(path)
@@ -1442,7 +1507,8 @@ class ChatExternalConversations:
                         *, recovering_request: bool = False,
                         source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         controller = self.controller
-        selected = ensure_external_admission_scope(self.bindings, selected, path, row, source_preflight=source_preflight)
+        selected = ensure_external_admission_scope(self.bindings, selected, path, row,
+            source_preflight=None if row.get("native_mention") else source_preflight)
         held_for_binding = row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
         if held_for_binding:
             row.pop("response_code")
@@ -1457,32 +1523,9 @@ class ChatExternalConversations:
             row["agent_target"] = None
         target = row.get("agent_target")
         steward_candidate = None
-        if target:
-            authority = self.bindings.resolve_agent_target(selected, target)
+        current, steward_candidate, authority = self._source_session(selected, target)
+        if authority:
             row["agent_audience"] = authority["audience"]
-            # Observation must retain failed or closed originals, so read the
-            # exact frozen target Session without lifecycle filtering.
-            current = next((candidate for candidate in controller.store.session_candidates(
-                goal_id=None, agent_id=selected["binding"]["executor_endpoint_id"],
-                channel_id=selected["channel_id"])
-                if candidate.get("session_id") == target["session_id"]),
-                controller.store.load_session(target["session_id"]))
-        else:
-            current = controller.store.latest_session(goal_id=None,
-            agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"])
-            if selected["binding"]["context_kind"] == "steward":
-                # A quota fallback keeps the original channel, source and Core
-                # Session. Agent filtering must not create another consumer or
-                # fork the conversation when its actual endpoint changed.
-                candidates = [item for item in controller.store.list_sessions(channel_id=selected["channel_id"])
-                              if item.get("status") in RESUMABLE_SESSION_STATES]
-                if candidates:
-                    latest = max(candidates, key=lambda item: str(item.get("created_at") or ""))
-                    steward_candidate = controller.store.load_session(latest["session_id"])
-                    allocation = (steward_candidate or {}).get("manager_executor_allocation")
-                    if isinstance(allocation, dict) and allocation.get("selection_policy") == "flexible":
-                        self.bindings.session_context(steward_candidate["steward_context"], session=steward_candidate)
-                        current = steward_candidate
         if row["command"] in {"status", "help"} and not target:
             # Observation must retain failed/closed originals. Admission still
             # uses the resumable selector and never resumes from this snapshot.
@@ -1491,6 +1534,8 @@ class ChatExternalConversations:
                     agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"]))
             snapshot = max(candidates, key=lambda candidate: str(candidate.get("updated_at") or ""), default=None)
             current = controller.store.load_session(snapshot["session_id"]) if snapshot else None
+        if row.get("native_mention") and (row.get("mention_capture") or {}).get("session_id"):
+            row["session_id"] = row["mention_capture"]["session_id"]
         if row.get("session_id") and row["command"] is None:
             current = controller.store.load_session(row["session_id"])
             if current is None:
@@ -1612,6 +1657,67 @@ class ChatExternalConversations:
                     mode="resume_latest", conversation_binding_id=row["binding_id"], source_context=row["source"])
             row["session_id"] = current["session_id"]
             _atomic_write_json(path, row)
+            if row.get("native_mention"):
+                from types import SimpleNamespace
+                from .queued_admission import deliver_native_mention
+
+                capture = row.get("mention_capture") or {}
+                if source_preflight is None:
+                    raise ValueError("native mentions require fresh original provider verification")
+                source_preflight(deepcopy(selected))
+                fresh_source = resolve_external_admission_source(self.bindings, row["binding_id"], row["source"], None)
+                if any(fresh_source.get(key) != selected.get(key) for key in ("binding", "context", "channel_id")):
+                    raise ValueError("native mention authority changed during source verification")
+                selected = fresh_source
+                selected = ensure_external_admission_scope(self.bindings, selected, path, row,
+                    source_preflight=source_preflight)
+
+                def steer_admitted(**kwargs):
+                    # The public steering endpoint intentionally rejects bound
+                    # conversations. Only this existing source-fenced admission
+                    # can reach the native IO with its current binding grant.
+                    saved = current.get("steward_context") or current.get("project_context")
+                    if not saved or saved.get("audience") not in {"bound_owner", "bound_group"}:
+                        return controller.steer_active_turn(**kwargs)
+                    with self.bindings.input_context(saved, origin=row["origin"], session=current,
+                                                     store=controller.store) as authorized:
+                        fresh = controller.store.load_session(current["session_id"])
+                        if (fresh is None or fresh.get("status") == "closed"
+                                or authorized["binding"] != selected["binding"]
+                                or any(fresh.get(key) != current.get(key) for key in
+                                       ("channel_id", "goal_id", "agent_id", "project_context", "steward_context"))):
+                            raise ValueError("original bound Session changed")
+                        controller.project_contexts.runtime_context(fresh, authorized)
+                        if fresh.get("project_context") is not None:
+                            from .project_context import validate_project_executor_scope
+                            validate_project_executor_scope(str(fresh["agent_id"]),
+                                fresh["project_context"], controller.capabilities)
+                        with controller.store.steering_delivery_lock(kwargs["session_id"], kwargs["client_ingress_id"]):
+                            return controller._steer_active_turn(session=fresh, _queued_turn_id=None, **kwargs)
+
+                decision = deliver_native_mention(
+                    SimpleNamespace(store=controller.store, steer_active_turn=steer_admitted),
+                    session_id=current["session_id"], ingress_id=plan["client_turn_id"],
+                    target_turn_id=capture.get("target_turn_id"),
+                    binding_matches=((capture.get("channel_id") == selected["channel_id"]
+                            or capture.get("channel_id") is None and capture.get("session_id") is None
+                            and capture.get("target_turn_id") is None and bool(capture))
+                        and current.get("status") != "closed"
+                        and (capture.get("session_id") == current["session_id"]
+                            or capture.get("session_id") is None and capture.get("target_turn_id") is None)
+                        and current.get("channel_id") == selected["channel_id"]),
+                    text_only=not row.get("attachments"), may_deliver_new=not recovering_request,
+                    steering_text=row["message"], queued_text=row["message"], origin=row["origin"])
+                row["mention_delivery"] = decision
+                if decision["action"] != "enqueue":
+                    row.update(status="prepared" if decision["action"] == "unresolved" else "command_completed",
+                        turn_id=decision.get("target_turn_id") or capture.get("target_turn_id"),
+                        response=("已送达当前回合。" if decision["action"] == "delivered" else
+                            "已收到，送达状态待核实。原消息已保留，不会自动改投下一回合。" if decision["action"] == "unresolved" else
+                            "本轮调整仅支持文字，原消息和附件已保留。" if decision.get("error_code") == "queue_steering_attachments_unavailable" else
+                            "未送达接收时的回合；该回合已切换或当前宿主不支持调整。原消息已保留。"))
+                    _atomic_write_json(path, row)
+                    return row
             self._record_steward_ingress(row, selected, current, plan["client_turn_id"])
             try:
                 turn, _ = controller.enqueue_turn(session_id=current["session_id"],
@@ -1973,7 +2079,7 @@ class ChatExternalConversations:
                         # queue preparation. The transport checks its source.
                         continue
                 if row["status"] == "prepared":
-                    if row.get("capture_origin") == "provider_history":
+                    if row.get("capture_origin") == "provider_history" or row.get("native_mention"):
                         continue  # Only the original provider can reverify this source.
                     # Admission resolves current authority after both request
                     # and route fences. A separate pre-fence network probe

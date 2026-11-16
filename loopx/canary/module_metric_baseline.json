@@ -29,6 +29,9 @@
     "loopx/capabilities/issue_fix/pr_lifecycle.py": {
       "lines": 2056
     },
+    "loopx/capabilities/native_chat/external_conversations.py": {
+      "lines": 2105
+    },
     "loopx/chat_actions.py": {
       "any_count": 52,
       "dict_any_count": 0
@@ -84,7 +87,7 @@
       "lines": 2760
     },
     "loopx/extensions/lark/private_conversations.py": {
-      "lines": 2583
+      "lines": 2651
     },
     "loopx/heartbeat_prompt.py": {
       "any_count": 17,
