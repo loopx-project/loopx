@@ -30,6 +30,7 @@ import { sendToolArtifact } from './borrowing-server.js';
 import { PetService } from './pets.js';
 import { corePath, proxyToCore } from './adapters/loopx/proxy.js';
 import type { LoopxService } from './adapters/loopx/service.js';
+import { LinkTokens } from './link-tokens.js';
 import { todoStages } from './todo-stage.js';
 import { teamMessage } from './teams.js';
 
@@ -38,6 +39,8 @@ export interface HttpDeps {
   push?: PushService;
   feishu?: FeishuChat;
   manager: ThreadManager;
+  /** Link tokens for opening a login link (`wl_…`); absent in tests that only exercise the hub token. */
+  linkTokens?: LinkTokens;
   /** Agent instances beyond the built-in ones. Optional so simple setups and tests need none. */
   registry?: AgentRegistry;
   /** Web terminals. Optional so deployments and tests can run without them. */
@@ -317,7 +320,42 @@ export function createHttpServer(deps: HttpDeps): Server {
     // signed for a `<video>` tag or a save link loses the header the same way and verifies the same.
     const signedFileRoute = /^\/api\/threads\/[^/]+\/files\//.test(path);
     const signedDownloadRoute = /^\/api\/threads\/[^/]+\/download$/.test(path) && url.searchParams.has('sig');
-    if (!trusted && !signedFileRoute && !signedDownloadRoute && !tokenMatches(bearer, token)) return sendJson(res, 401, { error: 'unauthorized' });
+    // A link token (`wl_…`, see LinkTokens) opens the same Workbench the hub's own token does. It
+    // never grants more: the routes that manage links or reveal the login state check the permanent
+    // token themselves. When one is recognized but dead, the 401 says which, so the page can tell
+    // an expired link from a mistyped token.
+    const link = deps.linkTokens?.check(bearer) ?? null;
+    const authed = tokenMatches(bearer, token) || (link !== null && link.ok);
+    if (!trusted && !signedFileRoute && !signedDownloadRoute && !authed) {
+      const body: Record<string, string> = { error: 'unauthorized' };
+      if (link !== null && !link.ok) body.auth_error = `link_${link.reason}`;
+      return sendJson(res, 401, body);
+    }
+
+    // What the bearer is: the hub's own token, or a link token with its expiry. Any valid token reads this.
+    if (path === '/api/auth/kind' && method === 'GET') {
+      if (!authed) return sendJson(res, 401, { error: 'unauthorized' });
+      if (tokenMatches(bearer, token)) return sendJson(res, 200, { kind: 'permanent' });
+      return sendJson(res, 200, link?.ok ? { kind: 'link', linkId: link.id, expiresAt: link.expiresAt } : { kind: 'link' });
+    }
+    // Issuing, listing and revoking link tokens is the permanent token's alone: a link must not
+    // extend its own life or mint siblings.
+    if (deps.linkTokens && path === '/api/auth/link-tokens') {
+      if (!tokenMatches(bearer, token)) return sendJson(res, 403, { error: 'link tokens cannot manage links' });
+      if (method === 'POST') {
+        const body = await readJson(req).catch(() => ({}));
+        const ttlDays = Number((body as { ttlDays?: unknown }).ttlDays ?? 7);
+        const issued = await deps.linkTokens.issue(Number.isFinite(ttlDays) ? ttlDays : 7);
+        return sendJson(res, 200, { token: issued.token, ...issued.record });
+      }
+      if (method === 'GET') return sendJson(res, 200, { links: deps.linkTokens.list() });
+    }
+    if (deps.linkTokens && /^\/api\/auth\/link-tokens\/[a-f0-9]+$/.test(path) && method === 'DELETE') {
+      if (!tokenMatches(bearer, token)) return sendJson(res, 403, { error: 'link tokens cannot manage links' });
+      const revoked = await deps.linkTokens.revoke(path.split('/').pop() ?? '');
+      return sendJson(res, 200, { revoked });
+    }
+
 
     // LoopX core (goals, todos, steward, status): forwarded as is, behind this hub's own auth.
     const core = corePath(path);

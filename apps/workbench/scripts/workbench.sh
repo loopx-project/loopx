@@ -33,6 +33,8 @@ core_start(){
 case "${1:-start}" in
   stop) alive && kill "$(cat "$PIDF")" && echo stopped || echo "not running";;
   status) alive && echo "running pid $(cat "$PIDF") on :$PORT" || echo "not running";;
+  # The permanent token, for filling into 设置 › 访问 after arriving through a login link.
+  token) sed -n 's/^LOOCHAT_TOKEN=//p' "$ENVF";;
   core)
     case "${2:-start}" in
       stop) core_alive && kill "$(cat "$CORE_PIDF")" && echo "core stopped" || echo "core not running";;
@@ -68,6 +70,17 @@ case "${1:-start}" in
     echo $! > "$PIDF"
     sleep 3; alive || { tail -20 "$STATE/daemon.log"; exit 1; }
     echo "started pid $(cat "$PIDF"), log $STATE/daemon.log"
+    # A login link to hand to a phone: a fresh 7-day link token, printed once as a full address.
+    # WORKBENCH_PRINT_LINK=0 skips it (links can also be made and revoked in 设置 › 访问).
+    if [ "${WORKBENCH_PRINT_LINK:-1}" != 0 ] && command -v python3 >/dev/null; then
+      TOKEN="$(sed -n 's/^LOOCHAT_TOKEN=//p' "$ENVF")" PORT="$PORT" python3 - <<'PY' || echo "login link not issued; make one in Settings → Access"
+import json, os, urllib.request
+req = urllib.request.Request(f"http://127.0.0.1:{os.environ['PORT']}/api/auth/link-tokens", method="POST",
+    headers={"Authorization": "Bearer " + os.environ["TOKEN"]}, data=b"{}")
+link = json.load(urllib.request.urlopen(req, timeout=10))
+print(f"login link (valid until {link['expiresAt']}): http://127.0.0.1:{os.environ['PORT']}/#token={link['token']}")
+PY
+    fi
     # First start of a state dir only: switch on the built-in extensions the Workbench wants (the session board),
     # as the Extensions page would. Done once, so uninstalling one later sticks. WORKBENCH_EXTENSIONS="" turns it off.
     if [ ! -f "$STATE/.extensions-seeded" ]; then
