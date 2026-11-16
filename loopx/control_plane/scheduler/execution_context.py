@@ -490,9 +490,11 @@ def render_scheduler_execution_args(
                 f"unsupported scheduler runtime profile: {runtime_profile}"
             ) from exc
         return _render_scheduler_runtime_profile_args(profile)
-    if scheduler_execution_context is None:
-        return ""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
+    # Resolving an omitted scheduler can carry a settlement default. Its
+    # absence still contributes no scheduler arguments to a recovery command.
+    if resolution.context is None and resolution.supplied is None:
+        return ""
     if not resolution.ok or resolution.context is None:
         raise ValueError(
             "invalid scheduler_execution_context: " + "; ".join(resolution.errors)
