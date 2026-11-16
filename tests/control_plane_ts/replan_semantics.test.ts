@@ -175,7 +175,7 @@ test("an open Vision reconstruction must come from the exact scoped receipt sour
   }
 });
 
-test("only plain vision and outcome reviews have a scalar receipt source", () => {
+test("scalar review sources exclude evidence windows and restricted duties", () => {
   const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
     obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
     stop_condition: "Stop at owner-only decisions.",
@@ -225,6 +225,35 @@ test("mixed vision/outcome recovery preserves the dominant policy without discha
       observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
     assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered,
       agent_vision: vision}).accepted, true);
+  }
+});
+
+test("Monitor lifecycle changes retain the admitted review without discharging it", () => {
+  const kind = "monitor_no_change_streak";
+  const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
+    obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
+    triggers: [{kind, todo_id: "todo_monitor", run_count: 5, threshold: 5}],
+    stop_condition: "Stop at owner-only decisions."};
+  const review = projectReplanSemantics({operation: "receipt_review_source", agent_id: "reviewer",
+    obligation: source}).review_source;
+  assert.deepEqual(review, {kind, stop_condition: source.stop_condition});
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "open", selected_obligation_id: source.obligation_id, current_obligation: null,
+    transition_candidates: [], agent_id: "reviewer", receipt_review: review};
+  const recovered = projectReplanSemantics(request).obligation as JsonObject;
+  assert.equal(recovered.obligation_id, source.obligation_id);
+  assert.equal(recovered.selection_binding, "heartbeat_receipt");
+  assert.deepEqual(recovered.triggers, [{kind}]);
+  assert.deepEqual(requiredSemanticOutcomes(recovered), requiredSemanticOutcomes(source));
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered}).accepted, false);
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered,
+    observation_delta: {delta_kinds: ["new_surface"]}}).accepted, true);
+  assert.throws(() => projectReplanSemantics({...request, guard_scoped: false}), /identity conflicts/);
+  for (const restriction of [{progress_baseline: {}}, {progress_window: []},
+    {capability_guard: {}}, {resolution_mode: "todo_lifecycle_settlement"},
+    {satisfying_semantic_outcomes: ["new_runnable_successor"]}]) {
+    assert.equal(projectReplanSemantics({operation: "receipt_review_source", agent_id: "reviewer",
+      obligation: {...source, ...restriction}}).review_source, null);
   }
 });
 

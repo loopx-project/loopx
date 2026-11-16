@@ -47,7 +47,7 @@ from ..todos.contract import (
     normalize_todo_replan_obligation_id,
 )
 from ..todos.todo_semantics import todo_item_task_class
-from ..todos.user_gate import has_only_open_user_actions, open_todo_count
+from ..todos.user_gate import has_only_open_user_actions, open_todo_count, open_user_gate_todo_items
 from ..todos.write_hint import build_capability_resolution_writeback_actions
 from .autonomous_replan_obligation import (
     build_autonomous_replan_cli_actions,
@@ -461,6 +461,17 @@ def _due_monitor_cli_actions(
         "The poll advances next_due_at from cadence and settles this Monitor Turn without "
         "refresh-state or quota spend. Yield; independent work requires a fresh guarded Turn.",
     ]
+
+
+# Observation is evidence, never an owner decision: no completion command is projected.
+# Keep the text free of quote characters; consumers shlex-split every action.
+MONITOR_USER_GATE_NOTICE = (
+    "A Monitor observation never completes or approves a User gate. Do not pass the id or claim proof "
+    "of this Turn to a gate completion, and do not attach evidence to a gate through todo update. "
+    "Record the observation with the poll below and yield. Work that may continue on an observed change "
+    "without an owner decision belongs in the successor of that poll (--material-change with "
+    "--next-agent-todo), not behind a User gate."
+)
 
 
 def _turn_scoped_cli_settlement_context(
@@ -1436,6 +1447,10 @@ def _build_interaction_cli_channel(
     work_lane = payload.get("work_lane_contract")
     if not isinstance(work_lane, Mapping):
         work_lane = {}
+    if primary_monitor is not None and turn_instance_id and open_user_gate_todo_items(payload.get("user_todo_summary")):
+        # Keep the Monitor instruction first; the notice precedes the poll it qualifies.
+        actions = channel["next_cli_actions"]
+        channel["next_cli_actions"] = [*actions[:1], MONITOR_USER_GATE_NOTICE, *actions[1:]]
     auxiliary_monitor = work_lane.get("auxiliary_monitor_poll")
     if not isinstance(auxiliary_monitor, Mapping):
         auxiliary_monitor = None
