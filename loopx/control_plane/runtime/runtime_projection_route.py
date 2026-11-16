@@ -104,19 +104,21 @@ def resolve_goal_source_runtime_route(
     ``source_registry``, goal-scoped capabilities must use that registry's
     runtime rather than treating the shared projection as the source of truth.
     An explicit runtime override remains authoritative for diagnostics and
-    recovery commands.
+    recovery commands. It also supplies the invoked runtime for an unbound
+    registry.
     """
 
     invoked_registry = registry_path.expanduser().resolve()
     registry_payload = registry if registry is not None else load_registry(
         invoked_registry, source_snapshots=source_snapshots,
     )
-    invoked_runtime = _registry_runtime_root(
-        registry_payload,
-        registry_path=invoked_registry,
-    )
     if runtime_root_override:
         runtime_root = Path(runtime_root_override).expanduser().resolve()
+        invoked_runtime = (
+            _registry_runtime_root(registry_payload, registry_path=invoked_registry)
+            if registry_payload.get("common_runtime_root")
+            else runtime_root
+        )
         return _goal_source_route_packet(
             status="explicit_override",
             declaration_source="cli.runtime_root_override",
@@ -127,6 +129,10 @@ def resolve_goal_source_runtime_route(
             source_runtime=runtime_root,
         )
 
+    invoked_runtime = _registry_runtime_root(
+        registry_payload,
+        registry_path=invoked_registry,
+    )
     registry_is_global = bool(registry_payload.get("registry_role") == "global-local") or _same_path(
         invoked_registry,
         global_registry_path(invoked_runtime),

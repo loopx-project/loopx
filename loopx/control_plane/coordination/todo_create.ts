@@ -1,6 +1,6 @@
 import {planTodoCreationPriority} from "../todos/priority.ts";
 import {planMonitorSchedule} from "../todos/monitor_metadata.ts";
-import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
+import {AUTHORITY_SOURCE_CHANGED, requireReviewedRegistrySha256, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import type { JsonObject } from "../effect_program.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
 import type { AuthorityStore } from "./authority_store.ts";
@@ -35,6 +35,7 @@ export interface CoordinationTodoCreateInput {
   readonly operation_id: string;
   readonly dry_run: boolean;
   readonly expected_provider_revision?: string;
+  readonly expected_registry_sha256?: string;
   readonly now: Date;
 }
 
@@ -84,6 +85,9 @@ function normalizeCreateInput(rawInput: CoordinationTodoCreateInput,
   }
   if (input.expected_provider_revision !== undefined) {
     requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision");
+  }
+  if (input.expected_registry_sha256 !== undefined) {
+    requireReviewedRegistrySha256(input.expected_registry_sha256);
   }
   if (todo.status === "done" || todo.archive_state !== "active") {
     throw new AuthorityStoreProtocolError(
@@ -251,6 +255,8 @@ export async function executeCoordinationTodoCreate(
     dry_run: input.dry_run,
     ...(input.expected_provider_revision === undefined ? {} :
       {expected_provider_revision: input.expected_provider_revision}),
+    ...(input.expected_registry_sha256 === undefined ? {} :
+      {expected_registry_sha256: input.expected_registry_sha256}),
   });
   const receipt = createReceipt(input, requestSha);
   const existing = await receipt.read(store);
@@ -282,17 +288,17 @@ export async function executeCoordinationTodoCreate(
   }
   const todoId = requireAuthorityStoreId(input.todo.todo_id, "todo id");
   const readModel = canonicalAuthorityObject(head.head.todo_read_model, "Todo read model");
-  // A derived due time belongs to the first result, never to the retry identity.
-  const {todo} = input;
-  const needsInitialDue = todo.role === "agent" && todo.task_class === "continuous_monitor" &&
-    todo.next_due_at == null && todo.cadence != null;
-  const initialDue = needsInitialDue
-    ? planMonitorSchedule(input.now.toISOString(), todo.cadence).next_due_at : null;
-  const plannedInput = initialDue === null ? input : {...input, todo: {...todo, next_due_at: initialDue}};
-  const plan = planCoordinationTodoCreate(plannedInput, projection.todos, readModel.schema_version);
+  const plan = planCoordinationTodoCreate(input, projection.todos, readModel.schema_version);
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
   if (plan.status !== "planned") return {...plan, provider_revision: head.provider_revision, cursor: head.cursor};
-  const created = canonicalAuthorityObject(plan.todo, "created Todo");
+  // An implicit due time belongs to a new record. Duplicate matching compares
+  // the submitted configuration and respects any explicitly requested due time.
+  const planned = canonicalAuthorityObject(plan.todo, "created Todo");
+  const needsInitialDue = planned.role === "agent" && planned.task_class === "continuous_monitor" &&
+    planned.next_due_at == null && planned.cadence != null;
+  const initialDue = needsInitialDue
+    ? planMonitorSchedule(input.now.toISOString(), planned.cadence).next_due_at : null;
+  const created = initialDue === null ? planned : {...planned, next_due_at: initialDue};
   if (input.dry_run) {
     return {
       schema_version: COORDINATION_TODO_CREATE_RESULT_SCHEMA,

@@ -76,6 +76,9 @@ def add_goal_todo(
     dry_run: bool = False,
     operation_id: str | None = None,
     expected_provider_revision: str | None = None,
+    expected_registry_sha256: str | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
+    expected_store_identity: str | None = None,
 ) -> dict[str, Any]:
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if role not in TODO_SECTION_HEADINGS:
@@ -149,6 +152,9 @@ def add_goal_todo(
     return create_canonical_todo_if_promoted(
         operation_id=operation_id,
         expected_provider_revision=expected_provider_revision,
+        expected_registry_sha256=expected_registry_sha256,
+        routing_registry_witness=routing_registry_witness,
+        expected_store_identity=expected_store_identity,
         registry_path=registry_path,
         runtime_root=shadow_runtime_root,
         goal_id=goal_id,
@@ -301,9 +307,12 @@ def update_goal_todo(
     claim_only: bool = False,
     claim_operation_id: str | None = None,
     manage_execution: bool = False,
+    claim_expected_provider_revision: str | None = None,
+    claim_expected_registry_sha256: str | None = None,
     update_operation_id: str | None = None,
     update_expected_provider_revision: str | None = None,
     update_expected_registry_sha256: str | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     project: Path | None = None,
@@ -323,6 +332,9 @@ def update_goal_todo(
         update_operation_id, update_expected_provider_revision, update_expected_registry_sha256,
     )):
         raise ValueError("Todo update identity and review basis cannot be used for todo claim")
+    if not (claim_only and manage_execution) and (
+            claim_expected_provider_revision is not None or claim_expected_registry_sha256 is not None):
+        raise ValueError("A Todo claim review basis requires a managed claim")
     if excluded_agents and clear_excluded_agents:
         raise ValueError(
             "todo update accepts either excluded_agents or clear_excluded_agents, not both"
@@ -375,6 +387,9 @@ def update_goal_todo(
             dry_run=dry_run,
             operation_id=claim_operation_id,
             manage_execution=manage_execution,
+            expected_provider_revision=claim_expected_provider_revision,
+            expected_registry_sha256=claim_expected_registry_sha256,
+            routing_registry_witness=routing_registry_witness,
             task_lease_idempotency_key=task_lease_idempotency_key,
             task_lease_expected_version=task_lease_expected_version,
             project=project,
@@ -423,6 +438,7 @@ def update_goal_todo(
             authority_reason=authority_reason,
             expected_provider_revision=update_expected_provider_revision,
             expected_registry_sha256=update_expected_registry_sha256,
+            routing_registry_witness=routing_registry_witness,
             task_lease_idempotency_key=task_lease_idempotency_key,
             task_lease_expected_version=task_lease_expected_version,
             monitor_observation=monitor_metadata if isinstance(monitor_metadata, todo_monitor_metadata.MonitorPollObservation) else None,
@@ -446,6 +462,7 @@ def complete_goal_todo(
     completion_turn_key: str | None = None,
     completion_identity_source: str | None = None,
     terminal_review_basis: Mapping[str, Any] | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
     expected_todo_text_sha256: str | None = None,
     require_captured_todo_text: bool = False,
     completion_delivery_workspace: Mapping[str, Any] | None = None,

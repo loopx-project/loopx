@@ -46,6 +46,86 @@ test("an interrupted Task start retries only its original saved Task", () => {
   }
 });
 
+test("a failed create without a plan can retry only the original review", () => {
+  const proposal = {proposal_id: "confirmed", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    status: "failed", permission_classification: "durable_write", normalized_parameters: {goal_id: "report"},
+    available_transitions: ["apply"], checkpoint: null,
+    failure: {error_code: "canonical_action_failed", retry_safe: true}};
+  for (const action_kind of ["todo.create", "monitor.create"]) {
+    const plan = compileActionReviewPlan({...proposal, action_kind});
+    assert.equal(plan.proposalId, "confirmed");
+    assert.equal(plan.sourceFingerprint, "reviewed");
+    assert.equal(plan.retryOriginal, true);
+    assert.equal(plan.prohibitRegeneration, true);
+  }
+  for (const change of [
+    {status: "gated"}, {status: "stale"}, {proposal_id: ""}, {expected_state_fingerprint: ""},
+    {normalized_parameters: {}}, {permission_classification: "protected"}, {available_transitions: []},
+    {failure: {...proposal.failure, retry_safe: false}},
+    {failure: {...proposal.failure, error_code: "invalid_canonical_transition"}},
+    {checkpoint: {steps: {todo_create_prepared: {operation_id: "chat-create:another-proposal"}}}},
+    {checkpoint: {steps: {todo_created: null}}},
+  ]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+  assert.equal(compileActionReviewPlan({...proposal, status: "stale"}).prohibitRegeneration, undefined);
+  const applying = {...proposal, status: "applying", failure: null};
+  assert.equal(compileActionReviewPlan(applying).interaction, "pending");
+  assert.equal(compileActionReviewPlan({...applying, creation_retry_available: true}).retryOriginal, true);
+  assert.equal(compileActionReviewPlan({...applying, creation_retry_available: true, checkpoint: {steps: {}}}).retryOriginal, undefined);
+});
+
+test("a Todo saved before create preparation was introduced retries from its original receipt", () => {
+  const created = {todo_id: "todo-original",
+    canonical_receipt: {todo_id: "todo-original", goal_id: "report", preview_id: "reviewed", status: "applied"},
+    source: {source_identity: "original-route", source_authority: "sqlite_v0", store_identity: "original-store",
+      registry_sha256: "a".repeat(64), provider_revision: "created-revision", operation_id: "chat-todo:reviewed"}};
+  const proposal = {proposal_id: "confirmed", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    status: "applying", permission_classification: "durable_write", normalized_parameters: {goal_id: "report"},
+    checkpoint: {steps: {todo_created: created}}};
+  const plan = compileActionReviewPlan(proposal);
+  assert.equal(plan.reason, "todo_creation_retry");
+  assert.equal(plan.retryOriginal, true);
+  assert.equal(plan.prohibitRegeneration, true);
+  assert.equal(compileActionReviewPlan({...proposal, normalized_parameters: {goal_id: "elsewhere"}}).retryOriginal, undefined);
+  assert.equal(compileActionReviewPlan({...proposal,
+    checkpoint: {steps: {todo_created: {...created, source: null}}}}).retryOriginal, undefined);
+});
+
+test("a confirmation saved before source binding remains reachable on its original card", () => {
+  const receipt = {schema_version: "loopx_chat_todo_receipt_v0", receipt_id: "original-create",
+    todo_id: "todo-original", goal_id: "report", preview_id: "reviewed", preview_revision: "original-revision",
+    status: "applied", outcome: "todo_added"};
+  const created = {todo_id: "todo-original", canonical_receipt: receipt};
+  const proposal = {proposal_id: "confirmed", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    status: "failed", permission_classification: "durable_write", normalized_parameters: {goal_id: "report", agent_id: "agent-a"},
+    context: {kind: "goal", goal_id: "report"}, checkpoint: {steps: {todo_created: created}}};
+  const gated = {...proposal, status: "gated", gate: {kind: "canonical_authority_required"}};
+  const createOnly = {...proposal, normalized_parameters: {goal_id: "report"}};
+  const displayPending = {...createOnly,
+    failure: {error_code: "canonical_create_projection_pending", details: {canonical_committed: true}}};
+  for (const original of [proposal, {...proposal, status: "applying"}, gated, createOnly, displayPending]) {
+    const plan = compileActionReviewPlan(original);
+    assert.equal(plan.proposalId, "confirmed");
+    assert.equal(plan.canApply, true);
+    assert.equal(plan.retryOriginal, true);
+    assert.equal(plan.prohibitRegeneration, true);
+  }
+  assert.equal(compileActionReviewPlan(displayPending).reason, "canonical_create_projection_pending");
+  for (const change of [
+    {context: {kind: "goal", goal_id: "different-report"}},
+    {context: {...proposal.context, binding_id: "steward-chat"}},
+    {checkpoint: {steps: {todo_created: {...created, source: null}}}},
+  ]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+  for (const change of [{preview_revision: null}, {preview_id: "another-review"}, {outcome: "todo_already_exists"}]) {
+    const checkpoint = {steps: {todo_created: {...created, canonical_receipt: {...receipt, ...change}}}};
+    assert.equal(compileActionReviewPlan({...proposal, checkpoint}).retryOriginal, undefined);
+  }
+  assert.equal(compileActionReviewPlan({...gated, gate: {kind: "authenticated_steward_confirmation_required"}}).canApply, false);
+});
+
 test("confirmed Task dispatch resolves only to the receipt's own execution Turn", () => {
   const resources = {goal_id: "repair", todo_id: "todo-first", session_id: "session-first", turn_id: "turn-first"};
   const canonical = {goal_id: "repair", todo_id: "todo-first", preview_id: "reviewed", status: "applied"};
@@ -596,4 +676,33 @@ test("a plan card frame is refused for anything that was never an admitted previ
   const operation = compileActionReviewPlan(operationProposal("awaiting_confirmation"));
   assert.equal(operation.operationFrame?.kind, "confirmation");
   assert.equal(operation.reviewCardFrame, undefined);
+});
+
+
+test("task and monitor creation recover the original pending display without accepting an unrelated proposal", () => {
+  const prepared = {operation_id: "chat-create:reviewed", preview_id: "original-preview",
+    source_identity: "route", source_authority: "sqlite_v0", expected_provider_revision: "revision",
+    expected_registry_sha256: "a".repeat(64), expected_store_identity: "sqlite:fixture"};
+  const proposal = {schema_version: "loopx_chat_action_proposal_v1", proposal_id: "reviewed",
+    expected_state_fingerprint: "original-preview", permission_classification: "durable_write",
+    normalized_parameters: {goal_id: "goal-a"}, status: "failed",
+    checkpoint: {steps: {todo_create_prepared: prepared}},
+    failure: {error_code: "canonical_create_projection_pending", retry_safe: true,
+      details: {canonical_committed: true, todo_id: "todo_created"}}};
+  for (const action_kind of ["todo.create", "monitor.create"]) {
+    const action = {...proposal, action_kind};
+    const plan = compileActionReviewPlan(action);
+    assert.equal(plan.reason, "canonical_create_projection_pending");
+    assert.equal(plan.retryOriginal, true);
+    assert.equal(plan.canApply, true);
+    assert.equal(compileActionReviewPlan({...action, failure: null, status: "applying"}).reason, "todo_creation_retry");
+    const interrupted = {...action, failure: null, status: "applying",
+      checkpoint: {steps: {...action.checkpoint.steps, todo_created: {projection_delivery: "pending"}}}};
+    assert.equal(compileActionReviewPlan(interrupted).reason, "canonical_create_projection_pending");
+    assert.equal(compileActionReviewPlan({...action, status: "applied", receipt: {projection_verified: true}}).interaction, "completed");
+    for (const change of [{status: "stale"}, {checkpoint: null}, {permission_classification: "protected"},
+      {proposal_id: "different"}, {action_kind: "todo.update"}, {failure: {retry_safe: false}}]) {
+      assert.equal(compileActionReviewPlan({...action, ...change}).retryOriginal, undefined);
+    }
+  }
 });
