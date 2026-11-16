@@ -592,6 +592,30 @@ def test_complete_markdown_keeps_unknown_facts_types_and_instruction_text():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ordinary_quota_uses_complete_source_before_turn_binding(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _initialize_fixture_authority,
+        _run_cli, _spend_run_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="soft_claim")
+    code, source = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--context-delivery", "off", cwd=project)
+    assert code == 0, source
+    assert_complete_turn_decision(source)
+    assert source["selected_todo"]["todo_id"] == TODO_ID
+    assert source["selected_todo"]["text"].endswith("Validate and settle the selected delivery.")
+    assert not source.get("heartbeat_receipt")
+    assert "settlement_plan" not in source["interaction_contract"]["cli_channel"]
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("host_args", [("--codex-app",), ("--runtime-profile", "generic_cli")])
 def test_complete_quota_successor_settles_original_turn_without_staged_reader(tmp_path, monkeypatch, provider, host_args):
     import shlex

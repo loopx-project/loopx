@@ -11,6 +11,7 @@ import loopx
 import pytest
 
 from loopx.control_plane.quota.turn_envelope import (
+    assert_complete_turn_decision,
     build_turn_envelope,
     compose_turn_decision,
     compose_turn_decision_with_raw_envelope,
@@ -56,12 +57,8 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
     record_property("markdown_utf8_bytes", len(result.stdout.encode("utf-8")))
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
-    if not envelope:
-        assert result.stdout.startswith("# LoopX Quota Should Run\n")
-        assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
-        assert "normal_run" in result.stdout
-        assert "schema_version" not in source and "contract_binding" not in source
-    elif delivery == "off":
+    assert_complete_turn_decision(source)
+    if envelope and delivery == "off":
         assert result.stdout.startswith("# LoopX Turn Envelope\n")
         assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
         assert "- should_run: `True`" in result.stdout
@@ -69,7 +66,6 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
         assert not result.stdout.startswith("# LoopX Turn Envelope\n\n```json\n")
         assert len(result.stdout) <= 4800
     else:
-        assert result.stdout.startswith("# LoopX Turn Envelope\n")
         # Follow the same pinned recovery as JSON; no second admission is
         # needed to recover every field of this complete synthetic decision.
         body, cost = read_cli_context_for_oracle(result.stdout, output_format="markdown")
@@ -78,8 +74,6 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
         assert shown["should_run"] is True
         assert shown["effective_action"] == "normal_run"
         assert json.dumps(shown, ensure_ascii=False) == json.dumps(source, ensure_ascii=False)
-    if envelope:
-        assert source["schema_version"] == "loopx_turn_envelope_v1"
     # Both readers recover the identical admitted source without a second guard.
     assert source["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
     assert source["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == TURN_ID

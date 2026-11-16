@@ -4536,7 +4536,8 @@ def test_visible_cli_goal_prompt_keeps_source_and_agent_spend(
             guard.replace(f" --turn-instance-id {TURN_ID}", ""),
             registry_path=registry_path, cwd=project,
         )
-        assert rc == 0 and "contract_binding" not in unbound, unbound
+        assert rc == 0, unbound
+        assert_complete_turn_decision(unbound)
         assert not unbound.get("heartbeat_receipt")
 
     rc, preview = _run_generated_cli(guard, registry_path=registry_path, cwd=project)
@@ -5237,10 +5238,7 @@ def test_unbound_visible_goal_selection_binds_the_chosen_todo(
         assert "--decision-output-root" not in argv
     bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
     assert bound_rc == 0, bound
-    if complete or profile in {"codex_app_ssh_goal", "codex_cli"}:
-        assert_complete_turn_decision(bound)
-    else:
-        assert "schema_version" not in bound and "contract_binding" not in bound
+    assert_complete_turn_decision(bound)
     assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     identity = bound["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == ALTERNATIVE_TODO_ID

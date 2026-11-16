@@ -65,7 +65,9 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
         assert off["schema_version"] == "loopx_turn_envelope_v0"
         work_context = off["work_context"]
     else:
-        assert "schema_version" not in off and "contract_binding" not in off
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(off)
         work_context = off["interaction_contract"]["agent_channel"]["work_context"]
     source = next(row["content"] for row in work_context["sources"]
         if row.get("source") == "goal_acceptance")

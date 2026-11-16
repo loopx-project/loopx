@@ -1003,9 +1003,12 @@ variation, failures and negative cases. Historical-best optimization keeps that
 native ranking, with final-retention facts separate. A Codex-scoped adapter
 cannot qualify a DeepSeek host.
 
-Keep this sequence in C1/C2/C9: explanation → both-model comparison → supported
-profile's reversible adoption/release → scoped default → named old-path
-retirement. Mixed or regressed results retain opt-in or explicit limitations.
+C1 candidates qualify one default complete source for supported new work,
+including selection before a Turn is bound. Compare that candidate with the
+current release on matched tasks and qualify its supported callers before
+release adoption. Use the results to repair regressions or narrow the release
+scope. C2's additional delivery layers keep their own scoped adoption and
+rollback checks.
 Retirement requires actual caller replacement, historical decoding/readback,
 supported-version and rollback coverage; full snapshots, digest checks,
 authority/identity/stops and recovery remain. Do not preserve two permanent

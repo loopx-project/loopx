@@ -342,7 +342,7 @@ def _prepare_quota_result_context(
     payload: dict[str, object], args: argparse.Namespace, *,
     context: QuotaCommandContext | None, registry_path: Path,
     heartbeat_turn_id: str | None, capture_directory: Path | None, reader_argv: list[str],
-    complete_source: bool, complete_cli_settlement: bool, preserve_bound_delivery: bool,
+    complete_cli_settlement: bool,
     activation: Mapping[str, Any],
     remember_result: Callable[[dict[str, object], str | None], None],
 ) -> tuple[dict[str, object], list[dict[str, Any]]]:
@@ -361,11 +361,10 @@ def _prepare_quota_result_context(
     attach_quota_settlement_guidance(payload, registry_path=registry_path,
         runtime_root=context.runtime_root if context is not None else None)
     bind_capture_selection_transport(payload, args, capture_directory=capture_directory,
-        retain_delivery_options=complete_source)
+        retain_delivery_options=args.quota_command == "should-run")
     if args.quota_command == "should-run" and context is not None:
         bind_capture_recovery_transport(payload, args, capture_directory=capture_directory,
-            registry_path=registry_path, runtime_root=context.runtime_root,
-            preserve_bound_delivery=preserve_bound_delivery)
+            registry_path=registry_path, runtime_root=context.runtime_root)
     if capture_directory is not None and payload.get("replan_action_packet"):
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": reader_argv}
@@ -383,7 +382,6 @@ def _prepare_quota_result_context(
         capability_context = attach_reward_memory_recall_after_should_run(
             payload, quota_command=args.quota_command, heartbeat_turn_id=heartbeat_turn_id,
             registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
-            complete_source=complete_source,
         )
     return payload, capability_context
 
@@ -510,11 +508,7 @@ def _publish_quota_result(
     native_context = False
     host_todo_settlement = getattr(args, "host_todo_settlement", False)
     complete_cli_settlement = bool(host_todo_settlement or getattr(args, "complete_turn", False))
-    complete_source = False
-    profile_source = False
-    stateless_app_work_turn = False
-    cli_work_source = False
-    direct_cli_source = False
+    is_quota_guard = args.quota_command == "should-run"
     runtime_root = context.runtime_root if context is not None else None
     if not budgeted_spend:
         try:
@@ -527,55 +521,23 @@ def _publish_quota_result(
         native_context = activation["enabled"] and bool(
             getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
         )
-        # Both direct and profiled CLI work use the complete source. Host and
-        # display options still control transport and settlement independently.
-        if args.quota_command == "should-run" and context is not None:
+        # The SSH Goal hands spend to the runtime after authorized writeback.
+        # All guard profiles share the same work source.
+        if (is_quota_guard and context is not None and heartbeat_turn_id is not None
+                and args.format == "json" and not getattr(args, "turn_envelope", False)):
             from ..control_plane.scheduler.execution_context import (
                 SchedulerRuntimeProfile,
-                resolve_scheduler_execution_context,
                 scheduler_runtime_profile_for_execution_context,
             )
 
-            scheduler = resolve_scheduler_execution_context(context.scheduler_context)
-            profile = scheduler_runtime_profile_for_execution_context(scheduler)
-            # Turnless App probes retain their observation route.
-            stateless_app_work_turn = (
-                heartbeat_turn_id is not None
-                and profile in {SchedulerRuntimeProfile.TRAE_APP, SchedulerRuntimeProfile.ANTIGRAVITY_APP}
+            profile = scheduler_runtime_profile_for_execution_context(context.scheduler_context)
+            complete_cli_settlement = (
+                complete_cli_settlement or profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE
             )
-            bound_work = heartbeat_turn_id is not None and args.agent_id is not None
-            bound_json = args.format == "json" and bound_work
-            cli_work_source = (
-                (args.format == "json" and profile is SchedulerRuntimeProfile.CODEX_CLI_VISIBLE)
-                or (bound_json and (
-                    profile is SchedulerRuntimeProfile.KIRO_CLI_VISIBLE
-                    or (profile is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
-                        and getattr(args, "runtime_profile", None) == profile.value)
-                ))
-            )
-            # Markdown and JSON render the same authority for a bound generic Turn.
-            direct_cli_source = bound_work and (
-                (profile or scheduler.default_settlement_profile)
-                is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
-            )
-            profile_source = (
-                profile is SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT
-                or stateless_app_work_turn
-                or cli_work_source
-            )
-            if (profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE and heartbeat_turn_id is not None
-                    and args.format == "json" and not getattr(args, "turn_envelope", False)):
-                complete_cli_settlement = True
-        complete_source = (complete_cli_settlement or profile_source or direct_cli_source
-            or any(getattr(args, name, None) for name in (
-                "turn_envelope", "decision_handoff_socket",
-            )))
         payload, capability_context = _prepare_quota_result_context(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
-            complete_source=complete_source, complete_cli_settlement=complete_cli_settlement,
-            preserve_bound_delivery=(stateless_app_work_turn or cli_work_source or direct_cli_source)
-                and not getattr(args, "complete_turn", False),
+            complete_cli_settlement=complete_cli_settlement,
             activation=activation, remember_result=remember_result,
         )
     _observe_live_quota_result(
@@ -598,7 +560,7 @@ def _publish_quota_result(
     )
     raw_envelope, legacy_view = False, None
     delivery_request = None
-    if args.quota_command == "should-run" and complete_source:
+    if is_quota_guard:
         from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 
         try:
@@ -612,15 +574,11 @@ def _publish_quota_result(
                 ) if isinstance(payload.get("interaction_contract"), Mapping) else payload)
                 print_payload(observation, args.format, _quota_renderer(args))
                 return 0 if observation.get("ok") is True else 1
-            inline_diagnostic_source = profile_source or (
-                direct_cli_source and not getattr(args, "complete_turn", False)
-            )
             payload, raw_envelope, legacy_view = compose_quota_cli_source(
                 payload, args, activation, compose=_export("compose_turn_decision"),
                 scheduler_context=context.scheduler_context if context is not None else None,
                 capture_directory=capture_directory, capability_context=capability_context,
-                share_inline_diagnostics=(inline_diagnostic_source and not context_delivery_enabled
-                    and not activation["progressive_enabled"]),
+                share_inline_diagnostics=not context_delivery_enabled and not activation["progressive_enabled"],
             )
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
             failure = _export("quota_composition_failure_view")(args, payload, exc,
@@ -630,11 +588,6 @@ def _publish_quota_result(
             return 1
         # Validate before capture or handoff; the complete source is unchanged.
         payload = _project_quota_cli_payload(payload, args, detail_sections)
-    elif args.quota_command == "should-run":
-        if payload.get("ok") is True and ("schema_version" in payload or "contract_binding" in payload):
-            raise QuotaDecisionTransportError("Ordinary quota received an unexpected decision source.")
-        if payload.get("ok") is True and not isinstance(payload.get("interaction_contract"), Mapping):
-            raise QuotaDecisionTransportError("Ordinary quota decision is missing its interaction contract.")
     captured_digest = capture_decision(
         capture_directory, payload, args=args, native_context=native_context, record_capture=remember_result,
     )
@@ -659,23 +612,14 @@ def _publish_quota_result(
         print_payload(raw_quota_turn_view(payload, legacy_view), args.format, _quota_renderer(args))
         return 0 if payload.get("ok") is True else 1
     captured_payload = payload
-    # The native planner and its fallback must use the same original bytes.
-    # Compaction here would stage a second view before native first-read paths
-    # are derived, while its exact recovery reference still names decision.json.
-    native_read = (
-        args.quota_command == "should-run" and native_context and not deferred_context
-        and args.format == "json" and payload.get("ok") is True
-    )
-    if args.quota_command != "should-run" or (not complete_source and not native_read):
-        payload = _project_quota_cli_payload(payload, args, detail_sections,
-            ordinary_source=not complete_source,
-            capture_directory=capture_directory)
+    if not is_quota_guard:
+        payload = _project_quota_cli_payload(payload, args, detail_sections)
     return _emit_quota_presentation(payload, args, capture_directory=capture_directory,
         captured_payload=captured_payload, captured_digest=captured_digest,
         delivery_request=delivery_request,
         context_delivery_enabled=context_delivery_enabled,
         native_context=native_context, progressive_enabled=activation["progressive_enabled"],
-        complete_source=complete_source, runtime_root=runtime_root,
+        runtime_root=runtime_root,
         reader_argv=reader_argv, print_payload=print_payload)
 
 
@@ -684,7 +628,7 @@ def _emit_quota_presentation(
     capture_directory: Path | None, captured_payload: dict[str, object], captured_digest: str | None,
     delivery_request: tuple[dict[str, Any], str] | None,
     context_delivery_enabled: bool, native_context: bool,
-    progressive_enabled: bool, complete_source: bool, runtime_root: Path | None,
+    progressive_enabled: bool, runtime_root: Path | None,
     reader_argv: list[str], print_payload: PrintPayload,
 ) -> int:
     """Render the admitted capture and retain its receipt if presentation fails."""
@@ -705,14 +649,13 @@ def _emit_quota_presentation(
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
             surface=quota_context_surface(captured_payload, args))
-    if (not deferred_context and (args.format == "json" or complete_source) and succeeded
-            and args.quota_command == "should-run" and progressive_enabled
+    if (not deferred_context and succeeded and args.quota_command == "should-run" and progressive_enabled
             and not native_context and delivery_request is None):
         payload = progressive_context_or_current(payload, args,
             runtime_root=runtime_root if runtime_root is not None else Path(args._progressive_context_runtime),
             directory=capture_directory, reader_argv=reader_argv,
             captured_decision_path=str(capture_directory / "decision.json") if capture_directory is not None else None,
-            captured_digest=captured_digest if complete_source else None)
+            captured_digest=captured_digest)
         if args.format == "markdown":
             from ..presentation.renderers.turn_envelope_markdown import render_turn_context_markdown
 

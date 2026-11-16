@@ -726,27 +726,28 @@ def test_complete_turn_rejects_other_routes_before_authority_io(tmp_path, comman
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_explicit_complete_soft_claim_reuses_the_original_turn_receipt(tmp_path, provider):
+@pytest.mark.parametrize("complete_profile", [(), ("--runtime-profile", "generic_cli")], ids=["direct", "profile"])
+def test_explicit_complete_soft_claim_reuses_the_original_turn_receipt(tmp_path, provider, complete_profile):
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="soft_claim")
-    command = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
+    command = ["quota", "should-run", "--context-delivery", "off",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
-    rc, legacy = _run_cli(registry, runtime, *command, cwd=project)
-    assert rc == 0, legacy
-    assert "schema_version" not in legacy and "contract_binding" not in legacy
-    original_cli = legacy["interaction_contract"]["cli_channel"]
+    rc, manual = _run_cli(registry, runtime, *command, "--runtime-profile", "generic_cli", cwd=project)
+    assert rc == 0, manual
+    assert_complete_turn_decision(manual)
+    original_cli = manual["interaction_contract"]["cli_channel"]
     assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
-    rc, complete = _run_cli(registry, runtime, *command, "--complete-turn", cwd=project)
+    rc, complete = _run_cli(registry, runtime, *command, "--complete-turn", *complete_profile, cwd=project)
     assert rc == 0, complete
     assert_complete_turn_decision(complete)
     cli = complete["interaction_contract"]["cli_channel"]
     assert "execution_preparation" not in cli  # A soft claim never becomes a fabricated ready lease.
     assert cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
-    assert cli["settlement_plan"]["identity"] == legacy["heartbeat_receipt"]["settlement_identity"]
-    assert complete["goal_boundary"] == legacy["goal_boundary"]
-    assert complete["normal_delivery_allowed"] == legacy["normal_delivery_allowed"]
+    assert cli["settlement_plan"]["identity"] == manual["heartbeat_receipt"]["settlement_identity"]
+    assert complete["goal_boundary"] == manual["goal_boundary"]
+    assert complete["normal_delivery_allowed"] == manual["normal_delivery_allowed"]
     assert len(cli["next_cli_actions"]) == 1
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
     assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
