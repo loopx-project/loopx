@@ -37,6 +37,8 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
 
   turnRef.current = turn;
+  /** Sets the live turn and its ref together, so code that runs before the next render sees it. */
+  const showTurn = (next: ManagerTurn | null) => { turnRef.current = next; setTurn(next); };
   const running = turn?.state === 'streaming' || turn?.state === 'stopping';
 
   useEffect(() => {
@@ -71,10 +73,10 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     // The stored history is the truth; the live turn is only its preview. Read it back once.
     const id = sessionRef.current;
     readManagerHistory(token, id)
-      .then(history => { setMessages(history); setTurn(null); })
+      .then(history => { setMessages(history); showTurn(null); })
       .catch(() => {
         // The turn ended but the history did not come back; keep what streamed rather than blanking.
-        setTurn(ended.answer ? { ...ended, state: 'idle', steps: [] } : null);
+        showTurn(ended.answer ? { ...ended, state: 'idle', steps: [] } : null);
       });
   };
 
@@ -89,8 +91,9 @@ export function StewardConversation({ token, failure }: { token: string | undefi
           after: cursorRef.current || undefined,
           onEvent: (event: ManagerEvent) => {
             if (event.id) cursorRef.current = event.id;
-            // The ref follows each event at once: when the stream closes, finishTurn reads it before a render.
-            setTurn(current => (turnRef.current = current ? applyManagerEvent(current, event) : current));
+            // Folded here, not in a state updater (React may defer those to the next render): when the
+            // stream closes, finishTurn reads the ref before any render.
+            if (turnRef.current) showTurn(applyManagerEvent(turnRef.current, event));
           },
         });
         // The stream closed: the turn ended (interrupted turns close without a terminal event).
@@ -117,7 +120,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     const left = turnRef.current;
     if (left) {
       if (left.answer) setMessages(current => [...(current ?? []), { id: `turn-${left.turnId}`, role: 'agent', text: left.answer, createdAt: null, turnId: left.turnId }]);
-      setTurn(null);
+      showTurn(null);
     }
     setError(null);
     const localId = `local-${Date.now()}`;
@@ -126,7 +129,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     const clientTurnId = (crypto.randomUUID?.() ?? String(Date.now()));
     try {
       const { turnId, eventsPath } = await sendManagerTurn(token, sessionId, body, clientTurnId);
-      setTurn({ turnId, eventsPath, state: 'streaming', steps: [], answer: '', error: null });
+      showTurn({ turnId, eventsPath, state: 'streaming', steps: [], answer: '', error: null });
       await runStream(sessionId, turnId, eventsPath);
     } catch (cause) {
       if (cause instanceof ManagerError && cause.status === 409 && typeof cause.body.active_turn_id === 'string') {
@@ -136,7 +139,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
         setDraft(body);
         const turnId = cause.body.active_turn_id;
         const eventsPath = `/api/loopx/api/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`;
-        setTurn({ turnId, eventsPath, state: 'streaming', steps: [], answer: '', error: null });
+        showTurn({ turnId, eventsPath, state: 'streaming', steps: [], answer: '', error: null });
         await runStream(sessionId, turnId, eventsPath);
         return;
       }
@@ -150,7 +153,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   const stop = () => {
     const current = turnRef.current;
     if (!current || !sessionId || current.state !== 'streaming') return;
-    setTurn({ ...current, state: 'stopping' });
+    showTurn({ ...current, state: 'stopping' });
     void interruptManagerTurn(token, sessionId, current.turnId).catch(() => {
       // The stream closing below ends the turn even when the interrupt request itself fails.
     });
