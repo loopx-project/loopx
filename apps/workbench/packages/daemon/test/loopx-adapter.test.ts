@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { corePermission, fromCorePermission, goalAgentFor, LoopxBindings, permissionAvailable, type LoopxBinding } from '../src/adapters/loopx/binding.js';
 import { goalContextBlock } from '../src/adapters/loopx/context.js';
 import { goalCreateRequest, goalLocale, workspaceRef } from '../src/adapters/loopx/core.js';
-import { GoalStateCache, projectGoalState, readGoalState } from '../src/adapters/loopx/status.js';
+import { GoalStateCache, GoalStatusUnavailable, projectGoalState, readGoalState } from '../src/adapters/loopx/status.js';
 
 const payload = (over: Record<string, unknown> = {}) => ({
   goal_filter: 'g1',
@@ -106,4 +106,17 @@ test('the Goal\'s own words follow the reader: Chinese for zh, English otherwise
 
 test('a CLI that is missing is reported as unavailable, never as an empty Goal', async () => {
   await assert.rejects(readGoalState('g1', { command: ['/nonexistent/loopx-binary'] }, 5000), /loopx_unavailable/);
+});
+
+
+test('registry membership keeps a stopped or unreadable Goal distinct from a deleted Goal', () => {
+  const registered = { id: 'g1', display_name: 'Release review', registry_member: true, status: 'active', activation_state: 'stopped' };
+  for (const items of [[], [{ goal_id: 'g1', status: 'status_collection_failed' }]]) {
+    assert.throws(() => projectGoalState({ goal_filter: 'g1', run_history: { goals: [registered] }, attention_queue: { items } }, 'g1'),
+      error => error instanceof GoalStatusUnavailable && error.goalTitle === 'Release review');
+  }
+  assert.throws(() => projectGoalState({ goal_filter: 'g1', attention_queue: { items: [{ goal_id: 'g1', status: 'status_collection_failed' }] } }, 'g1'),
+    error => error instanceof GoalStatusUnavailable && error.goalTitle === undefined);
+  const removed = { ...registered, registry_member: false, status: 'legacy-runtime' };
+  assert.throws(() => projectGoalState({ ...payload(), run_history: { goals: [removed] } }, 'g1'), /goal_not_found/);
 });

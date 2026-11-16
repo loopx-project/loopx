@@ -10,7 +10,7 @@ import { corePermission, fromCorePermission, goalAgentFor, LOOPX_PERMISSIONS, Lo
 import { goalContextBlock } from './context.js';
 import { applyProposal, CoreError, coreJson, goalLocale, grantedWorkspaces, loadProposal, previewGoalCreate, registeredGoalRoot, workspaceRef, type GoalDraft } from './core.js';
 import { coreUrl } from './proxy.js';
-import { cliFromEnv, GoalStateCache, readGoalState, type GoalState, type LoopxCli } from './status.js';
+import { cliFromEnv, GoalStateCache, GoalStatusUnavailable, readGoalState, type GoalState, type LoopxCli } from './status.js';
 import type { LoopxLookup, SessionLoopx } from '../../session-enrich.js';
 
 export interface LoopxDeps {
@@ -100,7 +100,10 @@ export class LoopxService implements LoopxHooks {
       },
       goal: async (goalId) => {
         try { return { title: (await this.states.get(goalId)).title }; }
-        catch (err) { return err instanceof Error && err.message === 'goal_not_found' ? 'missing' : null; }
+        catch (err) {
+          if (err instanceof GoalStatusUnavailable) return err.goalTitle ? { title: err.goalTitle } : null;
+          return err instanceof Error && err.message === 'goal_not_found' ? 'missing' : null;
+        }
       },
     };
   }

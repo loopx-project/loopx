@@ -182,3 +182,19 @@ test('a binding follows the core: a Goal that disappears is marked, not unbound'
   assert.equal(service.info(id)?.missing, true);
   assert.ok(service.bindings.get(id));
 });
+
+
+test('a stopped registered Goal clears a previously mistaken deleted marker', async () => {
+  const { service } = world([]);
+  service.bindings.set('thread-stopped', {
+    goalId: 'stopped', goalAgentId: 'codex', managedAgentId: null, goalInstanceId: null,
+    workspace: goalRoot, permission: 'read_only', goalTitle: 'Old title', goalMissing: true,
+  });
+  assert.equal(service.info('thread-stopped')?.missing, true);
+  await service.syncSessions([]);
+  assert.equal(service.info('thread-stopped')?.missing, undefined);
+  assert.equal(service.info('thread-stopped')?.goalTitle, 'Stopped release review');
+  assert.deepEqual(await service.lookup().goal('stopped'), { title: 'Stopped release review' });
+  assert.equal(await service.lookup().goal('missing'), 'missing');
+  assert.equal(await service.lookup().goal('invalid'), null);
+});

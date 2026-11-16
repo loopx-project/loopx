@@ -40,11 +40,22 @@ function group(todos: any): TodoGroup {
   return { total, open, items, complete: items.length === total };
 }
 
+/** A registered Goal can lack attention details, notably while it is stopped. */
+export class GoalStatusUnavailable extends Error {
+  constructor(readonly goalTitle?: string) { super('goal_status_unavailable'); }
+}
+
 /** Projects the `loopx status --goal-id` payload. A missing or foreign goal is an error, not a guess. */
 export function projectGoalState(payload: any, goalId: string): GoalState {
   if (payload?.goal_filter !== goalId || !Array.isArray(payload?.attention_queue?.items)) throw new Error('invalid_status_scope');
+  const goal = Array.isArray(payload.run_history?.goals) ? payload.run_history.goals.find((g: any) => g?.id === goalId) : undefined;
+  if (goal && (goal.registry_member === false || goal.status === 'legacy-runtime')) throw new Error('goal_not_found');
   const row = payload.attention_queue.items.find((i: any) => i?.goal_id === goalId && i?.status !== 'status_collection_failed');
-  if (!row) throw new Error('goal_not_found');
+  if (!row) {
+    if (goal?.registry_member === true) throw new GoalStatusUnavailable(typeof goal.display_name === 'string' && goal.display_name.trim() ? goal.display_name : goalId);
+    if (payload.attention_queue.items.some((i: any) => i?.goal_id === goalId)) throw new GoalStatusUnavailable();
+    throw new Error('goal_not_found');
+  }
   const channel = row.goal_channel_projection;
   return {
     goalId,
