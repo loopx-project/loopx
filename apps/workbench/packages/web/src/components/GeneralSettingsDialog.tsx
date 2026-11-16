@@ -64,6 +64,7 @@ export function GeneralSettingsDialog({ api, onSave, onClose }: {
               </button>)}
             </Popover>
           </div>
+          <p className="panel-hint general-hint">{t('general.startupHint')}</p>
           <div className="personal-setting-line general-setting-line">
             <span>{t('general.autoImportLocal')}</span>
             <Popover label={t('general.autoImportLocal')} triggerLabel={t('general.autoImportLocal')} placement="below" align="end"
@@ -77,7 +78,6 @@ export function GeneralSettingsDialog({ api, onSave, onClose }: {
             </Popover>
           </div>
           <p className="panel-hint general-hint">{t('general.autoImportLocalHint')}</p>
-          <p className="panel-hint general-hint">{t('general.startupHint')}</p>
           <div className="personal-setting-line general-setting-line">
             <span>{t('quickSwitch.handle')}</span>
             <Popover label={t('quickSwitch.handle')} triggerLabel={t('quickSwitch.handle')} placement="below" align="end"

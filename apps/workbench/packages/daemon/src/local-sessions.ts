@@ -161,10 +161,16 @@ export class LocalSessions {
           continue; // this agent cannot answer right now; its last list stands
         }
         this.cache.set(id, { at: now, sessions });
+        // One agent that answers slowly must not hold back what another has already found.
+        void this.afterScan();
       }
     };
     await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, queue.length) }, () => worker()));
-    await Promise.resolve(this.deps.onScanned?.()).catch(() => undefined);
+    await this.afterScan();
+  }
+
+  private afterScan(): Promise<void> {
+    return Promise.resolve(this.deps.onScanned?.()).catch((err) => console.warn(`local sessions: importing LoopX conversations failed: ${err instanceof Error ? err.message : err}`));
   }
 
   /** Every session the last scan found, including those that are threads here. */

@@ -97,7 +97,7 @@ async function main(): Promise<void> {
     instances: () => registry.list().map((instance) => ({ id: instance.id, hidden: !!instance.hidden, store: sessionStoreKey(instance) })),
     enricher: new SessionEnricher({ bindings: () => loopx.lookup().bindings(), goal: (goalId) => loopx.lookup().goal(goalId) }),
     listAll: () => manager.generalSettings().autoImportLocal,
-    onScanned: (): Promise<void> => loopx.syncSessions(localSessions.all()),
+    onScanned: (): Promise<void> => loopx.syncSoon(() => localSessions.all()),
   }, { enabled: localScan });
   const machineUsage = localScan ? new MachineUsageMeter({
     db: store.db,

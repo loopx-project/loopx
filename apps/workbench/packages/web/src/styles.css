@@ -15699,11 +15699,11 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 }
 .thread-sub { display: flex; align-items: center; gap: 0; min-width: 0; font-size: 11.5px; line-height: 1.35; color: var(--muted); white-space: nowrap; }
 .thread-sub > span { flex: none; }
-.thread-sub-crab { display: inline-flex; margin-right: 3px; color: var(--muted); }
-.thread-sub-goal { flex: 0 1 auto !important; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.thread-sub-crab { display: inline-flex; margin-right: 3px; color: var(--faint); }
+.thread-sub-goal { flex: 0 1 auto !important; min-width: 2em; overflow: hidden; text-overflow: ellipsis; }
 .thread-sub-goal.gone { text-decoration: line-through; color: var(--faint); }
-.thread-sub-sep { margin: 0 5px; color: var(--faint); }
-.thread-sub-source { flex: 0 1 auto !important; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.thread-sub-sep { margin: 0 4px; color: var(--faint); }
+.thread-sub-source { flex: none !important; }
 
 /* wb-sessions: the LoopX Goal group at the top of the session panel. */
 .loopx-group-head { cursor: default; }

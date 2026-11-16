@@ -100,6 +100,19 @@ export class LoopxService implements LoopxHooks {
     };
   }
 
+  private syncing: Promise<void> | null = null;
+  private syncAgain = false;
+
+  /** `syncSessions` for the latest scan, one run at a time: a call during a run asks for one more after it. */
+  syncSoon(read: () => Parameters<LoopxService['syncSessions']>[0]): Promise<void> {
+    if (this.syncing) { this.syncAgain = true; return this.syncing; }
+    this.syncing = (async () => {
+      try { do { this.syncAgain = false; await this.syncSessions(read()); } while (this.syncAgain); }
+      finally { this.syncing = null; }
+    })();
+    return this.syncing;
+  }
+
   /**
    * Binds what a scan found. A session on a Goal the core has is imported once it is idle (history is
    * read then, not before) and bound to that Goal under the Goal's registered root; one on a Goal the core
@@ -124,7 +137,7 @@ export class LoopxService implements LoopxHooks {
       if (!thread) {
         // A conversation that is still being written to by its host is left until it has been quiet a while.
         if (session.updatedAt && Date.now() - Date.parse(session.updatedAt) < idleMs) continue;
-        thread = await manager.importSession({ agent: session.agent, sessionId: session.sessionId }).catch(() => null);
+        thread = await manager.importSession({ agent: session.agent, sessionId: session.sessionId }).catch((err) => { console.warn(`loopx: could not import session for Goal ${info.goalId}: ${err instanceof Error ? err.message : err}`); return null; });
         if (!thread) continue;
       }
       if (this.bindings.get(thread.id)) continue;

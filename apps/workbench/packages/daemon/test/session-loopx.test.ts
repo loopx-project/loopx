@@ -101,7 +101,7 @@ function world(fixtures: Fixture[]) {
     adapters: adapters as never, workdirs: () => [root], importedSessions: () => new Map([...threads.values()].map((t) => [t.id.replace('thread-', ''), t.agent])),
     instances: () => [{ id: 'codex', hidden: false, store: 'codex:' }],
     enricher: new SessionEnricher(service.lookup()),
-    onScanned: () => service.syncSessions(local.all()),
+    onScanned: () => service.syncSoon(() => local.all()),
   });
   return { local, service, imports, threads, dir, files };
 }
