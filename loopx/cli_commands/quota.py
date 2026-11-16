@@ -1365,6 +1365,10 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
                         delivery["next_action"] = action
                         interaction["agent_channel"]["primary_action"] = payload["recommended_action"] = action
                 elif work_readback.writeback_run is None:
+                    # A hard-lease admission may bind the Turn before the claim.
+                    # Capture the work basis only after its execution lease exists.
+                    if (payload.get("execution_preparation") or {}).get("state") == "claim_required":
+                        return payload
                     payload["delivery_result_context"] = result_work_context(registry_path=registry_path,
                         runtime_root=runtime_root, identity=work_readback.identity.value, goal_ref=goal_ref)
                     interaction = payload.get("interaction_contract", {})
