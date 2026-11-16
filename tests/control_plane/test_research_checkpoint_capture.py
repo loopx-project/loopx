@@ -1040,7 +1040,8 @@ def test_loopx_participant_preserves_legacy_and_current_owned_goal_directories(t
             'loopx_state':'true'}).encode())
 
 
-def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover(tmp_path, monkeypatch):
+@pytest.mark.parametrize("allowed_slots", [2, 3], ids=["exhausted", "later-point-budget"])
+def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover(tmp_path, monkeypatch, allowed_slots):
     """Real CLI/worker/permissions; only the model executable is synthetic."""
     import os
     import sys
@@ -1050,12 +1051,18 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
         pytest.skip("Real POSIX permission denial requires an unprivileged test user")
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    # Declare the finite synthetic allowance before any wake. Two slots pay
+    # for the original work and review; a later accepted point needs a third.
+    settings = json.loads(registry.read_text())
+    settings["goals"][0]["quota"]["allowed_slots"] = allowed_slots
+    registry.write_text(json.dumps(settings))
     skills = tmp_path / "skills"
     skills.mkdir()
     binary = tmp_path / "codex"
     binary.write_text(f"#!{sys.executable}\n" +
         "import json,pathlib,sys\n"
         "pathlib.Path('host-input.txt').write_text(sys.stdin.read())\n"
+        "pathlib.Path('host-invocations').open('a').write('invoke\\n')\n"
         "pathlib.Path('solution.py').write_text('after_strategy_decision = 999\\n')\n"
         "print(json.dumps({'type':'thread.started','thread_id':'synthetic-index-session'}))\n")
     binary.chmod(0o755)
@@ -1187,6 +1194,20 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
         row["progress_observation"].update(surface_id="surface-later", hypothesis_id="hypothesis-later")
         Path(row["json_path"]).write_text(json.dumps(row))
     index.write_bytes(source_history + b"".join((json.dumps(row) + "\n").encode() for row in observations))
+    if allowed_slots == 2:
+        from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostLaunchRejected
+
+        invocations = (project / "host-invocations").read_bytes()
+        prior_wakes = set((logs / "wakes").iterdir())
+        with pytest.raises(FirstPartyHostLaunchRejected, match="goal_launch_not_allowed"):
+            run_once(env)
+        [refused_wake] = set((logs / "wakes").iterdir()) - prior_wakes
+        refusal = json.loads((refused_wake / "checkpoint-start-guard.json").read_text())
+        assert refusal["should_run"] is False and refusal["quota"]["state"] == "throttled"
+        assert refusal["quota"]["spent_slots"] == refusal["quota"]["allowed_slots"] == 2
+        assert (project / "host-invocations").read_bytes() == invocations
+        assert not list((logs / "checkpoints").glob("replan-*/checkpoint.json"))
+        return
     fresh = run_once(env)
     assert fresh["ok"] and fresh["checkpoint"]["captured"], fresh
     point = Path(fresh["checkpoint"]["destination"])
