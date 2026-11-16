@@ -96,6 +96,15 @@ test("whole completion owner selects continuation and rejects contradictory inte
   }), /cannot record both no_followup and a successor/);
 });
 
+test("deferred terminal result stays active and is not a completed recovery", () => {
+  const request = {schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
+    todo: {status: "open", no_followup: true}, requested_no_followup: false,
+    defer_no_followup: true, has_successor: false, completion_identity_source: "turn_settlement"};
+  assert.deepEqual(selectTodoCompletionState(request), {
+    schema_version: "loopx_todo_completion_state_result_v0", continuation: "active_goal", recovery: null});
+  assert.throws(() => selectTodoCompletionState({...request, completion_identity_source: "unscoped_completion"}), /original Turn/);
+});
+
 test("retired scalar and summary RPCs fail closed", async () => {
   const handlers = createEffectRuntimeHandlers({fingerprint: "completion-retirement-test", requestShutdown: () => undefined});
   for (const method of ["todo.completion_state.continuation_for_write", "todo.completion_state.normalize",
@@ -171,4 +180,16 @@ test("lifecycle reentry emits a distinct terminal recovery", () => {
       recovery: "lifecycle_reentry_terminal_closeout",
     },
   );
+});
+
+
+test("original Turn defers explicit terminal intent without reporting terminal recovery", () => {
+  const request = {schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
+    todo: {status: "done", no_followup: false, completion_continuation: "active_goal"},
+    requested_no_followup: true, defer_no_followup: true, has_successor: false,
+    completion_identity_source: "turn_settlement"};
+  assert.deepEqual(selectTodoCompletionState(request), {
+    schema_version: "loopx_todo_completion_state_result_v0", continuation: "active_goal", recovery: null});
+  assert.deepEqual(selectTodoCompletionState({...request, defer_no_followup: false}), {
+    schema_version: "loopx_todo_completion_state_result_v0", continuation: "no_followup", recovery: "same_turn_terminal_closeout"});
 });

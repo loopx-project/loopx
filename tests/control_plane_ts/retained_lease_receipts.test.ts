@@ -14,7 +14,7 @@ async function restore(t: test.TestContext, name: string) {
   assert.equal(history.source_commit, "60d833b13c85135587b725013b247e827663ffb9");
   const root = await mkdtemp(join(tmpdir(), "loopx-retained-1x-"));
   t.after(() => rm(root, {recursive: true, force: true}));
-  const original = JSON.parse(JSON.stringify(history.scenarios[name]).replaceAll("$ROOT", root));
+  const original = JSON.parse(JSON.stringify(history.scenarios[name]).replaceAll("$ROOT", JSON.stringify(root).slice(1, -1)));
   for (const [relative, value] of Object.entries(original.files)) {
     const path = join(root, "runtime", relative);
     await mkdir(dirname(path), {recursive: true});

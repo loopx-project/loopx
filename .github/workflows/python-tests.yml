@@ -667,6 +667,7 @@ jobs:
         run: >-
           python -m pytest -v -n 2 -m "not stage2c_e2e"
           -p scripts.ci.pytest_timing
+          -p scripts.ci.w07_collection
           --ci-stall-after 120
           --splits 6 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
@@ -919,8 +920,13 @@ jobs:
         run: >-
           python -m pytest -q --basetemp "${{ runner.temp }}/lxs-${{ github.run_id }}-${{ github.run_attempt }}"
           tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery
-          tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement
-          tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once
+          tests/control_plane/test_refresh_settle_turn_powershell.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement
+          tests/control_plane/test_refresh_settle_turn_powershell.py::test_pinned_powershell_launcher_settles_original_turn_once
+
+      - name: Qualify W07 native PowerShell scheduler recovery
+        run: >-
+          python -m pytest -q --basetemp "${{ runner.temp }}/w07-${{ github.run_id }}-${{ github.run_attempt }}"
+          "@scripts/ci/w07_powershell_nodes.txt"
 
       - name: Restore the primary Windows Node runtime
         uses: actions/setup-node@v6
@@ -1049,7 +1055,7 @@ jobs:
           node-version: "22.22.3"
 
       - name: Run SQLite CLI integration
-        run: python -m pytest -q tests/control_plane/test_sqlite_authority_cli.py
+        run: python -m pytest -q -p scripts.ci.w07_collection tests/control_plane/test_sqlite_authority_cli.py tests/control_plane/test_sqlite_authority_cli_w07_migrated.py
 
       - name: Run native scheduler and SQLite authority tests
         run: >-

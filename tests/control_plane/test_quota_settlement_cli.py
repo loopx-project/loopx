@@ -240,6 +240,7 @@ def _run_cli(
             "PYTHONPATH": str(REPO_ROOT),
         },
     )
+    assert result.stdout.strip(), (result.returncode, result.stderr)
     return result.returncode, json.loads(result.stdout)
 
 
@@ -760,6 +761,33 @@ def _initialize_git_checkout(project: Path) -> None:
     )
 
 
+def _default_checkpoint_args(registry: Path, runtime: Path, binding: tuple[str, ...], root: Path,
+                             *, purpose: str = "first_delivery") -> tuple[str, ...]:
+    """The fixture Agent consumes a real post-result read before authoring."""
+    from tests.control_plane.host_checkpoint_fixture import checkpoint_decision
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", purpose)
+    assert rc == 0, context
+    decision = checkpoint_decision(context)
+    args = ("--checkpoint-read-context", context["read_context_id"])
+    if decision.get("agent_vision"):
+        path = root / "checkpoint-vision.json"
+        path.write_text(json.dumps(decision["agent_vision"]), encoding="utf-8")
+        return (*args, "--agent-vision-json", str(path))
+    return (*args, "--vision-unchanged-reason", decision["vision_unchanged_reason"])
+
+
+def _historical_turn(runtime: Path, turn_id: str = TURN_ID) -> None:
+    """Seed the persisted pre-default contract for historical recovery cases."""
+    path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for row in rows:
+        if row.get("event_kind") == "quota_should_run" and row.get("run_id") == turn_id:
+            for field in ("result_freshness", "checkpoint_continuation"):
+                row.get("details", {}).pop(field, None)
+    path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+
 def _strip_heartbeat_workspace_causality(runtime: Path) -> None:
     log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     events = [
@@ -814,6 +842,7 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
             encoding="utf-8",
         )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
     for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
@@ -893,6 +922,27 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
         "peer_independent_worktree_required": False,
     }
     assert str(project) not in json.dumps(refresh["delivery_workspace"])
+
+    # Retention alone cannot end the quota cycle while direction is pending.
+    pending_rc, pending = _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--source", "heartbeat", "--execute", *binding, cwd=project)
+    assert pending_rc == 1 and pending["appended"] is False, pending
+    assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
+    context_rc, context = _run_cli(registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        "--purpose", "supplement_checkpoint", *binding, cwd=project)
+    assert context_rc == 0, context
+    direction = project / "direction.json"
+    direction.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed", "vision_patch": {"acceptance_summary": "Verify the retained local candidate."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The local candidate can advance the task.",
+            "observed_reality": "The retained candidate has a verified local workspace identity.",
+            "retained": ["The original candidate and task."], "evidence_refs": [f"todo:{TODO_ID}"]}}), encoding="utf-8")
+    direction_rc, supplemented = _run_cli(registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        *binding, "--classification", "gitless_validated_progress", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--checkpoint-read-context", context["read_context_id"], "--agent-vision-json", str(direction),
+        "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert direction_rc == 0 and supplemented["vision_checkpoint"]["satisfied"] is True, supplemented.get("error") or supplemented
+    assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
 
     spend_rc, spend = _run_cli(
         registry_path,
@@ -1041,6 +1091,7 @@ def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(
     )
     assert complete_rc == 0, complete
 
+    checkpoint_args = _default_checkpoint_args(registry_path, runtime, binding, tmp_path)
     refresh_rc, refresh = _run_cli(
         registry_path,
         runtime,
@@ -1049,6 +1100,7 @@ def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(
         GOAL_ID,
         "--classification",
         "reward_memory_app_progress",
+        *checkpoint_args,
         "--delivery-batch-scale",
         "single_surface",
         "--delivery-outcome",
@@ -1280,7 +1332,7 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         "turn-after-typed-blocker-settlement",
         cwd=project,
     )
-    assert next_rc == 0, next_turn
+    assert next_rc == 0, json.dumps(next_turn, indent=2)
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
     assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
 
@@ -1345,11 +1397,12 @@ def test_typed_blocked_retry_without_successor_defers_the_only_todo(
     assert next_turn["should_run"] is False, next_turn
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_scheduler_cache_misses_after_todo_state_changes_without_run(
-    tmp_path: Path,
+    tmp_path: Path, provider: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     guard = (
         "quota",
         "should-run",
@@ -1414,8 +1467,78 @@ def test_scheduler_cache_misses_after_todo_state_changes_without_run(
         refreshed["status_projection_cache"]["miss_reason"]
         == "goal_todo_projection_changed"
     )
-    assert refreshed["should_run"] is False
+    # Deferral removes new work authority, but cannot discard the admitted
+    # Turn's original settlement. Recovery is not a new Todo dispatch.
+    assert refreshed["effective_action"] == "unsettled_host_turn_recovery"
+    assert refreshed["normal_delivery_allowed"] is False
     assert "selected_todo" not in refreshed
+    identity = initial["heartbeat_receipt"]["settlement_identity"]
+    assert refreshed["heartbeat_receipt"]["settlement_identity"] == identity
+    assert (index_path.read_bytes() if index_path.exists() else None) == index_before
+    assert _spend_run_count(runtime) == 0
+
+    binding = (
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", identity["turn_instance_id"],
+    )
+    rc, context = _run_cli(
+        registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", "delivery_result", cwd=project,
+    )
+    assert rc == 0, context
+    writeback = (
+        "refresh-state", "--goal-id", GOAL_ID, *binding,
+        "--classification", "deferred_turn_checkpoint",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    rc, retained = _run_cli(registry_path, runtime, *writeback, cwd=project)
+    assert rc == 0, retained
+    assert _spend_run_count(runtime) == 0
+    rc, direction = _run_cli(
+        registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", "supplement_checkpoint", cwd=project,
+    )
+    assert rc == 0 and direction["basis"]["todo"]["status"] == "deferred", direction
+    vision = project / "deferred-direction.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "todo_delta": [f"retain:{TODO_ID}"],
+        "vision_patch": {"acceptance_summary": "Resume the retained task only after its dated wait."},
+        "path_delta": {"outcome": "no_change", "prior_assumption": "The selected task remains required.",
+            "observed_reality": "Its current source is deferred until 2099-01-01T00:00:00Z.",
+            "retained": ["The original task and its dated wait."], "evidence_refs": [f"todo:{TODO_ID}"]},
+    }), encoding="utf-8")
+    rc, accepted = _run_cli(
+        registry_path, runtime, *writeback, "--checkpoint-read-context", direction["read_context_id"],
+        "--agent-vision-json", str(vision), cwd=project,
+    )
+    assert rc == 0 and accepted["vision_checkpoint"]["satisfied"] is True, accepted
+    rc, settled = _run_cli(
+        registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        *binding, "--source", "heartbeat", "--execute", cwd=project,
+    )
+    assert rc == 0 and settled["appended"] is True, settled
+    assert _spend_run_count(runtime) == 1
+
+    # A genuinely fresh Turn must still wait until 2099 after that original
+    # obligation is settled, including when the projection cache is requested.
+    rc, waiting = _run_cli(
+        registry_path, runtime, *guard, "--use-projection-cache",
+        "--turn-instance-id", "turn-after-deferred-settlement", cwd=project,
+    )
+    assert rc == 0 and waiting["should_run"] is False, waiting
+    assert waiting["effective_action"] == "agent_scope_wait"
+    assert "selected_todo" not in waiting
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID,
+    )
+    assert listed_rc == 0, listed
+    [deferred] = [item for item in listed["todos"] if item["todo_id"] == TODO_ID]
+    assert deferred["status"] == "deferred" and deferred["resume_ready"] is False
+    assert deferred["resume_when"] == "resume_at:2099-01-01T00:00:00Z"
+    assert _spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("include_detail", [False, True])
@@ -2910,6 +3033,8 @@ def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
         assert added_rc == 0, added
         replan_todo_ids.append(added["todo_id"])
 
+    source_dir = runtime / "goals" / GOAL_ID / "heartbeat-guard-sources"
+    original_sources = {path.name: path.read_bytes() for path in source_dir.glob("*.json")}
     recovery_rc, recovery = _run_cli(
         registry_path,
         runtime,
@@ -2950,9 +3075,11 @@ def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
     ][1]
     assert packet["repair"] == "resume_prior_turn"
     assert "settlement_identity" not in recovery["heartbeat_receipt"]
-    assert recovery["heartbeat_receipt"]["semantic_replan_obligation_id"] == (
-        replan_obligation_id
-    )
+    # The projected replan remains visible, but this recovery did not admit it.
+    assert recovery["replan_action_packet"]["obligation_id"] == replan_obligation_id
+    assert "semantic_replan_obligation_id" not in recovery["heartbeat_receipt"]
+    assert "semantic_replan_source" not in recovery["heartbeat_receipt"]
+    assert {path.name: path.read_bytes() for path in source_dir.glob("*.json")} == original_sources
 
     # Model the separately verified replan settlement without touching the
     # append-only heartbeat receipt.  The same recovery Turn must then be able
@@ -3100,6 +3227,7 @@ def test_prior_turn_with_several_receipts_recovers_once(tmp_path: Path) -> None:
     )
     assert prior_rc == 0, prior
     assert prior["heartbeat_receipt"]["closeout_required"] is True
+    _historical_turn(runtime, prior_turn_id)
 
     # A real goal persists more than one guard per Turn: an identity upgrade
     # append and an older guard that never carried a binding.  The newest bound
@@ -3375,6 +3503,7 @@ def test_prior_host_closeout_reads_archived_exact_todo(
     )
     assert rc == 0, prior
     assert prior["heartbeat_receipt"]["closeout_required"] is True
+    _historical_turn(runtime, prior_turn_id)
 
 
     rc, complete = _run_cli(
@@ -3523,12 +3652,14 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert complete_replay["idempotent_replay"] is True
     assert complete_replay["settlement_result"]["ok"] is True
 
+    checkpoint_args = _default_checkpoint_args(registry_path, runtime, binding, tmp_path)
     refresh_args = (
         "refresh-state",
         "--goal-id",
         GOAL_ID,
         "--classification",
         "validated_progress",
+        *checkpoint_args,
         "--delivery-batch-scale",
         "single_surface",
         "--delivery-outcome",
@@ -3571,8 +3702,9 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         "turn-settlement-cli-successor",
     )
     assert fresh_guard_rc == 0, fresh_guard
-    assert fresh_guard["selected_todo"]["todo_id"] == successor_id
-    assert fresh_guard["heartbeat_receipt"]["turn_instance_id"] == "turn-settlement-cli-successor"
+    assert fresh_guard["first_delivery_progress"]["stage"] == "settlement_pending"
+    assert fresh_guard["first_delivery_progress"]["settlement_identity"] == identity
+    assert fresh_guard["recommended_action"] == fresh_guard["first_delivery_progress"]["next_action"]
 
     spend_args = (
         "quota",
@@ -3643,19 +3775,16 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         runtime,
         *original_ack_hint["cli_args"],
     )
-    # The intervening fresh_guard superseded this Turn for host writeback,
-    # even though its original delivery settlement still replays correctly.
-    assert ack_rc == 1, ack
-    assert ack["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
-    assert ack["scheduler_state_mutated"] is False
-    assert ack["write_performed"] is False
+    # A pending original Turn was recovered rather than superseded by successor selection.
+    assert ack_rc == 0, ack
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["scheduler_commit"]["written"] is True
     assert ack["appended"] is False
-    assert load_scheduler_state(
-        runtime,
-        goal_id=GOAL_ID,
-        agent_id=AGENT_ID,
-        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
-    ) is None
+    scheduler_path = Path(ack["scheduler_state_path"])
+    saved = scheduler_path.read_bytes()
+    rc, replay_ack = _run_cli(registry_path, runtime, *original_ack_hint["cli_args"])
+    assert rc == 0 and replay_ack["scheduler_commit"]["replayed"] is True, replay_ack
+    assert scheduler_path.read_bytes() == saved
     assert _spend_run_count(runtime) == 1
 
     # Use the admitted successor Turn's hint. Another new Turn would compete
@@ -3971,7 +4100,23 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
         "network",
     )
     assert successor_guard_rc == 0, successor_guard
-    assert successor_guard["selected_todo"]["todo_id"] == successor_id
+    # Completing the Todo does not discharge the original Turn's checkpoint or
+    # spend. An identityless wake resumes that Turn before selecting new work.
+    assert successor_guard["heartbeat_receipt"]["settlement_identity"] == identity
+    assert not successor_guard.get("selected_todo")
+    assert _spend_run_count(runtime) == 0
+    checkpoint_args = _default_checkpoint_args(
+        registry_path, runtime, binding, tmp_path, purpose="supplement_checkpoint",
+    )
+    checkpoint_rc, checkpoint = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "identity_upgrade_validated",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", *binding, *checkpoint_args,
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert checkpoint_rc == 0, checkpoint
+    assert checkpoint["vision_checkpoint"]["satisfied"] is True
 
     spend_args = (
         "quota",
@@ -3995,6 +4140,12 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
     assert spend_replay["appended"] is False
     assert _spend_run_count(runtime) == 1
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 2
+    successor_guard_rc, successor_guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--available-capability", "network", )
+    assert successor_guard_rc == 0, successor_guard
+    assert successor_guard["selected_todo"]["todo_id"] == successor_id
 
 
 def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
@@ -4740,7 +4891,7 @@ def test_visible_goal_unbound_spend_recovers_delivery_after_capability_replan(
 
 
 @pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
-def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
+def test_default_visible_goal_admission_still_rejects_unbound_manual_spend(
     tmp_path: Path, profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -4805,11 +4956,7 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     assert spend["delivery_workspace_causality"] is None
     assert _spend_run_count(runtime) == 0
 
-    # Execute the projected re-entry, filling only the host-owned identity.
-    command = actions[0].replace(
-        "<unique-work-iteration-id-reuse-on-retry>", TURN_ID,
-    )
-    bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
+    bound_rc, bound = _run_generated_cli(actions[0], registry_path=registry_path)
     assert bound_rc == 0, bound
     bound_interaction = bound["interaction_contract"]
     assert bound_interaction["agent_channel"]["delivery_allowed"] is True
@@ -7040,7 +7187,7 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
+def test_default_visible_goal_todoless_replan_replays_original_admission(
     tmp_path: Path, provider: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -7094,16 +7241,47 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert bound.get("selected_todo") is None, bound
     obligation_id = bound["replan_action_packet"]["obligation_id"]
     identity = bound["heartbeat_receipt"]["settlement_identity"]
+    source_dir = runtime / "goals" / GOAL_ID / "heartbeat-guard-sources"
+    original_sources = {path.name: path.read_bytes() for path in source_dir.glob("*.json")}
+    assert len(original_sources) == 1
+    frozen_source = json.loads(next(iter(original_sources.values())))
+    assert frozen_source["obligation"]["obligation_id"] == identity["replan_obligation_id"]
     assert identity["binding_kind"] == "autonomous_replan"
     assert identity["replan_obligation_id"] == obligation_id
-    assert identity["turn_instance_id"].startswith("guided-start:")
+    replay_rc, replay = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--runtime-profile", "codex_app_ssh_goal",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", identity["turn_instance_id"],
+    )
+    assert replay_rc == 0, replay
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
     cli_channel = bound["interaction_contract"]["cli_channel"]
+    assert cli_channel["settlement_plan"]["identity"] == identity
+    commands = cli_channel["next_cli_actions"]
+    assert len(commands) == 2
+    assert all(f"--replan-obligation-id {obligation_id}" in command for command in commands)
+    assert all(f"--turn-instance-id {identity['turn_instance_id']}" in command for command in commands)
+
+    # The captured CLI reader is available independently of optional native
+    # continuity. Re-read this Turn without starting another admission.
+    captured_rc, captured = _run_cli(
+        registry_path, runtime, "quota", "should-run",
+        "--runtime-profile", "codex_app_ssh_goal", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", identity["turn_instance_id"],
+        "--decision-output-dir", str(tmp_path / "replan-capture"),
+    )
+    assert captured_rc == 0, captured
+    assert captured["decision"] == "autonomous_replan_required", captured
+    assert captured["heartbeat_receipt"]["settlement_identity"] == identity
+    assert captured["heartbeat_receipt"]["status"] == "replayed"
+    assert {path.name: path.read_bytes() for path in source_dir.glob("*.json")} == original_sources
+    cli_channel = captured["interaction_contract"]["cli_channel"]
     assert cli_channel["settlement_identity"] == identity
     assert cli_channel["settlement_read_ref"] == "$.replan_action_packet.writeback"
     assert "settlement_plan" not in cli_channel
-    # Native admission defers the plan; consume its exact captured reader
+    # Captured admission defers the plan; consume its exact captured reader
     # without another guard or a second guided-start Turn.
-    reader_argv = shlex.split(bound["replan_action_packet"]["writeback"])
+    reader_argv = shlex.split(captured["replan_action_packet"]["writeback"])
     source_paths = (
         registry_path,
         project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
@@ -7716,6 +7894,65 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
     waiting = call("todo", "list", "--goal-id", GOAL_ID, "--todo-id", successor)["todo"]
     assert waiting["status"] == "open"
     assert waiting["resume_when"] == "resume_at:2999-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("command,ok,should_run", [
+    ("should-run", True, True), ("should-run", True, False),
+    ("should-run", False, False), ("status", True, True),
+])
+def test_quota_rollout_details_does_not_capture_guard_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str, ok: bool, should_run: bool,
+) -> None:
+    from argparse import Namespace
+    from loopx.control_plane.quota import heartbeat_receipt
+    from loopx.control_plane.quota.settlement_cli import quota_rollout_details
+
+    def unexpected_capture(*_args, **_kwargs):
+        raise AssertionError("a details projection must not capture or persist a guard source")
+
+    monkeypatch.setattr(heartbeat_receipt, "guard_source_from_decision", unexpected_capture)
+    monkeypatch.setattr(heartbeat_receipt, "store_guard_source_blob", unexpected_capture)
+    obligation = {"schema_version": "autonomous_replan_obligation_v0", "required": True,
+        "agent_id": AGENT_ID, "obligation_id": "replan-1111111111111111",
+        "trigger_count": 1, "triggers": [{"kind": "goal_outcome_uncovered"}],
+        "stop_condition": "Stop at owner-only decisions."}
+    details = quota_rollout_details({"ok": ok, "should_run": should_run,
+        "registry": str(tmp_path / "registry.json"), "runtime_root": str(tmp_path),
+        "autonomous_replan_obligation": obligation,
+        "replan_action_packet": {"obligation_id": obligation["obligation_id"]}},
+        Namespace(quota_command=command, agent_id=AGENT_ID, goal_id=GOAL_ID), todo_id=None)
+    assert details["semantic_replan_review_stop_condition"] == obligation["stop_condition"]
+    assert "semantic_replan_source_ref" not in details
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("binding,ok,should_run,delivery_allowed", [
+    (False, True, True, True), (True, False, False, False),
+    (True, True, False, False), (True, True, True, False),
+])
+def test_unadmitted_heartbeat_does_not_freeze_observed_replan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    binding: bool, ok: bool, should_run: bool, delivery_allowed: bool,
+) -> None:
+    from loopx.control_plane.quota import heartbeat_receipt
+    from loopx.control_plane.quota.effect_program import SettlementIdentity
+
+    def unexpected_capture(*_args, **_kwargs):
+        raise AssertionError("an unadmitted obligation must not become a frozen Turn source")
+
+    monkeypatch.setattr(heartbeat_receipt, "guard_source_from_decision", unexpected_capture)
+    monkeypatch.setattr(heartbeat_receipt, "store_guard_source_blob", unexpected_capture)
+    observed = {"semantic_replan_obligation_id": "replan-1111111111111111", "todo_id": TODO_ID}
+    identity = (SettlementIdentity(goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        turn_instance_id=TURN_ID) if binding else None)
+    details = heartbeat_receipt.capture_heartbeat_admission_source(
+        {"ok": ok, "should_run": should_run,
+         "interaction_contract": {"agent_channel": {"delivery_allowed": delivery_allowed}}},
+        details=observed, identity=identity, registry_path=tmp_path / "registry.json", runtime_root=tmp_path)
+    assert "semantic_replan_obligation_id" not in details
+    assert "semantic_replan_source_ref" not in details
+    assert observed["semantic_replan_obligation_id"] == "replan-1111111111111111"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_receipt_review_does_not_persist_private_or_lossy_stop_clauses() -> None:
@@ -8493,6 +8730,7 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         TURN_ID,
     )
     assert guard_rc == 0, guard
+    _historical_turn(runtime)
     assert guard["heartbeat_receipt"]["delivery_workspace_causality"] == {
         "schema_version": "delivery_workspace_causality_v0",
         "todo_id": TODO_ID,
@@ -8675,7 +8913,7 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     sidecars = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
     terminal_sidecars = [
         path for path in sidecars.glob("*.json")
-        if json.loads(path.read_text())["source_receipt_id"]
+        if not path.name.endswith(".lock.holder.json") and json.loads(path.read_text())["source_receipt_id"]
         == trigger_intent["source_receipt_id"]
     ]
     assert len(terminal_sidecars) == 1

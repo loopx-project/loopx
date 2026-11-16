@@ -404,3 +404,15 @@ test("runtime input and validation receipts fail closed", () => {
     /cannot record both no_followup and a successor/,
   );
 });
+
+test("bound terminal upgrade reuses original RESULT validation", () => {
+  for (const source of ["turn_settlement", "lifecycle_reentry"]) {
+    const result = reduceTodoCompletionTransaction(request({todo: {...baseTodo, status: "done",
+      completion_continuation: "active_goal", completion_turn_key: "original-turn",
+      validation_command: "must-never-run-again"}, requested_no_followup: true,
+      requested_completion_turn_key: "original-turn", requested_completion_identity_source: source}));
+    assert.equal(result.decision, "commit");
+    assert.equal(result.validation_receipt, null);
+    assert.equal(result.completion_state.continuation, "no_followup");
+  }
+});

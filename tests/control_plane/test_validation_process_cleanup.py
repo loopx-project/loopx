@@ -250,6 +250,23 @@ os._exit(0)
         process.communicate(timeout=5)
 
 
+def test_host_adapter_can_isolate_protocol_stdin() -> None:
+    inner = "import sys;assert sys.stdin.read()==''"
+    outer = (
+        "import json,sys,subprocess;from pathlib import Path;"
+        "from loopx.control_plane.runtime.validation_command import run_caller_validation;"
+        f"print(json.dumps(run_caller_validation(Path.cwd(),validation_argv=[sys.executable,'-c',{inner!r}],"
+        "validation_label='Isolated protocol stdin',timeout_seconds=3,stdin=subprocess.DEVNULL)))"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", outer],
+        input="synthetic protocol input", text=True, capture_output=True,
+        cwd=Path(__file__).resolve().parents[2], timeout=5,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["passed"] is True
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_timeout_keeps_canonical_todo_open_and_declaration_unchanged(

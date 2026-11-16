@@ -68,8 +68,8 @@ WINDOWS_QUALIFIED_SUITES = (
 
 SETTLEMENT_RECOVERY_TESTS = (
     "tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery",
-    "tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement",
-    "tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once",
+    "tests/control_plane/test_refresh_settle_turn_powershell.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement",
+    "tests/control_plane/test_refresh_settle_turn_powershell.py::test_pinned_powershell_launcher_settles_original_turn_once",
 )
 
 
@@ -135,7 +135,12 @@ class WindowsLaneCoverageTests(unittest.TestCase):
         for test in SETTLEMENT_RECOVERY_TESTS:
             with self.subTest(test=test):
                 self.assertIn(test, recovery["run"])
-        for step in (setup, recovery, restore):
+        w07_index, w07 = by_name["Qualify W07 native PowerShell scheduler recovery"]
+        self.assertLess(test_index, w07_index)
+        self.assertLess(w07_index, restore_index)
+        self.assertIn('"@scripts/ci/w07_powershell_nodes.txt"', w07["run"])
+        self.assertTrue((ROOT / "scripts/ci/w07_powershell_nodes.txt").is_file())
+        for step in (setup, recovery, w07, restore):
             with self.subTest(step=step.get("name")):
                 self.assertNotIn("if", step, "settlement recovery qualification must not be skipped")
                 self.assertNotIn(

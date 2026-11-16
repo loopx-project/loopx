@@ -29,6 +29,7 @@ from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 from loopx.status import parse_active_state_todos
 from loopx.todos import add_goal_todo
+from tests.control_plane.host_checkpoint_fixture import checkpoint_decision
 
 
 GOAL_ID = "adapter-partial-steps-fixture"
@@ -205,11 +206,26 @@ def _control(registry: Path) -> GoalModeMCPControlPlane:
     return control
 
 
+def _complete_default_task(control, *args, **options):
+    """The fixture Agent judges the actual post-result basis before settlement."""
+    output = control.complete_task(*args, **options)
+    first = json.loads(output)
+    if first.get("stage") != "direction_pending":
+        return output
+    assert first["completed"] is True and first["settlement_complete"] is False
+    decision = checkpoint_decision(first["context"])
+    return control.complete_task(*args, **options, read_context_id=decision["read_context_id"],
+        agent_vision=decision.get("agent_vision"),
+        vision_unchanged_reason=decision.get("vision_unchanged_reason") or None)
+
+
 def test_a_raising_step_after_a_durable_commit_recovers_through_the_cli_receipt(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The recovery boundary: the CLI owns the receipt, not the adapter."""
-    registry, _ = _write_fixture(tmp_path)
+    registry, state_file = _write_fixture(tmp_path)
+    monkeypatch.chdir(state_file.parent)
     added = add_goal_todo(
         registry_path=registry,
         goal_id=GOAL_ID,
@@ -220,6 +236,7 @@ def test_a_raising_step_after_a_durable_commit_recovers_through_the_cli_receipt(
     )
     todo_id = str(added["todo_id"])
     control = _control(registry)
+    assert json.loads(control.should_run())["delivery_result_context"]
     original = control.run_cli
     injected = False
     bound_identity: dict[str, object] = {}
@@ -244,7 +261,7 @@ def test_a_raising_step_after_a_durable_commit_recovers_through_the_cli_receipt(
     control.run_cli = raise_after_commit  # type: ignore[assignment]
 
     with pytest.raises(RuntimeError, match="synthetic CLI transport failure"):
-        control.complete_task(
+        _complete_default_task(control,
             todo_id,
             AGENT_ID,
             "partial-step fixture check passed",
@@ -274,7 +291,7 @@ def test_a_raising_step_after_a_durable_commit_recovers_through_the_cli_receipt(
 
     calls.clear()
     replay = json.loads(
-        control.complete_task(
+        _complete_default_task(control,
             todo_id,
             AGENT_ID,
             "partial-step fixture check passed",
@@ -300,9 +317,11 @@ def test_a_raising_step_after_a_durable_commit_recovers_through_the_cli_receipt(
 
 def test_a_raised_step_before_completion_commits_no_settlement(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed transport never becomes a settlement the CLI would replay."""
     registry, state_file = _write_fixture(tmp_path)
+    monkeypatch.chdir(state_file.parent)
     added = add_goal_todo(
         registry_path=registry,
         goal_id=GOAL_ID,
@@ -313,6 +332,7 @@ def test_a_raised_step_before_completion_commits_no_settlement(
     )
     todo_id = str(added["todo_id"])
     control = _control(registry)
+    assert json.loads(control.should_run())["delivery_result_context"]
     original = control.run_cli
     turn_instance_id = ""
 
@@ -327,7 +347,7 @@ def test_a_raised_step_before_completion_commits_no_settlement(
     control.run_cli = raise_on_completion  # type: ignore[assignment]
 
     with pytest.raises(RuntimeError, match="synthetic CLI transport failure"):
-        control.complete_task(
+        _complete_default_task(control,
             todo_id,
             AGENT_ID,
             "raised step fixture check passed",
@@ -365,13 +385,15 @@ def test_a_raised_step_before_completion_commits_no_settlement(
 def _raise_after_step(
     tmp_path: Path,
     step_prefix: tuple[str, ...],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, str, str]:
     """Complete a Todo whose transport fails just after ``step_prefix`` commits.
 
     Returns the runtime root, the Todo id and the turn instance id the plan used,
     so the caller can read back the receipts the CLI already committed.
     """
-    registry, _ = _write_fixture(tmp_path)
+    registry, state_file = _write_fixture(tmp_path)
+    monkeypatch.chdir(state_file.parent)
     added = add_goal_todo(
         registry_path=registry,
         goal_id=GOAL_ID,
@@ -382,6 +404,7 @@ def _raise_after_step(
     )
     todo_id = str(added["todo_id"])
     control = _control(registry)
+    assert json.loads(control.should_run())["delivery_result_context"]
     original = control.run_cli
     turn_instance_id = ""
     injected = False
@@ -398,7 +421,7 @@ def _raise_after_step(
 
     control.run_cli = raise_after_commit  # type: ignore[assignment]
     with pytest.raises(RuntimeError, match="synthetic CLI transport failure"):
-        control.complete_task(
+        _complete_default_task(control,
             todo_id,
             AGENT_ID,
             "partial-step fixture check passed",
@@ -441,13 +464,14 @@ def _committed_receipt_kinds(readback: object) -> list[str]:
 )
 def test_a_raised_step_after_a_durable_commit_leaves_only_that_stage_pending(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     step_prefix: tuple[str, ...],
     expected_replay_phase: str,
     expected_state: str,
     expected_receipt_kinds: list[str],
 ) -> None:
     """Each durable stage leaves exactly its own receipt behind."""
-    runtime_root, todo_id, turn_instance_id = _raise_after_step(tmp_path, step_prefix)
+    runtime_root, todo_id, turn_instance_id = _raise_after_step(tmp_path, step_prefix, monkeypatch)
 
     readback = read_heartbeat_settlement(
         runtime_root,

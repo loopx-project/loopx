@@ -65,7 +65,7 @@ def test_cli_preserves_query_failure_and_existing_receipt(
     before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     result = command.handle_quota_command(
         args, registry_path=registry, runtime_root_arg=str(tmp_path),
-        print_payload=lambda payload, *_: output.append(json.loads(json.dumps(payload))),
+        print_payload=lambda payload, *_, **_kwargs: output.append(json.loads(json.dumps(payload))),
         append_cli_rollout_event=append,
     )
     assert result == 1

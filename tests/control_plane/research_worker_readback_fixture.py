@@ -112,7 +112,10 @@ def serve(root: Path, mode: str) -> None:
         assert index.read_bytes() == before
         state = json.loads(Path(args.state_file).read_text())
         original = state["replan_attempts"][0]["obligation_id"]
+        original_turn = state["replan_attempts"][0]["settlement_identity"]["turn_instance_id"]
+        assert original_turn
         receipt = receipt_path_for_goal({"id": GOAL}, root / "project" / "ACTIVE_GOAL_STATE.md")
+        assert json.loads(receipt.read_text())["worker_observations"][AGENT]["turn_instance_id"] == original_turn
         synced = sync_project_registry_to_global(registry_path=Path(args.registry),
             runtime_root_override=args.runtime_root, goal_id=GOAL)
         assert synced["ok"] is True
@@ -128,7 +131,8 @@ def serve(root: Path, mode: str) -> None:
             def serve_forever(self, poll_interval=0.5):
                 print(json.dumps({"port": self.server_address[1], "registry": args.registry,
                     "runtime": args.runtime_root, "goal_id": GOAL, "agent_id": AGENT,
-                    "obligation_id": original, "receipt": str(receipt), "dispatches": str(dispatches),
+                    "obligation_id": original, "turn_instance_id": original_turn,
+                    "receipt": str(receipt), "dispatches": str(dispatches),
                     "dashboard_registry": str(dashboard_registry),
                     "history": str(index)}),
                     file=output, flush=True)

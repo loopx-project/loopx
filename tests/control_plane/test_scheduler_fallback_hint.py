@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from loopx.control_plane.heartbeat.rules import (
     SCHEDULER_HINT_APPLICATION_RULE,
     SCHEDULER_HINT_COMPACT_RULE,
@@ -77,13 +79,17 @@ def _hint(
     scheduler_state: dict | None = None,
     host_rrule: str | None = None,
     automation_id: str | None = None,
+    include_detail: bool = False,
+    observation_error: str | None = None,
 ) -> dict:
     return build_scheduler_hint(
         decision,
         codex_app_scheduler_state=scheduler_state,
         codex_app_current_rrule=host_rrule,
         codex_app_automation_id=automation_id,
+        codex_app_observation_error=observation_error,
         scheduler_execution_context=APP_CONTEXT,
+        include_detail=include_detail,
     )
 
 
@@ -141,6 +147,60 @@ def test_apply_needed_without_automation_id_projects_deterministic_fallback() ->
     )
     assert "--automation-id" in fallback["cli_args"]
     assert "automation_id_projected" in fallback["reason"]
+
+
+def test_observed_codex_app_schedule_only_gets_a_cadence_suggestion() -> None:
+    hint = _hint(
+        _active_decision(),
+        host_rrule="FREQ=MINUTELY;INTERVAL=13",
+        automation_id="loopx",
+        include_detail=True,
+    )
+
+    assert hint["action"] == "run_now"
+    for app in (hint["app_automation"], hint["codex_app"]):
+        assert app["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3"
+        assert app["host_action"] == "none"
+        assert app["rrule_source"] is None
+        backoff = app["stateful_backoff"]
+        assert backoff["host_observation"]["current_rrule"] == "FREQ=MINUTELY;INTERVAL=13"
+        assert backoff["apply_needed"] is False and backoff["ack_needed"] is False
+        assert not {"ack_hint", "fallback_hint", "failure_hint"}.intersection(app)
+    detail = hint["cold_path_detail"]
+    assert detail["reset_policy_detail"]["app_automation_apply"] == "none"
+    assert detail["stateful_backoff_detail"]["ack_required_after_apply"] is False
+    assert detail["execution_phase"]["disposition"] == "not_required"
+
+
+def test_matching_codex_app_schedule_can_still_be_acknowledged() -> None:
+    hint = _hint(
+        _active_decision(),
+        host_rrule="FREQ=MINUTELY;INTERVAL=3",
+        automation_id="loopx",
+    )
+
+    app = hint["app_automation"]
+    assert app["host_action"] == "ack_observed_rrule_without_update"
+    assert app["stateful_backoff"]["apply_needed"] is False
+    assert "ack_hint" in app
+    assert "fallback_hint" not in app
+
+
+@pytest.mark.parametrize("reason", ["heartbeat RRULE not found", "heartbeat RRULE is ambiguous"])
+def test_unavailable_codex_app_schedule_omits_update_and_ack_in_detail(reason: str) -> None:
+    hint = _hint(
+        _active_decision(), automation_id="loopx", include_detail=True, observation_error=reason,
+    )
+
+    for app in (hint["app_automation"], hint["codex_app"]):
+        assert app["host_observation"] == {"available": False, "reason": reason}
+        assert app["host_action"] == "none"
+        assert not {"ack_hint", "fallback_hint", "failure_hint"}.intersection(app)
+    detail = hint["cold_path_detail"]
+    reset = detail["reset_policy_detail"]
+    assert reset["app_automation_apply"] == reset["codex_app_apply"] == "none"
+    assert detail["stateful_backoff_detail"]["ack_required_after_apply"] is False
+    assert detail["execution_phase"]["disposition"] == "not_required"
 
 
 def test_settled_cadence_omits_fallback_hint(tmp_path: Path) -> None:
@@ -433,6 +493,22 @@ def test_resolve_codex_app_automation_rrule_returns_automation_id(
     )
     assert result["available"] is True
     assert result["automation_id"] == "fixture"
+
+    deleted = tmp_path / "automations" / "deleted-fixture" / "automation.toml"
+    deleted.parent.mkdir()
+    deleted.write_text(
+        automation_path.read_text(encoding="utf-8")
+        .replace('id = "fixture"', 'id = "deleted-fixture"')
+        .replace('status = "ACTIVE"', 'status = "DELETED"'),
+        encoding="utf-8",
+    )
+
+    assert resolve_codex_app_automation_rrule(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, root=tmp_path,
+    ) == result
+    assert resolve_codex_app_automation_rrule(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, root=tmp_path, automation_id="deleted-fixture",
+    ) == {"available": False, "reason": "Codex App heartbeat is deleted"}
 
 
 def test_codex_app_automation_writer_round_trips_multiline_prompt(

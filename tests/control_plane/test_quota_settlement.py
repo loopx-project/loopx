@@ -47,6 +47,7 @@ from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
 from loopx.control_plane.turn_driver import decision_capture as decision_capture_module
+from loopx.control_plane.turn_driver import native_context_profile
 from loopx.control_plane.work_items.interaction_contract import (
     build_interaction_contract,
     interaction_next_cli_actions,
@@ -855,6 +856,7 @@ def test_codex_app_windows_settlement_command_substitutes_powershell_turn(
 def test_private_capture_support_matches_uid_boundary(
     platform: SimpleNamespace, supported: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(native_context_profile, "os", platform)
     monkeypatch.setattr(decision_capture_module, "os", platform)
     assert decision_capture_module.private_capture_supported() is supported
     if supported:

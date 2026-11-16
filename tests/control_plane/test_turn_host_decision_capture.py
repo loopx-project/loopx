@@ -98,8 +98,10 @@ def test_codex_workspace_write_consumes_original_decision_inline(tmp_path, monke
             todos=summary["agent_todos"]["items"]), state_path=state, provider=provider)
     executable = fixture._write_fake_codex(tmp_path)
     script = executable.with_suffix(".py") if os.name == "nt" else executable
-    source = script.read_text(encoding="utf-8").replace("prompt = sys.stdin.read()", '''prompt = sys.stdin.read()
-assert args[args.index("--sandbox") + 1] == "workspace-write"
+    source = script.read_text(encoding="utf-8")
+    work_start = "turn_key = re.search("
+    assert source.count(work_start) == 1
+    source = source.replace(work_start, '''assert args[args.index("--sandbox") + 1] == "workspace-write"
 request = json.loads(prompt.split("Turn request:\\n", 1)[1])
 contract = request["task_context"]
 assert request["schema_version"] == "loopx_turn_model_context_v0"
@@ -128,7 +130,7 @@ assert "Read the supplied task_context before dependent work" in prompt
 assert "not a prerequisite filesystem read" in prompt
 assert contract["interaction_contract"]["agent_channel"]["work_context"]
 pathlib.Path("received.json").write_text(json.dumps(request), encoding="utf-8")
-''')
+''' + work_start)
     executable = write_python_host_fixture(script.with_suffix(""), source)
     argv = fixture._base_argv(registry=registry, runtime=runtime, workspace=workspace,
         codex_bin=executable, model=None, timeout_seconds=20,
@@ -633,7 +635,8 @@ def test_real_host_reads_original_capture_after_source_change(
     monkeypatch.setattr(turn_decision, "selected_turn_todo", legacy_launch_selection, raising=False)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     f = _fixture_module()
-    project, runtime, workspace, registry = f._write_fixture(tmp_path, turn_count=2)
+    capture_fixture_root = tmp_path / "reader's path ’"
+    project, runtime, workspace, registry = f._write_fixture(capture_fixture_root, turn_count=2)
     state = project / ".codex/goals" / f.GOAL_ID / "ACTIVE_GOAL_STATE.md"
     state_bytes = state.read_bytes()
     code, listed = f._run_cli(["--registry", str(registry), "--runtime-root", str(runtime),
@@ -648,8 +651,17 @@ def test_real_host_reads_original_capture_after_source_change(
                                              todos=summary["agent_todos"]["items"]),
         state_path=state, provider=provider)
     executable = f._write_fake_codex(tmp_path)
-    source = executable.read_text().replace("#!/usr/bin/env python3", "#!" + sys.executable)
-    source = source.replace("prompt = sys.stdin.read()", 'prompt = sys.stdin.read()\npathlib.Path("received.txt").write_text(prompt)')
+    source_path = executable.with_suffix(".py") if os.name == "nt" else executable
+    source = source_path.read_text()
+    source = source.replace("marker = pathlib.Path(",
+        'pathlib.Path("received.txt").write_text(prompt)\nmarker = pathlib.Path(')
+    source = source.replace("    turn_number = int(match.group(1)) + 1\n",
+        '    request = json.loads(prompt.split("Turn request:\\n", 1)[1])\n'
+        '    revalidation = request["result_revalidation"]\n'
+        '    assert revalidation["candidate"]["result_kind"] == "validated_progress"\n'
+        '    assert revalidation["original_context"]["read_context_id"] != request["delivery_result_context"]["read_context_id"]\n'
+        '    turn_number = int(match.group(1))\n')
+    source = source.replace("marker.write_text(", "if not marker.is_file():\n    marker.write_text(")
     if first_attempt_fails:
         source = source.replace("marker = pathlib.Path(",
             'failed = pathlib.Path("failed-once")\n'
@@ -659,7 +671,8 @@ def test_real_host_reads_original_capture_after_source_change(
             '    print("Selected model is at capacity. Please try a different model.", file=sys.stderr)\n'
             '    raise SystemExit(9)\n'
             'marker = pathlib.Path(')
-    executable.write_text(source)
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+    executable = write_python_host_fixture(tmp_path / "captured-fake-codex", source)
     base = f._base_argv(registry=registry, runtime=runtime, workspace=workspace,
         codex_bin=executable, model=None, timeout_seconds=20,
         expected_marker=f._marker_value(1), turn_instance_id="original-observation")
@@ -684,7 +697,8 @@ def test_real_host_reads_original_capture_after_source_change(
     assert capture["turn_key"] == request["turn_key"]
     path = Path(capture["path"])
     original = path.read_bytes()
-    assert path.stat().st_mode & 0o077 == 0
+    if os.name != "nt":  # POSIX mode bits do not describe Windows ACLs.
+        assert path.stat().st_mode & 0o077 == 0
     if legacy_pretty:
         # Model an observation produced by the older writer. Recovery must
         # preserve those original bytes rather than rewriting its layout.
@@ -712,8 +726,9 @@ def test_real_host_reads_original_capture_after_source_change(
         current["authority_read"]["provider_revision"], "--execute"])
     assert code == 0, update
     # Execute precisely what the actual subprocess received.
-    detail_bytes = subprocess.run(shlex.split(detail["full_decision"]), check=True,
-                                  capture_output=True).stdout
+    read_command = (["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", detail["full_decision"]]
+                    if os.name == "nt" else shlex.split(detail["full_decision"]))
+    detail_bytes = subprocess.run(read_command, check=True, capture_output=True, timeout=15).stdout
     assert detail_bytes == original and b"SOURCE_B" not in detail_bytes
     code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
     assert code == 0 and "SOURCE_B" in current["todo"]["text"]
@@ -788,10 +803,19 @@ def test_real_host_reads_original_capture_after_source_change(
             assert code == 0 and restored["changed"], restored
         code, recovered = f._run_cli(retry)
         if restore_live_work:
+            # Restoring text allows the original Host retry. The Todo revision
+            # still changed, so its returned progress needs a fresh work read.
+            assert code == 1 and recovered["validation_stage"] == "result_freshness", recovered
+            assert recovered["effects"]["host_invoked"] and not recovered["effects"]["state_written"]
+            assert f._quota_spend_count(runtime) == 0
+            failed = json.loads(journal_path.read_bytes())
+            assert failed["result_revalidation"]["changed_components"] == ["todo"]
+            code, recovered = f._run_cli(retry)
             assert code == 0 and recovered["status"] == "committed", json.dumps(recovered)
             retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
             assert retried["task_context"] == request["task_context"]
             assert retried["detail_ref"] == detail
+            assert retried["delivery_result_context"]["read_context_id"] != request["delivery_result_context"]["read_context_id"]
         else:
             assert code == 1 and recovered["error_code"] == "current_turn_work_changed", recovered
             assert not any(recovered["effects"].values())
@@ -882,7 +906,12 @@ def test_publication_digest_covers_exact_bytes_without_a_file_readback(tmp_path,
         reference = capture_context_projection(payload, directory=tmp_path)
     assert Path(reference["path"]).read_bytes() == expected
     assert reference["sha256"] == hashlib.sha256(expected).hexdigest()
-    assert Path(reference["path"]).stat().st_mode & 0o077 == 0
+    if os.name == "nt":
+        from tests.control_plane.windows_private_acl import assert_private_acl
+
+        assert_private_acl(Path(reference["path"]))
+    else:
+        assert Path(reference["path"]).stat().st_mode & 0o077 == 0
 
 
 @pytest.mark.parametrize("adaptive", [False, True])
@@ -1006,9 +1035,16 @@ def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path
             todos=summary["agent_todos"]["items"]), state_path=state, provider=provider)
     runner = tmp_path / "dsh_runner.py"
     runner.write_text(
-        "import json\nfrom pathlib import Path\n"
+        "import json, sys\nfrom pathlib import Path\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r})\n"
+        "from tests.control_plane.host_checkpoint_fixture import checkpoint_decision\n"
         "def run_dsh_turn(**kwargs):\n"
-        "    source, _ = json.JSONDecoder().raw_decode(kwargs['prompt'].split('Turn request:\\n', 1)[1])\n"
+        "    prompt = kwargs['prompt']\n"
+        "    if 'Turn request:\\n' not in prompt:\n"
+        "        request = json.loads(prompt.rsplit('\\n', 1)[-1])\n"
+        "        assert request['phase'] == 'checkpoint_direction'\n"
+        "        return json.dumps(checkpoint_decision(request['checkpoint_context']))\n"
+        "    source, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])\n"
         "    contract = source['task_context']\n"
         "    assert source['schema_version'] == 'loopx_turn_model_context_v0'\n"
         "    assert 'schema_version' not in contract and 'contract_binding' not in contract\n"
@@ -1070,9 +1106,26 @@ def test_real_traex_cli_checks_the_adapter_before_dispatch_and_replays_once(
     traex.write_text(
         f"#!{sys.executable}\n"
         "import json,sys\nfrom pathlib import Path\nfrom jsonschema import validate\n"
-        f"open({str(traex_calls)!r}, 'a').write('invoked\\n')\n"
         "args = sys.argv[1:]\n"
         "prompt = args[-1]\n"
+        "schema = Path(args[args.index('--output-schema') + 1])\n"
+        "output = Path(args[args.index('--output-last-message') + 1])\n"
+        "if 'Turn request:\\n' not in prompt:\n"
+        "    source = json.loads(prompt.rsplit('\\n', 1)[-1])\n"
+        "    assert source['phase'] == 'checkpoint_direction'\n"
+        "    assert source['session']['action'] == 'resume'\n"
+        "    assert args[args.index('--sandbox') + 1] == 'read-only'\n"
+        "    assert '--permission-mode' not in args\n"
+        f"    assert Path({str(tmp_path / 'validation-calls.txt')!r}).read_text() == 'validated\\n'\n"
+        f"    open({str(traex_calls)!r}, 'a').write('direction\\n')\n"
+        f"    sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r})\n"
+        "    from tests.control_plane.host_checkpoint_fixture import checkpoint_decision\n"
+        "    decision = checkpoint_decision(source['checkpoint_context'])\n"
+        "    decision['agent_vision_json'] = json.dumps(decision.pop('agent_vision')) if 'agent_vision' in decision else ''\n"
+        "    validate(decision, json.loads(schema.read_text()))\n"
+        "    output.write_text(json.dumps(decision))\n"
+        "    sys.exit(0)\n"
+        f"open({str(traex_calls)!r}, 'a').write('work\\n')\n"
         "assert 'Never re-enter admission for detail reads.' in prompt\n"
         "source, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])\n"
         "assert source['schema_version'] == 'loopx_turn_model_context_v0'\n"
@@ -1085,6 +1138,7 @@ def test_real_traex_cli_checks_the_adapter_before_dispatch_and_replays_once(
         "assert ref['source_hash_ref'] == '$.source_decision_hash'\n"
         "assert source['source_decision_hash'] == json.loads(original)['contract_binding']['content_hash']\n"
         "assert json.loads(original)['interaction_contract']['agent_channel'] == contract['interaction_contract']['agent_channel']\n"
+        f"assert not Path({fixture.MARKER_NAME!r}).exists()\n"
         f"Path({fixture.MARKER_NAME!r}).write_text({fixture._marker_value(1)!r})\n"
         "candidate = {'result_kind':'validated_progress','classification':'traex_complete_work',\n"
         "    'delivery_batch_scale':'implementation','delivery_outcome':'outcome_progress',\n"
@@ -1134,8 +1188,9 @@ def test_real_traex_cli_checks_the_adapter_before_dispatch_and_replays_once(
     code, replay = fixture._run_cli([*argv, "--resume-turn-key", first["resume_turn_key"], "--execute"])
     assert code == 0 and replay["status"] == "committed", replay
     assert replay["replayed"] and not any(replay["effects"].values())
-    assert adapter_calls.read_text().splitlines() == ["invoked"]
+    assert adapter_calls.read_text().splitlines() == ["invoked", "invoked"]
     assert validation_calls.read_text().splitlines() == ["validated"]
+    assert traex_calls.read_text().splitlines() == ["work", "direction"]
     assert fixture._quota_spend_count(runtime) == 1
 
     from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
@@ -1143,14 +1198,18 @@ def test_real_traex_cli_checks_the_adapter_before_dispatch_and_replays_once(
     plan = load_loopx_turn_plan_from_journal(runtime, goal_id=fixture.GOAL_ID,
         agent_id=fixture.AGENT_ID, turn_key=first["resume_turn_key"])
     request = build_loopx_turn_host_request(plan)
-    for invalid in ({**request, "turn_envelope": {}}, {**request, "work_contract": None}):
+    for invalid in (
+        {**request, "turn_envelope": {}},
+        {**request, "work_contract": None},
+        {**request, "phase": "checkpoint_direction", "checkpoint_context": {}},
+    ):
         result = subprocess.run(
             [sys.executable, str(adapter), "--traex-bin", str(traex), "--workspace", str(workspace)],
             input=json.dumps(invalid), text=True, capture_output=True, cwd=workspace, timeout=15,
         )
         assert result.returncode == 2 and not result.stdout
         assert "invalid LoopX Turn Host request" in result.stderr
-        assert traex_calls.read_text().splitlines() == ["invoked"]
+        assert traex_calls.read_text().splitlines() == ["work", "direction"]
 
 
 def test_historical_tool_identity_preserves_raw_values(complete_host_request):
@@ -1570,27 +1629,29 @@ def test_complete_codex_launch_shares_input_check_only_within_attempt(
     from loopx.control_plane.turn_driver.codex_cli import _prompt, codex_cli_result_schema, run_codex_cli_host
     from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host
     from loopx.control_plane.turn_driver.executor import MATERIAL_HOST_RESULT_KINDS
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
     from tests.test_codex_operation_host import FAKE_SERVER
 
     request, _ = complete_host_request
     expected_prompt, expected_schema = _prompt(request), codex_cli_result_schema(request)
     prompt_file, schema_file = tmp_path / "prompt.txt", tmp_path / "schema.json"
     if operation_tools:
-        executable = tmp_path / "fake-operation-host"
-        executable.write_text(FAKE_SERVER.replace(
+        source = FAKE_SERVER.replace(
             'assert row["params"]["outputSchema"]["type"] == "object"',
             'import pathlib\n        '
             f'pathlib.Path({str(schema_file)!r}).write_text(json.dumps(row["params"]["outputSchema"]))',
-        ))
-        executable.chmod(0o700)
+        )
+        executable = write_python_host_fixture(tmp_path / "fake-operation-host", source)
         monkeypatch.setenv("FAKE_OPERATION_PROMPT_FILE", str(prompt_file))
     else:
         executable = _fixture_module()._write_fake_codex(tmp_path)
-        executable.write_text(executable.read_text().replace(
+        script = executable.with_suffix(".py") if os.name == "nt" else executable
+        source = script.read_text(encoding="utf-8").replace(
             "prompt = sys.stdin.read()", "prompt = sys.stdin.read()\n"
             f"pathlib.Path({str(prompt_file)!r}).write_text(prompt)\n"
             f"pathlib.Path({str(schema_file)!r}).write_text(pathlib.Path(args[args.index('--output-schema') + 1]).read_text())",
-        ))
+        )
+        executable = write_python_host_fixture(script.with_suffix(""), source)
     observed = []
     original = turn_envelope.effect_runtime_projection_result
     phase = "prepare"

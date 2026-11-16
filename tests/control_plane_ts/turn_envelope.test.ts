@@ -779,6 +779,16 @@ test("budget pressure retains complete independent planning context", () => {
   assert.deepEqual(source, original);
 });
 
+function assertCaptureReader(command: unknown, path: string, posixCommand: string): void {
+  if (process.platform === "win32") {
+    assert.equal(typeof command, "string");
+    assert.ok((command as string).includes(`[System.IO.File]::ReadAllBytes('${path}')`));
+    assert.match(command as string, /\[Console\]::OpenStandardOutput\(\)\.Write\(/u);
+  } else {
+    assert.equal(command, posixCommand);
+  }
+}
+
 test("vision closeout obligations survive projection and signature mutation", () => {
   const source = payload();
   const audit = {
@@ -812,7 +822,8 @@ test("vision closeout obligations survive projection and signature mutation", ()
     assert.deepEqual(projected[field], audit[field]);
   }
   assert.equal(projected.acceptance_gaps, undefined);
-  assert.equal((envelope.detail_ref as JsonObject).full_decision, "cat -- 'private capture/decision.json'");
+  assertCaptureReader((envelope.detail_ref as JsonObject).full_decision,
+    "private capture/decision.json", "cat -- 'private capture/decision.json'");
   assert.deepEqual(source, before);
   assert.deepEqual(quotaActionSignatureDocument(source),
     turnEnvelopeActionSignatureDocument(envelope));
@@ -1249,7 +1260,8 @@ test("scheduler omitted argv resolves the captured source carrier, never a new q
         .reduce<unknown>((value, key) => (value as JsonObject)[key], source);
       assert.deepEqual(resolved, expected);
     }
-    assert.equal((envelope.detail_ref as JsonObject).full_decision, "cat -- /tmp/capture/decision.json");
+    assertCaptureReader((envelope.detail_ref as JsonObject).full_decision,
+      "/tmp/capture/decision.json", "cat -- /tmp/capture/decision.json");
     assert.deepEqual(source, before);
     assert.deepEqual(quotaActionSignatureDocument(source),
       turnEnvelopeActionSignatureDocument(envelope));
@@ -1690,7 +1702,7 @@ test("captured details reuse one observation without changing action or default 
   assert.deepEqual(captured.writeback, original.writeback);
   assert.deepEqual(captured.action, original.action);
   const detail = captured.detail_ref as JsonObject;
-  assert.equal(detail.full_decision, "cat -- /tmp/capture/decision.json");
+  assertCaptureReader(detail.full_decision, "/tmp/capture/decision.json", "cat -- /tmp/capture/decision.json");
   assert.equal((detail.captured_decision as JsonObject).turn_instance_id, "turn-observed");
   assert.match(String((detail.captured_decision as JsonObject).instruction), /no fresh authority/);
   assert.equal(detail.todo_detail, (original.detail_ref as JsonObject).todo_detail);
@@ -1770,7 +1782,8 @@ test("native Turn capture binds the original observation without inventing admis
   assert.equal(capture.turn_instance_id, "native-turn");
   assert.equal(capture.turn_key, request.turn_key);
   assert.equal(decision.heartbeat_receipt, undefined);
-  assert.equal((bound.detail_ref as JsonObject).full_decision, "cat -- /tmp/native-turn/decision.json");
+  assertCaptureReader((bound.detail_ref as JsonObject).full_decision,
+    "/tmp/native-turn/decision.json", "cat -- /tmp/native-turn/decision.json");
   assert.deepEqual(evaluateTurnEnvelope({...request, envelope: bound}), bound);
   for (const turn_key of ["a".repeat(64), "sha256:" + "A".repeat(64),
       "sha256:" + "a".repeat(63), "sha256:" + "a".repeat(65), "sha256:" + "g".repeat(64)]) {
