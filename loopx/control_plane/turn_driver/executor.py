@@ -1016,6 +1016,7 @@ def _host_result_stage(
     persist_journal: JournalPersist,
     effects: dict[str, bool],
     confirm_start: Callable[[], None] | None = None,
+    record_host_attempt: Callable[[str], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
     host_launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
@@ -1039,6 +1040,8 @@ def _host_result_stage(
         # reservation. Confirmation failure stops before the host starts.
         if confirm_start is not None:
             confirm_start()
+        if record_host_attempt is not None:
+            record_host_attempt(str(journal["turn_key"]))
         from ...extensions.process_runtime import ProcessStdinDispatchUnconfirmed
         from ...usage_goal import observe_goal_execution
 
@@ -1597,6 +1600,7 @@ def run_loopx_turn_once(
     settlement_admission: Callable[[], AbstractContextManager] | None = None,
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
+    record_host_attempt: Callable[[str], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     host_launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
 ) -> dict[str, Any]:
@@ -1871,6 +1875,7 @@ def run_loopx_turn_once(
             persist_journal=persist_journal,
             effects=effects,
             confirm_start=confirm_start if reserved_start else None,
+            record_host_attempt=record_host_attempt,
             host_launch_guard=host_launch_guard,
         )
         if terminal is not None:

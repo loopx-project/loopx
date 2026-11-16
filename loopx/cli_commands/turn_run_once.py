@@ -846,7 +846,7 @@ def execute_turn_run_once(
                 return request_settlement_lifetime(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
 
-        def on_managed_start_admitted() -> None:
+        def ensure_start_receipt(turn_key: str | None = None) -> None:
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
@@ -868,6 +868,7 @@ def execute_turn_run_once(
                     else None
                 ),
                 goal_ref=goal_ref,
+                turn_key=turn_key,
             )
 
         managed_cadence = managed_cadence_start(
@@ -876,7 +877,7 @@ def execute_turn_run_once(
             agent_id=args.agent_id,
             automation_id=args.automation_id,
             manual_reason=args.manual_interval_bypass_reason,
-            on_admitted=on_managed_start_admitted,
+            on_admitted=ensure_start_receipt,
             request_id=settlement_identity.effect_id if args.host == "codex-cli" else None,
         )
 
@@ -913,6 +914,9 @@ def execute_turn_run_once(
             ) if args.execute else None),
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
+            record_host_attempt=ensure_start_receipt if args.execute and settlement_identity.todo_id and (
+                args.host == "codex-app-server" or getattr(args, "codex_operation_tools", False)
+            ) else None,
             goal_admission=goal_admission,
             host_launch_guard=(partial(
                 host_admission.launch_lifetime,

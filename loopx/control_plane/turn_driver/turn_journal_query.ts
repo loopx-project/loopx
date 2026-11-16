@@ -27,6 +27,7 @@ import {
 
 interface JournalEvidence {
   turn_key: string;
+  recovery_reason: string;
   observed_capabilities: string[] | null;
 }
 
@@ -136,6 +137,7 @@ function evidenceForJournal(
   }
   return {
     turn_key: turnKey,
+    recovery_reason: inspection.recovery_decision.reason,
     observed_capabilities: inspection.replay_legal
       ? observedCapabilities(turnPlanWorkSource(plan ?? {}, sourceNumberTokens(journal,
         parsedSourceNumberTokens(journal, numbers)).filter(({path}) => path[0] === "plan" && path[1] === "work_contract")
@@ -143,19 +145,65 @@ function evidenceForJournal(
   };
 }
 
+async function readJournalSnapshot(path: string): Promise<ReturnType<typeof parseJsonSource>> {
+  // Journals are atomically replaced. Read a complete snapshot without a
+  // reader lock or following a link to a different authority.
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
+    try {
+      return parseJsonSource(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
+    } catch (error) {
+      if (error instanceof SyntaxError || error instanceof TypeError) {
+        journalConflict("Turn journal history is unreadable; reconcile it before retrying");
+      }
+      throw error;
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+function turnJournalDirectory(runtimeRootValue: unknown, goalId: string): string {
+  const runtimeRoot = requireNonEmptyString(runtimeRootValue, "runtime_root");
+  if (!isAbsolute(runtimeRoot) || runtimeRoot.includes("\0")) {
+    throw new EffectRuntimeRequestError("Turn journal runtime_root must be an absolute path");
+  }
+  if ([".", ".."].includes(goalId) || /[/\\\0]/u.test(goalId)) {
+    throw new EffectRuntimeRequestError("Turn journal goal_id must be a single path segment");
+  }
+  return join(runtimeRoot, "goals", goalId, "turns");
+}
+
+/** An attempt linked by the bound receipt cannot be excluded by a missing journal. */
+export async function turnJournalHasUnconfirmedHost(
+  runtimeRoot: string, turnKey: string, settlementIdentity: JsonObject, goalRef: unknown,
+): Promise<boolean> {
+  if (!/^sha256:[a-f0-9]{64}$/u.test(turnKey)) {
+    journalConflict("The admitted Turn journal locator is invalid");
+  }
+  const identity = decodeIdentity(settlementIdentity);
+  const directory = turnJournalDirectory(runtimeRoot, identity.goal_id);
+  let parsed;
+  try {
+    parsed = await readJournalSnapshot(join(directory, turnKey.slice("sha256:".length) + ".json"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  const evidence = evidenceForJournal(
+    parsed.value, turnKey, identity, goalRef === undefined ? null : decodeGoalRef(goalRef), parsed.numbers,
+  );
+  if (!evidence) journalConflict("The admitted Turn journal belongs to another settlement identity");
+  return evidence.recovery_reason === "host_outcome_unknown";
+}
+
 async function queryTurnJournal(
   runtimeRootValue: unknown,
   identity: JournalAddress | BoundSettlementIdentity,
   goalRef: ExactGoalRef | null,
 ): Promise<JournalEvidence | null> {
-  const runtimeRoot = requireNonEmptyString(runtimeRootValue, "runtime_root");
-  if (!isAbsolute(runtimeRoot) || runtimeRoot.includes("\0")) {
-    throw new EffectRuntimeRequestError("Turn journal runtime_root must be an absolute path");
-  }
-  if ([".", ".."].includes(identity.goal_id) || /[/\\\0]/u.test(identity.goal_id)) {
-    throw new EffectRuntimeRequestError("Turn journal goal_id must be a single path segment");
-  }
-  const directory = join(runtimeRoot, "goals", identity.goal_id, "turns");
+  const directory = turnJournalDirectory(runtimeRootValue, identity.goal_id);
   let entries;
   try {
     entries = await readdir(directory, { withFileTypes: true });
@@ -167,22 +215,7 @@ async function queryTurnJournal(
   for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     if (!/^[a-f0-9]{64}\.json$/u.test(entry.name)) continue;
     if (!entry.isFile()) journalConflict("Turn journal history contains a non-regular snapshot; reconcile it before retrying");
-    let parsed: ReturnType<typeof parseJsonSource>;
-    // Journals are atomic-replace files. Read one complete version without
-    // creating reader lock files; do not follow a replaced symlink. This is
-    // not a snapshot of the directory or proof of provider-side absence.
-    const handle = await open(join(directory, entry.name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    try {
-      if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
-      try {
-        parsed = parseJsonSource(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
-      } catch (error) {
-        if (error instanceof SyntaxError || error instanceof TypeError) journalConflict("Turn journal history is unreadable; reconcile it before retrying");
-        throw error;
-      }
-    } finally {
-      await handle.close();
-    }
+    const parsed = await readJournalSnapshot(join(directory, entry.name));
     const evidence = evidenceForJournal(
       parsed.value,
       `sha256:${entry.name.slice(0, -5)}`,

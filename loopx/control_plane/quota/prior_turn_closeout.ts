@@ -13,7 +13,9 @@ import { jsonObject } from "../runtime_decode.ts";
 import {
   admitsAutonomousReplan,
   heartbeatReceiptBinding,
+  heartbeatReceiptDetails,
   heartbeatReceiptFactFromEvent,
+  optionalHeartbeatString,
   selectEffectiveHeartbeatReceipt,
   type HeartbeatReceiptBinding,
   type HeartbeatReceiptFact,
@@ -32,11 +34,13 @@ export interface PriorHostTurnCloseoutCandidate extends JsonObject {
   settlement_effect_id: string | null;
   /** The effective guard admitted a replan under this Todo's settlement identity. */
   admitted_todo_replan?: true;
+  unconfirmed_host_turn_key?: string;
 }
 
 interface CloseoutCandidateCheck {
   candidate: PriorHostTurnCloseoutCandidate;
   requireWritebackForRecovery: boolean;
+  turnKey: string | null;
 }
 
 function candidate(
@@ -62,6 +66,8 @@ function candidate(
  * admission requires a verified outstanding writeback for this binding.
  * Explicit pending-closeout discovery can also find admitted replans before
  * writeback, whether their settlement identity is a Todo or an obligation.
+ * Admission preflight can also inspect the exact journal named by a native
+ * Todo guard when the receipts do not confirm closeout.
  *
  * Every prior Turn is identity-validated, so a conflicting receipt fails the
  * read instead of being hidden behind a newer Turn. Results are newest first
@@ -78,7 +84,7 @@ export function selectCloseoutCandidates(
   goalId: string,
   agentId: string,
   excludeTurnInstanceId: string | null,
-  { includeUnwrittenReplans } = { includeUnwrittenReplans: false },
+  { includeUnwrittenReplans = false, readTurnJournals = false } = {},
 ): { candidates: CloseoutCandidateCheck[]; turnsValidated: number } {
   const perTurn = new Map<string, { fact: HeartbeatReceiptFact; value: JsonObject }[]>();
   const firstRecorded = new Map<string, number>();
@@ -120,10 +126,12 @@ export function selectCloseoutCandidates(
     if (binding === null) continue;
     const admittedReplan = admitsAutonomousReplan(effective, fact);
     const admittedTodoReplan = admittedReplan && binding.binding_kind === "todo";
+    const turnKey = readTurnJournals && binding.binding_kind === "todo"
+      ? optionalHeartbeatString(heartbeatReceiptDetails(effective).turn_key) : null;
     if (!fact.closeout_required && !admittedTodoReplan &&
-        !(includeUnwrittenReplans && admittedReplan)) continue;
+        !(includeUnwrittenReplans && admittedReplan) && turnKey === null) continue;
     candidates.push({candidate: candidate(binding, turnInstanceId, fact, admittedTodoReplan),
-      requireWritebackForRecovery: !fact.closeout_required && !includeUnwrittenReplans});
+      requireWritebackForRecovery: !fact.closeout_required && !includeUnwrittenReplans, turnKey});
   }
   return {candidates, turnsValidated: validated};
 }

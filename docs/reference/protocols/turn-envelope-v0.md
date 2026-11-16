@@ -500,8 +500,12 @@ by the pipe. A proven pre-dispatch expiry returns `goal_launch_not_allowed`
 with no Host invocation, writeback or debit. If a complete frame may have been
 delivered after expiry, the sender retires the receiver and the original
 attempt stays in progress with `host_outcome_unknown`. Recovery holds retry
-pending reconciliation of that attempt. Registry contention can refuse dispatch
-with `goal_authority_unavailable`.
+pending reconciliation of that attempt. A Todo-bound native admission links
+its original receipt to the journal after the Host attempt is durable and
+before dispatch. Fresh admission returns the original Turn key for reconciliation
+if that attempt is unconfirmed or its linked journal is missing. An admission
+that stops before recording an attempt has no journal link. Registry contention
+can refuse dispatch with `goal_authority_unavailable`.
 The journal retains the original capture, identity and saved session recovery
 for retry or readback.
 
@@ -509,7 +513,9 @@ for retry or readback.
 `turn/start` 每次非阻塞写入前都检查时限，管道接受完整帧后再检查一次。
 确认未派发即到期时，返回 `goal_launch_not_allowed`，不启动模型工作、不写回、
 不扣额。完整帧可能在到期后送达时，发送方终止接收进程，原尝试保留在执行中并
-标为 `host_outcome_unknown`。恢复须先核对原尝试，才能再次派发。
+标为 `host_outcome_unknown`。绑定 Todo 的原生执行在尝试落盘后、派发前，将日志索引
+附到原准入回执。结果未确认或已绑定日志缺失时，新准入返回原 Turn 索引供核对，先核查
+原尝试再派发。止于尝试落盘前的准入没有绑定日志索引。
 Use a fresh eligible Turn for changed work. Reading detail consumes no quota.
 Source admission, cancellation, workspace and mutation authority remain with
 their existing owners.

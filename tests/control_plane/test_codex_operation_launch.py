@@ -606,7 +606,7 @@ def test_lease_expiry_during_final_pipe_write_keeps_original_attempt_unconfirmed
                 assert count == 1
                 sent_at.append(time.time())
                 limit = time.monotonic() + 2
-                while not turns.exists() and time.monotonic() < limit:
+                while not (turns.exists() and turns.stat().st_size) and time.monotonic() < limit:
                     time.sleep(.005)
                 return count
 
@@ -641,6 +641,28 @@ def test_lease_expiry_during_final_pipe_write_keeps_original_attempt_unconfirmed
     assert code == 1 and replay["recovery_decision"]["reason"] == "host_outcome_unknown", replay
     assert replay["recovery_decision"]["reinvoke_host"] is False
     assert native.read_text().splitlines() == ["native"] and len(turns.read_text().splitlines()) == 1
+    assert path.read_bytes() == saved and capture.read_bytes() == original_capture
+    guard_arguments = [
+        *arguments[:6], "quota", "should-run", "--goal-id", "loopx-turn-fixture",
+        "--agent-id", "codex-fixture",
+        "--context-delivery", "off", "--delta-delivery", "off",
+    ]
+    code, guard = _cli([*guard_arguments, "--turn-instance-id", "next-after-unconfirmed-dispatch"])
+    assert code == 0, guard
+    assert guard["should_run"] is False and guard["reason_code"] == "host_outcome_unknown", guard
+    assert guard["unsettled_host_turn_recovery"]["turn_key"] == key
+    moved = path.with_suffix(".relocated")
+    path.rename(moved)
+    try:
+        code, guard = _cli([*guard_arguments, "--turn-instance-id", "next-after-original-journal-lost"])
+        assert code == 0, guard
+        assert guard["should_run"] is False and guard["reason_code"] == "host_outcome_unknown", guard
+        assert guard["unsettled_host_turn_recovery"]["turn_key"] == key
+        assert not path.exists()
+    finally:
+        moved.rename(path)
+    assert native.read_text().splitlines() == ["native"] and len(turns.read_text().splitlines()) == 1
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
     assert path.read_bytes() == saved and capture.read_bytes() == original_capture
 
 
