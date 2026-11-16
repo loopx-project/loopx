@@ -3,6 +3,10 @@ import { SettingsPage, type SettingsGroup } from './components/SettingsPage';
 import { AssistantSettingsPage, assistantTitle } from './components/AssistantSettingsPage';
 import { PageNavigation, SettingsSection, usePageNavigation } from './components/PageNavigation';
 import { PushSettingsDialog } from './components/PushSettingsDialog';
+import { LoopxNotifySettings } from './components/LoopxNotifySettings';
+import { CommandPalette } from './components/CommandPalette';
+import { isPaletteChord, type PaletteItem } from './command-palette';
+import { browserAlertsWanted, browserPermission, newlyWaiting } from './loopx/notify';
 import { FeishuSettingsDialog } from './components/FeishuSettingsDialog';
 import { GeneralSettingsDialog } from './components/GeneralSettingsDialog';
 import { AutoHandoverNotice, HandoverSettingsDialog } from './components/AutoHandover';
@@ -91,7 +95,7 @@ import { SchedulesPage } from './components/SchedulesPage';
 import { GoalWorkPage } from './components/GoalWorkPage';
 import { StewardPage } from './components/StewardPage';
 import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
-import { needsYouGoalIds } from './loopx/status';
+import { needsYouGoalIds, sortGoalTree } from './loopx/status';
 import { ActivityPage } from './components/ActivityPage';
 import { GoalBar, GoalConfirm, GoalPermissionPicker, LoopxToggle } from './components/LoopxGoal';
 import { defaultGoalPermission, fetchGoalCapabilities, goalOf, type GoalAgentCapability, type GoalPermission } from './loopx/launch';
@@ -511,6 +515,32 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const loopxRead = useLoopxStatus(token);
   const loopxStatus = loopxRead.status;
   const loopxNeedsYou = useMemo(() => needsYouGoalIds(loopxStatus?.attention ?? []), [loopxStatus]);
+  // A browser alert for each Goal that newly waits on the person. The first read is only the baseline.
+  const alertSeen = useRef<Set<string> | null>(null);
+  const openGoalRef = useRef<(goalId: string) => void>(() => undefined);
+  useEffect(() => {
+    if (!loopxStatus) return;
+    const { now, fresh } = newlyWaiting(alertSeen.current, loopxStatus.attention);
+    alertSeen.current = now;
+    if (!fresh.length || !browserAlertsWanted() || browserPermission() !== 'granted') return;
+    for (const id of fresh) {
+      const title = loopxStatus.goals.find(goal => goal.goalId === id)?.title ?? id;
+      try {
+        const alert = new Notification(t('app.name'), { body: t('loopx.notify.alert', title), tag: `loopx-goal-${id}` });
+        alert.onclick = () => { window.focus(); openGoalRef.current(id); alert.close(); };
+      } catch { /* a browser that refuses the constructor (some phones) just does not alert */ }
+    }
+  }, [loopxStatus]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!isPaletteChord(event) || event.isComposing) return;
+      event.preventDefault();
+      setPaletteOpen(open => !open);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   /** What the main area shows: a thread (or the blank one a new thread starts from), one of the hub's pages, or an extension's view. */
   // Those pages have addresses of their own, so a reload or a bookmark lands back on them.
@@ -2197,6 +2227,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const openGoal = (goalId: string) => navigate(() => {
     setGoalPath(goalId); setSelectedId(null); setView('goal'); setDrawer(false);
   });
+  openGoalRef.current = openGoal;
   const [exploreOpen, setExploreOpen] = useState(false);
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null);
   const [setupNotice, setSetupNotice] = useState<{ text: string; at: number } | null>(null);
@@ -2781,6 +2812,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       </div></SettingsSection> },
       ...(!demo ? [
         { id: 'push', label: t('push.title'), icon: IconBell, render: () => <PushSettingsDialog api={api} onClose={closeSettings} /> },
+        { id: 'loopx-notify', label: t('loopx.notify.title'), icon: IconBell, render: () => <LoopxNotifySettings token={token} goals={loopxStatus?.goals ?? []} notifications={loopxStatus?.notifications ?? []} failed={loopxRead.failure !== null} onChanged={loopxRead.reload} /> },
         { id: 'feishu', label: t('feishu.title'), icon: IconSideChat, render: () => <FeishuSettingsDialog api={api} agents={agents} onClose={closeSettings} /> },
         { id: 'handover', label: t('auto.title'), icon: IconAgents, render: () => <HandoverSettingsDialog api={api} agents={agents} onClose={closeSettings} /> },
       ] : []),
@@ -3607,6 +3639,26 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           }}
         />
       )}
+      {paletteOpen && (() => {
+        const entries = settingsGroups.flatMap(group => group.entries);
+        const items: PaletteItem[] = [
+          { id: 'cmd:new', group: 'commands', label: t('palette.newSession'), keywords: 'new thread' },
+          ...(showcase ? [] : [{ id: 'cmd:steward', group: 'commands' as const, label: t('palette.steward'), keywords: 'steward loopx' }]),
+          ...topLevelThreads.map(thread => ({ id: `thread:${thread.id}`, group: 'sessions' as const, label: thread.title, hint: thread.cwd, keywords: thread.agent })),
+          ...sortGoalTree(loopxStatus?.goals ?? []).map(goal => ({ id: `goal:${goal.goalId}`, group: 'goals' as const, label: goal.title, hint: goal.status, keywords: goal.objective ?? '', needsYou: loopxNeedsYou.has(goal.goalId) })),
+          ...entries.map(entry => ({ id: `settings:${entry.id}`, group: 'settings' as const, label: entry.label })),
+        ];
+        const pickItem = (item: PaletteItem) => {
+          setPaletteOpen(false);
+          const [kind, ...rest] = item.id.split(':'); const key = rest.join(':');
+          if (kind === 'thread') pick(key);
+          else if (kind === 'goal') openGoal(key);
+          else if (kind === 'settings') { const entry = entries.find(e => e.id === key); if (entry?.onOpen) entry.onOpen(); else openSettings(key); }
+          else if (key === 'steward') openSteward();
+          else newThread();
+        };
+        return <CommandPalette items={items} onPick={pickItem} onClose={() => setPaletteOpen(false)} />;
+      })()}
       {connectAsk && !showcase && <ConnectDialog reason={connectAsk.reason} onCancel={() => setConnectAsk(null)} onConnected={(t) => onToken(t)} />}
       {confirmSignOut && (
         <Dialog

@@ -32,3 +32,32 @@
 .goal-confirm-error { padding: 8px 10px; border-radius: var(--radius-sm, 8px); background: rgba(192, 57, 43, 0.1); color: var(--text); font-size: 12.5px; }
 .goal-confirm-error p { margin: 0 0 4px; }
 .goal-confirm-error ul { margin: 0; padding-left: 18px; }
+
+/* ⌘K command palette */
+.palette { width: min(560px, calc(100vw - 24px)); max-height: min(520px, 80vh); display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.palette-input { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--muted); }
+.palette-input input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); font-size: 15px; }
+.palette-list { overflow-y: auto; padding: 6px; }
+.palette-group { padding: 8px 10px 4px; color: var(--muted); font-size: 11px; letter-spacing: .04em; }
+.palette-row { display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); text-align: left; font-size: 14px; }
+.palette-row.active { background: var(--active); }
+.palette-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; text-align: right; }
+.palette-badge { flex: none; padding: 1px 6px; border-radius: 999px; background: var(--warn); color: #fff; font-size: 11px; }
+.palette-empty { padding: 20px; color: var(--muted); text-align: center; }
+.palette-foot { padding: 8px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+
+/* Goal notification settings */
+.loopx-notify-list { list-style: none; margin: 0; padding: 0; }
+.loopx-notify-row { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.loopx-notify-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.loopx-notify-badge { padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
+.loopx-notify-badge.on { background: var(--active); color: var(--fg); }
+.loopx-notify-bind { display: flex; gap: 8px; margin-top: 8px; }
+.loopx-notify-bind select { flex: 1; min-width: 0; }
+.loopx-notify-confirm { margin-top: 8px; }
+.settings-actions-inline { display: flex; gap: 8px; }
+.settings-subtitle { margin: 18px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+
+/* The bell's red dot: something waits on the person */
+.activity-btn .bell-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: #e5484d; box-shadow: 0 0 0 2px var(--bg, #fff); }

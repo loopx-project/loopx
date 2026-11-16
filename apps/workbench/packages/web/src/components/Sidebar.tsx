@@ -240,6 +240,8 @@ export function Sidebar({
   // The machine on screen being down hides its list, unless every machine is listed.
   const down = hostDown && !mergedModel;
   const wanted = attentionCount(threads, selectedId);
+  // The bell's red dot is for what waits on the person: a session asking, a Goal needing a decision. Unread results only count in the title.
+  const waitingOnYou = threads.filter((thread) => thread.waiting).length + needsYouGoals.size;
   // While searching, everything is expanded so matches are never hidden inside a closed group.
   const isOpen = (key: string) => Boolean(search.trim()) || !collapsed.has(key);
 
@@ -662,10 +664,11 @@ export function Sidebar({
                 className={`round-btn activity-btn${byActivity ? ' on' : ''}`}
                 aria-label={t('sidebar.byActivity')}
                 aria-pressed={byActivity}
-                title={byActivity ? t('sidebar.byProject') : wanted > 0 ? t('sidebar.byActivityCount', wanted) : t('sidebar.byActivity')}
+                title={byActivity ? t('sidebar.byProject') : waitingOnYou > 0 ? t('sidebar.byActivityUrgent', waitingOnYou) : wanted > 0 ? t('sidebar.byActivityCount', wanted) : t('sidebar.byActivity')}
                 onClick={() => setByActivity(!byActivity)}
               >
                 <IconBell size={compact ? 20 : 16} />
+                {waitingOnYou > 0 && <span className="bell-dot" aria-hidden="true" />}
               </button>
               <button className="round-btn" aria-label={t('sidebar.search')} title={t('sidebar.search')} onClick={() => setSearching(true)}>
                 <IconSearch size={compact ? 20 : 16} />

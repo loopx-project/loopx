@@ -40,9 +40,22 @@ export interface LoopxTodo {
   done: boolean;
 }
 
+/** Where a Goal's Lark group stands: bound or not, and which of the automatic notices are on. */
+export interface LoopxNotification {
+  goalId: string;
+  configured: boolean;
+  enabled: boolean;
+  humanGateAutoNotify: boolean;
+  blockedNoticeAutoNotify: boolean;
+  targetRef: string | null;
+  receiptCount: number;
+  lastNotifiedAt: string | null;
+}
+
 export interface LoopxStatus {
   goals: LoopxGoal[];
   attention: LoopxAttention[];
+  notifications: LoopxNotification[];
   observedAt: string;
 }
 
@@ -97,6 +110,17 @@ interface RawAttention {
   agent_todos?: RawTodoSummary;
 }
 
+interface RawNotification {
+  goal_id?: string;
+  configured?: boolean;
+  enabled?: boolean;
+  human_gate_auto_notify_enabled?: boolean;
+  blocked_notice_auto_notify_enabled?: boolean;
+  target_ref?: string | null;
+  receipt_count?: number;
+  last_notified_at?: string | null;
+}
+
 interface RawGoal {
   id?: string;
   parent_goal_id?: string | null;
@@ -147,7 +171,18 @@ export function parseLoopxStatus(payload: unknown): LoopxStatus {
     userTodos: todoCounts(item.user_todos),
     agentTodos: todoCounts(item.agent_todos),
   })).filter(item => item.goalId);
-  return { goals, attention, observedAt: text(record.served_at) ?? new Date().toISOString() };
+  const projection = (record.goal_channel_notification_projection ?? {}) as { goals?: RawNotification[] };
+  const notifications: LoopxNotification[] = (Array.isArray(projection.goals) ? projection.goals : []).map(row => ({
+    goalId: String(row.goal_id ?? ''),
+    configured: row.configured === true,
+    enabled: row.enabled === true,
+    humanGateAutoNotify: row.human_gate_auto_notify_enabled === true,
+    blockedNoticeAutoNotify: row.blocked_notice_auto_notify_enabled === true,
+    targetRef: text(row.target_ref),
+    receiptCount: Number(row.receipt_count ?? 0),
+    lastNotifiedAt: text(row.last_notified_at),
+  })).filter(row => row.goalId);
+  return { goals, attention, notifications, observedAt: text(record.served_at) ?? new Date().toISOString() };
 }
 
 /** Fetch and classify. 404 means the proxy is not serving the core yet; that is a state, not an error. */
