@@ -15,6 +15,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 from urllib.request import proxy_bypass_environment
@@ -59,6 +60,11 @@ class ProviderRequestAdmission:
         captured_session = SimpleNamespace(goal_ref=copy.deepcopy(session_wake.goal_ref))
         check = heartbeat_launch_check(captured_env, captured_session,
             original_quota=copy.deepcopy(original_quota))
+        preparation = original_quota.get("execution_preparation") if original_quota is not None else None
+        launch_scope = {}
+        if isinstance(preparation, dict) and preparation.get("handoff_mode") == "hard_lease":
+            # Keep the stored work's canonical lease fence through actual POST dispatch.
+            launch_scope["work_runtime_root"] = Path(captured_env["LOOPX_RUNTIME_ROOT"])
         deadline = math.inf
         if timeout is not None:
             if not math.isfinite(timeout) or timeout < 0:
@@ -72,7 +78,7 @@ class ProviderRequestAdmission:
             deadline = min(deadline,
                 time.monotonic() + epoch - reserve - time.time())
         self._invocation = _Invocation(
-            session_wake.admission.with_launch_decision(check), captured_env["LOOPX_TURN"],
+            session_wake.admission.with_launch_decision(check, **launch_scope), captured_env["LOOPX_TURN"],
             session_wake.session_id, deadline)
         self._env = captured_env
         self._process = None

@@ -495,9 +495,14 @@ def current_heartbeat_host_launch_decision(
     # Initial heartbeat/planning has not chosen an action yet. Its generic
     # prompt asks the Host to consume the current decision after launch. A
     # held continuation already has an action and cannot substitute another.
-    return {"current": current, "planned_effective_action": (
+    launch = {"current": current, "planned_effective_action": (
         original_quota.get("effective_action") if original_quota is not None
         else current.get("effective_action"))}
+    if selection.receipt_bound_todo_id is not None:
+        launch["receipt_bound_todo_id"] = selection.receipt_bound_todo_id
+        if original_quota is not None:
+            launch["planned_execution_preparation"] = original_quota.get("execution_preparation")
+    return launch
 
 
 def build_fresh_envelope_for_managed_step(

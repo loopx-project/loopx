@@ -599,9 +599,11 @@ process or admission identity. The request check reuses the existing Stop, quota
 and canonical admission owners; it does not grant additional work or invent a
 second quota counter. Inbound parsing, upstream connection setup and waiting for
 the response do not hold the Goal/registry lock. The admitted POST dispatch has
-an absolute two-second deadline, shortened by a smaller remaining phase budget.
-An uncertain or partially sent request remains unknown and is not retried by
-this transport.
+an absolute two-second deadline, shortened by the remaining phase budget or the
+active hard lease. A bound checkpoint request holds its original work lease
+fence during dispatch. A final write returning after the deadline leaves the
+original attempt unknown even if the provider received the body. A request with
+an expired or replaced lease for the original work is refused.
 
 Per-invocation receipts distinguish requests started, bytes fully sent, pending
 responses and unknown partial sends. `sent` does not certify provider acceptance

@@ -103,6 +103,24 @@ test("legacy native launch consumes the current quota owner without weakening so
     planned_effective_action: "control_plane_health_repair",
     current: {should_run: true, status_health_ok: false, effective_action: "control_plane_health_repair"},
   }}).kind, "reject");
+
+  const preparation = {todo_id: "todo-original", handoff_mode: "hard_lease", state: "ready",
+    delivery_allowed: true, lease_proof: {idempotency_key: "original-lease", expected_version: 2}};
+  const boundLaunch = {...admitted, receipt_bound_todo_id: preparation.todo_id,
+    planned_execution_preparation: preparation};
+  const withPreparation = (execution_preparation: unknown) => decideFirstPartyHostRuntime({
+    ...legacy, launch_decision: {...boundLaunch, current: {...admitted.current, execution_preparation}},
+  });
+  assert.notEqual(withPreparation(preparation).kind, "reject");
+  assert.notEqual(withPreparation({...preparation,
+    lease_proof: {...preparation.lease_proof, expected_version: 3}}).kind, "reject");
+  for (const current of [null, {...preparation, state: "claim_required", delivery_allowed: false},
+    {...preparation, todo_id: "todo-other"},
+    {...preparation, handoff_mode: "soft_claim", state: "not_required"},
+    {...preparation, lease_proof: {idempotency_key: "replacement-lease", expected_version: 3}},
+    {...preparation, lease_proof: {...preparation.lease_proof, expected_version: 1}}]) {
+    assert.deepEqual(withPreparation(current), {kind: "reject", code: "goal_launch_not_allowed"});
+  }
   assert.deepEqual(decideFirstPartyHostRuntime({...exact,
     planned_goal_ref: {goal_id: "release"}, launch_decision: admitted}),
   {kind: "reject", code: "goal_instance_id_missing"});
