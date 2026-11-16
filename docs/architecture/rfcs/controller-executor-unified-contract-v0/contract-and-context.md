@@ -42,6 +42,20 @@ regressed those cases and was rejected. Explicit raw-off retains its v0 view;
 progressive delivery validates the complete v1 source. Installed/in-flight
 adoption, independent review and original-quota outcomes/full costs remain open.
 
+After admission, a presentation failure reuses the prequalified bounded reader
+for the complete original capture when its receipt would fragment. Receipts that
+fit retain their single-page reader. A receipt-only pinned selection had rejected
+subsequent reads of that Turn's selection, replan and settlement commands. The
+existing File/SQLite CLI matrix now follows those commands through the original
+capture at 650- and 900-byte output limits, including a lost-page retry and a
+changed PATH, and settles once without rerunning admission. Refused decisions
+retain their diagnostic readers; an unverifiable capture remains rejected.
+This repairs recovery without raising the output cap or qualifying model cost.
+The checkpoint permission fixture separately declares two or three slots before
+any wake: exhaustion must reject the later Host launch without invoking it; a
+later capture is qualified only with its predeclared allowance. The earlier
+two-slot failure remains evidence of the enforced quota, not a runtime waiver.
+
 The current complete-source validator also delegates executable required-read
 checks to the existing interaction owner. Explicit command/order coordinates
 cannot disappear or introduce an unsupported execution order; prose-only and
