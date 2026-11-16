@@ -32,7 +32,7 @@ The same source commit and template contents produce the same archive. The bundl
 
 The source revision must include scoped v1 reads (#8861). Qualify from an unpacked bundle on a disposable Docker host with a unique project name and two free loopback ports. On amd64, verify the architecture of the host and running services. Time cold and cached starts through image pull, build, readiness and client reads. Check that PostgreSQL has no published port, clients have no route to the backend network and they have no database credential.
 
-Run the rehearsal from the repository. It creates a temporary project, exercises writer claim, expiry, takeover and receipt recovery after restart, plus reader filtering, write denial, persistent revocation and missing/malformed policy refusal, then removes its own containers and volumes.
+Run the rehearsal from the repository. It creates a temporary project, exercises writer claim, expiry, takeover, original receipt recovery and replay after restart for creation and completion, plus reader filtering, write denial, persistent revocation and missing/malformed policy refusal, then removes its own containers and volumes.
 
 ```sh
 node examples/coordination/remote-authority-compose/rehearse.mjs /path/to/unpacked-bundle

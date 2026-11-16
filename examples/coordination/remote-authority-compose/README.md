@@ -32,7 +32,7 @@ python3 examples/coordination/remote-authority-compose/build_bundle.py \
 
 源码版本须包含 scoped v1 读取实现（#8861）。在专用测试 Docker 环境中解压验证，使用唯一的 Compose 项目名和两个空闲回环端口。在 amd64 主机上验证本机架构和实际运行架构。冷启动与缓存启动分别记录镜像拉取、构建、就绪与客户端首次读回时间。确认数据库端口未发布，客户端无法访问 backend 网络，网关不向客户端提供数据库凭据。
 
-从仓库运行下列演练。它会创建临时项目，验证写客户端的认领、到期接管和重启后的回执，以及只读客户端的资源过滤、拒写、撤权重启和策略缺失/损坏拒绝，最后清理自己的容器和卷。
+从仓库运行下列演练。它会创建临时项目，验证写客户端的认领、到期接管、新增任务与完成操作的原回执恢复及重启重放，以及只读客户端的资源过滤、拒写、撤权重启和策略缺失/损坏拒绝，最后清理自己的容器和卷。
 
 ```sh
 node examples/coordination/remote-authority-compose/rehearse.mjs /path/to/unpacked-bundle

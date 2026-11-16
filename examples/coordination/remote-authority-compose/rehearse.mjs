@@ -67,9 +67,15 @@ try {
   assert.equal(client("b", "request", wrongStore).status, "rejected");
   assert.equal(client("b", "request", {...b, actor_id: a.actor_id}).status, "rejected");
   const hidden = "todo_outside_read_grant";
-  assert.equal(client("a", "request", {...a, todo_id: hidden, operation: "todo_add",
+  const createHidden = {...a, todo_id: hidden, operation: "todo_add",
     request_id: "rehearsal-create-hidden", text: "Task outside the reader grant",
-    note: "Private writer-only note"}).result.status, "applied");
+    note: "Private writer-only note"};
+  assert.equal(client("a", "request", createHidden).result.status, "applied");
+  const createdReceipt = client("a", "recover", createHidden);
+  assert.equal(createdReceipt.status, "found");
+  assert.equal(createdReceipt.historical_only, true);
+  assert.equal(createdReceipt.result.changed, true);
+  assert.equal(createdReceipt.result.todo.todo_id, hidden);
   const beforeReadChecks = client("a", "read").provider_revision;
   assert.equal(client("reader", "request", {...reader, todo_id: hidden}).status, "rejected");
   assert.equal(client("reader", "request", {...reader, operation: "claim", request_id: "reader-cannot-claim"}).status, "rejected");
@@ -116,6 +122,8 @@ try {
 
   run("docker", ["compose", "down", "--timeout", "5"]);
   run("./start.sh", []);
+  assert.equal(client("a", "recover", createHidden).receipt_sha256, createdReceipt.receipt_sha256);
+  assert.equal(client("a", "request", createHidden).result.status, "replayed");
   assert.equal(client("b", "recover", complete).receipt_sha256, recover.receipt_sha256);
   assert.equal(client("b", "request", complete).result.status, "replayed");
   const aEnd = client("a", "read");
