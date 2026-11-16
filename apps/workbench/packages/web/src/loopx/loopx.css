@@ -81,3 +81,13 @@
 .goal-accept-gap { padding: 8px 0; border-top: 1px solid var(--border); }
 .goal-accept-gap p { margin: 2px 0; }
 .goal-accept-objective { margin: 10px 0 2px; font-weight: 600; }
+
+/* Goal files tab */
+.goal-files { display: grid; gap: 28px; }
+.goal-files-list { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 8px; }
+.goal-files-row { display: grid; gap: 2px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: transparent; color: var(--fg); text-align: left; }
+.goal-files-row:hover { background: var(--surface-2); }
+.goal-files-row small, .goal-files-meta { color: var(--muted); font-size: 12px; }
+.goal-files-reader { margin-top: 8px; }
+.goal-files-text { white-space: pre-wrap; word-break: break-word; padding: 12px; border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
+.goal-files-markdown { line-height: 1.7; overflow-wrap: anywhere; }

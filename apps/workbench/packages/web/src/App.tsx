@@ -3268,6 +3268,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               onChanged={() => loopxRead.reload()}
               threads={threads}
               onOpenThread={openThreadById}
+              onBrowseFiles={threadId => { setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
               defaultAgent={draftAgent || agents[0]?.id || 'codex'}
             />
           </div>
