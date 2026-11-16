@@ -447,8 +447,8 @@ test("actorless owner gate decisions do not require an execution lease", () => {
     todo_id: "todo_target",
     required_decision_scopes: [scope],
   };
-  // A hard-lease goal has no agent actor to hold a lease for an owner decision:
-  // the gate records a decision, it does not execute work.
+  // A single-agent hard-lease goal has no peer set or agent actor to hold a
+  // lease for an owner decision: the gate records a decision, it does not execute work.
   const owner = evaluateCoordinationTodoTerminalDecision(request({
     registered_agents: ["agent-a"],
     handoff_mode: "hard_lease",
@@ -524,6 +524,22 @@ test("actorless owner gate decisions do not require an execution lease", () => {
   }));
   assert.equal(explicitFence.outcome, "rejected");
   assert.equal(explicitFence.code, "handoff_mode_requires_lease");
+
+  // Multi-agent hard-lease goals preserve their attributed-actor contract
+  // even when auto-acquire is enabled for the gate.
+  for (const allowAuto of [false, true]) {
+    const multiAgent = evaluateCoordinationTodoTerminalDecision(request({
+      registered_agents: ["agent-a", "agent-b"],
+      handoff_mode: "hard_lease",
+      allow_user_gate_auto_acquire: allowAuto,
+      todo: gate,
+      decision_target: target,
+      actor_agent_id: null,
+      decision_outcome: "approve",
+    }));
+    assert.equal(multiAgent.outcome, "rejected");
+    assert.equal(multiAgent.code, "handoff_mode_requires_lease");
+  }
 });
 
 test("hard-lease terminal transition releases the exact owned generation", () => {

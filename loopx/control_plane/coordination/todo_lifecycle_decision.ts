@@ -478,14 +478,15 @@ function terminalFence(
         ? {...lease, active: false, status: "released"} : null,
     });
   }
-  // An owner decision on an exact linked user gate has no agent actor to hold
-  // an execution lease: the gate records a decision, it does not execute work,
-  // so there is no holder to acquire for, and any expired lease lineage is
-  // retired together with the Todo transition. Only the actorless exact-scope
-  // override is admitted this way; a registered actor keeps the ordinary lease
-  // requirement below, and an active holder or an explicitly supplied fence is
-  // never bypassed.
-  if (request.command === "complete" && authorityMode === "exact_user_gate_decision_scope_override" &&
+  // In single-agent goals there is no peer set to attribute an execution
+  // lease across, and the terminal CLI has no human owner actor: an owner
+  // decision on an exact linked user gate records a decision rather than
+  // executing work, and retires any expired lease lineage with the Todo
+  // transition. Multi-agent hard-lease goals keep their attributed-actor
+  // gate contract, registered actors keep the ordinary lease requirement, and
+  // an active holder or an explicitly supplied fence is never bypassed.
+  if (request.registered_agents.length <= 1 && request.command === "complete" &&
+      authorityMode === "exact_user_gate_decision_scope_override" &&
       request.todo.role === "user" && request.todo.task_class === "user_gate" &&
       request.actor_agent_id === null && !timeActive && !explicitFence) {
     return result("apply", "terminal_fence_not_required", {

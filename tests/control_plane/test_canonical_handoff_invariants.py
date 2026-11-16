@@ -791,12 +791,11 @@ def test_exact_user_gate_completion_preserves_execution_fence(
 def test_owner_closes_exact_user_gate_without_an_agent_actor(
     tmp_path, canonical_workspace, mode, agents
 ):
-    """The owner who is not registered as an agent can still close the gate.
+    """The owner who is not registered as an agent can close a single-agent gate.
 
     A single-agent goal has no second agent to act for the owner, and the
-    terminal CLI has no human owner actor. The exact linked gate is a decision
-    record rather than execution, so an actorless owner decision needs no
-    execution lease on either handoff mode.
+    terminal CLI has no human owner actor. Multi-agent hard-lease goals retain
+    their attributed-actor execution fence contract when no actor is named.
     """
     registry, state = canonical_workspace(
         tmp_path, handoff_mode=mode, registered_agents=agents
@@ -821,6 +820,19 @@ def test_owner_closes_exact_user_gate_without_an_agent_actor(
         )
     assert error.value.code == "actor_required"
     _unchanged(registry, state, before, display)
+
+    if mode == "hard_lease" and len(agents) > 1:
+        with pytest.raises(LocalCoordinationAuthorityRejection) as error:
+            _terminal(
+                registry,
+                gate["todo_id"],
+                role="user",
+                decision_outcome="approve",
+                agent_id=None,
+            )
+        assert error.value.code == "handoff_mode_requires_lease"
+        _unchanged(registry, state, before, display)
+        return
 
     result = _terminal(
         registry,
