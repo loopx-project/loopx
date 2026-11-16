@@ -104,14 +104,12 @@ function stopReasonOf(status: string): string {
  * changed region. Context lines belong to both sides; the file's untouched parts are not in the
  * diff, but the hub only shows the region, so the lines it has are all it needs.
  *
- * An added or deleted file is not a patch at all: Codex sends the file's plain content. That is
- * told apart by no line carrying a diff marker.
+ * Added and deleted files can carry plain content. Only a unified hunk header identifies a
+ * patch there; indentation and leading +/- are valid file content.
  */
 export function parseUnifiedDiff(diff: string, kind?: string): { oldText: string | null; newText: string } {
   const text = String(diff ?? '');
-  const looksLikePatch = /^(@@|--- |\+\+\+ |[-+ \\])/m.test(text);
-  // An added or deleted file is not a patch at all: Codex sends the file's plain content, which
-  // no line of carries a diff marker. An update always comes as a real patch.
+  const looksLikePatch = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(?: .*)?\r?$/m.test(text);
   if ((kind === 'add' || kind === 'delete') && !looksLikePatch) {
     return kind === 'delete' ? { oldText: text, newText: '' } : { oldText: null, newText: text };
   }
