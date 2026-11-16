@@ -528,6 +528,12 @@ evidence → recovery; continuation → governance.
 | What evidence changed? | Compact run history, validation, blockers, and accepted writeback. |
 | May the loop continue? | Quota, capabilities, safe fallback, scheduler hints, and stop conditions. |
 
+Preview a Goal stop with `loopx goal-lifecycle --goal-id <id> --operation stop`;
+use `--operation resume` to restore eligibility. Apply the transition with
+`--actor-kind owner --execute`, retaining a fresh `--expected-state-fingerprint`
+when supplied by the Goal actions view. The ordinary and standalone
+[`loopx-core`](packages/loopx-core/README.md) CLI use the same lifecycle owner.
+
 <details>
 <summary>Architecture, control-plane surfaces and runtime responsibilities</summary>
 
