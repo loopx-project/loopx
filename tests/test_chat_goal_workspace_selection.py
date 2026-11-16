@@ -576,6 +576,12 @@ def test_goal_create_without_a_session_returns_the_managed_agent_address(tmp_pat
     try:
         status, refused = request("/api/actions/preview", create(open_session="no"))
         assert status == 400, refused
+        # Starting execution needs the Session the core would open; refused rather than dropped.
+        status, refused = request("/api/actions/preview", create(
+            open_session=False, start_execution=True, permission="workspace_write_on_confirmation",
+            completion_criteria="The check passes", initial_todos=["Make the check pass"]))
+        assert status == 400, refused
+        assert refused["error_code"] == "invalid_action_preview" and "open_session" in refused["error"], refused
         status, previewed = request("/api/actions/preview", create(open_session=False))
         assert status == 201, previewed
         assert previewed["proposal"]["normalized_parameters"]["open_session"] is False

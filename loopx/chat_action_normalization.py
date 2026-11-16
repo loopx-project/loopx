@@ -585,6 +585,10 @@ class ChatActionNormalizationMixin:
             if "permission" in values or "start_execution" in values:
                 from .control_plane.effect_runtime import effect_runtime_result
                 result.update(effect_runtime_result("goal.creation.execution.normalize", values))
+            if result.get("open_session") is False and result.get("start_execution"):
+                # start_execution queues the original task as the first Turn of the Session the
+                # core opens; with open_session=false there is no such Session to carry it.
+                raise ValueError("start_execution cannot be combined with open_session=false")
             for field in ("agent_id", "workspace_ref"):
                 if values.get(field):
                     result[field] = _opaque(values[field], field=field)
