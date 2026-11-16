@@ -237,6 +237,13 @@ def _same_file(left: Path, right: Path) -> bool:
         return False
 
 
+def _listed(target: Path, leaf: str) -> bool:
+    try:
+        return leaf in os.listdir(target.parent)
+    except OSError:
+        return False
+
+
 def _disk_parent(repo: Path, name: str) -> str:
     """Spell the existing leading directories of name as their parents list them."""
     parts = name.split("/")[:-1]
@@ -322,6 +329,13 @@ def _index(repo: Path, paths: list[str]) -> str:
         # identity, so its entry is matched by caseless name; every entry that
         # could be it is kept, so an index change is never reported as no_delta.
         existing = [name for name in pending if os.path.lexists(repo / name)]
+        # A selected leaf listed under its own spelling is a separate directory
+        # entry, so only an index entry with that exact leaf is the same entry;
+        # sharing a file identity (a hard link) is not an alias. An unlisted leaf
+        # was resolved by the file system to another spelling: match it by identity.
+        aliased = {
+            name: not _listed(repo / name, name.rsplit("/", 1)[-1]) for name in existing
+        }
         missing: dict[str, list[str]] = {}
         for name in pending:
             if name in existing:
@@ -349,8 +363,10 @@ def _index(repo: Path, paths: list[str]) -> str:
                     for name in existing
                     if _same_file(folder, (repo / name).parent)
                 ]
+            leaf = path.rsplit("/", 1)[-1]
             if any(
-                _same_file(repo / path, repo / name)
+                leaf == name.rsplit("/", 1)[-1]
+                or (aliased[name] and _same_file(repo / path, repo / name))
                 for name in same_directory[directory]
             ):
                 records.add(record)

@@ -759,6 +759,22 @@ def test_out_of_scope_non_utf8_index_path_does_not_fail_capture(icase_repo):
     assert captured["files"]["missing.txt"] is None
 
 
+def test_hard_link_to_a_tracked_file_is_not_its_alias(icase_repo):
+    repo = icase_repo
+    _stage(repo, "record.txt", b"tracked\n")
+    try:
+        os.link(repo / "record.txt", repo / "selected.txt")
+    except OSError:
+        pytest.skip("hard links are unavailable on this volume")
+    # selected.txt is its own untracked directory entry that shares the file.
+    before = drift_capture.stable_capture(repo, ["selected.txt"])
+    _index_blob_change(repo, "record.txt", b"staged\n")
+    after = drift_capture.stable_capture(repo, ["selected.txt"])
+    assert after["content_digest"] == before["content_digest"]
+    # The other entry's staged change is outside the selected scope.
+    assert after["index_digest"] == before["index_digest"]
+
+
 def test_posix_keeps_nofollow_open(repo, monkeypatch):
     (repo / "file.txt").write_bytes(b"original\n")
     platform = SimpleNamespace(**vars(os))
