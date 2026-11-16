@@ -347,14 +347,20 @@ whose capabilities are known when the automation is installed.
 - every selected Todo-bound, delivery-enabled must-attempt guard persists
   `closeout_required=true`. A fresh heartbeat checks the immediately preceding
   flagged guard against its exact writeback/spend receipts and typed Todo
-  lifecycle. If neither is present, `unsettled_host_turn_recovery_v0` preempts
+  lifecycle. If no legal closeout is present, `unsettled_host_turn_recovery_v0` preempts
   ordinary work selection. For an open advancement Todo without a resume gate,
   the typed `resume_prior_turn` route re-enters the original Turn guard: inspect
   existing effects first, follow its current eligibility and settlement contract,
   and account only verified work under that original identity. Missing receipts
   are not evidence of an external wait; never invent `monitor_changed` or a
-  successor to clear recovery. After legal closeout, rerun the same current Turn
-  and continue eligible work. Recovery selection itself is idempotent and
+  successor to clear recovery. Completing an advancement Todo after its durable
+  writeback cannot waive an owed debit: a requested successor remains unadmitted,
+  creates no heartbeat receipt or scheduler follow-up, and first returns the
+  original Turn's recovery commands. Settle that Turn, then rerun the successor.
+  Confirm a pending host scheduler follow-up only when the original receipt is
+  current and the host schedule matches. A rejected or unavailable ACK leaves
+  successor admission to the fresh guard. After legal closeout,
+  rerun the same current Turn and continue eligible work. Recovery selection itself is idempotent and
   no-spend; actual validated delivery retains normal accounting. Genuine external
   waits and monitor observations retain their existing typed closeouts. Receipts
   created before the explicit flag are not retroactively treated as unsettled.
@@ -688,8 +694,11 @@ suppressed until either value changes. Continue any allowed delivery under the
 observed host cadence. When the desired RRULE is already applied, skip
 `automation_update`; if `stateful_backoff.ack_needed=true`, run the bound ack
 hint directly, otherwise do nothing. For the uniquely matched current heartbeat,
-`quota should-run` reconciles the installed RRULE with the ACK ledger; a
-`host_observation.status=drift_detected` result reopens `apply_needed`.
+`quota should-run` reconciles the installed RRULE with the ACK ledger. An ordinary
+observed drift with no configured minimum interval leaves the installed schedule in
+place. A recommended RRULE in that case is advisory. A configured minimum
+interval can require an update when the observation is usable and
+`stateful_backoff.apply_needed=true`.
 
 If `automation_update` is unavailable in the session and
 `scheduler_hint.app_automation.fallback_hint.available=true`, run the bound

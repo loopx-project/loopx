@@ -1790,12 +1790,20 @@ trigger uses a fresh Turn identity to evaluate the live frontier; it never
 re-executes or spends for the closed Turn. Native Goal runtimes continue to that
 fresh guard instead of blocking the Goal. Explicit Goal stop or quota pause
 still takes precedence. Actual fresh-Turn waits retain their existing backoff.
+A pending Codex App cadence ACK does not defer fresh Turn admission. While
+the original receipt is current, its bound ACK can still confirm the observed
+host schedule. After admission supersedes that receipt, the fresh Turn compares
+its own target with the current host readback. A matching schedule can be
+acknowledged without updating the host. An unavailable or ambiguous readback
+reports its reason and withholds cadence apply and ACK commands until there is a
+usable observation. Explicit Goal stop and quota pause retain their own rules.
 For Codex App and local schedulers, `recommended_interval_minutes` is the next
-target interval. For Codex App heartbeats, `recommended_rrule` is emitted only
-when `app_automation.stateful_backoff.apply_needed=true`; if the desired RRULE is
-already applied, it is omitted so the agent does not call a host tool again.
-If that match still needs a reset-token/identity binding,
-`stateful_backoff.ack_needed=true` and the bound ack runs without a host update.
+target interval. When a running Codex App heartbeat is observed and no owner
+minimum interval is configured, `recommended_rrule` can describe the suggested
+cadence while both `apply_needed` and `ack_needed` are false. Use both the
+corresponding action flag and command hint before invoking a host update or ACK.
+For policies that require an ACK, a matching observed schedule can bind the
+reset token and identity without a host update.
 When an apply is required but `automation_update` is unavailable in the
 session, `app_automation.fallback_hint` carries the bounded `loopx-apply-rrule`
 command for the resolved automation (backup `codex-dev.db`, sync TOML+SQLite,
@@ -1849,9 +1857,10 @@ stateful-backoff policy live in `scheduler_hint.cold_path_detail` when callers
 request `loopx quota should-run --include-detail scheduler`. Hosts should also
 reset when an external event makes the goal actionable again, such as user
 feedback in the thread, a new or reassigned todo, a resolved gate, or material
-evidence transition. A reset applies `app_automation_initial_interval_minutes` (and
-the matching local scheduler initial interval) before starting unchanged
-backoff again; it never spends quota.
+evidence transition. A reset starts the progression at the profile's initial
+interval. The local scheduler can apply its initial interval. A Codex App
+heartbeat with an observed schedule and no configured minimum interval keeps
+that schedule. A reset spends no quota.
 For Codex App heartbeats, hosts and agents should use `automation_update` only
 when `app_automation.stateful_backoff.apply_needed=true` and
 `app_automation.recommended_rrule` is present. After `automation_update` succeeds,
@@ -1904,20 +1913,19 @@ cooldown. This changes notification delivery only, not the underlying user todo.
 matching readback and does not emit or make immediately due a successor RRULE
 in the same turn. User
 feedback, newly runnable work, reassignment, or material evidence therefore
-restores the automation to the current profile's initial interval before
-backoff resumes.
+resets progression before backoff resumes. A host interval change follows the
+current apply decision.
 
 `quota should-run` also observes the RRULE of a uniquely matched active Codex
 App heartbeat (goal + agent + current thread). The observed host RRULE takes
-precedence over `last_applied_rrule` when computing `apply_needed`, and the
-compact result is exposed as `stateful_backoff.host_observation`. A mismatch is
-`drift_detected`, so an ACK written before the host update—or a later host-side
-cadence regression—cannot permanently suppress the repair. This observation
-contains only cadence metadata. If a reset RRULE already matches but its new
-reset token/identity is not persisted, `apply_needed=false`, `ack_needed=true`,
-and the bound `ack_hint.cli_args` records that exact readback without a no-op
-host write. Missing or mismatched readback still requires `automation_update`;
-LoopX never edits the App manifest directly.
+precedence over `last_applied_rrule`, and the compact result is exposed as
+`stateful_backoff.host_observation`. A mismatch appears as `drift_detected`.
+Ordinary drift from an observed Codex App schedule leaves the host schedule in
+place. A configured owner minimum interval can produce an apply command from a
+usable observation. If a policy requires confirmation and the current schedule
+matches, the bound ACK records the reset token and identity without a host
+write. When readback is unavailable, `app_automation.host_observation` reports
+the reason and the cadence commands are omitted.
 For Codex App SSH Goal, Codex CLI TUI, and Claude Code loops, the default hot path reads
 `scheduler_hint.unchanged_poll.limits.<runtime>`. A value of `3` means the third
 unchanged poll triggers the compact final quota/replan check named by
