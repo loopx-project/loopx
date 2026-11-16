@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from benchmark.runtime import worker
 from benchmark.runtime.provider_request_admission import (
     ProviderRequestAdmission,
     request_admission_enabled,
@@ -525,6 +526,60 @@ def test_provider_request_keeps_original_soft_claim_turn(authority):
             assert len(upstream.rows) == 1
             assert quota_fixture._heartbeat_receipt_count(authority.runtime, turn) == 1
             assert quota_fixture._spend_run_count(authority.runtime) == 0
+
+
+@pytest.mark.parametrize("released_before_recheck", [False, True])
+def test_bound_native_worker_serializes_original_lease_release(held_provider_task, monkeypatch, released_before_recheck):
+    authority, quota, original, lease = held_provider_task
+    turn = quota_fixture.TURN_ID
+    marker = authority.root / "checkpoint-input"
+    command = [sys.executable, "-c",
+               f"import sys; from pathlib import Path; Path({str(marker)!r}).write_text(sys.stdin.read())"]
+    env = {
+        "LOOPX_PROJECT": str(authority.project), "LOOPX_RUNTIME_ROOT": str(authority.runtime),
+        "LOOPX_GOAL_ID": quota_fixture.GOAL_ID, "LOOPX_AGENT_ID": quota_fixture.AGENT_ID,
+        "LOOPX_TURN": turn,
+    }
+    session = SimpleNamespace(
+        admission=FirstPartyHostGoalAdmission.for_plan(
+            registry_path=authority.registry, goal_id=quota_fixture.GOAL_ID, planned_goal_ref=None,
+        ),
+        goal_ref=None,
+        session_id="fixture-original",
+    )
+    launch = {
+        "env": env, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+        "session_wake": session, "receipt": {}, "wake": authority.root, "original_quota": quota,
+    }
+    real_popen = subprocess.Popen
+    mutations = []
+
+    def start_with_release(args, *extra, **kwargs):
+        if args == command:
+            target = shadow_maintenance_lock_target(authority.runtime, quota_fixture.GOAL_ID)
+            with pytest.raises(LockAcquireTimeoutError):
+                with exclusive_mutation_file_lock(target, timeout_seconds=0):
+                    pytest.fail("the original lease could be released before the child starts")
+            mutations.append(_async(lambda: lease("release", original["version"])))
+        return real_popen(args, *extra, **kwargs)
+
+    monkeypatch.setattr(worker.subprocess, "Popen", start_with_release)
+    if released_before_recheck:
+        assert lease("release", original["version"])["status"] == "released"
+        with pytest.raises(first_party_host_admission.FirstPartyHostRuntimeRejected,
+                           match="goal_launch_not_allowed"):
+            with worker.native_child_process(command, **launch):
+                pytest.fail("the released lease started another worker")
+        assert not marker.exists() and not mutations
+    else:
+        with worker.native_child_process(command, **launch) as process:
+            process.communicate(input="original checkpoint input", timeout=5)
+            assert process.returncode == 0
+        assert marker.read_text() == "original checkpoint input"
+        released, = mutations
+        assert released.result(timeout=10)["status"] == "released"
+    assert quota_fixture._heartbeat_receipt_count(authority.runtime, turn) == 1
+    assert quota_fixture._spend_run_count(authority.runtime) == 0
 
 
 @pytest.mark.parametrize("retry_lease", ["expired", "replacement"])

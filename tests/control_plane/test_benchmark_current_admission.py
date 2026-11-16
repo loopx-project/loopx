@@ -1,11 +1,13 @@
 """Real heartbeat Hosts consume current source eligibility before native launch."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 from pathlib import Path
+import subprocess
 import sys
 import time
-from contextlib import contextmanager
 
 import pytest
 
@@ -13,10 +15,12 @@ from benchmark.runtime import worker
 from benchmark.tests.test_shared_codex_runtime import worker_env
 from loopx.configure_goal import configure_goal
 from loopx.cli_commands import turn_decision
+from loopx.control_plane.coordination.shadow_management import shadow_maintenance_lock_target
 from loopx.control_plane.goals import activation_service
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission, FirstPartyHostRuntimeRejected
 from loopx import contract, status as status_owner
 from loopx.cli import main
+from loopx.file_lock import LockAcquireTimeoutError, exclusive_mutation_file_lock
 from loopx.global_registry import sync_project_registry_to_global
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.host_process_fixture import write_python_host_fixture
@@ -195,6 +199,45 @@ def test_heartbeat_worker_consumes_hard_lease_deadline_at_spawn(
         assert worker.run_once(env)["ok"]
         assert (project / "native-starts").read_text().splitlines() == ["native"]
         assert (project / "model-starts").read_text().splitlines() == ["model"]
+    assert fixture._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_heartbeat_worker_holds_the_lease_writer_until_native_spawn(tmp_path, monkeypatch, provider):
+    env, project, runtime, source, _ = _environment(tmp_path, monkeypatch, provider, handoff_mode="hard_lease")
+    lease_args = ["--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID,
+        "--owner", fixture.AGENT_ID, "--idempotency-key", "benchmark-worker-spawn-lease"]
+    code, acquired = fixture._run_cli(source, runtime, "task-lease", "acquire",
+        *lease_args, "--expected-version", "0", "--ttl-seconds", "60", cwd=project)
+    assert code == 0 and acquired["ok"], acquired
+    real_popen = subprocess.Popen
+    mutations = []
+
+    def release():
+        code, result = fixture._run_cli(source, runtime, "task-lease", "release",
+            *lease_args, "--expected-version", str(acquired["lease"]["version"]), cwd=project)
+        assert code == 0 and result["ok"], result
+        return result["lease"]
+
+    with ThreadPoolExecutor(max_workers=1) as writer:
+        def start_with_release(args, *extra, **kwargs):
+            if isinstance(args, list) and args and args[0] == env["CODEX_BIN"]:
+                target = shadow_maintenance_lock_target(runtime, fixture.GOAL_ID)
+                with pytest.raises(LockAcquireTimeoutError):
+                    with exclusive_mutation_file_lock(target, timeout_seconds=0):
+                        pytest.fail("canonical lease writer could enter before Popen")
+                mutations.append(writer.submit(release))
+            return real_popen(args, *extra, **kwargs)
+
+        monkeypatch.setattr(worker.subprocess, "Popen", start_with_release)
+        result = worker.run_once(env)
+        assert result["ok"], result
+        released, = mutations
+        assert released.result(timeout=10)["status"] == "released"
+
+    assert (project / "native-starts").read_text().splitlines() == ["native"]
+    assert (project / "model-starts").read_text().splitlines() == ["model"]
+    assert fixture._heartbeat_receipt_count(runtime, result["turn_id"]) == 0
     assert fixture._spend_run_count(runtime) == 0
 
 
