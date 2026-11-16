@@ -845,7 +845,9 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: windows-latest
-    timeout-minutes: 30
+    # The expanded native lane reached the final Chat rebuild at 29m57s.
+    # Leave bounded room for that rebuild, source verification, and cleanup.
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v7

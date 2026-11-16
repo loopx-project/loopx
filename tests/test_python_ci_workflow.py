@@ -311,7 +311,7 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
 
 def test_windows_lane_rebuilds_the_frontend_without_a_usable_python3() -> None:
     job = WORKFLOW.split("  windows-powershell:\n", 1)[1].split("  presentation:\n", 1)[0]
-    assert "timeout-minutes: 30" in job
+    assert yaml.safe_load(WORKFLOW)["jobs"]["windows-powershell"]["timeout-minutes"] == 35
     assert "cache-dependency-path: apps/presentation/dashboard/package-lock.json" in job
     assert "working-directory: apps/presentation/dashboard" in job
     assert "npm ci --ignore-scripts" in job
