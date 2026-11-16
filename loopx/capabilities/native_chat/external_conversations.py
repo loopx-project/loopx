@@ -1695,11 +1695,17 @@ class ChatExternalConversations:
                         with controller.store.steering_delivery_lock(kwargs["session_id"], kwargs["client_ingress_id"]):
                             return controller._steer_active_turn(session=fresh, _queued_turn_id=None, **kwargs)
 
+                scope_current = True
+                if current.get("steward_context") and capture.get("target_turn_id"):
+                    from ...chat_manager_context import manager_authorization_scope_is_current
+                    scope_current = manager_authorization_scope_is_current(
+                        controller.registry_path, controller.manager_scope_resolver, current,
+                        current.get("manager_authorization_scope_id"), runtime_root=controller.coordination_runtime_root)
                 decision = deliver_native_mention(
                     SimpleNamespace(store=controller.store, steer_active_turn=steer_admitted),
                     session_id=current["session_id"], ingress_id=plan["client_turn_id"],
                     target_turn_id=capture.get("target_turn_id"),
-                    binding_matches=((capture.get("channel_id") == selected["channel_id"]
+                    binding_matches=(scope_current and (capture.get("channel_id") == selected["channel_id"]
                             or capture.get("channel_id") is None and capture.get("session_id") is None
                             and capture.get("target_turn_id") is None and bool(capture))
                         and current.get("status") != "closed"
@@ -1715,7 +1721,7 @@ class ChatExternalConversations:
                         response=("已送达当前回合。" if decision["action"] == "delivered" else
                             "已收到，送达状态待核实。原消息已保留，不会自动改投下一回合。" if decision["action"] == "unresolved" else
                             "本轮调整仅支持文字，原消息和附件已保留。" if decision.get("error_code") == "queue_steering_attachments_unavailable" else
-                            "未送达接收时的回合；该回合已切换或当前宿主不支持调整。原消息已保留。"))
+                            "未送达接收时的回合；原回合、授权或宿主能力已变化。原消息已保留。"))
                     _atomic_write_json(path, row)
                     return row
             self._record_steward_ingress(row, selected, current, plan["client_turn_id"])
