@@ -171,7 +171,13 @@ function continuationSource(
 }
 
 function isDriverMessage(message: UserMessage): boolean {
-  return continuationSource(message) !== undefined
+  // A malformed continuation still belongs to the Driver. Only
+  // sameReservation can admit its payload to a model step.
+  return message.source?.kind === 'loopx-continuation'
+}
+
+function otherStepInputs(messages: readonly UserMessage[], submitted: UserMessage): UserMessage[] {
+  return messages.filter(message => message.id !== submitted.id && !isDriverMessage(message))
 }
 
 function isHostContextMessage(message: UserMessage): boolean {
@@ -322,6 +328,11 @@ function foldSessionActivation(session: Agent['session']): ActivationProjection 
  */
 function inboxHasPending(inbox: Agent['inbox']): boolean {
   return inbox.nextTurn.length > 0 || inbox.nextStep.length > 0
+}
+
+function inboxContains(inbox: Agent['inbox'], id: UserMessage['id']): boolean {
+  return inbox.nextStep.some(message => message.id === id)
+    || inbox.nextTurn.some(message => message.id === id)
 }
 
 function exactBinding(
@@ -847,20 +858,20 @@ export class LoopXContinuationDriver {
       if (reservation !== undefined && submitted.id === reservation.messageId) {
         this.retireReservation(state)
       }
-      this.restoreOtherMessages(agent, messages, submitted)
+      this.restoreCompetingMessages(agent, otherStepInputs(messages, submitted))
       return { kind: 'reject' }
     }
     if (messages.some(message => message.id !== submitted.id && !isHostContextMessage(message))) {
       this.warn(`dsh-loopx-driver: ${preStepRejection('competing-messages', messages, submitted, startedAt)}`)
       this.retireReservation(state)
-      this.restoreOtherMessages(agent, messages, submitted)
+      this.restoreCompetingMessages(agent, otherStepInputs(messages, submitted))
       return { kind: 'reject' }
     }
 
     if (!(await this.authorityStillAllows(state, reservation, signal))) {
       this.warn(`dsh-loopx-driver: ${preStepRejection('authority-before-next', messages, submitted, startedAt)}`)
       this.retireReservation(state)
-      this.restoreOtherMessages(agent, messages, submitted)
+      this.restoreCompetingMessages(agent, otherStepInputs(messages, submitted))
       this.requestEvaluation(state)
       return { kind: 'reject' }
     }
@@ -890,13 +901,23 @@ export class LoopXContinuationDriver {
       || !sameReservation(admitted, reservation)) {
       this.warn(`dsh-loopx-driver: ${preStepRejection('downstream-batch', decision.messages, submitted, startedAt)}`)
       this.retireReservation(state)
-      this.restoreOtherMessages(agent, decision.messages, submitted)
+      const remaining = otherStepInputs(decision.messages, submitted)
+      const acceptedInputs = remaining.filter(message => !inboxContains(agent.inbox, message.id))
+      if (acceptedInputs.some(message => message.source.kind === 'user')) {
+        // Keep the downstream-approved human step. Putting the messages back
+        // after a rejection would leave them parked until another Host wake.
+        return { ...decision, messages: acceptedInputs }
+      }
+      const restoredWork = this.restoreCompetingMessages(agent, remaining)
+      if (!restoredWork && !inboxHasPending(agent.inbox)) {
+        state.pauseAfterTurnError = true
+      }
       return { kind: 'reject' }
     }
     if (!(await this.authorityStillAllows(state, reservation, signal))) {
       this.warn(`dsh-loopx-driver: ${preStepRejection('authority-after-next', decision.messages, submitted, startedAt)}`)
       this.retireReservation(state)
-      this.restoreOtherMessages(agent, decision.messages, submitted)
+      this.restoreCompetingMessages(agent, otherStepInputs(decision.messages, submitted))
       return { kind: 'reject' }
     }
     return decision
@@ -1430,17 +1451,18 @@ export class LoopXContinuationDriver {
     state.reservation = undefined
   }
 
-  private restoreOtherMessages(
+  private restoreCompetingMessages(
     agent: Agent,
-    messages: UserMessage[],
-    submitted: UserMessage,
-  ): void {
+    messages: readonly UserMessage[],
+  ): boolean {
+    // Host context belongs to the step that requested it. Restore it only
+    // alongside independent input that will actually use it.
+    if (messages.every(isHostContextMessage)) return false
     for (const message of messages) {
-      if (message.id === submitted.id || isDriverMessage(message)) continue
-      if (agent.inbox.nextStep.some(candidate => candidate.id === message.id)
-        || agent.inbox.nextTurn.some(candidate => candidate.id === message.id)) continue
+      if (inboxContains(agent.inbox, message.id)) continue
       agent.send(message, 'next-step', true)
     }
+    return true
   }
 
   private stopState(state: DriverState): void {

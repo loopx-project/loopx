@@ -580,12 +580,20 @@ writeback, spend, or void receipt.
 The Driver resolves the current project registry with
 `resolve-agent-thread`, requires one exact Goal/Agent match for the live DSH
 session, and rechecks binding plus quota before and after downstream pre-step
-listeners. A human message removes an unclaimed automatic reservation; a
-mixed batch rejects the automatic message and restores the human work.
+listeners. A human message removes an unclaimed automatic reservation. A
+mixed batch detected before downstream approval returns independent work to
+the inbox. When the downstream decision already accepts independent user input,
+the current step can enter with that input and its allowed companion messages.
+The Driver removes its continuation and leaves already-queued messages in
+their original inbox position.
 DSH's built-in `runtime-context`, `time-context`, and `skill-catalog` producers
 may share the step with that continuation, including after downstream listeners.
 The source's `kind` identifies those producers; a plugin's snapshot or catalog
 `form` alone does not make its message host-owned context.
+If a downstream pre-step listener removes or rewrites the reserved continuation
+and leaves no competing input, the Driver holds automatic admission until the
+next human message or an explicit GoalBar Pause and Start. A rejected batch's
+host context is restored only alongside independent input.
 The Driver queues at most one Driver-owned followup per automatic admission.
 Initialization messages use the distinct `dsh-loopx-plugin/init-command`
 source and never satisfy a Driver reservation.
