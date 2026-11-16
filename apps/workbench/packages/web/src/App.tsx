@@ -3439,8 +3439,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           left={draftTeam ? undefined : left}
           right={draftTeam ? undefined : right}
           composerActions={<>
-            {!selected && !draftTeam && !api.demo && goalCap && (
-              <LoopxToggle active={draftLoopx} disabledReason={goalCap.available ? undefined : goalCap.reason} onToggle={() => setDraftLoopx(on => !on)} />
+            {!selected && !draftTeam && (api.demo || goalCap) && (
+              // The demo has no hub to hand a Goal to: the mark stays, so the entry can be found, and says what it needs.
+              <LoopxToggle active={draftLoopx} disabledReason={api.demo ? t('demo.needsHub') : goalCap?.available ? undefined : goalCap?.reason} onToggle={() => setDraftLoopx(on => !on)} />
             )}
             {(canVoice || canVoiceDraft) && !voice.state.active && (
             <button
