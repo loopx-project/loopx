@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import loopxIcon from '../assets/loo-icon-blue.svg';
 import '../loopx/loopx.css';
 import { applyGoal, defaultGoalPermission, fetchGoalBar, LoopxError, permissionCopy, previewGoal, statusWord,
   type GoalAgentCapability, type GoalBarRead, type GoalBinding, type GoalPermission, type GoalPreview } from '../loopx/launch';
 import { t } from '../i18n';
 import { Dialog } from './Dialog';
-import { IconCheck, IconHand, IconShield } from './icons';
+import { IconCheck, IconHand, IconShield, LooMark } from './icons';
 import { Popover } from './Popover';
 
 /** The LoopX mark next to the voice button: turns a new conversation into a Goal conversation. */
@@ -13,7 +12,8 @@ export function LoopxToggle({ active, onToggle, disabledReason }: { active: bool
   const title = disabledReason ?? (active ? t('loopx.goal.cancelMode') : t('loopx.goal.handOver'));
   return (
     <button type="button" className={`tool-btn composer-loopx${active ? ' active' : ''}`} disabled={Boolean(disabledReason)} onClick={onToggle} title={title} aria-label={title} aria-pressed={active}>
-      <img src={loopxIcon} alt="" width={18} height={18} />
+      {/* One mark, drawn in currentColor: the theme's ink at rest, white on the black active pill. */}
+      <LooMark size={18} />
       {active && <span className="composer-loopx-label">LoopX</span>}
     </button>
   );

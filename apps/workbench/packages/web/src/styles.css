@@ -15348,12 +15348,41 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 }
 
 .sidebar-goals-head {
-  padding: 0 10px;
-  margin-bottom: 2px;
-  font-size: 12px;
-  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin: 8px 10px 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--faint);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
 }
+
+.sidebar-goals-all {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-goals-all:hover { background: var(--hover, rgba(31, 30, 28, 0.05)); color: var(--text); }
+.sidebar-goals-all-count { font-variant-numeric: tabular-nums; }
+
+.sidebar-goal-pin { flex: none; color: var(--muted); display: inline-flex; }
+
+/* A stopped Goal reads as absence: a hollow dot, not a coloured one. */
+.sidebar-goal-dot.is-stopped { background: transparent; border: 1.5px solid var(--faint); }
 
 .sidebar-goal {
   display: flex;
@@ -15382,7 +15411,7 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 }
 
 .sidebar-goal-dot.is-active { background: var(--ok, #3a7d44); }
-.sidebar-goal-dot.is-stopped { background: var(--warn, #b3802d); }
+.sidebar-goal-dot.is-stopped { background: transparent; border: 1.5px solid var(--faint); }
 
 .sidebar-goal-title {
   flex: 1;
@@ -15391,6 +15420,9 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The group's fold chevron sits right after its label, not pinned to the sidebar's far edge. */
+.sidebar-goals-head .sidebar-goal-title { flex: none; }
 
 .sidebar-goal-badge {
   flex-shrink: 0;
@@ -15404,6 +15436,215 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   line-height: 16px;
   text-align: center;
 }
+
+/* The All Goals page: the whole list, searched and grouped. Quiet greys; colour only where the
+   state says so (green runs, black waits on you, hollow is stopped). */
+.goals-page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 20px 20px 48px;
+}
+
+.goals-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.goals-head h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+
+.goals-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  max-width: 360px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill, 999px);
+  color: var(--muted);
+  background: var(--surface);
+}
+.goals-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; outline: none; }
+.goals-search input::placeholder { color: var(--faint); }
+
+.goals-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.goals-filters button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill, 999px);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.goals-filters button[aria-pressed='true'] { background: var(--active); color: var(--text); border-color: var(--border-strong); }
+.goals-filter-count { margin-left: 4px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+.goals-group { margin: 14px 0 6px; }
+.goals-group h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.goals-group h2 span { color: var(--faint); font-size: 12px; font-weight: 500; }
+
+.goals-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: calc(var(--depth, 0) * 22px);
+}
+.goals-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius, 10px);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  /* At narrow widths every column must give way inside the row, never paint past its right edge. */
+  overflow: hidden;
+}
+.goals-row-main:hover { background: var(--hover); }
+
+.goals-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.goals-dot.is-active { background: var(--ok, #3a7d44); }
+.goals-dot.is-needs-you { background: var(--text); }
+.goals-dot.is-stopped { background: transparent; border: 1.5px solid var(--faint); }
+
+.goals-row-title {
+  /* The name comes first: it takes the room, and only past that does it shorten. */
+  flex: 2 1 55%;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.goals-row.is-child .goals-row-title { font-size: 13px; color: var(--muted); }
+.goals-row-badge {
+  display: inline-block;
+  vertical-align: 2px;
+  margin-left: 6px;
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+.goals-row-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Fixed columns that yield gracefully: each keeps its width while there is room and
+   truncates with an ellipsis, not a hard clip, when the row runs out of space. */
+.goals-row-sub .goals-row-agents { flex: 0 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.goals-row-sub .goals-row-task { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.goals-row-count, .goals-row-recent { flex: 0 1 64px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.goals-pin { color: var(--faint); }
+.goals-pin.on { color: var(--text); }
+.goals-empty { margin: 24px 0; color: var(--faint); font-size: 13px; }
+
+@media (max-width: 640px) {
+  .goals-page { padding: 14px 12px 40px; }
+  .goals-head { flex-wrap: wrap; }
+  .goals-search { max-width: none; width: 100%; order: 3; }
+  .goals-row-count { display: none; }
+  .goals-row-recent { width: auto; }
+}
+
+/* The standing line while the login came through a link: pinned above the sidebar's buttons, on
+   the foot's own fade, so a long session list cannot scroll it away. Quiet; a tap from the fix. */
+.link-login-notice {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(54px + var(--safe-bottom));
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+.link-login-notice:hover { color: var(--text); background: var(--hover); }
+.link-login-notice.soon { border-color: var(--warn); color: var(--warn); }
+
+/* 设置 › 访问 */
+.access-block { margin: 0 0 22px; }
+.access-block h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.access-quiet { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.access-token-form { display: flex; gap: 8px; }
+.access-token-form input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.access-token-form .primary { flex: none; }
+.access-error { margin: 8px 0 0; color: var(--danger); font-size: 13px; }
+.access-ok { margin: 8px 0 0; color: var(--positive); font-size: 13px; }
+.access-issued { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.access-issued input {
+  flex: 1;
+  min-width: 220px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+.access-issued .access-quiet { flex-basis: 100%; margin-top: 2px; }
+.access-links { margin: 10px 0 0; padding: 0; list-style: none; }
+.access-links li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.access-links li:last-child { border-bottom: 0; }
+.access-links li.revoked, .access-links li.expired { color: var(--faint); }
+.access-links .ghost { min-height: 28px; padding: 0 10px; font-size: 12px; }
+.access-links .ghost.danger { color: var(--danger); }
 
 .goal-page {
   max-width: 720px;

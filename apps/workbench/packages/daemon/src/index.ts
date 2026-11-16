@@ -9,6 +9,7 @@ import { AUTOTITLE_ID, AutoTitle } from './autotitle.js';
 import { loadSupportedExternalCatalog } from './external-extensions.js';
 import { Desktop, parseDesktopSetting } from './desktop.js';
 import { createHttpServer, listenPrivate, socketHeld } from './http.js';
+import { LinkTokens } from './link-tokens.js';
 import { HostRegistry } from './hosts.js';
 import { RelayClient } from './relay-client.js';
 import { AgentRegistry, defaultInstances } from './agents.js';
@@ -193,7 +194,10 @@ async function main(): Promise<void> {
   // Previews are served on a port of their own: the iframe needs an origin separate from the app
   // (see preview.ts). One port past the app's is the default; LOOCHAT_PREVIEW_PORT picks another.
   const previewPort = Number(process.env.LOOCHAT_PREVIEW_PORT) || config.port + 1;
-  const server = createHttpServer({ manager, loopx, push, feishu, registry, terminals, desktop, hosts, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, token: config.token, webDir: config.webDir, version: VERSION, previewPort });
+  // Login links (wl_… tokens) live with the rest of this daemon's state, so they survive a restart.
+  const linkTokens = new LinkTokens(config.dataDir);
+  await linkTokens.load();
+  const server = createHttpServer({ manager, loopx, push, feishu, registry, terminals, desktop, hosts, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, linkTokens, token: config.token, webDir: config.webDir, version: VERSION, previewPort });
   // Same requests, other origin: preview frames load from here so their pages cannot reach the
   // app, while their own CSS and scripts load same-origin. Without the port, previews say so.
   const preview = createHttpServer({ manager, registry, terminals, hosts, scheduler, extensions, token: config.token, webDir: null, version: VERSION, previewPort });
