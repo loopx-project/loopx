@@ -243,6 +243,25 @@ describe('LoopXGoalBar presentation', () => {
       .toBe('No agent-lane todos')
   })
 
+  it.each([
+    ['active', 'idle', 'Prior turn needs recovery'],
+    ['active', 'running', 'Running'],
+    ['stopped', 'idle', 'Paused'],
+  ] as const)('shows the appropriate status on a recovery hold with %s and %s', async (
+    goalActivation, agentStatus, text,
+  ) => {
+    const rpc = fakeRpc({
+      read: sessionId => Promise.resolve(readOutcome(sessionId, {
+        kind: 'present',
+        snapshot: snapshot({ sessionId, goalActivation, agentStatus, recoveryAttention: true }),
+        baseSessionEventSeq: 0,
+      })),
+    })
+    const view = mount({ rpcSessionId: 'session-one', rpc })
+    await flush()
+    expect(view.container.querySelector('[data-status]')?.textContent).toBe(text)
+  })
+
   it.each(['binding_missing', 'binding_ambiguous'] as const)(
     'renders no row for %s',
     async reason => {

@@ -377,6 +377,7 @@ function runnerFixture(options: {
   readonly heartbeatTurnInstanceId?: string
   readonly heartbeatTaskBody?: string
   readonly rewardMemoryGuidance?: string
+  readonly recovery?: () => Record<string, unknown>
   readonly typedQuotaFailure?: boolean
   readonly bindingStatus?: 'bound' | 'missing' | (() => 'bound' | 'missing')
 } = {}): RunnerFixture {
@@ -483,6 +484,9 @@ function runnerFixture(options: {
               },
             } : {}),
             scheduler_hint: schedulerHint,
+            ...(options.recovery === undefined ? {} : {
+              unsettled_host_turn_recovery: options.recovery(),
+            }),
             ...(options.rewardMemoryGuidance === undefined ? {} : {
               reward_memory_recall: {
                 schema_version: 'agent_turn_recall_v0',
@@ -2241,6 +2245,101 @@ describe('same-session LoopX driver', () => {
 })
 
 describe('GoalBar exact-Session Driver bridge', () => {
+  it.each(['unfinished', 'bound', 'different-agent', 'no-step', 'one-completion'] as const)(
+    'reconciles an original selection after Host completion on restore (%s)', async variant => {
+      const host = fakeAgent()
+      const original = 'dsh-prior-original-turn'
+      const source = {
+        kind: 'loopx-continuation', schemaVersion: 'loopx_dsh_continuation_v0',
+        goalId, agentId, turnInstanceId: original, selectionRequired: true,
+      } as const
+      host.appendEvent(userSkillInvocationEvent())
+      const completed = variant === 'unfinished' ? 2 : 1
+      for (let turn = 0; turn < completed; turn += 1) {
+        host.appendEvent(sessionEvent('turn/start', { turn }))
+        host.appendEvent(sessionEvent('user/message', {
+          ...userMessage('Continue the original Turn.'), source,
+        }))
+        if (variant !== 'no-step') host.appendEvent(sessionEvent('step/start', { turn, step: 0 }))
+        host.appendEvent(sessionEvent('turn/end', { turn, reason: { kind: 'completed' } }))
+      }
+      const fixture = runnerFixture()
+      const observed: string[] = []
+      const runner: FileRunner = async (file, args, options) => {
+        if (!args.includes('receipt')) return fixture.runner(file, args, options)
+        observed.push(args[args.indexOf('--turn-instance-id') + 1] ?? '')
+        const identity = { goal_id: goalId, agent_id: agentId, turn_instance_id: original }
+        return {
+          exitCode: 0, stderr: '', stdout: JSON.stringify({
+            ok: true, schema_version: 'quota_receipt_readback_v0', ...identity,
+            agent_id: variant === 'different-agent' ? 'agent-other' : agentId,
+            heartbeat_receipt: { status: 'committed', turn_instance_id: original,
+              ...(variant === 'bound' ? { settlement_identity: identity } : {
+                selection_required: true, settlement_binding_owed: true,
+              }),
+            },
+          }),
+        }
+      }
+      const driver = new LoopXContinuationDriver({
+        isLiveAgent: agent => agent === host.agent, runner, makeTurnInstanceId: () => 'fresh-turn',
+      })
+      const capture = { agent: host.agent, session: host.agent.session }
+      try {
+        driver.observeAgent(host.agent)
+        if (variant === 'no-step' || variant === 'bound' || variant === 'one-completion') {
+          await waitFor(() => host.nextTurn.length === 1)
+          expect(observed).toEqual(variant === 'no-step' ? [] : [original])
+          expect(fixture.quotaCalls[0]).toContain(variant === 'one-completion' ? original : 'fresh-turn')
+        } else {
+          await waitFor(() => observed.length === 1)
+          const exactBinding = { goalId, loopxAgentId: agentId }
+          if (variant === 'unfinished') {
+            await waitFor(() => driver.hasRecoveryAttention(capture, exactBinding))
+            expect(fixture.quotaCalls).toHaveLength(0)
+            expect(host.nextTurn).toHaveLength(0)
+            await driver.evaluateActivatedSession(capture)
+            await waitFor(() => host.nextTurn.length === 1)
+            expect(fixture.quotaCalls[0]).toContain(original)
+            expect(observed).toEqual([original, original])
+          } else {
+            await driver.dispose()
+            expect(fixture.quotaCalls).toHaveLength(0)
+          }
+        }
+      } finally {
+        await driver.dispose()
+      }
+    },
+  )
+
+  it('projects only the observed Core recovery hold for the current binding', async () => {
+    const host = fakeAgent()
+    let recoveryState = 'attention_required'
+    const { runner } = runnerFixture({
+      shouldRun: false,
+      schedulerMode: 'stop',
+      recovery: () => ({
+        schema_version: 'unsettled_host_turn_recovery_v0',
+        state: recoveryState,
+      }),
+    })
+    const driver = new LoopXContinuationDriver({ isLiveAgent: agent => agent === host.agent, runner })
+    host.appendEvent(userSkillInvocationEvent())
+    const capture = { agent: host.agent, session: host.agent.session }
+    const expected = { goalId, loopxAgentId: agentId }
+    await driver.evaluateActivatedSession(capture)
+    expect(driver.hasRecoveryAttention(capture, expected)).toBe(true)
+    expect(driver.hasRecoveryAttention(capture, { ...expected, loopxAgentId: 'different-agent' }))
+      .toBe(false)
+    expect(host.nextTurn).toHaveLength(0)
+
+    recoveryState = 'recovery_required'
+    await driver.evaluateActivatedSession(capture)
+    expect(driver.hasRecoveryAttention(capture, expected)).toBe(false)
+    await driver.dispose()
+  })
+
   it.each(['agent/created', 'agent/session-start'] as const)(
     'resets resumed Session state on %s without activating an uninvoked Session',
     async event => {

@@ -21,6 +21,7 @@ import type {
   GoalBarDriverActionReceipt,
   GoalBarSessionCapture,
 } from './goalbar/events.ts'
+import type { GoalBarExpectedBindingV1 } from './goalbar/protocol.ts'
 
 export const name = 'dsh-loopx-driver'
 export const inject = ['agents', 'loopxBootstrap']
@@ -29,8 +30,10 @@ const HOST_SURFACE = 'deepseek-harness-native'
 const RESOLUTION_SCHEMA = 'loopx_thread_agent_binding_resolution_v0'
 const HEARTBEAT_SCHEMA = 'heartbeat_agent_input_v1'
 const CONTINUATION_SCHEMA = 'loopx_dsh_continuation_v0'
+const RECEIPT_READBACK_SCHEMA = 'quota_receipt_readback_v0'
 const DEFAULT_WAIT_MS = 5 * 60_000
 const MAX_WAIT_MS = 24 * 60 * 60_000
+const SELECTION_RECOVERY_COMPLETION_LIMIT = 2
 
 type TimerHandle = unknown
 type ReservationPhase = 'queued' | 'claimed' | 'admitted' | 'retired'
@@ -45,12 +48,21 @@ interface Binding {
   readonly agentId: string
 }
 
+interface SelectionTurn extends Binding {
+  readonly turnInstanceId: string
+}
+
+interface SelectionRecovery extends SelectionTurn {
+  readonly completedAttempts: number
+}
+
 interface LoopXContinuationMessageSource {
   readonly kind: 'loopx-continuation'
   readonly schemaVersion: typeof CONTINUATION_SCHEMA
   readonly goalId: string
   readonly agentId: string
   readonly turnInstanceId: string
+  readonly selectionRequired?: true
 }
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -74,6 +86,8 @@ interface ActivationProjection {
   readonly session: Agent['session']
   readonly pendingModelCalls: Set<string>
   activated: boolean
+  hostTurn?: { turn: number; entered: boolean; selection?: SelectionTurn } | undefined
+  pendingSelection?: SelectionRecovery | undefined
 }
 
 interface EvaluationWaiter {
@@ -96,6 +110,8 @@ interface DriverState {
   controller?: AbortController | undefined
   timer?: TimerHandle | undefined
   reservation?: Reservation | undefined
+  recoveryAttention?: Binding | undefined
+  retrySelection: boolean
 }
 
 interface QueuePlan extends Binding {
@@ -103,6 +119,7 @@ interface QueuePlan extends Binding {
   readonly session: Agent['session']
   readonly turnInstanceId: string
   readonly taskBody: string
+  readonly selectionRequired: boolean
 }
 
 interface WaitPlan {
@@ -110,6 +127,7 @@ interface WaitPlan {
   readonly delayMs?: number | undefined
   readonly schedulerToken?: string | undefined
   readonly unchangedPolls?: number | undefined
+  readonly recoveryAttention?: Binding | undefined
 }
 
 type EvaluationPlan = QueuePlan | WaitPlan
@@ -151,12 +169,14 @@ const systemClock: DriverClock = Object.freeze({
 function continuationSource(
   message: UserMessage,
 ): LoopXContinuationMessageSource | undefined {
-  const source = exactRecord(message.source, [
+  const observed = record(message.source)
+  const source = exactRecord(observed, [
     'kind',
     'schemaVersion',
     'goalId',
     'agentId',
     'turnInstanceId',
+    ...(observed?.selectionRequired === true ? ['selectionRequired'] : []),
   ])
   return source?.kind === 'loopx-continuation'
     && source.schemaVersion === CONTINUATION_SCHEMA
@@ -210,6 +230,7 @@ function automaticMessage(
       goalId: plan.goalId,
       agentId: plan.agentId,
       turnInstanceId: plan.turnInstanceId,
+      ...(plan.selectionRequired ? { selectionRequired: true as const } : {}),
     }),
   })
 }
@@ -307,6 +328,36 @@ function foldActivationEvent(
   }
 }
 
+function foldSelectionEvent(projection: ActivationProjection, event: SessionEvent): void {
+  if (event.type === 'turn/start') {
+    projection.hostTurn = { turn: event.data.turn, entered: false }
+    return
+  }
+  const hostTurn = projection.hostTurn
+  if (hostTurn === undefined) return
+  if (event.type === 'user/message') {
+    const source = continuationSource(event.data)
+    if (source?.selectionRequired === true) {
+      hostTurn.selection = { goalId: source.goalId, agentId: source.agentId,
+        turnInstanceId: source.turnInstanceId }
+    }
+  } else if (event.type === 'step/start' && hostTurn.turn === event.data.turn) {
+    hostTurn.entered = true
+  } else if (event.type === 'turn/end' && hostTurn.turn === event.data.turn) {
+    projection.hostTurn = undefined
+    if (event.data.reason.kind === 'completed' && hostTurn.entered && hostTurn.selection !== undefined) {
+      const selection = hostTurn.selection
+      const previous = projection.pendingSelection
+      const sameOriginal = previous?.turnInstanceId === selection.turnInstanceId
+        && previous.goalId === selection.goalId && previous.agentId === selection.agentId
+      projection.pendingSelection = {
+        ...selection,
+        completedAttempts: sameOriginal ? previous.completedAttempts + 1 : 1,
+      }
+    }
+  }
+}
+
 function foldSessionActivation(session: Agent['session']): ActivationProjection {
   const projection: ActivationProjection = {
     session,
@@ -314,10 +365,15 @@ function foldSessionActivation(session: Agent['session']): ActivationProjection 
     activated: false,
   }
   try {
-    for (const event of session.snapshotEvents()) foldActivationEvent(projection, event)
+    for (const event of session.snapshotEvents()) {
+      foldActivationEvent(projection, event)
+      foldSelectionEvent(projection, event)
+    }
   } catch {
     projection.pendingModelCalls.clear()
     projection.activated = false
+    projection.hostTurn = undefined
+    projection.pendingSelection = undefined
   }
   return projection
 }
@@ -365,7 +421,10 @@ const QUOTA_INDEX_SCHEMA = 'context_capture_index_v1'
 const QUOTA_SELECTION_SCHEMA = 'context_capture_selection_v1'
 const QUOTA_REQUIRED_POINTERS = ['/ok', '/mode', '/goal_id', '/should_run', '/agent_identity']
 const QUOTA_RECEIPT_POINTER = '/heartbeat_receipt'
-const QUOTA_OPTIONAL_POINTERS = [QUOTA_RECEIPT_POINTER, '/scheduler_hint', '/reward_memory_recall']
+const QUOTA_OPTIONAL_POINTERS = [
+  QUOTA_RECEIPT_POINTER, '/scheduler_hint', '/reward_memory_recall',
+  '/unsettled_host_turn_recovery',
+]
 
 type QuotaReadOptions = Pick<JsonCommandOptions, 'runner' | 'cwd' | 'signal'>
 
@@ -698,6 +757,8 @@ export class LoopXContinuationDriver {
     this.retireReservation(state)
     state.competing = inboxHasPending(agent.inbox)
     state.pauseAfterTurnError = false
+    state.recoveryAttention = undefined
+    state.retrySelection = false
     state.schedulerToken = ''
     state.unchangedPolls = 0
     state.commands.clear()
@@ -745,6 +806,14 @@ export class LoopXContinuationDriver {
     this.cancelPending(state)
   }
 
+  hasRecoveryAttention(capture: GoalBarSessionCapture, expected: GoalBarExpectedBindingV1): boolean {
+    if (!this.captureIsLive(capture)) return false
+    const state = this.states.get(capture.agent)
+    return state?.activation.session === capture.session
+      && state.recoveryAttention?.goalId === expected.goalId
+      && state.recoveryAttention.agentId === expected.loopxAgentId
+  }
+
   async evaluateActivatedSession(
     capture: GoalBarSessionCapture,
   ): Promise<GoalBarDriverActionReceipt> {
@@ -760,6 +829,7 @@ export class LoopXContinuationDriver {
     if (!state.activation.activated) return { kind: 'applied' }
 
     state.pauseAfterTurnError = false
+    state.retrySelection = state.activation.pendingSelection !== undefined
     const evaluated = new Promise<boolean>(resolve => {
       state.evaluationWaiters.add({ session: capture.session, resolve })
     })
@@ -792,6 +862,7 @@ export class LoopXContinuationDriver {
     if (reservation?.phase === 'claimed' || reservation?.phase === 'admitted') {
       reservation.preserveAcrossPause = true
     }
+    state.retrySelection = false
     this.cancelPending(state)
     return this.captureIsLive(capture)
       && state.activation.session === capture.session
@@ -805,6 +876,7 @@ export class LoopXContinuationDriver {
     const state = this.stateFor(agent)
     const wasActivated = state.activation.activated
     foldActivationEvent(state.activation, event)
+    foldSelectionEvent(state.activation, event)
     if (!wasActivated && state.activation.activated
       && agent.status === 'idle' && !state.pauseAfterTurnError) {
       this.requestEvaluation(state)
@@ -969,6 +1041,8 @@ export class LoopXContinuationDriver {
         this.retireReservation(existing)
         existing.competing = inboxHasPending(agent.inbox)
         existing.pauseAfterTurnError = false
+        existing.recoveryAttention = undefined
+        existing.retrySelection = false
         existing.schedulerToken = ''
         existing.unchangedPolls = 0
         existing.commands.clear()
@@ -983,6 +1057,7 @@ export class LoopXContinuationDriver {
       stopping: false,
       competing: inboxHasPending(agent.inbox),
       pauseAfterTurnError: false,
+      retrySelection: false,
       schedulerToken: '',
       unchangedPolls: 0,
       commands: new Set(),
@@ -1106,6 +1181,9 @@ export class LoopXContinuationDriver {
 
     // Cancellation can land after the maintenance callback has built its plan.
     if (admissionSignal?.aborted || state.agent.session !== session) return false
+    if (this.ready(state)) {
+      state.recoveryAttention = plan.kind === 'wait' ? plan.recoveryAttention : undefined
+    }
 
     if (plan.kind === 'wait') {
       if (plan.schedulerToken !== undefined) state.schedulerToken = plan.schedulerToken
@@ -1173,8 +1251,26 @@ export class LoopXContinuationDriver {
       return { kind: 'wait', schedulerToken: '', unchangedPolls: 0 }
     }
 
-    const turnInstanceId = this.makeTurnInstanceId()
     setStage('quota')
+    const selection = state.activation.pendingSelection
+    let turnInstanceId: string | undefined
+    if (selection !== undefined
+      && selection.goalId === binding.goalId && selection.agentId === binding.agentId) {
+      const receipt = await this.readSelectionReceipt(command, state.agent, selection, signal)
+      this.ensureReady(state, signal, session)
+      if (receipt.selection_required === true && receipt.settlement_binding_owed === true) {
+        if (!state.retrySelection && selection.completedAttempts >= SELECTION_RECOVERY_COMPLETION_LIMIT) {
+          return { kind: 'wait', recoveryAttention: binding }
+        }
+        turnInstanceId = selection.turnInstanceId
+      } else {
+        state.activation.pendingSelection = undefined
+      }
+    } else {
+      state.activation.pendingSelection = undefined
+    }
+    state.retrySelection = false
+    turnInstanceId ??= this.makeTurnInstanceId()
     const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, { signal })
     this.ensureReady(state, signal, session)
     if (quota.ok !== true) {
@@ -1193,7 +1289,13 @@ export class LoopXContinuationDriver {
       )
     }
     if (quota.should_run !== true) {
-      return schedulerWait(quota, state.schedulerToken, state.unchangedPolls)
+      const wait = schedulerWait(quota, state.schedulerToken, state.unchangedPolls)
+      const recovery = record(quota.unsettled_host_turn_recovery)
+      return quota.should_run === false
+        && recovery?.schema_version === 'unsettled_host_turn_recovery_v0'
+        && recovery.state === 'attention_required'
+        ? { ...wait, recoveryAttention: binding }
+        : wait
     }
     setStage('heartbeat')
     const heartbeat = await this.readHeartbeat(
@@ -1219,12 +1321,15 @@ export class LoopXContinuationDriver {
         false,
       )
     }
+    const receipt = record(quota.heartbeat_receipt)
     return {
       kind: 'queue',
       ...binding,
       session,
       turnInstanceId,
       taskBody: taskBodyWithRewardMemory(taskBody, quota),
+      selectionRequired: (receipt?.status === 'committed' || receipt?.status === 'replayed')
+        && receipt.selection_required === true && receipt.settlement_binding_owed === true,
     }
   }
 
@@ -1360,6 +1465,31 @@ export class LoopXContinuationDriver {
       throw new LoopXCliError('invalid_schema', 'LoopX quota capture did not match the bound Goal', false)
     }
     return decision
+  }
+
+  private async readSelectionReceipt(
+    command: LoopXCommand,
+    agent: Agent,
+    selection: SelectionTurn,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const readback = await runJsonCommand(command, [
+      '--registry', '.loopx/registry.json', '--format', 'json', 'quota', 'receipt',
+      '--goal-id', selection.goalId, '--agent-id', selection.agentId,
+      '--turn-instance-id', selection.turnInstanceId,
+    ], { runner: this.runner, cwd: agent.session.header.cwd, signal })
+    const receipt = record(readback.heartbeat_receipt)
+    const identity = record(receipt?.settlement_identity)
+    if (readback.schema_version !== RECEIPT_READBACK_SCHEMA
+      || readback.ok !== true || readback.goal_id !== selection.goalId
+      || readback.agent_id !== selection.agentId || readback.turn_instance_id !== selection.turnInstanceId
+      || receipt?.status !== 'committed' || receipt.turn_instance_id !== selection.turnInstanceId
+      || !(receipt.selection_required === true && receipt.settlement_binding_owed === true
+        || identity?.goal_id === selection.goalId && identity.agent_id === selection.agentId
+          && identity.turn_instance_id === selection.turnInstanceId)) {
+      throw new LoopXCliError('invalid_schema', 'LoopX could not verify the original Turn selection', false)
+    }
+    return receipt
   }
 
   private readHeartbeat(

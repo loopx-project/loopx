@@ -438,6 +438,14 @@ def quota_rollout_details(
         details["semantic_replan_gap_id"] = capability_guard["gap_id"]
         details["semantic_replan_frontier_revision"] = capability_guard["frontier_revision"]
     cli_channel = interaction.get("cli_channel")
+    if (
+        isinstance(cli_channel, Mapping)
+        and cli_channel.get("selection_required") is True
+        and payload.get("ok") is True
+        and payload.get("should_run") is True
+        and not todo_id and not replan_obligation_id
+    ):
+        details["selection_required"] = True
     if isinstance(cli_channel, Mapping) and cli_channel.get("quota_spend_source"):
         details["quota_spend_source"] = cli_channel["quota_spend_source"]
     retained_todo_id = normalize_todo_id(retained_selection.get("retained_todo_id"))

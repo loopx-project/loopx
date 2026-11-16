@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
   LoopXCliError,
@@ -29,6 +30,7 @@ import {
 } from './protocol.ts'
 import type {
   GoalBarActionResultV1,
+  GoalBarExpectedBindingV1,
   GoalBarReadFaultCode,
   GoalBarReadResultV1,
   GoalBarRequestV1,
@@ -73,6 +75,7 @@ export interface GoalBarCoordinatorPort {
   cancelQueued(
     capture: GoalBarSessionCapture,
   ): Promise<GoalBarDriverActionReceipt>
+  hasRecoveryAttention?(capture: GoalBarSessionCapture, expected: GoalBarExpectedBindingV1): boolean
 }
 
 export interface GoalBarServiceOptions {
@@ -141,6 +144,12 @@ function exactRecord(
     && actual.every(key => typeof key === 'string' && allowed.has(key))
     ? input
     : undefined
+}
+
+function recoverySourceRevision(revision: string, recoveryAttention: boolean): string {
+  // Retain the ordinary source revision shape for clients and unaffected sessions.
+  if (!recoveryAttention) return revision
+  return `sha256:${createHash('sha256').update('goalbar-recovery-attention\0').update(revision).digest('hex')}`
 }
 
 /** Strict verified relation for the existing lifecycle execution V1 receipt. */
@@ -421,14 +430,16 @@ export class GoalBarService implements GoalBarServiceHandle {
     if (model.kind === 'fault') {
       return { kind: 'fault', code: model.code, baseSessionEventSeq, sourceRevision }
     }
+    const recoveryAttention = this.coordinator.hasRecoveryAttention?.(capture, model.snapshot) === true
     return {
       kind: 'present',
       baseSessionEventSeq,
-      sourceRevision,
+      sourceRevision: recoverySourceRevision(sourceRevision, recoveryAttention),
       snapshot: {
         ...model.snapshot,
         // Status is process-local authority and is refreshed at publication.
         agentStatus: capture.agent.status,
+        ...(recoveryAttention ? { recoveryAttention: true } : {}),
       },
     }
   }
@@ -514,11 +525,7 @@ export class GoalBarService implements GoalBarServiceHandle {
       if (receipt.kind === 'runtime_changed'
         && receipt.sessionId === request.sessionId) {
         try {
-          const revision = await computeGoalBarSourceRevision({
-            cwd: capture.cwd,
-            goalId: request.expected?.goalId,
-            loopxAgentId: request.expected?.loopxAgentId,
-          })
+          const revision = await this.watchSourceRevision(capture, request.expected)
           if (!this.captureIsCurrent(capture)) {
             return { kind: 'fault', code: 'session_unavailable' }
           }
@@ -545,11 +552,7 @@ export class GoalBarService implements GoalBarServiceHandle {
         return { kind: 'fault', code: 'session_unavailable' }
       }
       try {
-        const revision = await computeGoalBarSourceRevision({
-          cwd: capture.cwd,
-          goalId: request.expected?.goalId,
-          loopxAgentId: request.expected?.loopxAgentId,
-        })
+        const revision = await this.watchSourceRevision(capture, request.expected)
         if (!this.captureIsCurrent(capture)) {
           return { kind: 'fault', code: 'session_unavailable' }
         }
@@ -564,6 +567,20 @@ export class GoalBarService implements GoalBarServiceHandle {
       }
     }
     return { kind: 'fault', code: 'session_unavailable' }
+  }
+
+  private async watchSourceRevision(
+    capture: LiveCapture,
+    expected: GoalBarExpectedBindingV1 | null,
+  ): Promise<string> {
+    const revision = await computeGoalBarSourceRevision({
+      cwd: capture.cwd,
+      goalId: expected?.goalId,
+      loopxAgentId: expected?.loopxAgentId,
+    })
+    const recoveryAttention = expected !== null
+      && this.coordinator.hasRecoveryAttention?.(capture, expected) === true
+    return recoverySourceRevision(revision, recoveryAttention)
   }
 
   private actionAdmission(): ActionAdmission {
