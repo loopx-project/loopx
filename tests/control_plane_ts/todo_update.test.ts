@@ -405,6 +405,27 @@ test("bound user-gate initial unblock link is administrative and retains provide
   }
 });
 
+test("first user-gate link accepts a retained uppercase wait for that exact gate", async () => {
+  const {store, request} = await boundUserAction({task_class: "user_gate", blocks_agent: "agent-a"});
+  const head = await store.loadAuthority();
+  if (head.status !== "loaded") assert.fail("missing fixture");
+  // The resume grammar needs a full-length Todo id, unlike the shared fixture's.
+  const records = [...(head.head.todos as Record<string, unknown>[])
+      .map(row => row.todo_id === request.todo_id ? {...row, todo_id: "todo_gate"} : row),
+    todo({todo_id: "todo_old", status: "blocked", resume_when: "TODO_DONE:todo_gate"})]
+    .sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
+  await store.commitAuthority({operation_id: "seed-uppercase-wait", expected_provider_revision: head.provider_revision,
+    events: [], receipts: [], next_projection: {...head.head, todos: records,
+      todo_read_model: coordinationTodoReadModel(records, TODO_DOMAIN_READ_RECORD_SCHEMA)}});
+  const before = await store.loadAuthority();
+  if (before.status !== "loaded") assert.fail("missing fixture");
+  const edit = {...request, todo_id: "todo_gate", expected_provider_revision: before.provider_revision,
+    patch: {note: "Link the file gate"}, planning_intent: {unblocks_todo_id: "todo_old"}};
+  const preview = await executeCoordinationTodoUpdate(store, {...edit, dry_run: true});
+  assert.equal(preview.status, "planned", JSON.stringify(preview));
+  assert.equal((await executeCoordinationTodoUpdate(store, edit)).status, "applied");
+});
+
 for (const schema of ["native", "legacy"] as const) {
   const cases: [string, Record<string, unknown>][] = [
     ["completed", {status: "done", done: true}],

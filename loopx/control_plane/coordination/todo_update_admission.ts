@@ -6,7 +6,7 @@ import {leaseRepositoryRejection, ownerAdministrativeRepositoryRejection} from "
 import {isExploreReferenceAppend} from "../todos/field_update.ts";
 import {isInactiveUserCompletionTarget} from "../todos/user_completion.ts";
 import {decisionScopeRelation} from "../todos/decision_scope.ts";
-import {todoResumeDependencyId} from "../todos/resume_condition.ts";
+import {todoDoneResumeTargetId} from "../todos/resume_condition.ts";
 import {acceptanceRestoration} from "./todo_acceptance_restoration.ts";
 import {monitorMutationRejection} from "./todo_monitor_cycle.ts";
 import type {JsonObject} from "../effect_program.ts";
@@ -259,7 +259,7 @@ export function todoUpdateAdmissionRejection(
         // exact gate (another Todo, a Monitor change, a time or a capacity) waits for
         // that; approving this gate cannot satisfy it, so it cannot take the first link.
         const declared = typeof target.resume_when === "string" ? target.resume_when.trim() : "";
-        const waitsForThisGate = declared.startsWith("todo_done:") && todoResumeDependencyId(declared) === input.todo_id;
+        const waitsForThisGate = todoDoneResumeTargetId(declared) === input.todo_id;
         if (declared && !waitsForThisGate) {
           return reject("user_gate_link_target_invalid",
             "Initial gate link requires a target that declares no resume condition other than this gate");
