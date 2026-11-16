@@ -4,7 +4,8 @@
 # Usage: scripts/workbench.sh [start|stop|status]
 set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STATE="${WORKBENCH_STATE_DIR:-/data00/home/liuhuadong.hans/code/.workbench-state}"
+REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+STATE="${WORKBENCH_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/loochat-workbench}"
 PORT="${WORKBENCH_PORT:-8796}"
 mkdir -p "$STATE"
 ENVF="$STATE/.env"
@@ -21,12 +22,12 @@ CORE_PORT="${LOOPX_CORE_PORT:-8792}"
 CORE_PIDF="$STATE/core.pid"
 core_alive(){ [ -f "$CORE_PIDF" ] && kill -0 "$(cat "$CORE_PIDF")" 2>/dev/null; }
 core_start(){
-  local REPO_ROOT; REPO_ROOT="$(cd "$HERE/../.." && pwd)"
-  local WS="${LOOPX_GOAL_WORKSPACES:-$REPO_ROOT/loopx}" scan=() item
+  local WS="${LOOPX_GOAL_WORKSPACES:-$REPO_ROOT/loopx}" scan=() assets=() item
+  [ -n "${LOOPX_CHAT_ASSETS:-}" ] && assets=(--assets-dir "$LOOPX_CHAT_ASSETS")
   IFS=',' read -ra items <<< "$WS"
   for item in "${items[@]}"; do [ -n "$item" ] && scan+=(--scan-path "$item"); done
   ( cd "$REPO_ROOT" && LOOPX_USAGE_PING=0 setsid nohup python3 -m loopx.cli chat --global-registry --host 127.0.0.1 --port "$CORE_PORT" --no-open \
-      --assets-dir "${LOOPX_CHAT_ASSETS:-/data00/home/liuhuadong.hans/code/loopx/loopx/web/chat}" "${scan[@]}" --project-workspace-grant workspace_read \
+      "${assets[@]}" "${scan[@]}" --project-workspace-grant workspace_read \
       > "$STATE/core.log" 2>&1 < /dev/null & echo $! > "$CORE_PIDF" )
 }
 case "${1:-start}" in
@@ -57,13 +58,12 @@ case "${1:-start}" in
       RAH_WEB_DIR RAH_TOKEN RAH_AGENTS_JSON RAH_HUB_URL RAH_HUB_TOKEN RAH_BIN_DIR \
       LIMI_SOCKET LIMI_KEY LIMI_TOOLS_KEY
     # LoopX Goal conversations: the core (Python chat server) is reached over HTTP, status is read through the CLI.
-    REPO_ROOT="$(cd "$HERE/../.." && pwd)"
     LOOCHAT_LOOPX_CORE_URL="${LOOCHAT_LOOPX_CORE_URL:-http://127.0.0.1:8792}" \
     LOOCHAT_LOOPX_CMD="${LOOCHAT_LOOPX_CMD:-python3 -m loopx.cli}" LOOCHAT_LOOPX_CWD="${LOOCHAT_LOOPX_CWD:-$REPO_ROOT}" \
     LOOCHAT_LOOPX_REGISTRY="${LOOCHAT_LOOPX_REGISTRY:-$HOME/.loopx/registry.global.json}" \
-    LOOCHAT_ENV_FILE="$ENVF" LOOCHAT_HOST=0.0.0.0 LOOCHAT_PORT="$PORT" LOOCHAT_PREVIEW_PORT=$((PORT+1)) \
+    LOOCHAT_ENV_FILE="$ENVF" LOOCHAT_HOST="${WORKBENCH_HOST:-127.0.0.1}" LOOCHAT_PORT="$PORT" LOOCHAT_PREVIEW_PORT=$((PORT+1)) \
     LOOCHAT_DATA_DIR="$STATE/data" LOOCHAT_SOCKET="$STATE/daemon.sock" \
-    LOOCHAT_WORKDIRS="${WORKBENCH_WORKDIRS:-/home/liuhuadong.hans/code,/tmp}" \
+    LOOCHAT_WORKDIRS="${WORKBENCH_WORKDIRS:-$REPO_ROOT,/tmp}" \
       setsid nohup node dist/index.js > "$STATE/daemon.log" 2>&1 < /dev/null &
     echo $! > "$PIDF"
     sleep 3; alive && echo "started pid $(cat "$PIDF"), log $STATE/daemon.log" || { tail -20 "$STATE/daemon.log"; exit 1; };;

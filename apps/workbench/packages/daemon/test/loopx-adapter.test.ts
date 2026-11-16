@@ -80,7 +80,7 @@ test('the Goal context names the boundary and says so when the state could not b
 });
 
 test('the core review request opens no session and uses the dashboard\'s workspace token', () => {
-  assert.equal(workspaceRef('/data00/home/liuhuadong.hans/code/loopx-workbench/loopx'), 'workspace-006c61f94ff5');
+  assert.equal(workspaceRef('/srv/projects/loopx'), 'workspace-19ef65bf33a8');
   const request = goalCreateRequest({ goalId: 'goal-1', title: 'T', objective: ' do   it ', completion: 'tests pass', boundary: '', goalAgentId: 'codex', workspaceRef: 'workspace-x', permission: 'read_only', operationId: 'op' });
   assert.equal(request.action_kind, 'goal.create');
   assert.equal(request.normalized_parameters.open_session, false);
