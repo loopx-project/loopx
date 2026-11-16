@@ -66,5 +66,23 @@ case "${1:-start}" in
     LOOCHAT_WORKDIRS="${WORKBENCH_WORKDIRS:-$REPO_ROOT,/tmp}" \
       setsid nohup node dist/index.js > "$STATE/daemon.log" 2>&1 < /dev/null &
     echo $! > "$PIDF"
-    sleep 3; alive && echo "started pid $(cat "$PIDF"), log $STATE/daemon.log" || { tail -20 "$STATE/daemon.log"; exit 1; };;
+    sleep 3; alive || { tail -20 "$STATE/daemon.log"; exit 1; }
+    echo "started pid $(cat "$PIDF"), log $STATE/daemon.log"
+    # First start of a state dir only: switch on the built-in extensions the Workbench wants (the session board),
+    # as the Extensions page would. Done once, so uninstalling one later sticks. WORKBENCH_EXTENSIONS="" turns it off.
+    if [ ! -f "$STATE/.extensions-seeded" ]; then
+      TOKEN="$(sed -n 's/^LOOCHAT_TOKEN=//p' "$ENVF")" PORT="$PORT" EXTS="${WORKBENCH_EXTENSIONS-board}" python3 - <<'PY' && : > "$STATE/.extensions-seeded" || echo "extensions not seeded; enable them in Settings → Extensions"
+import json, os, urllib.request
+base, head = f"http://127.0.0.1:{os.environ['PORT']}/api/extensions", {"Authorization": "Bearer " + os.environ["TOKEN"], "Content-Type": "application/json"}
+def call(method, url, body=None):
+    req = urllib.request.Request(url, method=method, headers=head, data=None if body is None else json.dumps(body).encode())
+    return json.load(urllib.request.urlopen(req, timeout=10))
+catalog = {e["manifest"]["id"]: e for e in call("GET", base)}
+for ext in filter(None, os.environ["EXTS"].split(",")):
+    state = catalog.get(ext)
+    if state is None or state["installed"]: continue
+    call("POST", f"{base}/{ext}/install", {"granted": state["manifest"]["permissions"]})
+    call("PATCH", f"{base}/{ext}", {"enabled": True})
+PY
+    fi;;
 esac

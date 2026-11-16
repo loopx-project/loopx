@@ -152,9 +152,9 @@ test('translations keep numeric messages and English plurals', () => {
   assert.equal(t('zh', 'team', 3), '协作 3 人');
 });
 
-test('manifest asks for summaries, the progress line, shared work and the assistant', () => {
+test('manifest asks for summaries, the progress line and shared work, and no longer for the assistant (Workbench has none)', () => {
   assert.equal(manifest.id, 'board');
-  assert.deepEqual(manifest.permissions, ['events.summary', 'progress.report', 'worksource.read', 'assistant.ask']);
+  assert.deepEqual(manifest.permissions, ['events.summary', 'progress.report', 'worksource.read']);
   assert.deepEqual(manifest.contributes.views, [{
     id: 'board', title: manifest.name, icon: 'board', route: '#/board', sidebar: { pinned: true },
   }]);

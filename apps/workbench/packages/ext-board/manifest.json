@@ -15,8 +15,7 @@
   "permissions": [
     "events.summary",
     "progress.report",
-    "worksource.read",
-    "assistant.ask"
+    "worksource.read"
   ],
   "contributes": {
     "views": [
