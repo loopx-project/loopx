@@ -13,9 +13,12 @@ export function CommandPalette({ items, onPick, onClose }: {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const list = useRef<HTMLDivElement>(null);
+  const field = useRef<HTMLInputElement>(null);
   const shown = useMemo(() => filterPalette(items, query), [items, query]);
   // Rows keep their group order so the keyboard walks the list the way the eye does.
   const ordered = useMemo(() => query.trim() ? shown : PALETTE_GROUPS.flatMap(group => shown.filter(item => item.group === group)), [shown, query]);
+  // The dialog surface takes focus after its children mount; ask for it again once it has.
+  useEffect(() => { const id = requestAnimationFrame(() => field.current?.focus()); return () => cancelAnimationFrame(id); }, []);
   useEffect(() => setActive(0), [query]);
   useEffect(() => { list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }); }, [active]);
   const move = (by: number) => setActive(i => ordered.length ? (i + by + ordered.length) % ordered.length : 0);
@@ -25,7 +28,7 @@ export function CommandPalette({ items, onPick, onClose }: {
     <label className="palette-input">
       <IconSearch size={16} />
       <input
-        autoFocus role="combobox" aria-expanded="true" aria-controls="palette-list" aria-activedescendant={ordered[active] ? `palette-${active}` : undefined}
+        ref={field} autoFocus role="combobox" aria-expanded="true" aria-controls="palette-list" aria-activedescendant={ordered[active] ? `palette-${active}` : undefined}
         value={query} placeholder={t('palette.placeholder')} onChange={e => setQuery(e.target.value)}
         onKeyDown={e => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;

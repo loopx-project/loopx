@@ -46,15 +46,15 @@ function GoalRow({ token, goal, row, targets, onChanged }: {
       <span className={`loopx-notify-badge ${configured ? 'on' : ''}`}>{configured ? (row?.enabled ? t('loopx.notify.bound') : t('loopx.notify.disabled')) : t('loopx.notify.notBound')}</span>
     </div>
     {configured ? <>
-      <p className="settings-hint">
+      <p className="loopx-notify-note">
         {[row?.targetRef ? t('loopx.notify.group', row.targetRef) : '', t('loopx.notify.sent', row?.receiptCount ?? 0), row?.lastNotifiedAt ? t('loopx.notify.recent', new Date(row.lastNotifiedAt).toLocaleString()) : ''].filter(Boolean).join(' · ')}
       </p>
       {switchLine('human_gate', t('loopx.notify.humanGate'), row?.humanGateAutoNotify === true)}
       {switchLine('blocked_notice', t('loopx.notify.blocked'), row?.blockedNoticeAutoNotify === true)}
-    </> : targets.length === 0 ? <p className="settings-hint">{t('loopx.notify.noTargets')} <code>loopx goal-channel target add</code></p>
+    </> : targets.length === 0 ? null
       : bind.phase === 'confirm' ? <div className="loopx-notify-confirm">
         <p>{t('loopx.notify.bindConfirm', goal.title, bind.target)}</p>
-        {bind.preview && <p className="settings-hint">{bind.preview}</p>}
+        {bind.preview && <p className="loopx-notify-note">{bind.preview}</p>}
         <div className="settings-actions-inline">
           <button className="primary" onClick={() => void run(true)}>{t('loopx.notify.confirmBind')}</button>
           <button className="ghost" onClick={() => setBind({ phase: 'idle' })}>{t('common.cancel')}</button>
@@ -102,7 +102,8 @@ export function LoopxNotifySettings({ token, goals, notifications, failed, onCha
     {failed && <p className="personal-warning" role="alert">{t('loopx.notify.coreDown')}</p>}
     {targetsError && <p className="personal-warning" role="alert">{targetsError}</p>}
     {targets === null && !failed && <p>{t('common.loading')}</p>}
-    {targets !== null && !failed && sorted.length === 0 && <p className="settings-hint">{t('loopx.notify.noGoals')}</p>}
+    {targets !== null && !failed && sorted.length === 0 && <p className="loopx-notify-note">{t('loopx.notify.noGoals')}</p>}
+    {targets !== null && !failed && !targetsError && targets.length === 0 && sorted.length > 0 && <p className="loopx-notify-note">{t('loopx.notify.noTargets')} <code>loopx goal-channel target add</code></p>}
     {targets !== null && !failed && <ul className="loopx-notify-list">
       {sorted.map(goal => <GoalRow key={goal.goalId} token={token} goal={goal} row={notifications.find(x => x.goalId === goal.goalId)} targets={targets} onChanged={onChanged} />)}
     </ul>}

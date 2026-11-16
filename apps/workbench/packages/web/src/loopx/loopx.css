@@ -61,3 +61,4 @@
 
 /* The bell's red dot: something waits on the person */
 .activity-btn .bell-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: #e5484d; box-shadow: 0 0 0 2px var(--bg, #fff); }
+.loopx-notify-note { margin: 6px 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
