@@ -520,7 +520,7 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
 }
 
 describe('driver diagnostic records', () => {
-  it.each(['before', 'downstream'])('restores user input with a throwing Cordis exporter in the %s batch', async phase => {
+  it.each(['before', 'downstream'])('preserves user input with a throwing Cordis exporter in the %s batch', async phase => {
     const fixture = runnerFixture()
     const host = fakeAgent()
     const service = new LoggerService(new Context())
@@ -541,13 +541,15 @@ describe('driver diagnostic records', () => {
       driver.onInboxClaimed(host.agent, submitted)
       await expect(driver.onPreStep(host.agent, phase === 'before' ? [submitted, other] : [submitted],
         new AbortController().signal, next,
-      )).resolves.toEqual({ kind: 'reject' })
+      )).resolves.toEqual(phase === 'before'
+        ? { kind: 'reject' }
+        : { kind: 'enter', messages: [other] })
       expect(exporter.export).toHaveBeenCalledOnce()
-      expect(host.nextStep).toEqual([other])
+      expect(host.nextStep).toEqual(phase === 'before' ? [other] : [])
       expect(next).toHaveBeenCalledTimes(phase === 'before' ? 0 : 1)
       await expect(driver.onPreStep(host.agent, [submitted], new AbortController().signal, next))
         .resolves.toEqual({ kind: 'reject' })
-      expect(host.nextStep).toEqual([other])
+      expect(host.nextStep).toEqual(phase === 'before' ? [other] : [])
       expect(host.cancelCalls).toBe(0)
     } finally {
       removeExporter()
@@ -632,7 +634,9 @@ describe('driver diagnostic records', () => {
       driver.onInboxClaimed(host.agent, submitted)
       expect(await driver.onPreStep(host.agent, phase === 'before' ? [submitted, other] : [submitted],
         new AbortController().signal, async () => ({ kind: 'enter', messages: [submitted, other] }),
-      )).toEqual({ kind: 'reject' })
+      )).toEqual(phase === 'before'
+        ? { kind: 'reject' }
+        : { kind: 'enter', messages: [other] })
       expect(warnings[0]).toContain(`reason=${phase === 'before' ? 'competing-messages' : 'downstream-batch'} other_kinds=user`)
       expect(warnings.join('')).not.toContain('PRIVATE')
     } finally { await driver.dispose() }
@@ -1325,7 +1329,7 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it.each(['rewritten', 'missing', 'malformed replacement'] as const)(
+  it.each(['rewritten', 'missing', 'malformed replacement', 'relabeled as user'] as const)(
     'holds a %s downstream continuation until an explicit evaluation',
     async change => {
       const fixture = runnerFixture()
@@ -1351,13 +1355,16 @@ describe('same-session LoopX driver', () => {
           id: randomUUID() as UserMessage['id'],
           source: alteredSource,
         }
-        const messages = change === 'rewritten' ? [rewritten]
-          : change === 'missing' ? [context]
-          : [malformed, context]
+        const cases = {
+          rewritten: [rewritten],
+          missing: [context],
+          'malformed replacement': [malformed, context],
+          'relabeled as user': [{ ...queued, source: { kind: 'user' as const } }],
+        }
 
         const decision = await driver.onPreStep(
           host.agent, [queued], new AbortController().signal,
-          async () => ({ kind: 'enter', messages }),
+          async () => ({ kind: 'enter', messages: cases[change] }),
         )
         expect(decision).toEqual({ kind: 'reject' })
 
@@ -1378,7 +1385,7 @@ describe('same-session LoopX driver', () => {
     },
   )
 
-  it('reevaluates after input queued while the downstream listener removes the continuation', async () => {
+  it('keeps a queued user message in the inbox when a downstream listener returns it too', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
     const driver = makeDriver(fixture)
@@ -1394,11 +1401,12 @@ describe('same-session LoopX driver', () => {
         host.agent, [queued], new AbortController().signal, async () => {
           host.agent.followup(human)
           driver.onInboxInserted(host.agent, human)
-          return { kind: 'enter', messages: [] }
+          return { kind: 'enter', messages: [human] }
         },
       )
       expect(decision).toEqual({ kind: 'reject' })
       expect(host.nextTurn).toEqual([human])
+      expect(host.nextStep).toEqual([])
 
       // The host consumes the queued human input before its next idle event.
       expect(host.nextTurn.shift()).toBe(human)
@@ -1900,7 +1908,7 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it.each(['before', 'after'])('restores competing work added %s downstream listeners with host context', async phase => {
+  it.each(['before', 'after'])('preserves independent user input %s downstream listeners with host context', async phase => {
     const fixture = runnerFixture()
     const host = fakeAgent()
     const driver = makeDriver(fixture)
@@ -1916,11 +1924,13 @@ describe('same-session LoopX driver', () => {
     const decision = await driver.onPreStep(
       host.agent, phase === 'before' ? messages : [queued, context],
       new AbortController().signal,
-      async () => ({ kind: 'enter', messages }),
+      async () => ({ kind: 'enter', messages, startsRequestSeries: true }),
     )
 
-    expect(decision).toEqual({ kind: 'reject' })
-    expect(host.nextStep).toEqual([context, human])
+    expect(decision).toEqual(phase === 'before'
+      ? { kind: 'reject' }
+      : { kind: 'enter', messages: [context, human], startsRequestSeries: true })
+    expect(host.nextStep).toEqual(phase === 'before' ? [context, human] : [])
     expect(fixture.quotaCalls).toHaveLength(phase === 'before' ? 1 : 2)
     await driver.dispose()
   })
