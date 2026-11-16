@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import brandIconLight from '../assets/loo-icon-paper.svg';
 import brandIconDark from '../assets/loo-icon-dark.svg';
+import { IconSend, IconStop } from './icons';
 import {
   applyManagerEvent, interruptManagerTurn, openManagerSession, readManagerHistory, sendManagerTurn, streamManagerEvents,
   ManagerError, type ManagerEvent, type ManagerMessage, type ManagerTurn,
@@ -17,10 +20,9 @@ const GREETING_ASKS = () => [
 
 /**
  * The steward conversation: the Python manager's own session, spoken to through the proxy. The page
- * is the chat — the conversation owns the viewport, the composer is pinned to its bottom, and an
- * empty history opens on a centered question with one-tap asks (the shape Calli's new-thread page
- * taught: a big question and compact chips, nothing else). The layout follows the thread view's
- * shape — the person's words right, the steward's left, activity steps as a quiet trail.
+ * is the chat, drawn with the thread's own parts — the person's words as user rows, the steward's
+ * answers as assistant rows in the thread's markdown, the composer as the app's composer shell with
+ * its send and stop buttons. An empty history opens on a centered question with one-tap asks.
  */
 export function StewardConversation({ token, failure }: { token: string | undefined; failure: LoopxStatusFailure | null }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -35,6 +37,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
 
   turnRef.current = turn;
+  const running = turn?.state === 'streaming' || turn?.state === 'stopping';
 
   useEffect(() => {
     if (failure) return;
@@ -175,36 +178,42 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     <div className="steward-messages" hidden={empty}>
       {messages === null ? <p className="steward-hint">{t('common.loading')}</p>
         : messages.map(message => message.role === 'user'
-          ? <div key={message.id} className="steward-row-msg user"><div className="bubble">{message.text}</div></div>
-          : <div key={message.id} className="steward-row-msg agent"><div className="bubble">{message.text}</div></div>)}
+          ? <div key={message.id} className="row user"><div className="bubble">{message.text}</div></div>
+          : <div key={message.id} className="row assistant"><div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown></div></div>)}
       {turn ? <>
         {turn.steps.length ? <ul className="steward-steps" aria-label={t('loopx.stewardSteps')}>
           {turn.steps.map((step, index) => <li key={index}>{step}</li>)}
         </ul> : null}
-        {turn.answer ? <div className="steward-row-msg agent streaming"><div className="bubble">{turn.answer}</div></div> : null}
-        {turn.state === 'streaming' || turn.state === 'stopping'
-          ? <div className="steward-turn-bar">
-            {turn.state === 'stopping' ? <span className="steward-stopping">{t('loopx.stopping')}</span> : null}
-            <button type="button" className="steward-stop" onClick={stop} disabled={turn.state === 'stopping'}>{t('composer.stop')}</button>
-          </div>
-          : null}
-        {turn.error ? <p role="alert" className="steward-hint">{turn.error}</p> : null}
+        {turn.answer ? <div className={`row assistant${turn.state === 'streaming' ? ' streaming' : ''}`}>
+          <div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{turn.answer}</Markdown></div>
+        </div> : null}
+        {turn.error ? <div className="row channel-note"><span role="alert">{turn.error}</span></div> : null}
       </> : null}
-      {error && sessionId ? <p role="alert" className="steward-hint">{error}</p> : null}
+      {error && sessionId ? <div className="row channel-note"><span role="alert">{error}</span></div> : null}
       <div ref={scrollAnchor} />
     </div>
-    <form className="steward-composer" onSubmit={event => { event.preventDefault(); void send(draft); }}>
-      <textarea
-        value={draft}
-        rows={2}
-        placeholder={t('loopx.stewardAskInput')}
-        disabled={Boolean(turn) || messages === null}
-        onChange={event => setDraft(event.target.value)}
-        onKeyDown={event => {
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(draft); }
-        }}
-      />
-      <button type="submit" disabled={!draft.trim() || Boolean(turn) || messages === null}>{t('common.send')}</button>
+    {/* The app's composer shell, carrying only what a manager conversation has: words, send, stop. */}
+    <form className="composer steward-composer" onSubmit={event => { event.preventDefault(); void send(draft); }}>
+      <div className="composer-anchor">
+        <div className="composer-box">
+          <textarea
+            rows={1}
+            value={draft}
+            placeholder={t('loopx.stewardAskInput')}
+            disabled={running || messages === null}
+            aria-label={t('composer.message')}
+            onChange={event => setDraft(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(draft); }
+            }}
+          />
+          <div className="composer-bar">
+            <div className="spacer" />
+            {running ? <button type="button" className="send-btn stop" onClick={stop} disabled={turn?.state === 'stopping'} aria-label={t('composer.stop')} title={t('composer.stopTurn')}><IconStop size={16} /></button> : null}
+            {!running ? <button type="submit" className="send-btn" disabled={!draft.trim() || messages === null} aria-label={t('common.send')}><IconSend size={16} /></button> : null}
+          </div>
+        </div>
+      </div>
     </form>
   </div>;
 }

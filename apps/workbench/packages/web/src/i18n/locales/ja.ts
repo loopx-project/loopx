@@ -2952,6 +2952,7 @@ export const ja: Messages = {
   'loopx.goalGone': 'この Goal はもうありません：削除された可能性があります。',
   'loopx.newThread': '新しい会話',
   'loopx.stoppedGoals': (n: number) => `停止中 · ${n}`,
+  'loopx.stoppedShort': '停止中',
   'loopx.lifecycle.menu': 'Goal 操作',
   'loopx.lifecycle.stop': '停止',
   'loopx.lifecycle.resume': '再開',

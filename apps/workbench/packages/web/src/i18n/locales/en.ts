@@ -2956,6 +2956,7 @@ export const en: Messages = {
   'loopx.goalGone': 'This Goal is gone: it may have been deleted.',
   'loopx.newThread': 'New conversation',
   'loopx.stoppedGoals': (n: number) => `Stopped · ${n}`,
+  'loopx.stoppedShort': 'Stopped',
   'loopx.lifecycle.menu': 'Goal actions',
   'loopx.lifecycle.stop': 'Stop',
   'loopx.lifecycle.resume': 'Resume',

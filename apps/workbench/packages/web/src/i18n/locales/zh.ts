@@ -2954,6 +2954,7 @@ export const zh = {
   'loopx.goalGone': '这个 Goal 已经不在了：可能已被删除。',
   'loopx.newThread': '新会话',
   'loopx.stoppedGoals': (n: number) => `已停止 · ${n}`,
+  'loopx.stoppedShort': '已停止',
   'loopx.lifecycle.menu': 'Goal 操作',
   'loopx.lifecycle.stop': '停止',
   'loopx.lifecycle.resume': '恢复',
