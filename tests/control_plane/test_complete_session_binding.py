@@ -263,8 +263,11 @@ def test_failed_session_retry_delivers_original_source_and_settles_once(
     expected = plan["turn_envelope"] if historical else contract
     if refresh_source:
         assert observed_advice == ["Advice for the original source."] * 2
-    assert sources == [expected, expected]
+    # Inspection and retry each check the retained Session. A successful
+    # dispatch then binds that same source for checkpoint continuation.
+    assert sources == [expected, expected, expected]
     assert run_loopx_turn_once(saved, **common)["replayed"] is True
+    assert sources == [expected, expected, expected]
     assert calls == dict(host=2, writeback=1, spend=1, scheduler=1)
     assert artifact.read_text(encoding="utf-8") == "ready"
     assert contract == before

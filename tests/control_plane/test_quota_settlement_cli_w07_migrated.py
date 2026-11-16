@@ -1,0 +1,9140 @@
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+import pytest
+
+from examples.control_plane.quota_plan_fixtures import write_codex_heartbeat_fixture
+from loopx.bootstrap_command_pack import build_start_goal_guided_packet
+from loopx.control_plane.work_items.delivery_outcome import (
+    PROGRESS_DELIVERY_OUTCOMES,
+    DeliveryOutcome,
+)
+from loopx.control_plane.status.autonomous_replan_projection import (
+    AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
+)
+from loopx.control_plane.quota.settlement_validation import (
+    completion_validation_spend_error,
+)
+from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
+from loopx.control_plane.runtime.private_permissions import protect_private_path, require_private_path
+from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from loopx.control_plane.scheduler.state import (
+    APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    load_scheduler_state,
+)
+from loopx.heartbeat_prompt import build_heartbeat_prompt
+from loopx.paths import shell_selected_global_registry
+from loopx.rollout_event_log import build_rollout_event
+from tests.control_plane.canonical_authority_fixture import (
+    initialize_canonical_source_fixture,
+    read_fixture_todos,
+)
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+GOAL_ID = "settlement-cli-fixture"
+AGENT_ID = "codex-settlement-cli"
+TODO_ID = "todo_fixture_settlement"
+ALTERNATIVE_TODO_ID = "todo_fixture_alternative"
+SECOND_ALTERNATIVE_TODO_ID = "todo_fixture_second_alternative"
+OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID = "todo_fixture_outside_portfolio"
+DEEP_ALTERNATIVE_TODO_ID = "todo_fixture_deep_alternative"
+REENTRY_TODO_ID = "todo_fixture_network_reentry"
+DUE_MONITOR_TODO_ID = "todo_fixture_due_monitor"
+TURN_ID = "turn-settlement-cli-1"
+SELECTED_REPLAN_TODO_ID = "todo_chain_000000000000"
+
+
+@pytest.fixture
+def scheduler_host_home(tmp_path: Path, monkeypatch) -> Path:
+    root = tmp_path / "codex-host"
+    monkeypatch.setenv("CODEX_HOME", str(root))
+    monkeypatch.setenv("CODEX_THREAD_ID", "scheduler-fixture")
+    return root
+
+
+def _prepare_scheduler_host_readback(
+    registry_path: Path, runtime: Path, host_root: Path, ack_args: list[str],
+) -> None:
+    """Exercise the real Host reader over a synthetic manifest, not a live App."""
+    requested = ack_args[ack_args.index("--applied-rrule") + 1]
+    wrong = "FREQ=MINUTELY;INTERVAL=60"
+    assert requested != wrong
+    for observed in (None, wrong):
+        if observed is not None:
+            write_codex_heartbeat_fixture(host_root, goal_id=GOAL_ID, agent_id=AGENT_ID, rrule=observed)
+        rc, refused = _run_cli(registry_path, runtime, *ack_args)
+        assert rc == 1, refused
+        assert refused["scheduler_commit"]["reason_code"] == "rrule_mismatch", refused
+        assert refused["scheduler_commit"]["written"] is False
+        assert refused["scheduler_commit"]["observed_host_rrule"] == (observed or "")
+        assert load_scheduler_state(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
+            state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY) is None
+        assert _spend_run_count(runtime) == 1
+    # Only change the isolated Host observation, not the original receipt/hint.
+    write_codex_heartbeat_fixture(host_root, goal_id=GOAL_ID, agent_id=AGENT_ID, rrule=requested)
+
+
+def _assert_action_selection_recovery_projections(payload: dict[str, Any]) -> None:
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
+
+    interaction = payload["interaction_contract"]
+    assert interaction["mode"] == "skip"
+    assert interaction["agent_channel"]["must_attempt"] is False
+    assert interaction["agent_channel"]["delivery_allowed"] is False
+    assert interaction["cli_channel"]["spend_allowed_now"] is False
+    assert interaction["cli_channel"]["spend_after_validation"] is False
+    assert payload["execution_obligation"]["kind"] == "quota_skip"
+    assert payload["execution_obligation"]["must_attempt_work"] is False
+    assert payload["automation_liveness"]["automation_action"] == "keep_active"
+    assert payload["scheduler_hint"]["action"] == "backoff_until_state_change"
+    assert "protocol_action_packet" not in payload
+    for field in (
+        "autonomous_replan_obligation",
+        "replan_action_packet",
+        "selected_todo",
+        "work_lane_contract",
+    ):
+        assert field not in payload
+
+    envelope = build_turn_envelope(payload)
+    assert "protocol_action_packet" not in envelope["contract_capsule"]
+    assert envelope["contract_capsule"]["interaction_contract"]["mode"] == "skip"
+    assert envelope["contract_capsule"]["execution_obligation"][
+        "must_attempt_work"
+    ] is False
+    assert envelope["writeback"]["spend_allowed_now"] is False
+    assert envelope["writeback"]["spend_after_validation"] is False
+    authority = extract_turn_authority({"turn_envelope": envelope})
+    assert authority["primary_action"] == interaction["agent_channel"][
+        "primary_action"
+    ]
+    assert authority["write_scope"] == []
+
+
+def _write_fixture(
+    root: Path,
+    *,
+    required_capability: str | None = None,
+    claimed: bool = True,
+    provider: str | None = None,
+) -> tuple[Path, Path, Path]:
+    """Write unmigrated source input; canonical consumers must initialize authority.
+
+    Use ``_initialize_fixture_authority`` after source edits for ordinary reads
+    or writes, or select ``provider`` when initial authoring is already complete.
+    Claim-authoring scenarios must also opt out of the initial claim.
+    """
+    project = root / "project"
+    runtime = root / "runtime"
+    state_file = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path = project / state_file
+    registry_path = project / ".loopx" / "registry.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    capability_metadata = (
+        f" required_capabilities={required_capability}" if required_capability else ""
+    )
+    claim_metadata = f"claimed_by={AGENT_ID} " if claimed else ""
+    state_path.write_text(
+        "---\n"
+        "status: active-read-only\n"
+        "owner_mode: goal\n"
+        'objective: "Settle one standard Codex App delivery."\n'
+        "updated_at: 2026-01-01T00:00:00+00:00\n"
+        "---\n\n"
+        "# Settlement CLI Fixture\n\n"
+        "## Objective\n\n"
+        "Settle one standard Codex App delivery.\n\n"
+        "## Next Action\n\n"
+        "- Validate and settle the selected delivery.\n\n"
+        "## Agent Todo\n\n"
+        "- [ ] [P1] Validate and settle the selected delivery.\n"
+        f"  <!-- loopx:todo todo_id={TODO_ID} status=open "
+        f"{claim_metadata}"
+        "task_class=advancement_task action_kind=validate"
+        f"{capability_metadata} -->\n",
+        encoding="utf-8",
+    )
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+                "common_runtime_root": str(runtime),
+                "goals": [
+                    {
+                        "id": GOAL_ID,
+                        "domain": "settlement-cli-fixture",
+                        "status": "active-read-only",
+                        "repo": str(project),
+                        "state_file": state_file,
+                        "adapter": {
+                            "kind": "read_only_project_map_v0",
+                            "status": "connected-read-only",
+                        },
+                        "coordination": {
+                            "registered_agents": [AGENT_ID],
+                            "agent_model": "peer_v1",
+                        },
+                        "authority_sources": [],
+                        "quota": {
+                            "compute": 1.0,
+                            "window_hours": 24,
+                            "allowed_slots": 2,
+                        },
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if provider is not None:
+        _initialize_fixture_authority(project, runtime, provider=provider)
+    return project, runtime, registry_path
+
+
+def _run_cli(
+    registry_path: Path,
+    runtime: Path,
+    *args: str,
+    cwd: Path = REPO_ROOT,
+    raw_guard: bool = True,
+) -> tuple[int, dict[str, Any]]:
+    # Existing guard observers consume the authority decision, independently of
+    # machine presentation defaults. Native lifecycle tests use raw_guard=False
+    # to exercise omitted/default activation; explicit on/off is never replaced.
+    if raw_guard and args[:2] == ("quota", "should-run") and "--context-delivery" not in args:
+        args = (*args, "--context-delivery", "off")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.entrypoint",
+            "--registry",
+            str(registry_path),
+            "--runtime-root",
+            str(runtime),
+            "--format",
+            "json",
+            *args,
+        ],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(REPO_ROOT),
+        },
+    )
+    assert result.stdout.strip(), (result.returncode, result.stderr)
+    return result.returncode, json.loads(result.stdout)
+
+
+def _initialize_fixture_authority(
+    project: Path,
+    runtime: Path,
+    *,
+    provider: str = "file",
+    handoff_mode: str = "soft_claim",
+    leases: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return initialize_canonical_source_fixture(
+        runtime, GOAL_ID,
+        state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
+        provider=provider, handoff_mode=handoff_mode, leases=leases,
+    )
+
+
+def _run_generated_cli(
+    command: str,
+    *,
+    registry_path: Path,
+    cwd: Path = REPO_ROOT,
+) -> tuple[int, dict[str, Any]]:
+    argv = shlex.split(command)
+    # The worker renderer may pin this environment's executable explicitly.
+    # Keep rejecting unrelated executables instead of matching only a basename.
+    assert argv[0] in {"loopx", str(Path(sys.executable).parent / "loopx")}
+    if "--registry" not in argv:
+        argv[1:1] = ["--registry", str(registry_path)]
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", *argv[1:]],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+    return result.returncode, read_cli_policy_payload(result.stdout, returncode=result.returncode)
+
+
+def _run_host_command(
+    command: str, *, cwd: Path = REPO_ROOT, turn_id: str = "",
+) -> tuple[int, dict[str, Any], int]:
+    # Resolve the emitted "loopx" command to this checkout in the native shell.
+    if os.name == "nt":
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        assert shell is not None
+        python = sys.executable.replace("'", "''")
+        args = [shell, "-NoProfile", "-NonInteractive", "-Command"]
+        script = f"function loopx {{ & '{python}' -m loopx.entrypoint @args }}\n$LOOPX_TURN = '{turn_id}'\n"
+        script += f"{command}\nexit $LASTEXITCODE"
+    else:
+        args = ["sh", "-c"]
+        script = f'loopx() {{ {shlex.quote(sys.executable)} -m loopx.entrypoint "$@"; }}\n'
+        script += f"LOOPX_TURN={shlex.quote(turn_id)}\n{command}"
+    result = subprocess.run(
+        [*args, script], cwd=cwd, capture_output=True, timeout=75,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+    assert result.stdout.strip(), (result.returncode, result.stderr)
+    payload = read_cli_policy_payload(result.stdout.decode("utf-8"), returncode=result.returncode)
+    return result.returncode, payload, len(result.stdout)
+
+
+def _qualify_retained_direction(
+    tmp_path: Path, registry: Path, runtime: Path, retained: dict[str, Any],
+    *, source: str, cwd: Path = REPO_ROOT, vision: Path | None = None,
+    premature_args: tuple[str, ...] | None = None,
+) -> tuple[dict[str, Any], str]:
+    assert retained["appended"] is True
+    assert retained["settlement_progress"]["state"] == "direction_pending", retained
+    assert not retained.get("settlement_owed")
+    identity = retained["settlement_identity"]
+    scope = tuple(
+        item for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id")
+        for item in ("--" + key.replace("_", "-"), identity[key])
+    )
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    initial_index = index.read_bytes()
+    result_path = Path(retained["json_path"])
+    original_result = result_path.read_bytes()
+    rc, refused = _run_cli(
+        registry, runtime, *(premature_args or (
+            "quota", "spend-slot", *scope, "--slots", "1", "--source", source, "--execute",
+        )), cwd=cwd,
+    )
+    assert rc == 1 and not refused["appended"] and "direction checkpoint" in refused["reason"], refused
+    assert index.read_bytes() == initial_index
+    assert _spend_run_count(runtime) == 0
+    read, submit = retained["next_cli_actions"]
+    assert "checkpoint-context" in read and "--purpose supplement_checkpoint" in read
+    assert "refresh-state" in submit and "--checkpoint-read-context" in submit
+    assert all("spend-slot" not in command for command in (read, submit))
+    assert all(all(arg in command for arg in scope) for command in (read, submit))
+    rc, context, _ = _run_host_command(read, cwd=cwd)
+    assert rc == 0 and context["settlement_identity"] == identity, context
+    if vision is None:
+        vision = tmp_path / "current-direction.json"
+        vision.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "vision_closed",
+            "vision_patch": {"acceptance_summary": "The verified original result is retained."},
+        }), encoding="utf-8")
+    quoted_vision = str(vision).replace("'", "''" if os.name == "nt" else "'\"'\"'")
+    submit = submit.replace("<read-context-id>", context["read_context_id"]).replace(
+        "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", quoted_vision,
+    ).replace("<file>", quoted_vision)
+    rc, qualified, _ = _run_host_command(submit, cwd=cwd)
+    assert rc == 0, qualified.get("error") or qualified
+    assert qualified["vision_checkpoint"]["satisfied"], qualified
+    assert qualified["settlement_identity"] == identity
+    assert qualified["settlement_owed"]["effect_id"] == identity["effect_id"]
+    tokens = shlex.split(qualified["settlement_owed"]["command"])
+    assert tokens[tokens.index("--source") + 1] == source
+    assert not qualified.get("next_cli_actions")
+    assert result_path.read_bytes() == original_result
+    assert index.read_bytes().startswith(initial_index)
+    assert _spend_run_count(runtime) == 0
+    return qualified, submit
+
+
+def _delivery_read_args(registry: Path, runtime: Path, binding: tuple[str, ...]) -> tuple[str, str]:
+    rc, context = _run_cli(
+        registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", "delivery_result",
+    )
+    assert rc == 0, context
+    return "--delivery-read-context", context["read_context_id"]
+
+
+def _spend_run_count(runtime: Path) -> int:
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    if not index_path.exists():
+        return 0
+    return sum(
+        1
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("classification") == "quota_slot_spent"
+    )
+
+
+def _classification_count(runtime: Path, classification: str) -> int:
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    if not index_path.exists():
+        return 0
+    return sum(
+        1
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("classification") == classification
+    )
+
+
+def _append_surface_only_runs(runtime: Path, *, count: int) -> None:
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    with index_path.open("a", encoding="utf-8") as handle:
+        for index in range(count):
+            handle.write(
+                json.dumps(
+                    {
+                        "generated_at": (
+                            f"2026-08-13T00:{index:02d}:00+00:00"
+                        ),
+                        "goal_id": GOAL_ID,
+                        "classification": "surface_only_progress",
+                        "agent_id": AGENT_ID,
+                        "progress_scope": "agent_lane",
+                        "delivery_outcome": "surface_only",
+                    }
+                )
+                + "\n"
+            )
+
+
+def _heartbeat_receipt_count(runtime: Path, turn_instance_id: str) -> int:
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    if not log_path.exists():
+        return 0
+    return sum(
+        1
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if (
+            (event := json.loads(line)).get("event_kind") == "quota_should_run"
+            and event.get("run_id") == turn_instance_id
+            and event.get("agent_id") == AGENT_ID
+        )
+    )
+
+
+def _configure_read_only_todo(project: Path) -> Path:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            "action_kind=validate -->",
+            "action_kind=validate "
+            "continuation_policy=same_agent_non_delivery "
+            "required_capabilities=shell%2Cfilesystem_read -->",
+        ),
+        encoding="utf-8",
+    )
+    return state_path
+
+
+def _configure_repository_write_todo(project: Path) -> Path:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            "action_kind=validate -->",
+            "action_kind=validate "
+            "task_repository=git:github.com/example/read-only-settlement-fixture "
+            "required_capabilities=filesystem_write -->",
+        ),
+        encoding="utf-8",
+    )
+    return state_path
+
+
+def _configure_boundary_blocked_primary(project: Path) -> Path:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            "action_kind=validate -->",
+            "action_kind=validate required_write_scopes=private/** -->",
+        ),
+        encoding="utf-8",
+    )
+    return state_path
+
+
+def _configure_completion_validation_todo(project: Path) -> Path:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            "action_kind=validate",
+            "action_kind=validate validation_command=pytest",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    return state_path
+
+
+def _configure_selectable_alternative(
+    project: Path,
+    *,
+    required_capability: str | None = None,
+) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    capability_metadata = (
+        f" required_capabilities={required_capability}"
+        if required_capability
+        else ""
+    )
+    state_path.write_text(
+        state_text.rstrip()
+        + "\n- [ ] [P1] Advance the independent alternative delivery.\n"
+        + "  <!-- loopx:todo "
+        + f"todo_id={ALTERNATIVE_TODO_ID} status=open "
+        + "task_class=advancement_task action_kind=implement"
+        + capability_metadata
+        + " -->\n"
+        + "- [ ] [P1] Advance the second independent alternative.\n"
+        + "  <!-- loopx:todo "
+        + f"todo_id={SECOND_ALTERNATIVE_TODO_ID} status=open "
+        + "task_class=advancement_task action_kind=implement"
+        + capability_metadata
+        + " -->\n"
+        + "- [ ] [P1] Advance the fourth eligible action.\n"
+        + "  <!-- loopx:todo "
+        + f"todo_id={OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID} status=open "
+        + "task_class=advancement_task action_kind=implement"
+        + capability_metadata
+        + " -->\n",
+        encoding="utf-8",
+    )
+
+
+def _configure_ready_deferred_priority_preemption(project: Path) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_text = state_text.replace(
+        "[P1] Validate and settle the selected delivery.",
+        "[P0] Validate and settle the selected delivery.",
+    )
+    state_path.write_text(
+        state_text.rstrip()
+        + "\n- [x] [P0] Complete the prior dependency.\n"
+        + "  <!-- loopx:todo todo_id=todo_fixture_prior status=done "
+        + f"task_class=advancement_task claimed_by={AGENT_ID} -->\n"
+        + "- [ ] [P0] Replan the ready deferred successor.\n"
+        + "  <!-- loopx:todo todo_id=todo_fixture_ready_deferred "
+        + f"status=deferred task_class=advancement_task claimed_by={AGENT_ID} "
+        + "resume_when=todo_done:todo_fixture_prior -->\n",
+        encoding="utf-8",
+    )
+
+
+def _configure_runtime_capability_reentry_fixture(project: Path) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            "## Agent Todo\n\n",
+            "## Agent Todo\n\n"
+            "- [ ] [P0] Inspect the network target.\n"
+            f"  <!-- loopx:todo todo_id={REENTRY_TODO_ID} status=open "
+            "task_class=advancement_task action_kind=inspect_target "
+            "required_capabilities=network -->\n",
+        ),
+        encoding="utf-8",
+    )
+
+
+def _append_newly_due_monitor(
+    project: Path,
+    *,
+    priority: str = "P0-monitor",
+    watch_only: bool = False,
+) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    watch_only_field = "watch_only=true " if watch_only else ""
+    state_path.write_text(
+        state_text.replace(
+            "## Agent Todo\n\n",
+            "## Agent Todo\n\n"
+            f"- [ ] [{priority}] Observe the newly due public target.\n"
+            f"  <!-- loopx:todo todo_id={DUE_MONITOR_TODO_ID} status=open "
+            "task_class=continuous_monitor action_kind=observe "
+            f"claimed_by={AGENT_ID} target_key=due-monitor-fixture "
+            "required_capabilities=network%2Cexternal_evidence_poll "
+            f"{watch_only_field}"
+            "cadence=1m next_due_at=2000-01-01T00%3A00%3A00Z -->\n",
+        ),
+        encoding="utf-8",
+    )
+
+
+def _add_newly_due_monitor(registry_path: Path, runtime: Path) -> str:
+    """Introduce a monitor after admission through the real canonical writer."""
+    rc, added = _run_cli(
+        registry_path, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        "--role", "agent", "--text", "Observe the newly due public target.",
+        "--priority", "P0", "--task-class", "continuous_monitor",
+        "--action-kind", "observe", "--claimed-by", AGENT_ID,
+        "--target-key", "due-monitor-fixture", "--cadence", "1m",
+        "--next-due-at", "2000-01-01T00:00:00Z",
+        "--expires-at", "2099-01-01T00:00:00Z",
+        "--required-capability", "network",
+        "--required-capability", "external_evidence_poll",
+    )
+    assert rc == 0, added
+    return added["todo_id"]
+
+
+def _append_due_monitors(
+    project: Path,
+    monitors: list[tuple[str, str]],
+) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    rows = "".join(
+        "- [ ] [P2-monitor] Observe an independent due target.\n"
+        f"  <!-- loopx:todo todo_id={todo_id} status=open "
+        "task_class=continuous_monitor action_kind=observe "
+        f"claimed_by={AGENT_ID} target_key={target_key} "
+        "required_capabilities=network%2Cexternal_evidence_poll "
+        "cadence=1m next_due_at=2000-01-01T00%3A00%3A00Z -->\n"
+        for todo_id, target_key in monitors
+    )
+    state_path.write_text(
+        state_text.replace("## Agent Todo\n\n", f"## Agent Todo\n\n{rows}"),
+        encoding="utf-8",
+    )
+
+
+def _append_blocking_user_gate(project: Path, *, global_gate: bool = False) -> None:
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+    from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
+    from loopx.control_plane.todos.todo_summary import canonical_todo_read_record
+
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    gate = (
+        "- [ ] [P0-user] Approve the newly introduced delivery gate.\n"
+        + "  <!-- loopx:todo todo_id=todo_fixture_user_gate status=open "
+        + "task_class=user_gate action_kind=approve_delivery "
+        + f"blocks_agent={AGENT_ID} "
+        + ("global_gate=true " if global_gate else "")
+        + "decision_scope=direction:action:fixture priority=P0-USER -->\n"
+    )
+    additions = parse_active_state_todos(
+        "## User Todo\n\n" + gate, state_path=state_path, item_limit=None,
+    )["user_todos"]["items"]
+    # Reuse the section owner for both authored and already materialized input.
+    # This edits fixture source only; callers still initialize or advance CAS.
+    rendered = render_canonical_todo_sections(
+        state_text, [canonical_todo_read_record(row)
+                     for row in [*read_fixture_todos(state_path), *additions]],
+        provider_revision="fixture-user-gate",
+    )
+    state_path.write_text(rendered.markdown, encoding="utf-8")
+
+
+def _heartbeat_receipt_events(
+    runtime: Path, turn_instance_id: str
+) -> list[dict[str, Any]]:
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    if not log_path.exists():
+        return []
+    return [
+        event
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if (
+            (event := json.loads(line)).get("event_kind") == "quota_should_run"
+            and event.get("run_id") == turn_instance_id
+            and event.get("agent_id") == AGENT_ID
+        )
+    ]
+
+
+def _configure_autonomous_replan_fixture(
+    project: Path,
+    runtime: Path,
+    registry_path: Path,
+) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        "---\n"
+        "status: active\n"
+        "owner_mode: goal\n"
+        'objective: "Settle one Todo-less autonomous replan."\n'
+        "updated_at: 2026-01-01T00:00:00+00:00\n"
+        "---\n\n"
+        "# Autonomous Replan Settlement Fixture\n\n"
+        "## Objective\n\n"
+        "Settle one Todo-less autonomous replan.\n\n"
+        "## Next Action\n\n"
+        "- Replan the repeated monitor observation.\n\n"
+        "## Agent Todo\n\n"
+        "- [ ] [P1-monitor] Observe the stable public fixture.\n"
+        "  <!-- loopx:todo todo_id=todo_replan_monitor status=open "
+        "task_class=continuous_monitor action_kind=observe "
+        f"claimed_by={AGENT_ID} target_key=replan-settlement-fixture "
+        "cadence=1d next_due_at=2999-01-01T00%3A00%3A00Z -->\n",
+        encoding="utf-8",
+    )
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["status"] = "active"
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    runs: list[dict[str, Any]] = []
+    for minute in (1, 2):
+        generated_at = f"2026-01-01T00:0{minute}:00+00:00"
+        run = {
+            "generated_at": generated_at,
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "classification": "bounded_fixture_probe",
+            "delivery_batch_scale": "single_surface",
+            "delivery_outcome": "surface_only",
+            "progress_observation": {
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "unchanged",
+                "work_item_id": "todo_replan_monitor",
+                "surface_id": "surface-existing",
+                "hypothesis_id": "hypothesis-existing",
+                "probe_kind": "probe-existing",
+                "evidence_ids": ["evidence-existing"],
+            },
+        }
+        json_path = runs_dir / f"replan-{minute}.json"
+        markdown_path = runs_dir / f"replan-{minute}.md"
+        json_path.write_text(json.dumps(run) + "\n", encoding="utf-8")
+        markdown_path.write_text("# Replan fixture\n", encoding="utf-8")
+        runs.append(
+            {
+                **run,
+                "json_path": str(json_path),
+                "markdown_path": str(markdown_path),
+            }
+        )
+    (runs_dir / "index.jsonl").write_text(
+        "".join(json.dumps(run) + "\n" for run in runs),
+        encoding="utf-8",
+    )
+
+
+def _configure_selected_todo_replan_fixture(
+    project: Path,
+    registry_path: Path,
+) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    todo_rows = "\n".join(
+        (
+            f"- [ ] [P1] Validate bounded slice {index}.\n"
+            "  <!-- loopx:todo "
+            f"todo_id=todo_chain_{index:012d} status=open "
+            "task_class=advancement_task action_kind=validate "
+            f"claimed_by={AGENT_ID} -->"
+        )
+        for index in range(15)
+    )
+    state_path.write_text(
+        "---\n"
+        "status: active\n"
+        "owner_mode: goal\n"
+        'objective: "Settle one Todo-bound autonomous replan."\n'
+        "updated_at: 2026-01-01T00:00:00+00:00\n"
+        "---\n\n"
+        "# Todo-bound Replan Settlement Fixture\n\n"
+        "## Objective\n\n"
+        "Settle one Todo-bound autonomous replan.\n\n"
+        "## Next Action\n\n"
+        "- Validate bounded slice 0.\n\n"
+        "## Agent Todo\n\n"
+        f"{todo_rows}\n",
+        encoding="utf-8",
+    )
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["status"] = "active"
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _projected_cli_args(command: str, *, turn_instance_id: str) -> tuple[str, ...]:
+    tokens = shlex.split(command)
+    command_names = {"refresh-state", "quota"}
+    command_index = next(
+        index for index, token in enumerate(tokens) if token in command_names
+    )
+    return tuple(
+        turn_instance_id if token == "${LOOPX_TURN:?}" else token
+        for token in tokens[command_index:]
+    )
+
+
+def _bind_selected_replan_guard(
+    registry: Path, runtime: Path, project: Path, turn_instance_id: str,
+    *,
+    goal_id: str = GOAL_ID,
+    agent_id: str = AGENT_ID,
+    todo_id: str = SELECTED_REPLAN_TODO_ID,
+) -> dict[str, Any]:
+    """Choose the fixture Todo explicitly, then consume the generated recovery.
+
+    An initial hard-replan recommendation is planning context, not a binding.
+    Keep the existing semantic-delta regressions testing an admitted identity.
+    """
+    rc, deferred = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", goal_id, "--agent-id", agent_id,
+        "--turn-instance-id", turn_instance_id,
+        "--todo-id", todo_id,
+    )
+    if rc == 0:
+        bound = deferred
+    else:
+        # Without a prior receipt, first-call refusal remains caller-owned.
+        assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
+        [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        rc, bound = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0, bound
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
+    return bound
+
+
+def _initialize_git_checkout(project: Path) -> None:
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=project,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/read-only-settlement-fixture.git",
+        ],
+        cwd=project,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _default_checkpoint_args(registry: Path, runtime: Path, binding: tuple[str, ...], root: Path,
+                             *, purpose: str = "first_delivery") -> tuple[str, ...]:
+    """The fixture Agent consumes a real post-result read before authoring."""
+    from tests.control_plane.host_checkpoint_fixture import checkpoint_decision
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", purpose)
+    assert rc == 0, context
+    decision = checkpoint_decision(context)
+    args = ("--checkpoint-read-context", context["read_context_id"])
+    if decision.get("agent_vision"):
+        path = root / "checkpoint-vision.json"
+        path.write_text(json.dumps(decision["agent_vision"]), encoding="utf-8")
+        return (*args, "--agent-vision-json", str(path))
+    return (*args, "--vision-unchanged-reason", decision["vision_unchanged_reason"])
+
+
+def _historical_turn(runtime: Path, turn_id: str = TURN_ID) -> None:
+    """Seed the persisted pre-default contract for historical recovery cases."""
+    path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for row in rows:
+        if row.get("event_kind") == "quota_should_run" and row.get("run_id") == turn_id:
+            for field in ("result_freshness", "checkpoint_continuation"):
+                row.get("details", {}).pop(field, None)
+    path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+
+def _strip_heartbeat_workspace_causality(runtime: Path) -> None:
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    events = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    for event in events:
+        if (
+            event.get("event_kind") == "quota_should_run"
+            and event.get("run_id") == TURN_ID
+            and isinstance(event.get("details"), dict)
+        ):
+            event["details"].pop("delivery_workspace_causality", None)
+            for key in tuple(event["details"]):
+                if key.startswith("delivery_workspace_"):
+                    event["details"].pop(key)
+    log_path.write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("legacy_runtime", [False, True])
+def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
+    tmp_path: Path, monkeypatch, legacy_runtime: bool,
+) -> None:
+    # Production quota CLI -> detached Python discovery -> TS cycle owner.
+    # The isolated home also proves telemetry never reads the operator's sessions.
+    from loopx import usage_ping
+    import time
+
+    def await_cycle(*, finished: bool) -> dict[str, Any]:
+        # This observes an asynchronous local result, not an HTTP deadline.
+        # Process startup and competing tests must not become an 8s product rule.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if cycles_path.exists():
+                cycles = json.loads(cycles_path.read_text())["cycles"]
+                if cycles and ("end" in cycles[0] if finished else "start" in cycles[0]):
+                    assert len(cycles) == 1
+                    return cycles[0]
+            time.sleep(0.03)
+        raise AssertionError(f"public quota/spend CLI did not observe cycle finished={finished}")
+
+    home = tmp_path / "isolated-home"
+    machine = home / (".codex/loopx" if legacy_runtime else ".loopx")
+    machine.mkdir(parents=True)
+    if legacy_runtime:
+        (machine / "registry.global.json").write_text(
+            json.dumps({"common_runtime_root": str(machine), "goals": []}),
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
+    monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
+    for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
+        monkeypatch.delenv(key, raising=False)
+    usage_path = machine / "usage-ping.json"
+    usage_ping.control("enable", usage_path)
+    project, runtime, registry_path = _write_fixture(
+        tmp_path,
+        required_capability="filesystem_write",
+    )
+    turn_id = "turn-gitless-settlement"
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        cwd=project,
+    )
+    assert guard_rc == 0, guard
+    assert guard["should_run"] is True
+    assert (
+        guard["heartbeat_receipt"]["delivery_workspace_causality"]["requirement"]
+        == "required"
+    )
+
+    # Preview/failed spend before validated delivery must not finish measurement.
+    cycles_path = Path(str(usage_path) + ".cycles")
+    await_cycle(finished=False)
+    for execute in (False, True):
+        _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+                 "--slots", "1", "--source", "heartbeat", *binding,
+                 *(["--execute"] if execute else []),  cwd=project)
+        assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "gitless_validated_progress",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh["delivery_workspace"] == {
+        "schema_version": "delivery_workspace_v1",
+        "workspace_identity": f"loopx:{GOAL_ID}",
+        "identity_kind": "local_goal",
+        "task_repository": None,
+        "repository_source": "goal_id_fallback",
+        "workspace_kind": "local_goal_workspace",
+        "peer_independent_worktree_required": False,
+    }
+    assert str(project) not in json.dumps(refresh["delivery_workspace"])
+
+    # Retention alone cannot end the quota cycle while direction is pending.
+    pending_rc, pending = _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--source", "heartbeat", "--execute", *binding, cwd=project)
+    assert pending_rc == 1 and pending["appended"] is False, pending
+    assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
+    context_rc, context = _run_cli(registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        "--purpose", "supplement_checkpoint", *binding, cwd=project)
+    assert context_rc == 0, context
+    direction = project / "direction.json"
+    direction.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed", "vision_patch": {"acceptance_summary": "Verify the retained local candidate."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The local candidate can advance the task.",
+            "observed_reality": "The retained candidate has a verified local workspace identity.",
+            "retained": ["The original candidate and task."], "evidence_refs": [f"todo:{TODO_ID}"]}}), encoding="utf-8")
+    direction_rc, supplemented = _run_cli(registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        *binding, "--classification", "gitless_validated_progress", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--checkpoint-read-context", context["read_context_id"], "--agent-vision-json", str(direction),
+        "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert direction_rc == 0 and supplemented["vision_checkpoint"]["satisfied"] is True, supplemented.get("error") or supplemented
+    assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["appended"] is True
+    assert spend["delivery_workspace_validated"] is True
+    assert spend["delivery_workspace"]["workspace_identity"] == f"loopx:{GOAL_ID}"
+    assert _spend_run_count(runtime) == 1
+    cycle = await_cycle(finished=True)
+    assert cycle["exact"] is True
+    assert cycle["start"] < cycle["end"]
+    before_replay = cycles_path.read_bytes()
+    replay_rc, replay = _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+                                 "--slots", "1", "--source", "heartbeat", *binding,
+                                 "--execute",  cwd=project)
+    assert replay_rc == 0 and replay["idempotent_replay"] is True
+    assert cycles_path.read_bytes() == before_replay
+    assert usage_ping.control("status", usage_path)["goal_preview"]["counters"][0]["measurement"] == "quota_cycle"
+    usage_ping.control("disable", usage_path)
+
+
+def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    validator = project / "validate_reward_memory.py"
+    validator.write_text(
+        "import json, sys\n"
+        "text = sys.stdin.read()\n"
+        "if text:\n"
+        "  request = json.loads(text)\n"
+        "  print(json.dumps({\n"
+        "    'schema_version': 'reward_memory_reflection_validation_v0',\n"
+        "    'status': 'validated',\n"
+        "    'reflection_digest': request['reflection_digest'],\n"
+        "    'evidence_refs': request['reflection']['evidence_refs'],\n"
+        "  }))\n",
+        encoding="utf-8",
+    )
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    validation_argv = quote(
+        json.dumps([sys.executable, str(validator)], separators=(",", ":")),
+        safe="",
+    )
+    state_path.write_text(
+        state_text.replace(
+            "action_kind=validate -->",
+            "action_kind=validate "
+            f"validation_command_argv={validation_argv} "
+            "validation_label=reward-memory-app-fixture -->",
+        ),
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime)
+    turn_id = "turn-reward-memory-app"
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+    reflection = json.dumps(
+        {
+            "schema_version": "turn_reward_memory_reflection_v1",
+            "status": "eligible",
+            "surface_id": "agent_workflow.turn_admission",
+            "outcome_kind": "engineering",
+            "content_summary": "Reuse the exact settlement identity on retries.",
+            "reasoning_summary": "The declared validator covered the bound outcome.",
+            "confidence": "high",
+            "evidence_refs": ["artifact:app-settlement", "receipt:validator"],
+            "experience": {
+                "schema_version": "procedural_experience_contract_v0",
+                "applicability": ["Retrying a settled managed Turn outcome"],
+                "observed_outcome": (
+                    "The exact settlement identity preserved idempotent retry behavior."
+                ),
+                "attribution": (
+                    "The declared validator covered the outcome bound to that identity."
+                ),
+                "future_behavior": {
+                    "trigger": "A settled outcome requires retry or reconciliation.",
+                    "action": "Reuse the exact settlement identity on every retry.",
+                    "validation": "Verify the identity against the settlement receipt.",
+                    "stop_condition": (
+                        "Stop when the receipt is missing or the identity has drifted."
+                    ),
+                },
+                "limitations": [
+                    "The identity rule does not validate the business outcome itself."
+                ],
+                "evidence_refs": ["artifact:app-settlement", "receipt:validator"],
+            },
+        },
+        separators=(",", ":"),
+    )
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        cwd=project,
+    )
+    assert guard_rc == 0, guard
+
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "reward memory app fixture validated",
+        "--next-agent-todo",
+        "Continue after the reward memory fixture.",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--next-action-kind",
+        "implement",
+        cwd=project,
+    )
+    assert complete_rc == 0, complete
+
+    checkpoint_args = _default_checkpoint_args(registry_path, runtime, binding, tmp_path)
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "reward_memory_app_progress",
+        *checkpoint_args,
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--reward-memory-reflection-json",
+        reflection,
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    candidate = refresh["reward_memory_outcome_candidate"]
+    assert candidate["status"] == "validation_bound"
+    assert candidate["validation_bound"] is True
+    assert candidate["raw_content_projected"] is False
+    assert "content_summary" not in json.dumps(candidate)
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["settlement_result"]["ok"] is True
+    assert spend["reward_memory_ingest"]["host_wiring"] == (
+        "codex_app_refresh_spend_post_settlement"
+    )
+    assert spend["reward_memory_ingest"]["external_writes_performed"] is False
+
+
+def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(
+        tmp_path,
+        required_capability="filesystem_write",
+    )
+    _configure_completion_validation_todo(project)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    turn_id = "turn-typed-blocker-settlement"
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        cwd=project,
+    )
+    assert guard_rc == 0, guard
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert DeliveryOutcome.OUTCOME_GAP not in PROGRESS_DELIVERY_OUTCOMES
+
+    common_refresh_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "typed_blocker_writeback",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_gap",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    bare_rc, bare = _run_cli(
+        registry_path,
+        runtime,
+        *common_refresh_args,
+        cwd=project,
+    )
+    assert bare_rc == 1, bare
+    assert "typed blocked outcome_gap settlement" in bare["error"]
+    assert _classification_count(runtime, "typed_blocker_writeback") == 0
+
+    surface_args = list(common_refresh_args)
+    outcome_index = surface_args.index("outcome_gap")
+    surface_args[outcome_index] = "surface_only"
+    surface_rc, surface = _run_cli(
+        registry_path,
+        runtime,
+        *surface_args,
+        "--progress-result-class",
+        "blocked",
+        "--progress-blocker-id",
+        "blocker:runtime-boundary",
+        "--progress-evidence-id",
+        "evidence:runtime-boundary",
+        cwd=project,
+    )
+    assert surface_rc == 1, surface
+    assert "typed blocked outcome_gap settlement" in surface["error"]
+
+    mismatch_args = list(common_refresh_args)
+    todo_index = mismatch_args.index(TODO_ID)
+    mismatch_args[todo_index] = ALTERNATIVE_TODO_ID
+    mismatch_rc, mismatch = _run_cli(
+        registry_path,
+        runtime,
+        *mismatch_args,
+        "--progress-result-class",
+        "blocked",
+        "--progress-blocker-id",
+        "blocker:runtime-boundary",
+        "--progress-evidence-id",
+        "evidence:runtime-boundary",
+        cwd=project,
+    )
+    assert mismatch_rc == 1, mismatch
+    assert "settlement binding does not match" in mismatch["error"]
+
+    due_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
+    wait_rc, wait = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "update",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--status",
+        "open",
+        "--resume-when",
+        f"resume_at:{due_at}",
+        "--successor-todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+    assert wait_rc == 0, wait
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert listed_rc == 0, listed
+    waiting_todo = next(
+        item for item in listed["todos"] if item["todo_id"] == TODO_ID
+    )
+    assert waiting_todo["resume_when"] == f"resume_at:{due_at}"
+    assert waiting_todo["resume_ready"] is False
+    assert waiting_todo["successor_todo_ids"] == [ALTERNATIVE_TODO_ID]
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        *common_refresh_args,
+        "--progress-result-class",
+        "blocked",
+        "--progress-blocker-id",
+        "blocker:runtime-boundary",
+        "--progress-evidence-id",
+        "evidence:runtime-boundary",
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    assert refresh["delivery_outcome"] == "outcome_gap"
+    assert refresh["progress_observation"]["result_class"] == "blocked"
+    assert refresh["progress_observation"]["work_item_id"] == TODO_ID
+    assert refresh["blocked_retry"]["resume_when"] == f"resume_at:{due_at}"
+    assert [
+        receipt["step_kind"]
+        for receipt in refresh["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback"]
+    assert refresh["settlement_progress"]["state"] == "settled"
+    assert refresh["settlement_progress"]["closeout_kind"] == (
+        "typed_blocked_writeback_no_spend"
+    )
+    assert refresh.get("settlement_owed") is None
+    assert "- closeout: typed blocked writeback; no quota slot spent" in (
+        render_settlement_progress_markdown(refresh)
+    )
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["appended"] is False
+    assert _spend_run_count(runtime) == 0
+
+    next_rc, next_turn = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-after-typed-blocker-settlement",
+        cwd=project,
+    )
+    assert next_rc == 0, json.dumps(next_turn, indent=2)
+    assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
+    assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+
+
+def test_typed_blocked_retry_without_successor_defers_the_only_todo(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_completion_validation_todo(project)
+    _initialize_fixture_authority(project, runtime)
+    turn_id = "turn-typed-blocker-only-todo"
+    binding = (
+        "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID,
+        "--turn-instance-id", turn_id,
+    )
+    guard_rc, guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding,  cwd=project,
+    )
+    assert guard_rc == 0, guard
+    due_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
+    wait_rc, wait = _run_cli(
+        registry_path, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
+        "--status", "deferred", "--resume-when", f"resume_at:{due_at}",
+    )
+    assert wait_rc == 0, wait
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert listed_rc == 0, listed
+    assert listed["todos"][0]["status"] == "deferred"
+    assert listed["todos"][0]["resume_ready"] is False
+
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "typed_blocker_writeback",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", *binding,
+        "--progress-result-class", "blocked",
+        "--progress-blocker-id", "blocker:runtime-boundary",
+        "--progress-evidence-id", "evidence:runtime-boundary",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    assert refresh["settlement_progress"]["state"] == "settled"
+    assert refresh["blocked_retry"]["resume_when"] == f"resume_at:{due_at}"
+    assert _spend_run_count(runtime) == 0
+
+    next_rc, next_turn = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", "turn-after-only-todo-blocked",
+         cwd=project,
+    )
+    assert next_rc == 0, next_turn
+    assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
+    assert (next_turn.get("selected_todo") or {}).get("todo_id") != TODO_ID
+    assert next_turn["should_run"] is False, next_turn
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_scheduler_cache_misses_after_todo_state_changes_without_run(
+    tmp_path: Path, provider: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    rc, configured = _run_cli(
+        registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+        "--execution-stride-strategy", "off", "--execute", cwd=project,
+    )
+    assert rc == 0, configured
+    turn_id = "turn-before-cached-deferral"
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    rc, initial = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--turn-instance-id", turn_id, "--todo-id", TODO_ID,
+        cwd=project,
+    )
+    assert rc == 0, initial
+    assert initial["selected_todo"]["todo_id"] == TODO_ID
+    claim_rc, claim = _run_cli(
+        registry_path, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID, cwd=project,
+    )
+    assert claim_rc == 0 and claim["execution_managed"] is True, claim
+    prepared_rc, prepared = _run_cli(
+        registry_path, runtime, *guard, "--turn-instance-id", turn_id, "--todo-id", TODO_ID,
+        "--write-projection-cache", cwd=project,
+    )
+    assert prepared_rc == 0, prepared
+    assert prepared["execution_preparation"]["state"] == "ready"
+    assert prepared["normal_delivery_allowed"] is True
+    identity = initial["heartbeat_receipt"]["settlement_identity"]
+    assert prepared["heartbeat_receipt"]["settlement_identity"] == identity
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index_before = index_path.read_bytes() if index_path.exists() else None
+
+    rc, updated = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "update",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--status",
+        "deferred",
+        "--resume-when",
+        "resume_at:2099-01-01T00:00:00Z",
+        "--reason", "Wait for the future resume condition.",
+        "--claim-operation-id", claim["claim_operation_id"], cwd=project,
+    )
+    assert rc == 0, updated
+    assert updated["status"] == "applied"
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert listed_rc == 0, listed
+    deferred = next(
+        item for item in listed["todos"] if item["todo_id"] == TODO_ID
+    )
+    assert deferred["status"] == "deferred"
+    assert deferred["resume_when"] == "resume_at:2099-01-01T00:00:00Z"
+    assert (index_path.read_bytes() if index_path.exists() else None) == index_before
+
+    rc, refreshed = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--use-projection-cache",
+        "--turn-instance-id", turn_id, "--todo-id", TODO_ID, cwd=project,
+    )
+
+    assert rc == 0, refreshed
+    assert refreshed["status_projection_cache"]["hit"] is False
+    assert (
+        refreshed["status_projection_cache"]["miss_reason"]
+        == "goal_todo_projection_changed"
+    )
+    # Deferral removes new work authority, but cannot discard the admitted
+    # Turn's original settlement. Recovery is not a new Todo dispatch.
+    assert refreshed["effective_action"] == "unsettled_host_turn_recovery"
+    assert refreshed["normal_delivery_allowed"] is False
+    assert "selected_todo" not in refreshed
+    assert refreshed["heartbeat_receipt"]["settlement_identity"] == identity
+    assert (index_path.read_bytes() if index_path.exists() else None) == index_before
+    assert _spend_run_count(runtime) == 0
+
+    binding = (
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", identity["turn_instance_id"],
+    )
+    rc, context = _run_cli(
+        registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", "delivery_result", cwd=project,
+    )
+    assert rc == 0, context
+    writeback = (
+        "refresh-state", "--goal-id", GOAL_ID, *binding,
+        "--classification", "deferred_turn_checkpoint",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    rc, retained = _run_cli(registry_path, runtime, *writeback, cwd=project)
+    assert rc == 0, retained
+    assert _spend_run_count(runtime) == 0
+    rc, direction = _run_cli(
+        registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", "supplement_checkpoint", cwd=project,
+    )
+    assert rc == 0 and direction["basis"]["todo"]["status"] == "deferred", direction
+    vision = project / "deferred-direction.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "todo_delta": [f"retain:{TODO_ID}"],
+        "vision_patch": {"acceptance_summary": "Resume the retained task only after its dated wait."},
+        "path_delta": {"outcome": "no_change", "prior_assumption": "The selected task remains required.",
+            "observed_reality": "Its current source is deferred until 2099-01-01T00:00:00Z.",
+            "retained": ["The original task and its dated wait."], "evidence_refs": [f"todo:{TODO_ID}"]},
+    }), encoding="utf-8")
+    rc, accepted = _run_cli(
+        registry_path, runtime, *writeback, "--checkpoint-read-context", direction["read_context_id"],
+        "--agent-vision-json", str(vision), cwd=project,
+    )
+    assert rc == 0 and accepted["vision_checkpoint"]["satisfied"] is True, (accepted.get("error"), accepted.get("vision_checkpoint"))
+    rc, settled = _run_cli(
+        registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        *binding, "--source", "heartbeat", "--execute", cwd=project,
+    )
+    assert rc == 0 and settled["appended"] is True, settled
+    assert _spend_run_count(runtime) == 1
+
+    # A genuinely fresh Turn must still wait until 2099 after that original
+    # obligation is settled, including when the projection cache is requested.
+    rc, waiting = _run_cli(
+        registry_path, runtime, *guard, "--use-projection-cache",
+        "--turn-instance-id", "turn-after-deferred-settlement", cwd=project,
+    )
+    assert rc == 0 and waiting["should_run"] is False, waiting
+    assert waiting["effective_action"] == "agent_scope_wait"
+    assert "selected_todo" not in waiting
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID,
+    )
+    assert listed_rc == 0, listed
+    [deferred] = [item for item in listed["todos"] if item["todo_id"] == TODO_ID]
+    assert deferred["status"] == "deferred" and deferred["resume_ready"] is False
+    assert deferred["resume_when"] == "resume_at:2099-01-01T00:00:00Z"
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("include_detail", [False, True])
+def test_scheduler_cache_tracks_todo_changes_beyond_display_limit(
+    tmp_path: Path, include_detail: bool,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    tail_rows = "".join(
+        f"- [ ] [P2] Tail task {index}.\n"
+        f"  <!-- loopx:todo todo_id=todo_tail_{index:02d} status=open "
+        "task_class=advancement_task action_kind=implement -->\n"
+        for index in range(40)
+    )
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").rstrip() + "\n" + tail_rows,
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime)
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        *(["--include-detail", "agent-todos"] if include_detail else []),
+    )
+    initial_rc, initial = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--write-projection-cache",
+        cwd=project,
+    )
+    assert initial_rc == 0, initial
+
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "Tail task 39.",
+            "Tail task 39 with revised display text.",
+        ),
+        encoding="utf-8",
+    )
+    display_rc, display_only = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--use-projection-cache",
+        cwd=project,
+    )
+    assert display_rc == 0, display_only
+    assert display_only["status_projection_cache"]["hit"] is True
+
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index_before = index_path.read_bytes() if index_path.exists() else None
+    deferred_rc, deferred = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "update",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        "todo_tail_39",
+        "--agent-id",
+        AGENT_ID,
+        "--status",
+        "deferred",
+        "--resume-when",
+        "resume_at:2099-01-01T00:00:00Z",
+    )
+    assert deferred_rc == 0, deferred
+    assert (index_path.read_bytes() if index_path.exists() else None) == index_before
+
+    def read_deferred_guard(*cache_args: str) -> tuple[int, dict[str, Any]]:
+        from copy import deepcopy
+
+        started = datetime.now(timezone.utc).replace(microsecond=0)
+        rc, payload = _run_cli(registry_path, runtime, *guard, *cache_args, cwd=project)
+        finished = datetime.now(timezone.utc)
+        assert rc == 0, payload
+        comparable = deepcopy(payload)
+        # The legacy compact view omits item details; its explicit detail
+        # mode and the complete contract must both retain the observation.
+        if not include_detail and "deferred_items" not in comparable["agent_todo_summary"]:
+            return rc, comparable
+        deferred_items = comparable["agent_todo_summary"]["deferred_items"]
+        assert len(deferred_items) == 1
+        assert deferred_items[0]["todo_id"] == "todo_tail_39"
+        condition = deferred_items[0]["resume_condition"]
+        # These are separate live evaluations after a cache miss. Check each
+        # observation clock against its own invocation, then compare every
+        # other fact, including the due time, readiness and receipt semantics.
+        evaluated = datetime.fromisoformat(condition.pop("evaluated_at").replace("Z", "+00:00"))
+        assert evaluated.tzinfo is not None
+        assert started <= evaluated <= finished
+        assert condition["scheduled_for"] == "2099-01-01T00:00:00Z"
+        assert condition["satisfied"] is False
+        return rc, comparable
+
+    deferred_cached_rc, deferred_cached = read_deferred_guard("--use-projection-cache")
+    deferred_fresh_rc, deferred_fresh = read_deferred_guard()
+    assert deferred_cached_rc == deferred_fresh_rc == 0, deferred_cached
+    assert deferred_cached["status_projection_cache"]["hit"] is False
+    assert (
+        deferred_cached["status_projection_cache"]["miss_reason"]
+        == "goal_todo_projection_changed"
+    )
+    parity_fields = (
+        "should_run",
+        "decision",
+        "effective_action",
+        "selected_todo",
+        "todo_summary_projection",
+        "open_count",
+        "agent_todo_summary",
+    )
+    assert {field: deferred_cached.get(field) for field in parity_fields} == {
+        field: deferred_fresh.get(field) for field in parity_fields
+    }
+    assert deferred_cached["agent_todo_summary"]["deferred_count"] == 1
+
+    deferred_cache_rc, deferred_cache = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--write-projection-cache",
+        cwd=project,
+    )
+    assert deferred_cache_rc == 0, deferred_cache
+    resumed_rc, resumed = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "update",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        "todo_tail_39",
+        "--agent-id",
+        AGENT_ID,
+        "--status",
+        "open",
+        "--clear-resume-when",
+    )
+    assert resumed_rc == 0, resumed
+
+    resumed_cached_rc, resumed_cached = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--use-projection-cache",
+        cwd=project,
+    )
+    resumed_fresh_rc, resumed_fresh = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        cwd=project,
+    )
+    assert resumed_cached_rc == resumed_fresh_rc == 0, resumed_cached
+    assert resumed_cached["status_projection_cache"]["hit"] is False
+    assert (
+        resumed_cached["status_projection_cache"]["miss_reason"]
+        == "goal_todo_projection_changed"
+    )
+    assert {field: resumed_cached.get(field) for field in parity_fields} == {
+        field: resumed_fresh.get(field) for field in parity_fields
+    }
+    assert resumed_cached["agent_todo_summary"]["deferred_count"] == 0
+
+
+def test_scheduler_malformed_cached_todo_rebuilds_without_authority_write(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    seeded = _initialize_fixture_authority(project, runtime)
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    initial_rc, initial = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--write-projection-cache",
+        cwd=project,
+    )
+    assert initial_rc == 0, initial
+    cache_path = Path(initial["status_projection_cache"]["path"])
+    cache_record = json.loads(cache_path.read_text(encoding="utf-8"))
+    cached_todo = cache_record["payload"]["attention_queue"]["items"][0][
+        "agent_todos"
+    ]["items"][0]
+    assert cached_todo.pop("schema_version") == "todo_item_v0"
+    cache_path.write_text(
+        json.dumps(cache_record, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rebuilt_rc, rebuilt = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--use-projection-cache",
+        cwd=project,
+    )
+    fresh_rc, fresh = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        cwd=project,
+    )
+
+    assert rebuilt_rc == fresh_rc == 0, rebuilt
+    assert rebuilt["status_projection_cache"]["hit"] is False
+    assert (
+        rebuilt["status_projection_cache"]["miss_reason"]
+        == "invalid_goal_todo_projection"
+    )
+    parity_fields = (
+        "should_run",
+        "decision",
+        "effective_action",
+        "selected_todo",
+        "todo_summary_projection",
+        "open_count",
+        "agent_todo_summary",
+    )
+    assert {field: rebuilt.get(field) for field in parity_fields} == {
+        field: fresh.get(field) for field in parity_fields
+    }
+    after_rc, after = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert after_rc == 0, after
+    assert after["authority_read"]["provider_revision"] == seeded["provider_revision"]
+
+
+def test_scheduler_cache_freshness_keeps_authoritative_decode_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.cli_commands import quota_cache_freshness
+    from loopx.history import goal_registry_digest
+
+    _, runtime, registry_path = _write_fixture(tmp_path)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    payload = {
+        "run_history": {
+            "goals": [
+                {
+                    "id": GOAL_ID,
+                    "registry_goal_digest": goal_registry_digest(
+                        registry["goals"][0]
+                    ),
+                }
+            ]
+        },
+        "attention_queue": {"items": [{"goal_id": GOAL_ID}]},
+    }
+
+    def reject_authoritative_source(*_args: object, **_kwargs: object) -> object:
+        raise ValueError("malformed authoritative Todo source")
+
+    monkeypatch.setattr(
+        quota_cache_freshness,
+        "active_state_todo_fields",
+        reject_authoritative_source,
+    )
+    with pytest.raises(ValueError, match="malformed authoritative Todo source"):
+        quota_cache_freshness.cached_goal_projection_miss_reason(
+            payload,
+            registry_path=registry_path,
+            runtime_root=runtime,
+            goal_id=GOAL_ID,
+        )
+
+
+def test_scheduler_cache_misses_after_goal_is_stopped_without_run(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    _initialize_fixture_authority(project, runtime)
+    rc, initial = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--write-projection-cache",
+        cwd=project,
+    )
+    assert rc == 0, initial
+    assert initial["should_run"] is True
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index_before = index_path.read_bytes() if index_path.exists() else None
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["activation_state"] = "stopped"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    assert (index_path.read_bytes() if index_path.exists() else None) == index_before
+
+    rc, refreshed = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--use-projection-cache",
+        cwd=project,
+    )
+
+    assert rc == 0, refreshed
+    assert refreshed["status_projection_cache"]["hit"] is False
+    assert refreshed["status_projection_cache"]["miss_reason"] == (
+        "goal_registry_changed"
+    )
+    assert refreshed["should_run"] is False
+    assert refreshed["effective_action"] == "quota_skip"
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value", "expected_action"),
+    [
+        ("quota", "allowed_slots", 0, "throttled_skip"),
+        ("adapter", "status", "disconnected", "operator_gate_notify"),
+    ],
+)
+def test_scheduler_cache_misses_after_goal_configuration_changes_without_run(
+    tmp_path: Path,
+    section: str,
+    field: str,
+    value: object,
+    expected_action: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    _initialize_fixture_authority(project, runtime)
+    rc, initial = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--write-projection-cache",
+        cwd=project,
+    )
+    assert rc == 0, initial
+    assert initial["should_run"] is True
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index_before = index_path.read_bytes() if index_path.exists() else None
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0][section][field] = value
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    assert (index_path.read_bytes() if index_path.exists() else None) == index_before
+
+    rc, refreshed = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--use-projection-cache",
+        cwd=project,
+    )
+
+    assert rc == 0, refreshed
+    assert refreshed["status_projection_cache"]["hit"] is False
+    assert refreshed["status_projection_cache"]["miss_reason"] == (
+        "goal_registry_changed"
+    )
+    assert refreshed["should_run"] is False
+    assert refreshed["effective_action"] == expected_action
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("large_history", [False, True])
+def test_typed_blocked_retry_with_peer_hard_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    large_history: bool,
+) -> None:
+    """A peer's overlapping execution lease must not strand exact closeout."""
+    from canonical_authority_fixture import (
+        initialize_canonical_authority,
+        isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state = _configure_completion_validation_todo(project)
+    _configure_selectable_alternative(project)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"]["registered_agents"].append("peer-agent")
+    registry["goals"][0]["coordination"]["write_scope"] = ["src/**"]
+    registry["goals"][0]["workspace_guard_policy"] = {
+        "peer_independent_worktree_required": False,
+    }
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    todos = read_fixture_todos(state)
+    for todo in todos:
+        todo["required_write_scopes"] = ["src/**"]
+    if large_history:
+        # Complete authority remains large; display/prose bytes must not be
+        # retransmitted to the wait qualifier or removed from persisted Todos.
+        todos.extend({"todo_id": f"todo_history_{index:04d}", "role": "agent",
+                      "schema_version": "todo_item_v0", "done": True, "source_section": "Agent Todo",
+                      "status": "done", "task_class": "advancement_task", "archive_state": "active",
+                      "text": "Previously validated work.", "note": "Historical details. " * 500}
+                     for index in range(300))
+        assert len(json.dumps(todos).encode()) > 2 * 1024 * 1024
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease", leases=[],
+    )
+    initialize_canonical_authority(
+        runtime, GOAL_ID, projection, state_path=state, provider=provider,
+    )
+
+    turn_id = f"turn-hard-lease-blocker-{provider}"
+    binding = (
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", turn_id,
+    )
+    guard_rc, guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding,
+        "--write-projection-cache", cwd=project,
+    )
+    assert guard_rc == 0, guard
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    cached_rc, cached_guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding,
+        "--use-projection-cache", cwd=project,
+    )
+    assert cached_rc == 0, cached_guard
+    assert cached_guard["status_projection_cache"]["hit"] is True
+
+    lease_rc, lease = _run_cli(
+        registry_path, runtime, "task-lease", "acquire", "--goal-id", GOAL_ID,
+        "--todo-id", ALTERNATIVE_TODO_ID, "--owner", "peer-agent",
+        "--idempotency-key", f"peer-overlap-{provider}", "--expected-version", "0",
+        "--ttl-seconds", "600", "--write-scope", "src/**",
+    )
+    assert lease_rc == 0, lease
+    assert lease["acquired"] is True
+    assert lease["source_authority"] == f"{provider}_v0"
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "peer_hard_lease_blocker",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", *binding,
+        "--progress-result-class", "blocked",
+        "--progress-blocker-id", "blocker:peer-hard-lease",
+        "--progress-evidence-id", "evidence:peer-hard-lease",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    assert refresh["settlement_progress"]["closeout_kind"] == (
+        "typed_blocked_writeback_no_spend"
+    )
+    assert refresh["blocked_retry"]["source"] == "turn_settlement"
+    due_at = datetime.fromisoformat(refresh["blocked_retry"]["due_at"].replace("Z", "+00:00"))
+    observed = datetime.fromisoformat(refresh["blocked_retry"]["observed_at"].replace("Z", "+00:00"))
+    assert due_at - observed == timedelta(minutes=5)
+    assert _spend_run_count(runtime) == 0
+    replay_rc, replay = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "peer_hard_lease_blocker",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", *binding,
+        "--progress-result-class", "blocked",
+        "--progress-blocker-id", "blocker:peer-hard-lease",
+        "--progress-evidence-id", "evidence:peer-hard-lease",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert replay_rc == 0, replay.get("error") or replay
+    assert replay["idempotent_replay"] is True
+    assert replay["blocked_retry"] == refresh["blocked_retry"]
+    assert _classification_count(runtime, "peer_hard_lease_blocker") == 1
+    spend_rc, spend = _run_cli(
+        registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--slots", "1", "--source", "heartbeat", "--execute", *binding,
+         cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["appended"] is False
+    assert _spend_run_count(runtime) == 0
+    rc, after = _run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, after
+    original = next(todo for todo in after["todos"] if todo["todo_id"] == TODO_ID)
+    assert original["status"] == "open"
+    assert not original.get("resume_when")
+    assert original["completion_validation_required"] is True
+    assert original["completion_validation_sha256"]
+    if large_history:
+        assert next(todo for todo in after["todos"] if todo["todo_id"] == "todo_history_0299")["note"] == todos[-1]["note"]
+
+    next_rc, next_turn = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", f"turn-after-hard-lease-blocker-{provider}",
+         "--use-projection-cache", cwd=project,
+    )
+    assert next_rc == 0, next_turn
+    assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
+    assert next_turn["status_projection_cache"]["miss_reason"] == "run_index_changed"
+    assert (next_turn.get("selected_todo") or {}).get("todo_id") != TODO_ID
+    # Canonical Todo still has no wait; the committed Run alone supplies the
+    # bounded retry through real File/SQLite CLI collection and compaction.
+    pending = next_turn["scheduler_hint"]["pending_retry"]
+    assert pending["source"] == "turn_settlement"
+    assert pending["due_at"] == refresh["blocked_retry"]["due_at"]
+    assert pending["turn_instance_id"] == turn_id
+    assert pending["todo_id"] == TODO_ID
+    assert pending["execution_authority_granted"] is False
+    assert next_turn["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] <= 5
+
+
+def _receipt_retry_with_vision_fixture(
+    tmp_path, monkeypatch, provider, *, peer_agent=None, prior_work_turns=0,
+):
+    """Create the wait through its actual admission and blocked-writeback owners."""
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    if prior_work_turns:
+        configuration = json.loads(registry.read_text())
+        configuration["goals"][0]["quota"]["allowed_slots"] = 30
+        registry.write_text(json.dumps(configuration))
+    if peer_agent is not None:
+        configuration = json.loads(registry.read_text())
+        goal = configuration["goals"][0]
+        goal["coordination"]["registered_agents"].append(peer_agent)
+        goal.setdefault("workspace_guard_policy", {})["peer_independent_worktree_required"] = False
+        registry.write_text(json.dumps(configuration))
+    _configure_completion_validation_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    for index in range(prior_work_turns):
+        prior_binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                         "--todo-id", TODO_ID, "--turn-instance-id", f"verified-work-{index}")
+        rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+                                *prior_binding, cwd=project)
+        assert rc == 0, admitted
+        assert admitted["execution_obligation"]["must_attempt_work"] is True
+        artifact = project / "verified-arithmetic.txt"
+        artifact.write_text(str(17 * (23 + index)))
+        assert int(artifact.read_text()) == 17 * (23 + index)
+        rc, written = _run_cli(registry, runtime, "refresh-state", *prior_binding,
+            "--classification", "arithmetic_verified", "--delivery-batch-scale", "single_surface",
+            "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+            "--no-global-sync", "--suppress-external-sinks", cwd=project)
+        assert rc == 0, written
+        rc, spent = _run_cli(registry, runtime, "quota", "spend-slot", *prior_binding,
+                             "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+        assert rc == 0 and spent["appended"], spent
+    rc, before = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, before
+    binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", "turn-vision-feedback")
+    rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+                            "--goal-id", GOAL_ID, *binding, cwd=project)
+    assert rc == 0, admitted
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Qualify the work after new feedback.",
+                         "advancement_policy": "repeat_until_closed"},
+        "todo_delta": [f"retain:{TODO_ID}"],
+        "path_delta": {"outcome": "no_change", "prior_assumption": "Feedback is required.",
+                       "observed_reality": "No new feedback is available.",
+                       "retained": ["The original work and acceptance."],
+                       "evidence_refs": ["evidence:feedback-pending"]},
+    }), encoding="utf-8")
+    rc, closed = _run_cli(registry, runtime, "refresh-state", "--goal-id", GOAL_ID,
+                          *binding, "--classification", "feedback_pending",
+                          "--delivery-batch-scale", "single_surface",
+                          "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+                          "--progress-blocker-id", "external-feedback",
+                          "--progress-evidence-id", "evidence:feedback-pending",
+                          "--agent-vision-json", str(vision),
+                          "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert rc == 0, closed
+    assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+    return project, runtime, registry, before, closed
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("human_item", [None, "user_action", "user_gate"])
+@pytest.mark.parametrize("prior_work_turns", [0, 5])
+def test_receipt_retry_keeps_open_vision_quiet_through_real_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, human_item: str | None,
+    prior_work_turns: int,
+) -> None:
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+    project, runtime, registry, before, closed = _receipt_retry_with_vision_fixture(
+        tmp_path, monkeypatch, provider, prior_work_turns=prior_work_turns,
+    )
+    if prior_work_turns:
+        # The default cadence is six. Reach a real review threshold only after
+        # the blocked Turn was admitted, using the configuration owner rather
+        # than fabricated history or settlement receipts.
+        rc, configured = _run_cli(
+            registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
+            "--execution-replan-after-turns", str(prior_work_turns), "--execute", cwd=project,
+        )
+        assert rc == 0, configured
+        assert configured["after"]["execution_profile"]["replan_after_effective_turns"] == prior_work_turns
+    if human_item is not None:
+        scope = "--bound-agent" if human_item == "user_action" else "--blocks-agent"
+        rc, human = _run_cli(
+            registry, runtime, "todo", "add", "--goal-id", GOAL_ID, "--role", "user",
+            "--agent-id", AGENT_ID, "--task-class", human_item, scope, AGENT_ID,
+            "--text", "Review independent work.",
+        )
+        assert rc == 0, human
+    rc, waiting = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+                           "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                           "--turn-instance-id", "turn-before-feedback-due", cwd=project)
+    assert rc == 0, waiting
+    assert waiting["execution_obligation"]["must_attempt_work"] is False
+    if human_item == "user_gate":
+        assert waiting["interaction_contract"]["user_channel"]["action_required"] is True
+        assert not waiting["interaction_contract"]["user_channel"].get("non_gating_notice")
+        assert waiting["scheduler_hint"]["action"] == "backoff_waiting_for_user"
+        assert _spend_run_count(runtime) == prior_work_turns
+        return
+    assert not waiting.get("autonomous_replan_obligation")
+    assert waiting["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert waiting["agent_todo_summary"]["blocked_retry_wait"]["due_at"] == closed["blocked_retry"]["due_at"]
+    wait = waiting["goal_frontier_projection"]["vision_wait_state"]
+    assert wait["selected_todo_id"] == TODO_ID
+    assert wait["resume_condition"]["scheduled_for"] == closed["blocked_retry"]["due_at"]
+    if human_item == "user_action":
+        assert waiting["interaction_contract"]["user_channel"]["non_gating_notice"] is True
+        assert "response_plan" not in waiting["interaction_contract"]
+        assert waiting["scheduler_hint"]["reason_code"] == "interaction_agent_scope_wait"
+        assert waiting["scheduler_hint"]["action"] != "backoff_waiting_for_user"
+        assert waiting["scheduler_hint"]["pending_retry"]["due_at"] == closed["blocked_retry"]["due_at"]
+    envelope = build_turn_envelope(waiting)
+    assert envelope["contract_capsule"]["execution_obligation"]["must_attempt_work"] is False
+    rc, after = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, after
+    assert next(todo for todo in after["todos"] if todo["todo_id"] == TODO_ID) == before["todos"][0]
+    assert _spend_run_count(runtime) == prior_work_turns
+    rc, independent = _run_cli(
+        registry, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        "--role", "agent", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "independent-feedback",
+        "--claimed-by", AGENT_ID, "--text", "Validate independent evidence.",
+    )
+    assert rc == 0, independent
+    rc, resumed = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "turn-independent-feedback", cwd=project,
+    )
+    assert rc == 0, resumed
+    assert resumed["selected_todo"]["todo_id"] == independent["todo_id"]
+    assert resumed["execution_obligation"]["must_attempt_work"] is True
+    assert _spend_run_count(runtime) == prior_work_turns
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("reassign", [False, True])
+def test_fresh_peer_does_not_borrow_receipt_retry_after_canonical_handoff(
+    tmp_path, monkeypatch, provider, reassign,
+):
+    peer = "codex-settlement-peer"
+    project, runtime, registry, before, closed = _receipt_retry_with_vision_fixture(
+        tmp_path, monkeypatch, provider, peer_agent=peer,
+    )
+    # Give B its own causally related Vision through a real work Turn. Merely
+    # selecting an explicit Todo can bypass the stale unscoped projection and
+    # cannot establish that fresh automatic admission uses B's own frontier.
+    rc, added = _run_cli(registry, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        "--role", "agent", "--claimed-by", peer, "--task-class", "advancement_task",
+        "--text", "Verify independent arithmetic.", "--action-kind", "validate",
+        "--target-key", "peer-arithmetic")
+    assert rc == 0, added
+    peer_binding = ("--goal-id", GOAL_ID, "--agent-id", peer, "--todo-id", added["todo_id"],
+                    "--turn-instance-id", "turn-peer-arithmetic")
+    rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+                            *peer_binding, cwd=project)
+    assert rc == 0, admitted
+    artifact = project / "verified-arithmetic.txt"
+    artifact.write_text("391\n")
+    assert int(artifact.read_text()) == 17 * 23
+    peer_vision = tmp_path / "peer-vision.json"
+    peer_vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verify the retained original work after arithmetic.",
+                         "advancement_policy": "repeat_until_closed"},
+        "todo_delta": [f"retain:{TODO_ID}"],
+        "path_delta": {"outcome": "continue", "prior_assumption": "Verify arithmetic before the next work.",
+                       "observed_reality": "The independent artifact equals 17 times 23.",
+                       "retained": ["Verify the retained original work."],
+                       "evidence_refs": ["evidence:verified-arithmetic"]},
+    }))
+    rc, written = _run_cli(registry, runtime, "refresh-state", *peer_binding,
+        "--classification", "peer_arithmetic_verified", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(peer_vision),
+        "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert rc == 0, written
+    rc, spent = _run_cli(registry, runtime, "quota", "spend-slot", *peer_binding,
+                         "--slots", "1", "--source", "heartbeat", "--execute", cwd=project)
+    assert rc == 0, spent
+    rc, done = _run_cli(registry, runtime, "todo", "complete", *peer_binding,
+                        "--evidence", str(artifact), "--successor-todo-id", TODO_ID, cwd=project)
+    assert rc == 0, done
+    # The current owner releases its assignment through the real canonical
+    # writer. No Run, clock, retry or receipt is patched for the observation.
+    rc, current = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+    assert rc == 0, current
+    change = ("--claimed-by", peer) if reassign else ("--clear-claim",)
+    rc, updated = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+        "--agent-id", AGENT_ID, "--update-operation-id", "transfer-after-feedback",
+        "--update-expected-provider-revision", current["authority_read"]["provider_revision"], *change,
+    )
+    assert rc == 0, updated
+    rc, automatic = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", peer, "--turn-instance-id", "turn-fresh-peer-after-feedback", cwd=project,
+    )
+    assert rc == 0, automatic
+    assert automatic["agent_todo_summary"]["work_counts"]["advancement"] == 1
+    assert not automatic.get("vision_wait_state")
+    assert not automatic["scheduler_hint"].get("pending_retry")
+    rc, fresh = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", peer, "--todo-id", TODO_ID,
+        "--turn-instance-id", "turn-fresh-peer-after-feedback", cwd=project,
+    )
+    assert rc == 0, fresh
+    assert fresh["selected_todo"]["todo_id"] == TODO_ID
+    assert fresh["execution_obligation"]["must_attempt_work"] is True
+    assert not fresh["agent_todo_summary"].get("blocked_retry_wait")
+    assert not fresh["scheduler_hint"].get("pending_retry")
+    assert _spend_run_count(runtime) == 1
+    rc, readback = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+    assert rc == 0, readback
+    assert readback["todo"].get("claimed_by") == (peer if reassign else None)
+    rc, replay = _run_cli(registry, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "turn-vision-feedback",
+        "--classification", "feedback_pending", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+        "--progress-blocker-id", "external-feedback", "--progress-evidence-id", "evidence:feedback-pending",
+        "--agent-vision-json", str(tmp_path / "vision.json"),
+        "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert rc == 0, replay
+    assert replay["idempotent_replay"] is True
+    assert replay["blocked_retry"] == closed["blocked_retry"]
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("kind", ["todo_done", "monitor_changed", "resume_at", "implicit", "monitor"])
+def test_blocked_wait_transports_complete_lifecycle_facts_without_prose(
+    kind: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.quota.blocked_retry import require_blocked_retry_wait
+
+    observed = "2026-01-01T00:00:00Z"
+    due = "2026-01-01T00:05:00Z"
+    waiting = {"todo_id": TODO_ID, "role": "agent", "status": "open",
+               "task_class": "advancement_task", "archive_state": "active",
+               "claimed_by": AGENT_ID, "note": "研究记录" * 250_000}
+    target = {"todo_id": ALTERNATIVE_TODO_ID, "role": "agent", "status": "open",
+              "task_class": "advancement_task", "archive_state": "active"}
+    if kind in {"todo_done", "monitor_changed", "resume_at"}:
+        resume = f"resume_at:{due}" if kind == "resume_at" else f"{kind}:{ALTERNATIVE_TODO_ID}"
+        waiting.update(resume_when=resume, resume_ready=False,
+                       resume_condition={"schema_version": "todo_resume_condition_v0", "kind": kind,
+                                         "resume_when": resume, "satisfied": False,
+                                         "target_todo_id": ALTERNATIVE_TODO_ID, "target_status": "open",
+                                         "target_task_class": "advancement_task", "target_archive_state": "active"})
+        if kind == "monitor_changed":
+            target.update(task_class="continuous_monitor", material_change_generation=7)
+            waiting["resume_monitor_generation"] = 7
+            waiting["resume_condition"].update(target_task_class="continuous_monitor",
+                                                material_change_generation=7, baseline_generation=7)
+    elif kind == "monitor":
+        waiting.update(task_class="continuous_monitor", last_checked_at=observed, next_due_at=due,
+                       result_hash="sha256:previous", material_change=False, material_change_generation=7,
+                       cadence="5m", expires_at="2026-01-02T00:00:00Z", watch_only=True)
+    source = {"agent_todos": {"items": [waiting, target]}, "user_todos": {"items": []}}
+    before = json.dumps(source, sort_keys=True)
+    invoke = effect_runtime.effect_runtime_request
+    requests = []
+
+    def observe_request(method, params, **kwargs):
+        if method == "quota.settlement.read":
+            requests.append(params)
+        return invoke(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_request", observe_request)
+    result = require_blocked_retry_wait(source, todo_id=TODO_ID, observed_at=observed,
+                                       allow_turn_settlement_retry=kind == "implicit")
+    assert len(requests) == 1
+    assert len(json.dumps(requests[0]).encode()) < 4_096
+    assert {row["todo_id"] for row in requests[0]["todos"]} == {TODO_ID, ALTERNATIVE_TODO_ID}
+    assert json.dumps(source, sort_keys=True) == before
+    assert result["todo_id"] == TODO_ID
+    if kind in {"todo_done", "monitor_changed"}:
+        assert result["schema_version"] == "quota_blocked_causal_wait_v0"
+        assert result["target_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+        assert result["waiting_todo"]["resume_when"] == waiting["resume_when"]
+    elif kind == "monitor":
+        assert result["schema_version"] == "quota_monitor_unavailable_v0"
+        assert result["monitor_todo"] == {k: v for k, v in waiting.items() if k != "note"}
+    else:
+        assert result["schema_version"] == "quota_blocked_retry_v0"
+        assert result["due_at"] == due
+
+
+def test_settlement_read_snapshot_is_explicit_and_preserves_complete_facts() -> None:
+    from loopx.control_plane.effect_runtime import (
+        MAX_REQUEST_BYTES,
+        EffectRuntimeRejected,
+        effect_runtime_result,
+    )
+
+    note_unit = "Complete source. "
+    request = {"schema_version": "loopx_quota_blocked_wait_request_v0",
+               "todos": [{"todo_id": TODO_ID, "role": "agent", "status": "open",
+                          "task_class": "advancement_task",
+                          "note": note_unit * (MAX_REQUEST_BYTES // len(note_unit.encode()) + 1)}],
+               "todo_id": TODO_ID, "observed_at": "2026-01-01T00:00:00Z",
+               "allow_turn_settlement_retry": True}
+    assert len(json.dumps(request).encode()) > MAX_REQUEST_BYTES
+    with pytest.raises(EffectRuntimeRejected, match="request is oversized"):
+        effect_runtime_result("quota.settlement.read", request)
+    result = effect_runtime_result("quota.settlement.read", request, large_local_snapshot=True)
+    assert result == {"schema_version": "quota_blocked_retry_v0", "source": "turn_settlement",
+                      "todo_id": TODO_ID, "resume_when": "resume_at:2026-01-01T00:05:00Z",
+                      "observed_at": "2026-01-01T00:00:00Z", "due_at": "2026-01-01T00:05:00Z"}
+    with pytest.raises(EffectRuntimeRejected, match="unavailable for this method"):
+        effect_runtime_result("runtime.ping", {}, large_local_snapshot=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_large_goal_preserves_bound_wait_recovery_and_once_only_settlement(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    history = [{"schema_version": "todo_item_v0", "todo_id": f"todo_history_{i:04d}",
+                "role": "agent", "status": "done", "done": True, "task_class": "advancement_task",
+                "archive_state": "active", "source_section": "Agent Todo",
+                "text": "Previously validated work.", "note": "Historical details. " * 500}
+               for i in range(300)]
+    source = [*read_fixture_todos(state), *history]
+    assert len(json.dumps(source).encode()) > 2 * 1024 * 1024
+    initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, todos=source, handoff_mode="soft_claim",
+    ), state_path=state, provider=provider)
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID)
+    binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", "turn-large-causal-original")
+    rc, guard = _run_cli(registry, runtime, *guard_args, *binding)
+    assert rc == 0 and guard["heartbeat_receipt"]["closeout_required"], guard
+    rc, wait = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+                        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+                        "--resume-when", f"todo_done:{ALTERNATIVE_TODO_ID}",
+                        "--successor-todo-id", ALTERNATIVE_TODO_ID)
+    assert rc == 0, json.dumps(wait)
+    # The receipt-bound recovery adapter and the blocked writeback adapter must
+    # consume the same complete dependency graph, not a display-sized prefix.
+    rc, recovery = _run_cli(registry, runtime, *guard_args, *binding)
+    assert rc == 0, recovery
+    assert recovery["unsettled_host_turn_recovery"]["repair"] == "blocked_writeback"
+    assert recovery["unsettled_host_turn_recovery"]["binding_id"] == TODO_ID
+    rc, foreign = _run_cli(registry, runtime, *guard_args, *binding[:-3],
+                           ALTERNATIVE_TODO_ID, *binding[-2:])
+    assert rc == 1 and foreign["error_code"] == "heartbeat_receipt_identity_conflict", foreign
+    refresh = ("refresh-state", "--goal-id", GOAL_ID, *binding,
+               "--classification", "large_causal_wait", "--delivery-batch-scale", "single_surface",
+               "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+               "--progress-blocker-id", ALTERNATIVE_TODO_ID, "--progress-evidence-id", "evidence:pending-dependency",
+               "--no-global-sync", "--suppress-external-sinks")
+    for replay in (False, True):
+        rc, closed = _run_cli(registry, runtime, *refresh, cwd=project)
+        assert rc == 0, closed
+        assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+        if replay:
+            assert closed["idempotent_replay"] is True
+    assert _classification_count(runtime, "large_causal_wait") == 1
+    assert _spend_run_count(runtime) == 0
+    successor = ("--agent-id", AGENT_ID, "--todo-id", ALTERNATIVE_TODO_ID,
+                 "--turn-instance-id", "turn-large-causal-successor")
+    rc, next_turn = _run_cli(registry, runtime, *guard_args, *successor)
+    assert rc == 0, next_turn
+    assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    rc, advanced = _run_cli(registry, runtime, "refresh-state", "--goal-id", GOAL_ID,
+                            *successor, "--classification", "large_goal_validated_progress",
+                            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                            "--delivery-boundary", "in_flight_continuation",
+                            "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert rc == 0, advanced
+    spend = ("quota", "spend-slot", "--goal-id", GOAL_ID, *successor,
+             "--slots", "1", "--source", "heartbeat", "--execute")
+    for replay in (False, True):
+        rc, spent = _run_cli(registry, runtime, *spend)
+        assert rc == 0, spent
+        assert spent.get("idempotent_replay", False) is replay
+    assert _spend_run_count(runtime) == 1
+    rc, historical = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+                              "--todo-id", history[-1]["todo_id"])
+    assert rc == 0 and historical["todo"]["note"] == history[-1]["note"], historical
+
+
+@pytest.mark.parametrize("invalid", ["cycle", "duplicate", "missing_target", "completed", "stale_generation"])
+def test_compact_blocked_wait_keeps_authority_rejections(invalid: str) -> None:
+    from loopx.control_plane.quota.blocked_retry import require_blocked_retry_wait
+
+    waiting = {"todo_id": TODO_ID, "role": "agent", "status": "open", "archive_state": "active",
+               "task_class": "advancement_task", "resume_when": f"todo_done:{ALTERNATIVE_TODO_ID}",
+               "resume_ready": False, "note": "Historical details. " * 150_000,
+               "resume_condition": {"schema_version": "todo_resume_condition_v0", "kind": "todo_done",
+                                    "resume_when": f"todo_done:{ALTERNATIVE_TODO_ID}", "satisfied": False,
+                                    "target_todo_id": ALTERNATIVE_TODO_ID, "target_status": "open",
+                                    "target_task_class": "advancement_task", "target_archive_state": "active"}}
+    target = {"todo_id": ALTERNATIVE_TODO_ID, "role": "agent", "status": "open",
+              "archive_state": "active", "task_class": "advancement_task"}
+    rows = [waiting, target]
+    if invalid == "cycle":
+        target["resume_when"] = "todo_done:todo_transitive"
+        rows.append({**target, "todo_id": "todo_transitive", "resume_when": f"todo_done:{TODO_ID}"})
+        error = "dependency cycle"
+    elif invalid == "duplicate":
+        rows.append(dict(waiting))
+        error = "same unfinished Todo"
+    elif invalid == "missing_target":
+        rows.pop()
+        error = "registered pending causal target"
+    elif invalid == "completed":
+        waiting["status"] = "done"
+        error = "same unfinished Todo"
+    else:
+        waiting.update(resume_when=f"monitor_changed:{ALTERNATIVE_TODO_ID}", resume_monitor_generation=7)
+        waiting["resume_condition"].update(kind="monitor_changed", resume_when=waiting["resume_when"],
+                                            target_task_class="continuous_monitor", baseline_generation=7,
+                                            material_change_generation=6)
+        target.update(task_class="continuous_monitor", material_change_generation=7)
+        error = "stale causal target generation"
+    with pytest.raises(ValueError, match=error):
+        require_blocked_retry_wait({"agent_todos": {"items": rows}}, todo_id=TODO_ID,
+                                   observed_at="2026-01-01T00:00:00Z")
+
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("writeback_kind", ["in_flight", "semantic", "replan"])
+@pytest.mark.parametrize("host", ["codex_app", "generic_cli"])
+def test_same_todo_writeback_reentry_only_settles_original_turn(
+    tmp_path: Path, provider: str, writeback_kind: str, host: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sealed writeback cannot admit more work just because its Todo stays open."""
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    todo_id = TODO_ID
+    if writeback_kind == "replan":
+        _configure_selected_todo_replan_fixture(project, registry)
+        _initialize_git_checkout(project)
+        todo_id = SELECTED_REPLAN_TODO_ID
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    if writeback_kind == "replan":
+        # This replay fixture supplies the ordinary typed replan delta. Keep
+        # its strategy explicit; Stride decision followthrough is tested separately.
+        rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                                  "--execution-stride-strategy", "off", "--execute")
+        assert rc == 0, configured
+    turn_id = "turn-same-todo-writeback"
+    host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
+    guard_args = (
+        "quota", "should-run", *host_args, "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn_id,
+        "--todo-id", todo_id,
+    )
+    rc, initial = _run_cli(registry, runtime, *guard_args[:-2])
+    assert rc == 0, initial
+    rc, guard = _run_cli(registry, runtime, *guard_args)
+    if rc != 0:
+        assert guard["action_selection_qualification"]["state"] == "deferred", guard
+        [command] = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        rc, guard = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0, guard
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
+    if writeback_kind == "replan":
+        assert guard["decision"] == "autonomous_replan_required", guard
+    else:
+        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    identity = ("--agent-id", AGENT_ID, "--todo-id", todo_id, "--turn-instance-id", turn_id)
+    vision = project / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
+        "todo_delta": [f"retain:{todo_id}"],
+        "path_delta": {
+            "outcome": "replan" if writeback_kind == "replan" else "continue",
+            "prior_assumption": "Fixture work needs a verified next route.",
+            "observed_reality": "A fixture check supports continuing the existing work.",
+            "retained": ["Original requirements and the existing Todo."],
+            "evidence_refs": ["evidence:fixture-check"],
+        },
+    }), encoding="utf-8")
+    refresh_args = (
+        "refresh-state", "--goal-id", GOAL_ID, *identity,
+        "--classification", "verified_fixture_work", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(project),
+        "--delivery-boundary", "in_flight_continuation" if writeback_kind == "in_flight" else "semantic_closeout",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    if writeback_kind != "in_flight":
+        refresh_args += ("--agent-vision-json", str(vision))
+    if writeback_kind == "replan":
+        refresh_args += ("--autonomous-replan-recorded", "--repair-delta-kind", "goal_vision_patch")
+    rc, refreshed = _run_cli(registry, runtime, *refresh_args)
+    assert rc == 0 and refreshed["appended"] is True, refreshed
+    assert refreshed["vision_checkpoint"]["satisfied"] is True
+    if writeback_kind == "replan":
+        assert refreshed["autonomous_replan_ack"]["recorded"] is True
+    writeback_bytes = Path(refreshed["json_path"]).read_bytes()
+
+    rc, recovery = _run_cli(registry, runtime, *guard_args)
+    assert rc == 0, recovery
+    assert recovery["normal_delivery_allowed"] is False
+    assert recovery["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert recovery["unsettled_host_turn_recovery"]["scope"] == "current_turn"
+    assert recovery["unsettled_host_turn_recovery"]["binding_id"] == todo_id
+    assert recovery["unsettled_host_turn_recovery"]["repair"] == "quota_spend"
+    assert recovery["settlement_progress"]["state"] == "spend_required"
+    cli = recovery["interaction_contract"]["cli_channel"]
+    assert cli["spend_allowed_now"] is True
+    [spend_command] = cli["next_cli_actions"]
+    assert "spend-slot" in spend_command and turn_id in spend_command
+    assert _spend_run_count(runtime) == 0
+    assert Path(refreshed["json_path"]).read_bytes() == writeback_bytes
+    spend_args = _projected_cli_args(spend_command, turn_instance_id=turn_id)
+    rc, spent = _run_cli(registry, runtime, *spend_args, cwd=project)
+    assert rc == 0 and spent.get("settlement_progress", {}).get("state") == "settled", {
+        key: spent.get(key) for key in ("error", "reason", "settlement_result", "before")
+    }
+    rc, spent_again = _run_cli(registry, runtime, *spend_args, cwd=project)
+    assert rc == 0 and spent_again["appended"] is False, spent_again
+    assert _spend_run_count(runtime) == 1
+    rc, settled = _run_cli(registry, runtime, *guard_args)
+    assert rc == 0 and settled["should_run"] is False, settled
+    assert settled["normal_delivery_allowed"] is False
+    rc, todos = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", todo_id)
+    assert rc == 0 and todos["todo"]["status"] == "open", todos
+    assert Path(refreshed["json_path"]).read_bytes() == writeback_bytes
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.work_items.delivery_outcome import (
+        qualifies_turn_scoped_settlement,
+    )
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    first_turn_id = "turn-settlement-continuation-1"
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        first_turn_id,
+    )
+    assert guard_rc == 0, guard
+    assert guard["selected_todo"]["todo_id"] == TODO_ID
+    assert guard["selected_todo"]["delivery_boundary"] == ("in_flight_continuation")
+    first_writeback = guard["interaction_contract"]["cli_channel"]["next_cli_actions"][
+        0
+    ]
+    assert "--delivery-boundary <boundary>" in first_writeback
+    writeback_step = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
+    assert writeback_step["vision_authoring"]["schema_version"] == "goal_vision_replan_contract_v0"
+    checkpoint = writeback_step["semantic_closeout_command_template"]
+    assert "--delivery-boundary semantic_closeout" in checkpoint and "<boundary>" not in checkpoint
+    assert f"--turn-instance-id {first_turn_id}" in checkpoint
+    assert "outcome_gap requires semantic_closeout" in writeback_step["precondition"]
+    offered = writeback_step["precondition"].split("; outcome=", 1)[1].split(".", 1)[0].split("|")
+    blocked = {
+        "schema_version": "typed_progress_observation_v0", "result_class": "blocked",
+        "work_item_id": TODO_ID, "blocker_id": "blocker_fixture", "evidence_ids": ["evidence:fixture"],
+    }
+    assert offered and all(qualifies_turn_scoped_settlement(
+        outcome, blocked, work_item_id=TODO_ID,
+    ) for outcome in offered)
+
+    # A caller must not escape an honest preparation result by renaming it.
+    # Refusing it leaves this original Turn available for actual progress.
+    refused_rc, refused = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "preparation_only", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "surface_only", "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", first_turn_id,
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert refused_rc == 1 and refused["appended"] is False, refused
+    assert "surface_only cannot settle a Turn" in refused["error"]
+    assert _classification_count(runtime, "preparation_only") == 0
+    assert _spend_run_count(runtime) == 0
+    assert "outcome_progress" in offered
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "validated_progress",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        first_turn_id,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    persisted = json.loads(Path(refresh["json_path"]).read_text(encoding="utf-8"))
+    assert persisted["vision_checkpoint"]["decision"] == "not_required"
+    assert persisted["vision_checkpoint"]["delivery_boundary"] == (
+        "in_flight_continuation"
+    )
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        first_turn_id,
+    )
+    assert spend_rc == 0, spend
+
+    second_guard_rc, second_guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-settlement-continuation-2",
+    )
+    assert second_guard_rc == 0, second_guard
+    assert second_guard["selected_todo"]["todo_id"] == TODO_ID
+    assert second_guard["selected_todo"]["selected_by"] == "in_flight_todo"
+    assert second_guard["selected_todo"]["delivery_boundary"] == (
+        "in_flight_continuation"
+    )
+    writeback = second_guard["interaction_contract"]["cli_channel"]["next_cli_actions"][
+        0
+    ]
+    assert "--delivery-boundary <boundary>" in writeback
+
+    second_refresh_rc, second_refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "validated_progress",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "turn-settlement-continuation-2",
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert second_refresh_rc == 0, second_refresh
+    persisted_second = json.loads(
+        Path(second_refresh["json_path"]).read_text(encoding="utf-8")
+    )
+    assert persisted_second["vision_checkpoint"] == {
+        "schema_version": "vision_checkpoint_v0",
+        "agent_id": AGENT_ID,
+        "required": False,
+        "satisfied": True,
+        "decision": "not_required",
+        "triggers": [{"kind": "in_flight_continuation", "todo_id": TODO_ID}],
+        "delivery_boundary": "in_flight_continuation",
+    }
+
+
+def test_in_flight_progress_settles_while_completion_validation_todo_is_open(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_completion_validation_todo(project)
+    turn_id = "turn-settlement-open-validation"
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+    assert guard_rc == 0, guard
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "validated_intermediate_progress",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+
+    assert refresh_rc == 0, refresh
+    assert refresh["settlement_result"]["ok"] is True
+    assert refresh["vision_checkpoint"]["delivery_boundary"] == (
+        "in_flight_continuation"
+    )
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_id,
+    )
+    assert spend_rc == 0, spend
+    assert spend["settlement_progress"]["state"] == "settled", spend
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    current_todo = next(
+        item for item in parse_active_state_todos(
+            state_path.read_text(encoding="utf-8"), item_limit=None
+        )["agent_todos"]["items"]
+        if item["todo_id"] == TODO_ID
+    )
+    assert current_todo["status"] == "open", current_todo
+
+    replay_rc, replay = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn_id,
+    )
+    assert replay_rc == 0, replay
+    assert replay["should_run"] is False, replay
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["kind"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["must_attempt_work"] is False
+    assert replay["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert replay["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
+    assert _spend_run_count(runtime) == 1
+
+
+def test_open_completion_todo_accepts_only_matching_in_flight_writeback(
+    tmp_path: Path,
+) -> None:
+    project, _runtime, _registry_path = _write_fixture(tmp_path)
+    _configure_completion_validation_todo(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    selected = next(
+        item for item in parse_active_state_todos(
+            state_path.read_text(encoding="utf-8"), item_limit=None
+        )["agent_todos"]["items"]
+        if item["todo_id"] == TODO_ID
+    )
+    status = {"attention_queue": {"items": [{
+        "goal_id": GOAL_ID, "agent_todos": {"items": [selected]},
+    }]}}
+    delivery = {
+        "goal_id": GOAL_ID,
+        "todo_id": TODO_ID,
+        "agent_id": AGENT_ID,
+        "settlement_identity": {
+            "goal_id": GOAL_ID, "todo_id": TODO_ID, "agent_id": AGENT_ID,
+        },
+        "delivery_outcome": "outcome_progress",
+        "vision_checkpoint": {
+            "schema_version": "vision_checkpoint_v0",
+            "agent_id": AGENT_ID,
+            "satisfied": True,
+            "delivery_boundary": "in_flight_continuation",
+            "triggers": [{"kind": "in_flight_continuation", "todo_id": TODO_ID}],
+        },
+    }
+
+    def error(run: dict) -> str | None:
+        return completion_validation_spend_error(
+            status, goal_id=GOAL_ID, todo_id=TODO_ID, agent_id=AGENT_ID,
+            selected_todo=selected, delivery_run=run,
+        )
+
+    assert error(delivery) is None
+    for field, value in (
+        ("goal_id", "another-goal"),
+        ("delivery_outcome", "surface_only"),
+        ("agent_id", "another-agent"),
+        ("todo_id", "todo_other"),
+    ):
+        assert "completion validation" in error({**delivery, field: value})
+    for field, value in (
+        ("satisfied", False),
+        ("agent_id", "another-agent"),
+        ("delivery_boundary", "semantic_closeout"),
+        ("triggers", []),
+        ("triggers", None),
+    ):
+        altered = json.loads(json.dumps(delivery))
+        altered["vision_checkpoint"][field] = value
+        assert "completion validation" in error(altered)
+    for field, value in (
+        ("goal_id", "another-goal"),
+        ("agent_id", "another-agent"),
+        ("todo_id", "todo_other"),
+    ):
+        altered = json.loads(json.dumps(delivery))
+        altered["settlement_identity"][field] = value
+        assert "completion validation" in error(altered)
+    assert "completion validation" in completion_validation_spend_error(
+        status, goal_id=GOAL_ID, todo_id=TODO_ID, agent_id=None,
+        selected_todo=selected, delivery_run=delivery,
+    )
+
+
+def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _append_newly_due_monitor(project)
+    prior_turn_id = "turn-unsettled-prior"
+
+    _initialize_fixture_authority(project, runtime)
+    prior_rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        TODO_ID,
+    )
+    assert prior_rc == 0, prior
+    assert prior["heartbeat_receipt"]["closeout_required"] is True
+
+    replan_todo_ids = []
+    for index in range(15):
+        added_rc, added = _run_cli(
+            registry_path, runtime, "todo", "add", "--goal-id", GOAL_ID,
+            "--role", "agent", "--text", f"Review recovery breadth {index}.",
+            "--priority", "P1", "--task-class", "advancement_task",
+            "--action-kind", "validate", "--claimed-by", AGENT_ID,
+        )
+        assert added_rc == 0, added
+        replan_todo_ids.append(added["todo_id"])
+
+    source_dir = runtime / "goals" / GOAL_ID / "heartbeat-guard-sources"
+    original_sources = {path.name: path.read_bytes() for path in source_dir.glob("*.json")}
+    recovery_rc, recovery = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+    )
+    assert recovery_rc == 0, recovery
+    assert recovery["effective_action"] == "unsettled_host_turn_recovery"
+    replan_obligation_id = recovery["replan_action_packet"]["obligation_id"]
+    packet = recovery["unsettled_host_turn_recovery"]
+    assert packet["prior_turn_instance_id"] == prior_turn_id
+    assert packet["binding_id"] == TODO_ID
+    assert packet["missing_receipts"] == [
+        "durable_writeback_receipt",
+        "quota_spend_receipt",
+    ]
+    assert "selected_todo" not in recovery
+    contract = recovery["interaction_contract"]
+    assert contract["mode"] == "unsettled_host_turn_recovery"
+    assert contract["agent_channel"]["must_attempt"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert contract["agent_channel"]["quiet_noop_allowed"] is False
+    assert contract["agent_channel"]["primary_action"] == recovery[
+        "recommended_action"
+    ]
+    assert contract["agent_channel"]["recovery_ref"] == (
+        "$.unsettled_host_turn_recovery"
+    )
+    assert contract["cli_channel"]["spend_after_validation"] is False
+    assert "--turn-instance-id turn-unsettled-prior" in contract["cli_channel"][
+        "next_cli_actions"
+    ][1]
+    assert packet["repair"] == "resume_prior_turn"
+    assert "settlement_identity" not in recovery["heartbeat_receipt"]
+    # The projected replan remains visible, but this recovery did not admit it.
+    assert recovery["replan_action_packet"]["obligation_id"] == replan_obligation_id
+    assert "semantic_replan_obligation_id" not in recovery["heartbeat_receipt"]
+    assert "semantic_replan_source" not in recovery["heartbeat_receipt"]
+    assert {path.name: path.read_bytes() for path in source_dir.glob("*.json")} == original_sources
+
+    # Model the separately verified replan settlement without touching the
+    # append-only heartbeat receipt.  The same recovery Turn must then be able
+    # to bind an independent successor instead of preserving an obsolete replan.
+    for todo_id in replan_todo_ids:
+        retired_rc, retired = _run_cli(
+            registry_path, runtime, "todo", "supersede", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", todo_id,
+            "--successor-todo-id", ALTERNATIVE_TODO_ID,
+            "--reason", "Temporary review breadth was resolved by the separate replan scenario.",
+        )
+        assert retired_rc == 0, retired
+
+    wait_rc, wait = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "update",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--status",
+        "open",
+        "--resume-when",
+        f"monitor_changed:{DUE_MONITOR_TODO_ID}",
+        "--successor-todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+    assert wait_rc == 0, wait
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert listed_rc == 0, listed
+    waiting = next(item for item in listed["todos"] if item["todo_id"] == TODO_ID)
+    assert waiting["resume_when"] == f"monitor_changed:{DUE_MONITOR_TODO_ID}"
+    assert waiting["successor_todo_ids"] == [ALTERNATIVE_TODO_ID]
+
+    current_turn_id = recovery["heartbeat_receipt"]["turn_instance_id"]
+    resumed_rc, resumed = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        current_turn_id,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+    assert resumed_rc == 0, resumed
+    assert resumed["effective_action"] != "unsettled_host_turn_recovery"
+    assert resumed.get("autonomous_replan_obligation") is None
+    assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert resumed["heartbeat_receipt"]["status"] == "upgraded"
+    assert resumed["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
+
+
+def test_recovery_guard_accepts_the_todo_it_must_settle(
+    tmp_path: Path,
+) -> None:
+    """A recovery guard bound to the Todo it recovers is not a selection conflict.
+
+    The recovery decision carries no top-level ``selected_todo``: its
+    qualification names the Todo the prior unsettled Turn has to settle. Binding
+    the guard to that same Todo is the documented way to close out, so the
+    preflight must accept it instead of failing as a projection conflict.
+    """
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _append_newly_due_monitor(project)
+    prior_turn_id = "turn-unsettled-bound-prior"
+    recovery_turn_id = "turn-unsettled-bound-recovery"
+
+    _initialize_fixture_authority(project, runtime)
+    prior_rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        TODO_ID,
+    )
+    assert prior_rc == 0, prior
+    assert prior["heartbeat_receipt"]["closeout_required"] is True
+
+    recovery_rc, recovery = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        recovery_turn_id,
+        "--todo-id",
+        TODO_ID,
+    )
+
+    assert recovery_rc == 0, recovery
+    assert recovery["effective_action"] == "unsettled_host_turn_recovery"
+    packet = recovery["unsettled_host_turn_recovery"]
+    assert packet["prior_turn_instance_id"] == prior_turn_id
+    assert packet["binding_id"] == TODO_ID
+    assert recovery.get("error_code") != "quota_unexpected_collection_error"
+
+
+def test_prior_turn_with_several_receipts_recovers_once(tmp_path: Path) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    prior_turn_id = "turn-multi-receipt-prior"
+    _initialize_fixture_authority(project, runtime)
+    prior_rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        TODO_ID,
+    )
+    assert prior_rc == 0, prior
+    assert prior["heartbeat_receipt"]["closeout_required"] is True
+    _historical_turn(runtime, prior_turn_id)
+
+    # A real goal persists more than one guard per Turn: an identity upgrade
+    # append and an older guard that never carried a binding.  The newest bound
+    # receipt decides the Turn, and the unbound one can neither outrank it nor
+    # turn the Turn into an identity conflict.
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    with log_path.open("a", encoding="utf-8") as stream:
+        for event_id, details in (
+            (
+                "multi-receipt-identity-upgrade",
+                {
+                    "todo_id": TODO_ID,
+                    "settlement_effect_id": (
+                        f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{prior_turn_id}"
+                    ),
+                    "closeout_required": True,
+                },
+            ),
+            ("multi-receipt-stale-unbound", {"stall_observation": "not_applicable"}),
+        ):
+            stream.write(
+                json.dumps(
+                    {
+                        "schema_version": "loopx_rollout_event_v0",
+                        "event_id": event_id,
+                        "event_kind": "quota_should_run",
+                        "goal_id": GOAL_ID,
+                        "agent_id": AGENT_ID,
+                        "run_id": prior_turn_id,
+                        "status": "turn_run_once",
+                        "summary": "prior Turn guard",
+                        "details": details,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+    recovery_rc, recovery = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+    )
+    assert recovery_rc == 0, recovery
+    assert recovery["effective_action"] == "unsettled_host_turn_recovery"
+    packet = recovery["unsettled_host_turn_recovery"]
+    assert packet["prior_turn_instance_id"] == prior_turn_id
+    assert packet["binding_kind"] == "todo"
+    assert packet["binding_id"] == TODO_ID
+    assert packet["prior_event_id"] == "multi-receipt-identity-upgrade"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_reopened_prior_turn_recovers_before_its_bound_successor(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real lifecycle changes must not create a pair of reciprocal recoveries."""
+    from canonical_authority_fixture import (
+        initialize_canonical_authority, isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    todos = read_fixture_todos(project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md")
+    for todo in todos:
+        if todo["todo_id"] == ALTERNATIVE_TODO_ID:
+            todo["claimed_by"] = AGENT_ID
+    initialize_canonical_authority(
+        runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, handoff_mode="soft_claim", todos=todos,
+        ), state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
+        provider=provider,
+    )
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID)
+    # Opaque ids deliberately sort opposite to their actual admission order.
+    original = ("--agent-id", AGENT_ID, "--turn-instance-id", "z-original",
+                "--todo-id", TODO_ID)
+    successor = ("--agent-id", AGENT_ID, "--turn-instance-id", "a-successor",
+                 "--todo-id", ALTERNATIVE_TODO_ID)
+    rc, first = _run_cli(registry, runtime, *guard, *original)
+    assert rc == 0 and first["heartbeat_receipt"]["closeout_required"], first
+    rc, blocked = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--status", "blocked",
+        "--reason", "Checker unavailable; independent work can continue.",
+    )
+    assert rc == 0, blocked
+    rc, second = _run_cli(registry, runtime, *guard, *successor)
+    assert rc == 0 and second["heartbeat_receipt"]["closeout_required"], second
+    rc, reopened = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--status", "open",
+        "--clear-resume-when", "--reason", "The checker is available again.",
+    )
+    assert rc == 0, reopened
+    rc, recovery = _run_cli(registry, runtime, *guard, *successor)
+    assert rc == 0, recovery
+    assert recovery["unsettled_host_turn_recovery"]["prior_turn_instance_id"] == "z-original"
+    rc, resumed = _run_cli(registry, runtime, *guard, *original)
+    assert rc == 0, resumed
+    assert resumed["effective_action"] != "unsettled_host_turn_recovery", resumed
+    assert resumed["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == first["heartbeat_receipt"]["settlement_identity"]
+
+    # Recovery never permits rebinding the original Turn to the successor.
+    rc, mismatch = _run_cli(registry, runtime, *guard, *original[:-1], ALTERNATIVE_TODO_ID)
+    assert rc == 1 and mismatch["error_code"] == "heartbeat_receipt_identity_conflict", mismatch
+    assert _spend_run_count(runtime) == 0
+    rc, failed_check = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, *original,
+        "--classification", "checker_unqualified", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+        "--progress-blocker-id", "checker:negative-result",
+        "--progress-evidence-id", "evidence:checker-negative-result",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert rc == 0, failed_check
+    assert failed_check["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+    rc, resumed_successor = _run_cli(registry, runtime, *guard, *successor)
+    assert rc == 0, resumed_successor
+    assert resumed_successor["effective_action"] != "unsettled_host_turn_recovery", resumed_successor
+    assert resumed_successor["heartbeat_receipt"]["settlement_identity"] == second["heartbeat_receipt"]["settlement_identity"]
+    rc, progress = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, *successor,
+        "--classification", "successor_validation", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert rc == 0, progress
+    spend = ("quota", "spend-slot", "--goal-id", GOAL_ID, *successor,
+             "--slots", "1", "--source", "heartbeat", "--execute")
+    rc, spent = _run_cli(registry, runtime, *spend)
+    assert rc == 0 and spent["appended"] is True, spent
+    rc, replay = _run_cli(registry, runtime, *spend)
+    assert rc == 0 and replay["idempotent_replay"] is True, replay
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("hidden_count", [0, 6])
+def test_prior_host_closeout_survives_hidden_todo_lifecycle(
+    tmp_path: Path,
+    hidden_count: int,
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import (
+        isolate_sqlite_runtime,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--turn-instance-id",
+        "turn-hidden-closeout-prior",
+        "--todo-id",
+        TODO_ID,
+    )
+    assert rc == 0, prior
+    assert prior["heartbeat_receipt"]["closeout_required"] is True
+    rc, recovery = _run_cli(registry_path, runtime, *guard, "--begin-turn")
+    assert rc == 0, recovery
+    assert recovery["effective_action"] == "unsettled_host_turn_recovery"
+    for index in range(hidden_count):
+        added_rc, added = _run_cli(
+            registry_path, runtime, "todo", "add", "--goal-id", GOAL_ID,
+            "--role", "agent", "--text", f"Wait for validation {index}.",
+            "--priority", "P0", "--status", "blocked",
+            "--task-class", "advancement_task",
+        )
+        assert added_rc == 0, added
+    rc, update = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "update",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--status",
+        "blocked",
+        "--reason",
+        "Waiting on independent validation.",
+        "--successor-todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+    assert rc == 0, json.dumps(update, indent=2)
+    turn_id = recovery["heartbeat_receipt"]["turn_instance_id"]
+    rc, observed = _run_cli(
+        registry_path, runtime, *guard, "--turn-instance-id", turn_id
+    )
+    assert observed["effective_action"] != "unsettled_host_turn_recovery", observed.get(
+        "unsettled_host_turn_recovery"
+    )
+    assert rc == 0, observed
+    rc, resumed = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--turn-instance-id",
+        turn_id,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+    assert rc == 0, resumed
+    assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert resumed["heartbeat_receipt"]["status"] == "upgraded"
+    assert resumed["quota"]["spent_slots"] == prior["quota"]["spent_slots"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_prior_host_closeout_reads_archived_exact_todo(
+    tmp_path: Path,
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import (
+        isolate_sqlite_runtime,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    prior_turn_id = "turn-archived-closeout-prior"
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        TODO_ID,
+    )
+    assert rc == 0, prior
+    assert prior["heartbeat_receipt"]["closeout_required"] is True
+    _historical_turn(runtime, prior_turn_id)
+
+
+    rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "archived closeout lifecycle validated",
+        "--next-agent-todo",
+        "Continue after archived closeout validation.",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--next-action-kind",
+        "implement",
+    )
+    assert rc == 0, complete
+    rc, archived = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "archive-completed",
+        "--goal-id",
+        GOAL_ID,
+        "--max-active-done",
+        "0",
+        "--execute",
+    )
+    assert rc == 0, archived
+    assert archived["moved_count"] == 1
+
+    rc, active = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert rc == 0, active
+    assert TODO_ID not in {item["todo_id"] for item in active["todos"]}
+    rc, exact = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "list",
+        "--goal-id",
+        GOAL_ID,
+        "--role",
+        "agent",
+        "--todo-id",
+        TODO_ID,
+    )
+    assert rc == 0, exact
+    assert exact["todo"]["todo_id"] == TODO_ID
+    assert exact["todo"]["status"] == "done"
+    assert exact["todo"]["archive_state"] == "archive"
+    assert exact["todo"]["source_section"] == "Completed Work Archive"
+
+    rc, observed = _run_cli(registry_path, runtime, *guard, "--begin-turn")
+    assert rc == 0, observed
+    assert observed["effective_action"] != "unsettled_host_turn_recovery", observed.get(
+        "unsettled_host_turn_recovery"
+    )
+    assert observed["quota"]["spent_slots"] == prior["quota"]["spent_slots"]
+
+
+def test_standard_codex_app_settlement_is_receipted_and_idempotent(
+    tmp_path: Path, scheduler_host_home: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime)
+    write_codex_heartbeat_fixture(
+        scheduler_host_home, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        rrule="FREQ=MINUTELY;INTERVAL=3",
+    )
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    assert guard_rc == 0, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID
+    assert identity["effect_id"] == (f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}")
+    original_ack_hint = guard["scheduler_hint"]["codex_app"]["ack_hint"]
+
+    complete_args = (
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "original delivery validated",
+        "--next-agent-todo",
+        "Continue the explicit successor delivery.",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--next-action-kind",
+        "implement",
+    )
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        *complete_args,
+    )
+
+    assert complete_rc == 0, complete
+    assert complete["settlement_result"]["ok"] is True
+    assert [
+        receipt["step_kind"] for receipt in complete["settlement_result"]["receipts"]
+    ] == ["validation"]
+    successor_id = complete["next_todos"][0]["todo_id"]
+    assert successor_id != TODO_ID
+    complete_replay_rc, complete_replay = _run_cli(
+        registry_path,
+        runtime,
+        *complete_args,
+    )
+    assert complete_replay_rc == 0, complete_replay
+    assert complete_replay["idempotent_replay"] is True
+    assert complete_replay["settlement_result"]["ok"] is True
+
+    checkpoint_args = _default_checkpoint_args(registry_path, runtime, binding, tmp_path)
+    refresh_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "validated_progress",
+        *checkpoint_args,
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+    )
+
+    assert refresh_rc == 0, refresh
+    assert refresh["settlement_result"]["ok"] is True
+    assert [
+        receipt["step_kind"] for receipt in refresh["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback"]
+    refresh_replay_rc, refresh_replay = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+    )
+    assert refresh_replay_rc == 0, refresh_replay
+    assert refresh_replay["idempotent_replay"] is True
+    assert _classification_count(runtime, "validated_progress") == 1
+
+    successor_turn = "turn-settlement-cli-successor"
+    successor_guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", successor_id, "--turn-instance-id", successor_turn,
+    )
+    fresh_guard_rc, fresh_guard = _run_cli(registry_path, runtime, *successor_guard)
+    assert fresh_guard_rc == 0, fresh_guard
+    assert fresh_guard["first_delivery_progress"]["stage"] == "settlement_pending"
+    assert fresh_guard["first_delivery_progress"]["settlement_identity"] == identity
+    assert fresh_guard["recommended_action"] == fresh_guard["first_delivery_progress"]["next_action"]
+    assert _heartbeat_receipt_count(runtime, successor_turn) == 0
+
+    spend_args = (
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+    )
+    spend_rc, spend = _run_cli(registry_path, runtime, *spend_args)
+    replay_rc, replay = _run_cli(registry_path, runtime, *spend_args)
+
+    assert spend_rc == 0, spend
+    assert spend["settlement_result"]["ok"] is True
+    assert [
+        receipt["step_kind"] for receipt in spend["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback", "quota_spend"]
+    assert replay_rc == 0, replay
+    assert replay["idempotent_replay"] is True
+    assert replay["appended"] is False
+    assert _spend_run_count(runtime) == 1
+
+    original_guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
+    )
+    settled_replay_rc, settled_replay = _run_cli(registry_path, runtime, *original_guard)
+    assert settled_replay_rc == 0, settled_replay
+    assert settled_replay["decision"] == "skip"
+    assert settled_replay["effective_action"] == "heartbeat_settled_skip"
+    assert settled_replay["execution_obligation"]["must_attempt_work"] is False
+    assert settled_replay.get("selected_todo") is None
+    assert settled_replay["heartbeat_receipt"]["status"] == "replayed"
+    assert (
+        settled_replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    )
+    assert _spend_run_count(runtime) == 1
+
+    assert settled_replay["scheduler_hint"]["action"] == "preserve_current_schedule"
+    assert original_ack_hint["args"]["turn_instance_id"] == TURN_ID
+    assert original_ack_hint["cli_args"][-3:] == [
+        "--turn-instance-id",
+        TURN_ID,
+        "--execute",
+    ]
+    manifest = scheduler_host_home / "automations" / "scheduler-fixture" / "automation.toml"
+    manifest.unlink()
+    _prepare_scheduler_host_readback(registry_path, runtime, scheduler_host_home, original_ack_hint["cli_args"])
+    ack_rc, ack = _run_cli(
+        registry_path,
+        runtime,
+        *original_ack_hint["cli_args"],
+    )
+    # The current original Turn can still acknowledge the observed schedule.
+    assert ack_rc == 0, ack
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["scheduler_commit"]["written"] is True
+    assert ack["appended"] is False
+    scheduler_path = Path(ack["scheduler_state_path"])
+    saved = scheduler_path.read_bytes()
+    rc, replay_ack = _run_cli(registry_path, runtime, *original_ack_hint["cli_args"])
+    assert rc == 0 and replay_ack["scheduler_commit"]["replayed"] is True, replay_ack
+    assert scheduler_path.read_bytes() == saved
+    assert _spend_run_count(runtime) == 1
+
+    fresh_guard_rc, fresh_guard = _run_cli(registry_path, runtime, *successor_guard)
+    assert fresh_guard_rc == 0 and fresh_guard["heartbeat_receipt"]["status"] == "committed", fresh_guard
+    assert fresh_guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == successor_id
+    assert _heartbeat_receipt_count(runtime, successor_turn) == 1
+    rc, stale = _run_cli(registry_path, runtime, *original_ack_hint["cli_args"])
+    assert rc == 1 and stale["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE", stale
+    assert scheduler_path.read_bytes() == saved
+    fresh_ack_args = fresh_guard["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
+    assert fresh_ack_args[fresh_ack_args.index("--turn-instance-id") + 1] == successor_turn
+    # Remove only the isolated observation to exercise missing Host refusal.
+    manifest.unlink()
+    for observed in (None, "FREQ=MINUTELY;INTERVAL=60"):
+        if observed is not None:
+            write_codex_heartbeat_fixture(scheduler_host_home, goal_id=GOAL_ID, agent_id=AGENT_ID, rrule=observed)
+        rc, refused = _run_cli(registry_path, runtime, *fresh_ack_args)
+        assert rc == 1 and refused["scheduler_commit"]["reason_code"] == "rrule_mismatch", refused
+        assert not refused["scheduler_commit"]["written"]
+        assert scheduler_path.read_bytes() == saved
+    requested = fresh_ack_args[fresh_ack_args.index("--applied-rrule") + 1]
+    write_codex_heartbeat_fixture(scheduler_host_home, goal_id=GOAL_ID, agent_id=AGENT_ID, rrule=requested)
+    fresh_ack_rc, fresh_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
+    assert fresh_ack_rc == 0, fresh_ack
+    assert fresh_ack["schema_version"] == "loopx_scheduler_host_followup_result_v0"
+    assert fresh_ack["mode"] == "scheduler-ack"
+    assert fresh_ack["scheduler_commit"]["written"] is True
+    assert load_scheduler_state(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY)["last_applied_rrule"] == (
+            fresh_ack_args[fresh_ack_args.index("--applied-rrule") + 1]
+        )
+    scheduler_bytes = Path(fresh_ack["scheduler_state_path"]).read_bytes()
+    replay_ack_rc, replay_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
+    assert replay_ack_rc == 0, replay_ack
+    assert replay_ack["scheduler_commit"]["replayed"] is True
+    assert replay_ack["scheduler_commit"]["written"] is False
+    assert Path(fresh_ack["scheduler_state_path"]).read_bytes() == scheduler_bytes
+    assert _spend_run_count(runtime) == 1
+    rc, historical = _run_cli(registry_path, runtime, *original_guard)
+    assert rc == 0 and historical["effective_action"] == "heartbeat_settled_skip", historical
+    for packet in (settled_replay, historical):
+        hint = packet["scheduler_hint"]
+        assert hint["action"] == "preserve_current_schedule"
+        for surface in ("app_automation", "codex_app"):
+            scheduler = hint.get(surface, {})
+            assert "recommended_rrule" not in scheduler, scheduler
+            assert "fallback_hint" not in scheduler, scheduler
+            assert not scheduler.get("stateful_backoff", {}).get("apply_needed"), scheduler
+            assert "ack_hint" not in scheduler, scheduler
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("host_state", ["matching", "different", "paused", "missing", "ambiguous", "unreadable"])
+def test_successor_reconciles_schedule_after_lost_ack(
+    tmp_path: Path, scheduler_host_home: Path, monkeypatch, provider: str, host_state: str,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    scope = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    guard = ("quota", "should-run", *scope)
+    original = ("--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    different_rrule = "FREQ=MINUTELY;INTERVAL=60"
+    matching_rrule = "FREQ=MINUTELY;INTERVAL=3"
+    write_codex_heartbeat_fixture(
+        scheduler_host_home, goal_id=GOAL_ID, agent_id=AGENT_ID, rrule=matching_rrule,
+    )
+    manifest = scheduler_host_home / "automations" / "scheduler-fixture" / "automation.toml"
+    rc, first = _run_cli(registry, runtime, *guard, "--codex-app", *original)
+    assert rc == 0, first
+    original_app = first["scheduler_hint"]["app_automation"]
+    assert original_app["host_action"] == "ack_observed_rrule_without_update"
+    original_ack = original_app["ack_hint"]["cli_args"]
+    assert original_ack[original_ack.index("--automation-id") + 1] == "scheduler-fixture"
+
+    rc, complete = _run_cli(
+        registry, runtime, "todo", "complete", "--goal-id", GOAL_ID, *binding,
+        "--claimed-by", AGENT_ID, "--evidence", "original delivery validated",
+        "--next-agent-todo", "Continue independent delivery.", "--next-claimed-by", AGENT_ID,
+        "--next-action-kind", "implement",
+    )
+    assert rc == 0, complete
+    successor = complete["next_todos"][0]["todo_id"]
+    checkpoint = _default_checkpoint_args(registry, runtime, binding, tmp_path)
+    rc, refreshed = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID, *binding, *checkpoint,
+        "--classification", "validated_progress", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert rc == 0 and refreshed["settlement_result"]["ok"], refreshed.get("error")
+    rc, spent = _run_cli(
+        registry, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID, *binding,
+        "--slots", "1", "--source", "heartbeat", "--execute",
+    )
+    assert rc == 0 and spent["settlement_result"]["ok"], spent.get("error")
+
+    if host_state == "missing":
+        manifest.unlink()
+    elif host_state == "different":
+        write_codex_heartbeat_fixture(
+            scheduler_host_home, goal_id=GOAL_ID, agent_id=AGENT_ID, rrule=different_rrule,
+        )
+    else:
+        if host_state == "paused":
+            manifest.write_text(manifest.read_text(encoding="utf-8").replace(
+                'status = "ACTIVE"', 'status = "PAUSED"',
+            ), encoding="utf-8")
+        if host_state in {"ambiguous", "unreadable"}:
+            duplicate = manifest.parent.parent / "duplicate" / manifest.name
+            duplicate.parent.mkdir()
+            duplicate.write_text(
+                manifest.read_text(encoding="utf-8").replace('id = "scheduler-fixture"', 'id = "duplicate"', 1)
+                if host_state == "ambiguous" else "invalid TOML",
+                encoding="utf-8",
+            )
+    before = manifest.read_bytes() if manifest.exists() else None
+
+    rc, replay = _run_cli(registry, runtime, *guard, "--codex-app", *original)
+    assert rc == 0 and replay["effective_action"] == "heartbeat_settled_skip", replay
+    assert replay["scheduler_hint"]["action"] == "preserve_current_schedule"
+    for surface in ("app_automation", "codex_app"):
+        app = replay["scheduler_hint"][surface]
+        assert app["host_action"] == "none"
+        assert not {"ack_hint", "failure_hint", "fallback_hint", "recommended_rrule"} & app.keys()
+
+    next_turn = "turn-settlement-cli-next"
+    successor_guard = (*guard, "--codex-app", "--todo-id", successor, "--turn-instance-id", next_turn)
+    rc, next_packet = _run_cli(registry, runtime, *successor_guard)
+    assert rc == 0, next_packet
+    assert next_packet["heartbeat_receipt"]["status"] == "committed"
+    assert next_packet["heartbeat_receipt"]["settlement_identity"]["todo_id"] == successor
+    assert _heartbeat_receipt_count(runtime, next_turn) == 1
+
+    rc, stale = _run_cli(registry, runtime, *original_ack)
+    assert rc == 1 and stale["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE", stale
+    assert not stale["scheduler_state_mutated"]
+    assert load_scheduler_state(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY) is None
+
+    capture = tmp_path / "successor-guard"
+    rc, envelope = _run_cli(registry, runtime, *successor_guard,
+        "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
+    assert rc == 0, envelope
+    app = next_packet["scheduler_hint"]["app_automation"]
+    compact_app = envelope["scheduler"]["app_automation"]
+    unknown_reasons = {
+        "paused": "paused", "missing": "no matching", "ambiguous": "ambiguous",
+        "unreadable": "could not be fully read",
+    }
+    if host_state in unknown_reasons:
+        for hint in (app, compact_app, next_packet["scheduler_hint"]["codex_app"]):
+            assert hint["host_action"] == "none"
+            assert hint["host_observation"]["available"] is False
+            assert unknown_reasons[host_state] in hint["host_observation"]["reason"]
+            assert not {"ack_hint", "ack_cli_args", "ack_cli_args_detail_ref", "fallback_hint",
+                        "failure_hint", "recommended_rrule"} & hint.keys()
+    elif host_state == "different":
+        assert app["stateful_backoff"]["host_observation"]["current_rrule"] == different_rrule
+        for hint in (app, compact_app, next_packet["scheduler_hint"]["codex_app"]):
+            assert hint["host_action"] == "none"
+            assert hint["stateful_backoff"]["apply_needed"] is False
+            assert hint["stateful_backoff"]["ack_needed"] is False
+            assert hint["recommended_rrule"] == matching_rrule
+            assert not {"ack_hint", "ack_cli_args", "ack_cli_args_detail_ref",
+                        "fallback_hint", "failure_hint"} & hint.keys()
+    else:
+        assert app["stateful_backoff"]["apply_needed"] is False
+        assert app["stateful_backoff"]["ack_needed"] is True
+        assert app["host_action"] == "ack_observed_rrule_without_update"
+        assert "recommended_rrule" not in app and "recommended_rrule" not in compact_app
+        ack_args = compact_app.get("ack_cli_args")
+        if ack_args is None:
+            assert compact_app["ack_cli_args_detail_ref"]["detail_ref"] == (
+                "full_decision.scheduler_hint.app_automation.ack_hint.cli_args"
+            )
+            saved_decision = json.loads((capture / "decision.json").read_bytes())
+            ack_args = saved_decision["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
+        assert ack_args[ack_args.index("--turn-instance-id") + 1] == next_turn
+        # A replacement with the same RRULE cannot acknowledge the bound automation.
+        assert before is not None
+        manifest.write_text(before.decode("utf-8").replace(
+            'id = "scheduler-fixture"', 'id = "replacement"', 1,
+        ), encoding="utf-8")
+        rc, refused = _run_cli(registry, runtime, *ack_args)
+        assert rc == 1 and refused["scheduler_commit"]["reason_code"] == "rrule_mismatch", refused
+        assert not refused["scheduler_commit"]["written"]
+        manifest.write_bytes(before)
+        rc, ack = _run_cli(registry, runtime, *ack_args)
+        assert rc == 0 and ack["scheduler_commit"]["written"], ack
+        schedule = Path(ack["scheduler_state_path"])
+        saved = schedule.read_bytes()
+        rc, replay_ack = _run_cli(registry, runtime, *ack_args)
+        assert rc == 0 and replay_ack["scheduler_commit"]["replayed"], replay_ack
+        assert not replay_ack["scheduler_commit"]["written"]
+        assert schedule.read_bytes() == saved
+    assert (manifest.read_bytes() if manifest.exists() else None) == before
+    assert _spend_run_count(runtime) == 1
+
+
+def _assert_material_monitor_writeback_can_add_workspace_before_spend(
+    tmp_path: Path,
+    *,
+    repository_write: bool,
+    expected_requirement: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    if repository_write:
+        _configure_repository_write_todo(project)
+    _initialize_git_checkout(project)
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    assert guard_rc == 0, guard
+    assert (
+        guard["heartbeat_receipt"]["delivery_workspace_causality"]["requirement"]
+        == expected_requirement
+    )
+
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    material_monitor = {
+        "generated_at": "2026-01-01T00:01:00+00:00",
+        "goal_id": GOAL_ID,
+        "classification": "quota_monitor_poll",
+        "delivery_batch_scale": "single_surface",
+        "delivery_outcome": "outcome_progress",
+        "material_change": True,
+        "agent_id": AGENT_ID,
+        "todo_id": TODO_ID,
+        "turn_instance_id": TURN_ID,
+        "settlement_identity": guard["heartbeat_receipt"]["settlement_identity"],
+    }
+    (runs_dir / "index.jsonl").write_text(
+        json.dumps(material_monitor, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    repair_rc, repair = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "material_monitor_receipt_repair",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert repair_rc == 0, repair
+    assert repair["receipt_repaired"] is True
+    assert repair["appended"] is False
+
+    supplement_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "material_monitor_workspace_supplemented",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-workspace-path",
+        str(project),
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    wrong_workspace = tmp_path / "unrelated-workspace"
+    subprocess.run(["git", "init", "--quiet", str(wrong_workspace)], cwd=tmp_path, check=True)
+    wrong_args = tuple(str(wrong_workspace) if arg == str(project) else arg for arg in supplement_args)
+    index = runs_dir / "index.jsonl"
+    before = index.read_bytes()
+    wrong_rc, wrong = _run_cli(registry_path, runtime, *wrong_args, cwd=project)
+    assert wrong_rc == 1 and not wrong["appended"] and "workspace" in wrong["error"].lower(), wrong
+    assert index.read_bytes() == before
+    supplement_rc, supplement = _run_cli(
+        registry_path,
+        runtime,
+        *supplement_args,
+    )
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *supplement_args,
+    )
+
+    assert supplement_rc == 0, supplement
+    assert supplement["appended"] is True
+    assert supplement["delivery_workspace"] == {
+        "schema_version": "delivery_workspace_v1",
+        "workspace_identity": "git:github.com/example/read-only-settlement-fixture",
+        "identity_kind": "git_repository",
+        "task_repository": "git:github.com/example/read-only-settlement-fixture",
+        "repository_source": "refresh_state.delivery_workspace_path",
+        "workspace_kind": "canonical_checkout",
+        "peer_independent_worktree_required": False,
+    }
+    assert replay_rc == 0, replay
+    assert replay["idempotent_replay"] is True
+    assert (
+        _classification_count(runtime, "material_monitor_workspace_supplemented") == 1
+    )
+
+    qualified, _ = _qualify_retained_direction(
+        tmp_path, registry_path, runtime, supplement, source="heartbeat", cwd=project,
+    )
+    assert qualified["delivery_workspace"] == supplement["delivery_workspace"]
+    command = qualified["settlement_owed"]["command"]
+    spend_rc, spend, _ = _run_host_command(command, cwd=project)
+    assert spend_rc == 0, spend
+    assert spend["delivery_workspace_validated"] is True
+    assert spend["settlement_result"]["ok"] is True
+    rc, debit_replay, _ = _run_host_command(command, cwd=project)
+    assert rc == 0 and debit_replay["idempotent_replay"] and not debit_replay["appended"], debit_replay
+    assert _spend_run_count(runtime) == 1
+
+
+def test_material_monitor_writeback_can_add_required_workspace_before_spend(
+    tmp_path: Path,
+) -> None:
+    _assert_material_monitor_writeback_can_add_workspace_before_spend(
+        tmp_path,
+        repository_write=True,
+        expected_requirement="required",
+    )
+
+
+def test_material_monitor_writeback_can_add_unknown_workspace_before_spend(
+    tmp_path: Path,
+) -> None:
+    _assert_material_monitor_writeback_can_add_workspace_before_spend(
+        tmp_path,
+        repository_write=False,
+        expected_requirement="unknown",
+    )
+
+
+def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(
+        tmp_path,
+        required_capability="network",
+    )
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "action_kind=validate ",
+            "action_kind=validate continuation_policy=same_agent_non_delivery ",
+        ),
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime)
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    upgraded_rc, upgraded = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+    )
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+    )
+
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    # The documented wake order commits this receipt before a work item exists,
+    # so the guard has to say the turn still owes its binding instead of letting
+    # the caller discover it when the closeout cannot settle.
+    assert first["heartbeat_receipt"]["settlement_binding_owed"] is True
+    assert upgraded_rc == 0, upgraded
+    assert upgraded["heartbeat_receipt"]["status"] == "upgraded"
+    assert "settlement_binding_owed" not in upgraded["heartbeat_receipt"]
+    identity = upgraded["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID
+    assert identity["effect_id"] == f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}"
+    assert replay_rc == 0, replay
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    assert (
+        replay["heartbeat_receipt"]["event_id"]
+        == upgraded["heartbeat_receipt"]["event_id"]
+    )
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 2
+
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "identity upgrade delivery validated",
+        "--next-agent-todo",
+        "Continue after the identity upgrade delivery.",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--next-action-kind",
+        "implement",
+    )
+    assert complete_rc == 0, complete
+    successor_id = complete["next_todos"][0]["todo_id"]
+    assert successor_id != TODO_ID
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "identity_upgrade_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+
+    successor_guard_rc, successor_guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--available-capability",
+        "network",
+    )
+    assert successor_guard_rc == 0, successor_guard
+    # Completing the Todo does not discharge the original Turn's checkpoint or
+    # spend. An identityless wake resumes that Turn before selecting new work.
+    assert successor_guard["heartbeat_receipt"]["settlement_identity"] == identity
+    assert not successor_guard.get("selected_todo")
+    assert _spend_run_count(runtime) == 0
+    checkpoint_args = _default_checkpoint_args(
+        registry_path, runtime, binding, tmp_path, purpose="supplement_checkpoint",
+    )
+    checkpoint_rc, checkpoint = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "identity_upgrade_validated",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", *binding, *checkpoint_args,
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert checkpoint_rc == 0, checkpoint
+    assert checkpoint["vision_checkpoint"]["satisfied"] is True
+
+    spend_args = (
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+    )
+    spend_rc, spend = _run_cli(registry_path, runtime, *spend_args)
+    spend_replay_rc, spend_replay = _run_cli(registry_path, runtime, *spend_args)
+
+    assert spend_rc == 0, spend
+    assert spend["settlement_result"]["ok"] is True
+    assert spend_replay_rc == 0, spend_replay
+    assert spend_replay["idempotent_replay"] is True
+    assert spend_replay["appended"] is False
+    assert _spend_run_count(runtime) == 1
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 2
+    successor_guard_rc, successor_guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--available-capability", "network", )
+    assert successor_guard_rc == 0, successor_guard
+    assert successor_guard["selected_todo"]["todo_id"] == successor_id
+
+
+def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-1"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+
+    assert first_rc == 0, first
+    assert (
+        first["action_portfolio"]["selection_policy"]["requires_explicit_turn_binding"]
+        is True
+    )
+    assert first["interaction_contract"]["agent_channel"]["selection_required"] is True
+    assert first["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    cli_channel = first["interaction_contract"]["cli_channel"]
+    assert cli_channel["next_cli_actions"] == []
+    selection_command = cli_channel["selection_command"]
+    assert "--todo-id '{todo_id}'" in selection_command["command_args_template"]
+    assert "--registry" in selection_command["route_prefix"]
+    assert "--runtime-root" in selection_command["route_prefix"]
+
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert "action_portfolio" not in selected
+    assert (
+        selected["interaction_contract"]["agent_channel"].get("selection_required")
+        is None
+    )
+    assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert (
+        selected["heartbeat_receipt"]["settlement_identity"]["todo_id"]
+        == ALTERNATIVE_TODO_ID
+    )
+    plan_identity = selected["interaction_contract"]["cli_channel"]["settlement_plan"][
+        "identity"
+    ]
+    assert plan_identity["todo_id"] == ALTERNATIVE_TODO_ID
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+@pytest.mark.parametrize("host_surface", ["codex-app", "codex-app-ssh"])
+def test_guided_start_begins_one_turn_and_executes_returned_selection(
+    tmp_path: Path,
+    host_surface: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    packet = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        cli_bin="loopx",
+        host_surface=host_surface,
+        goal_text="Start one accountable delivery turn.",
+    )
+    guard_command = next(
+        step["command"]
+        for step in packet["guided_transaction"]["ordered_steps"]
+        if step["id"] == "quota_guard"
+    )
+
+    assert "--begin-turn" in guard_command
+    assert "--turn-instance-id" not in guard_command
+    first_rc, first = _run_generated_cli(
+        guard_command,
+        registry_path=registry_path,
+    )
+
+    assert first_rc == 0, first
+    assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
+    turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
+    assert turn_instance_id.startswith("guided-start:")
+    selection = first["interaction_contract"]["cli_channel"]["selection_command"]
+    assert (
+        f"--turn-instance-id {turn_instance_id}" in selection["command_args_template"]
+    )
+    selection_command = f"{selection['route_prefix']} " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", ALTERNATIVE_TODO_ID)
+
+    selected_rc, selected = _run_generated_cli(
+        selection_command,
+        registry_path=registry_path,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    receipt_identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert receipt_identity["turn_instance_id"] == turn_instance_id
+    cli_channel = selected["interaction_contract"]["cli_channel"]
+    settlement_plan = cli_channel["settlement_plan"]
+    assert settlement_plan["identity"] == receipt_identity
+    assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
+    expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
+    assert any(
+        f"--source {expected_source}" in action
+        for action in cli_channel["next_cli_actions"]
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    prompt = build_heartbeat_prompt(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        runtime_profile="codex_app_ssh_goal",
+        thin=True,
+    )
+    guard_command = prompt["quota_guard_command"].replace(
+        shell_selected_global_registry().strip('"'),
+        str(registry_path),
+    )
+
+    assert "--begin-turn" in guard_command
+    assert "--turn-instance-id" not in guard_command
+    first_rc, first = _run_generated_cli(
+        guard_command,
+        registry_path=registry_path,
+    )
+
+    assert first_rc == 0, first
+    assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
+    turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
+    assert turn_instance_id.startswith("guided-start:")
+    selection = first["interaction_contract"]["cli_channel"]["selection_command"]
+    assert (
+        f"--turn-instance-id {turn_instance_id}" in selection["command_args_template"]
+    )
+    selection_command = f"{selection['route_prefix']} " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", ALTERNATIVE_TODO_ID)
+
+    selected_rc, selected = _run_generated_cli(
+        selection_command,
+        registry_path=registry_path,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert (
+        selected["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"]
+        == turn_instance_id
+    )
+    cli_channel = selected["interaction_contract"]["cli_channel"]
+    settlement_plan = cli_channel["settlement_plan"]
+    assert settlement_plan["identity"] == selected["heartbeat_receipt"][
+        "settlement_identity"
+    ]
+    assert any(
+        "--source visible-goal" in action for action in cli_channel["next_cli_actions"]
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+@pytest.mark.parametrize("fallback_available", [False, True])
+def test_visible_goal_capability_reentry_preserves_turn_through_selection(
+    tmp_path: Path, fallback_available: bool,
+) -> None:
+    project, runtime, registry_path = _write_fixture(
+        tmp_path,
+        required_capability=None if fallback_available else "network",
+    )
+    _configure_runtime_capability_reentry_fixture(project)
+    _configure_selectable_alternative(project, required_capability=None if fallback_available else "network")
+    _initialize_fixture_authority(project, runtime)
+    prompt = build_heartbeat_prompt(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        runtime_profile="codex_app_ssh_goal",
+        thin=True,
+    )
+    guard_command = prompt["quota_guard_command"].replace(
+        shell_selected_global_registry().strip('"'),
+        str(registry_path),
+    )
+
+    first_rc, first = _run_generated_cli(
+        guard_command,
+        registry_path=registry_path,
+    )
+
+    assert first_rc == 0, first
+    turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
+    reentry_packet = first["interaction_contract"]["cli_channel"]["runtime_capability_reentry"]
+    if fallback_available:
+        assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
+        assert first["selected_todo"]["todo_id"] == TODO_ID
+        assert first["interaction_contract"]["agent_channel"]["next_task_action"]["kind"] == "capability_verification"
+        assert first["interaction_contract"]["cli_channel"]["next_cli_actions"][0] == reentry_packet["candidates"][0]["command"]
+    reentry_command = reentry_packet["candidates"][0]["command"]
+    assert f"--turn-instance-id {turn_instance_id}" in reentry_command
+
+    reentry_rc, reentry = _run_generated_cli(
+        reentry_command,
+        registry_path=registry_path,
+    )
+
+    assert reentry_rc == 0, reentry
+    cli_channel = reentry["interaction_contract"]["cli_channel"]
+    assert cli_channel["selection_required"] is True
+    selection = cli_channel["selection_command"]
+    assert f"--turn-instance-id {turn_instance_id}" in selection[
+        "command_args_template"
+    ]
+    selection_command = f"{selection['route_prefix']} " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", REENTRY_TODO_ID)
+
+    selected_rc, selected = _run_generated_cli(
+        selection_command,
+        registry_path=registry_path,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == REENTRY_TODO_ID
+    receipt_identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert receipt_identity["turn_instance_id"] == turn_instance_id
+    assert receipt_identity["todo_id"] == REENTRY_TODO_ID
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+@pytest.mark.parametrize("host_surface", ["codex-app", "codex-app-ssh"])
+def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
+    tmp_path: Path,
+    host_surface: str,
+) -> None:
+    project, _runtime, registry_path = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, _runtime)
+    packet = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        cli_bin="loopx",
+        host_surface=host_surface,
+        goal_text="Start one accountable delivery turn.",
+    )
+    guard_command = next(
+        step["command"]
+        for step in packet["guided_transaction"]["ordered_steps"]
+        if step["id"] == "quota_guard"
+    )
+
+    guard_rc, guard = _run_generated_cli(
+        guard_command,
+        registry_path=registry_path,
+    )
+
+    assert guard_rc == 0, guard
+    assert guard["selected_todo"]["todo_id"] == TODO_ID
+    assert (
+        guard["interaction_contract"]["cli_channel"].get("selection_required") is None
+    )
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID
+    assert identity["turn_instance_id"].startswith("guided-start:")
+    settlement_plan = guard["interaction_contract"]["cli_channel"][
+        "settlement_plan"
+    ]
+    assert settlement_plan["identity"] == identity
+    expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
+    assert expected_source in next(
+        step["command_template"]
+        for step in settlement_plan["ordered_steps"]
+        if step["kind"] == "quota_spend"
+    )
+
+
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])
+def test_unclaimed_candidate_does_not_create_an_unsettled_work_obligation(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path, claimed=False)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8")
+        + "\n- [ ] [P0] Resume the original delivery after its dependency.\n"
+        + "  <!-- loopx:todo todo_id=todo_owned_wait status=deferred "
+        + f"claimed_by={AGENT_ID} task_class=advancement_task "
+        + "resume_when=todo_done:todo_owner_receipt -->\n"
+        + "\n## User Todo\n\n- [ ] Provide the authorized receipt.\n"
+        + "  <!-- loopx:todo todo_id=todo_owner_receipt status=open "
+        + f"task_class=user_action bound_agent={AGENT_ID} -->\n",
+        encoding="utf-8",
+    )
+    original_state = state_path.read_bytes()
+    guard_args = (
+        "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--runtime-profile", profile,
+    )
+    _initialize_fixture_authority(project, runtime)
+    for turn in ("turn-unclaimed-first", "turn-unclaimed-next"):
+        rc, packet = _run_cli(
+            registry_path, runtime, *guard_args, "--turn-instance-id", turn,
+        )
+        assert rc == 0, packet
+        assert packet["decision"] != "unsettled_host_turn_recovery"
+        cli = packet["interaction_contract"]["cli_channel"]
+        assert cli.get("selection_required") is True
+        assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+        assert "settlement_plan" not in cli
+        receipt = packet["heartbeat_receipt"]
+        assert "settlement_identity" not in receipt
+        assert receipt.get("closeout_required") is not True
+        assert state_path.read_bytes() == original_state
+        assert _spend_run_count(runtime) == 0
+
+    selection = cli["selection_command"]
+    command = selection["route_prefix"] + " " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", TODO_ID)
+    rc, selected = _run_generated_cli(command, registry_path=registry_path)
+    assert rc == 0, selected
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID
+    assert identity["turn_instance_id"] == "turn-unclaimed-next"
+    assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert state_path.read_bytes() == original_state  # Selection is not a claim.
+    assert _spend_run_count(runtime) == 0
+    rc, replay = _run_cli(
+        registry_path, runtime, *guard_args,
+        "--turn-instance-id", "turn-unclaimed-next",
+    )
+    assert rc == 0, replay
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert "action_portfolio" not in replay
+
+
+def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+    )
+
+    assert guard_rc == 0, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    turn_instance_id = identity["turn_instance_id"]
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["identity"] == identity
+    assert "--source visible-goal" in next(
+        step["command_template"]
+        for step in plan["ordered_steps"]
+        if step["kind"] == "quota_spend"
+    )
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "visible_goal_delivery_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh["todo_id"] == TODO_ID
+    assert refresh["turn_instance_id"] == turn_instance_id
+    assert refresh["delivery_workspace_causality"]["todo_id"] == TODO_ID
+    assert refresh["delivery_workspace_causality"]["requirement"] == "not_required"
+
+    qualified, _ = _qualify_retained_direction(
+        tmp_path, registry_path, runtime, refresh, source="visible-goal",
+    )
+    command = qualified["settlement_owed"]["command"]
+    tokens = shlex.split(command)
+    assert tokens[tokens.index("--source") + 1] == "visible-goal"
+    spend_rc, spend, _ = _run_host_command(command)
+    assert spend_rc == 0, spend
+    assert spend["todo_id"] == TODO_ID
+    assert spend["turn_instance_id"] == turn_instance_id
+    assert spend["settlement_identity"] == identity
+    assert spend["delivery_workspace_causality"]["todo_id"] == TODO_ID
+    assert spend["delivery_workspace_causality"]["requirement"] == "not_required"
+    rc, replay, _ = _run_host_command(command)
+    assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "expected_source"),
+    (
+        # Kiro CLI drives an in-session `/goal` loop and settles as a visible Goal.
+        ("kiro-cli", "visible-goal"),
+        # Hosts that stay on generic_cli keep the heartbeat spend unchanged.
+        ("opencode", "heartbeat"),
+    ),
+)
+def test_host_runtime_profile_selects_spend_source_through_real_settlement(
+    tmp_path: Path,
+    agent_type: str,
+    expected_source: str,
+) -> None:
+    from loopx.host_loop_activation import scheduler_command_binding_for_agent_type
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    runtime_profile = scheduler_command_binding_for_agent_type(agent_type)[
+        "runtime_profile"
+    ]
+    _initialize_fixture_authority(project, runtime)
+    prompt = build_heartbeat_prompt(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        runtime_profile=runtime_profile,
+        thin=True,
+        registry_path=registry_path,
+        runtime_root=runtime,
+    )
+    turn_instance_id = f"{agent_type}-iteration-1"
+    # The thin body tells the agent to mint LOOPX_TURN per iteration.
+    guard_command = prompt["quota_guard_command"]
+    assert f"--runtime-profile {runtime_profile}" in guard_command
+    guard_rc, guard, _ = _run_host_command(guard_command, turn_id=turn_instance_id)
+    assert guard_rc == 0, guard
+    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["identity"]["turn_instance_id"] == turn_instance_id
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "visible_goal_delivery_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    qualified, _ = _qualify_retained_direction(
+        tmp_path, registry_path, runtime, refresh, source=expected_source,
+    )
+    command = qualified["settlement_owed"]["command"]
+    tokens = shlex.split(command)
+    assert tokens[tokens.index("--source") + 1] == expected_source
+    spend_rc, spend, _ = _run_host_command(command)
+    assert spend_rc == 0, spend
+    assert spend["turn_instance_id"] == turn_instance_id
+    assert spend["settlement_identity"] == plan["identity"]
+    debit = json.loads(Path(spend["json_path"]).read_bytes())["quota_event"]
+    assert debit["source"] == expected_source and debit["settlement_identity"] == plan["identity"]
+    rc, replay, _ = _run_host_command(command)
+    assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    assert _spend_run_count(runtime) == 1
+
+
+def test_todo_guard_defers_replan_obligation_created_after_admission(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+    )
+
+    assert guard_rc == 0, guard
+    receipt = guard["heartbeat_receipt"]
+    assert "semantic_replan_obligation_id" not in receipt
+    identity = receipt["settlement_identity"]
+
+    _append_surface_only_runs(
+        runtime,
+        count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
+    )
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "turn_admitted_progress",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        identity["turn_instance_id"],
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+
+    assert refresh_rc == 0, refresh
+    assert refresh["todo_id"] == TODO_ID
+    assert refresh["turn_instance_id"] == identity["turn_instance_id"]
+
+
+def test_legacy_todo_guard_keeps_current_replan_gate_strict(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry_path)
+    _initialize_git_checkout(project)
+    turn_instance_id = "turn-legacy-replan-guard"
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    assert guard_rc == 0, guard
+    assert guard["decision"] == "autonomous_replan_required", guard
+
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
+
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    events = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    for event in events:
+        if event.get("event_kind") == "quota_should_run":
+            event["details"].pop("semantic_replan_obligation_id", None)
+    log_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        SELECTED_REPLAN_TODO_ID,
+        "--delivery-workspace-path",
+        str(project),
+        "--delivery-outcome",
+        "outcome_progress",
+        "--classification",
+        "validated_progress",
+        "--progress-result-class",
+        "advanced",
+        "--progress-evidence-id",
+        "evidence:legacy-guard",
+    )
+
+    assert refresh_rc == 1, refresh
+    assert "requires a typed semantic delta" in refresh["error"]
+
+
+def test_visible_goal_unbound_spend_recovers_delivery_after_capability_replan(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state_path = _configure_repository_write_todo(project)
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "required_capabilities=filesystem_write",
+            "required_capabilities=filesystem_write%2Cnetwork",
+        ),
+        encoding="utf-8",
+    )
+    _initialize_git_checkout(project)
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--available-capability",
+        "network",
+        "--begin-turn",
+        cwd=project,
+    )
+
+    assert guard_rc == 0, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    turn_instance_id = identity["turn_instance_id"]
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "capability_replan_delivery_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-workspace-path",
+        str(project),
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=project,
+    )
+
+    assert refresh_rc == 0, refresh
+    assert refresh["settlement_identity"] == identity
+    assert refresh["delivery_workspace_causality"]["requirement"] == "required"
+
+    spend_args = (
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "visible-goal",
+        "--execute",
+        "--agent-id",
+        AGENT_ID,
+    )
+    _qualify_retained_direction(
+        tmp_path, registry_path, runtime, refresh, source="visible-goal",
+        cwd=project, premature_args=spend_args,
+    )
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        *spend_args,
+        cwd=project,
+    )
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *spend_args,
+        cwd=project,
+    )
+
+    assert spend_rc == 0, spend
+    assert spend["todo_id"] == TODO_ID
+    assert spend["turn_instance_id"] == turn_instance_id
+    assert spend["settlement_identity"] == identity
+    assert spend["delivery_completion_spend"] is True
+    assert spend["capability_repair_spend"] is False
+    assert spend["delivery_workspace_validated"] is True
+    assert spend["delivery_workspace_causality"]["todo_id"] == TODO_ID
+    assert spend["delivery_workspace_causality"]["requirement"] == "required"
+    assert replay_rc == 0, replay
+    assert replay.get("idempotent_replay") is True, replay
+    assert replay["appended"] is False
+    assert replay["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
+def test_default_visible_goal_admission_still_rejects_unbound_manual_spend(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        profile,
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert guard_rc == 0, guard
+    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert len(actions) == 2
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert "refresh-state" in actions[0] and "quota spend-slot" in actions[1]
+    assert all(f"--turn-instance-id {identity['turn_instance_id']}" in action for action in actions)
+    # Default admission does not authorize an unbound manual spend.
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "visible-goal",
+        "--execute",
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert spend_rc == 1, spend
+    assert spend["appended"] is False
+    assert spend["settlement_result"]["failure"]["kind"] == "identity_mismatch"
+    assert spend["settlement_result"]["failure"]["step_kind"] == "validation"
+    assert spend["delivery_workspace_causality"] is None
+    assert _spend_run_count(runtime) == 0
+
+    # Re-observe the automatically admitted binding; do not execute placeholder
+    # work or mint a different Turn during identity qualification.
+    bound_rc, bound = _run_cli(registry_path, runtime, "quota", "should-run",
+        "--runtime-profile", profile, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", identity["turn_instance_id"],
+        )
+    assert bound_rc == 0, bound
+    plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["identity"] == identity
+    assert [step["kind"] for step in plan["ordered_steps"]] == [
+        "validation", "durable_writeback", "quota_spend", "terminal_closeout",
+    ]
+    assert _spend_run_count(runtime) == 0
+
+
+def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "generic_cli",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+    )
+
+    assert guard_rc == 1, guard
+    assert guard["error_code"] == "QUOTA_VALIDATION_FAILED"
+    # The rejection must also tell an agent-CLI host how to start its turn:
+    # Kiro CLI, ZCode, agy, Gemini CLI, Cursor and custom runners all land on
+    # generic_cli and mint their own identity instead.
+    assert guard["reason"] == (
+        "--begin-turn requires runtime-profile codex_app_heartbeat, "
+        "trae_app, or codex_app_ssh_goal; every other host starts its turn by "
+        "passing its own --turn-instance-id"
+    )
+
+
+@pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
+def test_host_owned_turn_executes_projected_selection_and_replays_identity(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    guard_args = (
+        "quota", "should-run", "--runtime-profile", profile,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", TURN_ID,
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["interaction_contract"]["agent_channel"]["selection_required"] is True
+    selection = first["interaction_contract"]["cli_channel"]["selection_command"]
+    command = selection["route_prefix"] + " " + selection[
+        "command_args_template"
+    ].replace("{todo_id}", ALTERNATIVE_TODO_ID)
+    selected_rc, selected = _run_generated_cli(command, registry_path=registry_path)
+    assert selected_rc == 0, selected
+    assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == ALTERNATIVE_TODO_ID
+    assert identity["turn_instance_id"] == TURN_ID
+    cli_channel = selected["interaction_contract"]["cli_channel"]
+    if profile == "outer_controller":
+        # Settlement stays with the controller, not the inner agent.
+        assert "settlement_plan" not in cli_channel
+    else:
+        assert cli_channel["settlement_plan"]["identity"] == identity
+
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard_args)
+    assert replay_rc == 0, replay
+    assert replay["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    conflict_rc, conflict = _run_cli(
+        registry_path, runtime, *guard_args, "--todo-id", TODO_ID,
+    )
+    assert conflict_rc != 0, conflict
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 2
+    if profile == "outer_controller":
+        return
+
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", ALTERNATIVE_TODO_ID,
+        "--turn-instance-id", TURN_ID, "--classification", "validated_progress",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation",
+        "--delivery-workspace-path", str(project),
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    spend_command = refresh["settlement_owed"]["command"]
+    spend_rc, spend = _run_cli(registry_path, runtime, *shlex.split(spend_command)[1:])
+    assert spend_rc == 0, spend
+    assert spend["settlement_identity"] == identity
+    retry_rc, retry = _run_cli(registry_path, runtime, *shlex.split(spend_command)[1:])
+    assert retry_rc == 0, retry
+    assert retry["appended"] is False
+    assert _spend_run_count(runtime) == 1
+
+
+def test_agent_can_select_eligible_todo_outside_bounded_suggestions(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-invalid"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID,
+    )
+
+    assert first_rc == 0, first
+    assert OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID not in {
+        item["todo_id"] for item in first["action_portfolio"]["suggested_actions"]
+    }
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == (OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID)
+    assert selected["selected_todo"]["selection_binding"] == ("heartbeat_receipt")
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+def _configure_deep_alternative(project: Path, *, fillers: int = 9) -> None:
+    """Add one owned advancement Todo beyond every bounded suggestion lane."""
+
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    filler_rows = "".join(
+        f"- [ ] [P1] Advance filler delivery {index}.\n"
+        f"  <!-- loopx:todo todo_id=todo_fixture_filler_{index} status=open "
+        "task_class=advancement_task action_kind=implement -->\n"
+        for index in range(fillers)
+    )
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").rstrip()
+        + "\n"
+        + filler_rows
+        + "- [ ] [P1] Advance the deep alternative delivery.\n"
+        + "  <!-- loopx:todo "
+        + f"todo_id={DEEP_ALTERNATIVE_TODO_ID} status=open "
+        + "task_class=advancement_task action_kind=implement -->\n",
+        encoding="utf-8",
+    )
+
+
+def test_agent_can_select_an_owned_todo_outside_every_bounded_lane(
+    tmp_path: Path,
+) -> None:
+    """The display lanes are a presentation budget, not the eligible Todo set."""
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_deep_alternative(project)
+    turn_instance_id = "turn-agent-selection-beyond-lanes"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        DEEP_ALTERNATIVE_TODO_ID,
+    )
+
+    assert first_rc == 0, first
+    # The row is a real, open, typed advancement Todo that this Agent owns, and
+    # no bounded presentation lane lists it.
+    assert DEEP_ALTERNATIVE_TODO_ID not in {
+        item["todo_id"] for item in first["action_portfolio"]["suggested_actions"]
+    }
+    # Every bounded lane this payload publishes must not list it either; the
+    # count guard keeps the check from passing vacuously on an empty payload.
+    bounded_lanes = [
+        (key, items)
+        for key, items in first["agent_todo_summary"].items()
+        if key.endswith("executable_items") and isinstance(items, list)
+    ]
+    assert bounded_lanes, sorted(first["agent_todo_summary"])
+    for key, items in bounded_lanes:
+        assert DEEP_ALTERNATIVE_TODO_ID not in {
+            item["todo_id"] for item in items
+        }, key
+    assert selected_rc == 0, selected
+    assert selected["ok"] is True
+    assert selected["selected_todo"]["todo_id"] == DEEP_ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        DEEP_ALTERNATIVE_TODO_ID
+    )
+
+
+def test_same_turn_can_select_eligible_todo_created_after_unbound_receipt(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-after-todo-create"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    added_rc, added = _run_cli(
+        registry_path, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        "--role", "agent", "--text", "Advance the newly created same-Turn alternative.",
+        "--priority", "P1", "--task-class", "advancement_task",
+        "--action-kind", "research", "--claimed-by", AGENT_ID,
+    )
+    assert added_rc == 0, added
+    late_todo_id = added["todo_id"]
+    reentry_rc, reentry = _run_cli(registry_path, runtime, *guard_args)
+    assert reentry_rc == 0, reentry
+    assert late_todo_id in {
+        item["todo_id"]
+        for item in reentry["action_portfolio"]["suggested_actions"]
+    }
+
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        late_todo_id,
+    )
+    assert selected_rc == 0, selected
+    assert selected["action_selection_qualification"]["state"] == "qualified"
+    assert selected["selected_todo"]["todo_id"] == late_todo_id
+    assert selected["selected_todo"]["selection_binding"] == (
+        "heartbeat_receipt"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        late_todo_id
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
+def test_agent_selection_rejects_unprojected_todo(tmp_path: Path, profile: str) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-unprojected"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--runtime-profile", profile,
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    invalid_rc, invalid = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        "todo_not_projected",
+    )
+
+    assert first_rc == 0, first
+    assert invalid_rc != 0, invalid
+    assert invalid["ok"] is False
+    assert invalid["error_code"] == "quota_action_selection_rejected"
+    assert invalid["effective_action"] == "quota_skip"
+    assert invalid["should_run"] is False
+    assert invalid["action_selection_qualification"] == {
+        "schema_version": "action_selection_qualification_v0",
+        "state": "rejected",
+        "recovery_action": "reenter_guard_without_selection",
+        "requested_todo_id": "todo_not_projected",
+        "reason": "candidate_not_currently_eligible",
+    }
+    _assert_action_selection_recovery_projections(invalid)
+    assert invalid["heartbeat_receipt"]["status"] == "replayed"
+    assert invalid["rollout_event"]["appended"] is False
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
+def test_unsuggested_selection_revalidates_current_capability_readiness(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            f"todo_id={OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID} status=open ",
+            f"todo_id={OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID} status=open "
+            "required_capabilities=network ",
+        ),
+        encoding="utf-8",
+    )
+    turn_instance_id = "turn-agent-selection-capability-blocked"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--runtime-profile", profile,
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    blocked_rc, blocked = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID,
+    )
+
+    assert first_rc == 0, first
+    assert blocked_rc != 0, blocked
+    assert blocked["error_code"] == "quota_action_selection_rejected"
+    assert blocked["action_selection_qualification"]["reason"] == (
+        "candidate_not_currently_eligible"
+    )
+    assert blocked["heartbeat_receipt"]["status"] == "replayed"
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
+def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    turn_instance_id = "turn-agent-selection-first-call-rejected"
+
+    _initialize_fixture_authority(project, runtime)
+    rejected_rc, rejected = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile", profile,
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        "todo_not_projected",
+    )
+
+    assert rejected_rc == 1, rejected
+    assert rejected["error_code"] == "quota_action_selection_rejected"
+    _assert_action_selection_recovery_projections(rejected)
+    assert rejected["heartbeat_receipt"] == {
+        "schema_version": "heartbeat_quota_receipt_v0",
+        "turn_instance_id": turn_instance_id,
+        "status": "not_committed",
+        "stall_observation": "not_evaluated",
+        "reason_code": "quota_action_selection_rejected",
+    }
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 0
+
+
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "generic_cli"])
+def test_first_call_agent_selection_is_qualified_before_receipt_commit(
+    tmp_path: Path, profile: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-without-portfolio"
+
+    _initialize_fixture_authority(project, runtime)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile", profile,
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert selected["heartbeat_receipt"]["status"] == "committed"
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("reentry", [False, True])
+def test_ready_deferred_priority_advises_but_does_not_veto_agent_choice(
+    tmp_path: Path,
+    reentry: bool,
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _configure_ready_deferred_priority_preemption(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    guard_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "turn-priority-choice",
+    )
+    if reentry:
+        first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+        assert first_rc == 0, first
+        assert first["selected_todo"]["todo_id"] == TODO_ID
+        assert first["agent_todo_summary"]["current_agent_deferred_resume_count"] == 1
+        suggested = first["action_portfolio"]["suggested_actions"]
+        assert ALTERNATIVE_TODO_ID in {item["todo_id"] for item in suggested}
+        assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    selected_rc, selected = _run_cli(
+        registry_path, runtime, *guard_args, "--todo-id", ALTERNATIVE_TODO_ID
+    )
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["action_selection_qualification"]["state"] == "qualified"
+    assert selected["normal_delivery_allowed"] is True
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == ALTERNATIVE_TODO_ID
+    # The higher-priority deferred work remains visible and is not reopened,
+    # completed, or reprioritized merely to make the chosen work executable.
+    assert selected["agent_todo_summary"]["current_agent_deferred_resume_count"] == 1
+    assert not selected.get("agent_scope_frontier", {}).get("priority_preemption")
+
+
+@pytest.mark.parametrize("foreign_workspace", [False, True])
+def test_explicit_choice_survives_default_successor_replan_but_not_workspace_gate(
+    tmp_path: Path, foreign_workspace: bool,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _configure_ready_deferred_priority_preemption(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    # Without an open P0 the default recommends resolving the deferred P0.
+    state_path.write_text(state_path.read_text(encoding="utf-8").replace(
+        "[P0] Validate and settle", "[P1] Validate and settle",
+    ), encoding="utf-8")
+    if foreign_workspace:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        registry["goals"][0]["coordination"]["registered_agents"].append("codex-peer")
+        registry_path.write_text(json.dumps(registry), encoding="utf-8")
+        state_path.write_text(state_path.read_text(encoding="utf-8").replace(
+            f"todo_id={ALTERNATIVE_TODO_ID} status=open",
+            f"todo_id={ALTERNATIVE_TODO_ID} status=open "
+            "task_repository=git:example.test/team/another-repository "
+            "required_write_scopes=src%2F%2A%2A",
+        ), encoding="utf-8")
+    _initialize_fixture_authority(project, runtime)
+    rc, selected = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", "turn-explicit-over-default-replan",
+         "--todo-id", ALTERNATIVE_TODO_ID,
+    )
+    assert rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["normal_delivery_allowed"] is (not foreign_workspace)
+    if foreign_workspace:
+        assert selected["effective_action"] == "agent_workspace_repair"
+        assert selected["workspace_guard"]["blocks_delivery"] is True
+    else:
+        assert selected["effective_action"] == "normal_run"
+
+
+def test_pending_deferred_p0_allows_independent_p1_selection(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").rstrip()
+        + "\n- [ ] [P0] Wait for the future resume condition.\n"
+        + "  <!-- loopx:todo todo_id=todo_fixture_future_p0 status=deferred "
+        + f"task_class=advancement_task claimed_by={AGENT_ID} "
+        + "resume_when=resume_at:2099-01-01T00:00:00Z -->\n",
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime)
+    rc, payload = _run_cli(
+        registry_path,
+        runtime,
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID,
+        "--turn-instance-id", "turn-pending-deferred-p0-p1-fallback",
+         "--todo-id", ALTERNATIVE_TODO_ID,
+    )
+    assert rc == 0, payload
+    assert payload["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert payload["action_selection_qualification"]["state"] == "qualified"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
+    tmp_path: Path,
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import (
+        isolate_sqlite_runtime,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "[P1] Validate and settle the selected delivery.",
+            "[P0] Validate and settle the selected delivery.",
+        ),
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    turn_id = "turn-bound-p0-then-deferred"
+    guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn_id,
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+    assert first_rc == 0, first
+    assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    claim_rc, claim = _run_cli(
+        registry_path, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID,
+    )
+    assert claim_rc == 0 and claim["execution_managed"] is True, json.dumps(claim)
+    prepared_rc, prepared = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+    assert prepared_rc == 0, prepared
+    assert prepared["execution_preparation"]["state"] == "ready"
+    assert prepared["normal_delivery_allowed"] is True
+    assert prepared["heartbeat_receipt"]["settlement_identity"] == (
+        first["heartbeat_receipt"]["settlement_identity"]
+    )
+    # This result exists before the lifecycle wait; recovery must account for
+    # it without executing more work or rebinding the original Turn.
+    artifact = project / "verified-before-wait.txt"
+    artifact.write_bytes(b"391\n")
+    verified_artifact = artifact.read_bytes()
+    assert int(verified_artifact) == 17 * 23
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", turn_id)
+    rc, old_read = _run_cli(
+        registry_path, runtime, "checkpoint-context", *binding, "--purpose", "delivery_result",
+    )
+    assert rc == 0, old_read
+    update_rc, update = _run_cli(
+        registry_path, runtime,
+        "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--status", "deferred",
+        "--resume-when", "resume_at:2099-01-01T00:00:00Z",
+        "--reason", "Wait for the future resume condition.",
+        "--claim-operation-id", claim["claim_operation_id"],
+    )
+    assert update_rc == 0, update
+    # The ordinary wait transition retires execution without a manual release.
+    inspect_rc, inspected = _run_cli(
+        registry_path, runtime, "task-lease", "inspect", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID,
+    )
+    assert inspect_rc == 0 and inspected["lease"]["status"] == "released", inspected
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard)
+    assert replay_rc == 0, replay
+    assert replay["effective_action"] == "unsettled_host_turn_recovery"
+    assert replay["normal_delivery_allowed"] is False
+    assert replay["unsettled_host_turn_recovery"]["binding_id"] == TODO_ID
+    assert replay["unsettled_host_turn_recovery"]["turn_instance_id"] == turn_id
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert replay.get("selected_todo") is None
+    assert replay["work_lane_contract"]["obligation"] == (
+        "settle_bound_turn"
+    )
+    assert replay["work_lane_contract"]["must_attempt_work"] is True
+    assert replay["recommended_action"] == replay["work_lane_contract"]["action"]
+    assert "independent alternative delivery" not in replay["recommended_action"]
+    assert replay.get("agent_lane_next_action") is None
+    interaction = replay["interaction_contract"]
+    assert interaction["agent_channel"]["must_attempt"] is True
+    assert interaction["agent_channel"]["delivery_allowed"] is False
+    assert interaction["cli_channel"]["spend_allowed_now"] is False
+    assert interaction["cli_channel"]["spend_after_validation"] is True
+    assert ALTERNATIVE_TODO_ID not in json.dumps(
+        interaction["cli_channel"].get("next_cli_actions", [])
+    )
+    plan = interaction["cli_channel"].get("settlement_plan")
+    assert plan["identity"] == first["heartbeat_receipt"]["settlement_identity"]
+    # Preparation and positive work admission share one settlement identity.
+    assert _heartbeat_receipt_count(runtime, turn_id) == 2
+    assert _spend_run_count(runtime) == 0
+
+    conflict_rc, conflict = _run_cli(
+        registry_path, runtime, *guard, "--todo-id", ALTERNATIVE_TODO_ID,
+    )
+    assert conflict_rc != 0, conflict
+    assert conflict["error_code"] in {
+        "heartbeat_receipt_identity_conflict",
+        "quota_action_selection_rejected",
+    }
+    assert _heartbeat_receipt_count(runtime, turn_id) == 2
+
+    vision = tmp_path / "before-wait-vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The arithmetic result is verified; the next work waits."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "Verify the result before waiting.",
+                       "observed_reality": "The existing artifact equals 17 times 23; the next work is deferred.",
+                       "retained": ["Keep the original future wait."],
+                       "evidence_refs": ["evidence:verified-before-wait"]},
+    }))
+    write_args = ("refresh-state", *binding, "--classification", "verified_before_wait",
+        "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
+        "--delivery-read-context", old_read["read_context_id"],
+        "--no-global-sync", "--suppress-external-sinks")
+    rc, stale = _run_cli(registry_path, runtime, *write_args, cwd=project)
+    assert rc == 1 and stale["error_code"] == "checkpoint_read_context_stale", stale
+    assert set(stale["checkpoint_read_context"]["changed_components"]) == {"todo", "execution_lease"}
+    assert not stale["appended"] and _classification_count(runtime, "verified_before_wait") == 0
+    assert _spend_run_count(runtime) == 0
+
+    read, _, writeback, spend_command = interaction["cli_channel"]["next_cli_actions"]
+    assert next(step["command_template"] for step in plan["ordered_steps"]
+                if step["kind"] == "durable_writeback") == writeback
+    rc, current, _ = _run_host_command(read, cwd=project)
+    assert rc == 0 and current["settlement_identity"] == plan["identity"], current
+    assert current["read_context_id"] != old_read["read_context_id"]
+    assert current["basis"]["todo"]["status"] == "deferred"
+    assert artifact.read_bytes() == verified_artifact
+    rc, refused = _run_cli(
+        registry_path, runtime, "refresh-state", *binding, "--classification", "late_p0_progress",
+        "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--delivery-read-context", current["read_context_id"],
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert rc == 1 and not refused["appended"], refused
+    assert "checkpoint_direction_source_changed" in json.dumps(refused), refused
+    assert _classification_count(runtime, "late_p0_progress") == 0 and _spend_run_count(runtime) == 0
+    values = {
+        "<read_context_id>": current["read_context_id"], "<validated_progress>": "verified_before_wait",
+        "<scale>": "single_surface", "<outcome>": "outcome_progress",
+    }
+    for placeholder, value in values.items():
+        assert f"'{placeholder}'" in writeback
+        writeback = writeback.replace(f"'{placeholder}'", value)
+    rc, written, _ = _run_host_command(
+        writeback + " --no-global-sync --suppress-external-sinks", cwd=project,
+    )
+    assert rc == 0 and written["settlement_identity"] == plan["identity"], written
+    _, submit = _qualify_retained_direction(
+        tmp_path, registry_path, runtime, written, source="heartbeat", cwd=project, vision=vision,
+    )
+    rc, replayed_write, _ = _run_host_command(submit, cwd=project)
+    assert rc == 0 and replayed_write["idempotent_replay"] is True, replayed_write
+    for appended in (True, False):
+        rc, spent, _ = _run_host_command(spend_command, cwd=project)
+        assert rc == 0 and spent["appended"] is appended, spent
+        assert spent["settlement_identity"] == plan["identity"]
+    assert _classification_count(runtime, "verified_before_wait") == 1
+    assert _spend_run_count(runtime) == 1
+    rc, unchanged = _run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID,
+                              "--todo-id", TODO_ID)
+    assert rc == 0, unchanged
+    assert unchanged["todo"]["status"] == "deferred"
+    assert unchanged["todo"]["resume_when"] == "resume_at:2099-01-01T00:00:00Z"
+    assert artifact.read_text() == "391\n"
+
+    next_rc, next_turn = _run_cli(
+        registry_path, runtime,
+        "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", "turn-after-bound-p0-deferred",
+         "--todo-id", ALTERNATIVE_TODO_ID,
+    )
+    assert next_rc == 0, next_turn
+    assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_due_successor_replan_replays_until_the_same_task_is_reopened(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace(
+        f"todo_id={TODO_ID} status=open",
+        f"todo_id={TODO_ID} status=deferred resume_when=resume_at:2000-01-01T00:00:00Z",
+    ))
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "due-successor-replay",
+    )
+    rc, first = _run_cli(registry_path, runtime, *guard)
+    assert rc == 0, first
+    assert first["effective_action"] == "successor_replan_required"
+    identity = first["heartbeat_receipt"]["settlement_identity"]
+    rc, replay = _run_cli(registry_path, runtime, *guard)
+    assert rc == 0, replay
+    assert replay["effective_action"] == "successor_replan_required"
+    assert replay["normal_delivery_allowed"] is False
+    assert replay["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 0
+
+    rc, deferred = _run_cli(
+        registry_path, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--status", "deferred", "--resume-when", "resume_at:2099-01-01T00:00:00Z",
+        "--reason", "A new dependency is not ready yet.",
+    )
+    assert rc == 0, deferred
+    rc, paused = _run_cli(registry_path, runtime, *guard)
+    assert rc == 0, paused
+    assert paused["should_run"] is False
+    assert paused["normal_delivery_allowed"] is False
+    assert paused["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 0
+
+    rc, reopened = _run_cli(
+        registry_path, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--status", "open", "--clear-resume-when",
+        "--reason", "The dependency is ready; continue the same authorized task.",
+    )
+    assert rc == 0, reopened
+    rc, resumed = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+    assert rc == 0, resumed
+    assert resumed["normal_delivery_allowed"] is True
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 0
+
+
+def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"]["registered_agents"].append(
+        "codex-settlement-peer"
+    )
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _initialize_git_checkout(project)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=LoopX Test",
+            "-c",
+            "user.email=loopx-test@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ],
+        cwd=project,
+        check=True,
+    )
+    turn_instance_id = "turn-pending-selection-workspace-repair"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        cwd=project,
+    )
+    repair_rc, repair = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        cwd=project,
+    )
+
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    assert repair_rc == 0, repair
+    assert repair.get("error_code") != "heartbeat_receipt_identity_conflict"
+    assert repair["effective_action"] == "agent_workspace_repair"
+    assert repair["workspace_repair_allowed"] is True
+    assert repair["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert repair["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert repair["execution_obligation"]["kind"] == "agent_workspace_repair"
+    assert repair["interaction_contract"]["agent_channel"]["primary_action"] == (
+        "create or switch to an independent worktree/branch, then rerun quota "
+        "guard before file edits"
+    )
+    assert repair["heartbeat_receipt"]["status"] == "upgraded"
+    assert repair["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
+
+    linked_worktree = tmp_path / "linked-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "--quiet", "--detach", str(linked_worktree)],
+        cwd=project,
+        check=True,
+    )
+    resumed_rc, resumed = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        cwd=linked_worktree,
+    )
+
+    assert resumed_rc == 0, resumed
+    assert resumed["effective_action"] == "normal_run"
+    assert resumed["normal_delivery_allowed"] is True
+    assert resumed["workspace_repair_allowed"] is False
+    assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert resumed["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    # Workspace recovery admits work on the already selected identity. Keep
+    # the repair receipt intact and append qualification rather than replaying
+    # its stale negative delivery facts to downstream admission readers.
+    assert resumed["heartbeat_receipt"]["status"] == "upgraded"
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == repair["heartbeat_receipt"]["settlement_identity"]
+    assert resumed["heartbeat_receipt"]["event_id"] != repair["heartbeat_receipt"]["event_id"]
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard_args,
+        "--todo-id", ALTERNATIVE_TODO_ID, cwd=linked_worktree)
+    assert replay_rc == 0 and replay["heartbeat_receipt"]["status"] == "replayed", replay
+    assert replay["heartbeat_receipt"]["event_id"] == resumed["heartbeat_receipt"]["event_id"]
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+
+
+def test_boundary_projection_repair_keeps_same_turn_alternative_selectable(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_boundary_blocked_primary(project)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-boundary-repair-alternative-selection"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+
+    assert first_rc == 0, first
+    assert first["effective_action"] == "boundary_projection_repair"
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+    assert first["action_portfolio"]["selection_policy"][
+        "requires_explicit_turn_binding"
+    ] is True
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    assert selected_rc == 0, selected
+    assert selected.get("error_code") != "heartbeat_receipt_identity_conflict"
+    assert selected["effective_action"] == "normal_run"
+    assert selected["normal_delivery_allowed"] is True
+    assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
+def test_selection_added_after_pending_guard_reports_final_boundary(
+    tmp_path: Path,
+) -> None:
+    """A late Todo must re-enter the final scope guard without a false receipt."""
+
+
+    # Preserve the unclaimed-frontier precondition: a claimed original Todo
+    # would remain the default instead of the newly introduced claimed task.
+    project, runtime, registry_path = _write_fixture(tmp_path, claimed=False)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+
+    turn_instance_id = "turn-selection-added-after-guard"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["interaction_contract"]["agent_channel"]["selection_required"] is True
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    first_receipt = next(
+        event
+        for event in _heartbeat_receipt_events(runtime, turn_instance_id)
+    )
+
+    added_rc, added = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "add",
+        "--goal-id",
+        GOAL_ID,
+        "--role",
+        "agent",
+        "--task-class",
+        "advancement_task",
+        "--action-kind",
+        "implement",
+        "--claimed-by",
+        AGENT_ID,
+        "--text",
+        "Validate the new canonical task",
+        "--task-repository",
+        "git:github.com/example/read-only-settlement-fixture",
+        "--required-write-scope",
+        "loopx/**",
+    )
+    assert added_rc == 0, added
+    selection_args = (*guard_args, "--todo-id", added["todo_id"])
+    rejected_rc, rejected = _run_cli(
+        registry_path,
+        runtime,
+        *selection_args,
+    )
+
+    assert rejected_rc == 1, rejected
+    assert rejected["error_code"] == "quota_action_selection_deferred"
+    assert rejected["effective_action"] == "quota_skip"
+    assert rejected["should_run"] is False
+    assert rejected["action_selection_qualification"]["reason"] == "control_repair"
+    assert rejected["action_selection_qualification"]["requested_todo_id"] == (
+        added["todo_id"]
+    )
+    assert rejected["normal_delivery_allowed"] is False
+    assert rejected["heartbeat_receipt"]["status"] == "selection_retained"
+    assert rejected["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == (
+        added["todo_id"]
+    )
+    retained_events = _heartbeat_receipt_events(runtime, turn_instance_id)
+    assert retained_events[0] == first_receipt
+    assert len(retained_events) == 2
+
+    repeated_rc, repeated = _run_cli(
+        registry_path,
+        runtime,
+        *selection_args,
+    )
+    assert repeated_rc == 1, repeated
+    assert repeated["action_selection_qualification"] == (
+        rejected["action_selection_qualification"]
+    )
+    assert "rerun quota should-run" in repeated["recommended_action"]
+    retry_rc, retry = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+    )
+    assert retry_rc == 0, retry
+    assert retry["normal_delivery_allowed"] is False
+    assert retry["workspace_repair_allowed"] or retry["self_repair_allowed"]
+
+
+def test_pending_action_selection_does_not_preempt_newly_due_monitor(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-pending-selection-monitor-preemption"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    _add_newly_due_monitor(registry_path, runtime)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+
+    assert selected_rc == 1, selected
+    assert selected["error_code"] == "quota_action_selection_deferred"
+    assert selected["action_selection_qualification"]["reason"] == (
+        "blocking_work_lane"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "selection_retained"
+    assert selected["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
+    assert selected["rollout_event"]["appended"] is True
+    events = _heartbeat_receipt_events(runtime, turn_instance_id)
+    assert len(events) == 2
+    assert all(not event["details"].get("todo_id") for event in events)
+    assert all(not event["details"].get("settlement_effect_id") for event in events)
+
+
+@pytest.mark.parametrize("capture", [False, True])
+@pytest.mark.parametrize("legacy_cadence", [False, True])
+def test_pending_selection_periodic_review_uses_selected_counting_unit(
+    tmp_path: Path, capture: bool, legacy_cadence: bool,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    if legacy_cadence:
+        rc, configured = _run_cli(
+            registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+            "--execution-replan-after-todos", "5", "--execute",
+        )
+        assert rc == 0, configured
+    turn_instance_id = "turn-pending-selection-replan-preemption"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["decision"] == "run"
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    _append_surface_only_runs(
+        runtime,
+        count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
+    )
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        *(["--decision-output-dir", str(tmp_path / "capture")] if capture else []),
+    )
+
+    assert selected_rc == 0, selected
+    if not legacy_cadence:
+        # Unsettled run records cannot become effective work Turns, even across
+        # pending action selection and decision-file capture.
+        assert selected["decision"] == "run"
+        assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+        assert not selected.get("autonomous_replan_obligation")
+        return
+    assert selected["decision"] == "autonomous_replan_required"
+    assert selected["normal_delivery_allowed"] is False
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert selected["heartbeat_receipt"]["pending_action_selection"]["settlement_bound"] is False
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert "todo_id" not in identity
+    assert selected["rollout_event"]["appended"] is True
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+
+    if capture:
+        saved = json.loads((tmp_path / "capture" / "decision.json").read_text())
+        assert saved["decision"] == "autonomous_replan_required"
+        assert saved["heartbeat_receipt"] == selected["heartbeat_receipt"]
+
+
+def test_due_monitor_auxiliary_context_has_typed_selection_rejection(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _append_newly_due_monitor(project, priority="P2-monitor")
+    turn_instance_id = "turn-auxiliary-due-monitor-selection"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+    assert first["work_lane_contract"]["lane"] == "advancement_task"
+    assert first["work_lane_contract"]["monitor_policy"] == (
+        "material_transition_only"
+    )
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+    )
+
+    assert selected_rc == 1, selected
+    assert selected["error_code"] == "quota_action_selection_rejected"
+    assert selected["action_selection_qualification"]["state"] == "rejected"
+    assert selected["action_selection_qualification"]["reason"] == (
+        "auxiliary_monitor_not_selectable_in_advancement_lane"
+    )
+    assert selected["recommended_action"].startswith(
+        "the due monitor is visible as auxiliary context"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "replayed"
+    assert selected["rollout_event"]["appended"] is False
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+def test_pending_action_selection_can_bind_exact_newly_due_monitor(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-pending-selection-exact-due-monitor"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    monitor_todo_id = _add_newly_due_monitor(registry_path, runtime)
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        monitor_todo_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == monitor_todo_id
+    assert selected["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert (
+        selected["heartbeat_receipt"]["settlement_identity"]["todo_id"]
+        == monitor_todo_id
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+    poll_args = (
+        "quota",
+        "monitor-poll",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        monitor_todo_id,
+        "--target-key",
+        "due-monitor-fixture",
+        "--result-hash",
+        "unchanged-due-monitor",
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+        "--execute",
+    )
+    poll_rc, poll = _run_cli(registry_path, runtime, *poll_args)
+    poll_replay_rc, poll_replay = _run_cli(
+        registry_path,
+        runtime,
+        *poll_args,
+    )
+
+    assert poll_rc == 0, poll
+    assert poll["material_change"] is False
+    assert poll["replayed"] is False
+    assert poll_replay_rc == 0, poll_replay
+    assert poll_replay["replayed"] is True
+    assert poll_replay["appended"] is False
+    assert _classification_count(runtime, "quota_monitor_poll") == 1
+    assert _spend_run_count(runtime) == 0
+
+    settled_rc, settled = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    assert settled_rc == 0, settled
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["execution_obligation"]["must_attempt_work"] is False
+    assert settled["heartbeat_receipt"]["status"] == "replayed"
+    assert _spend_run_count(runtime) == 0
+
+def test_prior_monitor_turn_accepts_exact_committed_receipt(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _append_newly_due_monitor(project)
+    _initialize_fixture_authority(project, runtime)
+    prior_turn_id = "turn-monitor-exact-closeout"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    prior_rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+    )
+    assert prior_rc == 0, prior
+    assert prior["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
+
+    poll_rc, poll = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "monitor-poll",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+        "--target-key",
+        "due-monitor-fixture",
+        "--result-hash",
+        "unchanged-exact-closeout",
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+        "--execute",
+    )
+    assert poll_rc == 0, poll
+    assert poll["material_change"] is False
+    assert poll["appended"] is True
+
+    next_turn_rc, next_turn = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--turn-instance-id",
+        "turn-after-exact-monitor-closeout",
+    )
+    assert next_turn_rc == 0, next_turn
+    assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
+    assert next_turn["selected_todo"]["todo_id"] == TODO_ID
+    assert _spend_run_count(runtime) == 0
+
+
+def test_prior_monitor_turn_recovery_rejects_wrong_identity_receipt(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _append_newly_due_monitor(project)
+    _initialize_fixture_authority(project, runtime)
+    prior_turn_id = "turn-monitor-wrong-identity"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    prior_rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+    )
+    assert prior_rc == 0, prior
+    assert prior["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
+
+    preview_rc, preview = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "monitor-poll",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+        "--target-key",
+        "due-monitor-fixture",
+        "--result-hash",
+        "preview-only",
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    assert preview_rc == 0, preview
+    assert preview["dry_run"] is True
+    assert preview["appended"] is False
+    assert _classification_count(runtime, "quota_monitor_poll") == 0
+
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    with index_path.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "classification": "quota_monitor_poll",
+                    "goal_id": GOAL_ID,
+                    "agent_id": "different-agent",
+                    "todo_id": DUE_MONITOR_TODO_ID,
+                    "turn_instance_id": prior_turn_id,
+                    "quota_monitor_poll_commit": {
+                        "schema_version": "quota_monitor_poll_commit_receipt_v0",
+                        "effect_id": "quota-monitor-poll:wrong-agent-fixture",
+                        "request_digest": "sha256:wrong-agent-fixture",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    recovery_rc, recovery = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--turn-instance-id",
+        "turn-after-wrong-monitor-receipt",
+    )
+    assert recovery_rc == 0, recovery
+    assert recovery["effective_action"] == "unsettled_host_turn_recovery"
+    packet = recovery["unsettled_host_turn_recovery"]
+    assert packet["binding_task_class"] == "continuous_monitor"
+    actions = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert "quota monitor-poll" in actions[1]
+    assert f"--turn-instance-id {prior_turn_id}" in actions[1]
+    assert "--resume-when" not in "\n".join(actions)
+
+
+def test_receipt_bound_advancement_turn_records_multiple_due_monitors(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    monitors = [
+        ("todo_fixture_monitor_alpha", "monitor-alpha"),
+        ("todo_fixture_monitor_beta", "monitor-beta"),
+        ("todo_fixture_monitor_gamma", "monitor-gamma"),
+    ]
+    _append_due_monitors(project, monitors)
+    _initialize_fixture_authority(project, runtime)
+    turn_instance_id = "turn-multiple-auxiliary-monitors"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+    assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        TODO_ID
+    )
+    projected_due = [
+        *(first["work_lane_contract"].get("monitor_due_items") or []),
+        *(first["agent_todo_summary"].get("monitor_due_items") or []),
+    ]
+    projected_due_ids = {
+        item["todo_id"] for item in projected_due if item.get("todo_id")
+    }
+    assert projected_due_ids < {todo_id for todo_id, _ in monitors}
+
+    poll_args: list[tuple[str, ...]] = []
+    for index, (todo_id, target_key) in enumerate(monitors):
+        args = (
+            "quota",
+            "monitor-poll",
+            "--codex-app",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            "--turn-instance-id",
+            turn_instance_id,
+            "--todo-id",
+            todo_id,
+            *(() if index == 2 else ("--target-key", target_key)),
+            "--result-hash",
+            f"unchanged-{target_key}",
+            "--available-capability",
+            "network",
+            "--available-capability",
+            "external_evidence_poll",
+            "--execute",
+        )
+        poll_args.append(args)
+        poll_rc, poll = _run_cli(registry_path, runtime, *args)
+        assert poll_rc == 0, poll
+        assert poll["settlement_todo_id"] == TODO_ID
+        assert poll["todo_id"] == todo_id
+        assert poll["target_key"] == target_key
+        assert poll["material_change"] is False
+        assert poll["replayed"] is False
+
+    for args in poll_args:
+        replay_rc, replay = _run_cli(registry_path, runtime, *args)
+        assert replay_rc == 0, replay
+        assert replay["settlement_todo_id"] == TODO_ID
+        assert replay["replayed"] is True
+        assert replay["appended"] is False
+
+    changed_args = list(poll_args[1])
+    changed_args[changed_args.index("unchanged-monitor-beta")] = (
+        "changed-monitor-beta"
+    )
+    conflict_rc, conflict = _run_cli(
+        registry_path,
+        runtime,
+        *changed_args,
+    )
+    assert conflict_rc == 1, conflict
+    assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert conflict["conflict_fields"] == ["result_hash"]
+
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    observation_rows = [
+        json.loads(line)
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("classification") == "quota_monitor_poll"
+    ]
+    effect_ids = {
+        row["quota_monitor_poll_commit"]["effect_id"]
+        for row in observation_rows
+    }
+    assert len(observation_rows) == 3
+    assert effect_ids == {
+        f"quota-monitor-poll:{GOAL_ID}:{AGENT_ID}:{turn_instance_id}:todo:{todo_id}"
+        for todo_id, _ in monitors
+    }
+    assert {
+        row["todo_id"] for row in observation_rows
+    } == {todo_id for todo_id, _ in monitors}
+    assert all(
+        row["settlement_todo_id"] == TODO_ID for row in observation_rows
+    )
+    assert _spend_run_count(runtime) == 0
+
+    settled_rc, settled = _run_cli(registry_path, runtime, *guard_args)
+    assert settled_rc == 0, settled
+    assert settled["selected_todo"]["todo_id"] == TODO_ID
+    assert settled["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        TODO_ID
+    )
+
+
+def test_pending_action_selection_does_not_commit_after_new_user_gate(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-pending-selection-user-gate"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    added_rc, added = _run_cli(
+        registry_path, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        "--role", "user", "--text", "Approve the newly introduced delivery gate.",
+        "--priority", "P0", "--task-class", "user_gate",
+        "--action-kind", "approve_delivery", "--blocks-agent", AGENT_ID,
+        "--agent-id", AGENT_ID, "--decision-scope", "direction:action:fixture",
+        "--unblocks-todo-id", ALTERNATIVE_TODO_ID,
+    )
+    assert added_rc == 0, added
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+
+    assert selected_rc == 1, selected
+    assert selected["error_code"] == "quota_action_selection_deferred"
+    assert selected["action_selection_qualification"]["reason"] == (
+        "delivery_not_allowed"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "selection_retained"
+    assert selected["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
+    assert selected["rollout_event"]["appended"] is True
+    events = _heartbeat_receipt_events(runtime, turn_instance_id)
+    assert len(events) == 2
+    assert all(not event["details"].get("todo_id") for event in events)
+    assert all(not event["details"].get("settlement_effect_id") for event in events)
+
+
+@pytest.mark.parametrize("write_vision", [True, False], ids=["qualified-vision", "missing-vision"])
+def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
+    tmp_path: Path, write_vision: bool, scheduler_host_home: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    # This case owns ordinary settlement/recovery, independently of Stride.
+    # Enabled decision adoption has separate real native coverage.
+    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                              "--execution-stride-strategy", "off", "--execute")
+    assert rc == 0, configured
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["control_plane"] = {
+        "periodic_report": {
+            "enabled": True,
+            "profile_preset": "weekly",
+            "route_ref": "project-room",
+        }
+    }
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime)
+    turn_instance_id = "turn-autonomous-replan-settlement-1"
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--app-automation-current-rrule", "FREQ=MINUTELY;INTERVAL=3",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    assert guard_rc == 0, guard
+    assert guard["decision"] == "autonomous_replan_required", guard
+    assert guard.get("selected_todo") is None, guard
+    obligation_id = guard["replan_action_packet"]["obligation_id"]
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert identity["replan_obligation_id"] == obligation_id
+    assert "todo_id" not in identity
+    cli_channel = guard["interaction_contract"]["cli_channel"]
+    plan_identity = cli_channel["settlement_plan"]["identity"]
+    assert plan_identity["binding_kind"] == identity["binding_kind"]
+    assert plan_identity["binding_id"] == identity["binding_id"]
+    assert plan_identity["replan_obligation_id"] == obligation_id
+    assert plan_identity["turn_instance_id"] == turn_instance_id
+    original_scheduler_ack_args = guard["scheduler_hint"]["codex_app"][
+        "ack_hint"
+    ]["cli_args"]
+    original_scheduler_ack_args = original_scheduler_ack_args[
+        original_scheduler_ack_args.index("quota"):
+    ]
+    assert original_scheduler_ack_args[:2] == ["quota", "scheduler-ack-current"]
+    assert "--turn-instance-id" in original_scheduler_ack_args
+    assert turn_instance_id in original_scheduler_ack_args
+    actions = cli_channel["next_cli_actions"]
+    refresh_command = next(action for action in actions if "refresh-state" in action)
+    spend_command = next(action for action in actions if "spend-slot" in action)
+    for command in (refresh_command, spend_command):
+        assert f"--replan-obligation-id {obligation_id}" in command
+        assert f"--turn-instance-id {turn_instance_id}" in command
+        assert "--todo-id" not in command
+
+    refresh_command = (
+        refresh_command.replace(
+            "<advanced|blocked|exploration_exhausted|no_followup>",
+            "advanced",
+        )
+        .replace("<surface-id>", "surface-new")
+        .replace("<hypothesis-id>", "hypothesis-new")
+        .replace("<probe-kind>", "probe-new")
+        .replace("<evidence-id>", "evidence-new")
+    )
+    if write_vision:
+        # Settling the original observation does not waive a fresh acceptance
+        # gap. Author the material checkpoint before expecting a quiet Turn.
+        vision_path = tmp_path / "replan-vision.json"
+        vision_path.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "agent_id": AGENT_ID,
+            "state": "active",
+            "vision_patch": {
+                "acceptance_summary": "Observe the fixture when its monitor becomes due.",
+                "advancement_policy": "as_needed",
+            },
+            "path_delta": {
+                "schema_version": "goal_path_delta_v0",
+                "outcome": "no_change",
+                "prior_assumption": "Repeated observations may need another probe.",
+                "observed_reality": "The new probe leaves only the future monitor.",
+                "retained": ["The existing monitor and its due date."],
+                "evidence_refs": ["evidence-new"],
+            },
+        }), encoding="utf-8")
+        refresh_command += f" --agent-vision-json {shlex.quote(str(vision_path))}"
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        *_projected_cli_args(
+            refresh_command,
+            turn_instance_id=turn_instance_id,
+        ),
+    )
+
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    assert refresh["settlement_result"]["ok"] is True
+    assert [
+        receipt["step_kind"] for receipt in refresh["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback"]
+    assert refresh["post_writeback_hooks"]["invoked_count"] == 1
+    assert refresh["post_writeback_hooks"]["intent_count"] == 0
+    assert refresh["post_writeback_hooks"]["failures"] == []
+
+    spend_args = _projected_cli_args(
+        spend_command,
+        turn_instance_id=turn_instance_id,
+    )
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        *spend_args,
+    )
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *spend_args,
+    )
+
+    assert spend_rc == 0, spend
+    assert spend["settlement_result"]["ok"] is True
+    assert [
+        receipt["step_kind"] for receipt in spend["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback", "quota_spend"]
+    assert replay_rc == 0, replay
+    assert replay["idempotent_replay"] is True
+    assert replay["appended"] is False
+    assert _spend_run_count(runtime) == 1
+
+    settled_rc, settled = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    assert settled_rc == 0, settled
+    assert settled["decision"] == "skip", settled
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["execution_obligation"]["must_attempt_work"] is False
+    assert settled.get("autonomous_replan_obligation") is None
+    assert settled.get("replan_action_packet") is None
+    assert settled["heartbeat_receipt"]["status"] == "replayed"
+    assert settled["heartbeat_receipt"]["settlement_identity"][
+        "binding_kind"
+    ] == "autonomous_replan"
+    assert _spend_run_count(runtime) == 1
+
+    _prepare_scheduler_host_readback(registry_path, runtime, scheduler_host_home, original_scheduler_ack_args)
+    ack_rc, ack = _run_cli(
+        registry_path,
+        runtime,
+        *original_scheduler_ack_args,
+    )
+    assert ack_rc == 0, ack
+    assert ack["ok"] is True
+    # Host handoff is outside delivery settlement. Its current receipt still
+    # permits the first ACK; replay must preserve bytes and the single debit.
+    assert ack["schema_version"] == "loopx_scheduler_host_followup_result_v0"
+    assert ack["mode"] == "scheduler-ack"
+    assert ack["scheduler_commit"]["written"] is True
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["appended"] is False
+    assert load_scheduler_state(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY)["last_applied_rrule"] == (
+            original_scheduler_ack_args[original_scheduler_ack_args.index("--applied-rrule") + 1]
+        )
+    scheduler_bytes = Path(ack["scheduler_state_path"]).read_bytes()
+    ack_replay_rc, ack_replay = _run_cli(
+        registry_path, runtime, *original_scheduler_ack_args
+    )
+    assert ack_replay_rc == 0, ack_replay
+    assert ack_replay["scheduler_commit"]["replayed"] is True
+    assert ack_replay["scheduler_commit"]["written"] is False
+    assert Path(ack["scheduler_state_path"]).read_bytes() == scheduler_bytes
+    assert _spend_run_count(runtime) == 1
+
+    fresh_turn_id = "turn-autonomous-replan-settlement-2"
+    fresh_rc, fresh = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        fresh_turn_id,
+    )
+
+    assert fresh_rc == 0, fresh
+    if write_vision:
+        assert refresh["vision_checkpoint"]["satisfied"] is True
+        assert fresh["decision"] == "skip", fresh
+        assert fresh["effective_action"] == "monitor_quiet_skip"
+        assert fresh["execution_obligation"]["must_attempt_work"] is False
+        assert fresh.get("autonomous_replan_obligation") is None
+        assert fresh.get("replan_action_packet") is None
+    else:
+        assert refresh["vision_checkpoint"]["missing_baseline"] is True
+        assert refresh["vision_checkpoint"]["satisfied"] is False
+        assert fresh["decision"] == "autonomous_replan_required", fresh
+        assert fresh["execution_obligation"]["must_attempt_work"] is True
+        obligation = fresh["autonomous_replan_obligation"]
+        assert obligation["obligation_id"] != obligation_id
+        assert obligation["rearmed_after_obligation_id"] == obligation_id
+        assert {trigger["kind"] for trigger in obligation["triggers"]} == {
+            "vision_checkpoint_missing"
+        }
+        assert fresh["replan_action_packet"]["obligation_id"] == obligation["obligation_id"]
+        assert any(
+            gap["kind"] == "vision_checkpoint_missing" and gap["missing_baseline"]
+            for gap in fresh["goal_frontier_projection"]["acceptance_gaps"]
+        )
+    assert fresh["heartbeat_receipt"]["turn_instance_id"] == fresh_turn_id
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_blocked_replan_keeps_material_checkpoint_in_native_readback(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    # This case owns ordinary settlement/recovery, independently of Stride.
+    # Enabled decision adoption has separate real native coverage.
+    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                              "--execution-stride-strategy", "off", "--execute")
+    assert rc == 0, configured
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    stamp = "2026-01-01T00:00:00+00:00"
+    prior = {
+        "generated_at": stamp, "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "classification": "verified_stage", "delivery_outcome": "outcome_progress",
+        "agent_vision": {
+            "agent_id": AGENT_ID, "state": "vision_active", "generated_at": stamp,
+            "vision_patch": {"vision_summary": "Verify the next outcome.",
+                             "acceptance_summary": "Prior stage verified by evidence:stage."},
+            "path_delta": {"outcome": "continue", "prior_assumption": "Verify the stage.",
+                           "observed_reality": "The stage passed its independent check.",
+                           "retained": ["Verify the next outcome."], "evidence_refs": ["evidence:stage"]},
+        },
+        "vision_checkpoint": {
+            "schema_version": "vision_checkpoint_v0", "agent_id": AGENT_ID,
+            "satisfied": True, "decision": "patched", "delivery_boundary": "semantic_closeout",
+            "triggers": [{"kind": "material_delivery_outcome", "delivery_outcome": "outcome_progress"}],
+        },
+    }
+    runs = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    runs.write_text(json.dumps(prior) + "\n" + runs.read_text())
+    turn = "blocked-replan-history-turn"
+    rc, guard = _run_cli(registry_path, runtime, "quota", "should-run", "--codex-app",
+                         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn)
+    assert rc == 0, guard
+    assert guard["decision"] == "autonomous_replan_required", guard
+    obligation = guard["replan_action_packet"]["obligation_id"]
+    packet = tmp_path / "vision.json"
+    packet.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"vision_summary": "Continue after the source is available.",
+                         "acceptance_summary": "The source is still unavailable; the outcome remains open."},
+        "path_delta": {"outcome": "wait", "prior_assumption": "The source may be available.",
+                       "observed_reality": "An independent read confirmed the source is unavailable.",
+                       "retained": ["Keep the outcome open."], "evidence_refs": ["evidence:source-unavailable"]},
+    }))
+    rc, closed = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn, "--replan-obligation-id", obligation,
+        "--classification", "source_wait_replanned", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+        "--progress-blocker-id", "source-not-ready", "--progress-evidence-id", "evidence:source-unavailable",
+        "--agent-vision-json", str(packet), "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert rc == 0, closed
+    assert closed["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+    assert closed["delivery_outcome"] == "outcome_gap"
+    assert _spend_run_count(runtime) == 0
+
+    # Read actual persisted facts through both status and subsequent admission.
+    # No receipt, checkpoint, history or clock is rewritten to obtain the result.
+    rc, status = _run_cli(registry_path, runtime, "status", "--goal-id", GOAL_ID)
+    assert rc == 0, status
+    goal = next(goal for goal in status["run_history"]["goals"] if goal["id"] == GOAL_ID)
+    context = next(row for row in goal["semantic_history"]["agents"] if row["agent_id"] == AGENT_ID)
+    assert context["latest_outcome_vision_checkpoint_run"]["generated_at"] == stamp
+    assert context["latest_material_milestone_run"]["generated_at"] == stamp
+    assert context["latest_autonomous_replan_ack_run"]["generated_at"] != stamp
+    for next_turn in (turn, "after-blocked-replan-history-turn"):
+        rc, readback = _run_cli(registry_path, runtime, "quota", "should-run", "--codex-app",
+                               "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                               "--turn-instance-id", next_turn)
+        assert rc == 0, readback
+        diagnostics = readback.get("vision_continuation_audit", {}).get("outcome_checkpoint_diagnostics", [])
+        assert diagnostics == []
+        assert not any(trigger.get("kind") == "vision_outcome_checkpoint_required"
+                       for trigger in readback.get("autonomous_replan_obligation", {}).get("triggers", []))
+    assert _spend_run_count(runtime) == 0
+
+
+def test_todoless_blocked_replan_settles_read_only_external_evidence_without_worktree(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    # This case owns ordinary settlement/recovery, independently of Stride.
+    # Enabled decision adoption has separate real native coverage.
+    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                              "--execution-stride-strategy", "off", "--execute")
+    assert rc == 0, configured
+    _initialize_git_checkout(project)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"]["registered_agents"].append(
+        "codex-settlement-peer"
+    )
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    external_evidence_dir = tmp_path / "external-review"
+    external_evidence_dir.mkdir()
+    turn_instance_id = "turn-autonomous-replan-blocked-external-evidence"
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    assert guard_rc == 0, guard
+    assert guard["decision"] == "autonomous_replan_required", guard
+    obligation_id = guard["replan_action_packet"]["obligation_id"]
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--replan-obligation-id",
+        obligation_id,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--progress-scope",
+        "agent_lane",
+        "--classification",
+        "external_evidence_replan_blocked",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_gap",
+        "--progress-result-class",
+        "blocked",
+        "--progress-blocker-id",
+        "public-head-validation-failed",
+        "--progress-evidence-id",
+        "public-review-readback",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=external_evidence_dir,
+    )
+
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    assert refresh["delivery_outcome"] == "outcome_gap"
+    assert refresh["progress_observation"]["work_item_id"] == obligation_id
+    assert refresh["settlement_workspace_requirement"] == {
+        "schema_version": "settlement_workspace_requirement_v0",
+        "settlement_binding_kind": "autonomous_replan",
+        "requirement": "not_required",
+        "source": "typed_settlement_identity",
+        "reason": "autonomous_replan_is_non_repository_control_plane_work",
+    }
+    assert "delivery_workspace" not in refresh
+    assert refresh["settlement_result"]["ok"] is True
+
+    # The replan writeback can expose a different repository-writing Todo before
+    # the original Turn spends its quota. That fresh workspace guard belongs to
+    # the new Todo; it must not rewrite the completed replan settlement, whose
+    # typed identity already declares that no delivery workspace was required.
+    added_rc, added = _run_cli(
+        registry_path, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        "--role", "agent", "--text", "Implement the next repository delivery.",
+        "--priority", "P0", "--task-class", "advancement_task",
+        "--action-kind", "implement", "--claimed-by", AGENT_ID,
+        "--target-key", "post-replan-delivery",
+        "--task-repository", "git:github.com/example/next-delivery",
+        "--required-write-scope", "src/**",
+        "--required-capability", "filesystem_write",
+    )
+    assert added_rc == 0, added
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        cwd=external_evidence_dir,
+    )
+
+    assert spend_rc == 0, spend
+    assert spend["before"]["effective_action"] == "agent_workspace_repair", spend[
+        "before"
+    ]
+    assert spend["settlement_workspace_requirement"]["requirement"] == (
+        "not_required"
+    )
+    assert spend["delivery_workspace_validated"] is False
+    assert spend["settlement_result"]["ok"] is True
+    assert [
+        receipt["step_kind"] for receipt in spend["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback", "quota_spend"]
+    assert _spend_run_count(runtime) == 1
+
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        SELECTED_REPLAN_TODO_ID,
+    )
+
+    assert replay_rc == 0, replay
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["interaction_contract"]["mode"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["kind"] == "heartbeat_settled_skip"
+    assert replay["should_run"] is False
+    assert replay.get("error_code") is None
+    assert replay.get("selected_todo") is None
+    assert replay.get("unsettled_host_turn_recovery") is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_default_visible_goal_todoless_replan_replays_original_admission(
+    tmp_path: Path, provider: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    unbound_rc, unbound = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+
+    assert unbound_rc == 0, unbound
+    assert unbound["decision"] == "autonomous_replan_required", unbound
+    assert unbound.get("selected_todo") is None, unbound
+    actions = unbound["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert len(actions) == 2
+    original = unbound["heartbeat_receipt"]["settlement_identity"]
+    assert "refresh-state" in actions[0] and "quota spend-slot" in actions[1]
+    assert all(f"--turn-instance-id {original['turn_instance_id']}" in action for action in actions)
+    source_dir = runtime / "goals" / GOAL_ID / "heartbeat-guard-sources"
+    original_sources = {path.name: path.read_bytes() for path in source_dir.glob("*.json")}
+    assert len(original_sources) == 1
+    frozen_source = json.loads(next(iter(original_sources.values())))
+    assert frozen_source["obligation"]["obligation_id"] == original["replan_obligation_id"]
+    bound_rc, bound = _run_cli(registry_path, runtime, "quota", "should-run",
+        "--runtime-profile", "codex_app_ssh_goal", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original["turn_instance_id"])
+
+    assert bound_rc == 0, bound
+    assert bound["decision"] == "autonomous_replan_required", bound
+    assert bound.get("selected_todo") is None, bound
+    obligation_id = bound["replan_action_packet"]["obligation_id"]
+    identity = bound["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert identity["replan_obligation_id"] == obligation_id
+    assert identity == original
+    assert bound["heartbeat_receipt"]["status"] == "replayed"
+    cli_channel = bound["interaction_contract"]["cli_channel"]
+    assert cli_channel["settlement_plan"]["identity"] == identity
+    commands = cli_channel["next_cli_actions"]
+    assert len(commands) == 2
+    assert all(f"--replan-obligation-id {obligation_id}" in command for command in commands)
+    assert all(f"--turn-instance-id {identity['turn_instance_id']}" in command for command in commands)
+
+    # The captured CLI reader is available independently of optional native
+    # continuity. Re-read this Turn without starting another admission.
+    captured_rc, captured = _run_cli(
+        registry_path, runtime, "quota", "should-run",
+        "--runtime-profile", "codex_app_ssh_goal", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original["turn_instance_id"],
+        "--decision-output-dir", str(tmp_path / "replan-capture"),
+    )
+    assert captured_rc == 0, captured
+    assert captured["decision"] == "autonomous_replan_required", captured
+    assert captured["heartbeat_receipt"]["settlement_identity"] == identity
+    assert captured["heartbeat_receipt"]["status"] == "replayed"
+    assert {path.name: path.read_bytes() for path in source_dir.glob("*.json")} == original_sources
+    cli_channel = captured["interaction_contract"]["cli_channel"]
+    assert cli_channel["settlement_identity"] == identity
+    assert cli_channel["settlement_read_ref"] == "$.replan_action_packet.writeback"
+    assert "settlement_plan" not in cli_channel
+    # Captured admission defers the plan; consume its exact captured reader
+    # without another guard or a second guided-start Turn.
+    reader_argv = shlex.split(captured["replan_action_packet"]["writeback"])
+    source_paths = (
+        registry_path,
+        project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
+        runtime / "goals" / GOAL_ID / "runs/index.jsonl",
+        Path(reader_argv[reader_argv.index("--decision-file") + 1]),
+    )
+    original_files = {path: path.read_bytes() for path in source_paths}
+    reader = subprocess.run(
+        reader_argv,
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert reader.returncode == 0, (reader.stdout, reader.stderr)
+    writeback = json.loads(reader.stdout)
+    assert writeback["obligation_id"] == obligation_id
+    plan = writeback["writeback"]["settlement_plan"]
+    assert plan["identity"] == identity
+    assert [step["kind"] for step in plan["ordered_steps"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    commands = [step["command_template"] for step in plan["ordered_steps"][1:]]
+    for command in commands:
+        assert f"--replan-obligation-id {obligation_id}" in command
+        assert f"--turn-instance-id {identity['turn_instance_id']}" in command
+    assert "--source visible-goal" in commands[1]
+    assert _spend_run_count(runtime) == 0
+    assert {path: path.read_bytes() for path in source_paths} == original_files
+
+
+def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
+    tmp_path: Path,
+) -> None:
+    """Regression for #3528's real Todo-bound replan path.
+
+    A stale repair-delta label does not itself prove a successor, but a fresh
+    typed progress observation can still satisfy the open obligation. The
+    accepted semantic ACK must remain in the accountable refresh/receipt chain
+    instead of being mislabeled as a noop after it discharges the obligation.
+    """
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry_path)
+    _initialize_git_checkout(project)
+    turn_instance_id = "turn-autonomous-replan-semantic-1"
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    assert guard_rc == 0, guard
+    assert guard["decision"] == "autonomous_replan_required", guard
+    assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
+    obligation_id = guard["replan_action_packet"]["obligation_id"]
+
+    refresh_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        SELECTED_REPLAN_TODO_ID,
+        "--delivery-workspace-path",
+        str(project),
+        "--autonomous-replan-recorded",
+        "--repair-delta-kind",
+        "successor_or_supersede",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--classification",
+        "validated_progress",
+        "--progress-result-class",
+        "advanced",
+        "--progress-surface-id",
+        "surface:periodic-review",
+        "--progress-hypothesis-id",
+        "hypothesis:periodic-review",
+        "--progress-probe-kind",
+        "probe:periodic-review",
+        "--progress-evidence-id",
+        "evidence:periodic-review",
+    )
+    mismatched_args = list(refresh_args)
+    todo_flag_index = mismatched_args.index("--todo-id")
+    mismatched_args[todo_flag_index : todo_flag_index + 2] = [
+        "--replan-obligation-id",
+        obligation_id,
+    ]
+    mismatch_rc, mismatch = _run_cli(
+        registry_path,
+        runtime,
+        *mismatched_args,
+    )
+    assert mismatch_rc == 1, mismatch
+    assert mismatch["ok"] is False
+    assert mismatch["appended"] is False
+    assert "settlement binding does not match" in mismatch["error"]
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+    )
+
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    assert refresh["ok"] is True
+    assert refresh["appended"] is True
+    assert refresh["classification"] == "validated_progress"
+    assert refresh["delivery_outcome"] == "outcome_progress"
+    assert refresh["autonomous_replan_recorded"] is True
+    assert refresh["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    assert refresh["settlement_result"]["ok"] is True
+    assert [
+        receipt["step_kind"] for receipt in refresh["settlement_result"]["receipts"]
+    ] == ["validation", "durable_writeback"]
+
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+    )
+    assert replay_rc == 0, replay
+    assert replay["idempotent_replay"] is True
+    assert replay["appended"] is False
+    assert _classification_count(runtime, "validated_progress") == 1
+
+    next_guard_rc, next_guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-after-autonomous-replan-semantic-1",
+    )
+    assert next_guard_rc == 0, next_guard
+    assert next_guard.get("autonomous_replan_obligation") is None
+    assert next_guard.get("decision") != "autonomous_replan_required"
+    assert obligation_id not in json.dumps(next_guard, sort_keys=True)
+
+
+def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry_path)
+    _initialize_git_checkout(project)
+    turn_instance_id = "turn-autonomous-replan-noop-1"
+
+    _initialize_fixture_authority(project, runtime)
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    assert guard_rc == 0, guard
+    assert guard["decision"] == "autonomous_replan_required", guard
+    assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--todo-id",
+        SELECTED_REPLAN_TODO_ID,
+        "--delivery-workspace-path",
+        str(project),
+        "--autonomous-replan-recorded",
+        "--repair-delta-kind",
+        "successor_or_supersede",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--classification",
+        "validated_progress",
+        "--progress-result-class",
+        "advanced",
+        "--progress-evidence-id",
+        "evidence:periodic-review",
+    )
+
+    assert refresh_rc == 1, refresh
+    assert refresh["ok"] is False
+    assert refresh["appended"] is False
+    assert "requires a typed semantic delta" in refresh["error"]
+    assert _classification_count(runtime, "validated_progress") == 0
+    assert _classification_count(runtime, "replan_noop") == 0
+
+
+def test_runtime_capability_reentry_replays_bound_receipt_after_rejected_rebind(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_runtime_capability_reentry_fixture(project)
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+    )
+
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+    assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert "runtime_capability_reentry" not in first
+    assert replay_rc == 0, replay
+    assert replay["selected_todo"]["todo_id"] == TODO_ID
+    assert replay["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert replay["agent_lane_next_action"]["todo_id"] == TODO_ID
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert (
+        replay["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"][
+            "todo_id"
+        ]
+        == TODO_ID
+    )
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+
+    conflict_rc, conflict = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+        "--todo-id",
+        REENTRY_TODO_ID,
+    )
+
+    assert conflict_rc == 1, conflict
+    assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert "explicitly requested Todo" in conflict["reason"]
+    assert conflict["heartbeat_receipt"]["status"] == "replayed"
+    assert conflict["heartbeat_receipt"]["event_id"] == first["heartbeat_receipt"]["event_id"]
+    assert conflict["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert conflict["effective_action"] == "quota_skip"
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+
+
+def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    _configure_runtime_capability_reentry_fixture(project)
+    turn_instance_id = "turn-autonomous-replan-capability-reentry"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+    )
+
+    assert first_rc == 0, first
+    assert first["decision"] == "autonomous_replan_required", first
+    obligation_id = first["replan_action_packet"]["obligation_id"]
+    assert (
+        first["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"]
+        == obligation_id
+    )
+    assert replay_rc == 0, replay
+    assert replay["decision"] == "autonomous_replan_required", replay
+    assert replay["selected_todo"] is None
+    assert replay["autonomous_replan_obligation"]["selection_binding"] == (
+        "heartbeat_receipt"
+    )
+    assert replay["replan_action_packet"]["obligation_id"] == obligation_id
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    assert (
+        replay["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"]
+        == obligation_id
+    )
+    assert (
+        replay["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"][
+            "replan_obligation_id"
+        ]
+        == obligation_id
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+    conflict_rc, conflict = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--available-capability",
+        "network",
+        "--todo-id",
+        REENTRY_TODO_ID,
+    )
+
+    assert conflict_rc == 1, conflict
+    assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("stride", [False, True])
+def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool,
+) -> None:
+    """Refreshing cumulative requirements must not rebind an admitted review."""
+    if provider == "sqlite":
+        from canonical_authority_fixture import isolate_sqlite_runtime
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace("status: active-read-only", "status: active"))
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["status"] = "active"
+    registry["goals"][0]["coordination"]["registered_agents"].append("another-agent")
+    registry_path.write_text(json.dumps(registry))
+    _initialize_fixture_authority(project, runtime, provider=provider)
+
+    def call(*args: str, expected_code: int = 0) -> dict[str, Any]:
+        code, result = _run_cli(registry_path, runtime, *args)
+        assert code == expected_code, result
+        return result
+
+    def refine(document: dict[str, Any], operation: str) -> dict[str, Any]:
+        current = call("goal-acceptance", "inspect", "--goal-id", GOAL_ID)
+        path = tmp_path / f"{operation}.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return call("goal-acceptance", "refine", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--document", str(path), "--operation-id", operation,
+            "--expected-provider-revision", current["provider_revision"], "--execute")
+
+    if stride:
+        call("configure-goal", "--goal-id", GOAL_ID,
+            "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    refine({"outcome_id": "delivery", "owner_agent_id": AGENT_ID,
+        "objective": "Deliver the requested artifact",
+        "requirements": [{"id": "original", "description": "Retain the original evidence"}],
+        "todo_ids": [TODO_ID],
+        "source": {"ref": "message:original", "summary": "The owner requested the artifact"}},
+        "declare-outcome")
+    call("todo", "complete", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--no-follow-up", "--evidence", "artifact:initial-delivery")
+    turn = "turn-replan-outcome-refinement"
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn)
+    first = call(*guard_args)
+    assert first["decision"] == "autonomous_replan_required", first
+    identity = first["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    receipt = _heartbeat_receipt_events(runtime, turn)[0]
+
+    successor = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+        "--text", "Read back the original owner's artifact when available",
+        "--claimed-by", AGENT_ID, "--action-kind", "validate",
+        "--resume-when", "resume_at:2999-01-01T00:00:00Z",
+        "--operation-id", "deferred-result-readback")["todo_id"]
+    updated = refine({"outcome_id": "delivery", "todo_ids": [successor]}, "link-existing-work")
+    expected = updated["goal_acceptance_contract"]["outcome_requirements"]
+    replay = call(*guard_args)
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert replay["selected_todo"] is None
+    context = replay["interaction_contract"]["agent_channel"]["work_context"]
+    acceptance = next(row["content"] for row in context["sources"]
+        if row.get("source") == "goal_acceptance")
+    assert acceptance["goal_acceptance_contract"]["outcome_requirements"] == expected
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert receipt["details"]["semantic_replan_review_kind"] == "goal_outcome_uncovered"
+    assert receipt["details"]["semantic_replan_review_stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
+    assert replay["autonomous_replan_obligation"]["stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
+    assert "semantic_replan_obligation" not in receipt["details"]
+    assert receipt["boundary"]["raw_task_text_recorded"] is False
+
+    # A further owner requirement must be read in the original review, while
+    # the durable receipt and waiting work retain their exact identities.
+    updated = refine({"outcome_id": "delivery",
+        "requirements": [{"id": "recovery", "description": "Validate recovery without losing the original artifact"}],
+        "source": {"ref": "message:recovery", "summary": "The owner added recovery acceptance"}},
+        "add-recovery-requirement")
+    expected = updated["goal_acceptance_contract"]["outcome_requirements"]
+    fresh = call(*guard_args)
+    assert fresh["heartbeat_receipt"]["settlement_identity"] == identity
+    current_context = fresh["autonomous_replan_obligation"]["replan_context"]
+    assert current_context["context_id"] != first["autonomous_replan_obligation"]["replan_context"]["context_id"]
+    sources = fresh["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    acceptance = next(row["content"] for row in sources if row.get("source") == "goal_acceptance")
+    assert acceptance["goal_acceptance_contract"]["outcome_requirements"] == expected
+    original = expected["outcomes"][0]
+    assert {row["id"] for row in original["requirements"]} == {"original", "recovery"}
+    assert original["sources"][0]["ref"] == "message:original"
+    assert _heartbeat_receipt_events(runtime, turn) == [receipt]
+
+    conflict = call(*guard_args, "--todo-id", successor, expected_code=1)
+    assert conflict["ok"] is False
+    assert _heartbeat_receipt_events(runtime, turn) == [receipt]
+    # Wrong scopes cannot borrow this receipt to write back or debit.
+    spend = ["quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
+        "--slots", "1", "--source", "heartbeat", "--execute"]
+    for flag, wrong in [("--goal-id", "another-goal"), ("--agent-id", "another-agent"),
+                         ("--turn-instance-id", "another-turn"),
+                         ("--replan-obligation-id", "replan-2222222222222222")]:
+        invalid = list(spend)
+        invalid[invalid.index(flag) + 1] = wrong
+        call(*invalid, expected_code=1)
+    assert _spend_run_count(runtime) == 0
+
+    from tests.control_plane.test_outcome_replan_composition_cli import _review_packet
+
+    control = fresh["replan_action_packet"].get("stride_control")
+    decision = tmp_path / "current-review.json"
+    decision.write_text(json.dumps(_review_packet(control)))
+    command = fresh["interaction_contract"]["cli_channel"]["next_cli_actions"][0]
+    for old, new in [("<advanced|blocked|exploration_exhausted|no_followup>", "advanced"),
+        ("<surface-id>", "review-current-artifact"), ("<hypothesis-id>", "retain-original-delivery"),
+        ("<probe-kind>", "recovery-check"), ("<evidence-id>", "evidence:current-artifact")]:
+        command = command.replace(old, new)
+    refresh = (*_projected_cli_args(command, turn_instance_id=turn),
+        "--agent-vision-json", str(decision), "--no-global-sync", "--suppress-external-sinks")
+    empty = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(decision),
+        "--no-global-sync", "--suppress-external-sinks", expected_code=1)
+    assert empty["appended"] is False
+    assert _spend_run_count(runtime) == 0
+    written = call(*refresh)
+    assert written["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    owed = _projected_cli_args(written["settlement_owed"]["command"], turn_instance_id=turn)
+    call(*owed)
+    call(*owed)
+    assert _spend_run_count(runtime) == 1
+    settled = call(*guard_args)
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _heartbeat_receipt_events(runtime, turn) == [receipt]
+    after = call("goal-acceptance", "inspect", "--goal-id", GOAL_ID)
+    assert after["goal_acceptance_contract"]["outcome_requirements"] == expected
+    waiting = call("todo", "list", "--goal-id", GOAL_ID, "--todo-id", successor)["todo"]
+    assert waiting["status"] == "open"
+    assert waiting["resume_when"] == "resume_at:2999-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("command,ok,should_run", [
+    ("should-run", True, True), ("should-run", True, False),
+    ("should-run", False, False), ("status", True, True),
+])
+def test_quota_rollout_details_does_not_capture_guard_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str, ok: bool, should_run: bool,
+) -> None:
+    from argparse import Namespace
+    from loopx.control_plane.quota import heartbeat_receipt
+    from loopx.control_plane.quota.settlement_cli import quota_rollout_details
+
+    def unexpected_capture(*_args, **_kwargs):
+        raise AssertionError("a details projection must not capture or persist a guard source")
+
+    monkeypatch.setattr(heartbeat_receipt, "guard_source_from_decision", unexpected_capture)
+    monkeypatch.setattr(heartbeat_receipt, "store_guard_source_blob", unexpected_capture)
+    obligation = {"schema_version": "autonomous_replan_obligation_v0", "required": True,
+        "agent_id": AGENT_ID, "obligation_id": "replan-1111111111111111",
+        "trigger_count": 1, "triggers": [{"kind": "goal_outcome_uncovered"}],
+        "stop_condition": "Stop at owner-only decisions."}
+    details = quota_rollout_details({"ok": ok, "should_run": should_run,
+        "registry": str(tmp_path / "registry.json"), "runtime_root": str(tmp_path),
+        "autonomous_replan_obligation": obligation,
+        "replan_action_packet": {"obligation_id": obligation["obligation_id"]}},
+        Namespace(quota_command=command, agent_id=AGENT_ID, goal_id=GOAL_ID), todo_id=None)
+    assert details["semantic_replan_review_stop_condition"] == obligation["stop_condition"]
+    assert "semantic_replan_source_ref" not in details
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("binding,ok,should_run,delivery_allowed", [
+    (False, True, True, True), (True, False, False, False),
+    (True, True, False, False), (True, True, True, False),
+])
+def test_unadmitted_heartbeat_does_not_freeze_observed_replan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    binding: bool, ok: bool, should_run: bool, delivery_allowed: bool,
+) -> None:
+    from loopx.control_plane.quota import heartbeat_receipt
+    from loopx.control_plane.quota.effect_program import SettlementIdentity
+
+    def unexpected_capture(*_args, **_kwargs):
+        raise AssertionError("an unadmitted obligation must not become a frozen Turn source")
+
+    monkeypatch.setattr(heartbeat_receipt, "guard_source_from_decision", unexpected_capture)
+    monkeypatch.setattr(heartbeat_receipt, "store_guard_source_blob", unexpected_capture)
+    observed = {"semantic_replan_obligation_id": "replan-1111111111111111", "todo_id": TODO_ID}
+    identity = (SettlementIdentity(goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        turn_instance_id=TURN_ID) if binding else None)
+    details = heartbeat_receipt.capture_heartbeat_admission_source(
+        {"ok": ok, "should_run": should_run,
+         "interaction_contract": {"agent_channel": {"delivery_allowed": delivery_allowed}}},
+        details=observed, identity=identity, registry_path=tmp_path / "registry.json", runtime_root=tmp_path)
+    assert "semantic_replan_obligation_id" not in details
+    assert "semantic_replan_source_ref" not in details
+    assert observed["semantic_replan_obligation_id"] == "replan-1111111111111111"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_receipt_review_does_not_persist_private_or_lossy_stop_clauses() -> None:
+    from argparse import Namespace
+    from loopx.control_plane.quota.settlement_cli import quota_rollout_details
+
+    obligation = {"schema_version": "autonomous_replan_obligation_v0", "required": True,
+        "agent_id": AGENT_ID, "obligation_id": "replan-1111111111111111",
+        "trigger_count": 1, "triggers": [{"kind": "goal_outcome_uncovered"}]}
+    for stop, retained in [("Stop at owner-only decisions.", True),
+        ("Stop if Authorization: example is required.", False),
+        ("Stop before\nowner-only decisions.", False), ("s" * 241, False)]:
+        details = quota_rollout_details({"autonomous_replan_obligation": {**obligation, "stop_condition": stop},
+            "replan_action_packet": {"obligation_id": obligation["obligation_id"]}},
+            Namespace(quota_command="should-run", agent_id=AGENT_ID), todo_id=None)
+        assert ("semantic_replan_review_kind" in details) is retained
+        if retained:
+            assert details["semantic_replan_review_stop_condition"] == stop
+        else:
+            assert "semantic_replan_review_stop_condition" not in details
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("bounded_result", [False, True])
+def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    bounded_result: bool,
+) -> None:
+    if provider == "sqlite":
+        from canonical_authority_fixture import isolate_sqlite_runtime
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    _initialize_git_checkout(project)
+    (project / ".gitignore").write_text(".loopx/\n.codex/\n")
+    (project / "README.md").write_text("Synthetic workspace fixture\n")
+    subprocess.run(["git", "add", ".gitignore", "README.md"], cwd=project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=LoopX Test",
+            "-c",
+            "user.email=loopx-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ],
+        cwd=project,
+        check=True,
+    )
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    _guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"]["registered_agents"].append(
+        "codex-settlement-peer"
+    )
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "action_kind=validate -->",
+            f"action_kind=validate claimed_by={AGENT_ID} -->",
+        ),
+        encoding="utf-8",
+    )
+    linked_worktree = tmp_path / "linked-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "--quiet", "--detach", str(linked_worktree)],
+        cwd=project,
+        check=True,
+    )
+
+    # This Todo intentionally has neither a repository nor write scopes. The
+    # registered Git Goal and its current peer policy still govern settlement.
+    replay_rc, replay = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding, cwd=project,
+    )
+    assert replay_rc == 0, {key: replay.get(key) for key in (
+        "error", "reason", "state", "health", "status", "status_health_ok",
+    )}
+    assert not replay["selected_todo"].get("task_repository")
+    hint = replay["interaction_contract"]["cli_channel"]["delivery_workspace_causality"]
+    assert "independent git worktree" in hint["refresh"]
+    assert "produced" in hint["refresh"]
+    assert "--delivery-workspace-path" in hint["refresh"]
+    assert replay["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+
+    refresh_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "peer_delivery_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    canonical_rc, canonical = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+        cwd=project,
+    )
+    assert canonical_rc == 1, canonical
+    assert "must be refreshed from the independent git worktree" in canonical["error"]
+    assert _classification_count(runtime, "peer_delivery_validated") == 0
+
+    linked_rc, linked = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+        cwd=linked_worktree,
+    )
+    assert linked_rc == 1 and linked["error_code"] == "checkpoint_read_context_stale", linked
+    assert linked["checkpoint_read_context"]["changed_components"] == ["source"]
+    assert not linked["appended"] and _classification_count(runtime, "peer_delivery_validated") == 0
+    assert _spend_run_count(runtime) == 0
+    recovery = linked["result_read_recovery"]
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert recovery["settlement_identity"] == identity
+    assert replay["delivery_result_context"]["read_context_id"] == guard["delivery_result_context"]["read_context_id"]
+    rc, current, _ = _run_host_command(recovery["read_command"], cwd=project)
+    assert rc == 0 and current["settlement_identity"] == identity, current
+    assert current["read_context_id"] != guard["delivery_result_context"]["read_context_id"]
+    assert "codex-settlement-peer" in current["basis"]["source"]["registry_goal"]["coordination"]["registered_agents"]
+    assert (linked_worktree / "README.md").read_text(encoding="utf-8") == "Synthetic workspace fixture\n"
+    retry = tuple(current["read_context_id"] if arg == "<read_context_id>" else arg
+                  for arg in recovery["retry_args"])
+    linked_rc, linked = _run_cli(registry_path, runtime, *refresh_args, *retry, cwd=project)
+    assert linked_rc == 0, linked
+    assert linked["appended"] and linked["settlement_identity"] == identity
+    assert linked["result_work_context"]["read_context_id"] == current["read_context_id"]
+    assert linked["delivery_workspace"]["workspace_kind"] == (
+        "independent_git_worktree"
+    )
+    assert linked["delivery_workspace"]["peer_independent_worktree_required"] is True
+    command = linked["settlement_owed"]["command"]
+    budget = (
+        "'--max-page-output-bytes' '64000'" if os.name == "nt"
+        else "--max-page-output-bytes 64000"
+    )
+    assert budget in command
+    if bounded_result:
+        bounded_budget = budget.replace("64000", "8192")
+        command = command.replace(budget, bounded_budget)
+        # Wrong workspace remains a refusal, with no accounting effect. The
+        # full unbudgeted API remains available for independent comparison.
+        raw_command = command.replace(f" {bounded_budget}", "")
+        raw_rc, raw, raw_bytes = _run_host_command(raw_command, cwd=project)
+        assert raw_rc == 1 and raw["appended"] is False
+        assert raw["before"]["selected_todo"]["todo_id"] == TODO_ID
+        assert raw_bytes > 8192
+        refused_rc, refused, refused_bytes = _run_host_command(command, cwd=project)
+        assert refused_rc == 1 and refused["workspace_guard"] == raw["workspace_guard"]
+        assert refused["appended"] is False and refused["registry_mutated"] is False
+        assert "before" not in refused and _spend_run_count(runtime) == 0
+        reference = Path(refused["result_details"]["reference_file"])
+        original = Path(json.loads(reference.read_text())["path"])
+        complete = json.loads(original.read_text())
+        assert complete["before"]["selected_todo"]["todo_id"] == TODO_ID
+        assert refused_bytes <= 8192
+        require_private_path(reference)
+        require_private_path(original)
+        read_rc, page = _run_cli(registry_path, runtime, "quota", "context-read",
+            "--reference-file", str(reference), "--select", "/workspace_guard", cwd=project)
+        assert read_rc == 0 and page["eof"]
+        assert json.loads(page["content"])["selections"][0]["value"] == raw["workspace_guard"]
+        assert not list((runtime / "context-delivery").rglob("session.json"))
+        # Invalid presentation input is rejected before the original effect.
+        invalid_rc, invalid, _ = _run_host_command(command.replace("8192", "0"), cwd=linked_worktree)
+        assert invalid_rc == 1 and "positive" in invalid["reason"]
+        assert _spend_run_count(runtime) == 0
+        # A later IO failure cannot conceal the effect that already committed.
+        capture_root = runtime / "context-delivery"
+        require_private_path(capture_root, directory=True)
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["icacls.exe", str(capture_root), "/remove:g", "*S-1-5-32-544"],
+                    check=True, capture_output=True, timeout=30,
+                )
+            else:
+                capture_root.chmod(0o755)
+            with pytest.raises(OSError):
+                require_private_path(capture_root, directory=True)
+            rejected_rc, rejected, rejected_bytes = _run_host_command(command, cwd=project)
+            assert rejected_rc == 1 and rejected["appended"] is False
+            assert _spend_run_count(runtime) == 0
+            for field in ("ok", "workspace_guard", "reason", "recommended_action", "error_code"):
+                if field in raw:
+                    assert rejected[field] == raw[field]
+            assert rejected["result_delivery_error"]["error_code"] == "quota_decision_transport_failed"
+            failed_rc, failed, failed_bytes = _run_host_command(command, cwd=linked_worktree)
+            assert failed_rc == 1 and failed["ok"] is True
+            assert failed["result_delivery_error"]["error_code"] == "quota_decision_transport_failed"
+            assert failed["settlement_result"]["ok"] is True
+            assert "quota_spend" in {row["step_kind"] for row in failed["settlement_result"]["receipts"]}
+            assert failed["settlement_identity"] == identity
+            assert failed["appended"] is True and _spend_run_count(runtime) == 1
+            assert failed["settlement_progress"]["state"] == "settled"
+            assert "original" in failed["result_delivery_error"]["recommended_action"]
+            assert rejected_bytes <= 8192 and failed_bytes <= 8192
+        finally:
+            protect_private_path(capture_root, directory=True)
+    for replay in (False, True):
+        spent_rc, spent, spent_bytes = _run_host_command(command, cwd=linked_worktree)
+        assert spent_rc == 0, spent
+        if bounded_result:
+            assert spent_bytes <= 8192
+        if "command" in spent:
+            parts = []
+            read_command = spent["command"]
+            while read_command:
+                read_rc, page, _ = _run_host_command(read_command, cwd=linked_worktree)
+                assert read_rc == 0
+                parts.append(page["content"])
+                read_command = page.get("next_command")
+            spent = {row["pointer"][1:]: row["value"]
+                for row in json.loads("".join(parts))["selections"]}
+        if not replay and not bounded_result:
+            assert spent["settlement_progress"]["state"] == "settled", spent
+        else:
+            assert spent["appended"] is False, spent
+    assert _spend_run_count(runtime) == 1
+
+
+def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    _initialize_fixture_authority(project, runtime)
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+    assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+
+    monitor_todo_id = _add_newly_due_monitor(registry_path, runtime)
+    capability_args = (
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    replay_rc, replay = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        *capability_args,
+    )
+
+    assert replay_rc == 0, replay
+    assert replay["selected_todo"]["todo_id"] == TODO_ID
+    assert replay["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert replay["agent_lane_next_action"]["todo_id"] == TODO_ID
+    assert replay["work_lane_contract"]["selection_binding"] == "heartbeat_receipt"
+    assert replay["work_lane_contract"]["selected_todo_id"] == TODO_ID
+    assert (
+        replay["work_lane_contract"]["deferred_work_lane"]["selected_todo_id"]
+        == monitor_todo_id
+    )
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    plan = replay["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["identity"]["todo_id"] == TODO_ID
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+
+    next_turn_rc, next_turn = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-settlement-cli-2",
+        *capability_args,
+    )
+    assert next_turn_rc == 0, next_turn
+    assert next_turn["effective_action"] == "unsettled_host_turn_recovery"
+    assert next_turn["unsettled_host_turn_recovery"]["binding_id"] == TODO_ID
+    assert "selected_todo" not in next_turn
+
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    complete_args = (
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "receipt-bound delivery validated",
+        "--next-agent-todo",
+        "Continue after the receipt-bound delivery.",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--next-action-kind",
+        "implement",
+    )
+    complete_rc, complete = _run_cli(registry_path, runtime, *complete_args)
+    complete_replay_rc, complete_replay = _run_cli(
+        registry_path,
+        runtime,
+        *complete_args,
+    )
+    assert complete_rc == 0, complete
+    assert complete_replay_rc == 0, complete_replay
+    assert complete_replay["idempotent_replay"] is True
+
+    refresh_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "receipt_bound_delivery_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    refresh_rc, refresh = _run_cli(registry_path, runtime, *refresh_args)
+    refresh_replay_rc, refresh_replay = _run_cli(
+        registry_path,
+        runtime,
+        *refresh_args,
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh_replay_rc == 0, refresh_replay
+    assert refresh_replay["idempotent_replay"] is True
+    assert _classification_count(runtime, "receipt_bound_delivery_validated") == 1
+
+    vision = tmp_path / "receipt-bound-direction.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Retain the verified receipt-bound result."},
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0",
+            "outcome": "continue",
+            "prior_assumption": "Settle the original verified delivery before any independent observation.",
+            "observed_reality": "The original result is retained and the independent Monitor is due.",
+            "retained": ["Keep the independent Monitor eligible on its next host Turn."],
+            "evidence_refs": ["evidence:original-receipt-and-monitor"],
+        },
+    }), encoding="utf-8")
+    _qualify_retained_direction(
+        tmp_path, registry_path, runtime, refresh, source="heartbeat", vision=vision,
+    )
+    spend_args = (
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+    )
+    spend_rc, spend = _run_cli(registry_path, runtime, *spend_args)
+    spend_replay_rc, spend_replay = _run_cli(
+        registry_path,
+        runtime,
+        *spend_args,
+    )
+    assert spend_rc == 0, spend
+    assert spend_replay_rc == 0, spend_replay
+    assert spend_replay["idempotent_replay"] is True
+    assert spend_replay["appended"] is False
+    assert _spend_run_count(runtime) == 1
+
+    resumed_turn_rc, resumed_turn = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-settlement-cli-2",
+        *capability_args,
+    )
+    assert resumed_turn_rc == 0, resumed_turn
+    assert resumed_turn["selected_todo"]["todo_id"] == monitor_todo_id
+
+
+@pytest.mark.parametrize("source_unavailable", [False, True])
+def test_bound_recovery_does_not_infer_missing_original_todo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_unavailable: bool,
+) -> None:
+    from loopx.control_plane.quota import unsettled_host_turn as recovery
+    from loopx.control_plane.todos import list_readback
+
+    def read(**kwargs):
+        if kwargs.get("todo_id"):
+            if source_unavailable:
+                raise ValueError("exact source unavailable")
+            return {"todo": None}
+        return {"todos": []}
+
+    monkeypatch.setattr(list_readback, "list_goal_todos", read)
+    monkeypatch.setattr(recovery, "effect_runtime_result", lambda *args, **kwargs: pytest.fail("unknown source reached the decision owner"))
+    payload = {"ok": True}
+    with pytest.raises(ValueError, match="exact source unavailable|original receipt-bound Todo cannot be read"):
+        recovery.apply_receipt_bound_wait_recovery(
+            payload, registry_path=tmp_path / "registry.json", runtime_root=tmp_path,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID,
+            available_capabilities=[], scheduler_execution_context=None,
+        )
+    assert payload == {"ok": True}
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("archived_with_alternatives", [False, True])
+def test_completed_todo_reentry_preserves_original_settlement_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, archived_with_alternatives: bool,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state_path = _configure_read_only_todo(project)
+    if archived_with_alternatives:
+        _configure_selectable_alternative(project)
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    guard_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
+    )
+    rc, admitted = _run_cli(registry_path, runtime, *guard_args, "--todo-id", TODO_ID)
+    assert rc == 0, admitted
+    original_plan = admitted["interaction_contract"]["cli_channel"]["settlement_plan"]
+    rc, completed = _run_cli(
+        registry_path, runtime, "todo", "complete", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", TURN_ID, "--evidence", "evidence:verified-read-only-result",
+    )
+    assert rc == 0, completed
+    assert completed["changed"] is True
+    assert completed["completion_continuation"] == "active_goal"
+    assert _spend_run_count(runtime) == 0
+    if archived_with_alternatives:
+        rc, archived = _run_cli(
+            registry_path, runtime, "todo", "archive-completed", "--goal-id", GOAL_ID,
+            "--role", "agent", "--max-active-done", "0", "--execute",
+        )
+        assert rc == 0, archived
+        rc, refused = _run_cli(
+            registry_path, runtime, *guard_args, "--todo-id", ALTERNATIVE_TODO_ID,
+        )
+        assert rc == 1, refused
+        assert refused["error_code"] == "heartbeat_receipt_identity_conflict"
+    completed_state = state_path.read_bytes()
+
+    rc, resumed = _run_cli(registry_path, runtime, *guard_args)
+    assert rc == 0, resumed
+    cli = resumed["interaction_contract"]["cli_channel"]
+    plan = cli.get("settlement_plan")
+    assert plan is not None, resumed
+    assert plan["identity"] == original_plan["identity"]
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == plan["identity"]
+    assert not resumed["normal_delivery_allowed"]
+    assert not resumed["interaction_contract"]["agent_channel"]["delivery_allowed"]
+    assert resumed.get("selected_todo") is None
+    assert cli["spend_allowed_now"] is False
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert state_path.read_bytes() == completed_state
+    commands = {step["kind"]: step["command_template"] for step in plan["ordered_steps"]}
+    assert cli["next_cli_actions"] == [commands["durable_writeback"], commands["quota_spend"]]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+    envelope = build_turn_envelope(resumed)
+    assert envelope["writeback"]["settlement_plan"] == plan
+    assert envelope["writeback"]["next_cli_actions"] == cli["next_cli_actions"]
+    assert envelope["writeback"]["spend_allowed_now"] is False
+    refresh = commands["durable_writeback"].replace(
+        "<validated_progress>", "completed_read_only_result",
+    ).replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+    refresh += (
+        " --vision-state vision_closed"
+        " --vision-acceptance 'The verified read-only result is durably recorded.'"
+        " --no-global-sync --suppress-external-sinks"
+    )
+    rc, written = _run_generated_cli(refresh, registry_path=registry_path)
+    assert rc == 0, written
+    rc, replayed = _run_generated_cli(refresh, registry_path=registry_path)
+    assert rc == 0, replayed
+    assert _classification_count(runtime, "completed_read_only_result") == 1
+    rc, owed = _run_cli(registry_path, runtime, *guard_args)
+    assert rc == 0, owed
+    assert owed["unsettled_host_turn_recovery"]["repair"] == "quota_spend"
+    assert owed["settlement_owed"]["todo_id"] == TODO_ID
+    for command in (owed["settlement_owed"]["command"], commands["quota_spend"]):
+        rc, spent = _run_generated_cli(command, registry_path=registry_path)
+        assert rc == 0, spent
+    assert _spend_run_count(runtime) == 1
+    rc, settled = _run_cli(registry_path, runtime, *guard_args)
+    assert rc == 0, settled
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["interaction_contract"]["agent_channel"]["must_attempt"] is False
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_read_only_settlement_omits_non_causal_delivery_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    # The two legal completion phases may commit within one clock tick. Keep
+    # the real CLI, authority and hook journal; freeze only their commit clock.
+    run = subprocess.run
+
+    def frozen_completion_clock(argv, *args, **kwargs):
+        if isinstance(argv, list) and argv[1:3] == ["-m", "loopx.cli"]:
+            program = (
+                "import loopx.control_plane.todos.provider_terminal_lifecycle as native; "
+                "clock=lambda:'2026-09-02T12:00:00+00:00'; "
+                "native.now_local=clock; "
+                "from loopx.cli import main; raise SystemExit(main())"
+            )
+            argv = [argv[0], "-c", program, *argv[3:]]
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", frozen_completion_clock)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["control_plane"] = {
+        "periodic_report": {
+            "enabled": True,
+            "profile_preset": "weekly",
+            "route_ref": "project-room",
+        }
+    }
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    state_path = _configure_read_only_todo(project)
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "## Agent Todo\n\n",
+            "## User Todo\n\n## Agent Todo\n\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    assert guard_rc == 0, guard
+    _historical_turn(runtime)
+    assert guard["heartbeat_receipt"]["delivery_workspace_causality"] == {
+        "schema_version": "delivery_workspace_causality_v0",
+        "todo_id": TODO_ID,
+        "requirement": "not_required",
+        "source": "selected_todo_contract",
+        "reason": "explicit_non_delivery_without_repository_writes",
+    }
+
+    premature_rc, premature = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "read-only characterization validated",
+        "--no-follow-up",
+    )
+    assert premature_rc == 1, premature
+    assert "requires matching writeback and quota spend receipts" in premature["error"]
+
+    conflict_rc, conflict = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "read_only_characterization_complete",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-workspace-path",
+        str(project),
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert conflict_rc == 1, conflict
+    assert "explicit non-delivery settlement contract" in conflict["error"]
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "read_only_characterization_complete",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--vision-state",
+        "vision_closed",
+        "--vision-summary",
+        "The bounded read-only characterization is complete.",
+        "--vision-acceptance",
+        "The characterization evidence is validated and durably written.",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh["delivery_workspace_causality"]["requirement"] == "not_required"
+    assert "delivery_workspace" not in refresh
+    assert refresh["post_writeback_hooks"]["intent_count"] == 0
+
+    ordinary_args = (
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "ordinary completion before terminal settlement",
+    )
+    ordinary_rc, ordinary = _run_cli(
+        registry_path,
+        runtime,
+        *ordinary_args,
+    )
+    assert ordinary_rc == 0, ordinary
+    assert ordinary["changed"] is True
+    assert ordinary["completion_continuation"] == "active_goal"
+    assert ordinary["completion_recovery"] is None
+    assert ordinary["post_writeback_hooks"]["intent_count"] == 0
+    ordinary_todo = next(
+        item for item in parse_active_state_todos(
+            state_path.read_text(encoding="utf-8"), item_limit=None,
+        )["agent_todos"]["items"] if item["todo_id"] == TODO_ID
+    )
+    assert ordinary_todo["completed_at"]
+
+    spend_args = (
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+    )
+    spend_rc, spend = _run_cli(registry_path, runtime, *spend_args)
+    replay_rc, replay = _run_cli(registry_path, runtime, *spend_args)
+
+    assert spend_rc == 0, spend
+    assert spend["delivery_workspace_causality"]["requirement"] == "not_required"
+    assert spend["delivery_workspace_validated"] is False
+    assert replay_rc == 0, replay
+    assert replay["idempotent_replay"] is True
+    assert _spend_run_count(runtime) == 1
+
+    terminal_args = (
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "read-only characterization validated",
+        "--no-follow-up",
+    )
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        *terminal_args,
+    )
+    assert complete_rc == 0, complete
+    assert complete["changed"] is True
+    assert complete["completion_continuation"] == "no_followup"
+    assert complete["completion_recovery"] == "same_turn_terminal_closeout"
+    # Closeout changes continuation metadata, so its update may be later.
+    # The first completion time must survive, independently of receipt identity.
+    assert datetime.fromisoformat(ordinary["updated_at"]) <= datetime.fromisoformat(
+        complete["updated_at"]
+    )
+    terminal_state = state_path.read_text(encoding="utf-8")
+    terminal_todo = next(
+        item for item in parse_active_state_todos(
+            terminal_state, item_limit=None,
+        )["agent_todos"]["items"] if item["todo_id"] == TODO_ID
+    )
+    assert terminal_todo["completed_at"] == ordinary_todo["completed_at"]
+    assert datetime.fromisoformat(ordinary_todo["updated_at"]) <= datetime.fromisoformat(
+        terminal_todo["updated_at"]
+    )
+    assert ordinary["completion_receipt_id"] != complete["completion_receipt_id"]
+    assert complete["post_writeback_hooks"]["intent_count"] == 1
+    trigger_intent = complete["post_writeback_hooks"]["intents"][0]
+    assert trigger_intent["intent_kind"] == "periodic_report.trigger_evaluation"
+    assert trigger_intent["requested_write_scope"] == []
+    assert trigger_intent["payload"]["generation_authorized"] is False
+    assert trigger_intent["payload"]["external_delivery_authorized"] is False
+    assert [
+        receipt["step_kind"] for receipt in complete["settlement_result"]["receipts"]
+    ] == [
+        "validation",
+        "durable_writeback",
+        "quota_spend",
+        "terminal_closeout",
+    ]
+    assert "no_followup=true" in state_path.read_text(encoding="utf-8")
+
+    # Model primary commit surviving a crash before the optional checkpoint.
+    # Only this disposable fixture's sidecar is removed; the Todo, original
+    # completion receipt, Turn journal and single quota debit remain intact.
+    sidecars = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
+    terminal_sidecars = [
+        path for path in sidecars.glob("*.json")
+        if not path.name.endswith(".lock.holder.json") and json.loads(path.read_text())["source_receipt_id"]
+        == trigger_intent["source_receipt_id"]
+    ]
+    assert len(terminal_sidecars) == 1
+    terminal_sidecars[0].unlink()
+    recovered_rc, recovered = _run_cli(registry_path, runtime, *terminal_args)
+    assert recovered_rc == 0, recovered
+    assert recovered["changed"] is False
+    assert recovered["completion_receipt_id"] == complete["completion_receipt_id"]
+    assert recovered["post_writeback_hooks"]["invoked_count"] == 1
+    assert recovered["post_writeback_hooks"]["intents"] == [trigger_intent]
+    assert _spend_run_count(runtime) == 1
+    assert state_path.read_text(encoding="utf-8") == terminal_state
+
+    event_log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    completion_events = [
+        event
+        for line in event_log.read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(line)).get("event_kind") == "todo_complete"
+        and event.get("run_id") == TURN_ID
+    ]
+    assert [event["details"]["no_followup"] for event in completion_events] == [
+        False,
+        True,
+    ]
+    assert [
+        event["details"]["completion_continuation"] for event in completion_events
+    ] == ["active_goal", "no_followup"]
+    assert [event["details"]["completion_recovery"] for event in completion_events] == [
+        None,
+        "same_turn_terminal_closeout",
+    ]
+    assert completion_events[0]["event_id"] != completion_events[1]["event_id"]
+
+    complete_replay_rc, complete_replay = _run_cli(
+        registry_path,
+        runtime,
+        *terminal_args,
+    )
+    assert complete_replay_rc == 0, complete_replay
+    assert complete_replay["idempotent_replay"] is True
+    assert complete_replay["changed"] is False
+    assert complete_replay["completion_receipt_id"] == complete["completion_receipt_id"]
+    assert complete_replay["post_writeback_hooks"]["invoked_count"] == 0
+    assert complete_replay["post_writeback_hooks"]["replayed_hooks"] == [
+        "periodic_report.runtime_trigger"
+    ]
+    assert complete_replay["post_writeback_hooks"]["intents"] == [trigger_intent]
+    ordinary_replay_rc, ordinary_replay = _run_cli(
+        registry_path,
+        runtime,
+        *ordinary_args,
+    )
+    assert ordinary_replay_rc == 0, ordinary_replay
+    assert ordinary_replay["idempotent_replay"] is True
+    assert state_path.read_text(encoding="utf-8") == terminal_state
+    replayed_completion_events = [
+        event
+        for line in event_log.read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(line)).get("event_kind") == "todo_complete"
+        and event.get("run_id") == TURN_ID
+    ]
+    assert len(replayed_completion_events) == 2
+
+
+def test_same_turn_terminal_receipt_replay_preempts_autonomous_replan(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime)
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "terminal_receipt_replay_characterized",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    qualified, _ = _qualify_retained_direction(
+        tmp_path, registry_path, runtime, refresh, source="heartbeat",
+    )
+    command = qualified["settlement_owed"]["command"]
+    spend_rc, spend, _ = _run_host_command(command)
+    assert spend_rc == 0 and spend["appended"], spend
+    replay_rc, spent_replay, _ = _run_host_command(command)
+    assert replay_rc == 0 and spent_replay["idempotent_replay"] and not spent_replay["appended"], spent_replay
+
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "terminal receipt replay characterized",
+        "--no-follow-up",
+        *_delivery_read_args(registry_path, runtime, binding),
+    )
+    assert complete_rc == 0, complete
+    assert complete["completion_continuation"] == "no_followup"
+
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard_args)
+
+    assert replay_rc == 0, replay
+    assert replay["decision"] == "skip", replay
+    assert replay["should_run"] is False
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["must_attempt_work"] is False
+    assert replay.get("selected_todo") is None
+    assert replay.get("replan_action_packet") is None
+    assert replay.get("autonomous_replan_obligation") is None
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 1
+
+    fresh_turn_args = tuple(
+        "turn-settlement-cli-2" if value == TURN_ID else value for value in guard_args
+    )
+    fresh_rc, fresh = _run_cli(registry_path, runtime, *fresh_turn_args)
+    assert fresh_rc == 0, fresh
+    assert fresh["decision"] == "autonomous_replan_required", fresh
+    assert fresh["should_run"] is True
+    assert fresh["replan_action_packet"]["obligation_id"]
+
+
+def test_settled_turn_defers_prior_unsettled_history_to_fresh_turn(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        TURN_ID,
+    )
+
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "settled_turn_recovery_order_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-workspace-path",
+        str(project),
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    qualified, _ = _qualify_retained_direction(
+        tmp_path, registry_path, runtime, refresh, source="heartbeat",
+    )
+    command = qualified["settlement_owed"]["command"]
+    spend_rc, spend, _ = _run_host_command(command)
+    assert spend_rc == 0 and spend["appended"], spend
+    replay_rc, spent_replay, _ = _run_host_command(command)
+    assert replay_rc == 0 and spent_replay["idempotent_replay"] and not spent_replay["appended"], spent_replay
+
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "settled Turn recovery order validated",
+        "--no-follow-up",
+        *_delivery_read_args(registry_path, runtime, binding),
+    )
+    assert complete_rc == 0, complete
+
+    prior_turn_id = "turn-unsettled-prior"
+    prior = build_rollout_event(
+        goal_id=GOAL_ID,
+        event_kind="quota_should_run",
+        agent_id=AGENT_ID,
+        todo_id=ALTERNATIVE_TODO_ID,
+        run_id=prior_turn_id,
+        status="normal_run",
+        summary="prior host Turn requires closeout",
+        recorded_at="2025-12-31T23:59:00Z",
+        details={
+            "todo_id": ALTERNATIVE_TODO_ID,
+            "settlement_effect_id": (
+                f"{GOAL_ID}:{AGENT_ID}:{ALTERNATIVE_TODO_ID}:{prior_turn_id}"
+            ),
+            "closeout_required": True,
+        },
+    )
+    log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    committed_history = log_path.read_text(encoding="utf-8")
+    log_path.write_text(
+        json.dumps(prior) + "\n" + committed_history,
+        encoding="utf-8",
+    )
+
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard_args)
+    assert replay_rc == 0, replay
+    assert replay["decision"] == "skip"
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["should_run"] is False
+    assert replay.get("unsettled_host_turn_recovery") is None
+
+    fresh_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-settlement-cli-2",
+    )
+    fresh_rc, fresh = _run_cli(registry_path, runtime, *fresh_args)
+    assert fresh_rc == 0, fresh
+    assert fresh["effective_action"] == "unsettled_host_turn_recovery"
+    assert fresh["unsettled_host_turn_recovery"]["prior_turn_instance_id"] == (
+        prior_turn_id
+    )
+    assert fresh["unsettled_host_turn_recovery"]["binding_id"] == (
+        ALTERNATIVE_TODO_ID
+    )

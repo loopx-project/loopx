@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import tempfile
 
+from loopx.control_plane.runtime.file_paths import windows_extended_path
+
 
 _POWERSHELL_READER_WORDS = re.compile(r"'(?:''|[^'])*'|[^'\s]+")
 _POWERSHELL_DOUBLED_QUOTE = re.compile(r"(['\u2018\u2019\u201a\u201b])\1")
@@ -55,7 +57,7 @@ def stable_budget_fixture_root(root: Path):
     try:
         yield fixture
     finally:
-        shutil.rmtree(fixture)
+        shutil.rmtree(windows_extended_path(fixture))
 
 
 def read_cli_context_for_oracle(text: str) -> tuple[str, dict[str, int]]:

@@ -145,7 +145,27 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
     lane = full["agent_lane_next_action"]
     assert lane["todo_id"] == TODO_ID and "title" not in lane
     assert lane["title_ref"] == f"$.interaction_contract.agent_channel.work_context.sources[{index}].content.todo.text"
-    assert json.dumps(full, ensure_ascii=False).count(json.dumps(body, ensure_ascii=False)) == 1
+    work_view = dict(full)
+    if (full.get("heartbeat_receipt") or {}).get("result_freshness") == "turn_result_freshness_required_v1":
+        from loopx.control_plane.goals.checkpoint_context_io import result_work_context
+        from loopx.control_plane.quota.settlement import SettlementIdentity
+
+        # The original read basis is a separate, self-contained Host input.
+        # Restore its existing token, never mint a new read or substitute the
+        # current work view merely because their text happens to match.
+        original = full["delivery_result_context"]
+        identity = SettlementIdentity.from_runtime_payload(original["settlement_identity"])
+        assert identity.todo_id == TODO_ID and identity.agent_id == AGENT_ID
+        assert identity.goal_id == GOAL_ID
+        stored = result_work_context(registry_path=registry, runtime_root=runtime, identity=identity)
+        assert json.dumps(original, sort_keys=True, allow_nan=False) == json.dumps(
+            stored, sort_keys=True, allow_nan=False)
+        assert original["basis"]["todo"]["text"] == body
+        assert original["basis"]["todo"]["title"] == body
+        work_view.pop("delivery_result_context")
+    # Preserve the old current-view oracle, including receipt-off behavior.
+    # This is not permission for an arbitrary number of duplicate carriers.
+    assert json.dumps(work_view, ensure_ascii=False).count(json.dumps(body, ensure_ascii=False)) == 1
     assert "context_delivery" not in full
     assert not list(project.rglob("presentation.json"))
     assert state.read_bytes() == original_state
@@ -303,6 +323,23 @@ def _items(count: int, *, prefix: str) -> list[dict[str, object]]:
         }
         for index in range(count)
     ]
+
+
+def test_disabled_recall_compacts_configuration_only_and_keeps_authority_flags() -> None:
+    recall = {"status": "disabled", "context": None, "provider_call_count": 0,
+        "grants_new_action_authority": False, "fail_open": True,
+        "experiment": {"enabled": False, "automatic_ingest": False,
+            "config_runtime_route": {"runtime_scope": "project_runtime"}, "host_coverage": ["fixture"]}}
+    payload = {"goal_id": "fixture", "reward_memory_recall": recall}
+    compact = compact_quota_should_run_cli_payload(payload)["reward_memory_recall"]
+    assert compact["provider_call_count"] == 0 and compact["grants_new_action_authority"] is False
+    assert compact["experiment"]["automatic_ingest"] is False
+    assert compact["experiment"]["detail_ref"] == "reward-memory experiment-status --goal-id fixture"
+    assert "host_coverage" not in compact["experiment"]
+    assert compact_quota_should_run_cli_payload(payload, include_todo_summary_detail=True)["reward_memory_recall"] == recall
+    for status, enabled in (("provider_unavailable", False), ("disabled", True), ("recalled", True)):
+        complete = {**recall, "status": status, "experiment": {**recall["experiment"], "enabled": enabled}}
+        assert compact_quota_should_run_cli_payload({**payload, "reward_memory_recall": complete})["reward_memory_recall"] == complete
 
 
 def test_markdown_distinguishes_peer_blockers_from_native_admission() -> None:

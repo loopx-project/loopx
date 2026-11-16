@@ -46,9 +46,9 @@ def main() -> int:
         errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        # The child runs two separately bounded 240-second probes, plus
+        # The child runs two separately bounded 420-second probes, plus
         # checkout/cleanup. Do not cut off a valid second native Windows probe.
-        timeout=600,
+        timeout=960,
     )
     if completed.returncode != 0:
         raise AssertionError(

@@ -13,6 +13,13 @@ import {
 
 const todoId = "todo_abc123";
 
+test("PR1 rejects protected terminal intent before preparing provider effects", () => {
+  assert.throws(() => prepare({schema_version: "loopx_host_todo_completion_transaction_v2",
+    first_delivery: true}), /no effects were admitted/);
+  const ordinary = prepare();
+  assert.ok(ordinary.provider_effect);
+});
+
 test("vision refresh shares the original delivery command and identity without a spend", () => {
   const authored = {schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
     vision_path: "fixture-vision.json"};
@@ -227,6 +234,39 @@ function finalize(
     request("finalize", { provider_outcomes: outcomes, ...overrides }),
   );
 }
+
+test("committed original result can recover settlement without claiming a restored work input", () => {
+  const identity = identityFrom(prepare());
+  const guard = {ok: true, heartbeat_receipt: {settlement_identity: identity,
+    result_freshness: "turn_result_freshness_required_v1"}, work_input_restored: false};
+  assert.equal(finalize(providerOutcomes(identity, {guard})).decision, "blocked");
+  assert.equal(finalize(providerOutcomes(identity, {guard: {...guard, result_committed: true}})).decision, "complete");
+  const other = {...identity, turn_instance_id: "another-turn"};
+  assert.equal(finalize(providerOutcomes(identity, {guard: {...guard, result_committed: true,
+    heartbeat_receipt: {...guard.heartbeat_receipt, settlement_identity: other}}})).decision, "blocked");
+});
+
+test("default current-Agent completion reads post-result facts and resumes a proven direction append", () => {
+  const enabled = {schema_version: "loopx_host_todo_completion_transaction_v2", first_delivery: true,
+    current_agent_checkpoint: true, vision_unchanged_reason: "Old pre-result decision."};
+  const prepared = prepare(enabled);
+  const identity = identityFrom(prepared);
+  const steps = (prepared.provider_effect as {steps: {step_kind: string}[]}).steps;
+  assert.deepEqual(steps.map(s => s.step_kind), ["guard", "lifecycle_completion", "direction_context"]);
+  const outcomes = providerOutcomes(identity).slice(0, 2);
+  const context = {ok: true, settlement_identity: identity, read_context_id: "read-A", basis: {}};
+  const pending = finalize([...outcomes, {step_kind: "direction_context", output: JSON.stringify(context)}], enabled);
+  assert.equal((pending.result as Record<string, unknown>).stage, "direction_pending");
+  assert.equal((pending.result as Record<string, unknown>).settlement_complete, false);
+  const committed = {...context, status: "committed", context: {purpose: "first_delivery", read_context_id: "original-A"}};
+  const resume = finalize([...outcomes, {step_kind: "direction_context", output: JSON.stringify(committed)}], enabled);
+  assert.equal(resume.decision, "execute");
+  assert.equal(resume.resume_checkpoint_read_context_id, "original-A");
+  const resumed = (resume.provider_effect as {steps: {args: string[]}[]}).steps;
+  assert.ok(resumed[2].args.includes("original-A"));
+  assert.equal(resumed[2].args.includes("Old pre-result decision."), false);
+  assert.equal(resumed.at(-1)!.args.includes("--no-follow-up"), true);
+});
 
 test("prepare owns the retry-stable identity and one ordered host CLI plan", () => {
   const original = request("prepare");

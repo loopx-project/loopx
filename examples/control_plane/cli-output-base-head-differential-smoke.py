@@ -44,7 +44,10 @@ def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) ->
         errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=240,
+        # The unchanged 96-row Windows candidate completes all semantic checks
+        # with 250 seconds inside CLI calls; a loaded Windows run exceeded 300s.
+        # Bound this qualification batch; do not change any product timeout.
+        timeout=420,
     )
     if completed.returncode != 0:
         raise AssertionError(

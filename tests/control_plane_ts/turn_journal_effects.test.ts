@@ -536,6 +536,45 @@ test("failed validation may explicitly rewind for host reinvocation", async () =
   });
 });
 
+test("only a retained, uncommitted stale result may invalidate completed validation", async () => {
+  await withJournalPath(async (path) => {
+    await commit(path, journal());
+    const worked = journal("in_progress", phases.slice(0, 2));
+    worked.host_result = {summary: "Retained candidate"};
+    worked.result_work_context = {read_context_id: "original-work-key"};
+    await commit(path, worked);
+    const validated = {...worked, completed_phases: [...phases.slice(0, 3)],
+      task_validation: {ok: true}};
+    await commit(path, validated);
+    const retry = {...worked, status: "failed", validation_stage: "result_freshness",
+      receipt: {turn_key: turnKey, failed_phase: "validation"}, result_revalidation: {
+        candidate: worked.host_result, original_context: worked.result_work_context,
+        rejection: {ok: false, error_code: "checkpoint_read_context_stale"},
+      }};
+    const variants = [
+      {...retry, result_revalidation: {...retry.result_revalidation, rejection: {ok: false, error_code: "unknown"}}},
+      {...retry, result_revalidation: {...retry.result_revalidation, candidate: {summary: "Other candidate"}}},
+      {...retry, result_work_context: {read_context_id: "replacement-key"}},
+      {...retry, task_validation: {ok: true}},
+      {...retry, writeback: {ok: true}},
+      {...retry, quota_spend: {ok: true}},
+      {...retry, effect_attempts: {durable_writeback: {status: "prepared", effect_ref: `${effectId()}#durable_writeback`}}},
+    ];
+    const before = await readFile(path, "utf8");
+    for (const invalid of variants) {
+      await assert.rejects(commit(path, invalid), /regress|prepared effect/);
+      assert.equal(await readFile(path, "utf8"), before);
+    }
+    await commit(path, retry);
+    await commit(path, {...worked, completed_phases: []});
+    assert.deepEqual(JSON.parse(await readFile(path, "utf8")).completed_phases, []);
+    await commit(path, worked);
+    await commit(path, validated);
+    await commit(path, {...retry, result_revalidation: {...retry.result_revalidation,
+      rejection: {ok: false, error_code: "delivery_validation_binding_mismatch"}}});
+  });
+});
+
 test("terminal journal tombstones are immutable", async () => {
   await withJournalPath(async (path) => {
     await commit(path, journal());
@@ -547,6 +586,47 @@ test("terminal journal tombstones are immutable", async () => {
     const changed = journal("committed", phases);
     changed.reason = "late mutation";
     await assert.rejects(commit(path, changed), /tombstones are immutable/);
+  });
+});
+
+test("terminal result revalidation preserves settled receipts and cannot execute settlement", async () => {
+  await withJournalPath(async (path) => {
+    await commit(path, journal());
+    const worked = {...journal("in_progress", phases.slice(0, 2)),
+      host_result: {summary: "Original candidate"}, result_work_context: {read_context_id: "original-key"}};
+    await commit(path, worked);
+    await commit(path, {...worked, completed_phases: [...phases.slice(0, 3)]});
+    const written = {...worked, completed_phases: [...phases.slice(0, 4)], writeback: {ok: true, run_id: "original-writeback"}};
+    await commit(path, written);
+    const settled = {...written, completed_phases: [...phases.slice(0, 5)], quota_spend: {ok: true, slots: 1}};
+    await commit(path, settled);
+    const retry = {...settled, status: "failed", receipt: {turn_key: turnKey, failed_phase: "terminal_closeout"},
+      result_revalidation: {phase: "terminal_closeout", candidate: worked.host_result,
+        original_context: worked.result_work_context, rejection: {ok: false, error_code: "checkpoint_read_context_stale"}, validation: {}}};
+    for (const invalid of [
+      {...retry, quota_spend: {ok: true, slots: 2}},
+      {...retry, writeback: {ok: true, run_id: "replacement"}},
+      {...retry, result_revalidation: {...retry.result_revalidation, candidate: {summary: "Other candidate"}}},
+      {...retry, result_revalidation: {...retry.result_revalidation, validation: {status: "in_progress", completed_phases: [...phases.slice(0, 4)]}}},
+      {...retry, effect_attempts: {terminal_closeout: {status: "prepared", effect_ref: `${effectId()}#terminal_closeout`}}},
+    ]) await assert.rejects(commit(path, invalid), /Terminal result revalidation/);
+    await commit(path, retry);
+    const progress = {...retry, status: "in_progress", result_revalidation: {...retry.result_revalidation,
+      validation: {status: "in_progress", completed_phases: [...phases.slice(0, 3)],
+        work_context: worked.result_work_context,
+        host_result: {summary: "Revalidated candidate"}, task_validation: {ok: true}}}};
+    await commit(path, progress);
+    const ready: Record<string, unknown> = {...progress, host_result: progress.result_revalidation.validation.host_result,
+      task_validation: {ok: true}, result_work_binding: {read_context_id: "original-key"}};
+    delete ready.result_revalidation;
+    const rebound = {...ready, result_work_context: {read_context_id: "replacement-key"},
+      result_work_binding: {read_context_id: "replacement-key"}};
+    await assert.rejects(commit(path, rebound), /Terminal result revalidation/);
+    await commit(path, ready);
+    const saved = JSON.parse(await readFile(path, "utf8"));
+    assert.deepEqual(saved.completed_phases, phases.slice(0, 5));
+    assert.deepEqual(saved.writeback, settled.writeback);
+    assert.deepEqual(saved.quota_spend, settled.quota_spend);
   });
 });
 
