@@ -843,36 +843,38 @@ export function Composer({
     try {
       if (taker) await takeover!.go(taker.id, [message, taker.task?.trim()].filter(Boolean).join('\n\n'));
       else await onSend(message, images, mentions, videos);
+      if (sentFrom !== undefined) keepDraft(sentFrom, null);
+      images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      videos.forEach(video => URL.revokeObjectURL(video.previewUrl));
+      // The same composer may now hold another conversation's draft.
+      if (keyRef.current !== sentFrom) return;
       setMentions([]);
       // Forget the sent draft at once, but retain words committed while its request was pending.
       const remainingText = draftRef.current.text === text ? '' : draftRef.current.text;
-      if (sentFrom !== undefined) keepDraft(sentFrom, null);
       if (remainingText && keyRef.current !== undefined) keepDraft(keyRef.current, { text: remainingText, notes: [], images: [] });
       inFlight.current = null;
       setNotes([]);
       setReferences([]);
-      images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
-      videos.forEach(video => URL.revokeObjectURL(video.previewUrl));
       setVideos([]);
       setImages([]);
       setText(current => current === text ? '' : current);
     } catch (error) {
       if (error instanceof SendCancelled) {
-        inFlight.current = null;
+        if (keyRef.current === sentFrom) inFlight.current = null;
         if (sentFrom !== undefined) {
           const draft = keyRef.current === sentFrom ? draftRef.current : { text, notes, references, images, videos, mentions };
           keepDraft(sentFrom, { ...draft, sending: undefined });
         }
       } else {
         // A failed read can follow a successful send, so retain the mark until history resolves it.
-        inFlight.current = mark;
+        if (keyRef.current === sentFrom) inFlight.current = mark;
       }
     } finally {
       clearTimeout(slowTimer);
       setSlow(false);
       sendingRef.current = false;
       setBusy(false);
-      ref.current?.focus();
+      if (keyRef.current === sentFrom) ref.current?.focus();
     }
   };
   const submitRef = useRef(submit);
