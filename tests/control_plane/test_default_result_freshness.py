@@ -444,6 +444,7 @@ def test_damaged_work_input_blocks_default_dispatch_and_preserves_admission(prov
     "terminal_host_cold",
     "terminal_validation_cold",
     "terminal_host_replaced",
+    "terminal_receipt_replaced_during_prepare",
     "terminal_validation_replaced",
     "terminal_commit_response_lost",
     "terminal_receipt_deleted",
@@ -620,9 +621,12 @@ FirstPartyHostGoalAdmission.launch_lifetime = reject
                 failed.pop(key, None)
             failed["completed_phases"] = []
             journal_path.write_text(json.dumps(failed), encoding="utf-8")
-    if recovery_window in {"terminal_host_cold", "terminal_validation_cold", "terminal_host_replaced", "terminal_validation_replaced"}:
+    replace_during_prepare = recovery_window == "terminal_receipt_replaced_during_prepare"
+    if replace_during_prepare or recovery_window in {
+        "terminal_host_cold", "terminal_validation_cold", "terminal_host_replaced", "terminal_validation_replaced",
+    }:
         wrapper = project / "lose_revalidation_checkpoint.py"
-        phase_count = 2 if recovery_window in {"terminal_host_cold", "terminal_host_replaced"} else 3
+        phase_count = 2 if replace_during_prepare or recovery_window in {"terminal_host_cold", "terminal_host_replaced"} else 3
         wrapper.write_text(f'''import os
 import loopx.control_plane.turn_driver.executor as executor
 original = executor._write_journal
@@ -647,6 +651,29 @@ raise SystemExit(main())
             state.write_text(state.read_text(encoding="utf-8") + "\nLatest acceptance must be adopted by the current Agent.\n", encoding="utf-8")
             result_work_context(registry_path=registry, runtime_root=runtime,
                 identity=SettlementIdentity.from_runtime_payload(failed["result_work_context"]["settlement_identity"]), reread=True)
+        if replace_during_prepare:
+            cached = json.loads(journal_path.read_bytes())
+            wrapper = project / "replace_revalidation_context.py"
+            wrapper.write_text('''from loopx.control_plane.goals.checkpoint_context_io import TurnResultWork
+original = TurnResultWork.prepare_request
+def replace_context(self, *args, **kwargs):
+    self.read(reread=True)
+    return original(self, *args, **kwargs)
+TurnResultWork.prepare_request = replace_context
+from loopx.cli import main
+raise SystemExit(main())
+''', encoding="utf-8")
+            blocked = subprocess.run([sys.executable, str(wrapper), "--registry", str(registry),
+                "--runtime-root", str(runtime), "--format", "json", *args,
+                "--resume-turn-key", failed["turn_key"], "--retry-failed-turn"], cwd=project,
+                capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(REPO_ROOT)})
+            assert blocked.returncode == 1, blocked.stdout + blocked.stderr
+            result = json.loads(blocked.stdout)
+            assert not result["effects"]["host_invoked"]
+            assert "context changed after recovery planning" in result["reason"]
+            pending = json.loads(journal_path.read_bytes())
+            assert pending["host_attempt_count"] == cached["host_attempt_count"]
+            assert pending["quota_spend"] == cached["quota_spend"]
     if recovery_window in {"commit_response_lost", "terminal_commit_response_lost", "commit_receipt_deleted", "commit_receipt_damaged", "terminal_receipt_deleted", "terminal_receipt_damaged"}:
         wrapper = project / "lose_completion_response.py"
         wrapper.write_text('''import os
@@ -711,7 +738,8 @@ raise SystemExit(main())
     assert rc == 0 and resumed["status"] == "committed", resumed
     committed = json.loads(journal_path.read_text(encoding="utf-8"))
     assert committed["turn_key"] == failed["turn_key"]
-    assert committed["host_attempt_count"] == (3 if fail_validator_once or recovery_window in {"terminal_host_replaced", "terminal_validation_replaced"} else 2)
+    assert committed["host_attempt_count"] == (3 if fail_validator_once or replace_during_prepare
+        or recovery_window in {"terminal_host_replaced", "terminal_validation_replaced"} else 2)
     if terminal_race:
         assert {key: value for key, value in committed["writeback"].items() if key != "completion"} == failed["writeback"]
         assert committed["quota_spend"] == failed["quota_spend"]
