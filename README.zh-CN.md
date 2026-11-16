@@ -463,6 +463,12 @@ Kernel 把控制面归结为五个用户可以直接行动的问题。每个问�
 | 证据发生了什么变化？ | 紧凑 run history、验证、blocker 和已接受 writeback。 |
 | Loop 是否可以继续？ | Quota、capability、安全侧路、scheduler hint 和停止条件。 |
 
+用 `loopx goal-lifecycle --goal-id <id> --operation stop` 预览 Goal 停止；
+改用 `--operation resume` 可恢复资格。加入 `--actor-kind owner --execute`
+执行变更；Goal actions 视图提供了新鲜指纹时，保留
+`--expected-state-fingerprint`。普通 CLI 与独立
+[`loopx-core`](packages/loopx-core/README.md) CLI 使用同一个生命周期 owner。
+
 <details>
 <summary>架构、控制面能力与运行责任</summary>
 
