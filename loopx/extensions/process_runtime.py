@@ -24,6 +24,10 @@ class ProcessStdinLeaseExpired(TimeoutError):
     """The lease expired before a complete frame could be published."""
 
 
+class ProcessStdinDispatchUnconfirmed(Exception):
+    """The original pipe receiver may have received the frame without timely proof."""
+
+
 @contextmanager
 def _nonblocking_pipe_writer(fd: int) -> Iterator[Callable[[memoryview], int]]:
     if os.name == "nt":
@@ -65,9 +69,9 @@ def _write_lease_bound_frame(
         raise ProcessStdinLeaseExpired("native input lease expired before dispatch")
     frame = memoryview(text.replace("\n", os.linesep).encode(stream.encoding, errors=stream.errors))
     try:
-        # A blocking write can publish the final bytes after expiry despite a
-        # time-bounded wait in the parent. The original receiver gets only
-        # nonblocking writes, each authorized immediately before submission.
+        # A blocking write can publish late through backpressure. The final
+        # nonblocking write still needs a completion check because the sender
+        # can be preempted between checking time and entering the syscall.
         with _nonblocking_pipe_writer(stream.fileno()) as write:
             while frame:
                 chunk = frame[:_PROCESS_IO_CHUNK_BYTES]
@@ -83,12 +87,23 @@ def _write_lease_bound_frame(
                     written = 0
                 if written:
                     frame = frame[written:]
+                    if not frame and time.time() * 1000 >= expires_at_ms:
+                        raise ProcessStdinDispatchUnconfirmed(
+                            "The native frame may have reached the Host after lease expiry. "
+                            "Reconcile the original Host attempt before retrying."
+                        )
                 else:
                     time.sleep(min(0.005, remaining, budget))
     except BaseException:
         # Reap before closing stdin so an incomplete line cannot become an
         # EOF-terminated request. Unconfirmed cleanup is still an unknown effect.
-        _retire_native_input_receiver(process, cancel_and_reap)
+        try:
+            _retire_native_input_receiver(process, cancel_and_reap)
+        except RuntimeError as cleanup_error:
+            raise ProcessStdinDispatchUnconfirmed(
+                "The original native Host could not be confirmed stopped. "
+                "Reconcile the original Host attempt before retrying."
+            ) from cleanup_error
         raise
 
 
@@ -101,9 +116,9 @@ def write_process_stdin_before_deadline(
 
     The caller owns the serialization and launch fence. A bounded wait keeps a
     full pipe from stranding that fence; the same process is reaped and its
-    writer joined before the caller releases it. A lease-bound send uses
-    nonblocking writes so the receiver cannot get a complete frame after the
-    lease expires. Both paths preserve the text stream's wire encoding.
+    writer joined before the caller releases it. A lease-bound send checks
+    the deadline around nonblocking publication of the complete frame.
+    Both paths preserve the text stream's wire encoding.
     """
     stream = process.stdin
     if stream is None:

@@ -494,18 +494,22 @@ from the live check through process spawn or the native `turn/start` send. A
 writer that commits first changes the inputs to the live check. A writer that
 arrives after the check can continue once dispatch completes, while the Host
 runs. The same live hard-lease read supplies the dispatch deadline. The process
-supervisor checks it at spawn, and the native sender uses nonblocking writes so
-a backed-up pipe cannot publish a complete `turn/start` after expiry. A proven
-pre-dispatch expiry returns `goal_launch_not_allowed` with no Host invocation,
-writeback or debit. An unconfirmed dispatch still follows the existing recovery
-path. Registry contention can refuse dispatch with `goal_authority_unavailable`.
+supervisor checks it at spawn. The native sender checks the deadline before
+each nonblocking write and after the complete `turn/start` frame is accepted
+by the pipe. A proven pre-dispatch expiry returns `goal_launch_not_allowed`
+with no Host invocation, writeback or debit. If a complete frame may have been
+delivered after expiry, the sender retires the receiver and the original
+attempt stays in progress with `host_outcome_unknown`. Recovery holds retry
+pending reconciliation of that attempt. Registry contention can refuse dispatch
+with `goal_authority_unavailable`.
 The journal retains the original capture, identity and saved session recovery
 for retry or readback.
 
-硬租约的派发截止时间来自同一次权威读。进程启动前检查到期时间，原生
-`turn/start` 使用非阻塞写入，防止管道积压导致到期后仍发布完整帧。确认
-到期前尚未派发时，返回 `goal_launch_not_allowed`，不启动模型工作、不写回、
-不扣额。派发状态不明时沿用原恢复路径和原回执身份。
+硬租约的派发截止时间来自同一次权威读。进程启动前检查到期时间。原生
+`turn/start` 每次非阻塞写入前都检查时限，管道接受完整帧后再检查一次。
+确认未派发即到期时，返回 `goal_launch_not_allowed`，不启动模型工作、不写回、
+不扣额。完整帧可能在到期后送达时，发送方终止接收进程，原尝试保留在执行中并
+标为 `host_outcome_unknown`。恢复须先核对原尝试，才能再次派发。
 Use a fresh eligible Turn for changed work. Reading detail consumes no quota.
 Source admission, cancellation, workspace and mutation authority remain with
 their existing owners.

@@ -572,6 +572,79 @@ def _lease(arguments, action, *, version, ttl):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_lease_expiry_during_final_pipe_write_keeps_original_attempt_unconfirmed(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.extensions import process_runtime
+
+    runtime, _, native, turns, arguments = _fixture(tmp_path, monkeypatch, provider, handoff_mode="hard_lease")
+    original = _lease(arguments, "acquire", version=0, ttl=300)
+    prepare_input = codex_operation_host.prepare_codex_cli_input
+    pipe_writer = process_runtime._nonblocking_pipe_writer
+    expires_at = []
+    sent_at = []
+
+    def renew_before_dispatch(request):
+        prepared = prepare_input(request)
+        renewed = _lease(arguments, "renew", version=original["version"], ttl=10)
+        assert renewed["lease_epoch"] == original["lease_epoch"]
+        expires_at.append(lease_expires_at(renewed).timestamp())
+        return prepared
+
+    @contextlib.contextmanager
+    def preempt_final_write(fd):
+        with pipe_writer(fd) as write:
+            def delayed(chunk):
+                if chunk[-1] != ord("\n"):
+                    return write(chunk)
+                if len(chunk) > 1:
+                    # Withhold exactly the terminator so the fixture cannot
+                    # interpret the real pipe's partial frame as a request.
+                    return write(chunk[:-1])
+                assert len(expires_at) == 1 and time.time() < expires_at[0]
+                time.sleep(expires_at[0] - time.time() + .03)
+                count = write(chunk)
+                assert count == 1
+                sent_at.append(time.time())
+                limit = time.monotonic() + 2
+                while not turns.exists() and time.monotonic() < limit:
+                    time.sleep(.005)
+                return count
+
+            yield delayed
+
+    monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", renew_before_dispatch)
+    monkeypatch.setattr(process_runtime, "_nonblocking_pipe_writer", preempt_final_write)
+    code, result = _cli([*arguments, "--execute"])
+    assert len(sent_at) == 1 and sent_at[0] >= expires_at[0]
+    assert native.read_text().splitlines() == ["native"] and len(turns.read_text().splitlines()) == 1
+    assert code == 1 and result["status"] == "in_progress", result
+    assert result["error_code"] == "host_outcome_unknown", result
+    assert result["effects"] == {
+        "host_invoked": True, "state_written": False, "quota_spent": False, "scheduler_acknowledged": False,
+    }
+    assert _bindings(runtime)
+    key = result["resume_turn_key"]
+    path = turn_journal_path(runtime, goal_id="loopx-turn-fixture", turn_key=key)
+    saved = path.read_bytes()
+    journal = json.loads(saved)
+    assert journal["turn_key"] == key and journal["host_attempt_count"] == 1
+    assert journal["status"] == "in_progress" and not journal["completed_phases"]
+    capture = path.parent / "decisions" / (key.removeprefix("sha256:") + ".json")
+    original_capture = capture.read_bytes()
+    index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+    resume = list(arguments)
+    index_of_turn = resume.index("--turn-instance-id")
+    resume[index_of_turn:index_of_turn + 2] = ["--resume-turn-key", key]
+    code, replay = _cli([*resume, "--retry-failed-turn", "--execute"])
+    assert code == 1 and replay["recovery_decision"]["reason"] == "host_outcome_unknown", replay
+    assert replay["recovery_decision"]["reinvoke_host"] is False
+    assert native.read_text().splitlines() == ["native"] and len(turns.read_text().splitlines()) == 1
+    assert path.read_bytes() == saved and capture.read_bytes() == original_capture
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_expired_lease_cannot_publish_backpressured_native_frame(tmp_path, monkeypatch, provider):
     from loopx.extensions import process_runtime
 

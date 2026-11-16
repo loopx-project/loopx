@@ -955,6 +955,8 @@ def _run_host_runner(
     *,
     runner: HostRunner,
 ) -> dict[str, Any]:
+    from ...extensions.process_runtime import ProcessStdinDispatchUnconfirmed
+
     try:
         value = runner(request)
     except BuiltInHostError as exc:
@@ -969,7 +971,7 @@ def _run_host_runner(
                 else {}
             ),
         }
-    except FirstPartyHostRuntimeRejected:
+    except (FirstPartyHostRuntimeRejected, ProcessStdinDispatchUnconfirmed):
         raise
     except Exception as exc:  # noqa: BLE001 - host adapters fail closed at boundary
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
@@ -1037,6 +1039,7 @@ def _host_result_stage(
         # reservation. Confirmation failure stops before the host starts.
         if confirm_start is not None:
             confirm_start()
+        from ...extensions.process_runtime import ProcessStdinDispatchUnconfirmed
         from ...usage_goal import observe_goal_execution
 
         rejected_launch = None
@@ -1057,6 +1060,15 @@ def _host_result_stage(
                         launch_guard=host_launch_guard,
                     )
                 )
+        except ProcessStdinDispatchUnconfirmed as exc:
+            # The durable in-progress attempt already blocks blind replay.
+            # No Host result may enter validation or settlement without proof.
+            journal["reason"] = str(exc)
+            persist_journal(journal)
+            effects["host_invoked"] = True
+            unresolved = execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
+            unresolved["error_code"] = "host_outcome_unknown"
+            return None, [], unresolved
         except FirstPartyHostRuntimeRejected as exc:
             # Stdio checks the Goal only before spawn. A native Host can reject
             # after dispatch too, so retain reconciliation for other failures.
