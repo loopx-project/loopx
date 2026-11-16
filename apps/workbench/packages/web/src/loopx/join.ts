@@ -9,6 +9,8 @@ export interface JoinGoalInput {
   agent: string;
   /** The first message; when empty the thread opens with an empty composer, as a new thread does. */
   text?: string;
+  /** Required when the Goal has no earlier conversation here (the daemon cannot know its workspace). */
+  cwd?: string;
 }
 
 export interface JoinGoalResult {
@@ -23,7 +25,7 @@ export async function joinGoalConversation(token: string | undefined, input: Joi
   const res = await fetch('/api/loopx/launch/join', {
     method: 'POST', signal,
     headers: { Authorization: `Bearer ${token ?? ''}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goalId: input.goalId, agent: input.agent, ...(input.text ? { text: input.text } : {}) }),
+    body: JSON.stringify({ goalId: input.goalId, agent: input.agent, ...(input.text ? { text: input.text } : {}), ...(input.cwd ? { cwd: input.cwd } : {}) }),
   });
   const json = await res.json().catch(() => ({})) as Record<string, unknown>;
   if (!res.ok || typeof json.threadId !== 'string') {

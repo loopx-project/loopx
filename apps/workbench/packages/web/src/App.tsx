@@ -925,6 +925,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // The daemon serves a newer build than the page runs: a row under the header offers the reload.
   const [newVersion, setNewVersion] = useState(false);
   const [showDirPicker, setShowDirPicker] = useState(false);
+  // A Goal join that waits on a directory choice: the picker resolves it, or null on cancel.
+  const [goalDirAsk, setGoalDirAsk] = useState<{ resolve: (cwd: string | null) => void } | null>(null);
+  const pickGoalDir = () => new Promise<string | null>(resolve => setGoalDirAsk({ resolve }));
   const [archiveKey, setArchiveKey] = useState(0);
   const [statusOpen, setStatusOpen] = useState(false);
   const [termOpen, setTermOpen] = useState(false);
@@ -2916,6 +2919,19 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onClose={() => setShowDirPicker(false)}
         />
       )}
+      {/* The same picker, answering a Goal join instead of setting the draft's directory. */}
+      {goalDirAsk && (
+        <DirectoryPicker
+          api={api}
+          roots={workdirs}
+          selected={draftCwd}
+          machine={host?.label ?? (hostId ? t('app.remoteMachine') : t('hosts.local'))}
+          onRootsChange={applyWorkdirs}
+          onManageRoots={() => setProjectDialog('roots')}
+          onSelect={cwd => { const ask = goalDirAsk; setGoalDirAsk(null); ask.resolve(cwd); }}
+          onClose={() => { const ask = goalDirAsk; setGoalDirAsk(null); ask.resolve(null); }}
+        />
+      )}
       {projectDialog === 'new' && (
         <NewProjectDialog
           api={api}
@@ -3280,6 +3296,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               onOpenThread={openThreadById}
               onBrowseFiles={threadId => { setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
               defaultAgent={draftAgent || agents[0]?.id || 'codex'}
+              pickDirectory={pickGoalDir}
             />
           </div>
         ) : onSteward ? (

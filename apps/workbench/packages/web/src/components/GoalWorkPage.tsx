@@ -42,7 +42,7 @@ function useGoalDetail(token: string | undefined, goalId: string, refreshKey: nu
 export type GoalTab = 'overview' | 'tasks' | 'chat' | 'files';
 export const GOAL_TABS: GoalTab[] = ['overview', 'tasks', 'chat', 'files'];
 
-export function GoalWorkPage({ token, goalId, tab, onTab, goals, goalsLoaded, attention, failure, onRetry, onChanged, threads, onOpenThread, onBrowseFiles, defaultAgent }: {
+export function GoalWorkPage({ token, goalId, tab, onTab, goals, goalsLoaded, attention, failure, onRetry, onChanged, threads, onOpenThread, onBrowseFiles, defaultAgent, pickDirectory }: {
   token: string | undefined;
   goalId: string;
   tab: GoalTab;
@@ -58,6 +58,8 @@ export function GoalWorkPage({ token, goalId, tab, onTab, goals, goalsLoaded, at
   onOpenThread: (threadId: string) => void;
   onBrowseFiles: (threadId: string) => void;
   defaultAgent: string;
+  /** Opens the app's directory picker; resolves the chosen path, or null when cancelled. */
+  pickDirectory?: () => Promise<string | null>;
 }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const goal = goals.find(g => g.goalId === goalId) ?? null;
@@ -94,7 +96,7 @@ export function GoalWorkPage({ token, goalId, tab, onTab, goals, goalsLoaded, at
       ? <GoalTasks token={token} goalId={goal.goalId} refreshKey={refreshKey} />
       : tab === 'files'
       ? <GoalFiles token={token} goalId={goal.goalId} threads={threads} onBrowse={onBrowseFiles} onOpenConversations={() => onTab('chat')} />
-      : <GoalConversations token={token} goalId={goal.goalId} title={goal.title} threads={threads} onOpenThread={onOpenThread} defaultAgent={defaultAgent} />}
+      : <GoalConversations token={token} goalId={goal.goalId} title={goal.title} threads={threads} onOpenThread={onOpenThread} defaultAgent={defaultAgent} pickDirectory={pickDirectory} />}
   </div>;
 }
 
@@ -162,30 +164,39 @@ function TodoRows({ group, emptyCount }: { group: { items: { id: string; text: s
 }
 
 /** The Goal's loochat conversations: the threads bound to it, and a way to start another. */
-function GoalConversations({ token, goalId, title, threads, onOpenThread, defaultAgent }: {
+function GoalConversations({ token, goalId, title, threads, onOpenThread, defaultAgent, pickDirectory }: {
   token: string | undefined;
   goalId: string;
   title: string;
   threads: Thread[];
   onOpenThread: (threadId: string) => void;
   defaultAgent: string;
+  /** Opens the app's directory picker; resolves the chosen path, or null when cancelled. */
+  pickDirectory?: () => Promise<string | null>;
 }) {
   const bound = threads.filter(thread => goalOf(thread)?.goalId === goalId);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A new conversation joins the Goal's own line: the agent its latest conversation used, else the default.
   const agent = bound[0]?.agent ?? defaultAgent;
-  const join = () => {
+  const join = (cwd?: string) => {
     if (joining) return;
     setJoining(true);
     setError(null);
-    joinGoalConversation(token, { goalId, agent })
+    joinGoalConversation(token, { goalId, agent, ...(cwd ? { cwd } : {}) })
       .then(result => onOpenThread(result.threadId))
       .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
       .finally(() => setJoining(false));
   };
+  const start = async () => {
+    // A Goal with conversations here works where they worked. One without — made in the dashboard —
+    // has no workspace here yet, and the daemon asks the person to name it.
+    if (bound.length || !pickDirectory) return join();
+    const cwd = await pickDirectory();
+    if (cwd) join(cwd);
+  };
   return <section className="goal-threads" aria-label={t('loopx.tabConversations')}>
-    <button type="button" className="goal-thread-new" disabled={joining || !agent} onClick={join}>{t('loopx.newThread')}</button>
+    <button type="button" className="goal-thread-new" disabled={joining || !agent} onClick={() => void start()}>{t('loopx.newThread')}</button>
     {error ? <p role="alert" className="goal-failure">{error}</p> : null}
     {bound.length ? bound.map(thread => (
       <button key={thread.id} type="button" className={`goal-thread is-${thread.status}`} onClick={() => onOpenThread(thread.id)}>
