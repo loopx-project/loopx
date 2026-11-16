@@ -663,6 +663,8 @@ def heartbeat_receipt_view(
         # finished guard: the caller otherwise discovers the debt only when the
         # closeout cannot settle the turn and the work stays unaccounted.
         receipt["settlement_binding_owed"] = True
+        if details.get("selection_required") is True:
+            receipt["selection_required"] = True
     semantic_replan_obligation_id = (
         heartbeat_receipt_semantic_replan_obligation_id(event)
     )
