@@ -748,6 +748,8 @@ export class PiRpcAdapter implements AgentAdapter {
   readonly label = PI_METADATA.label;
   readonly icon = PI_METADATA.icon;
   readonly installGuide = PI_METADATA.installGuide;
+  // Images are checked inside prompt before it is submitted; prompt_sent marks the submission.
+  readonly reportsPromptSent = true;
   // pi has no approval flow, so there is nothing to choose.
   readonly capabilities = {
     workModes: ['execute', 'plan'] as const,

@@ -325,6 +325,9 @@ export interface AgentAdapter {
   readonly icon?: string;
   /** Command or guide to install this agent when it is not yet on PATH. */
   readonly installGuide?: string;
+  /** The session emits turn.phase(prompt_sent) itself, at the moment the prompt really leaves (after
+   *  any preparation inside prompt). Otherwise the manager emits it just before calling prompt. */
+  readonly reportsPromptSent?: boolean;
   readonly capabilities: {
     /** The adapter can inspect existing generated memory; this does not imply generation is enabled. */
     memory?: boolean;

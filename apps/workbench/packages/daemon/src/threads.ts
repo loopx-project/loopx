@@ -3091,7 +3091,7 @@ export class ThreadManager {
         return;
       }
       // Durable before the agent is asked: a restart after this point must not ask it again as if it never was.
-      hooks.emit({ type: 'turn.phase', data: { phase: 'prompt_sent' } });
+      if (!this.adapters.get(thread.agent)?.reportsPromptSent) hooks.emit({ type: 'turn.phase', data: { phase: 'prompt_sent' } });
       const result = await session.prompt(input, hooks);
       if (!start?.data.handover && !start?.data.control) this.autoHandover.reserve(thread.id, turnId);
       if (result.stopReason === 'cancelled' || this.quietTurns.has(turnId) && result.stopReason !== 'error') unread = false;
