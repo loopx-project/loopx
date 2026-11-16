@@ -10,6 +10,7 @@ from ...quota import build_quota_should_run
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ..agent_context import project_agent_context, project_goal_agent_context
 from ..runtime.time import now_utc_iso
+from ..goals.activation import goal_owner_resume_id
 from ..goals.goal_frontier.fallback_source import live_fallback_authority_items
 from ..capability_hooks import (
     InteractionProjectionHookRegistration,
@@ -56,10 +57,14 @@ def _receipt_bound_guard_fields(
     guard = getattr(readback, "semantic_replan_guard", None)
     receipt = getattr(readback, "heartbeat_receipt", None) or {}
     identity = readback.identity.value if readback is not None else None
+    guard_scoped = bool(
+        obligation_id and isinstance(guard, Mapping) and guard.get("scope") == "turn_guard"
+        and guard.get("selected_obligation_id") == obligation_id
+    )
     return {
-        "receipt_bound_replan_guard_scoped": bool(
-            obligation_id and isinstance(guard, Mapping) and guard.get("scope") == "turn_guard"
-            and guard.get("selected_obligation_id") == obligation_id
+        "receipt_bound_replan_guard_scoped": guard_scoped,
+        "receipt_bound_replan_execution_pending": bool(
+            guard_scoped and readback and readback.replan_execution_pending
         ),
         "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
         "receipt_bound_guard_turn_instance_id": identity.turn_instance_id if identity is not None else None,
@@ -777,7 +782,10 @@ def build_live_quota_should_run_decision(
     ):
         from ..work_items.autonomous_replan_ack import load_receipt_replan_ack_candidates
         decision_status_payload["receipt_bound_replan_ack_candidates"] = load_receipt_replan_ack_candidates(
-            runtime_root, goal_id=goal_id, agent_id=agent_id, obligation_id=receipt_bound_replan_obligation_id)
+            runtime_root, goal_id=goal_id, agent_id=agent_id,
+            obligation_id=receipt_bound_replan_obligation_id,
+            guard_recorded_at=receipt_bound_guard_fields["receipt_bound_guard_recorded_at"],
+            guard_turn_instance_id=receipt_bound_guard_fields["receipt_bound_guard_turn_instance_id"])
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
     )
@@ -922,6 +930,7 @@ def build_live_quota_should_run_decision(
             available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
             goal_ref=goal_ref,
+            owner_action_id=goal_owner_resume_id(registered_goal),
         )
     if recovery_todo_id := _receipt_bound_recovery_todo(
         payload, receipt_bound_todo_id, agent_id=agent_id, turn_instance_id=turn_instance_id,
@@ -1060,6 +1069,7 @@ def _build_remote_authority_wait_decision(
             agent_id=agent_id, current_turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
             goal_ref=goal_ref,
+            owner_action_id=goal_owner_resume_id(configured_goal),
         ):
             return payload
 

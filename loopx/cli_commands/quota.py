@@ -26,6 +26,8 @@ from ..control_plane.turn_driver.decision_capture import (
     project_captured_context,
 )
 from ..usage_goal import observe_quota_result
+from ..file_lock import LockAcquireTimeoutError
+from ..rollout_event_log import RolloutAppendPreconditionChanged
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.quota.effective_action import EffectiveAction
@@ -40,6 +42,7 @@ from ..control_plane.quota.heartbeat_receipt import (
     attach_uncommitted_heartbeat_receipt,
     fail_heartbeat_receipt,
     find_heartbeat_receipt,
+    heartbeat_receipt_request_subject,
     heartbeat_receipt_view,
 )
 from .quota_registration import (
@@ -671,6 +674,123 @@ def handle_quota_command(
     return run_with_quota_failure_reader(args, limit, print_payload=print_payload, run=execute)
 
 
+def _append_quota_heartbeat_receipt(
+    payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    registry_path: Path,
+    runtime_root_arg: str | None,
+    runtime_root: Path,
+    goal_ref: dict[str, str] | None,
+    append_cli_rollout_event: RolloutEventAppender,
+    turn_instance_id: str,
+    stall_observation: str,
+    rollout_todo_id: str | None,
+    rollout_replan_obligation_id: str | None,
+    rollout_details: dict[str, object],
+    upgrade_recovery_wait: bool,
+    requested_todo_id: str | None,
+) -> dict[str, object]:
+    from ..control_plane.quota.unsettled_host_turn import recovery_admission_append_precondition
+
+    settlement_identity = (
+        SettlementIdentity(
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            todo_id=rollout_todo_id,
+            turn_instance_id=turn_instance_id,
+            replan_obligation_id=rollout_replan_obligation_id,
+        )
+        if rollout_todo_id or rollout_replan_obligation_id
+        else None
+    )
+    rollout_details.update(
+        {
+            "turn_instance_id": turn_instance_id,
+            "stall_observation": stall_observation,
+            "settlement_effect_id": settlement_identity.effect_id if settlement_identity is not None else "",
+        }
+    )
+    try:
+        with recovery_admission_append_precondition(
+            payload, registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=args.goal_id, agent_id=args.agent_id,
+            turn_instance_id=turn_instance_id, goal_ref=goal_ref,
+        ) as precondition:
+            append_cli_rollout_event(
+                payload,
+                registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg,
+                event_kind="quota_should_run",
+                goal_ref=goal_ref,
+                agent_id=args.agent_id,
+                run_id=turn_instance_id,
+                status=str(payload.get("effective_action") or payload.get("decision") or "should-run"),
+                summary=f"heartbeat quota receipt committed for turn={turn_instance_id} stall={stall_observation}",
+                details=rollout_details,
+                allow_failed=True,
+                idempotency_fields=[
+                    "goal_id",
+                    "event_kind",
+                    "agent_id",
+                    "run_id",
+                    *(["goal_ref"] if goal_ref is not None else []),
+                    *(["status"] if upgrade_recovery_wait else []),
+                ],
+                **({"precondition": precondition} if precondition is not None else {}),
+            )
+        receipt = find_heartbeat_receipt(
+            runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+            turn_instance_id=turn_instance_id, goal_ref=goal_ref,
+        )
+    except LockAcquireTimeoutError as exc:
+        failure = _export("quota_failure_payload")(
+            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg, error=exc,
+        )
+        fail_heartbeat_receipt(
+            failure, turn_instance_id=turn_instance_id, stall_observation=stall_observation,
+            reason="recovery receipt append could not acquire the quota authority lock",
+        )
+        return failure
+    if receipt is None:
+        fail_heartbeat_receipt(
+            payload, turn_instance_id=turn_instance_id, stall_observation=stall_observation,
+            reason="heartbeat receipt append could not be read back; retry quota should-run with the same --turn-instance-id",
+        )
+        return payload
+    if precondition is not None and receipt.get("status") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
+        raise RolloutAppendPreconditionChanged("A different guard was recorded for this Turn.")
+
+    rollout_event = payload.get("rollout_event")
+    status = "replayed"
+    if isinstance(rollout_event, Mapping) and rollout_event.get("appended"):
+        status = "upgraded" if upgrade_recovery_wait else "committed"
+    payload["heartbeat_receipt"] = heartbeat_receipt_view(receipt, turn_instance_id=turn_instance_id, status=status)
+    _export("commit_requested_action_selection")(payload, requested_todo_id=requested_todo_id)
+    return payload
+
+
+def _can_upgrade_recovery_wait(
+    payload: Mapping[str, object], selection: RequestedQuotaActionSelection,
+) -> bool:
+    receipt = selection.receipt
+    if receipt is None or payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
+        return False
+    details = receipt.get("details")
+    if payload.get("should_run") is not True or not isinstance(details, Mapping) or details.get("should_run") is not False:
+        return False
+    if (
+        receipt.get("status") != EffectiveAction.BLOCKED_WAIT.value
+        or selection.receipt_bound_todo_id
+        or selection.receipt_bound_replan_obligation_id
+        or heartbeat_receipt_request_subject(receipt) is not None
+    ):
+        raise HeartbeatReceiptIdentityConflictError(
+            "The existing Turn has no recovery grant; use a fresh Turn for recovery."
+        )
+    return True
+
+
 def _execute_quota_command(
     args: argparse.Namespace,
     *,
@@ -680,6 +800,7 @@ def _execute_quota_command(
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
     retained_action_selection_todo_id: str | None = None,
+    recovery_refreshes_remaining: int = 3,
 ) -> int:
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
@@ -687,6 +808,7 @@ def _execute_quota_command(
     heartbeat_receipt_existing_status = "replayed"
     heartbeat_receipt_existing_appended = False
     heartbeat_receipt_ready = False
+    upgrade_recovery_wait = False
     action_selection_preflight_failed = False
     closeout_query_unavailable = False
     action_selection: RequestedQuotaActionSelection | None = None
@@ -818,7 +940,10 @@ def _execute_quota_command(
                         action_selection_preflight.receipt_appended
                     )
             if heartbeat_turn_id and reentry is None and not action_selection_preflight_failed:
-                if heartbeat_receipt_existing:
+                # A wait receipt grants no recovery allowance. After a valid
+                # resume, bind its first grant under the ordinary append fence.
+                upgrade_recovery_wait = _can_upgrade_recovery_wait(payload, action_selection)
+                if heartbeat_receipt_existing and not upgrade_recovery_wait:
                     (
                         heartbeat_receipt_existing,
                         heartbeat_receipt_existing_status,
@@ -961,6 +1086,7 @@ def _execute_quota_command(
             reentry_args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
             print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
             capture_directory=capture_directory, retained_action_selection_todo_id=retained_todo_id,
+            recovery_refreshes_remaining=recovery_refreshes_remaining,
         )
     preview = args.quota_command == "should-run" and getattr(args, "dry_run", False)
     if not preview and _export("should_log_quota")(args.quota_command, payload):
@@ -1003,7 +1129,7 @@ def _execute_quota_command(
                         + (f": {prior_reason}" if prior_reason else "")
                     ),
                 )
-            elif heartbeat_receipt_existing:
+            elif heartbeat_receipt_existing and not upgrade_recovery_wait:
                 _export("render_existing_heartbeat_receipt_payload")(
                     payload,
                     receipt=heartbeat_receipt_existing,
@@ -1020,93 +1146,29 @@ def _execute_quota_command(
                     ),
                 )
             else:
-                settlement_identity = (
-                    SettlementIdentity(
-                        goal_id=args.goal_id,
-                        agent_id=args.agent_id,
-                        todo_id=rollout_todo_id,
-                        turn_instance_id=heartbeat_turn_id,
-                        replan_obligation_id=rollout_replan_obligation_id,
+                try:
+                    payload = _append_quota_heartbeat_receipt(
+                        payload, args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+                        runtime_root=runtime_root, goal_ref=goal_ref, append_cli_rollout_event=append_cli_rollout_event,
+                        turn_instance_id=heartbeat_turn_id, stall_observation=heartbeat_stall_observation,
+                        rollout_todo_id=rollout_todo_id, rollout_replan_obligation_id=rollout_replan_obligation_id,
+                        rollout_details=rollout_details, upgrade_recovery_wait=upgrade_recovery_wait,
+                        requested_todo_id=action_selection.requested_todo_id if action_selection is not None else None,
                     )
-                    if rollout_todo_id or rollout_replan_obligation_id
-                    else None
-                )
-                rollout_details.update(
-                    {
-                        "turn_instance_id": heartbeat_turn_id,
-                        "stall_observation": heartbeat_stall_observation,
-                        "settlement_effect_id": (
-                            settlement_identity.effect_id
-                            if settlement_identity is not None
-                            else ""
-                        ),
-                    }
-                )
-                append_cli_rollout_event(
-                    payload,
-                    registry_path=registry_path,
-                    runtime_root_arg=runtime_root_arg,
-                    event_kind="quota_should_run",
-                    goal_ref=goal_ref,
-                    agent_id=args.agent_id,
-                    run_id=heartbeat_turn_id,
-                    status=str(
-                        payload.get("effective_action")
-                        or payload.get("decision")
-                        or "should-run"
-                    ),
-                    summary=(
-                        "heartbeat quota receipt committed for "
-                        f"turn={heartbeat_turn_id} stall={heartbeat_stall_observation}"
-                    ),
-                    details=rollout_details,
-                    allow_failed=True,
-                    idempotency_fields=[
-                        "goal_id",
-                        "event_kind",
-                        "agent_id",
-                        "run_id",
-                        *(["goal_ref"] if goal_ref is not None else []),
-                    ],
-                )
-                receipt = find_heartbeat_receipt(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    turn_instance_id=heartbeat_turn_id,
-                    goal_ref=goal_ref,
-                )
-                if receipt:
-                    rollout_event_value = payload.get("rollout_event")
-                    rollout_event: Mapping[str, object] = (
-                        rollout_event_value
-                        if isinstance(rollout_event_value, Mapping)
-                        else {}
-                    )
-                    payload["heartbeat_receipt"] = heartbeat_receipt_view(
-                        receipt,
-                        turn_instance_id=heartbeat_turn_id,
-                        status="committed"
-                        if rollout_event.get("appended")
-                        else "replayed",
-                    )
-                    _export("commit_requested_action_selection")(
-                        payload,
-                        requested_todo_id=(
-                            action_selection.requested_todo_id
-                            if action_selection is not None
-                            else None
-                        ),
-                    )
-                else:
+                except RolloutAppendPreconditionChanged:
+                    if recovery_refreshes_remaining:
+                        return _execute_quota_command(
+                            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+                            print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
+                            capture_directory=capture_directory,
+                            retained_action_selection_todo_id=retained_action_selection_todo_id,
+                            recovery_refreshes_remaining=recovery_refreshes_remaining - 1,
+                        )
                     fail_heartbeat_receipt(
                         payload,
                         turn_instance_id=heartbeat_turn_id,
                         stall_observation=heartbeat_stall_observation,
-                        reason=(
-                            "heartbeat receipt append could not be read back; retry "
-                            "quota should-run with the same --turn-instance-id"
-                        ),
+                        reason="recovery admission changed repeatedly before append; retry the same Turn",
                     )
         else:
             _record_non_guard_quota_event(

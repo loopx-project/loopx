@@ -103,6 +103,16 @@ export function heartbeatReceiptFactFromEvent(
   };
 }
 
+/** Read positive autonomous replan admission from an effective guard receipt. */
+export function admitsAutonomousReplan(event: JsonObject, fact: HeartbeatReceiptFact): boolean {
+  const guard = heartbeatReceiptDetails(event);
+  const obligationId = normalizeHeartbeatReplanObligationId(guard.semantic_replan_obligation_id);
+  return fact.settlement_effect_id !== null && obligationId !== null
+    && (fact.todo_id !== null || obligationId === fact.replan_obligation_id)
+    && guard.interaction_mode === "autonomous_replan" && guard.ok === true && guard.should_run === true
+    && guard.must_attempt_work === true && guard.delivery_allowed === false && guard.quiet_noop_allowed === false;
+}
+
 /**
  * Resolve the settlement binding a persisted receipt declares.
  *

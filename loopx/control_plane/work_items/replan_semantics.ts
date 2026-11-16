@@ -111,11 +111,28 @@ function historicalAckDelta(
   const ackTurn = typeof ack.turn_instance_id === "string" ? ack.turn_instance_id.trim() : "";
   const generated = typeof ack.generated_at === "string"
     ? parseTodoTimestampMicros(ack.generated_at) : null;
+  // A generated_at that is already strictly later proves order on its own.
+  // The compact run clock is whole seconds, so a stamp inside the admission
+  // second can be either side of a fractional guard_recorded_at. That
+  // candidate needs the original refresh_state event, bound to this Goal,
+  // Agent, obligation, and ACK Turn, with both its recorded time and its
+  // log position after admission. Missing or conflicting order stays pending.
+  const admissionSecond = admitted / 1_000_000n * 1_000_000n;
+  const preciseLater = generated !== null && generated > admitted;
+  const sameSecond = generated !== null && generated % 1_000_000n === 0n &&
+    generated >= admissionSecond && !preciseLater;
+  const written = typeof ack.writeback_recorded_at === "string"
+    ? parseTodoTimestampMicros(ack.writeback_recorded_at) : null;
+  const writebackAfterAdmission = sameSecond && written !== null && written > admitted &&
+    ack.writeback_follows_admission === true && ack.writeback_goal_id === goal &&
+    ack.writeback_agent_id === agent && ack.writeback_turn_instance_id === ackTurn &&
+    ack.writeback_obligation_id === selected;
+  const afterAdmission = preciseLater || writebackAfterAdmission;
   const outcomes = strings(delta.outcomes);
   const satisfying = strings(delta.satisfying_outcomes);
   return ack.schema_version === "autonomous_replan_ack_v0" && ack.recorded === true &&
     ack.goal_id === goal && ack.agent_id === agent && ackTurn && ackTurn !== guardTurn &&
-    generated !== null && generated > admitted &&
+    generated !== null && afterAdmission &&
     delta.schema_version === "replan_semantic_delta_v0" && delta.accepted === true &&
     delta.obligation_id === selected && outcomes.length > 0 && satisfying.length > 0 &&
     outcomes.every(outcome => KNOWN_OUTCOMES.has(outcome)) &&
