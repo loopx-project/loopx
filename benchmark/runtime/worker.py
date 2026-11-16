@@ -111,7 +111,7 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         if context_dir:
             command += ["--context-delivery", "on", "--codex-context-dir", context_dir]
     if not native_goal:
-        command += ["--turn-envelope" if display.turn_envelope else "--complete-turn"]
+        command += ["--complete-turn"]
         if env.get("LOOPX_CONTEXT_DELIVERY") == "off":
             command += ["--context-delivery", "off"]
     result = subprocess.run(

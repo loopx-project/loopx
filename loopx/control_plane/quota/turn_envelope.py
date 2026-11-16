@@ -320,41 +320,11 @@ def compose_turn_decision(
     share_inline_diagnostics: bool = False,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
-    source, _ = _compose_turn_source(payload,
-        scheduler_execution_context=scheduler_execution_context, capability_context=capability_context,
-        share_inline_diagnostics=share_inline_diagnostics)
-    return source
-
-
-def compose_turn_decision_with_raw_envelope(
-    payload: Mapping[str, Any], *, scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
-    ) = None,
-    captured_decision_path: str | None,
-    capability_context: Sequence[Mapping[str, Any]] = (),
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Return the complete capture and its bounded compatibility view in one call."""
-    return _compose_turn_source(payload,
-        scheduler_execution_context=scheduler_execution_context, capability_context=capability_context,
-        legacy_output={"include_legacy_envelope": True,
-                       **({"captured_decision_path": captured_decision_path}
-                          if captured_decision_path is not None else {})})
-
-
-def _compose_turn_source(
-    payload: Mapping[str, Any], *, scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
-    ) = None,
-    legacy_output: Mapping[str, Any] | None = None,
-    capability_context: Sequence[Mapping[str, Any]] = (),
-    share_inline_diagnostics: bool = False,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
     source, request = _complete_composition_input(payload, scheduler_execution_context, capability_context)
     result = _turn_envelope_result("compose_complete", payload=source, source_edits=True,
-        **request, **(legacy_output or {}),
+        **request,
         **({"share_inline_diagnostics": True} if share_inline_diagnostics else {}))
-    view = result.pop("legacy_envelope", None) if legacy_output is not None else None
-    return _apply_context_projection_changes(source, result), view if isinstance(view, dict) else None
+    return _apply_context_projection_changes(source, result)
 
 
 def _complete_composition_input(

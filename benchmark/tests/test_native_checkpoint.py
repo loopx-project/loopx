@@ -1149,14 +1149,9 @@ def test_held_guard_checkpoint_binds_original_source_and_display(
             stdout, stderr = command_process.communicate(timeout=30)
             assert command_process.returncode == 0, (stdout, stderr)
             shown = json.loads(stdout)
-            if historical:
-                assert shown["schema_version"] == "loopx_turn_envelope_v0"
-                assert shown["detail_ref"]["captured_decision"]["path"] == str(held["path"])
-                signature = shown["action_signature"]
-                assert signature["matches"] is True
-                assert signature["source_decision_hash"] == source_decision["contract_binding"]["content_hash"]
-            else:
-                assert shown == source_decision
+            # Both spellings now return the captured complete source. The
+            # original spelling above remains part of the sealed replay audit.
+            assert shown == source_decision
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
     assert "thread/fork" not in calls

@@ -221,9 +221,8 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "Request the bounded v0 Turn envelope with raw --context-delivery off. "
-            "Progressive or Delta delivery use the complete decision. Managed handoff "
-            "requires the Host to release the complete capture before rendering the selected view."
+            "Deprecated source spelling: new guards always return the complete C1 contract. "
+            "Context delivery off keeps it inline; this option does not select settlement ownership."
         ),
     )
     turn_view.add_argument("--complete-turn", action="store_true",

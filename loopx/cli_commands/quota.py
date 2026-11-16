@@ -15,7 +15,7 @@ from .quota_presentation import (
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,
     attach_quota_settlement_guidance, budgeted_spend_result, compose_quota_cli_source,
-    native_quota_result, project_scheduler_observation, raw_quota_turn_view,
+    native_quota_result, project_scheduler_observation,
 )
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
@@ -354,7 +354,6 @@ def _prepare_quota_result_context(
                 and activation.get("scenario") == "codex_app_heartbeat"
                 and (getenv("CODEX_THREAD_ID") or getattr(args, "prepared_capture_reference", False))
                 and (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
-                and not getattr(args, "turn_envelope", False)
                 and payload.get("ok") is True and payload.get("effective_action") == EffectiveAction.NORMAL_RUN.value
                 and payload.get("normal_delivery_allowed") is True):
             payload = _project_native_cli_settlement(payload)
@@ -524,7 +523,7 @@ def _publish_quota_result(
         # The SSH Goal hands spend to the runtime after authorized writeback.
         # All guard profiles share the same work source.
         if (is_quota_guard and context is not None and heartbeat_turn_id is not None
-                and args.format == "json" and not getattr(args, "turn_envelope", False)):
+                and args.format == "json"):
             from ..control_plane.scheduler.execution_context import (
                 SchedulerRuntimeProfile,
                 scheduler_runtime_profile_for_execution_context,
@@ -558,7 +557,6 @@ def _publish_quota_result(
     present_capture_failure = context_delivery_enabled and args.format == "json" and (
         not deferred_context or output_limit is not None
     )
-    raw_envelope, legacy_view = False, None
     delivery_request = None
     if is_quota_guard:
         from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
@@ -574,7 +572,7 @@ def _publish_quota_result(
                 ) if isinstance(payload.get("interaction_contract"), Mapping) else payload)
                 print_payload(observation, args.format, _quota_renderer(args))
                 return 0 if observation.get("ok") is True else 1
-            payload, raw_envelope, legacy_view = compose_quota_cli_source(
+            payload = compose_quota_cli_source(
                 payload, args, activation, compose=_export("compose_turn_decision"),
                 scheduler_context=context.scheduler_context if context is not None else None,
                 capture_directory=capture_directory, capability_context=capability_context,
@@ -608,9 +606,6 @@ def _publish_quota_result(
             capture_directory, getattr(args, "decision_handoff_socket", None),
             context_delivery_enabled, capture_sha256=captured_digest,
         )
-    if raw_envelope:
-        print_payload(raw_quota_turn_view(payload, legacy_view), args.format, _quota_renderer(args))
-        return 0 if payload.get("ok") is True else 1
     captured_payload = payload
     if not is_quota_guard:
         payload = _project_quota_cli_payload(payload, args, detail_sections)

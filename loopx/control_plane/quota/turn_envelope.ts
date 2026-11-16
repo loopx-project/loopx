@@ -2715,13 +2715,13 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return sourceEdits ? contextProjectionChanges(payload, view, precision?.values) : view;
   }
   if (operation === "compose_complete") {
-    const legacy = request.include_legacy_envelope === undefined ? false
-      : requireBoolean(request.include_legacy_envelope, "include_legacy_envelope");
-    if (legacy && request.source_edits !== true) {
-      throw new EffectRuntimeRequestError("legacy Turn view requires raw complete source edits");
+    if (Object.hasOwn(request, "include_legacy_envelope")) {
+      throw new EffectRuntimeRequestError(
+        "legacy quota display is retired; use the complete source or the original historical capture reader",
+      );
     }
     if (request.host_todo_settlement === true) {
-      if (request.source_edits === true || legacy) {
+      if (request.source_edits === true) {
         throw new EffectRuntimeRequestError("Host Todo settlement cannot request a second decision view");
       }
       // The result is composed and checked here. For a supplied complete
@@ -2731,21 +2731,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const result = composeCompleteTurnDecision(request);
     if (request.source_edits !== true) return result;
     const input = requireJsonObject(request.payload, "complete Turn source");
-    const changes = contextProjectionChanges(input, result);
-    if (!legacy) return changes;
-    // Without a capture, preserve the historical bounded action on the same
-    // decided facts. Complete-only authoring belongs to the original reader.
-    // With a capture, the view and replan commands both bind its complete hash.
-    try {
-      const displaySource = request.captured_decision_path === undefined ? input : result;
-      return {...changes, legacy_envelope: boundedTurnEnvelope(
-        request, displaySource, request.scheduler_execution_args as string, result)};
-    } catch (error) {
-      if (!(error instanceof EffectRuntimeRequestError)) throw error;
-      // The caller still needs to save the original decision and report its
-      // receipt even when the optional display cannot be produced.
-      return {...changes, legacy_envelope: null};
-    }
+    return contextProjectionChanges(input, result);
   }
   if (operation === "complete_consumer") {
     requireCompleteTurnDecision(request.payload, request.source_number_tokens);

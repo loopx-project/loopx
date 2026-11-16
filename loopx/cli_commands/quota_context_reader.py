@@ -73,8 +73,7 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     ):
         capture_root = capture_directory.parent
     complete_turn = getattr(args, "complete_turn", False)
-    turn_envelope = getattr(args, "turn_envelope", False)
-    if root is None and capture_root is None and not (complete_turn or turn_envelope or retain_delivery_options):
+    if root is None and capture_root is None and not (complete_turn or retain_delivery_options):
         return
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
@@ -172,8 +171,8 @@ def _bind_capture_transport_options(template: str, args: argparse.Namespace, *,
         while option in words[start:]:
             index = words.index(option, start)
             del words[index:index + 2]
-    if getattr(args, "turn_envelope", False) and "--turn-envelope" not in words:
-        words.append("--turn-envelope")
+    # Preserve recorded historical words, but never add the retired source
+    # spelling to a newly generated selection command.
     if getattr(args, "complete_turn", False) and "--complete-turn" not in words:
         words.append("--complete-turn")
     return shlex.join(words)

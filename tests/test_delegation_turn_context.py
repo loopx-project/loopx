@@ -297,7 +297,7 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("delivery", ["raw_envelope", "unified_inline", pytest.param("native_files",
+@pytest.mark.parametrize("delivery", ["deprecated_source_spelling", "unified_inline", pytest.param("native_files",
     marks=pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX"))])
 @pytest.mark.parametrize("partial", [False, True], ids=["unanswered", "partial"])
 @pytest.mark.parametrize("parent_context", ["off", "on"])
@@ -384,7 +384,7 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     for turn_id in ("agenda-turn-one", "agenda-turn-two"):
         # Explicit legacy display and canonical machine JSON have different
         # read shapes. Native must exercise capture even under an inline parent.
-        if delivery == "raw_envelope":
+        if delivery == "deprecated_source_spelling":
             presentation = ["--turn-envelope", "--context-delivery", "off"]
         elif delivery == "unified_inline":
             presentation = ["--context-delivery", "off"]
@@ -429,11 +429,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
                 "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
             required_reads = values["/interaction_contract/agent_channel/required_reads"]
         else:
-            if delivery == "raw_envelope":
-                assert packet["schema_version"] == "loopx_turn_envelope_v0"
-                channel = packet
-            else:
-                channel = packet["interaction_contract"]["agent_channel"]
+            assert packet["schema_version"] == "loopx_turn_envelope_v1"
+            channel = packet["interaction_contract"]["agent_channel"]
             work_context = channel["work_context"]
             source = next(row for row in work_context["sources"] if row.get("hook_id") == "manager.context_inbox")
             content, required_reads = source["content"], channel["required_reads"]

@@ -69,7 +69,7 @@ def test_current_selection_and_settlement_override_goal_command(tmp_path, provid
         assert recommendation["reason"] == interaction["agent_channel"]["primary_action"]
         assert recommendation["spend_policy"] == interaction["cli_channel"]["spend_policy"]
         assert full["selected_todo"]["todo_id"] == cli.TODO_ID
-        envelope = current if name == "envelope" else build_turn_envelope(current)
+        envelope = build_turn_envelope(current)
         assert envelope["action_signature"]["matches"] is True
         assert extract_turn_authority({"turn_envelope": envelope})["primary_action"] == interaction["agent_channel"]["primary_action"]
         assert full["agent_command"] == COMMAND  # Configuration remains source evidence.
