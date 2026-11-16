@@ -108,3 +108,22 @@ test('cron: finds next fire in specified timezone', () => {
   assert.equal(next.toISOString(), '2026-10-13T01:00:00.000Z'); // 09:00 CST is 01:00 UTC
 });
 
+test('cron: next dates and missed fires follow the timezone across DST', () => {
+  const daily = parseCron('30 0 * * *');
+  for (const [from, next, resumed] of [
+    ['2026-03-08T05:30:00Z', '2026-03-09T04:30:00.000Z', '2026-03-09T06:00:00Z'],
+    ['2026-11-01T04:30:00Z', '2026-11-02T05:30:00.000Z', '2026-11-02T07:00:00Z'],
+  ]) {
+    assert.equal(nextCron(daily, new Date(from), 'America/New_York')?.toISOString(), next);
+    assert.equal(countCronFires(daily, new Date(from), new Date(resumed), 'America/New_York'), 1);
+  }
+  // Skipping an excluded date must still land at the next date's real boundary.
+  assert.equal(nextCron(parseCron('30 0 * * mon'), new Date('2026-03-08T05:30:00Z'), 'America/New_York')?.toISOString(), '2026-03-09T04:30:00.000Z');
+});
+
+test('cron: DST gaps are skipped and repeated minutes stay in chronological order', () => {
+  assert.equal(nextCron(parseCron('30 2 * * *'), new Date('2026-03-08T05:00:00Z'), 'America/New_York')?.toISOString(), '2026-03-09T06:30:00.000Z');
+  assert.equal(nextCron(parseCron('30 1 * * *'), new Date('2026-11-01T05:30:00Z'), 'America/New_York')?.toISOString(), '2026-11-01T06:30:00.000Z');
+  // Lord Howe changes by half an hour, so the transition cannot be treated as a fixed hour.
+  assert.equal(nextCron(parseCron('45 1 * * *'), new Date('2026-04-04T14:45:00Z'), 'Australia/Lord_Howe')?.toISOString(), '2026-04-04T15:15:00.000Z');
+});

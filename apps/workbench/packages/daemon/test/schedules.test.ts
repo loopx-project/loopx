@@ -396,3 +396,38 @@ test('schedules: enable and disable', async () => {
   assert.ok(on.nextRunAt);
   await api(`/api/schedules/${s.id}`, { method: 'DELETE' });
 });
+
+for (const [timezone, previous, resumed] of [
+  ['UTC', '2026-03-08T00:30:00Z', '2026-03-09T02:00:00Z'],
+  ['America/New_York', '2026-03-08T05:30:00Z', '2026-03-09T06:00:00Z'],
+]) {
+  test(`schedules: restart catch-up preserves the DST recovery watermark in ${timezone}`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse(resumed) });
+    const data = mkdtempSync(join(tmpdir(), 'loochat-sched-dst-'));
+    const db = new Store(data);
+    const adapters = new Map([['stub', stubAdapter]]);
+    const threads = new ThreadManager(db, adapters, [workroot], new AttachmentStore(data));
+    const first = new Scheduler(db, threads, adapters);
+    const second = new Scheduler(db, threads, adapters);
+    try {
+      const schedule = await first.create({ ...scheduleBody, cron: '30 0 * * *', timezone, catchUp: true });
+      db.updateSchedule(schedule.id, { lastFiredAt: new Date(previous).toISOString() });
+      first.start();
+      assert.equal(db.listScheduleRuns(schedule.id).find(r => r.status === 'missed')?.message, '停机期间错过了 1 次运行');
+      assert.equal(db.getSchedule(schedule.id)?.lastFiredAt, new Date(resumed).toISOString());
+      for (let i = 0; i < 100 && !db.listScheduleRuns(schedule.id).some(r => r.status === 'done'); i++) {
+        await new Promise(r => setTimeout(r, 20));
+      }
+      assert.equal(db.listScheduleRuns(schedule.id).filter(r => r.status === 'done').length, 1);
+      first.dispose();
+      second.start();
+      assert.equal(db.listScheduleRuns(schedule.id).length, 2, 'the recovery watermark prevents a second catch-up');
+    } finally {
+      first.dispose();
+      second.dispose();
+      await threads.shutdown();
+      db.close();
+      rmSync(data, { recursive: true, force: true });
+    }
+  });
+}

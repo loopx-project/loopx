@@ -163,49 +163,49 @@ export function cronMatches(f: CronFields, at: Date, tz?: string | null): boolea
   return dayMatchesParts(f, p);
 }
 
+/** The first real minute on a different local date; a DST day need not last 24 hours. */
+function nextDate(at: Date, p: ZonedParts, tz?: string | null): number {
+  const sameDate = (time: number) => {
+    const q = zonedParts(new Date(time), tz);
+    return q.year === p.year && q.month === p.month && q.date === p.date;
+  };
+  const guess = at.getTime() + (1440 - p.hours * 60 - p.minutes) * 60_000;
+  if (sameDate(guess - 60_000) && !sameDate(guess)) return guess;
+  let lo = at.getTime(), hi = lo + 48 * 60 * 60_000;
+  while (hi - lo > 60_000) {
+    const mid = Math.floor((lo + hi) / 2 / 60_000) * 60_000;
+    if (sameDate(mid)) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
 /** The first matching minute strictly after `after`, or null when nothing matches for years. */
 export function nextCron(f: CronFields, after: Date, tz?: string | null): Date | null {
-  const t = new Date(after.getTime());
-  t.setSeconds(0, 0);
-  t.setTime(t.getTime() + 60_000);
+  const t = new Date(Math.floor(after.getTime() / 60_000) * 60_000 + 60_000);
 
-  // Search up to 2 years ahead.
+  // Search up to 2 years ahead, advancing by actual timezone date boundaries.
   for (let dayCount = 0; dayCount < 366 * 2; dayCount++) {
     const p = zonedParts(t, tz);
-    if (!dayMatchesParts(f, p)) {
-      // Advance to the start of the next day in the target timezone.
-      const minsToNextDay = (23 - p.hours) * 60 + (60 - p.minutes);
-      t.setTime(t.getTime() + minsToNextDay * 60_000);
-      continue;
-    }
-
-    // Day matches, find matching hour and minute today.
-    let found = false;
-    for (const h of f.hours) {
-      if (h < p.hours) continue;
-      for (const m of f.minutes) {
-        if (h === p.hours && m < p.minutes) continue;
-        const diffMins = (h - p.hours) * 60 + (m - p.minutes);
-        t.setTime(t.getTime() + diffMins * 60_000);
-        // Verify timezone parts in case of DST jump.
-        const verified = zonedParts(t, tz);
-        if (verified.hours === h && verified.minutes === m && dayMatchesParts(f, verified)) {
-          return t;
+    const end = nextDate(t, p, tz);
+    if (dayMatchesParts(f, p)) {
+      const wallMinutes = 1440 - p.hours * 60 - p.minutes;
+      if (end - t.getTime() !== wallMinutes * 60_000) {
+        // An offset change remains today: visit real minutes so gaps and repeats keep their order.
+        for (; t.getTime() < end; t.setTime(t.getTime() + 60_000)) {
+          if (cronMatches(f, t, tz)) return t;
         }
-        // If DST distorted the time, advance minute by minute until match.
-        while (!cronMatches(f, t, tz)) {
-          t.setTime(t.getTime() + 60_000);
-          if (t.getTime() - after.getTime() > 366 * 2 * 86_400_000) return null;
+      } else {
+        for (const h of f.hours) {
+          if (h < p.hours) continue;
+          for (const m of f.minutes) {
+            if (h === p.hours && m < p.minutes) continue;
+            return new Date(t.getTime() + ((h - p.hours) * 60 + m - p.minutes) * 60_000);
+          }
         }
-        return t;
       }
     }
-
-    if (!found) {
-      // No more matching hours today; advance to next day.
-      const minsToNextDay = (23 - p.hours) * 60 + (60 - p.minutes);
-      t.setTime(t.getTime() + minsToNextDay * 60_000);
-    }
+    t.setTime(end);
   }
   return null;
 }
