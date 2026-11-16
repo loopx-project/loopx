@@ -210,6 +210,15 @@ Paired diffs do not certify translation accuracy.
     source-bound historical views and optional provider extensions. Source
     retention, original readback, actual adoption and complete-cost evidence
     remain unqualified; no runtime, default or experiment change.
+- [Sparse Working Memory at Context Compaction v0](sparse-compaction-working-memory-v0.md)
+  ([中文版](sparse-compaction-working-memory-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; no runtime or default change.
+  - **Current boundary:** A bounded T02 companion to history working sets:
+    consolidate source-bound working memory at compaction and retain or restore
+    a short recognizable structure. Compare deterministic sparse selection,
+    optional semantic consolidation and the current host path on accepted task
+    outcomes and complete costs. Host retention, expansion, utility and product
+    qualification remain open; no model experiment starts with this RFC.
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
   ([中文版](typescript-control-plane-migration-v0.zh-CN.md))
   - **Delivery on `main`:** Substantially implemented; active migration.
