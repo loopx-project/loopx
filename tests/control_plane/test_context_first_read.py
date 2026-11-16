@@ -2069,6 +2069,7 @@ def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, 
     selection = cli + "/selection_command"
     settlement = cli + "/settlement_plan"
     receipt_path = "/heartbeat_receipt"
+    audit = cli + "/vision_continuation_audit"
 
     def read(navigation, *pointers):
         return read_selection(navigation["recovery"]["command"] +
@@ -2103,8 +2104,9 @@ def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, 
     assert cold[precondition] == first_plan["ordered_steps"][index]["precondition"]
     _, fallback_actions = read(first, cli + "/next_cli_actions")
     assert first_plan["ordered_steps"][index]["command_template"] in fallback_actions[cli + "/next_cli_actions"]
-    original_page, original = read(first, authoring, precondition)
+    original_page, original = read(first, authoring, precondition, audit)
     assert original[authoring] == first_plan["ordered_steps"][index]["vision_authoring"]
+    assert original[audit] == cold[audit] and original[audit]["required"] is True
     deliver(native, event, [original_page])
     # Settle the original admitted Turn so that the next guard exercises
     # ordinary selection rather than correctly entering unfinished recovery.
@@ -2135,6 +2137,9 @@ def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, 
     current_page, facts = read_selection(current["first_read_command"])
     assert authoring in current_page.get("previously_delivered_fields", [])
     assert precondition in current_page.get("previously_delivered_fields", [])
+    _, current_audit = read(current, audit)
+    assert current_audit[audit] == original[audit]
+    assert audit in current_page.get("previously_delivered_fields", []) and audit not in facts
     assert precondition not in facts and cli + "/next_cli_actions" not in facts
     assert "previously_delivered_fields" in current["instruction"]
     assert facts[command] == plan["ordered_steps"][index]["semantic_closeout_command_template"]
@@ -2149,11 +2154,16 @@ def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, 
     replay_page, facts = read_selection(replay["first_read_command"])
     assert authoring in replay_page.get("previously_delivered_fields", [])
     assert facts[command] == plan["ordered_steps"][index]["semantic_closeout_command_template"]
-    _, explicit = read(replay, authoring, precondition)
+    _, explicit = read(replay, authoring, precondition, audit)
     assert explicit == original
+
+
 @pytest.mark.parametrize("version", ["quota_settlement_plan_v1", "quota_settlement_plan_v2"])
-@pytest.mark.parametrize("transition", ["same", "changed", "wrong_binding", "unknown_version", "rebound"])
-def test_native_first_read_reuses_only_observed_writeback_precondition(
+@pytest.mark.parametrize("transition", [
+    "same", "changed", "audit_changed", "audit_unobserved", "audit_reference",
+    "wrong_binding", "unknown_version", "rebound",
+])
+def test_native_first_read_reuses_only_observed_settlement_guidance(
     tmp_path, monkeypatch, decision, version, transition,
 ):
     from test_codex_context_lifecycle import deliver, setup
@@ -2172,6 +2182,19 @@ def test_native_first_read_reuses_only_observed_writeback_precondition(
     goal_text = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
     cli = contract["cli_channel"]
     cli["execution_preparation"] = {"state": "ready", "todo_id": "todo_current", "agent_id": "agent"}
+    from loopx.control_plane.goals.goal_frontier import build_vision_continuation_audit
+    from loopx.control_plane.work_items.interaction_contract import _attach_interaction_vision_continuation_audit
+
+    audit = build_vision_continuation_audit(goal_id="fixture", agent_id="agent", acceptance_gaps=[
+        {"kind": "fixture_gap", "acceptance_summary": "Verify the actual source artifact before closeout."},
+    ])
+    assert audit is not None
+    _attach_interaction_vision_continuation_audit(contract, {"vision_continuation_audit": audit})
+    audit_pointer = "/interaction_contract/cli_channel/vision_continuation_audit"
+    audit_body = cli["vision_continuation_audit"]
+    if transition == "audit_reference":
+        audit_body["vision_gap_judge"]["projection_ref"] = {"kind": "fixture_external_material"}
+    original_audit = deepcopy(audit_body)
     plan = cli["settlement_plan"]
     plan["schema_version"] = version
     text = "After independent validation, write back under the original identity and respect the current stop. " * 38
@@ -2197,10 +2220,18 @@ def test_native_first_read_reuses_only_observed_writeback_precondition(
     first = capture("first")
     page, facts = read_selection(first["first_read_command"])
     assert facts[precondition] == text and "previously_delivered_fields" not in page
-    deliver(tmp_path, event, [page])
+    assert facts[audit_pointer] == original_audit
+    if transition == "audit_unobserved":
+        observed, _ = read_selection(first["recovery"]["command"] +
+            " --select " + shlex.quote(precondition) + " --select " + shlex.quote(goal_text))
+        deliver(tmp_path, event, [observed])
+    else:
+        deliver(tmp_path, event, [page])
 
     if transition == "changed":
         step["precondition"] += " Await the updated external approval."
+    elif transition == "audit_changed":
+        audit_body["required_before_closeout"] = [*audit_body["required_before_closeout"], "verify_new_evidence"]
     elif transition == "unknown_version":
         plan["schema_version"] = "unknown"
     elif transition == "rebound":
@@ -2211,19 +2242,28 @@ def test_native_first_read_reuses_only_observed_writeback_precondition(
     assert facts[command] == "loopx refresh-state --turn-instance-id next"
     assert facts["/goal_boundary"] == decision["goal_boundary"]
     assert facts[root + "/identity/effect_id"] == plan["identity"]["effect_id"]
+    seen = set(page.get("previously_delivered_fields", []))
+    same_scope = transition not in {"wrong_binding", "unknown_version", "rebound"}
+    if same_scope and transition != "changed":
+        assert precondition in seen and precondition not in facts
+    else:
+        assert precondition not in seen and facts[precondition] == step["precondition"]
+    if same_scope and transition not in {"audit_changed", "audit_unobserved", "audit_reference"}:
+        assert audit_pointer in seen and audit_pointer not in facts
+    else:
+        assert audit_pointer not in seen and facts[audit_pointer] == audit_body
     if transition != "same":
-        assert precondition not in page.get("previously_delivered_fields", [])
-        assert facts[precondition] == step["precondition"]
         return
 
-    assert set(page["previously_delivered_fields"]) == {goal_text, precondition}
-    assert goal_text not in facts and precondition not in facts
-    _, recovered = read_selection(second["recovery"]["command"] + " --select " + precondition)
-    assert recovered[precondition] == text
+    assert seen == {goal_text, precondition, audit_pointer}
+    assert goal_text not in facts
+    _, recovered = read_selection(second["recovery"]["command"] + " --select " + precondition +
+        " --select " + audit_pointer)
+    assert recovered[precondition] == text and recovered[audit_pointer] == original_audit
     codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
     page, facts = read_selection(second["first_read_command"])
     assert "previously_delivered_fields" not in page and facts[precondition] == text
-    assert facts[goal_text] == narrative
+    assert facts[goal_text] == narrative and facts[audit_pointer] == original_audit
 
 
 

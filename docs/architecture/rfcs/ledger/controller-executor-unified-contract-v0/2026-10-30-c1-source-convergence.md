@@ -5,6 +5,37 @@
 - **Source:** original candidate `648104978fdd67176cccdbb765c5bc3f36bf2ca3`, integrated with target `e8f4c6f8125e3cc0ef912afac653d5542671392f`.
 - **Language mirror:** [中文版](2026-10-30-c1-source-convergence.zh-CN.md)
 
+## Quota packet size and repeated continuation audit
+
+The synthetic File quota workflow on main `f38fae05bb9a1` and C1
+`1f2f10539117` uses the same task, accepted artifact and Turn identity.
+Total stdout across guard, complete read, writeback, debit and duplicate
+submission grows from 53,248 to 65,554 bytes in five calls. SQLite records
+53,310 and 65,616 bytes. In the selected-read size breakdown, the new compact
+settlement plan occupies 10,646 bytes, including 3,209 bytes of writeback
+conditions and 2,939 bytes of Vision authoring structure and examples.
+Validation, the original settlement identity and recovery commands account
+for further bytes.
+
+The initial-read projection reuses the exact continuation audit only after
+the native hook observes its complete literal body under the same current
+Goal, bound Todo, agent and context epoch. A changed audit, missing
+observation, changed binding, compaction or a reference to other material
+requires a current read. The current writeback command and settlement identity
+are delivered separately. Explicit recovery still reads the original audit
+from the same capture.
+
+Two-turn CLI probes on File and SQLite exercise ordinary and complete
+selection, actual paged reads, writeback and settlement. Across all four
+pairs, the second Turn's first-read stdout decreases by 2,226 bytes at the
+same call count. The ordinary File second-Turn workflow drops from 54,093 to
+51,827 bytes in eight calls. The isolated installed wheel reproduces reuse,
+original capture readback and valid settlement. The matched cold default
+workflow stays at 65,554 bytes on File and 65,616 bytes on SQLite with this
+change. Explicit off, staged and original recovery also complete with the
+same accepted fixture and one debit. These local stdout observations leave
+native model token, task outcome and fleet adoption measurements open.
+
 ## Current repair: scoped capture reads and migrated consumers
 
 C1 integrates main `3a0c9608cc06`. The shared thin heartbeat renderer had turned

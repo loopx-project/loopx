@@ -108,9 +108,9 @@ function hasBoundDatedTodoReentry(context: JsonObject, interaction: JsonObject, 
     && isDeepStrictEqual(identity, receipt.settlement_identity);
 }
 
-function reusableWritebackPrecondition(context: JsonObject, handoffMode: unknown): ReusableReadField | undefined {
+function reusableSettlementGuidance(context: JsonObject, handoffMode: unknown): ReusableReadField[] {
   const interaction = jsonObject(context.interaction_contract);
-  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return undefined;
+  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return [];
   const plan = jsonObject(at(context, SETTLEMENT_PLAN_PATH)), steps = orderedSettlementSteps(plan);
   const identity = readySettlementIdentity(context, interaction, plan, handoffMode);
   const identityAgent = jsonObject(context.agent_identity)?.agent_id;
@@ -119,16 +119,29 @@ function reusableWritebackPrecondition(context: JsonObject, handoffMode: unknown
       || (identityAgent !== undefined && identityAgent !== agent)
       || typeof context.goal_id !== "string" || context.goal_id !== identity.goal_id
       || typeof context.registry !== "string" || !context.registry
-      || typeof context.runtime_root !== "string" || !context.runtime_root) return undefined;
+      || typeof context.runtime_root !== "string" || !context.runtime_root) return [];
   const writebacks = steps.map((value, index) => ({step: jsonObject(value), index}))
     .filter(({step}) => step?.kind === "durable_writeback");
-  if (writebacks.length !== 1) return undefined;
+  if (writebacks.length !== 1) return [];
   const {step, index} = writebacks[0]!;
-  if (step?.owner !== "agent" || typeof step.precondition !== "string") return undefined;
-  return {path: [...SETTLEMENT_PLAN_PATH, "ordered_steps", index, "precondition"],
+  if (step?.owner !== "agent" || typeof step.precondition !== "string") return [];
+  const scope = [context.registry, context.runtime_root, context.goal_ref ?? null,
+    plan.schema_version, identity.goal_id, agent, identity.todo_id];
+  const fields: ReusableReadField[] = [{
+    path: [...SETTLEMENT_PLAN_PATH, "ordered_steps", index, "precondition"],
     freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
-    sourceIdentity: JSON.stringify([context.registry, context.runtime_root, context.goal_ref ?? null,
-      plan.schema_version, identity.goal_id, agent, identity.todo_id, step.kind, step.owner])};
+    sourceIdentity: JSON.stringify([...scope, step.kind, step.owner]),
+  }];
+  const auditPath = ["interaction_contract", "cli_channel", "vision_continuation_audit"];
+  const audit = jsonObject(at(context, auditPath));
+  if (audit?.required === true && !Object.hasOwn(audit, "projection_ref")
+      && !Object.hasOwn(jsonObject(audit.vision_gap_judge) ?? {}, "projection_ref")) {
+    // The audit can carry current acceptance or stop guidance. Match the
+    // whole literal value under this admitted Todo's scope before reusing it.
+    fields.push({path: auditPath, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
+      sourceIdentity: JSON.stringify([...scope, "vision_continuation_audit"])});
+  }
+  return fields;
 }
 
 /** One registry for bodies eligible for observed reuse, regardless of whether
@@ -137,8 +150,7 @@ function reusableFirstReadFields(context: JsonObject, exactBody: ReusableExactBo
     handoffMode: unknown): ReusableReadField[] {
   const exactFields = exactBody && at(context, exactBody.path) !== undefined
     ? [{...exactBody, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}] : [];
-  const writeback = reusableWritebackPrecondition(context, handoffMode);
-  const fields = [...exactFields, ...(writeback ? [writeback] : [])];
+  const fields = [...exactFields, ...reusableSettlementGuidance(context, handoffMode)];
   const workPath: Path = ["interaction_contract", "agent_channel", "work_context"];
   const work = jsonObject(at(context, workPath));
   const base = [...workPath, "sources"];
