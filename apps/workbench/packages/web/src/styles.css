@@ -400,50 +400,47 @@
 }
 
 /*
- * "codex": the default. The light side is measured from the Codex desktop app's own theme — a warm
- * near-white page, quiet hairlines, terracotta for the accent. The dark side is derived in the same
- * hue (no dark screenshots existed to measure): warm dark greys, the accent lifted just enough to
- * read on them.
+ * "codex": the default. Neutral like the Codex app: a white page, cool greys with no warmth in them,
+ * and ink rather than a colour for the accent. The dark side keeps the same neutrality.
  */
 [data-palette='codex'] {
-  --p-bg: #f9f9f7;
-  --p-side: #f4f4f1;
-  --p-fg: #2d2d2b;
-  --p-dim: #888886;
-  --p-accent: #c0775f;
+  --p-bg: #ffffff;
+  --p-side: #f9f9f9;
+  --p-fg: #0d0d0d;
+  --p-dim: #6b6b6b;
+  --p-accent: #0d0d0d;
   --p-accent-fg: #ffffff;
 }
 
 [data-palette='codex'][data-theme='dark'] {
-  --p-bg: #211f1c;
-  --p-side: #1a1815;
-  --p-fg: #e9e7e2;
-  --p-dim: #9d988f;
-  --p-accent: #d08d75;
-  --p-accent-fg: #211f1c;
+  --p-bg: #212121;
+  --p-side: #181818;
+  --p-fg: #ececec;
+  --p-dim: #9b9b9b;
+  --p-accent: #ececec;
+  --p-accent-fg: #212121;
 }
 
 /*
- * "claude": the Claude Code desktop app, measured — pure white for the page, cool quiet greys for
- * everything else, and Claude's coral only where an accent is called for. The dark side is derived
- * on the same idea (nothing was measured): neutral cool dark greys, the coral lifted to read.
+ * "claude": warm like the Claude apps — an ivory page, a slightly deeper cream for the sidebar, warm
+ * greys, and Claude's clay only where an accent is called for. The dark side is the same warmth darkened.
  */
 [data-palette='claude'] {
-  --p-bg: #ffffff;
-  --p-side: #fafafa;
+  --p-bg: #faf9f5;
+  --p-side: #f5f4ed;
   --p-fg: #141413;
-  --p-dim: #565656;
+  --p-dim: #73726c;
   --p-accent: #d97757;
   --p-accent-fg: #ffffff;
 }
 
 [data-palette='claude'][data-theme='dark'] {
-  --p-bg: #252627;
-  --p-side: #1e1f20;
-  --p-fg: #ececec;
-  --p-dim: #9a9b9c;
-  --p-accent: #e08b6d;
-  --p-accent-fg: #252627;
+  --p-bg: #262624;
+  --p-side: #1f1e1d;
+  --p-fg: #f5f4ed;
+  --p-dim: #a6a39a;
+  --p-accent: #d97757;
+  --p-accent-fg: #ffffff;
 }
 
 [data-palette]:not([data-palette='paper']) {
