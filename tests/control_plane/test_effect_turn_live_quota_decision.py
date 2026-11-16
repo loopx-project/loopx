@@ -33,15 +33,26 @@ from loopx.rollout_event_log import build_rollout_event
 GOAL_ID = "effect-interpreter-fixture"
 
 
-@pytest.mark.parametrize("selected", ["replan-1111111111111111", "replan-2222222222222222"])
-def test_receipt_guard_fields_use_the_typed_identity_and_guard(selected: str) -> None:
+@pytest.mark.parametrize(
+    ("guard_matches", "execution_pending", "expected_pending"),
+    [(True, True, True), (True, False, False), (False, True, False)],
+    ids=["matching-open", "matching-not-pending", "different-obligation"],
+)
+def test_receipt_guard_fields_use_the_typed_identity_and_guard(
+    guard_matches: bool, execution_pending: bool, expected_pending: bool,
+) -> None:
+    obligation = "replan-1111111111111111"
+    selected = obligation if guard_matches else "replan-2222222222222222"
     fields = _receipt_bound_guard_fields(SimpleNamespace(
         semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": selected},
         identity=SimpleNamespace(value=SimpleNamespace(turn_instance_id="original-turn")),
         heartbeat_receipt={"recorded_at": "2026-08-01T00:00:00Z", "run_id": "other-turn",
-            "details": {"semantic_replan_obligation_id": "replan-1111111111111111"}},
-        successor_replan_pending=False), "replan-1111111111111111")
-    assert fields["receipt_bound_replan_guard_scoped"] is (selected == "replan-1111111111111111")
+            "details": {"semantic_replan_obligation_id": obligation}},
+        successor_replan_pending=False,
+        replan_execution_pending=execution_pending,
+    ), obligation)
+    assert fields["receipt_bound_replan_guard_scoped"] is guard_matches
+    assert fields["receipt_bound_replan_execution_pending"] is expected_pending
     assert fields["receipt_bound_guard_turn_instance_id"] == "original-turn"
     assert fields["receipt_bound_guard_recorded_at"] == "2026-08-01T00:00:00Z"
 

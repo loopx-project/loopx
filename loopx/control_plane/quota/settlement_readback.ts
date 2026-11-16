@@ -52,6 +52,7 @@ import {
   type RefreshRetryRequest,
 } from "./refresh_recovery.ts";
 import {
+  admitsAutonomousReplan,
   heartbeatReceiptDetails as details,
   heartbeatReceiptFactFromEvent,
   normalizeHeartbeatReplanObligationId as normalizeReplanObligationId,
@@ -1461,6 +1462,8 @@ function readQuotaSettlementFromRequest(
     completion_event: includeRecords ? completionEvent : null,
     monitor_phase: monitorPhase,
     replay_phase: replayPhase,
+    replan_execution_pending: replayPhase === "open" &&
+      admitsAutonomousReplan(heartbeatReceipt, heartbeatReceiptFactFromEvent(heartbeatReceipt)),
     successor_replan_pending: replayPhase === "open" &&
       heartbeatReceipt.status === "successor_replan_required" &&
       receiptDetails.should_run === true && receiptDetails.delivery_allowed === false,

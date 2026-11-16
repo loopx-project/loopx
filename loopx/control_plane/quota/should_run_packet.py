@@ -935,6 +935,7 @@ def _resolve_quota_should_run_route(
         registered_agent_ids=prepared.registered_agent_ids,
         goal_frontier_projection=prepared.goal_frontier_projection,
         task_orchestration_contract=prepared.task_orchestration_contract,
+        receipt_bound_replan_execution_pending=prepared.receipt_bound_replan_execution_pending,
         receipt_bound_replan_phase=(
             prepared.receipt_bound_replay_phase
             if prepared.receipt_bound_todo_id is None
