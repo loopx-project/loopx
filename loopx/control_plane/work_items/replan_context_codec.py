@@ -53,6 +53,7 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
         newest_position = len(runs) - 1
     else:
         newest_position = None
+    ordered_history = include_decisions and history_newest_first is not None
     rows = []
     for position, run in enumerate(runs):
         if not isinstance(run, Mapping):
@@ -84,6 +85,7 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
             text = _source_text(run.get(key))
             if text:
                 row[key] = text
+        history_position = newest_position - position if newest_position is not None else position
         if "settlement_identity" in run or "quota_spend_commit" in run or (include_decisions and "agent_vision" in run):
             # Transport facts, not a Python eligibility decision. Complete-text
             # digests prevent a shared display prefix from erasing distinct tails.
@@ -100,8 +102,8 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
             if include_decisions:
                 from ..goals.goal_vision_read_model import parse_vision_todo_delta_entries
 
-                if history_newest_first is not None:
-                    source["history_position"] = newest_position - position if newest_position is not None else position
+                if ordered_history:
+                    source["history_position"] = history_position
                 source["goal_ref"] = run.get("goal_ref")
                 source["agent_vision"] = run.get("agent_vision")
                 vision = run.get("agent_vision")
@@ -128,6 +130,9 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
                 value = run.get(key)
                 source[key + "_digest"] = hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) else None
             row["_source_facts"] = source
+        elif ordered_history and progress is not None:
+            # An older typed observation can still have a known index position.
+            row["_source_facts"] = {"history_position": history_position, "goal_ref": run.get("goal_ref")}
         rows.append(row)
     return rows
 

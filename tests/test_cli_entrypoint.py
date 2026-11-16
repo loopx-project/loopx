@@ -519,6 +519,7 @@ assert payload["groups"]
 		(["agent-directory", "--help"], "loopx.cli_commands.agent_directory", "loopx.cli_commands.agent_directory"),
 		(["agent-capabilities", "--help"], "loopx.cli_commands.agent_capabilities", "loopx.cli_commands.agent_capabilities"),
 		(["goal-acceptance", "--help"], "loopx.cli_commands.goal_acceptance", "loopx.cli_commands.goal_acceptance"),
+		(["goal-lifecycle", "--help"], "loopx.cli_commands.goal_lifecycle", "loopx.cli_commands.goal_lifecycle"),
 		(["host-mode-plan", "--help"], "loopx.cli_commands.host_mode_plan", "loopx.cli_commands.host_mode_plan"),
 		(["goal-portfolio", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-summary", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
@@ -999,6 +1000,10 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	argv_cases.extend([["goal-acceptance", "--help"], ["goal-acceptance", "inspect"],
 		["goal-acceptance", "unknown-action", "--goal-id", "goal"],
 		["goal-acceptance", "inspect", "--goal-id", "goal", "--unknown-option"]])
+	argv_cases.extend([["goal-lifecycle", "--help"], ["goal-lifecycle", "--operation", "stop"],
+		["goal-lifecycle", "--goal-id", "goal", "--operation", "unknown"],
+		["goal-lifecycle", "--goal-id", "goal", "--operation", "stop", "--actor-kind", "unknown"],
+		["goal-lifecycle", "--goal-id", "goal", "--operation", "stop", "--unknown-option"]])
 	selected = run_cli_batch("loopx.entrypoint", argv_cases)
 	full = run_cli_batch("loopx.cli", argv_cases)
 
@@ -1317,6 +1322,99 @@ def test_selected_goal_acceptance_refusals_match_without_full_cli(tmp_path, argu
 	assert selected.stderr == full.stderr
 	assert json.loads(selected.stdout)["ok"] is False
 	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("arguments, expected", [
+	(["--operation", "stop"], 0),
+	(["--operation", "resume"], 0),
+	(["--operation", "stop", "--execute"], 1),
+	(["--operation", "stop", "--actor-kind", "owner", "--execute",
+	  "--expected-state-fingerprint", "0" * 64], 1),
+])
+def test_selected_goal_lifecycle_preserves_preview_and_refusals(tmp_path, arguments, expected):
+	from datetime import datetime
+
+	registry, runtime = write_command_fixture(tmp_path)
+	before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-lifecycle", "--goal-id", "perf-goal", *arguments]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == expected
+	assert selected.stderr == full.stderr
+	payload = json.loads(selected.stdout)
+	legacy = json.loads(full.stdout)
+	for result in (payload, legacy):
+		if "activation" in result:
+			# Proposed activation timestamps are generated for each invocation.
+			assert datetime.fromisoformat(result["activation"].pop("updated_at")).tzinfo is not None
+	assert payload == legacy
+	assert payload["written"] is False and payload["ok"] is (expected == 0)
+	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+def test_goal_lifecycle_stop_resume_reaches_existing_source_owner(tmp_path, module):
+	registry, runtime = write_command_fixture(tmp_path)
+	prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-lifecycle", "--goal-id", "perf-goal"]
+	for operation, state in (("stop", "stopped"), ("resume", "active")):
+		before = registry.read_bytes()
+		preview = run_cli_main(module, [*prefix, "--operation", operation],
+			forbidden_modules=("loopx.cli",) if module == "loopx.entrypoint" else ())
+		assert preview.returncode == 0, preview.stderr
+		assert registry.read_bytes() == before
+		fingerprint = json.loads(preview.stdout)["observed_state_fingerprint"]
+		result = run_cli_main(module, [*prefix, "--operation", operation,
+			"--actor-kind", "owner", "--expected-state-fingerprint", fingerprint, "--execute"],
+			forbidden_modules=("loopx.cli",) if module == "loopx.entrypoint" else ())
+		assert result.returncode == 0, result.stderr
+		payload = json.loads(result.stdout)
+		assert payload["written"] and payload["readback"]["verified"]
+		assert json.loads(registry.read_text())["goals"][0]["activation"]["state"] == state
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("operation", ["stop", "resume"])
+@pytest.mark.parametrize("actor", ["owner", "controller"])
+def test_goal_lifecycle_cannot_override_outer_controller(tmp_path, module, operation, actor):
+	registry, runtime = write_command_fixture(tmp_path)
+	before = registry.read_bytes()
+	prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-lifecycle", "--goal-id", "perf-goal", "--operation", operation, "--actor-kind", actor]
+	environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "1",
+		"LOOPX_KUNLUNCODE_OUTER_GOAL_ID": "perf-goal"}
+	forbidden = ("loopx.cli",) if module == "loopx.entrypoint" else ()
+	preview = run_cli_main(module, prefix, forbidden_modules=forbidden, environment=environment)
+	assert preview.returncode == 0, preview.stderr
+	assert json.loads(preview.stdout)["written"] is False
+	assert registry.read_bytes() == before
+	blocked = run_cli_main(module, [*prefix, "--execute"],
+		forbidden_modules=forbidden, environment=environment)
+	assert blocked.returncode == 2 and blocked.stdout == ""
+	payload = json.loads(blocked.stderr)
+	assert payload["error_code"] == "kunluncode_outer_controller_write_owned"
+	assert payload["goal_id"] == "perf-goal"
+	assert payload["operation"] == f"goal-lifecycle {operation}"
+	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("controller, owned_goal", [("0", "perf-goal"), ("1", "other-goal")])
+def test_goal_lifecycle_preserves_unowned_goal_operations(tmp_path, module, controller, owned_goal):
+	registry, runtime = write_command_fixture(tmp_path)
+	prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-lifecycle", "--goal-id", "perf-goal", "--actor-kind", "owner", "--execute"]
+	environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": controller,
+		"LOOPX_KUNLUNCODE_OUTER_GOAL_ID": owned_goal}
+	forbidden = ("loopx.cli",) if module == "loopx.entrypoint" else ()
+	for operation, state in (("stop", "stopped"), ("resume", "active")):
+		result = run_cli_main(module, [*prefix, "--operation", operation],
+			forbidden_modules=forbidden, environment=environment)
+		assert result.returncode == 0, result.stderr
+		payload = json.loads(result.stdout)
+		assert payload["written"] and payload["readback"]["verified"]
+		assert json.loads(registry.read_text())["goals"][0]["activation"]["state"] == state
 
 
 @pytest.mark.parametrize("format_name", ["json", "markdown"])

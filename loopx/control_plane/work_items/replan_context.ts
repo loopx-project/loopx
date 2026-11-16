@@ -43,29 +43,36 @@ function sameSourceDigest(left: JsonObject, right: JsonObject, field: string): b
     value === objectOrNull(right._source_facts)?.[field + "_digest"];
 }
 
+function isRecordedTodoSettlement(identity: JsonObject): boolean {
+  return identity.schema_version === SETTLEMENT_IDENTITY_SCHEMA_VERSION ||
+    (identity.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION && identity.binding_kind === "todo");
+}
+
 /** Keep the recorded fields used by existing history references. */
-function recordedTodoIdentity(row: JsonObject): string[] | null {
+function recordedTodoIdentity(row: JsonObject, todo: unknown = row.todo_id): string[] | null {
   const source = objectOrNull(row._source_facts);
   const identity = objectOrNull(source?.settlement_identity);
-  if (!source || !identity ||
-      (identity.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION &&
-       (identity.schema_version !== SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION || identity.binding_kind !== "todo"))) return null;
+  if (!source || !identity || !isRecordedTodoSettlement(identity)) return null;
   const keys = ["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id"];
   if (keys.some(key => typeof identity[key] !== "string" || !identity[key])) return null;
-  if (keys.slice(0, 3).some(key => identity[key] !== source[key] || identity[key] !== row[key]) ||
+  const outerTodo = row.todo_id ?? null;
+  if (["goal_id", "agent_id"].some(key => identity[key] !== source[key] || identity[key] !== row[key]) ||
+      (source.todo_id ?? null) !== outerTodo || (outerTodo !== null && outerTodo !== todo) || identity.todo_id !== todo ||
       (source.turn_instance_id != null && identity.turn_instance_id !== source.turn_instance_id)) return null;
   return keys.map(key => String(identity[key]));
 }
 
-function hasConflictingTodoSettlement(row: JsonObject): boolean {
+function hasConflictingTodoSettlement(row: JsonObject, attributedTodo: string | null = null): boolean {
   const source = objectOrNull(row._source_facts);
   const declared = source?.settlement_identity;
   if (declared == null) return false;
   const identity = objectOrNull(declared);
   if (identity?.schema_version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION &&
       identity?.schema_version !== SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION) return true;
-  if (!(row.todo_id || source?.todo_id || identity.todo_id)) return false;
-  if (!recordedTodoIdentity(row)) return true;
+  const todoBinding = isRecordedTodoSettlement(identity);
+  const todo = attributedTodo ?? row.todo_id ?? (todoBinding ? observationTodo(row) : null);
+  if (!todoBinding && !(todo || source?.todo_id || identity.todo_id)) return false;
+  if (!recordedTodoIdentity(row, todo)) return true;
   const decoded = settlementIdentityFromPlan({settlement_plan: {identity}});
   return !!decoded.failure || decoded.value.binding_kind !== "todo" ||
     decoded.value.todo_id !== identity.todo_id || decoded.value.effect_id !== identity.effect_id;
@@ -114,11 +121,14 @@ function historicalEvidenceRef(row: JsonObject): string {
   return "replan-evidence-" + digest(readableEvidenceRow(row));
 }
 
+function isAccountingRow(row: JsonObject): boolean {
+  return row.classification === "quota_slot_spent" || Boolean(objectOrNull(row._source_facts)?.quota_spend_commit);
+}
+
 /** Preserve historical references even when a record fails work qualification. */
 function workEvidenceRef(row: JsonObject): string {
   const source = objectOrNull(row._source_facts);
-  if (row.progress_observation !== null || source?.quota_spend_commit ||
-      row.classification === "quota_slot_spent") return historicalEvidenceRef(row);
+  if (row.progress_observation !== null || isAccountingRow(row)) return historicalEvidenceRef(row);
   const identity = recordedTodoIdentity(row);
   if (!identity) return historicalEvidenceRef(row);
   const goalRef = objectOrNull(source?.goal_ref);
@@ -153,7 +163,7 @@ export function projectCoreGoal(value: unknown): JsonObject {
 function recordedDecisionBindingMatches(row: JsonObject, source: JsonObject, delta: JsonObject | null): boolean {
   const identity = objectOrNull(source.settlement_identity);
   if (!identity || typeof identity.turn_instance_id !== "string" || !ID.test(identity.turn_instance_id)) return false;
-  if (identity.schema_version === SETTLEMENT_IDENTITY_SCHEMA_VERSION) {
+  if (isRecordedTodoSettlement(identity)) {
     return (source.turn_instance_id == null || identity.turn_instance_id === source.turn_instance_id) &&
       ["goal_id", "agent_id", "todo_id"].every(key => identity[key] === row[key]);
   }
@@ -204,7 +214,7 @@ function recordedDecision(row: JsonObject): JsonObject | null {
   try { stride = normalizeRecordedStrideDecision(objectOrNull(source.agent_vision)?.stride_decision); }
   catch { return null; }
   const identity = objectOrNull(source.settlement_identity)!;
-  const autonomous = identity.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION;
+  const autonomous = identity.binding_kind === "autonomous_replan";
   const decision = {history_evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
     generated_at: row.generated_at, todo_id: autonomous ? null : row.todo_id, turn_instance_id: identity.turn_instance_id,
     ...(autonomous ? {replan_obligation_id: source.replan_obligation_id} : {}),
@@ -239,9 +249,14 @@ function plannedTodoIds(source: JsonObject): string[] {
   return [...new Set(declared.filter((id): id is string => typeof id === "string" && ID.test(id)))];
 }
 
-function observationTodo(row: JsonObject): unknown {
-  const work = objectOrNull(row.progress_observation)?.work_item_id;
-  return work == null ? row.todo_id : row.todo_id == null || row.todo_id === work ? work : null;
+function observationTodo(row: JsonObject): string | null {
+  const todo = objectOrNull(row.progress_observation)?.work_item_id ?? row.todo_id;
+  return typeof todo === "string" && (row.todo_id == null || row.todo_id === todo) ? todo : null;
+}
+
+function plannedObservationTodo(row: JsonObject, targets: ReadonlySet<string>): string | null {
+  const todo = observationTodo(row);
+  return todo !== null && targets.has(todo) ? todo : null;
 }
 
 /** Reserve one source-ordered observation per displayed planned Todo before
@@ -254,7 +269,7 @@ function boundedWorkEvidence(rows: JsonObject[], todoIds: string[]): JsonObject[
     const row = rows.find(row => observationTodo(row) === id);
     if (row) first.add(row);
   }
-  const relevant = rows.filter(row => displayed.has(String(observationTodo(row))));
+  const relevant = rows.filter(row => plannedObservationTodo(row, displayed) !== null);
   for (const row of [...relevant, ...rows]) {
     if (first.size >= 6) break;
     first.add(row);
@@ -274,8 +289,8 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
   const seen = new Set<string>();
   const legacyResultRefs = new Map<string, string>();
   for (const row of [...scoped].reverse()) {
+    if (isAccountingRow(row)) continue;
     const source = objectOrNull(row._source_facts)!;
-    if (source.quota_spend_commit) continue;
     if (acceptedDecisionSource(row)) {
       const decision = recordedDecision(row);
       if (!decision) { origin.clear(); proposed.clear(); continue; }
@@ -300,10 +315,10 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
     // or create a new pending work result. Unknown legacy outcomes stay unknown.
     // Material gaps remain eligible: this relation certifies neither successful
     // execution nor scientific gain, and must preserve useful negative evidence.
-    if (!MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome) ||
-        hasConflictingTodoSettlement(row)) continue;
-    const todo = String(observationTodo(row));
-    if (!origin.has(todo)) continue;
+    const todo = observationTodo(row);
+    if (todo === null || !origin.has(todo) ||
+        !MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome) ||
+        hasConflictingTodoSettlement(row, todo)) continue;
     const ref = workEvidenceRef(row);
     // Keep evidence aliases from historical decisions resolvable. When an old
     // citation matches multiple formerly collapsed rows, use that alias once.
@@ -354,11 +369,11 @@ function reviewEvidence(rows: JsonObject[], request: JsonObject): JsonObject {
       || (objectOrNull(row.progress_observation)?.evidence_ids as unknown[] | undefined)?.includes(ref));
     const subsequent = matches.filter(row => {
       const facts = objectOrNull(row._source_facts)!;
-      return Number(facts.history_position) > Number(source.history_position) && !facts.quota_spend_commit
-        && !hasConflictingTodoSettlement(row);
+      return Number(facts.history_position) > Number(source.history_position) && !isAccountingRow(row)
+        && !hasConflictingTodoSettlement(row, plannedObservationTodo(row, targets));
     });
     return {evidence_ref: ref, available: matches.length > 0, subsequent: subsequent.length > 0,
-      declared_work: subsequent.some(row => targets.has(String(observationTodo(row))))};
+      declared_work: subsequent.some(row => plannedObservationTodo(row, targets) !== null)};
   });
   return {previous_decision_ref: decision.evidence_ref, has_declared_work: targets.size > 0, citations};
 }
@@ -379,10 +394,11 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
   const targets = new Set(todoIds);
   for (const row of scoped) {
     const facts = objectOrNull(row._source_facts)!;
-    if (Number(facts.history_position) <= Number(source.history_position) || facts.quota_spend_commit ||
-        hasConflictingTodoSettlement(row)) continue;
+    const todo = plannedObservationTodo(row, targets);
+    if (Number(facts.history_position) <= Number(source.history_position) || isAccountingRow(row) ||
+        hasConflictingTodoSettlement(row, todo)) continue;
     if (!row.progress_observation) {
-      if (targets.has(String(observationTodo(row)))) {
+      if (todo !== null) {
         const ref = workEvidenceRef(row);
         if (!ordinary.has(ref)) ordinary.set(ref, {evidence_ref: ref,
           generated_at: row.generated_at, todo_id: row.todo_id});
@@ -628,8 +644,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   // Unpaired accounting can still explain a failure. It never contributes
   // to the Todo result ledger merely by being visible here.
   const evidenceRows = request.operation === "resolve" ? rows : rows.filter(row =>
-    row.classification === "quota_slot_spent" || objectOrNull(row._source_facts)?.quota_spend_commit ||
-    !hasConflictingTodoSettlement(row));
+    isAccountingRow(row) || !hasConflictingTodoSettlement(row));
   const unique = new Map<string, JsonObject>();
   for (const row of evidenceRows) {
     const readableRow = readableEvidenceRow(row);

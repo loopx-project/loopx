@@ -296,6 +296,65 @@ def test_settlement_identity_controls_work_attribution_in_quota(tmp_path, monkey
     assert index.read_bytes() == before
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("binding", [
+    "todo-v1-decision", "typed-todo", "typed-legacy", "typed-autonomous", "other-obligation", "legacy-accounting",
+])
+def test_projected_work_uses_the_planned_todos_own_settlement(tmp_path, monkeypatch, provider, binding):
+    from loopx.control_plane.effect_program import SettlementIdentity
+
+    from test_replan_successor_guard_reentry import _fixture, _guard, AGENT, GOAL
+
+    call, _, index = _fixture(tmp_path, monkeypatch, provider)
+    trigger = _vision_review_request(index)
+    original, decision, earlier = _rows(goal_id=GOAL, agent_id=AGENT)
+    original["agent_vision"]["todo_delta"] = ["retain:todo-a"]
+    decision["agent_vision"]["todo_delta"] = ["retain:todo-b"]
+    earlier["delivery_outcome"] = "outcome_progress"
+    earlier.pop("progress_observation")
+    _append_runs(index, original, earlier, trigger)
+    first = _guard(call, "turn-first-attribution")["autonomous_replan_obligation"]
+    pending = first["replan_context"]["decision_followthrough"]["work_result_use"]["unresolved"][0]["evidence_ref"]
+    decision["agent_vision"]["path_delta"]["evidence_refs"] = [pending]
+    later, _ = _settled_pair(goal_id=GOAL, agent_id=AGENT, todo_id="todo-b", turn_instance_id="turn-observed")
+    later["delivery_outcome"] = "outcome_progress"
+    if binding == "todo-v1-decision":
+        decision["settlement_identity"].update(schema_version="quota_settlement_identity_v1",
+            binding_kind="todo", binding_id=decision["todo_id"])
+    else:
+        later.pop("todo_id")
+    if binding in {"typed-autonomous", "other-obligation"}:
+        later["settlement_identity"] = SettlementIdentity(
+            GOAL, AGENT, None, "turn-observed", replan_obligation_id="replan-other",
+        ).as_dict()
+        if binding == "other-obligation":
+            later["progress_observation"]["work_item_id"] = "replan-other"
+    elif binding in {"typed-legacy", "legacy-accounting"}:
+        later.pop("settlement_identity")
+        if binding == "legacy-accounting":
+            later["classification"] = "quota_slot_spent"
+    _append_runs(index, decision, later, trigger)
+    before = index.read_bytes()
+
+    obligation = _guard(call, "turn-projected-attribution")["autonomous_replan_obligation"]
+    follow = obligation["replan_context"]["decision_followthrough"]
+    previous = follow["previous_decision"]
+    assert previous["turn_instance_id"] == "turn-latest"
+    assert previous["todo_id"] == decision["todo_id"]
+    assert "replan_obligation_id" not in previous
+    accepted = binding in {"todo-v1-decision", "typed-todo", "typed-legacy"}
+    use = follow["work_result_use"]
+    assert use["recorded_followthrough_count"] == int(accepted)
+    assert (use["unresolved"][0]["evidence_ref"] != pending) == accepted
+    assert follow["recorded_progress_count"] == int(binding not in {"typed-autonomous", "legacy-accounting"})
+    planned, = follow["planned_work"]
+    assert len(planned["observation_refs"]) == int(accepted)
+    legacy = {key: value for key, value in later.items() if key != "settlement_identity"}
+    ref = project_replan_context(goal_id=GOAL, agent_id=AGENT, runs=[legacy])["evidence"][0]["evidence_ref"]
+    assert call("history", "--goal-id", GOAL, "--agent-id", AGENT, "--evidence-ref", ref)["evidence"]["evidence_ref"] == ref
+    assert index.read_bytes() == before
+
+
 @pytest.mark.parametrize("rows", [_rows(), list(reversed(_rows()))])
 def test_unknown_order_does_not_fabricate_a_previous_decision_or_later_work(rows):
     context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,

@@ -164,6 +164,39 @@ function subsequent(position: number, todo = "todo-a"): JsonObject {
 
 const strideRequest = {...request, stride_strategy: "evidence_conditioned_v1"};
 
+test("a scoped Todo decision has the same history reference as its v0 representation", () => {
+  const record = reviewed();
+  const source = record._source_facts as JsonObject;
+  const original = projectReplanContext({...request, rows: [record]}).decision_followthrough.previous_decision;
+  const identity = {...source.settlement_identity as JsonObject,
+    schema_version: "quota_settlement_identity_v1", binding_kind: "todo", binding_id: record.todo_id};
+  const scoped = {...record, _source_facts: {...source, settlement_identity: identity}};
+  assert.deepEqual(projectReplanContext({...request, rows: [scoped]}).decision_followthrough.previous_decision, original);
+  const conflict = {...scoped, _source_facts: {...source, settlement_identity: {...identity, binding_id: "other-todo"}}};
+  assert.equal(projectReplanContext({...request, rows: [conflict]}).decision_followthrough, undefined);
+});
+
+test("citation replay requires the settlement of the Todo actually attributed", () => {
+  const decision = reviewed();
+  (decision._source_facts as JsonObject).planned_todo_ids = ["todo-a"];
+  const {todo_id: _todo, _source_facts: recorded, ...work} = subsequent(2);
+  const source = recorded as JsonObject;
+  const settlement_identity = settlementIdentityPayload({goal_id: "goal-a", agent_id: "agent-a",
+    turn_instance_id: String(source.turn_instance_id), replan_obligation_id: "replan-other"});
+  for (const work_item_id of ["todo-a", "replan-other"]) {
+    const observed = {...work, progress_observation: {...work.progress_observation as JsonObject, work_item_id},
+      _source_facts: {...source, todo_id: null, settlement_identity}};
+    const ref = projectReplanContext({...request, rows: [observed]}).evidence[0].evidence_ref;
+    const rows = [decision, observed];
+    const follow = projectReplanContext({...strideRequest, rows}).decision_followthrough;
+    const replay = projectReplanContext({...strideRequest, operation: "review_evidence", rows,
+      previous_decision_ref: follow.previous_decision.evidence_ref, evidence_refs: [ref]});
+    assert.deepEqual(replay.citations, [{evidence_ref: ref, available: true,
+      subsequent: work_item_id === "replan-other", declared_work: false}]);
+    assert.equal(follow.recorded_progress_count, Number(work_item_id === "replan-other"));
+  }
+});
+
 test("unconsumed result survives later reviews and citations alone; recorded work closes only its source relation", () => {
   const first = reviewed(1);
   (first._source_facts as JsonObject).planned_todo_ids = ["todo-a"];
