@@ -132,8 +132,10 @@ def test_separate_namespace_is_off_by_default_and_old_scoped_context_read_is_unc
     assert compaction_memory_enabled(tmp_path) is False
 
 
-@pytest.mark.parametrize("enabled,delivery", [(False, "on"), (True, "on"), (True, "off")])
-def test_real_hook_cli_resolves_the_persisted_independent_gate(tmp_path, monkeypatch, enabled, delivery):
+@pytest.mark.parametrize("enabled,delivery,delta", [
+    (False, "on", None), (True, "on", None), (True, "off", None), (True, "off", "auto"),
+])
+def test_real_hook_cli_resolves_the_persisted_independent_gate(tmp_path, monkeypatch, enabled, delivery, delta):
     event, _ = prepare(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
     config = runtime / "machine" / "configuration.json"
@@ -144,12 +146,14 @@ def test_real_hook_cli_resolves_the_persisted_independent_gate(tmp_path, monkeyp
     registry.write_text('{"goals": []}')
     command = [sys.executable, "-m", "loopx.cli", "--registry", str(registry), "--runtime-root", str(runtime),
         "--format", "json", "quota", "context-hook", "--context-delivery", delivery, "--codex-app", "--codex-context-dir", str(tmp_path)]
+    if delta is not None:
+        command.extend(["--delta-delivery", delta])
     for value in ({**event, "hook_event_name": "PreCompact"}, {**event, "source": "compact"}):
         result = subprocess.run(command, input=json.dumps(value), capture_output=True, text=True,
             cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(REPO)}, timeout=30)
         assert result.returncode == 0, result.stderr
         response = json.loads(result.stdout)
-    active = enabled and delivery == "on"
+    active = enabled and (delivery == "on" or delta == "auto")
     assert (tmp_path / "compaction-memory.json").exists() is active
     context = response.get("hookSpecificOutput", {}).get("additionalContext", "")
     assert ("loopx_compaction_memory_v0" in context) is active

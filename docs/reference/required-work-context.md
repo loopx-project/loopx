@@ -701,7 +701,9 @@ Absence means disabled. Existing supported native root sessions must already
 have context recovery enabled and a Goal/Agent-bound immutable source capture.
 The existing `codex_app_heartbeat`, `codex_app_ssh_goal` and
 `codex_benchmark_heartbeat` scenario restrictions remain in force. Other hosts,
-child sessions and explicit context-delivery off keep their ordinary paths.
+child sessions and a lone context-delivery off keep their ordinary paths.
+An explicit off/Delta-auto pair still qualifies the existing full-document native
+recovery path; the independent memory opt-in also applies there.
 The switch neither qualifies a new native version nor proves current-session use.
 
 After ordinary PreCompact/PostCompact lifecycle handling, the TypeScript context
