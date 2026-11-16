@@ -170,6 +170,7 @@ function activationPayload(state) {
     execute: false,
     goal_id: goalId,
     before_state: state,
+    observed_state_fingerprint: 'a'.repeat(64),
     after_state: 'stopped',
     changed: active,
     written: false,

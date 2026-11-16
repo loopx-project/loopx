@@ -307,7 +307,11 @@ export type GoalBarBindingReadResult =
   | { readonly kind: 'fault'; readonly code: GoalBarReadFaultCode }
 
 export type GoalBarActivationReadResult =
-  | { readonly kind: 'value'; readonly goalActivation: GoalBarActivationV1 }
+  | {
+      readonly kind: 'value'
+      readonly goalActivation: GoalBarActivationV1
+      readonly stateFingerprint?: string
+    }
   | { readonly kind: 'fault'; readonly code: GoalBarReadFaultCode }
 
 export type GoalBarProgressReadResult =
@@ -619,9 +623,15 @@ export async function readGoalBarActivation(
       goalId,
       result.exitCode,
     )
+    const fingerprint = result.payload.observed_state_fingerprint
     return goalActivation === undefined
       ? { kind: 'fault', code: 'activation_read_failed' }
-      : { kind: 'value', goalActivation }
+      : {
+          kind: 'value',
+          goalActivation,
+          ...(typeof fingerprint === 'string' && /^[a-f0-9]{64}$/u.test(fingerprint)
+            ? { stateFingerprint: fingerprint } : {}),
+        }
   } catch (error: unknown) {
     return fixedFault(error, 'activation_read_failed')
   }

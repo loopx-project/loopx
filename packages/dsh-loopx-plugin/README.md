@@ -82,8 +82,10 @@ qualified frozen 0.1.5 and 0.1.7-rc.2 compatibility ranges. The exported legacy
 RPC registration remains available to explicit callers, but plugin startup
 always uses the shared API.
 
-The source candidate additionally qualifies DSH 0.2.1-rc.2. Its frozen source
-host uses MCP client 2.3.0 and SDK 1.32.0 to address
+The beta.7 source candidate adds DSH 0.2.2-rc.1 and 0.2.2-rc.3 qualification,
+with Cordis 4.1.0 as the pinned development host. The earlier 0.2.1-rc.2
+combination remains covered. Its frozen source host uses MCP client 2.3.0 and
+SDK 1.32.0 to address
 [GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw).
 These dependency overrides do not patch an independently installed DSH binary;
 that host's owner must update its affected MCP dependencies separately.
@@ -650,16 +652,37 @@ deletes the plugin runtime from the registry before disposing its fibers,
 while user removal disposes the fiber first. Anything not identifiable as
 replacement keeps the cancellation semantics, including older hosts.
 
+The successor retains process-local cancellation ownership for the exact live
+Agent and Session, including a second replacement followed by user removal.
+An error pause survives replacement and is reconstructed from typed Session
+history on reopen; only new human input or explicit Start releases it. A pending host-context message cannot release a rejected
+continuation. Verified Core recovery decisions update the GoalBar even if the
+subsequent heartbeat body read fails.
+
+Start and Pause carry the fresh Core source fingerprint into the existing
+lifecycle mutation. Core checks it again under its source lock. A delayed old
+Pause cannot overwrite a newer Start, including when process cleanup was
+unconfirmed. Snapshot revisions include the Session's safe admission category,
+so a read in one page cannot acknowledge another page's stale watch anchor.
+
+The Linux 0.1.5 regression host freezes the complete published rc.2 SDK
+family and its Cordis dependencies. Pinning only the top-level CLI allows
+caret ranges to mix rc.2 with rc.3 components, whose boot graph requests a
+sandbox provider absent from the old CLI. The qualification keeps the native
+sandbox configuration and the PEP 668 guard intact.
+
 ## Installation and upgrade recovery
 
 Check `dsh --version` before choosing an artifact. The current source accepts
 DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explicitly
-qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2 candidates. It
-excludes earlier 0.2 candidates, stable 0.2.1, and other unqualified prerelease
+qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1, 0.2.1-rc.2, 0.2.2-rc.1 and
+0.2.2-rc.3 candidates. It excludes earlier 0.2 candidates, stable 0.2.1 and
+0.2.2, and other unqualified prerelease
 tuples. A stable-version range alone does not admit every prerelease.
 The immutable beta.6 download above is the published package. Building this
-checkout also produces version beta.6, but the local artifact is not the
-published release asset.
+checkout produces the separate beta.7 candidate; it never replaces the
+immutable beta.6 asset. Candidate qualification is separate from publishing
+and public npm/Hub adoption.
 
 If a marketplace reports `loopx-repository: entry file missing: index.js`, it
 selected the monorepo root instead of this plugin package. Installing

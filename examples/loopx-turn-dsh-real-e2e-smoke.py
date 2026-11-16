@@ -113,6 +113,10 @@ def _write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for goal in json.loads(registry.read_text())["goals"]:
+        import_fixture_authority(registry, goal["id"], provider="sqlite")
     return project, runtime, workspace, registry
 
 
@@ -276,6 +280,8 @@ def main() -> int:
         {
             "result_kind": "validated_progress",
             "classification": "real_dsh_mock_llm",
+            "work_evidence": [f"artifact:{MARKER_NAME}"],
+            "validation_evidence": ["fixture:independent-marker-validator"],
             "summary": "Real dsh runtime returned a typed result through the mock LLM.",
             "recommended_action": "Review the real dsh e2e marker.",
             "next_action": "Inspect the marker and replay idempotently.",

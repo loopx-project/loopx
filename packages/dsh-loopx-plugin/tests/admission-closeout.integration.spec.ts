@@ -12,6 +12,8 @@ import { LoopXCliError, runFile } from '../src/cli.ts'
 import type { FileRunner } from '../src/cli.ts'
 import { LoopXContinuationDriver } from '../src/driver.ts'
 import { pluginPythonCandidates } from '../src/managed-runtime.ts'
+import { GoalBarCoordinator } from '../src/goalbar/events.ts'
+import { createGoalBarService } from '../src/goalbar/service.ts'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const sessionId = 'dsh-closeout-session'
@@ -114,7 +116,7 @@ async function setAllowedSlots(testFixture: Fixture, allowedSlots: number): Prom
   await writeFile(testFixture.registry, JSON.stringify(registry))
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(provider: 'file' | 'sqlite' = 'file'): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-loopx-closeout-'))
   onTestFinished(() => rm(root, { recursive: true, force: true }))
   const project = join(root, 'project')
@@ -194,8 +196,8 @@ async function fixture(): Promise<Fixture> {
     '        "task_class": "advancement_task", "action_kind": "validate",',
     '    }])',
     'initialize_canonical_authority(Path(sys.argv[2]), sys.argv[3], projection,',
-    '    state_path=Path(sys.argv[4]), provider="file")',
-  ].join('\n'), repoRoot, runtime, goalId, state, todoId], {
+    '    state_path=Path(sys.argv[4]), provider=sys.argv[6])',
+  ].join('\n'), repoRoot, runtime, goalId, state, todoId, provider], {
     cwd: repoRoot,
     env: { ...process.env, PYTHONPATH: repoRoot },
   })
@@ -295,6 +297,77 @@ function executablePlanArgs(
 }
 
 describe('DSH admission-to-closeout integration', () => {
+  it.skipIf(process.platform === 'win32').each(['file', 'sqlite'] as const)(
+    'fences an escaped old Pause after a newer Start on real %s authority', async provider => {
+      const f = await fixture(provider)
+      const release = join(f.project, 'release-old-pause')
+      const resultPath = join(f.project, 'old-pause-result.json')
+      const python = await integrationPython
+      const coordinator = new GoalBarCoordinator()
+      coordinator.registerDriverBridge({
+        evaluateActivatedSession: async () => ({ kind: 'applied' }),
+        cancelQueued: async () => ({ kind: 'applied' }),
+        readContinuationAdmission: () => ({ state: 'clear' }),
+      })
+      let intercept = true
+      const runner: FileRunner = async (file, args, options) => {
+        const fullArgs = ['--runtime-root', f.runtime, ...args]
+        if (intercept && args.includes('--execute') && args.includes('stop')) {
+          intercept = false
+          const escaped = [
+            'import pathlib,subprocess,sys,time',
+            'release=pathlib.Path(sys.argv[1])',
+            'deadline=time.monotonic()+20',
+            'while not release.exists() and time.monotonic()<deadline: time.sleep(0.01)',
+            'if not release.exists(): raise SystemExit(2)',
+            'with open(sys.argv[2],"w") as out:',
+            ' subprocess.run([sys.executable,"-m","loopx.cli",*sys.argv[3:]],stdout=out)',
+          ].join('\n')
+          const launcher = [
+            'import subprocess,sys,time',
+            'subprocess.Popen([sys.executable,"-c",sys.argv[1],*sys.argv[2:]],start_new_session=True)',
+            'time.sleep(20)',
+          ].join('\n')
+          return runFile(python, ['-c', launcher, escaped, release, resultPath, ...fullArgs], {
+            ...options, timeoutMs: 100,
+            env: { ...process.env, ...options.env, PYTHONPATH: repoRoot, LOOPX_USAGE_PING: '0' },
+          })
+        }
+        return realLoopXRunner(file, fullArgs, options)
+      }
+      const service = createGoalBarService({
+        getAgent: id => id === sessionId ? f.agent : undefined,
+        coordinator, runner,
+        command: { file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.3.0' },
+      })
+      const request = (op: 'start' | 'pause') => ({
+        v: 'loopx_goalbar_request_v2' as const, op, sessionId,
+        expected: { goalId, loopxAgentId: agentId },
+      })
+      try {
+        expect((await service.handle(request('pause'), new AbortController().signal)).result)
+          .toEqual({ kind: 'unknown', code: 'operation_result_unknown' })
+        // An independently verified stop precedes the owner's new Start.
+        expect((await runCli(f, ['goal-lifecycle', '--goal-id', goalId,
+          '--operation', 'stop', '--actor-kind', 'owner', '--execute'])).payload.ok).toBe(true)
+        expect((await service.handle(request('start'), new AbortController().signal)).result.kind)
+          .toBe('succeeded')
+        await writeFile(release, '')
+        let stale: Record<string, unknown> | undefined
+        for (let i = 0; i < 100; i += 1) {
+          try { stale = record(JSON.parse(await readFile(resultPath, 'utf8'))); break } catch { /* writer still settling */ }
+          await new Promise(resolve => setTimeout(resolve, 25))
+        }
+        expect(stale).toMatchObject({ ok: false, written: false })
+        expect((await runCli(f, ['goal-lifecycle', '--goal-id', goalId,
+          '--operation', 'stop'])).payload.before_state).toBe('active')
+      } finally {
+        await writeFile(release, '')
+        await service.dispose()
+      }
+    }, 30_000,
+  )
+
   it.each([
     { route: 'compatibility', version: 'loopx 1.2.4', setting: 'on', readerCalls: 0 },
     { route: 'progressive', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4 },

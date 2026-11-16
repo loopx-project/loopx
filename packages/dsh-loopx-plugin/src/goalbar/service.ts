@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { isDeepStrictEqual } from 'node:util'
 import {
   LoopXCliError,
   resolveLoopXCommand,
@@ -152,10 +151,14 @@ function exactRecord(
     : undefined
 }
 
-function recoverySourceRevision(revision: string, recoveryAttention: boolean): string {
+function recoverySourceRevision(
+  revision: string, recoveryAttention: boolean,
+  admission: GoalBarContinuationAdmissionV1 = GOALBAR_ADMISSION_CLEAR,
+): string {
   // Retain the ordinary source revision shape for clients and unaffected sessions.
-  if (!recoveryAttention) return revision
-  return `sha256:${createHash('sha256').update('goalbar-recovery-attention\0').update(revision).digest('hex')}`
+  if (!recoveryAttention && admission.state === 'clear') return revision
+  return `sha256:${createHash('sha256').update('goalbar-runtime-state\0')
+    .update(revision).update(JSON.stringify([recoveryAttention, admission])).digest('hex')}`
 }
 
 /** Strict verified relation for the existing lifecycle execution V1 receipt. */
@@ -238,8 +241,6 @@ export class GoalBarService implements GoalBarServiceHandle {
   private readonly actionMaxOutputBytes: number
   private readonly warn: (message: string) => void
   private readonly disposal = new AbortController()
-  /** Last admission value served by a read per session, for watch liveness. */
-  private readonly servedAdmission = new Map<string, GoalBarContinuationAdmissionV1>()
   private activeAction?: ActionAdmission | undefined
   private disposed = false
 
@@ -373,7 +374,6 @@ export class GoalBarService implements GoalBarServiceHandle {
   ): Promise<GoalBarReadResultV1> {
     const capture = this.capture(sessionId)
     if (capture === undefined) {
-      this.servedAdmission.delete(sessionId)
       return {
         kind: 'fault',
         code: 'session_unavailable',
@@ -381,14 +381,6 @@ export class GoalBarService implements GoalBarServiceHandle {
         sourceRevision: unavailableGoalBarSourceRevision(),
       }
     }
-    // Sample the driver admission state before any CLI work, so every read
-    // outcome advances the watch comparison even when the snapshot itself
-    // is hidden or faulty.
-    this.servedAdmission.set(
-      sessionId,
-      this.coordinator.readContinuationAdmission(capture),
-    )
-
     // This cursor is captured before command resolution or any other CLI read.
     const baseSessionEventSeq = latestSessionEventSeq(capture.session)
     const operationSignal = this.combinedSignal(signal)
@@ -447,10 +439,11 @@ export class GoalBarService implements GoalBarServiceHandle {
       return { kind: 'fault', code: model.code, baseSessionEventSeq, sourceRevision }
     }
     const recoveryAttention = this.coordinator.hasRecoveryAttention?.(capture, model.snapshot) === true
+    const admission = this.coordinator.readContinuationAdmission(capture)
     return {
       kind: 'present',
       baseSessionEventSeq,
-      sourceRevision: recoverySourceRevision(sourceRevision, recoveryAttention),
+      sourceRevision: recoverySourceRevision(sourceRevision, recoveryAttention, admission),
       snapshot: {
         ...model.snapshot,
         // Status is process-local authority and is refreshed at publication.
@@ -458,19 +451,9 @@ export class GoalBarService implements GoalBarServiceHandle {
         ...(recoveryAttention ? { recoveryAttention: true } : {}),
         // The latched admission failure is driver-process state for the exact
         // Session and is refreshed from the same process-local authority.
-        continuationAdmission: this.publishServedAdmission(sessionId, capture),
+        continuationAdmission: admission,
       },
     }
-  }
-
-  /** Read the live admission state and record it as the served value. */
-  private publishServedAdmission(
-    sessionId: string,
-    capture: LiveCapture,
-  ): GoalBarContinuationAdmissionV1 {
-    const admission = this.coordinator.readContinuationAdmission(capture)
-    this.servedAdmission.set(sessionId, admission)
-    return admission
   }
 
   private async readFault(
@@ -541,14 +524,14 @@ export class GoalBarService implements GoalBarServiceHandle {
     // An admission change that landed while no watcher was registered (for
     // example during the client's own re-read) still differs from the last
     // served value; surface it immediately instead of waiting for an event.
-    const admissionNow = this.coordinator.readContinuationAdmission(capture)
-    if (!isDeepStrictEqual(
-      admissionNow,
-      this.servedAdmission.get(request.sessionId) ?? GOALBAR_ADMISSION_CLEAR,
-    )) {
+    const initialRevision = await this.watchSourceRevision(capture, request.expected)
+    if (operationSignal.aborted || !this.captureIsCurrent(capture)) {
+      return { kind: 'fault', code: 'session_unavailable' }
+    }
+    if (initialRevision !== request.sourceRevision) {
       return {
         kind: 'source_changed',
-        sessionEventSeq: upperBound ?? cursor,
+        sessionEventSeq: latestSessionEventSeq(capture.session) ?? cursor,
       }
     }
     while (!operationSignal.aborted && this.captureIsCurrent(capture)) {
@@ -633,9 +616,13 @@ export class GoalBarService implements GoalBarServiceHandle {
       goalId: expected?.goalId,
       loopxAgentId: expected?.loopxAgentId,
     })
-    const recoveryAttention = expected !== null
-      && this.coordinator.hasRecoveryAttention?.(capture, expected) === true
-    return recoverySourceRevision(revision, recoveryAttention)
+    // Hidden snapshots have no binding or admission projection. Keep their
+    // anchor in that same revision domain, so a retained driver failure cannot
+    // turn an unbound page's read/watch cycle into an immediate retry loop.
+    if (expected === null) return revision
+    const recoveryAttention = this.coordinator.hasRecoveryAttention?.(capture, expected) === true
+    return recoverySourceRevision(revision, recoveryAttention,
+      this.coordinator.readContinuationAdmission(capture))
   }
 
   private actionAdmission(): ActionAdmission {
@@ -729,10 +716,12 @@ export class GoalBarService implements GoalBarServiceHandle {
     if (validationSignal.aborted || !this.captureIsCurrent(capture)) {
       return { kind: 'rejected', code: 'binding_validation_failed' }
     }
-    const actionable = activation.kind === 'value'
-      && (request.op === 'start'
+    if (activation.kind !== 'value' || activation.stateFingerprint === undefined) {
+      return { kind: 'rejected', code: 'binding_validation_failed' }
+    }
+    const actionable = request.op === 'start'
         ? activation.goalActivation === 'stopped' && capture.agent.status === 'idle'
-        : activation.goalActivation === 'active')
+        : activation.goalActivation === 'active'
     if (!actionable) return { kind: 'rejected', code: 'not_actionable' }
 
     // Last identity/status fence before the child is synchronously launched.
@@ -752,6 +741,7 @@ export class GoalBarService implements GoalBarServiceHandle {
         '--goal-id', binding.goalId,
         '--operation', operation,
         '--actor-kind', 'owner',
+        '--expected-state-fingerprint', activation.stateFingerprint,
         '--execute',
       ], {
         runner: this.runner,

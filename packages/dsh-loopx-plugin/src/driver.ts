@@ -87,6 +87,30 @@ interface Reservation extends Binding {
   preserveAcrossPause: boolean
 }
 
+interface SessionDriverRetention {
+  readonly agent: Agent
+  paused: boolean
+  reservation?: Reservation | undefined
+}
+
+// HMR can replace this module while the same Agent and Session keep running.
+// Retain only process-local cancellation ownership and the error pause; Core
+// remains the owner of admission and settlement. Weak keys do not retain closed Sessions.
+const retentionKey = Symbol.for('loopx.dsh.session-driver-retention.v1')
+const retainedHost = globalThis as typeof globalThis & {
+  [retentionKey]?: WeakMap<Agent['session'], SessionDriverRetention>
+}
+const sessionRetention = retainedHost[retentionKey] ??= new WeakMap()
+
+function retainedState(agent: Agent, session: Agent['session']): SessionDriverRetention {
+  let retained = sessionRetention.get(session)
+  if (retained?.agent !== agent) {
+    retained = { agent, paused: sessionErrorPause(session) }
+    sessionRetention.set(session, retained)
+  }
+  return retained
+}
+
 interface ActivationProjection {
   readonly session: Agent['session']
   readonly pendingModelCalls: Set<string>
@@ -387,12 +411,35 @@ function foldSessionActivation(session: Agent['session']): ActivationProjection 
   return projection
 }
 
+/** Reopening a Session must not erase its last typed failure boundary. */
+function sessionErrorPause(session: Agent['session']): boolean {
+  let paused = false
+  try {
+    for (const event of session.snapshotEvents()) {
+      if (event.type === 'user/message' && event.data.source.kind === 'user') paused = false
+      if (event.type !== 'turn/end') continue
+      if (event.data.reason.kind === 'completed') paused = false
+      if (event.data.reason.kind === 'aborted' || event.data.reason.kind === 'max-tokens') paused = true
+    }
+  } catch {
+    return true
+  }
+  return paused
+}
+
 /**
  * Whether an Agent still holds input it has not consumed. The 0.1.5 Inbox
  * exposes the two pending queues instead of the retired `hasPending` flag.
  */
 function inboxHasPending(inbox: Agent['inbox']): boolean {
   return inbox.nextTurn.length > 0 || inbox.nextStep.length > 0
+}
+
+/** Pending context or another automatic message cannot release a rejected step. */
+function inboxHasIndependentInput(inbox: Agent['inbox']): boolean {
+  return [...inbox.nextTurn, ...inbox.nextStep].some(message => (
+    !isDriverMessage(message) && !isHostContextMessage(message)
+  ))
 }
 
 function inboxContains(inbox: Agent['inbox'], id: UserMessage['id']): boolean {
@@ -786,7 +833,6 @@ export class LoopXContinuationDriver {
     this.cancelPending(state)
     this.retireReservation(state)
     state.competing = inboxHasPending(agent.inbox)
-    state.pauseAfterTurnError = false
     state.recoveryAttention = undefined
     state.retrySelection = false
     state.schedulerToken = ''
@@ -1028,7 +1074,7 @@ export class LoopXContinuationDriver {
         return { ...decision, messages: acceptedInputs }
       }
       const restoredWork = this.restoreCompetingMessages(agent, remaining)
-      if (!restoredWork && !inboxHasPending(agent.inbox)) {
+      if (!restoredWork && !inboxHasIndependentInput(agent.inbox)) {
         state.pauseAfterTurnError = true
       }
       return { kind: 'reject' }
@@ -1087,7 +1133,6 @@ export class LoopXContinuationDriver {
         this.cancelPending(existing)
         this.retireReservation(existing)
         existing.competing = inboxHasPending(agent.inbox)
-        existing.pauseAfterTurnError = false
         existing.recoveryAttention = undefined
         existing.retrySelection = false
         existing.schedulerToken = ''
@@ -1106,7 +1151,10 @@ export class LoopXContinuationDriver {
       requested: false,
       stopping: false,
       competing: inboxHasPending(agent.inbox),
-      pauseAfterTurnError: false,
+      get pauseAfterTurnError() { return retainedState(agent, this.activation.session).paused },
+      set pauseAfterTurnError(value: boolean) { retainedState(agent, this.activation.session).paused = value },
+      get reservation() { return retainedState(agent, this.activation.session).reservation },
+      set reservation(value: Reservation | undefined) { retainedState(agent, this.activation.session).reservation = value },
       retrySelection: false,
       schedulerToken: '',
       unchangedPolls: 0,
@@ -1301,6 +1349,7 @@ export class LoopXContinuationDriver {
     }
     const binding = exactBinding(bindingPayload, String(state.agent.id))
     if (binding === undefined) {
+      state.recoveryAttention = undefined
       return { kind: 'wait', schedulerToken: '', unchangedPolls: 0 }
     }
 
@@ -1318,6 +1367,7 @@ export class LoopXContinuationDriver {
         turnInstanceId = selection.turnInstanceId
       } else {
         state.activation.pendingSelection = undefined
+        state.recoveryAttention = undefined
       }
     } else {
       state.activation.pendingSelection = undefined
@@ -1333,7 +1383,7 @@ export class LoopXContinuationDriver {
         false,
       )
     }
-    if (!exactQuotaContext(quota, binding)
+    if (typeof quota.should_run !== 'boolean' || !exactQuotaContext(quota, binding)
       || (quota.should_run === true && !exactQuotaReceipt(quota, turnInstanceId))) {
       throw new LoopXCliError(
         'invalid_schema',
@@ -1344,12 +1394,15 @@ export class LoopXContinuationDriver {
     if (quota.should_run !== true) {
       const wait = schedulerWait(quota, state.schedulerToken, state.unchangedPolls)
       const recovery = record(quota.unsettled_host_turn_recovery)
-      return quota.should_run === false
+      const attention = quota.should_run === false
         && recovery?.schema_version === 'unsettled_host_turn_recovery_v0'
         && recovery.state === 'attention_required'
-        ? { ...wait, recoveryAttention: binding }
-        : wait
+      state.recoveryAttention = attention ? binding : undefined
+      return attention ? { ...wait, recoveryAttention: binding } : wait
     }
+    // A verified new Core decision clears the old hold even if reading its
+    // task body later fails. A body transport error cannot revive a prior wait.
+    state.recoveryAttention = undefined
     setStage('heartbeat')
     const heartbeat = await this.readHeartbeat(
       command,

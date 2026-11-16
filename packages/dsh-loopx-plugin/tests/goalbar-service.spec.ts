@@ -152,6 +152,7 @@ function activationPayload(
     execute: false,
     goal_id: goalId,
     before_state: state,
+    observed_state_fingerprint: 'a'.repeat(64),
     after_state: 'stopped',
     changed: active,
     written: false,
@@ -425,6 +426,7 @@ describe('GoalBar Host read/watch', () => {
     const unregister = fixture.coordinator.registerDriverBridge({
       evaluateActivatedSession: async () => ({ kind: 'applied' }),
       cancelQueued: async () => ({ kind: 'applied' }),
+      readContinuationAdmission: () => ({ state: 'clear' }),
       hasRecoveryAttention: (capture, expected) => attention
         && capture.session === fixture.host.agent.session
         && expected.goalId === goalId && expected.loopxAgentId === loopxAgentId,
@@ -601,12 +603,32 @@ describe('GoalBar Host read/watch', () => {
       },
     })
 
-    // With the served value caught up, watching settles into a normal lease
-    // boundary instead of looping re-reads.
+    // Another client's read cannot acknowledge this client's old anchor.
+    expect((await fixture.service.handle(anchorRequest, new AbortController().signal)).result.kind)
+      .toBe('source_changed')
+    if (served.result.kind !== 'present') throw new Error('expected a current snapshot')
+    // A watch anchored to the new snapshot settles into the normal lease.
     expect((await fixture.service.handle(
-      anchorRequest,
+      { ...anchorRequest, sourceRevision: served.result.sourceRevision },
       new AbortController().signal,
     )).result).toEqual({ kind: 'timeout', sessionEventSeq: null })
+    await fixture.service.dispose()
+  })
+
+  it('keeps a hidden binding on a normal watch lease despite retained admission failure', async () => {
+    const fixture = harness({ watchTimeoutMs: 5 })
+    fixture.bindingMode = 'missing'
+    fixture.driverAdmission = { state: 'failed', category: 'cli_unreachable' }
+    const anchor = await fixture.service.handle(readRequest(), new AbortController().signal)
+    if (anchor.result.kind !== 'hidden') throw new Error('expected hidden anchor')
+    const callsAfterRead = fixture.calls.length
+    const watched = await fixture.service.handle(watchRequest(anchor.result.baseSessionEventSeq, {
+      sourceRevision: anchor.result.sourceRevision,
+      expected: null,
+      agentStatus: 'idle',
+    }), new AbortController().signal)
+    expect(watched.result).toEqual({ kind: 'timeout', sessionEventSeq: null })
+    expect(fixture.calls).toHaveLength(callsAfterRead)
     await fixture.service.dispose()
   })
 
@@ -942,6 +964,7 @@ describe('GoalBar Host lifecycle authority', () => {
       '--goal-id', goalId,
       '--operation', 'resume',
       '--actor-kind', 'owner',
+      '--expected-state-fingerprint', 'a'.repeat(64),
       '--execute',
     ])
     await fixture.service.dispose()
@@ -970,6 +993,7 @@ describe('GoalBar Host lifecycle authority', () => {
       '--goal-id', goalId,
       '--operation', 'stop',
       '--actor-kind', 'owner',
+      '--expected-state-fingerprint', 'a'.repeat(64),
       '--execute',
     ])
     expect(fixture.driverCalls).toEqual(['cancelQueued'])
