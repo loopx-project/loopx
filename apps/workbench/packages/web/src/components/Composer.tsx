@@ -5,7 +5,7 @@ import { flushSync } from 'react-dom';
 import { ApiError, MAX_QUEUED, type AgentMention, type ModelQueue, type OutgoingImage, type QueuedMessage, type SlashCommand } from '../api';
 import { commandDraft, searchCommands, slashQuery, type HubAction, type MenuRow } from '../commands';
 import { useIsNarrow, useIsTouch } from '../hooks';
-import { readDrafts, writeDraft, type Sending } from '../drafts';
+import { readDrafts, SendCancelled, writeDraft, type Sending } from '../drafts';
 import { sizeLabel } from '../files';
 import { mentionAt } from '../mentions';
 import { takeoverMention } from '../handover';
@@ -856,11 +856,17 @@ export function Composer({
       setVideos([]);
       setImages([]);
       setText(current => current === text ? '' : current);
-    } catch {
-      // The caller shows the error; keep the draft and the pictures so nothing is lost. The mark
-      // stays too: a send can fail on this side (the page being reloaded, the answer lost on a bad
-      // line) after the daemon took the message, and then the thread will show it.
-      inFlight.current = mark;
+    } catch (error) {
+      if (error instanceof SendCancelled) {
+        inFlight.current = null;
+        if (sentFrom !== undefined) {
+          const draft = keyRef.current === sentFrom ? draftRef.current : { text, notes, references, images, videos, mentions };
+          keepDraft(sentFrom, { ...draft, sending: undefined });
+        }
+      } else {
+        // A failed read can follow a successful send, so retain the mark until history resolves it.
+        inFlight.current = mark;
+      }
     } finally {
       clearTimeout(slowTimer);
       setSlow(false);

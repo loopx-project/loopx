@@ -2,6 +2,9 @@ import { readReferences, type ContextReference } from './context-references';
 import type { AgentMention } from './api';
 import type { Note } from './timeline';
 
+/** The person backed out before sending; the draft remains, with no delivery failure. */
+export class SendCancelled extends Error {}
+
 /** Unsent words in a thread's box, kept on this device so a reload does not lose them. */
 export interface StoredDraft {
   mentions?: AgentMention[];

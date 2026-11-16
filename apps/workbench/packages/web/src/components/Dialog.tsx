@@ -15,13 +15,14 @@ interface Props {
   hideCancel?: boolean;
   children?: ReactNode;
   confirmDisabled?: boolean;
+  cancelDisabled?: boolean;
   className?: string;
   onConfirm: (value: string | undefined, checked: boolean[]) => void;
   onCancel: () => void;
 }
 
 /** In-app modal used instead of window.prompt / window.confirm, so it matches the rest of the UI. */
-export function Dialog({ title, message, input, options = [], confirmLabel, danger, hideCancel = false, children, confirmDisabled, className = '', onConfirm, onCancel }: Props) {
+export function Dialog({ title, message, input, options = [], confirmLabel, danger, hideCancel = false, children, confirmDisabled, cancelDisabled = false, className = '', onConfirm, onCancel }: Props) {
   const [value, setValue] = useState(input?.initial ?? '');
   const [checked, setChecked] = useState<boolean[]>(() => options.map(() => false));
   const inputRef = useRef<HTMLInputElement>(null);
@@ -38,11 +39,11 @@ export function Dialog({ title, message, input, options = [], confirmLabel, dang
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) onCancel();
+      if (!cancelDisabled && e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) onCancel();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+  }, [onCancel, cancelDisabled]);
 
   const submit = () => {
     if (confirmDisabled) return;
@@ -57,7 +58,7 @@ export function Dialog({ title, message, input, options = [], confirmLabel, dang
       onClick={(e) => {
         if (e.target !== e.currentTarget || !pressedOutside.current) return;
         if (input) inputRef.current?.focus();
-        else onCancel();
+        else if (!cancelDisabled) onCancel();
       }}
     >
       <div
@@ -102,7 +103,7 @@ export function Dialog({ title, message, input, options = [], confirmLabel, dang
         ))}
         <div className="dialog-actions">
           {!hideCancel && (
-            <button className="ghost" onClick={onCancel}>
+            <button className="ghost" onClick={onCancel} disabled={cancelDisabled}>
               {t('common.cancel')}
             </button>
           )}

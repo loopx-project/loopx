@@ -102,6 +102,7 @@ import { ActivityPage } from './components/ActivityPage';
 import { LoopxGoalGroup } from './components/LoopxGoalGroup';
 import { drivenByApp } from './loopx/session';
 import { GoalConfirm, GoalPermissionPicker, LoopxToggle } from './components/LoopxGoal';
+import { SendCancelled } from './drafts';
 import { defaultGoalPermission, fetchGoalCapabilities, goalOf, type GoalAgentCapability, type GoalPermission } from './loopx/launch';
 import { ExtensionsPage } from './components/ExtensionsPage';
 import { VoiceOrb, VoiceControls } from './components/VoiceOrb';
@@ -2110,7 +2111,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         if (showcase) showcase.onInstall();
         else setConnectAsk({ reason: t('app.connectToSend') });
       }
-      else handleError(e, id);
+      else if (!(e instanceof SendCancelled)) handleError(e, id);
       throw e;
     }
   };
@@ -3672,7 +3673,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       {pendingGoal && (
         <GoalConfirm token={token} agent={draftAgent} agentLabel={agentLabel} cwd={draftCwd} permission={draftGoalLevel} text={pendingGoal.text}
           model={draftModel} effort={draftEffort}
-          onCancel={() => { pendingGoal.reject(new Error('not sent')); setPendingGoal(null); }}
+          onCancel={() => { pendingGoal.reject(new SendCancelled()); setPendingGoal(null); }}
           onCreated={(threadId) => { pendingGoal.resolve(); setPendingGoal(null); setDraftLoopx(false); setSelectedId(threadId); setView('thread'); void refreshThreads(); }} />
       )}
       {pendingSend && (

@@ -115,7 +115,7 @@ export function GoalConfirm({ token, agent: draftAgent, agentLabel, cwd: draftCw
   const error = review.status === 'error' ? review.error : null;
   return (
     <Dialog title={t('loopx.goal.createTitle')} confirmLabel={creating ? t('loopx.goal.creating') : t('loopx.goal.createGo')}
-      confirmDisabled={review.status !== 'ready' || creating} className="goal-confirm" onConfirm={() => void create()} onCancel={onCancel}>
+      confirmDisabled={review.status !== 'ready' || creating} cancelDisabled={creating} className="goal-confirm" onConfirm={() => void create()} onCancel={onCancel}>
       <div className="goal-confirm-body">
         <label className="goal-confirm-field"><span>{t('loopx.goal.goal')}</span><div className="goal-confirm-objective">{text}</div></label>
         <label className="goal-confirm-field"><span>{t('loopx.goal.completion')}</span>
