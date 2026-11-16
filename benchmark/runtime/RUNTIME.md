@@ -186,11 +186,14 @@ held-decision member still requires its original intent and sealed bytes, even
 when an annotation is empty.
 
 New heartbeat work and preflight capture the complete C1 contract with context
-delivery on or off. Explicit `--turn-envelope` selects the bounded v0 view when
-delivery is off. The view links to that original complete capture. With delivery
-on the native reader presents the verified capture. Explicit view requests,
-context delivery, and checkpoint handoffs allocate a capture directory. The
-worker and trial receipts preserve the requested view. For a historical
+delivery on or off. The deprecated `--turn-envelope` request spelling no longer
+selects a v0 view: Off returns the complete source inline; On uses the native
+reader for the verified source. Explicit request spellings, context delivery,
+and checkpoint handoffs retain capture allocation. Request receipts preserve
+the caller's spelling. New work supplies its actual shared `Execution` to the
+checkpoint verifier, so a retired request spelling cannot be mistaken for the
+complete guard that was emitted. Recorded pending commands still use their
+original receipt interpretation and strict command checks. For a historical
 short-view control, keep the recorded product and runner revisions. Preflight
 and live handoff require the signed source before selecting a replan point.
 Native checkpoint recovery reads legacy originals with their recorded mode,

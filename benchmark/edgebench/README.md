@@ -1011,10 +1011,11 @@ settlement. `--complete-turn` records an explicit selection in the worker
 and runtime receipts. `--context-delivery off` disables native context
 delivery while keeping the same decision contract.
 
-Heartbeat workers still accept explicit `--turn-envelope`. With context delivery
-off, it presents the bounded v0 view and links to the complete C1 capture.
-With context delivery on, the native reader presents that same capture. Pin the
-recorded runner and LoopX revisions for a historical short-view control.
+Heartbeat workers still accept the deprecated `--turn-envelope` request
+spelling and record it in request receipts. New guards always request the
+complete C1 source. With context delivery off it is inline; with delivery on
+the native reader presents that same capture. Pin the recorded runner and LoopX
+revisions for a historical short-view control.
 Checkpoint recovery verifies the original command and reads its captured
 source. To compare C1 with the original quota path, pin a pre-C1 runner and
 LoopX revision for the baseline. Match the task, scorer, model
@@ -1023,9 +1024,9 @@ recovery reads alongside the wake receipts. See the
 [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
 for source readback and recovery.
 
-新 heartbeat 统一使用 C1 完整契约。显式 `--turn-envelope` 在关闭上下文交付时
-输出有界 v0 短视图，并链接完整 C1 捕获。开启上下文交付时由原生 reader
-呈现该捕获。重跑旧短包对照时固定原 runner 与 LoopX 版本，历史 checkpoint
+新 heartbeat 统一使用 C1 完整契约。已废弃的 `--turn-envelope` 请求拼写仍记录在
+请求回执中，新 guard 一律请求完整来源。关闭上下文交付时保持 inline，开启时由
+原生 reader 呈现同一捕获。重跑旧短包对照时固定原 runner 与 LoopX 版本，历史 checkpoint
 按原命令和同一捕获恢复。与原 quota
 比较时固定 pre-C1 基线版本，并匹配题目、评估器、模型和预算。实际交付须核对
 原生工具输出和恢复读取。

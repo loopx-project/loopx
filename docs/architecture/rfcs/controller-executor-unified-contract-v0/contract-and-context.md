@@ -38,9 +38,28 @@ rewrite settlement ownership. After verified writeback, typed readback also
 projects the original pending-spend closeout for Todo-less replans, preserving historical ACK handling and
 once-only settlement. The existing C1 rule keeps an observed review from binding
 an otherwise unbound selection; integrating the main-specific fallback unchanged
-regressed those cases and was rejected. Explicit raw-off retains its v0 view;
-progressive delivery validates the complete v1 source. Installed/in-flight
-adoption, independent review and original-quota outcomes/full costs remain open.
+regressed those cases and was rejected. All new quota displays now use the
+complete v1 source, including the deprecated `--turn-envelope` spelling with
+context delivery off. Off keeps the complete source inline; it neither enables
+native delivery nor selects settlement ownership. The active raw-v0 projector,
+its second composition result and its heartbeat/preflight instructions are
+removed. New workers request the complete source. Their checkpoint verifier receives the
+actual shared `Execution`, independently of the caller's recorded spelling;
+otherwise a deprecated request could wrongly reject its complete pending guard.
+Historical sealed captures,
+recorded bootstrap recognition and frozen model-behavior comparisons retain
+their original readers and versions; the legacy builder cannot become a new-work
+fallback. Installed/in-flight adoption, independent review and original-quota
+outcomes/full costs remain open.
+
+The retired spelling's Off output intentionally grows because it now carries the
+complete source: an isolated File/SQLite CLI fixture changed from about 25.8 KB
+of v0 stdout to 50.9–51.0 KB of complete stdout. The ordinary complete path stayed
+about 51.2–51.3 KB. These are actual console/capture bytes on the same fixture
+shape, not model tokens, accepted outcomes, cache use or net cost. Both spellings
+retain the original Turn and zero spending during the reads. Frozen historical
+v0 budgets and failures remain unchanged; the original-quota/C1 matched outcome
+and full-cost qualification is still outstanding.
 
 After admission, a presentation failure reuses the prequalified bounded reader
 for the complete original capture when its receipt would fragment. Receipts that
@@ -1085,7 +1104,7 @@ the capture's format fields.
 | Generated manual shell and custom external driver | Onboarding and bootstrap commands select the same `generic_cli` route. The bound guard returns the same-Turn writeback and debit plan. Re-render copied launchers to select the complete source for new work. Original captures retain their existing readers. |
 | Ordinary quota and thin heartbeat | New guards compose the same complete contract before capture, including work selection before a Turn is bound. JSON and Markdown follow the same source. The selected runtime and original receipt determine settlement. Saved unsigned captures retain their pinned recovery reader. |
 | Explicit `--complete-turn` and managed handoff | Keep the checked complete source through selection and lease preparation. If a ready capture loses its complete version and binding, it offers receipt diagnosis only. |
-| Explicit `--turn-envelope` | Progressive or Delta uses the complete source. With context delivery explicitly off and Delta inactive, the CLI emits the bounded v0 view from the same composition. Archived EdgeBench comparisons use their recorded product and runner versions. |
+| Deprecated `--turn-envelope` spelling | New quota calls use the same complete v1 source in every delivery mode. Off stays inline, with the existing manual or qualified runtime settlement owner. New heartbeat and preflight producers no longer request a v0 view. Sealed historical captures and archived EdgeBench comparisons retain their recorded versions and readers. |
 | Recorded v0 captures, plans and requests | Keep their pinned integrity/recovery reader until outstanding admitted work and the supported recovery window are reconciled. An invalid new source cannot select this fallback. |
 
 In the earlier default-cutover comparison, a first reference
