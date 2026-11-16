@@ -12,6 +12,7 @@ export interface Appearance {
 
 /** The palettes to choose from. Their colours live at the top of styles.css, keyed by these ids. */
 export const PALETTES: ReadonlyArray<{ id: string; name: string }> = [
+  { id: 'codex', name: 'Codex' },
   { id: 'paper', name: t('appearance.palette.paper') },
   { id: 'graphite', name: t('appearance.palette.graphite') },
   { id: 'catppuccin', name: 'Catppuccin' },
@@ -28,7 +29,7 @@ export const MODES: ReadonlyArray<{ id: Mode; name: string }> = [
   { id: 'dark', name: t('appearance.mode.dark') },
 ];
 
-export const DEFAULT_APPEARANCE: Appearance = { mode: 'system', palette: 'paper' };
+export const DEFAULT_APPEARANCE: Appearance = { mode: 'system', palette: 'codex' };
 
 /** Where the choice is kept. index.html reads the same key before the first paint. */
 export const APPEARANCE_KEY = 'calli.appearance';

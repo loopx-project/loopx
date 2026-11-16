@@ -16,7 +16,7 @@ test('a saved choice is read back', () => {
 
 test('each half falls back on its own', () => {
   // A palette from a newer build must not cost the user their light-or-dark choice, and the other way round.
-  assert.deepEqual(parseAppearance('{"mode":"light","palette":"gone"}'), { mode: 'light', palette: 'paper' });
+  assert.deepEqual(parseAppearance('{"mode":"light","palette":"gone"}'), { mode: 'light', palette: 'codex' });
   assert.deepEqual(parseAppearance('{"mode":"dim","palette":"gruvbox"}'), { mode: 'system', palette: 'gruvbox' });
   assert.deepEqual(parseAppearance('{"mode":1,"palette":["nord"]}'), DEFAULT_APPEARANCE);
 });

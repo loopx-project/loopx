@@ -7,7 +7,7 @@
          to --vvh shrinks twice and the page background shows below the composer. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#f8f6f1" />
+    <meta name="theme-color" content="#f9f9f7" />
     <title>LoopX</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="application-name" content="LoopX" />
@@ -22,7 +22,10 @@
         var saved = JSON.parse(localStorage.getItem('calli.appearance') || '{}');
         var dark = saved.mode === 'dark' || (saved.mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        // A saved palette is honoured as-is; nothing saved opens on the default, which is spelled
+        // here because this runs before the bundle (it must match DEFAULT_APPEARANCE.palette).
         if (typeof saved.palette === 'string') document.documentElement.setAttribute('data-palette', saved.palette);
+        else document.documentElement.setAttribute('data-palette', 'codex');
       } catch (e) {}
     </script>
   </head>
