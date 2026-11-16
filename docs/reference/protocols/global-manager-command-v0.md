@@ -104,6 +104,12 @@ Request rules:
 
 ## Source Reads
 
+If both default runtime roots contain state, select the intended global
+registry by path with `--registry`. When that registry declares a runtime,
+use the registry alone so each Goal can route to its registered source.
+An explicit `--runtime-root` pins Goal authority lookup to a single directory.
+Use that override for diagnostics that intentionally inspect one runtime.
+
 Implementations may read only compact LoopX control-plane surfaces:
 
 - global registry and project-local registry entries;

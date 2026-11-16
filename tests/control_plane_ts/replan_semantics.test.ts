@@ -370,6 +370,21 @@ test("no-followup cannot hide an inconsistent vision behind another accepted out
   assert.equal(valid.accepted, true);
 });
 
+test("terminal input projection supplies coverage and vision without widening restricted exits", () => {
+  const result = projectReplanSemantics({operation: "requirements", obligation});
+  const contract = result.writeback_contract as JsonObject;
+  const terminal = contract.no_followup_requirements as JsonObject;
+  assert.deepEqual(terminal.cli_args, ["--progress-result-class", "no_followup",
+    "--progress-coverage-scope-id", "<coverage-scope-id>", "--progress-evidence-id", "<evidence-id>",
+    "--agent-vision-json", "<file>"]);
+  assert.deepEqual(terminal.vision_fields, {state: "no_followup", "path_delta.outcome": "stop"});
+  assert.deepEqual(terminal.preserve, ["vision_patch"]);
+  const restricted = projectReplanSemantics({operation: "requirements", obligation: {
+    ...obligation, satisfying_semantic_outcomes: ["new_concrete_blocker"],
+  }});
+  assert.equal((restricted.writeback_contract as JsonObject).no_followup_requirements, undefined);
+});
+
 test("external progress review: renamed identifiers discharge only behind new evidence; the plan may stand on evidence", () => {
   const review = {triggers: [{kind: "external_progress_review_drift", model_authority: "none"}]};
   const projection = projectReplanSemantics({operation: "requirements", obligation: review});

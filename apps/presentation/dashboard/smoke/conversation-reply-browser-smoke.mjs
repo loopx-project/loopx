@@ -80,11 +80,21 @@ async function checkReturnedFiles(ready, page, errors, writes) {
     }
   }
   await page.screenshot({path: resolve(output, `${baseline ? "before" : "after"}-files-desktop.png`), animations: "disabled"});
+  const historyPath = `/api/chat/sessions/${ready.sessionId}`;
+  const readerRequest = page.context().waitForEvent("request", {predicate: request =>
+    new URL(request.url()).pathname === historyPath
+    && new URL(request.frame().url()).searchParams.get("reportMessageId") === ready.fileMessageId});
   const opened = page.context().waitForEvent("page");
   await timeline.getByRole("link", {name: "单独阅读完整答复"}).click();
   const report = await opened;
   report.on("pageerror", error => errors.push(error.message));
   await report.getByRole("heading", {name: "结果已核验 / Verified result", exact: true}).waitFor();
+  const readerQuery = new URL((await readerRequest).url()).searchParams;
+  if (!baseline) {
+    assert.equal(readerQuery.get("turn_id"), answer.turn_id, "The saved answer checks its original Turn");
+    assert.equal(readerQuery.get("report_message_id"), answer.message_id, "The reader requests only the chosen answer");
+    assert.equal(readerQuery.has("message_limit"), false);
+  }
   assert.equal(await report.locator("a[download]").count(), baseline ? 0 : ready.files.length);
   await report.screenshot({path: resolve(output, `${baseline ? "before" : "after"}-files-reader.png`), animations: "disabled"});
   if (!baseline) {
@@ -109,6 +119,91 @@ async function checkReturnedFiles(ready, page, errors, writes) {
     const url = ready.origin + answer.attachments[0].data_url;
     assert.equal((await page.request.get(url.replace(ready.sessionId, "unrelated-session"))).status(), 404);
     assert.equal((await page.request.get(url, {headers: {Origin: "https://unrelated.example"}})).status(), 403);
+
+    const legacy = new URL(report.url());
+    legacy.searchParams.delete("reportTurnId");
+    const savedAnswerRequest = url => url.pathname === historyPath && url.searchParams.get("report_message_id") === ready.fileMessageId;
+    const legacyRead = report.waitForResponse(response => new URL(response.url()).pathname === historyPath);
+    await report.goto(legacy.toString());
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+    const legacyResponse = await legacyRead;
+    assert.ok(savedAnswerRequest(new URL(legacyResponse.url())), "An existing link selects its saved message without loading the transcript");
+    const legacySnapshot = await legacyResponse.json();
+    assert.deepEqual(legacySnapshot.messages.filter(row => row.role !== "user").map(row => row.message_id), [ready.fileMessageId]);
+    const legacyAnswer = legacySnapshot.messages.find(row => row.message_id === ready.fileMessageId);
+    assert.equal(legacyAnswer.text, answer.text);
+    assert.deepEqual(legacyAnswer.attachments, answer.attachments);
+
+    await report.route(savedAnswerRequest, route => route.fulfill({status: 400, json: {ok: false, error: "invalid history page arguments"}}));
+    const fallbackRead = report.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname === historyPath && url.search === "";
+    });
+    await report.reload();
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+    await fallbackRead;
+
+    const fallbackTurnRead = report.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname === historyPath && url.searchParams.get("turn_id") === answer.turn_id && url.searchParams.has("message_limit");
+    });
+    const withTurn = new URL(legacy);
+    withTurn.searchParams.set("reportTurnId", answer.turn_id);
+    await report.goto(withTurn.toString());
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+    await fallbackTurnRead;
+    await report.unroute(savedAnswerRequest);
+    await report.goto(legacy.toString());
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+
+    // Earlier history readers accept unknown query arguments and return their
+    // complete v1 snapshot. Both existing and Turn-pinned links still open it.
+    await report.route(savedAnswerRequest, route => route.fulfill({json: snapshot}));
+    for (const address of [legacy, withTurn]) {
+      await report.goto(address.toString());
+      await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+      assert.equal(await report.locator("a[download]").count(), ready.files.length);
+    }
+    const wrongTurn = new URL(withTurn);
+    wrongTurn.searchParams.set("reportTurnId", "unrelated-turn");
+    await report.goto(wrongTurn.toString());
+    await report.getByText("This answer was not found. It may have been removed, or the link may be incorrect.").waitFor();
+    assert.equal(await report.locator("a[download]").count(), 0);
+    await report.unroute(savedAnswerRequest);
+
+    for (const invalid of [
+      {...snapshot, session: {...snapshot.session, session_id: "another-session"}},
+      {...snapshot, report_message_id: "another-message"},
+      {...snapshot, message_page: {next_cursor: "another-page"}},
+    ]) {
+      await report.route(savedAnswerRequest, route => route.fulfill({json: invalid}));
+      await report.goto(legacy.toString());
+      await report.getByText("Could not load this answer.").waitFor();
+      assert.equal(await report.locator("a[download]").count(), 0);
+      await report.unroute(savedAnswerRequest);
+    }
+
+    const refusedReads = [];
+    const observeRefusal = request => {
+      if (new URL(request.url()).pathname === historyPath) refusedReads.push(new URL(request.url()));
+    };
+    report.on("request", observeRefusal);
+    for (const [status, error] of [[403, "Source access was revoked"], [400, "invalid Chat journal record"]]) {
+      refusedReads.length = 0;
+      await report.route(savedAnswerRequest, route => route.fulfill({status, json: {ok: false, error}}));
+      await report.reload();
+      await report.getByText("Could not load this answer.").waitFor();
+      assert.equal(await report.locator("a[download]").count(), 0);
+      assert.equal(refusedReads.length, 1);
+      assert.ok(savedAnswerRequest(refusedReads[0]), "A refused or invalid source must never trigger a wider history read");
+      await report.unroute(savedAnswerRequest);
+    }
+    report.off("request", observeRefusal);
+
+    legacy.searchParams.set("reportTurnId", "unrelated-turn");
+    await report.goto(legacy.toString());
+    await report.getByText(/This answer was not found|Could not load this answer/).waitFor();
+    assert.equal(await report.locator("a[download]").count(), 0);
   }
   child.stdin.write("inspect\n");
   const inspection = await next();
