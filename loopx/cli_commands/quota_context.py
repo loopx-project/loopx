@@ -271,7 +271,7 @@ def validate_quota_command_context_request(
             "turn-scoped `quota should-run` cannot use --dry-run"
         )
     if (
-        command == "should-run" and getattr(args, "format", None) == "json"
+        command == "should-run"
         and heartbeat_turn_id is not None and scheduler_context is None
         and not getattr(args, "turn_envelope", False)
     ):

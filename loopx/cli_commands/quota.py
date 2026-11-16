@@ -540,7 +540,8 @@ def _publish_quota_result(
                 heartbeat_turn_id is not None
                 and profile in {SchedulerRuntimeProfile.TRAE_APP, SchedulerRuntimeProfile.ANTIGRAVITY_APP}
             )
-            bound_json = args.format == "json" and heartbeat_turn_id is not None and args.agent_id is not None
+            bound_work = heartbeat_turn_id is not None and args.agent_id is not None
+            bound_json = args.format == "json" and bound_work
             cli_work_source = (
                 (args.format == "json" and profile is SchedulerRuntimeProfile.CODEX_CLI_VISIBLE)
                 or (bound_json and (
@@ -549,7 +550,8 @@ def _publish_quota_result(
                         and getattr(args, "runtime_profile", None) == profile.value)
                 ))
             )
-            direct_cli_source = bound_json and (
+            # Markdown and JSON render the same authority for a bound generic Turn.
+            direct_cli_source = bound_work and (
                 (profile or scheduler.default_settlement_profile)
                 is SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP
             )

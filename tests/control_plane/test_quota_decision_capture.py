@@ -171,13 +171,15 @@ def test_large_refusal_diagnostics_remain_reachable_by_selected_read(tmp_path):
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('output_format', ['json', 'markdown'])
 @pytest.mark.parametrize('profile_args', [
     pytest.param((), id='direct'),
     pytest.param(('--runtime-profile', 'generic_cli'), id='profile'),
     pytest.param(('--host-surface', 'generic_cli', '--scheduler-owner', 'agent_cli_loop',
                   '--execution-mode', 'interactive'), id='host-fields'),
 ])
-def test_bound_cli_fallback_preserves_capture_and_settles_once(tmp_path, monkeypatch, provider, profile_args):
+def test_bound_cli_fallback_preserves_capture_and_settles_once(
+        tmp_path, monkeypatch, provider, profile_args, output_format):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from tests.control_plane.canonical_authority_fixture import (
@@ -202,12 +204,22 @@ def test_bound_cli_fallback_preserves_capture_and_settles_once(tmp_path, monkeyp
             '--available-capability', 'shell', '--available-capability', 'filesystem_read',
             '--context-delivery', 'off', *profile_args]
     capture = tmp_path / 'original-decision'
-    code, inline = _run_cli(registry, runtime, *args, '--decision-output-dir', str(capture), cwd=project)
-    assert code == 0, inline
+    guard = subprocess.run(
+        [sys.executable, '-m', 'loopx.entrypoint', '--registry', str(registry),
+         '--runtime-root', str(runtime), '--format', output_format, *args,
+         '--decision-output-dir', str(capture)],
+        cwd=project, env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2])},
+        capture_output=True, text=True, check=False,
+    )
+    assert guard.returncode == 0, guard.stdout + guard.stderr
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
     assert_complete_turn_decision(full)
+    inline = guard.stdout
+    if output_format == 'markdown':
+        inline = inline.split('```json\n', 1)[1].rsplit('\n```', 1)[0]
+    inline = json.loads(inline)
     assert inline == full
     assert full['projection_envelope']['schema_version'] == 'loopx_projection_envelope_v2'
     fallback = full['blocked_priority_fallback']
