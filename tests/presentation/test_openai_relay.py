@@ -222,7 +222,7 @@ def test_loopback_truncation_framing_and_exact_tool_prefix(relay, framing, compl
 def test_valid_quota_json_in_short_content_length_cannot_rotate(relay):
     _, keys, calls, outcomes, post, _ = relay
     payload = json.dumps({"error": {"code": "insufficient_quota"}}).encode()
-    with socketserver.TCPServer(("127.0.0.1", 0), RejectedQuota) as server:
+    with socketserver.TCPServer(("127.0.0.1", 0), WireResponse) as server:
         server.wire_response = (
             f"HTTP/1.1 429 Too Many Requests\r\nContent-Length: {len(payload) + 1}\r\n"
             "Content-Type: application/json\r\nConnection: close\r\n\r\n"
@@ -245,11 +245,72 @@ def test_valid_quota_json_in_short_content_length_cannot_rotate(relay):
             serve.join(timeout=5)
 
 
-class RejectedQuota(socketserver.StreamRequestHandler):
+class WireResponse(socketserver.StreamRequestHandler):
     def handle(self):
         self.rfile.readline(4097)
         http.client.parse_headers(self.rfile)
         self.wfile.write(self.server.wire_response)
+
+
+@pytest.mark.parametrize("status", [200, 429])
+@pytest.mark.parametrize(("trailer", "complete"), [
+    (b"0\r\n", False),
+    (b"0\r\nX-Fixture: retained\r\n", False),
+    (b"0\r\n\r\n", True),
+    (b"0\r\nX-Fixture: retained\r\n\r\n", True),
+])
+def test_chunked_upstream_requires_the_end_of_trailers(relay, monkeypatch, status, trailer, complete):
+    owner, keys, calls, outcomes, post, _ = relay
+    module = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    # Keep the production HTTPS response parser while serving a raw local
+    # socket fixture. These cases exercise framing above the TLS transport.
+    monkeypatch.setattr(http.client.HTTPSConnection, "connect", http.client.HTTPConnection.connect)
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    prefix = b'data: {"type":"response.created"}\n\n'
+    error = b'{"error":{"code":"insufficient_quota"}}'
+    payload = prefix if status == 200 else error
+    status_line = "200 OK" if status == 200 else "429 Too Many Requests"
+    content_type = "text/event-stream" if status == 200 else "application/json"
+    with module.RelayServer(owner, {"port": 0}) as relay_server:
+        origin_opener = relay_server.opener
+    with socketserver.TCPServer(("127.0.0.1", 0), WireResponse) as server:
+        server.wire_response = (
+            f"HTTP/1.1 {status_line}\r\nTransfer-Encoding: chunked\r\n"
+            f"Content-Type: {content_type}\r\nConnection: close\r\n\r\n"
+            f"{len(payload):x}\r\n"
+        ).encode() + payload + b"\r\n" + trailer
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"https://127.0.0.1:{server.server_address[1]}/"
+            if status == 200:
+                outcomes.append(origin_opener.open(url, timeout=5))
+                if complete:
+                    assert post() == (200, prefix)
+                else:
+                    with pytest.raises(http.client.IncompleteRead) as caught:
+                        post()
+                    assert caught.value.partial == prefix
+                assert len(calls) == 1
+            else:
+                with pytest.raises(urllib.error.HTTPError) as rejected:
+                    origin_opener.open(url, timeout=5)
+                fallback = b'{"accepted":true}'
+                outcomes.extend([rejected.value, Response(fallback)])
+                if complete:
+                    assert post() == (200, fallback)
+                    assert len(calls) == 2
+                    assert calls[0].data == calls[1].data
+                    assert calls[0].get_header("Authorization") != calls[1].get_header("Authorization")
+                else:
+                    response_status, response = post()
+                    assert response_status == 502
+                    assert json.loads(response)["error"]["code"] == "upstream_unavailable"
+                    assert len(calls) == 1
+                    assert all(row["runtime"] is None for row in keys.status()["keys"])
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
 
 
 def test_pool_exhaustion_is_bounded_and_does_not_probe_in_background(relay):

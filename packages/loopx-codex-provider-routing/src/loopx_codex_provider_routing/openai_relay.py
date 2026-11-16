@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
-from http.client import HTTPException
+from http.client import HTTPException, HTTPResponse, HTTPSConnection, IncompleteRead, LineTooLong, _MAXHEADERS, _MAXLINE
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -37,6 +37,29 @@ BUILD = hashlib.sha256(b"".join(Path(__file__).with_name(name).read_bytes() for 
     "openai_relay.py", "relay_lifecycle.py", "provider.py", "native.py", "native_host.py",
     "native_policy.ts", "native_policy_bridge.ts", "openai_keys.py",
     "openai_policy.ts", "openai_policy_bridge.ts", "native-extension.toml"))).hexdigest()
+
+
+class _RelayHTTPResponse(HTTPResponse):
+    def _read_and_discard_trailer(self):
+        # Require the final blank line while retaining the standard trailer bounds.
+        for _ in range(_MAXHEADERS + 1):
+            line = self.fp.readline(_MAXLINE + 1)
+            if len(line) > _MAXLINE:
+                raise LineTooLong("trailer line")
+            if not line:
+                raise IncompleteRead(b"")
+            if line in (b"\r\n", b"\n"):
+                return
+        raise HTTPException(f"got more than {_MAXHEADERS} trailers")
+
+
+class _RelayHTTPSConnection(HTTPSConnection):
+    response_class = _RelayHTTPResponse
+
+
+class _RelayHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, request):
+        return self.do_open(_RelayHTTPSConnection, request, context=self._context)
 
 
 class _StreamOutcome:
@@ -133,7 +156,7 @@ class RelayServer(ThreadingHTTPServer):
 
     def __init__(self, owner: NativeAccounts, value: dict, *, opener=None):
         self.owner, self.value = owner, value
-        self.opener = opener or urllib.request.build_opener(NoRedirect())
+        self.opener = opener or urllib.request.build_opener(NoRedirect(), _RelayHTTPSHandler())
         self.instance_id = secrets.token_hex(16)
         self._admission_lock = threading.Lock()
         self._receiving: set[socket.socket] = set()
