@@ -473,7 +473,9 @@ def current_heartbeat_host_launch_decision(
             selection.receipt, turn_instance_id=original_turn, status="replayed",
         )
         if (not held.get("event_id") or current_receipt.get("event_id") != held.get("event_id")
-                or current_receipt.get("settlement_identity") != held.get("settlement_identity")):
+                or current_receipt.get("settlement_identity") != held.get("settlement_identity")
+                or current_receipt.get("semantic_replan_obligation_id")
+                != held.get("semantic_replan_obligation_id")):
             raise FirstPartyHostRuntimeRejected("heartbeat_launch_original_binding_changed")
     current = build_live_quota_should_run_decision(
         collect_turn_status_payload(args, registry_path=registry_path, runtime_root_arg=str(runtime_root)),
@@ -500,6 +502,8 @@ def current_heartbeat_host_launch_decision(
         else current.get("effective_action"))}
     if selection.receipt_bound_todo_id is not None:
         launch["receipt_bound_todo_id"] = selection.receipt_bound_todo_id
+        if selection.receipt_bound_replan_obligation_id is not None:
+            launch["receipt_bound_replan_obligation_id"] = selection.receipt_bound_replan_obligation_id
         if original_quota is not None:
             launch["planned_execution_preparation"] = original_quota.get("execution_preparation")
     return launch

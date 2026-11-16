@@ -163,10 +163,16 @@ def apply_selected_todo_execution_preparation(
         or preparation.get("state") == "authority_unavailable"
     ):
         return
-    if preparation is None or preparation.get("state") == "not_required":
+    if preparation is None:
+        return
+    state = preparation.get("state")
+    if state == "not_required":
+        # The live Host needs the canonical soft-claim result to distinguish
+        # permission from missing authority. Ordinary quota omits this detail.
+        if include_launch_lease_deadline:
+            payload["execution_preparation"] = preparation
         return
     payload["execution_preparation"] = preparation
-    state = preparation.get("state")
     if state == "ready":
         return
     payload["normal_delivery_allowed"] = False
@@ -196,7 +202,7 @@ def attach_interaction_execution_preparation(
     contract: dict[str, Any], payload: dict[str, Any],
 ) -> None:
     preparation = payload.get("execution_preparation")
-    if not isinstance(preparation, dict):
+    if not isinstance(preparation, dict) or preparation.get("state") == "not_required":
         return
     contract["agent_channel"]["execution_preparation"] = preparation
     contract["cli_channel"]["execution_preparation"] = preparation

@@ -499,6 +499,34 @@ def held_provider_task(tmp_path, monkeypatch, request):
     return authority, quota, original, lease
 
 
+def test_provider_request_keeps_original_soft_claim_turn(authority):
+    turn = quota_fixture.TURN_ID
+    with _upstream() as upstream, _process() as process:
+        guard, _, wake = authority.invocation(upstream.base_url, "soft-claim", turn_id=turn)
+        with guard.serve(["native", "-"]):
+            guard.started(process)
+            # The native session first binds work in its own Turn. The gateway
+            # was already created and must consume that same live authority.
+            code, quota = quota_fixture._run_cli(
+                authority.registry, authority.runtime, "quota", "should-run",
+                "--goal-id", quota_fixture.GOAL_ID, "--agent-id", quota_fixture.AGENT_ID,
+                "--todo-id", quota_fixture.TODO_ID, "--turn-instance-id", turn,
+                "--runtime-profile", "generic_cli", "--complete-turn", cwd=authority.project,
+            )
+            identity = quota["heartbeat_receipt"]["settlement_identity"]
+            assert code == 0 and quota["normal_delivery_allowed"] is True
+            assert identity["todo_id"] == quota_fixture.TODO_ID
+            assert "execution_preparation" not in quota
+
+            status, body = _post(guard.base_url)
+            assert status == 200, body
+            event, = _finished(wake)
+            assert event["turn_id"] == turn and event["forwarded"] is True
+            assert len(upstream.rows) == 1
+            assert quota_fixture._heartbeat_receipt_count(authority.runtime, turn) == 1
+            assert quota_fixture._spend_run_count(authority.runtime) == 0
+
+
 @pytest.mark.parametrize("retry_lease", ["expired", "replacement"])
 def test_final_provider_write_crossing_hard_lease_preserves_unknown_attempt(
     held_provider_task, monkeypatch, retry_lease,

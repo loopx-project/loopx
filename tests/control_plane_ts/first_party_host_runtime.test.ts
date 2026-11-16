@@ -126,6 +126,33 @@ test("legacy native launch consumes the current quota owner without weakening so
   {kind: "reject", code: "goal_instance_id_missing"});
 });
 
+test("a Todo-bound replan launch requires the same non-delivery obligation", () => {
+  const witness = {path: "/fixture/registry.json", sha256: "a".repeat(64)};
+  const legacy = {profile_id: null, operation: "launch", goal_id: "release",
+    registry_path: witness.path, planned_registry_witness: witness, registry_witness: witness,
+    authority: {kind: "present", goal_id: "release", registration_status: "active", activation_state: "active"}};
+  const todo = "todo_chain_000000000000";
+  const obligation = "replan-1000000000000001";
+  const current = {
+    effective_action: "autonomous_replan_required", should_run: true,
+    status_health_ok: true, normal_delivery_allowed: false,
+    selected_todo: {todo_id: todo}, replan_action_packet: {obligation_id: obligation},
+  };
+  const launch = {receipt_bound_todo_id: todo,
+    receipt_bound_replan_obligation_id: obligation,
+    planned_effective_action: current.effective_action, current};
+  const decide = (launch_decision: unknown) => decideFirstPartyHostRuntime({...legacy, launch_decision});
+  assert.deepEqual(decide(launch), {kind: "legacy"});
+  for (const facts of [
+    {...launch, receipt_bound_replan_obligation_id: undefined},
+    {...launch, current: {...current, replan_action_packet: {obligation_id: "replan-1000000000000002"}}},
+    {...launch, current: {...current, selected_todo: {todo_id: "todo_chain_000000000001"}}},
+    {...launch, current: {...current, normal_delivery_allowed: true}},
+  ]) {
+    assert.deepEqual(decide(facts), {kind: "reject", code: "goal_launch_not_allowed"});
+  }
+});
+
 test("a running legacy Turn requires its original authority and still sees Stop", () => {
   const entry = "a".repeat(64);
   const authority = {kind: "present", goal_id: "release", registration_status: "active",
