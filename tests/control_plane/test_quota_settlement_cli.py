@@ -708,34 +708,6 @@ def _projected_cli_args(command: str, *, turn_instance_id: str) -> tuple[str, ..
     )
 
 
-def _admit_selected_replan_guard(
-    registry: Path, runtime: Path, project: Path, turn_instance_id: str,
-    *,
-    goal_id: str = GOAL_ID,
-    agent_id: str = AGENT_ID,
-    todo_id: str = SELECTED_REPLAN_TODO_ID,
-) -> dict[str, Any]:
-    """Admit the review while retaining the explicit Todo as planning input."""
-    rc, admitted = _run_cli(
-        registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", goal_id, "--agent-id", agent_id,
-        "--turn-instance-id", turn_instance_id,
-        "--todo-id", todo_id,
-    )
-    assert rc == 0, admitted
-    assert admitted["selected_todo"]["todo_id"] == todo_id
-    identity = admitted["heartbeat_receipt"]["settlement_identity"]
-    assert identity["binding_kind"] == "autonomous_replan"
-    assert identity["replan_obligation_id"] == admitted["replan_action_packet"]["obligation_id"]
-    assert admitted["heartbeat_receipt"]["pending_action_selection"] == {
-        "todo_id": todo_id,
-        "state": "bound",
-        "reason": "explicit_choice_preserved",
-        "settlement_bound": True,
-    }
-    return admitted
-
-
 def _bind_selected_replan_guard(
     registry: Path, runtime: Path, project: Path, turn_instance_id: str,
     *,
@@ -743,16 +715,28 @@ def _bind_selected_replan_guard(
     agent_id: str = AGENT_ID,
     todo_id: str = SELECTED_REPLAN_TODO_ID,
 ) -> dict[str, Any]:
-    """Compatibility name for composition fixtures that admit this guard."""
-    return _admit_selected_replan_guard(
-        registry,
-        runtime,
-        project,
-        turn_instance_id,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        todo_id=todo_id,
+    """Choose the fixture Todo explicitly, then consume the generated recovery.
+
+    An initial hard-replan recommendation is planning context, not a binding.
+    Keep the existing semantic-delta regressions testing an admitted identity.
+    """
+    rc, deferred = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", goal_id, "--agent-id", agent_id,
+        "--turn-instance-id", turn_instance_id,
+        "--todo-id", todo_id,
     )
+    if rc == 0:
+        bound = deferred
+    else:
+        # Without a prior receipt, first-call refusal remains caller-owned.
+        assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
+        [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        rc, bound = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0, bound
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
+    return bound
+
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -801,7 +785,7 @@ def test_existing_todo_receipt_precedes_later_replan_projection(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_same_explicit_todo_retry_preserves_bound_replan_identity(
+def test_same_explicit_todo_retry_preserves_original_identity(
     tmp_path: Path,
     provider: str,
 ) -> None:
@@ -831,15 +815,9 @@ def test_same_explicit_todo_retry_preserves_bound_replan_identity(
 
     assert first_rc == 0, first
     original = first["heartbeat_receipt"]["settlement_identity"]
-    assert original["binding_kind"] == "autonomous_replan"
-    assert first["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == (
-        SELECTED_REPLAN_TODO_ID
-    )
+    assert original["todo_id"] == SELECTED_REPLAN_TODO_ID
     assert replay_rc == 0, replay
     assert replay["heartbeat_receipt"]["settlement_identity"] == original
-    assert replay["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == (
-        SELECTED_REPLAN_TODO_ID
-    )
     assert (
         replay["interaction_contract"]["cli_channel"]["settlement_plan"][
             "identity"
@@ -851,7 +829,7 @@ def test_same_explicit_todo_retry_preserves_bound_replan_identity(
     conflict_args[-1] = ALTERNATIVE_TODO_ID
     conflict_rc, conflict = _run_cli(registry, runtime, *conflict_args)
     assert conflict_rc == 1, conflict
-    assert conflict["error_code"] == "quota_action_selection_conflict"
+    assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
     receipt_events = _heartbeat_receipt_events(runtime, turn)
     assert receipt_events
     assert {
@@ -860,7 +838,7 @@ def test_same_explicit_todo_retry_preserves_bound_replan_identity(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_implicit_replan_binds_before_planning_todo_and_upgrades_legacy_review_guard(
+def test_todoless_replan_upgrades_legacy_review_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
     """A legacy review receipt gains its source without rebinding the Turn."""
@@ -870,7 +848,11 @@ def test_implicit_replan_binds_before_planning_todo_and_upgrades_legacy_review_g
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
-    state.write_text(state.read_text().replace("status: active-read-only", "status: active"))
+    state.write_text(
+        state.read_text().split("## Agent Todo")[0].replace(
+            "status: active-read-only", "status: active"
+        ) + "## Agent Todo\n\n"
+    )
     registry_value = json.loads(registry.read_text())
     registry_value["goals"][0]["status"] = "active"
     registry.write_text(json.dumps(registry_value))
@@ -885,12 +867,11 @@ def test_implicit_replan_binds_before_planning_todo_and_upgrades_legacy_review_g
     call("configure-goal", "--goal-id", GOAL_ID,
          "--execution-replan-after-todos", "5", "--execute")
 
-    turn = "turn-implicit-replan-review-upgrade"
+    turn = "turn-todoless-replan-review-upgrade"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn)
     first = call(*guard)
     assert first["effective_action"] == "autonomous_replan_required"
-    assert first["selected_todo"]["todo_id"] == TODO_ID
     identity = first["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
     assert identity["replan_obligation_id"] == first["replan_action_packet"]["obligation_id"]
@@ -2624,7 +2605,7 @@ def test_compact_blocked_wait_keeps_authority_rejections(invalid: str) -> None:
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("writeback_kind", ["in_flight", "semantic"])
+@pytest.mark.parametrize("writeback_kind", ["in_flight", "semantic", "replan"])
 @pytest.mark.parametrize("host", ["codex_app", "generic_cli"])
 def test_same_todo_writeback_reentry_only_settles_original_turn(
     tmp_path: Path, provider: str, writeback_kind: str, host: str,
@@ -2637,7 +2618,17 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     todo_id = TODO_ID
+    if writeback_kind == "replan":
+        _configure_selected_todo_replan_fixture(project, registry)
+        _initialize_git_checkout(project)
+        todo_id = SELECTED_REPLAN_TODO_ID
     _initialize_fixture_authority(project, runtime, provider=provider)
+    if writeback_kind == "replan":
+        # This replay fixture supplies the ordinary typed replan delta. Keep
+        # its strategy explicit; Stride decision followthrough is tested separately.
+        rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                                  "--execution-stride-strategy", "off", "--execute")
+        assert rc == 0, configured
     turn_id = "turn-same-todo-writeback"
     host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
     guard_args = (
@@ -4790,7 +4781,7 @@ def test_legacy_todo_guard_keeps_current_replan_gate_strict(
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
 
-    obligation_id = guard["replan_action_packet"]["obligation_id"]
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
 
     log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     events = [
@@ -4816,8 +4807,8 @@ def test_legacy_todo_guard_keeps_current_replan_gate_strict(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--replan-obligation-id",
-        obligation_id,
+        "--todo-id",
+        SELECTED_REPLAN_TODO_ID,
         "--delivery-workspace-path",
         str(project),
         "--delivery-outcome",
@@ -7344,7 +7335,7 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
 def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
-    """Regression for #3528's real autonomous-replan settlement path.
+    """Regression for #3528's real Todo-bound replan path.
 
     A stale repair-delta label does not itself prove a successor, but a fresh
     typed progress observation can still satisfy the open obligation. The
@@ -7377,6 +7368,7 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
     obligation_id = guard["replan_action_packet"]["obligation_id"]
 
     refresh_args = (
@@ -7387,8 +7379,8 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--replan-obligation-id",
-        obligation_id,
+        "--todo-id",
+        SELECTED_REPLAN_TODO_ID,
         "--delivery-workspace-path",
         str(project),
         "--autonomous-replan-recorded",
@@ -7410,10 +7402,10 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
         "evidence:periodic-review",
     )
     mismatched_args = list(refresh_args)
-    obligation_flag_index = mismatched_args.index("--replan-obligation-id")
-    mismatched_args[obligation_flag_index : obligation_flag_index + 2] = [
-        "--todo-id",
-        SELECTED_REPLAN_TODO_ID,
+    todo_flag_index = mismatched_args.index("--todo-id")
+    mismatched_args[todo_flag_index : todo_flag_index + 2] = [
+        "--replan-obligation-id",
+        obligation_id,
     ]
     mismatch_rc, mismatch = _run_cli(
         registry_path,
@@ -7467,8 +7459,7 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
     assert next_guard["normal_delivery_allowed"] is False
     recovery = next_guard["unsettled_host_turn_recovery"]
     assert recovery["prior_turn_instance_id"] == turn_instance_id
-    assert recovery["binding_kind"] == "autonomous_replan"
-    assert recovery["binding_id"] == obligation_id
+    assert recovery["binding_id"] == SELECTED_REPLAN_TODO_ID
     assert recovery["settlement_effect_id"] == original["effect_id"]
     assert recovery["missing_receipts"] == ["quota_spend_receipt"]
     assert all(not row["details"].get("settlement_effect_id")
@@ -7577,7 +7568,7 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
     assert guard["decision"] == "autonomous_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
 
-    obligation_id = guard["replan_action_packet"]["obligation_id"]
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -7589,8 +7580,8 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--replan-obligation-id",
-        obligation_id,
+        "--todo-id",
+        SELECTED_REPLAN_TODO_ID,
         "--delivery-workspace-path",
         str(project),
         "--autonomous-replan-recorded",
@@ -9202,7 +9193,7 @@ def test_settled_turn_defers_prior_unsettled_history_to_fresh_turn(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("legacy_turn_ref", [False, True])
-def test_exact_later_ack_executes_original_replan_settlement_commands(
+def test_exact_later_ack_executes_original_todo_settlement_commands(
     tmp_path: Path, provider: str, legacy_turn_ref: bool,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
@@ -9210,7 +9201,7 @@ def test_exact_later_ack_executes_original_replan_settlement_commands(
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-historical-todo-settlement"
-    admitted = _admit_selected_replan_guard(registry, runtime, project, original_turn)
+    admitted = _bind_selected_replan_guard(registry, runtime, project, original_turn)
     original_identity = admitted["heartbeat_receipt"]["settlement_identity"]
     obligation = admitted["replan_action_packet"]["obligation_id"]
     recorded = datetime.fromisoformat(admitted["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00"))
@@ -9243,10 +9234,11 @@ def test_exact_later_ack_executes_original_replan_settlement_commands(
         with (runs_dir / "index.jsonl").open("a") as stream:
             stream.write(json.dumps({**run, "json_path": str(source), "markdown_path": str(markdown)}) + "\n")
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn)
+        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
+        "--todo-id", SELECTED_REPLAN_TODO_ID)
     rc, recovery = _run_cli(registry, runtime, *guard_args)
     assert rc == 0 and recovery["replan_action_packet"]["decision"] == "historical_ack_recorded", json.dumps({key: recovery.get(key) for key in ["error", "error_code", "decision", "action_selection_qualification", "health"]})
-    rc, automatic = _run_cli(registry, runtime, *guard_args)
+    rc, automatic = _run_cli(registry, runtime, *guard_args[:-2])
     assert rc == 0, automatic
     assert automatic["heartbeat_receipt"]["settlement_identity"] == original_identity
     actions = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]

@@ -256,7 +256,7 @@ def test_selected_todo_suppresses_stale_replan_packet_binding() -> None:
     assert quota_rollout_replan_obligation_id(payload, args) is None
 
 
-def test_current_replan_binds_before_planning_todo_selection() -> None:
+def test_current_replan_preserves_explicit_planning_selection_gate() -> None:
     obligation_id = "replan-0000000000000001"
     payload = {
         "effective_action": EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value,
@@ -269,7 +269,7 @@ def test_current_replan_binds_before_planning_todo_selection() -> None:
     args = SimpleNamespace(todo_id=None, replan_obligation_id=None)
 
     assert quota_rollout_todo_id(payload, args) is None
-    assert quota_rollout_replan_obligation_id(payload, args) == obligation_id
+    assert quota_rollout_replan_obligation_id(payload, args) is None
 
 
 def test_explicit_replan_binding_survives_newly_selected_todo() -> None:

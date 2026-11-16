@@ -273,9 +273,8 @@ def quota_rollout_settlement_binding(
     """Resolve one rollout binding without mixing authority levels.
 
     Explicit settlement arguments and the typed plan are causal identities.
-    An admitted autonomous replan binds its obligation as the Turn's execution
-    identity; any selected Todo remains planning context for that decision.
-    Ordinary delivery may instead bind the current selected Todo.
+    The current selected Todo is a later projection, while a replan action
+    packet is only a diagnostic fallback when no concrete Todo is selected.
     """
 
     if payload.get("effective_action") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
@@ -296,25 +295,6 @@ def quota_rollout_settlement_binding(
         )
     if explicit_todo_id or explicit_replan_obligation_id:
         return explicit_todo_id, explicit_replan_obligation_id
-
-    if (
-        payload.get("effective_action")
-        == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
-    ):
-        replan_packet = (
-            payload.get("replan_action_packet")
-            if isinstance(payload.get("replan_action_packet"), Mapping)
-            else {}
-        )
-        current_replan_obligation_id = normalize_todo_replan_obligation_id(
-            replan_packet.get("obligation_id")
-        )
-        if current_replan_obligation_id:
-            # The selected Todo remains planning context while the semantic
-            # replan is the Turn's execution obligation.  Bind that obligation
-            # before the portfolio's explicit-selection guard can make the
-            # committed Turn identity-less and impossible to settle.
-            return None, current_replan_obligation_id
 
     action_portfolio_value = payload.get("action_portfolio")
     action_portfolio: Mapping[str, object] = (
