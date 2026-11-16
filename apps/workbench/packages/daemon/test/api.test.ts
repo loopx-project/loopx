@@ -677,6 +677,18 @@ async function finishedEvents(threadId: string): Promise<Array<{ type: string; d
   });
 }
 
+test('a turn records prompt_sent once the session is ready and before the agent says anything', async () => {
+  const thread = await newThread({ agent: 'claude' });
+  assert.equal((await api(`/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'hello' }) })).status, 202);
+  const list = await finishedEvents(thread.id);
+  const at = (match: (e: { type: string; data: any }) => boolean) => list.findIndex(match);
+  const ready = at((e) => e.type === 'turn.phase' && e.data.phase === 'session_ready');
+  const sent = at((e) => e.type === 'turn.phase' && e.data.phase === 'prompt_sent');
+  const said = at((e) => e.type === 'message.delta' || e.type === 'message.replace');
+  assert.ok(ready >= 0 && sent > ready, 'prompt_sent follows session_ready');
+  assert.ok(said < 0 || said > sent, 'nothing the agent said comes before prompt_sent');
+});
+
 test('a turn can carry images: stored on disk, listed in the event, served back, sent to the agent', async () => {
   const thread = await newThread({ agent: 'claude' });
   const sent = await api(`/api/threads/${thread.id}/turns`, {
@@ -2422,7 +2434,7 @@ test('commands: agy lists and answers its own commands; the answer is a normal t
   await post(`/api/threads/${thread.id}/turns`, { text: '/usage' });
   await untilIdle(thread.id);
   const log = await events(thread.id);
-  assert.deepEqual(log.filter((e) => e.type.startsWith('turn.')).map((e) => e.type), ['turn.started', 'turn.phase', 'turn.phase', 'turn.done']);
+  assert.deepEqual(log.filter((e) => e.type.startsWith('turn.')).map((e) => e.type), ['turn.started', 'turn.phase', 'turn.phase', 'turn.phase', 'turn.done']);
   assert.match(log.find((e) => e.type === 'message.delta')!.data.text, /\|Fast models\|Weekly Limit Remaining\|97%\|/);
 });
 

@@ -50,6 +50,10 @@ function send(res: ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value));
 }
 
+/** What only an agent that was asked can produce. Session start-up notices are not among them. */
+const AGENT_OUTPUT = new Set(['message.delta', 'message.replace', 'reasoning.delta', 'tool.start', 'tool.update', 'tool.end',
+  'plan.updated', 'plan.delta', 'plan.completed', 'input.request', 'approval.request']);
+
 export class LoopxService implements LoopxHooks {
   readonly bindings: LoopxBindings;
   private readonly states: GoalStateCache;
@@ -324,20 +328,25 @@ export class LoopxService implements LoopxHooks {
   }
 
   /**
-   * Sends a launch's first message. The binding keeps carrying it until a later look finds a turn
-   * that reached the agent: one still open, ended, or with anything the agent said. A turn that the
-   * restart cut off before it produced anything never got there, so the message is sent again.
+   * Sends a launch's first message. It counts as delivered only once a turn shows the agent was
+   * asked: the prompt_sent phase written just before the prompt, or anything the agent produced.
+   * Starting the session is not delivery. A turn still open is in flight and is left alone; one that
+   * ended before delivery (a restart, a failed start) is sent again. The binding keeps the message
+   * until a later look finds it delivered.
    */
   private async dispatch(threadId: string, text: string) {
     const events = this.manager!.listEvents(threadId, 0);
-    const lost = (turnId: string | null) => events.every((e) => e.turnId !== turnId || e.type === 'turn.started'
-      || (e.type === 'turn.error' && e.data?.code === 'interrupted'))
-      && events.some((e) => e.turnId === turnId && e.type === 'turn.error');
-    const sent = events.find((e) => e.type === 'turn.started' && !lost(e.turnId));
-    if (sent) {
+    const turns = events.filter((e) => e.type === 'turn.started').map((e) => e.turnId);
+    const of = (turnId: string | null) => events.filter((e) => e.turnId === turnId);
+    const delivered = (turnId: string | null) => of(turnId).some((e) => e.type === 'turn.phase'
+      ? e.data?.phase === 'prompt_sent' : AGENT_OUTPUT.has(e.type));
+    const done = turns.find(delivered);
+    if (done !== undefined) {
       this.bindings.update(threadId, { firstMessage: undefined });
-      return { threadId, turnId: sent.turnId };
+      return { threadId, turnId: done };
     }
+    const last = turns.at(-1);
+    if (last !== undefined && !of(last).some((e) => e.type === 'turn.error' || e.type === 'turn.done')) return { threadId, turnId: last };
     const started = await this.manager!.startTurn(threadId, { text, fromUser: true } as never);
     return { threadId, turnId: 'turnId' in started ? started.turnId : null };
   }
