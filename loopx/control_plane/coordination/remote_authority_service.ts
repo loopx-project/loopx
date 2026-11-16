@@ -1,7 +1,7 @@
 /** Authenticated task commands over the existing semantic and persistence owners. */
 import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore, AuthorityStoreReadFailure} from "./authority_store.ts";
-import {canonicalAuthoritySha256} from "./authority_store_codec.ts";
+import {canonicalAuthoritySha256, parseAuthorityCursor} from "./authority_store_codec.ts";
 import {PostgreSqlAuthorityService} from "./postgresql_authority_service.ts";
 import type {PostgreSqlAuthorityDatabase} from "./postgresql_authority_store.ts";
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
@@ -18,17 +18,18 @@ import {decodeRemoteAuthorityRequest, remoteAuthorityOperationId, remoteAuthorit
 
 export type RemoteAuthorityAdmission =
   | {status: "allowed"; principal_id: string; policy_revision: string; registered_agents: readonly string[];
-      read_scope?: {goal_ref: WireExactGoalRef; todo_ids: readonly string[]}}
+      read_scope?: {goal_ref: WireExactGoalRef; todo_ids: readonly string[]; receipt_operation_id?: string}}
   | {status: "rejected"; reason_code: string};
 export interface RemoteAuthorityDependencies {
   database: PostgreSqlAuthorityDatabase;
   /** One immutable, server-owned authorization decision per request. Revocation
    * affects later admissions; it never lies about an already admitted commit. */
-  admit(credential: string, request: RemoteAuthorityRequest): Promise<RemoteAuthorityAdmission>;
+  admit(credential: string, request: RemoteAuthorityRequest, mode: RemoteAuthorityMode): Promise<RemoteAuthorityAdmission>;
   now?: () => Date;
 }
 const incarnationFailure: AuthorityStoreReadFailure = {status: "unavailable",
   reason_code: "remote_authority_incarnation_changed", reason: "Rebind the authorized service scope before continuing"};
+const scopeDenied = {status: "rejected", reason_code: "remote_authority_scope_denied"};
 const MAX_READ_NOTE_BYTES = 4096;
 
 /** Pin every observation and write to the admitted incarnation. The provider's
@@ -95,6 +96,45 @@ function projectReadTodo(todo: JsonObject, includePlanning: boolean, includeNote
   return output;
 }
 
+function isActiveGoal(head: JsonObject, goalRef: WireExactGoalRef): boolean {
+  const lifecycle = readGoalAcceptanceLifecycle(head, goalRef.goal_id);
+  return lifecycle?.state === "active" && sameExactGoalRef(lifecycle.goal_ref, goalRef);
+}
+
+/** Authorize from the current pinned head, then prove the original transaction
+ * was visible at that head and committed under the same exact Goal lifetime. */
+async function readScopedReceipt(store: AuthorityStore, goalRef: WireExactGoalRef,
+  todoId: string, operationId: string): Promise<JsonObject> {
+  const unavailable = {status: "unavailable", reason_code: "remote_authority_read_unavailable"};
+  const head = await store.loadAuthority();
+  if (head.status !== "loaded") return unavailable;
+  if (!isActiveGoal(head.head, goalRef)) return scopeDenied;
+  const current = new CoordinationProjectionRead(head.head, goalRef.goal_id);
+  current.validateTodoReadModel();
+  if (!current.todoIndex.todos.has(todoId)) return scopeDenied;
+
+  // The pinned store checks the incarnation, principal, actor and exact request
+  // digest on the receipt. An ACL cannot reassign an older or unrelated intent.
+  const receipt = await store.readReceipt(operationId);
+  if (receipt.status !== "found") return receipt.status === "missing" ||
+    receipt.reason_code === "remote_authority_operation_mismatch" ? scopeDenied : unavailable;
+  const cursor = parseAuthorityCursor(receipt.cursor);
+  if (cursor > parseAuthorityCursor(head.cursor)) return scopeDenied;
+
+  // The provider reconstructs this window from its existing checkpoint and
+  // validates the committed projection. No raw ledger or current fallback.
+  const offset = cursor - 1n;
+  const page = await store.scanCommitted(offset === 0n ? null : offset.toString(), 1);
+  if (page.status !== "page" || page.transactions.length !== 1) return unavailable;
+  const transaction = page.transactions[0]!;
+  const digest = canonicalAuthoritySha256(receipt.receipts[0]);
+  if (transaction.cursor !== receipt.cursor || transaction.provider_revision !== receipt.provider_revision ||
+      transaction.operation_id !== operationId || transaction.receipts.length !== 1 ||
+      canonicalAuthoritySha256(transaction.receipts[0]) !== digest) return unavailable;
+  if (!isActiveGoal(transaction.projection, goalRef)) return scopeDenied;
+  return {status: "found", historical_only: true, todo_id: todoId, operation_id: operationId, receipt_sha256: digest};
+}
+
 /** Deliberately bounded response projection: no SQL errors, paths, arbitrary
  * canonical fields, workspace observations or provider credentials cross here. */
 function commandResult(result: JsonObject): JsonObject {
@@ -138,14 +178,16 @@ export class RemoteAuthorityService {
       return reply({status: "rejected", reason_code: "invalid_remote_authority_mode"});
     }
     let admission: RemoteAuthorityAdmission;
-    try { admission = structuredClone(await this.#dependencies.admit(credential, request)); }
+    try { admission = structuredClone(await this.#dependencies.admit(credential, request, mode)); }
     catch { return reply({status: "unavailable", reason_code: "remote_authority_policy_unavailable"}); }
     if (admission.status !== "allowed") return reply(admission);
     const isRead = request.operation === "read" || request.operation === "snapshot";
     const readScope = admission.read_scope;
     const allowedTodos = readScope && new Set(readScope.todo_ids);
-    const denyScope = () => reply({status: "rejected", reason_code: "remote_authority_scope_denied"});
-    if (allowedTodos && (!isRead || allowedTodos.size === 0 || request.todo_id && !allowedTodos.has(request.todo_id))) return denyScope();
+    const operationId = remoteAuthorityOperationId(request, admission.principal_id);
+    if (allowedTodos && (allowedTodos.size === 0 || request.todo_id && !allowedTodos.has(request.todo_id))) return reply(scopeDenied);
+    if (readScope && !isRead && (mode !== "recover" || request.todo_id === undefined ||
+        readScope.receipt_operation_id !== operationId)) return reply(scopeDenied);
     // Open through the established service seam with the already authenticated
     // snapshot. Never re-evaluate a different policy halfway through a request.
     const service = new PostgreSqlAuthorityService({database: this.#dependencies.database,
@@ -153,7 +195,6 @@ export class RemoteAuthorityService {
       authorizeTenant: () => ({status: "allowed"})});
     const opened = await service.openStore({...request, credential: null});
     if (opened.status !== "opened") return reply({status: "unavailable", reason_code: opened.reason_code});
-    const operationId = remoteAuthorityOperationId(request, admission.principal_id);
     // Explicitly reauthorizing a restored incarnation may recover old history.
     // The incarnation gates current access; it is not part of business intent.
     const {store_identity: admittedIdentity, ...intent} = request;
@@ -163,6 +204,12 @@ export class RemoteAuthorityService {
     const store = pinnedStore(opened.store, request.store_identity, binding, operationId);
     let dispatched = false;
     try {
+      if (readScope && mode === "recover" && request.todo_id !== undefined) {
+        const result = await readScopedReceipt(store, readScope.goal_ref, request.todo_id, operationId);
+        return result.status === "found"
+          ? remoteAuthorityResponse(request, mode, {...result, goal_ref: readScope.goal_ref}, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE)
+          : reply(result);
+      }
       const previous = isRead ? null : await store.readReceipt(operationId);
       if (previous?.status === "found") {
         const original = previous.receipts[0];
@@ -183,10 +230,7 @@ export class RemoteAuthorityService {
       if (mode === "recover") return reply({status: "missing", operation_id: operationId});
       const head = await store.loadAuthority();
       if (head.status !== "loaded") return reply({status: "unavailable", reason_code: "remote_authority_head_unavailable"});
-      if (readScope) {
-        const lifecycle = readGoalAcceptanceLifecycle(head.head, request.goal_id);
-        if (lifecycle?.state !== "active" || !sameExactGoalRef(lifecycle.goal_ref, readScope.goal_ref)) return denyScope();
-      }
+      if (readScope && !isActiveGoal(head.head, readScope.goal_ref)) return reply(scopeDenied);
       const projection = new CoordinationProjectionRead(head.head, request.goal_id);
       projection.validateTodoReadModel();
       const index = projection.coordinationIndex;

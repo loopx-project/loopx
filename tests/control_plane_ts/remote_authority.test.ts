@@ -91,6 +91,21 @@ test("scoped read responses require their Goal reference and exclude global auth
   ]) assert.throws(() => decodeRemoteAuthorityResponse(wrap(invalid), request, "execute"));
 });
 
+test("scoped historical receipt responses expose proof for the original Todo without its execution payload", () => {
+  const request = claimRequest("a");
+  const goal_ref = {goal_id: request.goal_id, goal_instance_id: "ginst_" + "a".repeat(32)};
+  const payload = {status: "found", historical_only: true, goal_ref, todo_id: request.todo_id,
+    operation_id: remoteAuthorityOperationId(request, "principal-a"), receipt_sha256: "d".repeat(64)};
+  const wrap = (value: JsonObject) => remoteAuthorityResponse(request, "recover", value, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE);
+  assert.deepEqual(decodeRemoteAuthorityResponse(wrap(payload), request, "recover"), wrap(payload));
+  for (const invalid of [
+    {...payload, todo_id: "todo_other"},
+    {...payload, historical_only: false},
+    {...payload, result: {lease: {idempotency_key: "out-of-scope"}}},
+    {...payload, cursor: "2"},
+  ]) assert.throws(() => decodeRemoteAuthorityResponse(wrap(invalid), request, "recover"));
+});
+
 test("invalid policy cannot silently broaden or retain grants", async t => {
   for (const mutate of [(p: ReturnType<typeof servicePolicy>) => p.principals.push(p.principals[0]),
     (p: ReturnType<typeof servicePolicy>) => p.scopes.push(p.scopes[0]),

@@ -88,6 +88,7 @@ export async function postgresRemoteFixture(t: TestContext, connectionString: st
   await setup.query(`GRANT CONNECT ON DATABASE ${name} TO ${role}`);
   await setup.query(`GRANT USAGE ON SCHEMA loopx_control_plane TO ${role}`);
   await setup.query(`GRANT SELECT ON loopx_control_plane.authority_store_metadata TO ${role}`);
+  await setup.query(`GRANT SELECT ON loopx_control_plane.authority_checkpoints TO ${role}`);
   await setup.query(`GRANT SELECT, INSERT, UPDATE ON loopx_control_plane.authority_heads TO ${role}`);
   await setup.query(`GRANT SELECT, INSERT ON loopx_control_plane.authority_commits,
     loopx_control_plane.authority_events, loopx_control_plane.authority_receipts TO ${role}`);

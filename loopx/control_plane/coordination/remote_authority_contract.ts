@@ -312,12 +312,21 @@ export function decodeRemoteAuthorityResponse(raw: unknown, request: RemoteAutho
   responseRequires(typeof value.status === "string");
   let goalRef: WireExactGoalRef | undefined;
   if (scoped) {
+    goalRef = parseWireExactGoalRef(value.goal_ref, "scoped read Goal");
+    responseRequires(goalRef.goal_id === request.goal_id);
+    if (mode === "recover") {
+      responseRequires(request.operation !== "read" && request.operation !== "snapshot" &&
+        value.status === "found" && value.historical_only === true && value.todo_id === request.todo_id &&
+        typeof value.receipt_sha256 === "string" && BARE_SHA256_PATTERN.test(value.receipt_sha256));
+      responseRequires(hasExactAuthorityKeys(value, ["schema_version", "request_sha256", "status", "goal_ref",
+        "historical_only", "todo_id", "operation_id", "receipt_sha256"]));
+      responseOperationId(value.operation_id, request);
+      return value;
+    }
     responseRequires(mode === "execute" && (request.operation === "read" && value.status === "found"
       || request.operation === "snapshot" && value.status === "snapshot"));
     const fields = value.status === "found" ? ["todo", "lease"] : ["goal_id", "store_identity", "receipt_sha256", "todos", "leases"];
     responseRequires(hasExactAuthorityKeys(value, ["schema_version", "request_sha256", "status", "goal_ref", ...fields]));
-    goalRef = parseWireExactGoalRef(value.goal_ref, "scoped read Goal");
-    responseRequires(goalRef.goal_id === request.goal_id);
   }
   if (["rejected", "unavailable", "ambiguous"].includes(value.status)) {
     remoteAuthorityId(value.reason_code, "response reason");

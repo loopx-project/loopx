@@ -6,7 +6,8 @@ import type {GoalAcceptanceLifecycleTransition} from "../../loopx/control_plane/
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {TODO_DOMAIN_ITEM_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {executeCoordinationTodoCreate} from "../../loopx/control_plane/coordination/todo_create.ts";
-import {REMOTE_AUTHORITY_REQUEST, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
+import {REMOTE_AUTHORITY_REQUEST, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE,
+  remoteAuthorityOperationId} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {REMOTE_AUTHORITY_SCOPED_READ_POLICY} from "../../loopx/control_plane/coordination/remote_authority_policy.ts";
 import {claimRequest, postgresRemoteFixture, serviceIdentity, servicePolicy} from "./remote_authority_fixture.ts";
 
@@ -124,6 +125,101 @@ export function registerRemoteAuthorityReadAclConformance(connectionString: stri
     assert.deepEqual((second.value.todos as JsonObject[]).map(todo => todo.todo_id), ["todo_next"]);
     assert.deepEqual(second.value.leases, []);
     assert.equal((await read("b", "todo_next")).code, 0);
+    assert.deepEqual(await fixture.store.loadAuthority(), successor);
+  });
+
+  test("scoped receipt recovery proves the original Goal lifetime and current exact operation access", {skip: !connectionString}, async t => {
+    const fixture = await postgresRemoteFixture(t, connectionString!);
+    const goal_id = "goal-one";
+    const a = {goal_id, goal_instance_id: "ginst_" + "a".repeat(32)};
+    const b = {goal_id, goal_instance_id: "ginst_" + "b".repeat(32)};
+    const unboundClaim = claimRequest("a", "todo_legacy");
+    const boundClaim = claimRequest("a", "todo_bound");
+    const missingClaim = claimRequest("a", "todo_bound", "never-committed");
+    const id = (request: typeof boundClaim) => remoteAuthorityOperationId(request, "principal-a");
+    async function transition(operation_id: string, step: GoalAcceptanceLifecycleTransition) {
+      const result = await transitionGoalAcceptanceLifecycle(fixture.store, {goal_id, actor_agent_id: null,
+        operation_id, transition: step});
+      assert.equal(result.status, "applied");
+    }
+
+    await fixture.seed(["todo_legacy", "todo_bound", "todo_hidden"]);
+    const legacy = await fixture.start();
+    assert.equal((await fixture.client(legacy.endpoint, "a", unboundClaim)).code, 0);
+    await transition("bind-receipt-goal", {kind: "bind_existing", goal_ref: a});
+    assert.equal((await fixture.client(legacy.endpoint, "a", boundClaim)).code, 0);
+    const original = await fixture.client(legacy.endpoint, "a", boundClaim, true);
+    assert.equal(original.code, 0);
+    assert("cursor" in original.value);
+    assert("lease" in (original.value.result as JsonObject));
+    await legacy.stop();
+
+    // Read an earlier receipt after the authority has crossed a checkpoint.
+    // This uses the normal journal and keeps the original receipt intact.
+    for (let sequence = 0; sequence < 64; sequence++) {
+      const head = await fixture.store.loadAuthority();
+      if (head.status !== "loaded") throw new Error("Missing fixture head");
+      const hidden = (head.head.todos as JsonObject[]).find(todo => todo.todo_id === "todo_hidden")!;
+      const result = await fixture.store.commitAuthority(prepareCoordinationProjectionCommit({
+        goal_id, projection: head.head, expected_provider_revision: head.provider_revision,
+        operation_id: `append-receipt-fixture-${sequence}`,
+        mutations: [{kind: "todo_upsert", todo: {...hidden, note: `Hidden fixture update ${sequence}`}}],
+      }));
+      assert.equal(result.status, "applied");
+    }
+    function policy(goalRef: typeof a, allowed: readonly string[], operations = ["read", "snapshot"]) {
+      const {scopes, principals} = servicePolicy();
+      return {schema_version: REMOTE_AUTHORITY_SCOPED_READ_POLICY,
+        scopes: scopes.map(scope => ({...scope, todo_read_acl: [
+          {goal_ref: goalRef, todo_id: "todo_bound", principal_id: "principal-a", actor_id: "actor-a",
+            receipt_operation_ids: allowed},
+          {goal_ref: goalRef, todo_id: "todo_legacy", principal_id: "principal-a", actor_id: "actor-a",
+            receipt_operation_ids: [id(unboundClaim), id(boundClaim)]},
+        ]})),
+        principals: principals.slice(0, 1).map(principal => ({...principal, grants: principal.grants.map(grant =>
+          ({...grant, goal_ref: goalRef, operations}))})),
+      };
+    }
+    await fixture.writePolicy(policy(a, [id(boundClaim), id(missingClaim)]));
+    const service = await fixture.start();
+    const recover = (request: typeof boundClaim) => fixture.client(service.endpoint, "a", request, true);
+    function denied(result: Awaited<ReturnType<typeof recover>>) {
+      assert.equal(result.code, 1);
+      assert.equal(result.value.status, "rejected");
+      assert.equal(result.value.reason_code, "remote_authority_scope_denied");
+      assert.deepEqual(Object.keys(result.value).sort(), ["reason_code", "request_sha256", "schema_version", "status"]);
+    }
+    const current = await fixture.store.loadAuthority();
+    const allowed = await recover(boundClaim);
+    assert.equal(allowed.code, 0);
+    assert.deepEqual(allowed.value, {
+      schema_version: REMOTE_AUTHORITY_SCOPED_READ_RESPONSE, status: "found", historical_only: true,
+      todo_id: boundClaim.todo_id, goal_ref: a, operation_id: original.value.operation_id,
+      receipt_sha256: original.value.receipt_sha256, request_sha256: original.value.request_sha256,
+    });
+    denied(await recover(unboundClaim));
+    denied(await recover(missingClaim));
+    denied(await recover({...boundClaim, todo_id: unboundClaim.todo_id}));
+    denied(await fixture.client(service.endpoint, "a", boundClaim)); // Execute stays outside the read grant.
+    await fixture.writePolicy(policy(a, []));
+    denied(await recover(boundClaim));
+    const currentTodo = await fixture.client(service.endpoint, "a", {
+      operation: "read", schema_version: REMOTE_AUTHORITY_REQUEST, tenant_id: boundClaim.tenant_id,
+      goal_id, actor_id: boundClaim.actor_id, store_identity: serviceIdentity, todo_id: boundClaim.todo_id,
+    });
+    assert.equal(currentTodo.code, 0);
+    await fixture.writePolicy(policy(a, [id(boundClaim)], ["snapshot"]));
+    denied(await recover(boundClaim));
+    assert.deepEqual(await fixture.store.loadAuthority(), current);
+
+    await fixture.writePolicy(policy(a, [id(boundClaim)]));
+    await transition("retire-receipt-goal", {kind: "retire", goal_ref: a});
+    denied(await recover(boundClaim));
+    await transition("activate-next-receipt-goal", {kind: "activate_successor", retired_goal_ref: a, goal_ref: b});
+    const successor = await fixture.store.loadAuthority();
+    denied(await recover(boundClaim)); // Stale credential.
+    await fixture.writePolicy(policy(b, [id(boundClaim)]));
+    denied(await recover(boundClaim)); // Current ACL cannot reassign a receipt from A to B.
     assert.deepEqual(await fixture.store.loadAuthority(), successor);
   });
 }

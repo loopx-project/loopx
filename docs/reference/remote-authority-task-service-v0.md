@@ -72,8 +72,8 @@ the existing v0 request JSON. The server supplies the exact Goal reference
 from its private policy and verifies it against the active lifecycle on the
 same PostgreSQL head used to compose the response. Unbound, retiring and
 mismatched lifetimes deny access. A direct read or targeted snapshot outside
-the ACL returns rejection without revealing whether the Todo exists. Write
-commands and historical receipt recovery are denied by this policy.
+the ACL returns rejection without revealing whether the Todo exists. The
+scoped listener denies write commands.
 
 Scoped successes use `loopx_remote_authority_scoped_read_response_v1`. They
 return the exact Goal reference, authorized Todo status and assignment, and
@@ -87,9 +87,33 @@ Revoke access by replacing the policy with a new version of the same schema
 that removes the matching ACL entry or grant. The service pins the policy
 schema at startup and fails closed on a schema change during reload. Stop the
 listener to disable it. Keep the v0 policy for an explicitly configured
-legacy listener with trusted access to the whole Goal. Artifact versions,
-delegated sources, cross-person writes and historical receipt ACLs require
-separate qualification before they can be exposed.
+legacy listener with trusted access to the whole Goal.
+
+#### Historical receipt proof
+
+To authorize recovery of a specific remote operation, add its canonical
+`operation_id` to `receipt_operation_ids` on the Todo's read ACL entry. The
+credential also needs `read` in its grant. The ID comes from the original
+operation or its trusted service receipt. An omitted or empty list grants
+no receipt access. Use `--recover` with the complete original command.
+
+The service checks the active Goal and allowed Todo before it opens the
+receipt. The original request digest, principal and actor must match the
+receipt. The original committed projection must prove the same Goal lifetime.
+The service reuses the provider's bounded checkpoint and delta reader for that
+exact cursor. Missing, unbound or cross-lifetime receipts are rejected, even
+with a matching operation ID. The scoped service role needs read access to the
+existing tenant-scoped `authority_checkpoints` table as part of this journal read.
+
+A scoped success returns the exact Goal, Todo and operation, `historical_only`
+and the original receipt digest. It withholds the original result payload,
+lease key, cursor and provider revision. The original receipt confirms
+recorded history. Execution authority still comes from a current lease and
+the existing mutation owner. Remove the operation ID to revoke recovery while
+leaving the authorized Todo read available.
+
+Artifact versions, delegated sources and cross-person writes require separate
+qualification before they can be exposed.
 
 ## Commands and recovery
 
