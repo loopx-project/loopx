@@ -41,13 +41,20 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
     # Repeating a committed recovery identity is not a fresh admission.
     rc, replay = _run_cli(registry, runtime, *guard, "--turn-instance-id", "recovery-2")
     assert rc == 0 and replay["should_run"] is True, replay
-    for turn in ("wait-1", "wait-2"):
-        rc, wait = _run_cli(registry, runtime, *guard, "--turn-instance-id", turn)
+    for turn, detail in (("wait-1", ()), ("wait-2", ("--include-detail", "scheduler"))):
+        rc, wait = _run_cli(registry, runtime, *guard, "--turn-instance-id", turn, *detail)
         assert rc == 0 and wait["should_run"] is False, wait
         assert wait["reason_code"] == "unsettled_recovery_admission_limit"
         assert wait["unsettled_host_turn_recovery"]["state"] == "attention_required"
         assert wait["unsettled_host_turn_recovery"]["admissions_without_progress"] == 3
-        assert wait["scheduler_hint"]["action"] != "run_now"
+        hint = wait["scheduler_hint"]
+        assert hint["action"] == "backoff_waiting_for_user"
+        if detail:
+            scheduler = hint["cold_path_detail"]["local_scheduler"]
+            assert scheduler["recommended_interval_minutes"] > 0
+            assert hint["unchanged_poll"]["limits"]["local_scheduler"] == 3
+        else:
+            assert "cold_path_detail" not in hint
         channel = wait["interaction_contract"]["agent_channel"]
         assert channel["must_attempt"] is False and channel["delivery_allowed"] is False
         assert wait["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
