@@ -259,6 +259,7 @@ def attach_active_state_project_asset_fields(
     autonomous_replan_obligation_from_runs: Callable[..., dict[str, Any] | None] | None = None,
     external_progress_review: dict[str, Any] | None = None,
     effective_turn_cadence: dict[str, Any] | None = None,
+    agent_lane_id: str | None = None,
 ) -> dict[str, Any]:
     project_asset = item.get("project_asset")
     if not isinstance(project_asset, dict):
@@ -322,7 +323,10 @@ def attach_active_state_project_asset_fields(
         shared_todos = item.get("agent_todos")
         monitor_todos = {"monitor_open_items":
             shared_todos.get("monitor_open_items", []) if isinstance(shared_todos, dict) else []}
-        agent_ids = sorted(
+        # Status retains shared Goal history for ownership and health checks.
+        # A lane caller only needs that Agent's semantic review obligations;
+        # peer receipts must not become a prerequisite for its settlement.
+        agent_ids = [agent_lane_id] if agent_lane_id is not None else sorted(
             {
                 agent_id
                 for run in latest_runs or []
@@ -351,6 +355,7 @@ def attach_active_state_project_asset_fields(
         replan_obligation = autonomous_replan_obligation_from_runs(
             latest_runs or [],
             agent_todos=item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else None,
+            agent_id=agent_lane_id,
         )
         if replan_obligation:
             item["autonomous_replan_obligation"] = replan_obligation
