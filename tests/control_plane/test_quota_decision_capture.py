@@ -443,6 +443,45 @@ def test_explicit_off_keeps_complete_source_with_either_cli_spelling(
     assert (directory / "decision.json").read_bytes() == raw
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_off_selection_without_capture_preserves_delivery_and_original_turn(tmp_path, monkeypatch, provider, alias):
+    from loopx.cli import build_parser
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        _configure_selectable_alternative, _initialize_fixture_authority, _run_generated_cli, _spend_run_count,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    rc, source = _run_cli(registry, runtime, 'quota', 'should-run', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--turn-instance-id', TURN_ID, '--runtime-profile', 'generic_cli',
+        '--context-delivery', 'off', *(['--turn-envelope'] if alias else []), cwd=project)
+    assert rc == 0 and source['schema_version'] == 'loopx_turn_envelope_v1', source
+    selection = source['interaction_contract']['cli_channel']['selection_command']
+    words = shlex.split(selection['command_args_template'])
+    parsed = build_parser().parse_args(words)
+    assert parsed.context_delivery == 'off'
+    assert '--turn-envelope' not in words
+    command = selection['route_prefix'] + ' ' + selection['command_args_template'].replace('{todo_id}', TODO_ID)
+    rc, selected = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and selected['schema_version'] == 'loopx_turn_envelope_v1', selected
+    assert selected['selected_todo']['todo_id'] == TODO_ID
+    assert selected['heartbeat_receipt']['turn_instance_id'] == TURN_ID
+    assert not {'context_delivery', 'reference_file', 'first_read_command'} & selected.keys()
+    assert source['heartbeat_receipt']['status'] == 'committed'
+    assert selected['heartbeat_receipt']['status'] == 'upgraded'
+    identity = selected['heartbeat_receipt']['settlement_identity']
+    before = _heartbeat_receipt_count(runtime, TURN_ID)
+    rc, replayed = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and replayed['heartbeat_receipt']['status'] == 'replayed', replayed
+    assert replayed['heartbeat_receipt']['settlement_identity'] == identity
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == before
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_real_guard_alias_preserves_source_and_read_without_reexecution(tmp_path, monkeypatch, provider):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection

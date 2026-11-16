@@ -708,8 +708,8 @@ def test_codex_app_thin_guard_uses_complete_source_for_new_captures(tmp_path, mo
         assert rc == 0, bootstrap
         command = bootstrap["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0]
         if historical_loader:
-            assert "--complete-turn" in shlex.split(command)
-            command = command.replace(" --complete-turn", " --turn-envelope")
+            assert not {"--complete-turn", "--turn-envelope"} & set(shlex.split(command))
+            command += " --turn-envelope"
         rc, prompt = _run_generated_cli(command, registry_path=registry, cwd=project)
     else:
         rc, prompt = _run_cli(registry, runtime, "heartbeat-prompt", *options, cwd=project)
@@ -717,7 +717,7 @@ def test_codex_app_thin_guard_uses_complete_source_for_new_captures(tmp_path, mo
     guard = shlex.split(next(line for line in prompt["task_body"].splitlines()
         if " quota should-run " in line))
     assert "--turn-envelope" not in guard
-    assert ("--complete-turn" in guard) is historical_loader
+    assert "--complete-turn" not in guard
     guard[guard.index("--turn-instance-id") + 1] = TURN_ID
     rc, view = _run_cli(registry, runtime, *guard[guard.index("quota"):],
         "--todo-id", TODO_ID, cwd=project, raw_guard=False)
@@ -993,8 +993,8 @@ def test_ssh_goal_generated_command_uses_complete_source(tmp_path, monkeypatch, 
             *options, "--turn-envelope", "--bootstrap", cwd=project)
         assert rc == 0, bootstrap
         command = bootstrap["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0]
-        assert "--complete-turn" in shlex.split(command)
-        historical = command.replace(" --complete-turn", " --turn-envelope")
+        assert not {"--complete-turn", "--turn-envelope"} & set(shlex.split(command))
+        historical = command + " --turn-envelope"
         prompt = run(historical)
     else:
         rc, prompt = _run_cli(registry, runtime, "heartbeat-prompt", *options, cwd=project)

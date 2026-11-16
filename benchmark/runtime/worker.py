@@ -529,7 +529,7 @@ def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_CONTEXT_DELIVERY", "off") not in {"off", "on"}:
         raise ValueError("LOOPX_CONTEXT_DELIVERY supports only off or on")
     display = explicit_turn_display(env)
-    execution = Execution(
+    requested_execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT"),
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"),
@@ -543,6 +543,10 @@ def run_once(env: dict[str, str]) -> dict:
                             if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
         complete_turn=display.complete_turn,
     )
+    # Keep the request audit, while every new heartbeat executes the complete
+    # source actually emitted by heartbeat_body and checkpoint preflight.
+    execution = (replace(requested_execution, turn_envelope=False, complete_turn=True)
+                 if requested_execution.mode == "heartbeat" else requested_execution)
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
         from .provider_request_admission import request_admission_enabled
@@ -587,7 +591,7 @@ def run_once(env: dict[str, str]) -> dict:
         "task_entry": execution.task_entry,
         **({"execution_observation": observation_producer}
            if observation_producer is not None else {}),
-        **turn_envelope_receipt(execution),
+        **turn_envelope_receipt(requested_execution),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),
@@ -648,7 +652,7 @@ def run_once(env: dict[str, str]) -> dict:
             # heartbeat workers stage; other modes must not import it.
             from benchmark.runtime.checkpoint_wake import CheckpointWake
 
-            checkpoint_wake = wake_context.enter_context(CheckpointWake(env, receipt))
+            checkpoint_wake = wake_context.enter_context(CheckpointWake(env, receipt, guard_execution=execution))
         else:
             checkpoint_wake = _InertCheckpointWake()
         if execution.context_delivery != "off":
