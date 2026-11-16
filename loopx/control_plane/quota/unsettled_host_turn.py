@@ -410,6 +410,7 @@ def apply_unsettled_host_turn_recovery_if_required(
     agent_id: str | None,
     current_turn_instance_id: str | None,
     available_capabilities: list[str] | None,
+    include_scheduler_detail: bool,
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
@@ -432,9 +433,12 @@ def apply_unsettled_host_turn_recovery_if_required(
     )
     if verdict is None:
         return False
-    return _apply_recovery_projection(payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
+    return _apply_recovery_projection(
+        payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
         current_turn_instance_id=current_turn_instance_id, available_capabilities=available_capabilities,
-        scheduler_execution_context=scheduler_execution_context)
+        scheduler_execution_context=scheduler_execution_context,
+        include_scheduler_detail=include_scheduler_detail,
+    )
 
 
 def apply_receipt_bound_wait_recovery(
@@ -525,6 +529,7 @@ def _apply_recovery_projection(
     payload: dict[str, Any], *, verdict: Mapping[str, Any], registry_path: Path, runtime_root: Path,
     current_turn_instance_id: str | None, available_capabilities: list[str] | None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+    include_scheduler_detail: bool = False,
 ) -> bool:
     recovery = verdict["recovery"]
     obligation = verdict["obligation"]
@@ -619,6 +624,6 @@ def _apply_recovery_projection(
 
         payload["scheduler_hint"] = build_scheduler_hint(
             payload, arbitration=arbitration, scheduler_execution_context=scheduler_execution_context,
-            available_capabilities=available_capabilities,
+            available_capabilities=available_capabilities, include_detail=include_scheduler_detail,
         )
     return True

@@ -928,6 +928,7 @@ def build_live_quota_should_run_decision(
             agent_id=agent_id,
             current_turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities,
+            include_scheduler_detail=include_scheduler_detail,
             scheduler_execution_context=resolved_context,
             goal_ref=goal_ref,
             owner_action_id=goal_owner_resume_id(registered_goal),
@@ -1068,6 +1069,7 @@ def _build_remote_authority_wait_decision(
             payload, registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
             agent_id=agent_id, current_turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
+            include_scheduler_detail=include_scheduler_detail,
             goal_ref=goal_ref,
             owner_action_id=goal_owner_resume_id(configured_goal),
         ):
