@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import ExitStack
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from uuid import uuid4
 
 from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.coordination.local_authority_shadow_projection import source_effect_runtime_result
-from ..file_lock import exclusive_file_lock, write_json_atomic
+from ..file_lock import exclusive_cross_runtime_file_lock, exclusive_file_lock, write_json_atomic
 
 CHAT_GOAL_STORAGE_PATH = "/api/chat/goal-storage"
 
@@ -121,8 +122,9 @@ class GoalStorageRequestMixin:
 
     def _storage_source_registry(
         self, goal_id: str, registry: dict[str, Any], goal: dict[str, Any], root: Path,
+        *, registry_path: Path | None = None,
     ) -> Path:
-        invoked = Path(self.server.registry_path).resolve()
+        invoked = registry_path if registry_path is not None else Path(self.server.registry_path).resolve()
         if not goal.get("source_registry"):
             return invoked
 
@@ -336,12 +338,32 @@ class GoalStorageRequestMixin:
                 request["expected_plan_sha256"] = _token(body, "plan_sha256", 64)
                 if action == "apply":
                     request["writers_stopped"] = body["writers_stopped"]
-                    request["expected_source_registry"] = str(
-                        self._storage_source_registry(goal_id, registry, goal, root)
-                    )
             path = self._storage_preview_path(goal_id)
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            with exclusive_file_lock(path):
+            with exclusive_file_lock(path), ExitStack() as source_lock:
+                if action == "apply":
+                    from ..registry import find_registry_goal, load_registry
+
+                    invoked = Path(self.server.registry_path).resolve()
+                    source_lock.enter_context(exclusive_cross_runtime_file_lock(
+                        invoked, operation="cold_source_import",
+                    ))
+                    # A global index selects the source but is not in the
+                    # typed cutover's source locks. Re-read its mapping under
+                    # the registry writer's lock and retain it through Apply.
+                    registry = load_registry(invoked)
+                    current_goal = find_registry_goal(registry, goal_id)
+                    if current_goal is None:
+                        raise ValueError("registered Goal source changed")
+                    selected = self._storage_source_registry(
+                        goal_id, registry, current_goal, root, registry_path=invoked,
+                    )
+                    request["expected_source_registry"] = str(selected)
+                    if selected == invoked:
+                        # The typed owner locks this same file and verifies
+                        # its immutable plan witness before fencing. Do not
+                        # hold a second process's lock across that call.
+                        source_lock.close()
                 if action == "readback":
                     known, saved = os.path.lexists(path), None
                 else:
