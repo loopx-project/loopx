@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { statSync } from 'node:fs'
+import { setTimeout as delay } from 'node:timers/promises'
 
 // 1.2.4 includes the released Windows peer-file fix. Bootstrap and every
 // runtime consumer must use the same floor, including an existing global CLI.
@@ -116,12 +117,64 @@ export interface ResolveLoopXCommandOptions {
 const DEFAULT_TIMEOUT_MS = 20_000
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 const FORCE_KILL_GRACE_MS = 250
+const CLEANUP_CONFIRM_MS = 1_000
+const PS = process.platform === 'darwin' ? '/bin/ps' : '/usr/bin/ps'
 
-function transportKind(error: NodeJS.ErrnoException): LoopXCliError {
+// Match the managed Host's local process-group boundary. This npm package
+// also runs standalone with older Core CLIs and cannot load their TS internals.
+function signalOwnedGroup(pgid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pgid, signal)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
+    throw error
+  }
+}
+
+async function confirmGroupStopped(pgid: number): Promise<void> {
+  const deadline = performance.now() + CLEANUP_CONFIRM_MS
+  for (;;) {
+    const remaining = Math.ceil(deadline - performance.now())
+    if (remaining <= 0) throw new Error('CLI group did not exit')
+    try {
+      if (!signalOwnedGroup(pgid, 0)) return
+    } catch (error) {
+      // Darwin may return EPERM for an unreaped, dead group. Check process
+      // state; lack of permission to signal is not proof of termination.
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error
+    }
+    const rows = await new Promise<string>((resolve, reject) => {
+      execFile(PS, ['-A', '-o', 'pgid=', '-o', 'stat='], {
+        encoding: 'utf8', timeout: remaining, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
+        env: { LC_ALL: 'C', PATH: '/usr/bin:/bin' },
+      }, (error, stdout) => { if (error) reject(error); else resolve(stdout) })
+    })
+    if (performance.now() >= deadline || !rows.trim()) throw new Error('CLI group observation unavailable')
+    let live = false
+    for (const row of rows.trim().split('\n')) {
+      const [, group, state] = /^\s*(\d+)\s+(\S+)\s*$/u.exec(row) ?? []
+      if (group === undefined || state === undefined) throw new Error('Invalid CLI group observation')
+      if (Number(group) === pgid && !state.startsWith('Z')) live = true
+    }
+    if (!live) return
+    await delay(10)
+  }
+}
+
+function transportKind(error: NodeJS.ErrnoException, spawned: boolean): LoopXCliError {
   if (error.code === 'ENOENT') {
     return new LoopXCliError('missing', 'required executable is unavailable', false, undefined, { osCode: error.code })
   }
-  return new LoopXCliError('transport', 'could not start the LoopX command', true, undefined, { osCode: error.code })
+  return new LoopXCliError('transport', spawned ? 'LoopX command I/O failed' : 'could not start the LoopX command',
+    true, undefined, { osCode: error.code })
+}
+
+// A non-retryable transport means the adapter could not safely continue to a
+// second child. Keep launch/probe fallbacks from interpreting it as "missing."
+export function isUnsafeToContinue(error: unknown): boolean {
+  return error instanceof LoopXCliError
+    && (error.kind === 'aborted' || (error.kind === 'transport' && !error.retryable))
 }
 
 export const runFile: FileRunner = (file, args, options) => new Promise((resolve, reject) => {
@@ -130,10 +183,12 @@ export const runFile: FileRunner = (file, args, options) => new Promise((resolve
     return
   }
 
+  const posix = process.platform !== 'win32'
   const child = spawn(file, [...args], {
     cwd: options.cwd,
     env: options.env ?? process.env,
     shell: false,
+    detached: posix,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const stdout: Buffer[] = []
@@ -143,17 +198,59 @@ export const runFile: FileRunner = (file, args, options) => new Promise((resolve
   let settled = false
   let terminalError: LoopXCliError | undefined
   let forceKillTimer: ReturnType<typeof setTimeout> | undefined
+  const closed = Promise.withResolvers<void>()
+  const group = posix && child.pid !== undefined && child.pid > 1 ? child.pid : undefined
 
   const cleanup = (): void => {
     clearTimeout(timer)
     if (forceKillTimer !== undefined) clearTimeout(forceKillTimer)
     options.signal?.removeEventListener('abort', abort)
   }
+  const rejectOnce = (error: LoopXCliError): void => {
+    if (settled) return
+    settled = true
+    cleanup()
+    reject(error)
+  }
   const fail = (error: LoopXCliError): void => {
     if (settled || terminalError !== undefined) return
     terminalError = error
     clearTimeout(timer)
     options.signal?.removeEventListener('abort', abort)
+    if (child.pid === undefined) {
+      rejectOnce(error)
+      return
+    }
+    if (group !== undefined) {
+      void (async () => {
+        try {
+          if (signalOwnedGroup(group, 'SIGTERM')) {
+            await delay(FORCE_KILL_GRACE_MS)
+            signalOwnedGroup(group, 'SIGKILL')
+          }
+          await confirmGroupStopped(group)
+          // If a descendant escaped the group with these pipes, cleanup of
+          // the owned group does not make this operation safe to retry.
+          await Promise.race([
+            closed.promise,
+            delay(CLEANUP_CONFIRM_MS, undefined, { ref: false }).then(() => {
+              throw new Error('CLI output pipes did not close')
+            }),
+          ])
+          rejectOnce(error)
+        } catch {
+          child.stdout.destroy()
+          child.stderr.destroy()
+          rejectOnce(new LoopXCliError(
+            'transport', 'LoopX CLI process cleanup was not confirmed', false, undefined,
+            { causeKind: error.kind },
+          ))
+        }
+      })()
+      return
+    }
+    // Keep the direct-child/reap path on Windows. Node does not give this
+    // adapter a Job Object that it owns after the command leader has exited.
     child.kill('SIGTERM')
     forceKillTimer = setTimeout(() => {
       if (!settled) child.kill('SIGKILL')
@@ -178,15 +275,19 @@ export const runFile: FileRunner = (file, args, options) => new Promise((resolve
   options.signal?.addEventListener('abort', abort, { once: true })
   child.stdout.on('data', (chunk: Buffer) => collect(stdout, chunk))
   child.stderr.on('data', (chunk: Buffer) => collect(stderr, chunk))
-  child.on('error', (error: NodeJS.ErrnoException) => fail(transportKind(error)))
+  const onTransportError = (error: NodeJS.ErrnoException) => fail(transportKind(error, child.pid !== undefined))
+  child.stdout.on('error', onTransportError)
+  child.stderr.on('error', onTransportError)
+  child.on('error', onTransportError)
   child.on('close', code => {
+    closed.resolve()
     if (settled) return
-    settled = true
-    cleanup()
     if (terminalError !== undefined) {
-      reject(terminalError)
+      if (group === undefined) rejectOnce(terminalError)
       return
     }
+    settled = true
+    cleanup()
     resolve({
       exitCode: code ?? 1,
       stdout: Buffer.concat(stdout).toString('utf8'),
@@ -266,13 +367,12 @@ export async function runJsonMutationCommand(
       },
     )
   } catch (error: unknown) {
-    throw error instanceof LoopXCliError
-      ? error
-      : new LoopXCliError(
-          'transport',
-          'LoopX mutation command failed to execute',
-          false,
-        )
+    if (error instanceof LoopXCliError) {
+      throw error.retryable
+        ? new LoopXCliError(error.kind, error.message, false, error.exitCode, error.diagnostics)
+        : error
+    }
+    throw new LoopXCliError('transport', 'LoopX mutation command failed to execute', false)
   }
 
   const payload = parsePayload(result.stdout)
@@ -447,7 +547,7 @@ export async function resolveLoopXCommand(
       if (options.signal?.aborted) {
         throw new LoopXCliError('aborted', 'operation was cancelled', false)
       }
-      if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
+      if (isUnsafeToContinue(error)) throw error
       const failure = error instanceof LoopXCliError ? error
         : new LoopXCliError('transport', 'LoopX version probe failed to execute', false)
       probes.push(new LoopXCliError(failure.kind, 'version probe failed', false, failure.exitCode, {
