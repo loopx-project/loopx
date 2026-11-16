@@ -207,6 +207,9 @@ export class AgentRegistry {
   private creating: Promise<unknown> = Promise.resolve();
   private writing: Promise<unknown> = Promise.resolve();
 
+  /** Entries of agents.json whose adapter this version does not have: kept, never started. */
+  private readonly retired: AgentInstance[] = [];
+
   constructor(
     instances: AgentInstance[],
     /** Where `agents.json` lives, or null for a list the hub does not own (an inline
@@ -216,6 +219,15 @@ export class AgentRegistry {
     builtIn: AgentInstance[] = [],
     private readonly dataDir: string | null = file ? dirname(file) : null,
   ) {
+    // An entry for an adapter this build no longer has (a retired agent) is kept as written and
+    // left out, so an old agents.json neither stops the hub nor loses the entry on the next save.
+    const known = new Set<string>(SUPPORTED_AGENTS.map(meta => meta.adapter));
+    instances = instances.filter(instance => {
+      if (known.has(instance?.adapter)) return true;
+      this.retired.push(instance);
+      console.warn(`warning: agents.json entry ${JSON.stringify(instance?.id ?? null)} uses ${JSON.stringify(instance?.adapter ?? null)}, which this version no longer supports; it is kept in the file and not started`);
+      return false;
+    });
     // The first instance of an adapter decides what an instance without a command runs.
     for (const instance of instances) {
       if (!this.defaultCommands.has(instance.adapter) && instance.command) {
@@ -533,7 +545,7 @@ export class AgentRegistry {
   private async persist(instances: AgentInstance[] = this.list()): Promise<void> {
     const file = this.file;
     if (!file) return;
-    const body = JSON.stringify({ agents: instances }, null, 2) + '\n';
+    const body = JSON.stringify({ agents: [...instances, ...this.retired] }, null, 2) + '\n';
     const fs = await import('node:fs/promises');
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {

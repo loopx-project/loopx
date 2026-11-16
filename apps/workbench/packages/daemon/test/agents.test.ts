@@ -64,6 +64,20 @@ test('add persists to agents.json and a later fromEnv reads it back', async () =
   rmSync(dataDir, { recursive: true, force: true });
 });
 
+test('an agents.json entry for a retired adapter is skipped and kept in the file', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'loochat-agents-retired-'));
+  const retired = { id: 'doubao', adapter: 'doubao', command: ['doubao'] };
+  writeFileSync(join(dataDir, 'agents.json'), JSON.stringify({ agents: [{ id: 'codex', adapter: 'codex' }, retired] }));
+  const registry = AgentRegistry.fromEnv({ dataDir, env: {}, defaults });
+  assert.deepEqual(registry.list().map((i) => i.id), ['codex']);
+  assert.ok(registry.adapters.has('codex'));
+  await registry.add({ id: 'pi2', adapter: 'pi' });
+  const saved = JSON.parse(readFileSync(join(dataDir, 'agents.json'), 'utf8')).agents;
+  assert.deepEqual(saved.map((i: AgentInstance) => i.id), ['codex', 'pi2', 'doubao']);
+  assert.deepEqual(saved.at(-1), retired);
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
 test('update renames and remove drops an instance from agents.json', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'loochat-agents-manage-'));
   const registry = AgentRegistry.fromEnv({ dataDir, env: {}, defaults });
