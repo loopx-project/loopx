@@ -91,8 +91,9 @@ async function checkReturnedFiles(ready, page, errors, writes) {
   await report.getByRole("heading", {name: "结果已核验 / Verified result", exact: true}).waitFor();
   const readerQuery = new URL((await readerRequest).url()).searchParams;
   if (!baseline) {
-    assert.equal(readerQuery.get("turn_id"), answer.turn_id, "The saved answer reads its original Turn");
-    assert.equal(readerQuery.get("message_limit"), "200");
+    assert.equal(readerQuery.get("turn_id"), answer.turn_id, "The saved answer checks its original Turn");
+    assert.equal(readerQuery.get("report_message_id"), answer.message_id, "The reader requests only the chosen answer");
+    assert.equal(readerQuery.has("message_limit"), false);
   }
   assert.equal(await report.locator("a[download]").count(), baseline ? 0 : ready.files.length);
   await report.screenshot({path: resolve(output, `${baseline ? "before" : "after"}-files-reader.png`), animations: "disabled"});
@@ -121,10 +122,56 @@ async function checkReturnedFiles(ready, page, errors, writes) {
 
     const legacy = new URL(report.url());
     legacy.searchParams.delete("reportTurnId");
-    const legacyRead = report.waitForRequest(request => new URL(request.url()).pathname === historyPath);
+    const savedAnswerRequest = url => url.pathname === historyPath && url.searchParams.get("report_message_id") === ready.fileMessageId;
+    const legacyRead = report.waitForResponse(response => new URL(response.url()).pathname === historyPath);
     await report.goto(legacy.toString());
     await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
-    assert.equal(new URL((await legacyRead).url()).searchParams.has("turn_id"), false);
+    const legacyResponse = await legacyRead;
+    assert.ok(savedAnswerRequest(new URL(legacyResponse.url())), "An existing link selects its saved message without loading the transcript");
+    const legacySnapshot = await legacyResponse.json();
+    assert.deepEqual(legacySnapshot.messages.filter(row => row.role !== "user").map(row => row.message_id), [ready.fileMessageId]);
+    const legacyAnswer = legacySnapshot.messages.find(row => row.message_id === ready.fileMessageId);
+    assert.equal(legacyAnswer.text, answer.text);
+    assert.deepEqual(legacyAnswer.attachments, answer.attachments);
+
+    await report.route(savedAnswerRequest, route => route.fulfill({status: 400, json: {ok: false, error: "invalid history page arguments"}}));
+    const fallbackRead = report.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname === historyPath && url.search === "";
+    });
+    await report.reload();
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+    await fallbackRead;
+
+    const fallbackTurnRead = report.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname === historyPath && url.searchParams.get("turn_id") === answer.turn_id && url.searchParams.has("message_limit");
+    });
+    const withTurn = new URL(legacy);
+    withTurn.searchParams.set("reportTurnId", answer.turn_id);
+    await report.goto(withTurn.toString());
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+    await fallbackTurnRead;
+    await report.unroute(savedAnswerRequest);
+    await report.goto(legacy.toString());
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+
+    const refusedReads = [];
+    const observeRefusal = request => {
+      if (new URL(request.url()).pathname === historyPath) refusedReads.push(new URL(request.url()));
+    };
+    report.on("request", observeRefusal);
+    for (const [status, error] of [[403, "Source access was revoked"], [400, "invalid Chat journal record"]]) {
+      refusedReads.length = 0;
+      await report.route(savedAnswerRequest, route => route.fulfill({status, json: {ok: false, error}}));
+      await report.reload();
+      await report.getByText("Could not load this answer.").waitFor();
+      assert.equal(await report.locator("a[download]").count(), 0);
+      assert.equal(refusedReads.length, 1);
+      assert.ok(savedAnswerRequest(refusedReads[0]), "A refused or invalid source must never trigger a wider history read");
+      await report.unroute(savedAnswerRequest);
+    }
+    report.off("request", observeRefusal);
 
     legacy.searchParams.set("reportTurnId", "unrelated-turn");
     await report.goto(legacy.toString());

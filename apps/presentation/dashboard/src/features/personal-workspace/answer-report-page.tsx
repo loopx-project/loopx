@@ -1,6 +1,6 @@
 import {useEffect, useMemo, useRef, useState} from "react";
 
-import {fetchChatSession, fetchChatSessionHistory, type ChatSessionSnapshot, type ChatVisibleMessage} from "../../data/chat";
+import {fetchSavedChatAnswer, type ChatSessionSnapshot, type ChatVisibleMessage} from "../../data/chat";
 import {visibleAgentMessage} from "./answer-text";
 import {readWorkspaceLocale} from "./i18n";
 import {resolveConversationScope} from "../../../../../../loopx/control_plane/collaboration/conversation_scope";
@@ -45,9 +45,7 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
     setLoaded({scope, value: {kind: "loading"}});
     setCopied(false);
     setCopyFailed(false);
-    const read = turnId === null
-      ? fetchChatSession(sessionId, controller.signal)
-      : fetchChatSessionHistory(sessionId, controller.signal, turnId);
+    const read = fetchSavedChatAnswer(sessionId, messageId, controller.signal, turnId ?? undefined);
     void read.then((snapshot) => {
       if (!live) return;
       if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1"

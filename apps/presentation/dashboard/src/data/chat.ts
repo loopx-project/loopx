@@ -972,6 +972,26 @@ export async function fetchChatSession(sessionId: string, signal?: AbortSignal) 
   return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
 }
 
+export async function fetchSavedChatAnswer(sessionId: string, messageId: string, signal: AbortSignal, turnId?: string) {
+  const query = new URLSearchParams({report_message_id: messageId});
+  if (turnId !== undefined) query.set("turn_id", turnId);
+  const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`;
+  try {
+    const snapshot = await requestJson<ChatSessionSnapshot & {report_message_id?: string}>(path, {signal});
+    if (snapshot.report_message_id !== messageId) throw new Error("The saved answer selection changed during read.");
+    return snapshot;
+  } catch (error) {
+    // Older Chat builds reject unknown history selectors before reading the
+    // Session. Only that response enables the earlier history read paths.
+    if (!(error instanceof ChatApiError) || error.payload.http_status !== 400
+      || error.message !== "invalid history page arguments") throw error;
+    signal.throwIfAborted();
+    return turnId === undefined
+      ? fetchChatSession(sessionId, signal)
+      : fetchChatSessionHistory(sessionId, signal, turnId);
+  }
+}
+
 export const chatQueueInputRequestSchema = z.discriminatedUnion("action", [
   z.object({action: z.literal("edit"), operation_id: z.string().min(1).max(160),
     expected_revision: z.number().int().nonnegative(), message: z.string().min(1).max(24000)}).strict(),
