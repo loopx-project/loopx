@@ -159,3 +159,12 @@ test('after a restart, a first message that already went out is not sent again',
   assert.equal(first.turns.length, 1);
   assert.equal(again.service.binding(done.threadId)!.firstMessage, undefined);
 });
+
+test('the granted directories carry where they are here, so a Goal can be pointed at one', async () => {
+  const { service } = harness();
+  let status = 0, payload: any = null;
+  const res = { writeHead: (s: number) => { status = s; return res; }, setHeader: () => {}, end: (b: string) => { payload = JSON.parse(b); } };
+  assert.equal(await service.handle({ method: 'GET', headers: {} } as never, res as never, '/api/loopx/workspaces', new URL('http://x/api/loopx/workspaces')), true);
+  assert.equal(status, 200);
+  assert.deepEqual(payload.workspaces, [{ ref: workspaceRef(granted), title: 'a', path: granted }]);
+});

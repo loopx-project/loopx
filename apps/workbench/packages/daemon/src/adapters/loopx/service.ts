@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpError } from '../../errors.js';
 import type { AgentAdapter, ApprovalRequest } from '../types.js';
@@ -217,6 +217,22 @@ export class LoopxService implements LoopxHooks {
     return { path: real, ref };
   }
 
+  /**
+   * Where a granted directory is on this machine, so a person can pick it: the core names it only by
+   * reference and a title relative to some root, so the allowed roots (and their parents) are tried.
+   * Null when none of them gives the core's reference, or the directory is outside the allowed workdirs.
+   */
+  private locate(g: { ref: string; title: string }): string | null {
+    for (const root of this.deps.dirs.all()) {
+      let real: string;
+      try { real = realpathSync(root); } catch { continue; }
+      for (const candidate of [real, join(real, g.title), join(dirname(real), g.title)]) {
+        if (workspaceRef(candidate) === g.ref && isWithinWorkdirs(candidate, this.deps.dirs.all())) return candidate;
+      }
+    }
+    return null;
+  }
+
   private fail(err: unknown): never {
     if (err instanceof HttpError) throw err;
     if (err instanceof CoreError) throw new HttpError(err.status === 502 ? 502 : err.status >= 400 && err.status < 500 ? 409 : 502, err.message, { code: err.code ?? 'loopx_core_error', core: err.body });
@@ -383,7 +399,8 @@ export class LoopxService implements LoopxHooks {
     if (path === '/api/loopx/health' && method === 'GET') { send(res, 200, await this.health()); return true; }
     if (path === '/api/loopx/capabilities' && method === 'GET') { send(res, 200, { agents: this.capabilities() }); return true; }
     if (path === '/api/loopx/workspaces' && method === 'GET') {
-      send(res, 200, { workspaces: await grantedWorkspaces(this.core).catch((err) => { throw new HttpError(502, err.message, { code: 'loopx_core_unavailable' }); }) });
+      const granted = await grantedWorkspaces(this.core).catch((err) => { throw new HttpError(502, err.message, { code: 'loopx_core_unavailable' }); });
+      send(res, 200, { workspaces: granted.map((g) => ({ ...g, path: this.locate(g) })) });
       return true;
     }
     if (path === '/api/loopx/launch/preview' && method === 'POST') { send(res, 200, await this.preview(await body(req), req.headers['accept-language'])); return true; }

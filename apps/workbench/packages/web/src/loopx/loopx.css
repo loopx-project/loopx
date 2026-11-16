@@ -25,6 +25,8 @@
 .goal-confirm-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 12.5px; }
 .goal-confirm-facts dt { color: var(--muted); }
 .goal-confirm-facts dd { margin: 0; word-break: break-all; }
+.goal-confirm-facts dt { align-self: center; }
+.goal-confirm-select { width: 100%; min-height: 30px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--surface); color: var(--text); font: inherit; }
 .goal-confirm-note { margin: 0; font-size: 12.5px; color: var(--muted); }
 .goal-confirm-note.ok { color: var(--loopx-blue); }
 .goal-confirm-error { padding: 8px 10px; border-radius: var(--radius-sm, 8px); background: rgba(192, 57, 43, 0.1); color: var(--text); font-size: 12.5px; }

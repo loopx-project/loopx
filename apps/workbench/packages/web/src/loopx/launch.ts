@@ -59,6 +59,11 @@ async function call<T>(token: string | undefined, path: string, body?: unknown, 
 export const fetchGoalCapabilities = (token: string | undefined, signal?: AbortSignal) =>
   call<{ agents: GoalAgentCapability[] }>(token, '/api/loopx/capabilities', undefined, signal).then((r) => r.agents);
 
+/** The directories the core lets a Goal be created in; `path` is where that is here, null when this machine cannot tell. */
+export interface GoalWorkspace { ref: string; title: string; path: string | null }
+export const fetchGoalWorkspaces = (token: string | undefined, signal?: AbortSignal) =>
+  call<{ workspaces: GoalWorkspace[] }>(token, '/api/loopx/workspaces', undefined, signal).then((r) => r.workspaces);
+
 export interface LaunchInput { agent: string; cwd: string; permission: GoalPermission; objective: string; completion?: string; boundary?: string }
 export const previewGoal = (token: string | undefined, input: LaunchInput, signal?: AbortSignal) =>
   call<GoalPreview>(token, '/api/loopx/launch/preview', input, signal);

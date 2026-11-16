@@ -3668,7 +3668,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         />
       )}
       {pendingGoal && (
-        <GoalConfirm token={token} agent={draftAgent} agentLabel={agentLabel(draftAgent)} cwd={draftCwd} permission={draftGoalLevel} text={pendingGoal.text}
+        <GoalConfirm token={token} agent={draftAgent} agentLabel={agentLabel} cwd={draftCwd} permission={draftGoalLevel} text={pendingGoal.text}
           model={draftModel} effort={draftEffort}
           onCancel={() => { pendingGoal.reject(new Error('not sent')); setPendingGoal(null); }}
           onCreated={(threadId) => { pendingGoal.resolve(); setPendingGoal(null); setDraftLoopx(false); setSelectedId(threadId); setView('thread'); void refreshThreads(); }} />
