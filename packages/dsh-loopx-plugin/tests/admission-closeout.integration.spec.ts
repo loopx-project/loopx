@@ -359,6 +359,7 @@ describe('DSH admission-to-closeout integration', () => {
     expect(source).toEqual({
       kind: 'loopx-continuation',
       schemaVersion: 'loopx_dsh_continuation_v0',
+      selectionRequired: true,
       goalId,
       agentId,
       turnInstanceId,
