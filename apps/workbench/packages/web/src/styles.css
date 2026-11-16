@@ -939,7 +939,7 @@ button:disabled {
   @media (max-height: 520px) {
     .quick-switch-panel {
       bottom: calc(190px + var(--safe-bottom));
-      max-height: max(0px, calc(var(--vvh, 100dvh) - 260px - env(safe-area-inset-top)));
+      max-height: max(0px, calc(var(--vvh, 100dvh) - 270px - env(safe-area-inset-top)));
     }
   }
 
@@ -14735,6 +14735,7 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .menu-dense .menu-row { min-height: 36px; padding: 7px 11px; }
 .menu-row:focus-visible, .pop-item:focus-visible { outline-offset: -2px; background: var(--hover); }
 .menu-sep { margin: 8px 10px; background: var(--border); }
+.menu-dense .menu-sep { margin-block: 4px; }
 .pop-panel.anchored-pop { position: fixed; top: var(--pop-top); left: var(--pop-left); right: auto; bottom: auto; width: max-content; min-width: min(260px, calc(100vw - 24px)); max-width: min(380px, calc(100vw - 24px)); max-height: var(--pop-height, 520px); overflow-y: auto; overscroll-behavior: contain; z-index: 80; animation: pop-in .14s ease-out; }
 .pop-panel.anchored-pop .pop-scroll { max-height: min(340px, calc(var(--pop-height, 520px) - 96px)); }
 .pop-panel.anchored-pop .pop-search { position: sticky; top: -8px; z-index: 1; background: var(--surface); }

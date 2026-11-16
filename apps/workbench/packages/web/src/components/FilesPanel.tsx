@@ -82,10 +82,11 @@ function savedWidth(): number {
 /** What is left of the window once the conversation has its share: sidebar (folded away is gone)
  * and all. The panel never takes more than this, not by opening a body and not by dragging. */
 function maxPanelWidth(): number {
-  const sidebar = document.querySelector('.app > .sidebar');
+  const sidebar = document.querySelector('.shell > .sidebar');
   const open = sidebar ? getComputedStyle(sidebar).visibility !== 'hidden' : window.innerWidth >= 900;
   const taken = sidebar && open ? sidebar.getBoundingClientRect().width : open ? SIDEBAR_W : 0;
-  return Math.max(MIN_WIDTH, window.innerWidth - Math.round(taken) - MIN_CHAT);
+  const available = document.querySelector('.shell')?.clientWidth ?? window.innerWidth;
+  return Math.max(MIN_WIDTH, available - Math.round(taken) - MIN_CHAT);
 }
 const clampWidth = (w: number) => Math.max(MIN_WIDTH, Math.min(w, maxPanelWidth()));
 
@@ -382,7 +383,7 @@ export function FilesPanel({ api, threadId, target, phone, revision, writingStag
     onResize();
     window.addEventListener('resize', onResize);
     // The sidebar folding away or back changes what there is to take, at the same window size.
-    const sidebar = document.querySelector('.app > .sidebar');
+    const sidebar = document.querySelector('.shell > .sidebar');
     const observer = sidebar && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : null;
     if (observer && sidebar) observer.observe(sidebar);
     return () => {

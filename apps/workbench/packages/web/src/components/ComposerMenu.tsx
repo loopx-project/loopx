@@ -5,11 +5,13 @@ import { t } from '../i18n';
 export type GoalCapability = NonNullable<AgentInfo['capabilities']['goal']>;
 export type GoalAction = NonNullable<GoalCapability['actions']>[number];
 
-/** The menu only starts a goal; view, pause and clear live on the goal card. */
+/** Live agents keep controls on their card; other agents need the menu as their control surface. */
 export function goalMenuActions(goal: GoalCapability, running: boolean, plan: boolean) {
-  return (goal.actions ?? []).includes('set')
-    ? [{ action: 'set' as const, blocked: running ? t('composerMenu.afterTurn') : plan ? t('composerMenu.planFirst') : '' }]
-    : [];
+  return (goal.actions ?? []).filter(action => !goal.live || action === 'set').map(action => ({
+    action,
+    blocked: running && !goal.controls.some(control => control === action) ? t('composerMenu.afterTurn')
+      : plan && (action === 'set' || action === 'resume') ? t('composerMenu.planFirst') : '',
+  }));
 }
 
 interface Props {
@@ -63,7 +65,7 @@ export function ComposerMenu({ commands, planMode, writingMode, goal, running, a
     </button>}
     {goal && goalMenuActions(goal, running, !!planMode?.active).map(({ action, blocked }) => (
       <button key={action} type="button" role="menuitem" className="pop-item" disabled={!!blocked}
-        title={blocked || t('composer.goalSetHint')}
+        title={blocked || (action === 'set' ? t('composer.goalSetHint') : undefined)}
         onClick={() => pick(() => onGoal(action))}>
         <span className="pop-item-icon"><IconTarget size={19} /></span>
         <span className="pop-item-text"><span className="pop-item-label">{t(`goal.${action}`)}</span>{blocked && <small className="pop-item-hint">{blocked}</small>}</span>

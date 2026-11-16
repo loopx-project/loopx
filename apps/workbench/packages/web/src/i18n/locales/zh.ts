@@ -1205,6 +1205,7 @@ export const zh = {
   'collab.pickAndWrite': '选择并填写任务',
 
   // Composer menu
+  'goal.show': '查看目标',
   'goal.set': '设置目标',
   'goal.pause': '暂停目标',
   'goal.resume': '继续目标',

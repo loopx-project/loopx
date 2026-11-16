@@ -16,10 +16,21 @@ let rendering: Promise<unknown> = Promise.resolve();
  */
 function themeVariables(): Record<string, string> {
   const styles = getComputedStyle(document.documentElement);
-  const v = (name: string): string => styles.getPropertyValue(name).trim();
+  const raw = (name: string): string => styles.getPropertyValue(name).trim();
+  // Mermaid's color parser cannot read CSS color-mix; let the browser resolve the theme first.
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 1;
+  const context = canvas.getContext('2d', { willReadFrequently: true })!;
+  const v = (name: string): string => {
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = raw(name);
+    context.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+    return `rgba(${r}, ${g}, ${b}, ${a / 255})`;
+  };
   return {
     background: v('--bg'),
-    fontFamily: v('--font'),
+    fontFamily: raw('--font'),
     fontSize: '14px',
     // Nodes: the page's quiet surfaces, its borders, its text. Nothing purple, nothing loud.
     primaryColor: v('--surface-2'),

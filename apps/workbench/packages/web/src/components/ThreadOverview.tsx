@@ -138,15 +138,19 @@ export function ThreadOverview(props: OverviewProps) {
     // The sections are pinned per opening so refreshes keep their slots — but the panel must
     // still grow when what it holds grows: a section that lands late (the team usually arrives
     // after the outputs) or a group that gains a row (the team goes from one member to two).
-    // Both show up as a different natural height. The pin from the previous fit would hide that,
+    // Removed rows retain their slots until reopening; late content may grow the frame.
+    // Additions show up as a different natural height. The pin from the previous fit would hide that,
     // so it is cleared for the measurement and restored before paint.
     const el = root.current;
     const pinned = el.style.height;
     el.style.height = 'auto';
-    const height = el.offsetHeight;
+    const height = Math.max(el.offsetHeight, layout?.height ?? 0);
     el.style.height = pinned;
-    const key = available.join(' ');
-    if (layout && layout.sections.join(' ') === key && Math.abs(layout.height - height) <= 1) return;
+    const nextSections = (Object.keys(counts) as Section[]).filter(id => counts[id] > 0 || layout?.sections.includes(id));
+    const nextCounts = { ...counts };
+    for (const id of nextSections) nextCounts[id] = Math.max(counts[id], layout?.counts[id] ?? 0);
+    const sameSlots = layout && nextSections.every(id => Math.min(limit, layout.counts[id] ?? 0) === Math.min(limit, nextCounts[id]));
+    if (layout && layout.sections.join(' ') === nextSections.join(' ') && sameSlots && Math.abs(layout.height - height) <= 1) return;
     const panel = el.closest<HTMLElement>('.overview-panel');
     if (!panel) return;
     const viewport = window.visualViewport;
@@ -159,7 +163,7 @@ export function ThreadOverview(props: OverviewProps) {
     const budget = Math.min(hard, Math.max(preferred, Math.min(360, hard)));
     if (height + 18 > budget && limit > 0) { setLimit(limit === 3 ? 1 : 0); return; }
     if (height + 18 > hard && limit === 0) { action(() => onViewAll('all', false))(); return; }
-    setLayout({ height, sections: available, counts });
+    setLayout({ height, sections: nextSections, counts: nextCounts });
   });
   useEffect(() => {
     if (detail) return;

@@ -1231,7 +1231,11 @@ export class Api {
       throw new AuthError('unauthorized', code);
     }
     if (res.status === 204) return undefined as T;
-    const json = await res.json().catch(() => ({}));
+    const json = await res.json().catch(error => {
+      // A body interrupted by navigation is a failed read, not a successful empty record.
+      if (res.ok) throw error;
+      return {};
+    });
     if (!res.ok) throw new ApiError((json as { error?: string }).error ?? `HTTP ${res.status}`, json as Record<string, unknown>, res.status);
     return json as T;
   }

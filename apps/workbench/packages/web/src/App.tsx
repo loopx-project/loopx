@@ -1338,14 +1338,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // The app starts over on the demo; a token that stopped working says so in the connect dialog.
   const signOut = (msg?: string) => onToken('', msg);
 
-  const handleError = (e: unknown) => {
+  const handleError = (e: unknown, thread = selectedId) => {
     // In the demo, doing something asks to connect; a part it has no data for just stays empty.
     if (e instanceof DemoError) {
       if (e.write) askToConnect();
     } else if (e instanceof AuthError) signOut(e.code === 'link_expired' ? t('auth.linkExpired') : e.code === 'link_revoked' ? t('auth.linkRevoked') : t('app.tokenExpired'));
     // A machine that dropped is explained in the main area; the hub is asked at once how it is.
     else if (e instanceof ApiError && e.details.code === 'host_offline') void reloadHosts();
-    else setError(message(e));
+    else setErrorState({ text: message(e), thread });
   };
 
   const refreshThreads = () => threadFeed.read().catch(() => undefined);
@@ -2078,8 +2078,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   const performSend = async (text: string, images: PreparedImage[], isNewThread: boolean, mentions?: AgentMention[], videos: PreparedVideo[] = []) => {
     setError(null);
+    let id = selectedId;
     try {
-      let id = selectedId;
       // A Goal is reviewed by the LoopX core before it exists; the draft stays in the box until it is created or backed out of.
       if (!id && draftLoopx && !draftTeam) {
         if (images.length || videos.length) throw new Error(t('loopx.goal.noMedia'));
@@ -2110,7 +2110,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         if (showcase) showcase.onInstall();
         else setConnectAsk({ reason: t('app.connectToSend') });
       }
-      else handleError(e);
+      else handleError(e, id);
       throw e;
     }
   };

@@ -55,7 +55,7 @@ export function HandoverDialog({ api, thread, agents, onOpen, onClose }: Props) 
   }, [api, thread.id, revision]);
 
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !creatingRef.current && !document.querySelector('.pop-panel')) onClose(); };
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !creatingRef.current && !document.querySelector('.pop-panel:not(.overview-dock)')) onClose(); };
     document.addEventListener('keydown', key);
     return () => {
       document.removeEventListener('keydown', key);

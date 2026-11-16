@@ -54,11 +54,10 @@ for (const entry of preset) {
   else lines.push(entry);
 }
 
-// RAH_TOKEN is its name from before the rename to LooChat; a token set then is kept as it is.
-const at = lines.findIndex((l) => /^(CALLI|RAH)_TOKEN=/.test(l));
-const current = at >= 0 ? lines[at].slice(lines[at].indexOf('=') + 1).trim() : '';
+// Keep an existing token, including either historical name, before filling the current key.
+const { at, value: current } = ['LOOCHAT_TOKEN', 'CALLI_TOKEN', 'RAH_TOKEN'].map(valueOf).find(entry => entry.value) ?? valueOf('LOOCHAT_TOKEN');
 if (current) {
-  say('The access token is already set. To see it:', `  grep -E '^(CALLI|RAH)_TOKEN=' ${envPath}`);
+  say('The access token is already set. To see it:', `  grep -E '^(LOOCHAT|CALLI|RAH)_TOKEN=' ${envPath}`);
 } else {
   const token = randomBytes(24).toString('hex');
   if (at >= 0) lines[at] = `LOOCHAT_TOKEN=${token}`;

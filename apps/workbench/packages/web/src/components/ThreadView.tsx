@@ -697,14 +697,15 @@ function EditMessage({ text, imageIds, revision, onSend }: { text: string; image
     setKept(imageIds);
     setError('');
     setOpen(true);
-    requestAnimationFrame(() => {
-      const el = area.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-      el.style.height = `${el.scrollHeight}px`;
-    });
   };
+  // Finish initial selection before the editor can accept typing or a replacement paste.
+  useLayoutEffect(() => {
+    const el = area.current;
+    if (!open || !el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    el.style.height = `${el.scrollHeight}px`;
+  }, [open]);
   const send = async () => {
     if (busy || (!draft.trim() && !references.length)) return;
     setBusy(true);

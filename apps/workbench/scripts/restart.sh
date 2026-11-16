@@ -48,7 +48,7 @@ SERVICE_DIR="$(systemctl --user show -p WorkingDirectory --value "$NAME")"
 [ "$(realpath "$SERVICE_DIR")" = "$REPO" ] \
   || die "The service runs $SERVICE_DIR, not $REPO. Restart it from there."
 
-ENV_FILE="$(systemctl --user show -p Environment --value "$NAME" | tr ' ' '\n' | sed -nE 's/^(CALLI|RAH)_ENV_FILE=//p' | head -1)"
+ENV_FILE="$(systemctl --user show -p Environment --value "$NAME" | tr ' ' '\n' | sed -nE 's/^(LOOCHAT|CALLI|RAH)_ENV_FILE=//p' | head -1)"
 ENV_FILE="${ENV_FILE:-$HOME/.config/$NAME/.env}"
 env_raw() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 | sed -E "s/^['\"]|['\"]$//g"; }
 # LOOCHAT_<name>, else RAH_<name> from before the rename.

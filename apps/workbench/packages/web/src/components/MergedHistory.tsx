@@ -129,7 +129,10 @@ export function MergedHistory({ api, thread, merged, ready, agentLabel, laterOf,
         ? <div ref={sentinel} className="chain-later" role={loadingLater ? 'status' : undefined}>{loadingLater ? t('common.loading') : null}</div>
         : null}
   </>;
-  if (!merged) return later.length || hasLater ? <div className="merged-history" ref={root}><ThreadView {...current} />{laterBlock}</div> : <ThreadView {...current} />;
+  if (!merged) {
+    const body = <ThreadView {...current} beforeItems={<>{current.beforeItems}{ready && !current.hasOlder && handedOver(thread) && <HandoverBoundary api={api} thread={thread} agentLabel={agentLabel} turnId={current.items.find(item => item.kind === 'user' && item.handoverCollapsed)?.turnId ?? undefined} />}</>} />;
+    return later.length || hasLater ? <div className="merged-history" ref={root}>{body}{laterBlock}</div> : body;
+  }
   const localOlder = segments.length ? segments[0].page.hasOlder : current.hasOlder;
   const oldest = segments[0]?.thread ?? thread;
   const more = Boolean(localOlder || oldest.handover?.mode === 'continue');

@@ -174,8 +174,9 @@ export function DialogSurface({ children, className = '', labelledBy, onClose, b
       const surface = ref.current;
       // A nested dialog or a portalled menu owns the keyboard until it closes. Listening on the
       // document also handles a focused button becoming disabled while its request is in flight.
+      // The docked overview stays behind the modal and does not own its keyboard.
       const dialogs = [...document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]')];
-      if (!surface || dialogs.at(-1) !== surface || document.querySelector('.pop-panel')) return;
+      if (!surface || dialogs.at(-1) !== surface || document.querySelector('.pop-panel:not(.overview-dock)')) return;
       const owner = e.target instanceof Element ? e.target.closest('[role="dialog"]') : null;
       if (owner && owner !== surface) return;
       if (e.key === 'Escape') { e.stopPropagation(); if (!closeRef.current.busy) closeRef.current.onClose(); }

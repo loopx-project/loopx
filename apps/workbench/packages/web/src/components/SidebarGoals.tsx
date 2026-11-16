@@ -10,10 +10,14 @@ import { sidebarGoals, useGoalPins } from '../loopx/goal-picks';
 /** One shared status read for the sidebar, the badge and the pages that only need the list. */
 export function useLoopxStatus(token: string | undefined, refreshMs = 15000) {
   const [read, setRead] = useState<{ loading: boolean; status: LoopxStatus | null; failure: LoopxStatusFailure | null; at: number }>(
-    { loading: true, status: null, failure: null, at: 0 },
+    { loading: Boolean(token), status: null, failure: null, at: 0 },
   );
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
+    if (!token) {
+      setRead({ loading: false, status: null, failure: null, at: 0 });
+      return;
+    }
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const readOnce = async (signal: AbortSignal) => {

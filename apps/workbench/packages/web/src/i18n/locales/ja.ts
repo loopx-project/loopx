@@ -1203,6 +1203,7 @@ export const ja: Messages = {
   'collab.pickAndWrite': '選んでタスクを書く',
 
   // Composer menu
+  'goal.show': '目標を確認',
   'goal.set': '目標を設定',
   'goal.pause': '目標を一時停止',
   'goal.resume': '目標を再開',

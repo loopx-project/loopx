@@ -64,7 +64,7 @@ systemctl --user daemon-reload
 systemctl --user enable "$NAME" >/dev/null
 systemctl --user restart "$NAME"
 echo "Installed $UNIT and started it."
-PORT="$(sed -nE 's/^(CALLI|RAH)_PORT=//p' "$ENV_FILE" | tail -1)"
+PORT="$(sed -nE 's/^(LOOCHAT|CALLI|RAH)_PORT=//p' "$ENV_FILE" | tail -1)"
 PORT="${PORT:-8787}"
 OTHER="$(ss -ltnp 2>/dev/null | grep ":$PORT " | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -1)"
 if [ -n "$OTHER" ] && [ "$OTHER" != "$(systemctl --user show -p MainPID --value "$NAME")" ]; then

@@ -382,7 +382,7 @@ export function Composer({
     if (writingMode) additions.push({ id: 'composer:writing', label: t('writing.mode'), hint: writingMode.active ? t('writing.off') : t('writing.modeHint'), keywords: ['writing', 'write', '写作', '文章'], disabled: writingMode.disabled });
     if (goal) {
       for (const { action, blocked } of goalMenuActions(goal, running, !!planMode?.active)) {
-        additions.push({ id: `composer:goal:${action}`, label: t(`goal.${action}`), hint: blocked || t('composer.goalSetHint'), keywords: ['goal', '目标', 'target'], disabled: !!blocked });
+        additions.push({ id: `composer:goal:${action}`, label: t(`goal.${action}`), hint: blocked || (action === 'set' ? t('composer.goalSetHint') : ''), keywords: ['goal', '目标', 'target'], disabled: !!blocked });
       }
     }
     const group = (label: string, entries: HubAction[]): MenuRow[] => searchCommands(query, entries, []).map(row => row.type === 'heading' ? { ...row, label } : row);
