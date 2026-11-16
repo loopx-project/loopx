@@ -225,9 +225,9 @@ def _windows_capture(repo: Path, target: Path) -> tuple[bytes, int] | None:
             return raw, opened.st_mode & 0o111
 
 
-def _name_key(name: str) -> str:
-    # One component, compared the way a case-insensitive file system resolves it.
-    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", name).lower())
+def _caseless(text: str) -> str:
+    # Unicode caseless matching (full case folding), as case-insensitive volumes compare names.
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", text).casefold())
 
 
 def _same_file(left: Path, right: Path) -> bool:
@@ -251,7 +251,7 @@ def _disk_parent(repo: Path, name: str) -> str:
                 return "/".join([*spelled, *parts[position:]])
             # Prefer names that fold to the same key; a short-name alias has none.
             folded = [
-                listed for listed in names if _name_key(listed) == _name_key(part)
+                listed for listed in names if _caseless(listed) == _caseless(part)
             ]
             matches = [
                 listed
@@ -266,9 +266,8 @@ def _disk_parent(repo: Path, name: str) -> str:
     return "/".join(spelled)
 
 
-def _index_children(repo: Path, parent: str) -> Iterator[str]:
-    """Yield the index records directly inside parent without holding the listing."""
-    escaped = "".join("\\" + char if char in "\\*?[" else char for char in parent)
+def _index_records(repo: Path) -> Iterator[str]:
+    """Yield every index record from a file-backed read, without holding the listing."""
     with tempfile.TemporaryFile() as output:
         result = subprocess.run(
             [
@@ -279,8 +278,6 @@ def _index_children(repo: Path, parent: str) -> Iterator[str]:
                 "ls-files",
                 "--stage",
                 "-z",
-                "--",
-                ":(glob,icase)" + (escaped + "/*" if escaped else "*"),
             ],
             stdout=output,
             stderr=subprocess.DEVNULL,
@@ -309,31 +306,51 @@ def _index(repo: Path, paths: list[str]) -> str:
         )
     except ValueError:  # unset: Git matches paths exactly
         icase = False
-    if not icase:
-        return literal
-    # A case-insensitive workspace opens an alias such as RECORD.txt as the tracked
-    # record.txt. Git matches neither a literal alias nor, beyond ASCII, an icase
-    # one, so find the entry for the same file among its directory's index entries.
     records = {record for record in literal.split("\0") if record}
     found = {record.split("\t", 1)[1] for record in records}
-    for name in paths:
-        if name in found:
-            continue
-        target = repo / name
-        key = _name_key(name.rsplit("/", 1)[-1])
-        for record in _index_children(repo, _disk_parent(repo, name)):
+    pending = [name for name in paths if name not in found]
+    if icase and pending:
+        # A case-insensitive workspace opens an alias such as RECORD.txt as the
+        # tracked record.txt, and Git's own case folding differs from the file
+        # system's. An existing file is matched to its index entry by identity:
+        # only entries in the same directory are compared. A missing file has no
+        # identity, so its entry is matched by caseless name; every entry that
+        # could be it is kept, so an index change is never reported as no_delta.
+        existing = [name for name in pending if os.path.lexists(repo / name)]
+        missing: dict[str, list[str]] = {}
+        for name in pending:
+            if name in existing:
+                continue
+            parent = _disk_parent(repo, name)
+            leaf = name.rsplit("/", 1)[-1]
+            missing.setdefault(
+                _caseless(f"{parent}/{leaf}" if parent else leaf), []
+            ).append(name)
+        same_directory: dict[str, list[str]] = {}
+        for record in _index_records(repo):
             path = record.split("\t", 1)[1]
-            if _name_key(path.rsplit("/", 1)[-1]) != key:
+            if path in found:
                 continue
-            entry = repo / path
-            # Two existing files that only share a key are different files.
-            if (
-                os.path.lexists(target)
-                and os.path.lexists(entry)
-                and not _same_file(entry, target)
+            if _caseless(path) in missing:
+                records.add(record)
+                continue
+            if not existing:
+                continue
+            directory = path.rsplit("/", 1)[0] if "/" in path else ""
+            if directory not in same_directory:
+                folder = repo / directory if directory else repo
+                same_directory[directory] = [
+                    name
+                    for name in existing
+                    if _same_file(folder, (repo / name).parent)
+                ]
+            if any(
+                _same_file(repo / path, repo / name)
+                for name in same_directory[directory]
             ):
-                continue
-            records.add(record)
+                records.add(record)
+    elif not icase:
+        return literal
     return "".join(
         record + "\0"
         for record in sorted(records, key=lambda item: (item.split("\t", 1)[1], item))

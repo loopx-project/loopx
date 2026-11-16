@@ -689,6 +689,52 @@ def test_distinct_and_missing_files_keep_empty_index_evidence(icase_repo):
     )
 
 
+def _index_blob_change(repo, tracked, text):
+    """Point the index entry at a new blob without touching the working file."""
+    blob = (
+        subprocess.run(
+            ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+            input=text,
+            check=True,
+            capture_output=True,
+        )
+        .stdout.decode()
+        .strip()
+    )
+    _git(repo, "update-index", "--cacheinfo", f"100644,{blob},{tracked}")
+
+
+@pytest.mark.parametrize(
+    ("tracked", "renamed_parent", "alias"),
+    [
+        ("\u03c2.txt", None, "\u03a3.txt"),
+        ("stra\u00dfe.txt", None, "STRASSE.txt"),
+        ("caf\u00e9/x.txt", "CAF\u00c9", "CAF\u00c9/x.txt"),
+    ],
+    ids=["final-sigma", "sharp-s", "parent-renamed-non-ascii-case"],
+)
+def test_index_only_change_follows_file_identity(
+    icase_repo, tracked, renamed_parent, alias
+):
+    repo = icase_repo
+    _stage(repo, tracked, b"original\n")
+    if renamed_parent:
+        # Rename the directory on disk to a spelling that differs only by non-ASCII case.
+        old = repo / tracked.split("/", 1)[0]
+        old.rename(repo / "rename-step")
+        (repo / "rename-step").rename(repo / renamed_parent)
+    if not os.path.lexists(repo / alias) or not os.path.samefile(
+        repo / alias, repo / tracked
+    ):
+        pytest.skip("this volume does not resolve both spellings to the same file")
+    before = drift_capture.stable_capture(repo, [alias])
+    assert before["files"][alias]["text"] == "original\n"
+    _index_blob_change(repo, tracked, b"staged\n")
+    after = drift_capture.stable_capture(repo, [alias])
+    assert after["content_digest"] == before["content_digest"]
+    assert after["index_digest"] != before["index_digest"]
+
+
 def test_posix_keeps_nofollow_open(repo, monkeypatch):
     (repo / "file.txt").write_bytes(b"original\n")
     platform = SimpleNamespace(**vars(os))
