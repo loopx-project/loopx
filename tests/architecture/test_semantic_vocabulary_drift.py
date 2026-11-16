@@ -188,7 +188,7 @@ def test_registered_root_action_literals_still_require_owner_import(value, suffi
 
 def test_real_monitor_membership_cannot_revert_to_bare_action_literals():
     smoke = runpy.run_path(str(SMOKE))
-    path = 'loopx/control_plane/quota/monitor_poll_commit.ts'
+    path = 'loopx/control_plane/quota/monitor_poll_admission.ts'
     source = (REPO_ROOT / path).read_text()
     old = 'AgentScopeFrontierAction.AGENT_SCOPE_WAIT, EffectiveAction.MONITOR_QUIET_SKIP'
     assert old in source
