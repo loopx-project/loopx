@@ -15743,7 +15743,11 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 
 /* The steward's menus: a heading with its count, quiet one-line rows, and the way to every Goal. */
 .steward-menu { display: flex; flex-direction: column; width: 300px; max-width: calc(100vw - 32px); }
-.steward-menu-head { display: flex; align-items: baseline; gap: 6px; padding: 6px 10px 6px; color: var(--muted); font-size: 12.5px; }
+.steward-menu-head { display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 6px 10px; border: 0; border-radius: var(--radius-sm, 8px); background: none; color: var(--muted); font-size: 12.5px; text-align: left; }
+button.steward-menu-head { cursor: pointer; }
+button.steward-menu-head:hover { background: var(--hover, rgba(31, 30, 28, 0.06)); color: var(--text); }
+.steward-menu-go { margin-left: auto; opacity: 0; }
+button.steward-menu-head:hover .steward-menu-go { opacity: 1; }
 .steward-menu-count { color: var(--faint); font-variant-numeric: tabular-nums; }
 .steward-menu-list { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; scrollbar-width: thin; }
 .steward-menu-row {
@@ -15764,10 +15768,12 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   background: none; color: var(--muted); font-size: 12.5px; text-align: left; cursor: pointer;
 }
 .steward-menu-foot:hover { color: var(--text); }
-.steward-brief-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0; padding: 2px 6px 8px; }
-.steward-brief-stats > div { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border-radius: var(--radius-sm, 8px); background: var(--well, rgba(31, 30, 28, 0.04)); }
-.steward-brief-stats dd { order: -1; margin: 0; font-size: 20px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.steward-brief-stats dt { color: var(--faint); font-size: 12px; }
+.steward-brief-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 2px 6px 8px; }
+.steward-brief-stat { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: var(--radius-sm, 8px); background: var(--well, rgba(31, 30, 28, 0.04)); color: var(--text); text-align: left; font: inherit; }
+button.steward-brief-stat { cursor: pointer; }
+button.steward-brief-stat:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); }
+.steward-brief-num { font-size: 20px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.steward-brief-label { color: var(--faint); font-size: 12px; }
 
 .steward-hint { margin: 0 0 8px; color: var(--faint); font-size: 13px; }
 

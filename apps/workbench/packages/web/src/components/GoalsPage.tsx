@@ -5,7 +5,8 @@ import { GoalLifecycle } from './GoalLifecycle';
 import { useGoalPins } from '../loopx/goal-picks';
 import { needsYouGoalIds, sortGoalTree, type LoopxAttention, type LoopxGoal } from '../loopx/status';
 
-type Filter = 'all' | 'needs-you' | 'active' | 'stopped';
+export type GoalsFilter = 'all' | 'needs-you' | 'active' | 'stopped';
+type Filter = GoalsFilter;
 const FILTERS: Filter[] = ['all', 'needs-you', 'active', 'stopped'];
 
 const shortDate = (iso: string | null): string => {
@@ -24,16 +25,18 @@ const shortDate = (iso: string | null): string => {
  * the name, the todo count, the agents the core named, its most important open todo, the last
  * touch; anything the read did not carry stays empty rather than invented. Stopping, resuming and
  * deleting go through the same typed-action confirmation the work page uses. */
-export function GoalsPage({ token, goals, attention, activeGoalId, onOpenGoal, onChanged }: {
+export function GoalsPage({ token, goals, attention, activeGoalId, initialFilter = 'all', onOpenGoal, onChanged }: {
   token: string | undefined;
   goals: LoopxGoal[];
   attention: LoopxAttention[];
   activeGoalId: string | null;
+  /** The filter it opens on, when another page sent the person to one group. */
+  initialFilter?: GoalsFilter;
   onOpenGoal: (goalId: string) => void;
   onChanged: () => void;
 }) {
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
+  const [filter, setFilter] = useState<Filter>(initialFilter);
   const [pins, setPin] = useGoalPins();
   const needsYou = useMemo(() => needsYouGoalIds(attention), [attention]);
   const byId = useMemo(() => new Map(goals.map(goal => [goal.goalId, goal])), [goals]);

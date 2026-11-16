@@ -92,7 +92,7 @@ import { PersonalSettingsDialog } from './components/PersonalSettingsDialog';
 import { SkillsPage } from './components/SkillsPage';
 import { SchedulesPage } from './components/SchedulesPage';
 import { GoalWorkPage, GOAL_TABS, type GoalTab } from './components/GoalWorkPage';
-import { GoalsPage } from './components/GoalsPage';
+import { GoalsPage, type GoalsFilter } from './components/GoalsPage';
 import { AccessSettings } from './components/AccessSettings';
 import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
 import { StewardActions, StewardPage } from './components/StewardPage';
@@ -2253,8 +2253,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const openSteward = () => navigate(() => {
     setSelectedId(null); setView('steward'); setDrawer(false);
   });
-  const openGoalsList = () => navigate(() => {
-    setSelectedId(null); setView('goals'); setDrawer(false);
+  const [goalsFilter, setGoalsFilter] = useState<GoalsFilter>('all');
+  const openGoalsList = (filter: GoalsFilter = 'all') => navigate(() => {
+    setGoalsFilter(filter); setSelectedId(null); setView('goals'); setDrawer(false);
   });
   const openGoal = (goalId: string, tab: GoalTab = 'overview') => navigate(() => {
     setGoalPath(goalId); setGoalTab(tab); setSelectedId(null); setView('goal'); setDrawer(false);
@@ -3006,7 +3007,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           activeGoalId={onGoal ? goalPath : null}
           onOpenGoal={openGoal}
           onOpenGoalTasks={goalId => openGoal(goalId, 'tasks')}
-          onOpenAllGoals={showcase ? undefined : openGoalsList}
+          onOpenAllGoals={showcase ? undefined : () => openGoalsList()}
           onOpenSchedules={showcase ? undefined : openSchedules}
           onOpenDesktop={hasDesktop ? () => { setDrawer(false); setDesktop('open'); } : undefined}
           desktopRunning={desktop === 'minimized'}
@@ -3317,9 +3318,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             />
           </div>
         ) : onGoalsList ? (
-          <div key="goals-list" className="scroller">
+          <div key={`goals-list-${goalsFilter}`} className="scroller">
             <GoalsPage
               token={token}
+              initialFilter={goalsFilter}
               goals={loopxStatus?.goals ?? []}
               attention={loopxStatus?.attention ?? []}
               activeGoalId={null}
