@@ -20,7 +20,7 @@
 .goal-bar-refresh { height: 24px; min-width: 24px; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; }
 .goal-bar-refresh:hover:not(:disabled) { color: var(--text); }
 
-.goal-confirm-body { display: flex; flex-direction: column; gap: 12px; text-align: left; }
+.goal-confirm-body { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; text-align: left; }
 .goal-confirm-field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
 .goal-confirm-field textarea { resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
 .goal-confirm-objective { max-height: 120px; overflow: auto; padding: 8px 10px; border-radius: var(--radius-sm, 8px); background: var(--surface-2, var(--surface)); color: var(--text); font-size: 13.5px; white-space: pre-wrap; word-break: break-word; }
