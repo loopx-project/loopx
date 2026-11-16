@@ -47,6 +47,36 @@ def _private_source_input(message: Mapping[str, Any]) -> tuple[Any, ...]:
     return kind, content, message.get("create_time"), ancestry
 
 
+def recovery_source_matches(record: Mapping[str, Any], source: Mapping[str, Any],
+                            native: Mapping[str, Any]) -> bool:
+    """Match a fresh provider observation against the originally admitted input."""
+    if source.get("deleted") is True:
+        return False
+    # Keep the source text without verified ancestry added for Core. A missing
+    # provider rendering is unknown and cannot stand in for the frozen body.
+    expected = record.get("reply_context_source_text", native.get("message"))
+    message_type = record["event"].get("message_type")
+    if source.get("msg_type", source.get("message_type")) != message_type:
+        return False
+    if message_type == "post":
+        # Posts froze their rendering at intake. Text-only input must also equal
+        # the admitted text. For image input Core separately verifies the saved
+        # attachment bytes against the original Turn.
+        frozen = record.get("source_content")
+        images = record.get("attachments")
+        frozen_images = (isinstance(images, list) and bool(images)
+            and images == native.get("attachments") and record.get("message") == native.get("message"))
+        if (record.get("attachment_notice") or not isinstance(frozen, str)
+                or (not frozen_images and (images != [] or native.get("attachments")
+                                          or frozen.strip() != expected))):
+            return False
+        expected = frozen
+    elif message_type != "text":
+        return False
+    observed = source.get("content")
+    return isinstance(observed, str) and observed == expected
+
+
 def steward_source_preflight(
     binding: Mapping[str, Any], original: Mapping[str, Any],
     read_source: Callable[[dict[str, Any]], Mapping[str, Any] | None],

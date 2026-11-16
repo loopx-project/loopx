@@ -1690,7 +1690,34 @@ def test_private_delivery_keeps_retired_steward_cards_out_of_image_recovery(
         runtime.close()
 
 
-@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished", "source-changed", "closed", "lost-ack", "message-crash",
+def assert_recovered_reply_waits_for_original_source(transport, provider, path, source_id, fault, monkeypatch):
+    original = provider.messages[source_id]
+    change = ({"deleted": True} if fault == "source-recalled-at-send" else {"content": "Edited during preview"})
+    changed = {**original, **change}
+    reply = transport._reply_runner
+
+    def preview_then_change(args):
+        result = reply(args)
+        if "--dry-run" in args and ("+messages-send" in args or "+messages-reply" in args):
+            provider.messages[source_id] = changed
+        return result
+
+    writes = list(provider.writes)
+    with monkeypatch.context() as send:
+        send.setattr(transport, "_reply_runner", preview_then_change)
+        delivered = transport.reconcile_request(path)
+    assert provider.messages[source_id] is changed
+    assert delivered == 0 and provider.writes == writes
+    pending = transport.core.read_request(path.stem)["native_result_recovery"]
+    assert pending["delivery_verified"] is False
+    assert transport.reconcile_request(path) == 0 and provider.writes == writes
+    provider.messages[source_id] = original
+    assert transport.reconcile_request(path) == 1
+    assert len(provider.writes) == len(writes) + 1
+
+
+@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished",
+    "source-changed", "source-edited-at-send", "source-recalled-at-send", "closed", "lost-ack", "message-crash",
     "historical", "historical-source-changed", "historical-stop"])
 def test_original_worker_recovers_native_result_without_replay(tmp_path, language_server, monkeypatch, case):  # noqa: F811
     from test_native_steward_private import steward
@@ -1777,7 +1804,11 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
                 pass
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
             runner=provider, cli_bin="lark-cli")
-        restarted.reconcile()
+        if case in {"source-edited-at-send", "source-recalled-at-send"}:
+            assert_recovered_reply_waits_for_original_source(
+                restarted, provider, path, event["message_id"], case, monkeypatch)
+        else:
+            restarted.reconcile()
         native = restarted.core.read_request(ref)
         recovered = native.get("native_result_recovery")
         if fault in {"source-changed", "closed", "stop"}:

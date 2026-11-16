@@ -49,7 +49,7 @@ from .outbound import normalize_lark_outbound_text, present_lark_conversation_te
 from .private_images import private_message_caption, private_message_images
 from .private_delivery_discovery import (PrivateDeliveryDiscovery, allowed_answer_image_urls, answer_image_source_matches,
     answer_media_dispatch, historical_image_reply_matches, prepared_steward_binding_waits, resumable_answer_image_session)
-from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
+from .private_ingress import PrivateSourceUnavailable, private_source_text, recovery_source_matches, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from . import private_steward_triage as triage
 from .return_files import uploaded_chat_images, verify_chat_images
@@ -683,6 +683,17 @@ class LarkPrivateConversations:
                                     if row.get("binding_id") == record["binding_id"]), None)
                     if current != selected["binding"]:
                         return None
+                    # Every recovered answer uses the frozen original input,
+                    # including a native result delivered as the first reply
+                    # or as a follow-up to an existing failure notice.
+                    review = (record.get("context_recovery") or {}).get("answer_review") is True
+                    result_turn = (native.get("native_result_recovery") or {}).get("turn_id")
+                    if review or (result_turn is not None and result_turn == record.get("turn_id")):
+                        current_request = self.core.read_request(record["request_ref"])
+                        if (any(current_request.get(key) != record.get(key)
+                                for key in ("request_ref", "binding_id", "source", "session_id", "turn_id"))
+                                or not recovery_source_matches(record, message, current_request)):
+                            return None
                 if sender_identity is not None:
                     if observation is None:
                         return None
@@ -1265,7 +1276,9 @@ class LarkPrivateConversations:
         if historical_source_check is not None and phase != "answer_images.historical":
             raise ValueError("historical source verification requires a media repair")
         phase = presentation_phase(record, phase)
-        expected_text = record["event"]["content"] if kind == "answer_images" else None
+        source_authority = partial(self._source_authority, record)
+        if kind == "answer_images":
+            source_authority = partial(source_authority, expected_text=record["event"]["content"])
         phase_state = record["deliveries"].get(phase, {})
         if phase_state.get("verified"):
             return True
@@ -1299,8 +1312,8 @@ class LarkPrivateConversations:
         def verified_source() -> bool:
             if historical_source_check is not None:
                 return historical_source_check()
-            name, verified = self._source_authority(record, record["profile"],
-                record["event"]["chat_id"], record["event"]["message_id"], expected_text=expected_text)
+            name, verified = source_authority(record["profile"],
+                record["event"]["chat_id"], record["event"]["message_id"])
             return bool(name) and verified
 
         def image_authorized() -> bool:
@@ -1329,7 +1342,7 @@ class LarkPrivateConversations:
             **({"delivery_id": delivery_id} if delivery_id is not None else {}),
             finalize_reactions=finalize_source and not edit_only and kind not in {"admission", "progress", "periodic_report"} and not (kind == "terminal" and record.get("commission_resources")),
             source_authority_verifier=lambda profile, chat, message: (
-                self._source_authority(record, profile, chat, message, expected_text=expected_text)
+                source_authority(profile, chat, message)
                 if authorization_check is None or authorization_check() else (None, False)))
         progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
         stream = presentation_stream(record)
@@ -2195,38 +2208,10 @@ class LarkPrivateConversations:
 
     def _recovery_source_observation(self, record: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any] | None:
         source = self._source_message(record, selected=selected)
-        native = self.core.read_request(record["request_ref"])
-        expected = record.get("reply_context_source_text", native.get("message"))
-        # Resume the admitted text, never an edited/replaced source. Keep the
-        # original reply-context text when admission had added verified ancestry.
-        # An unavailable rendering is unknown, not permission to guess a body.
         if source is None:
             return None
-        message_type = record["event"].get("message_type")
-        if source.get("msg_type", source.get("message_type")) != message_type:
-            return None
-        if message_type == "post":
-            # Posts froze their provider rendering at intake. Text-only input
-            # must also equal its admitted text; image input retains its
-            # original model text and frozen attachment payload below.
-            frozen = record.get("source_content")
-            images = record.get("attachments")
-            frozen_images = (isinstance(images, list) and bool(images)
-                and images == native.get("attachments") and record.get("message") == native.get("message"))
-            if (record.get("attachment_notice") or not isinstance(frozen, str)
-                    or (not frozen_images and (images != [] or native.get("attachments")
-                                              or frozen.strip() != expected))):
-                return None
-            # The original post's image keys/caption must still render exactly
-            # as frozen at intake. Core separately verifies the saved image
-            # bytes against the original pre-dispatch Turn; never redownload or
-            # silently execute a text-only replacement of an image request.
-            expected = frozen
-        elif message_type != "text":
-            return None
-        if not isinstance(source.get("content"), str) or source["content"] != expected:
-            return None
-        return dict(source)
+        native = self.core.read_request(record["request_ref"])
+        return dict(source) if recovery_source_matches(record, source, native) else None
 
     def _received_during_recovery(self, path: Path) -> None:
         """Acknowledge durable ordinary admission independently of recovery.
