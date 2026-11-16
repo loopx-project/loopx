@@ -503,15 +503,18 @@ test("first user-gate link requires one consistent decision scope without consum
   }
 });
 
-test("first user-gate link rejects a target that declares another prerequisite without consuming retry", async () => {
+test("first user-gate link rejects a target that declares another resume condition without consuming retry", async () => {
   const {store, request} = await boundUserAction({task_class: "user_gate", blocks_agent: "agent-a"});
   const head = await store.loadAuthority();
   if (head.status !== "loaded") assert.fail("missing fixture");
   const records = [...head.head.todos as Record<string, unknown>[],
     todo({todo_id: "todo_gate_b", role: "user", task_class: "user_gate", claimed_by: null, bound_agent: "agent-a",
       blocks_agent: "agent-a", created_by: "agent-a"}),
-    todo({todo_id: "todo_waits_a", status: "blocked", resume_when: "todo_done:todo_a"}),
+    // The fixture gate id is not a valid resume target; the CLI regression covers todo_done:<this gate>.
+    todo({todo_id: "todo_waits_a", status: "blocked"}),
     todo({todo_id: "todo_waits_b", status: "blocked", resume_when: "todo_done:todo_gate_b"}),
+    todo({todo_id: "todo_waits_time", status: "blocked", resume_when: "resume_at:2099-01-01T00:00:00Z"}),
+    todo({todo_id: "todo_waits_browser", status: "blocked", resume_when: "capacity_available:browser"}),
   ].sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
   await store.commitAuthority({operation_id: "seed-prerequisites", expected_provider_revision: head.provider_revision,
     events: [], receipts: [], next_projection: {...head.head, todos: records,
@@ -519,9 +522,9 @@ test("first user-gate link rejects a target that declares another prerequisite w
   const before = await store.loadAuthority();
   if (before.status !== "loaded") assert.fail("missing fixture");
   const edit = {...request, expected_provider_revision: before.provider_revision, patch: {note: "Link gate A"}};
-  for (const dry_run of [true, false]) {
+  for (const [reference, dry_run] of ["todo_waits_b", "todo_waits_time", "todo_waits_browser"].flatMap(id => [[id, true], [id, false]] as const)) {
     const rejected = await executeCoordinationTodoUpdate(store, {...edit, dry_run,
-      planning_intent: {unblocks_todo_id: "todo_waits_b"}});
+      planning_intent: {unblocks_todo_id: reference}});
     assert.equal(rejected.reason_code, "user_gate_link_target_invalid", JSON.stringify(rejected));
     assert.deepEqual(await store.loadAuthority(), before);
     assert.equal((await store.readReceipt(edit.operation_id)).status, "missing");

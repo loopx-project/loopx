@@ -255,12 +255,13 @@ export function todoUpdateAdmissionRejection(
           return reject("user_gate_link_target_invalid",
             "Initial gate link requires a target whose required decision scopes are covered by this gate's decision scope, or neither side to declare one");
         }
-        // A target that already declares another Todo as its exact prerequisite waits
-        // for that one; this gate cannot become its dependency by being linked first.
-        const prerequisite = todoResumeDependencyId(target.resume_when);
-        if (prerequisite !== null && prerequisite !== input.todo_id) {
+        // A target that already declares any other resume condition (another Todo, a
+        // time or a capacity) waits for that; approving this gate cannot satisfy it, so
+        // the gate cannot become its dependency by being linked first.
+        const declared = typeof target.resume_when === "string" ? target.resume_when.trim() : "";
+        if (declared && todoResumeDependencyId(declared) !== input.todo_id) {
           return reject("user_gate_link_target_invalid",
-            "Initial gate link requires a target that does not already declare another Todo as its resume prerequisite");
+            "Initial gate link requires a target that declares no resume condition other than this gate");
         }
       }
     } catch (error) {

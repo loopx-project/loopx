@@ -318,8 +318,9 @@ The link must also describe one decision: a gate with a `decision_scope` only
 accepts a target whose `required_decision_scopes` include a scope it covers, and
 a gate without one only accepts a target that requires no scoped decision (a
 plain dependency link). A missing match is never read as a dependency.
-A target that already declares another Todo as its resume prerequisite
-(`todo_done:<other-id>`) waits for that one and cannot receive this first link.
+A target that already declares any other resume condition (`todo_done:<other-id>`,
+`resume_at:<time>` or `capacity_available:<capability>`) waits for that, which
+approving this gate cannot satisfy, so it cannot receive this first link.
 Preview and write reject missing, inactive or out-of-scope targets without
 writing or consuming the first-link opportunity or operation ID; the same gate
 and operation ID can then be used for a valid target. Existing links, gate scope,
