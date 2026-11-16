@@ -487,6 +487,7 @@ def current_heartbeat_host_launch_decision(
         receipt_bound_replan_obligation_id=selection.receipt_bound_replan_obligation_id,
         retained_action_selection_todo_id=selection.retained_todo_id_for_decision,
         turn_instance_id=original_turn, workspace_path=project, goal_ref=goal_ref,
+        include_launch_lease_deadline=True,
         interaction_projection_hooks=(periodic_report_pending_intent_interaction_hook(
             registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id, agent_id=agent_id,
         ),),

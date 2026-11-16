@@ -149,13 +149,20 @@ class ProviderRequestAdmission:
             self._require_live()
         entered = False
         try:
-            with self._invocation.admission.launch_lifetime(operation="provider_request_dispatch"):
+            with self._invocation.admission.launch_lifetime(operation="provider_request_dispatch") as expires_at_ms:
                 entered = True
                 with self._lock:
                     # Authority/registry contention can outlive the process or
                     # phase. Revalidate after every wait and before any POST.
                     self._require_live()
-                    yield min(time.monotonic() + 2, self._invocation.deadline)
+                    now = time.monotonic()
+                    deadline = min(now + 2, self._invocation.deadline)
+                    if expires_at_ms is not None:
+                        remaining = expires_at_ms / 1000 - time.time()
+                        if remaining <= 0:
+                            self._reject("goal_launch_not_allowed")
+                        deadline = min(deadline, now + remaining)
+                    yield deadline
         except ProviderGatewayRequestRejected:
             raise
         except FirstPartyHostRuntimeRejected as error:
