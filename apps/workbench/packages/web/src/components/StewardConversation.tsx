@@ -77,10 +77,12 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     if (!sessionRef.current || !ended) return;
     // The stored history is the truth; the live turn is only its preview. Read it back once.
     const id = sessionRef.current;
+    const stillCurrent = () => sessionRef.current === id && turnRef.current?.turnId === ended.turnId;
     readManagerHistory(token, id)
-      .then(history => { setMessages(history); showTurn(null); })
+      .then(history => { if (stillCurrent()) { setMessages(history); showTurn(null); } })
       .catch(() => {
         // The turn ended but the history did not come back; keep what streamed rather than blanking.
+        if (!stillCurrent()) return;
         showTurn(ended.answer ? { ...ended, state: 'idle', steps: [] } : null);
       });
   };
