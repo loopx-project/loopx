@@ -1,6 +1,6 @@
 /** Replan history IO: qualify work through the existing settlement owner. */
 import type { JsonObject } from "../effect_program.ts";
-import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
+import { jsonObject, optionalNonEmptyString, requireJsonObject } from "../runtime_decode.ts";
 import {
   readQuotaSettlementSnapshot,
   readQuotaSettlementForAdmittedOwnerFromSnapshot,
@@ -17,6 +17,7 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
   const source = request.settlement_source;
   // Historical callers retain their units until explicitly migrated.
   if (source == null) return projectReplanHistory(request);
+  const agentId = optionalNonEmptyString(request.agent_id, "agent_id");
   const scope = requireJsonObject(source, "settlement source");
   const {runtimeRoot, goalId} = validateQuotaSettlementScope(
     scope.runtime_root,
@@ -40,12 +41,14 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
     const settlementRuns = runs.filter(raw => {
       const row = jsonObject(raw);
       return row !== null && typeof row.agent_id === "string" && row.agent_id !== "" &&
+        (agentId === null || row.agent_id === agentId) &&
         typeof row.turn_id === "string" && row.turn_id !== "" &&
         receiptKeys.has(JSON.stringify([row.agent_id, row.turn_id]));
     });
-    // History rows without a matching should-run receipt cannot be qualified
-    // by settlement. Avoid parsing the strict quota run ledger unless at least
-    // one exact current-owner Turn can contribute to effective-cadence counts.
+    // Apply explicit Agent scope before interpreting settlement receipts, as
+    // the pure history owner does before counting work. Unscoped requests still
+    // validate all contributing Agents; a scoped read cannot repair peer data.
+    // Rows without a matching should-run receipt cannot contribute either.
     if (settlementRuns.length === 0) {
       return projectReplanHistory({...request, runs}, new Set());
     }

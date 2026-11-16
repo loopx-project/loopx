@@ -3,12 +3,15 @@ from .effective_action import EffectiveAction
 
 import shlex
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from ...quota import build_quota_should_run
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
+from ...command_invocation import loopx_cli_argv
 from ..agent_context import project_agent_context, project_goal_agent_context
+from ..agents.identity import build_quota_agent_identity
 from ..runtime.time import now_utc_iso
 from ..goals.activation import goal_owner_resume_id
 from ..goals.goal_frontier.fallback_source import live_fallback_authority_items
@@ -34,10 +37,13 @@ from ..work_items.autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
 )
 from ..todos.contract import normalize_todo_id
+from ..scheduler.arbitration import SchedulerArbitration
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     resolve_scheduler_execution_context,
 )
+from ..scheduler.scheduler_hint import build_scheduler_hint
+from ..scheduler.state import load_app_automation_scheduler_state
 from .unsettled_host_turn import (
     apply_unsettled_host_turn_recovery_if_required,
     apply_receipt_bound_wait_recovery,
@@ -486,6 +492,7 @@ def bind_scheduler_followup_cli_routes(
     scheduler_hint = payload.get("scheduler_hint")
     if not isinstance(scheduler_hint, dict):
         return
+    launcher_args = loopx_cli_argv()[1:]
     app_packets = [
         packet
         for packet_key in ("app_automation", "codex_app")
@@ -532,13 +539,13 @@ def bind_scheduler_followup_cli_routes(
                 }
                 continue
             bound_cli_args = list(cli_args)
-            if bound_cli_args[0] != "--registry":
-                bound_cli_args = [
-                    "--registry",
-                    str(registry_path.expanduser().resolve()),
-                    "--runtime-root",
-                    str(runtime_root.expanduser().resolve()),
-                    *bound_cli_args,
+            # Standalone Core emits an interpreter route. Its launcher
+            # arguments must precede the CLI's global options.
+            option_index = len(launcher_args) if cli_args[:len(launcher_args)] == launcher_args else 0
+            if bound_cli_args[option_index:option_index + 1] != ["--registry"]:
+                bound_cli_args[option_index:option_index] = [
+                    "--registry", str(registry_path.expanduser().resolve()),
+                    "--runtime-root", str(runtime_root.expanduser().resolve()),
                 ]
             safe_turn_instance_id = str(turn_instance_id or "").strip()
             if safe_turn_instance_id and "--turn-instance-id" not in bound_cli_args:
@@ -741,7 +748,7 @@ def build_live_quota_should_run_decision(
     if remote_config is not None:
         # Use the same hard-pause precedence and keep fresh local selection
         # outside the remote route, even when a TLS read succeeds.
-        return _build_remote_authority_wait_decision(
+        payload = _build_remote_authority_wait_decision(
             decision_status_payload, configured_goal=registered_goal or {},
             goal_id=goal_id, agent_id=agent_id, remote_config=remote_config,
             registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
@@ -751,6 +758,11 @@ def build_live_quota_should_run_decision(
             turn_instance_id=turn_instance_id, receipt_bound_todo_id=receipt_bound_todo_id,
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         )
+        bind_scheduler_followup_cli_routes(
+            payload, registry_path=registry_path, runtime_root=runtime_root,
+            turn_instance_id=turn_instance_id, source=route_source,
+        )
+        return payload
     settlement_readback = read_heartbeat_settlement(
         runtime_root,
         goal_id=goal_id,
@@ -835,6 +847,13 @@ def build_live_quota_should_run_decision(
         goal_id=goal_id,
         agent_id=agent_id,
     )
+    app_scheduler_state: dict[str, Any] | None = None
+
+    def observe_app_scheduler_state(readback: Mapping[str, Any]) -> None:
+        # A later recovery wait uses the same state this decision actually read.
+        nonlocal app_scheduler_state
+        app_scheduler_state = readback.get("state")
+
     payload: dict[str, Any] = build_quota_should_run(
         decision_status_payload,
         goal_id=goal_id,
@@ -862,6 +881,7 @@ def build_live_quota_should_run_decision(
         **receipt_bound_guard_fields,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        app_scheduler_state_observer=observe_app_scheduler_state,
         workspace_path=workspace_path,
         goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
@@ -932,6 +952,14 @@ def build_live_quota_should_run_decision(
             agent_id=agent_id,
             current_turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities,
+            project_scheduler_hint=partial(
+                build_scheduler_hint, include_detail=include_scheduler_detail,
+                scheduler_execution_context=resolved_context,
+                available_capabilities=available_capabilities,
+                codex_app_scheduler_state=app_scheduler_state,
+                codex_app_current_rrule=observed_rrule,
+                codex_app_automation_id=observed_automation_id or None,
+            ),
             scheduler_execution_context=resolved_context,
             goal_ref=goal_ref,
             owner_action_id=goal_owner_resume_id(registered_goal),
@@ -1054,6 +1082,24 @@ def _build_remote_authority_wait_decision(
     }
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)
+
+    def project_recovery_scheduler_hint(
+        decision: dict[str, Any], *, arbitration: SchedulerArbitration,
+    ) -> dict[str, Any]:
+        decision["agent_identity"] = build_quota_agent_identity(configured_goal, agent_id=agent_id)
+        host = scheduler_context.context
+        state = None
+        if scheduler_context.ok and host is not None and host.app_automation_applicable:
+            state = load_app_automation_scheduler_state(
+                runtime_root, goal_id=goal_id, agent_id=agent_id, surface=host.host_surface.value,
+            )
+        return build_scheduler_hint(
+            decision, arbitration=arbitration, include_detail=include_scheduler_detail,
+            available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
+            codex_app_scheduler_state=state, codex_app_current_rrule=codex_app_rrule,
+            codex_app_automation_id=codex_app_automation_id,
+        )
+
     if scope_matches and not settled:
         if (receipt_bound_todo_id and agent_id and turn_instance_id and readback is not None
                 and readback.replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING):
@@ -1072,6 +1118,7 @@ def _build_remote_authority_wait_decision(
             payload, registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
             agent_id=agent_id, current_turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
+            project_scheduler_hint=project_recovery_scheduler_hint,
             goal_ref=goal_ref,
             owner_action_id=goal_owner_resume_id(configured_goal),
         ):

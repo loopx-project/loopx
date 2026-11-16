@@ -1,4 +1,5 @@
 """Recovery admissions are bounded per original debt, never treated as spend."""
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -90,13 +91,20 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
     # Repeating a committed recovery identity is not a fresh admission.
     rc, replay = _run_cli(registry, runtime, *guard, "--turn-instance-id", "recovery-2")
     assert rc == 0 and replay["should_run"] is True, replay
-    for turn in ("wait-1", "wait-2"):
-        rc, wait = _run_cli(registry, runtime, *guard, "--turn-instance-id", turn)
+    for turn, detail in (("wait-1", ()), ("wait-2", ("--include-detail", "scheduler"))):
+        rc, wait = _run_cli(registry, runtime, *guard, "--turn-instance-id", turn, *detail)
         assert rc == 0 and wait["should_run"] is False, wait
         assert wait["reason_code"] == "unsettled_recovery_admission_limit"
         assert wait["unsettled_host_turn_recovery"]["state"] == "attention_required"
         assert wait["unsettled_host_turn_recovery"]["admissions_without_progress"] == 3
-        assert wait["scheduler_hint"]["action"] != "run_now"
+        hint = wait["scheduler_hint"]
+        assert hint["action"] == "backoff_waiting_for_user"
+        if detail:
+            scheduler = hint["cold_path_detail"]["local_scheduler"]
+            assert scheduler["recommended_interval_minutes"] > 0
+            assert hint["unchanged_poll"]["limits"]["local_scheduler"] == 3
+        else:
+            assert "cold_path_detail" not in hint
         channel = wait["interaction_contract"]["agent_channel"]
         assert channel["must_attempt"] is False and channel["delivery_allowed"] is False
         assert wait["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
@@ -154,6 +162,89 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
         assert debt["settlement_effect_id"] == effect
         if reset == "writeback":
             assert debt["missing_receipts"] == ["quota_spend_receipt"]
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("remote_binding", [False, True])
+def test_recovery_wait_keeps_observed_app_schedule_and_acknowledgement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, remote_binding: bool,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "recovery-thread")
+    automation = codex_home / "automations" / "recovery-heartbeat" / "automation.toml"
+    automation.parent.mkdir(parents=True)
+
+    def set_host_rrule(rrule: str) -> None:
+        automation.write_text(
+            'version = 1\nid = "recovery-heartbeat"\nkind = "heartbeat"\n'
+            'name = "Recovery schedule fixture"\nstatus = "ACTIVE"\n'
+            f'prompt = "Advance `{GOAL_ID}` from active state. Agent: `{AGENT_ID}`."\n'
+            f'rrule = "{rrule}"\ntarget_thread_id = "recovery-thread"\n',
+            encoding="utf-8",
+        )
+
+    def guard(turn: str, *extra: str) -> dict:
+        rc, result = _run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", turn, *extra, cwd=project,
+        )
+        assert rc == 0, result
+        return result
+
+    matching_rrule = "FREQ=MINUTELY;INTERVAL=30"
+    short_rrule = "FREQ=MINUTELY;INTERVAL=3"
+    set_host_rrule(matching_rrule)
+    original = guard("owed-original", "--todo-id", TODO_ID)
+    assert original["heartbeat_receipt"]["closeout_required"]
+    for index in range(3):
+        assert guard(f"recovery-{index}")["should_run"]
+
+    if remote_binding:
+        # A local recovery receipt still owns closeout after the Goal opts into
+        # the remote route. This fixture has no remote credentials or endpoint.
+        document = json.loads(registry.read_text(encoding="utf-8"))
+        goal, = (goal for goal in document["goals"] if goal["id"] == GOAL_ID)
+        goal["remote_authority"] = {"enabled": True}
+        registry.write_text(json.dumps(document), encoding="utf-8")
+
+    wait = guard("matching-wait", "--include-detail", "scheduler")
+    assert wait["should_run"] is False
+    assert wait["reason_code"] == "unsettled_recovery_admission_limit"
+    hint = wait["scheduler_hint"]
+    assert hint["cold_path_detail"]["local_scheduler"]["recommended_interval_minutes"] == 30
+    app = hint["app_automation"]
+    backoff = app["stateful_backoff"]
+    assert backoff["host_observation"]["current_rrule"] == matching_rrule
+    assert backoff["host_observation"]["status"] == "matches_recommended"
+    assert backoff["apply_needed"] is False and backoff["ack_needed"] is True
+    assert app["host_action"] == "ack_observed_rrule_without_update"
+    ack_hint = app["ack_hint"]
+    assert ack_hint["route_binding"]["turn_instance_bound"] is True
+    assert ack_hint["args"]["turn_instance_id"] == "matching-wait"
+    host_config = automation.read_bytes()
+    rc, ack = _run_cli(registry, runtime, *ack_hint["cli_args"], cwd=project)
+    assert rc == 0 and ack["scheduler_state_mutated"] is True, ack
+    assert automation.read_bytes() == host_config
+
+    replay = guard("matching-wait")
+    assert replay["heartbeat_receipt"]["event_id"] == wait["heartbeat_receipt"]["event_id"]
+    app = replay["scheduler_hint"]["app_automation"]
+    backoff = app["stateful_backoff"]
+    assert backoff["apply_needed"] is False and backoff["ack_needed"] is False
+    assert app["host_action"] == "none"
+    assert "cold_path_detail" not in replay["scheduler_hint"]
+
+    set_host_rrule(short_rrule)
+    drifted = guard("drifted-wait")["scheduler_hint"]["app_automation"]
+    assert drifted["stateful_backoff"]["host_observation"]["current_rrule"] == short_rrule
+    assert drifted["stateful_backoff"]["host_observation"]["status"] == "drift_detected"
+    assert drifted["host_action"] == "update_current_heartbeat_rrule"
+    assert drifted["recommended_rrule"] == matching_rrule
     assert _spend_run_count(runtime) == 0
 
 

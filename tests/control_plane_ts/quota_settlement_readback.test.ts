@@ -2257,6 +2257,53 @@ test("effective cadence scopes settlement and ACKs to its admitted Goal instance
   }
 });
 
+test("agent cadence does not interpret another agent's malformed semantic receipt", async () => {
+  const { projectSettledReplanHistory } = await import(
+    "../../loopx/control_plane/work_items/replan_history_settlement.ts");
+  const root = await fixture({writeback: true, spend: true, completion: true});
+  const peer = "codex-peer";
+  const peerTurn = "peer-turn";
+  const peerIdentity = settlementIdentity({goal_id: goalId, agent_id: peer,
+    todo_id: todoId, turn_instance_id: peerTurn});
+  const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+  const row = (agent: string, turn: string) => ({agent_id: agent, public_agent_id: agent,
+    monitor_agent_id: agent, turn_id: turn, classification: "state_refreshed",
+    generated_at: "2026-01-01T00:00:00Z", observed_at: 1,
+    accepted_ack: false, progress: null, monitor: {}});
+  const cadence = {schema_version: "replan_history_request_v0", operation: "periodic",
+    agent_id: agentId, monitor_agent_id: agentId, neutral_classifications: [],
+    stall_threshold: 2, periodic_threshold: 1, monitor_threshold: 6,
+    streak_threshold: 5, monitor_schema: "dead_monitor_repeat_v0",
+    todos: {monitors: [], advancements: [], resume: null},
+    settlement_source: {runtime_root: root, goal_id: goalId},
+    runs: [row(peer, peerTurn), row(agentId, turnId)]};
+  try {
+    const baseline = await projectSettledReplanHistory({...cadence, runs: cadence.runs.slice(1)});
+    assert.equal(requireJsonObject(baseline.trigger, "trigger").run_count, 1);
+    await appendFile(log, JSON.stringify({schema_version: "loopx_rollout_event_v0",
+      event_id: "malformed-peer-review", event_kind: "quota_should_run",
+      goal_id: goalId, agent_id: peer, run_id: peerTurn, details: {
+        todo_id: todoId, settlement_effect_id: peerIdentity.effect_id,
+        semantic_replan_obligation_id: "replan-0000000000000001",
+        semantic_replan_review_kind: "periodic_review_due",
+        semantic_replan_review_stop_condition: null,
+      }}) + "\n");
+    const originalLog = await readFile(log, "utf8");
+    assert.deepEqual(await projectSettledReplanHistory(cadence), baseline);
+    assert.equal((await projectSettledReplanHistory({...cadence,
+      runs: cadence.runs.slice(0, 1)})).trigger, null, "peer work cannot qualify this agent");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: peer}),
+      /receipt review stop condition/, "the affected agent still sees its own invalid receipt");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: null}),
+      /receipt review stop condition/, "unscoped history still validates every contributing agent");
+    await assert.rejects(projectSettledReplanHistory({...cadence, agent_id: 42}),
+      /agent_id/, "invalid scope must not silently become unscoped");
+    assert.equal(await readFile(log, "utf8"), originalLog, "readback cannot repair historical receipts");
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test("effective cadence skips settlement read without a matching should-run receipt", async () => {
   const { projectSettledReplanHistory } = await import(
     "../../loopx/control_plane/work_items/replan_history_settlement.ts");
