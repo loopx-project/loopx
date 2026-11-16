@@ -735,6 +735,30 @@ def test_index_only_change_follows_file_identity(
     assert after["index_digest"] != before["index_digest"]
 
 
+def test_out_of_scope_non_utf8_index_path_does_not_fail_capture(icase_repo):
+    repo = icase_repo
+    _stage(repo, "record.txt", b"tracked\n")
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+        input=b"other\n",
+        check=True,
+        capture_output=True,
+    ).stdout.strip()
+    # An index entry outside the selected scope whose path is not valid UTF-8.
+    added = subprocess.run(
+        ["git", "-C", str(repo), "update-index", "--add", "--index-info"],
+        input=b"100644 " + blob + b" 0\tout-of-scope-\xff.txt\n",
+        capture_output=True,
+        check=False,
+    )
+    if added.returncode:
+        pytest.skip("Git refused a non-UTF-8 index path on this host")
+    # The missing file forces the full index stream; the tracked file reads normally.
+    captured = drift_capture.stable_capture(repo, ["RECORD.txt", "missing.txt"])
+    assert captured["files"]["RECORD.txt"]["text"] == "tracked\n"
+    assert captured["files"]["missing.txt"] is None
+
+
 def test_posix_keeps_nofollow_open(repo, monkeypatch):
     (repo / "file.txt").write_bytes(b"original\n")
     platform = SimpleNamespace(**vars(os))

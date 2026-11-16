@@ -292,7 +292,12 @@ def _index_records(repo: Path) -> Iterator[str]:
         while chunk := output.read(65536):
             *complete, pending = (pending + chunk).split(b"\0")
             for record in complete:
-                yield record.decode("utf-8")
+                try:
+                    yield record.decode("utf-8")
+                except UnicodeDecodeError:
+                    # A path that is not UTF-8 cannot be any selected path;
+                    # it is outside the scope, so it must not fail the capture.
+                    continue
 
 
 def _index(repo: Path, paths: list[str]) -> str:
