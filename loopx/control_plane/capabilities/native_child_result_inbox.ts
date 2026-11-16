@@ -8,6 +8,7 @@ import {constants} from "node:fs";
 import {open, readdir} from "node:fs/promises";
 import {isAbsolute, join, toNamespacedPath} from "node:path";
 
+import {ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {atomicWriteJson, atomicWriteText, withFileMutationLock} from "../effect_runtime_io.ts";
@@ -106,7 +107,7 @@ async function readEntry(source: ReturnType<typeof scope>, id: string): Promise<
     fail("host terminal receipt id is invalid");
   }
   requireStringLiteral(row.outcome, [...OUTCOMES], "native child result outcome");
-  if (typeof row.content_sha256 !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(row.content_sha256)
+  if (typeof row.content_sha256 !== "string" || !ENVELOPED_SHA256_PATTERN.test(row.content_sha256)
       || !Number.isSafeInteger(row.content_bytes) || Number(row.content_bytes) < 0
       || Number(row.content_bytes) > MAX_CONTENT_BYTES) fail("native child result content identity is invalid");
   instant(row.created_at, "result creation time");
