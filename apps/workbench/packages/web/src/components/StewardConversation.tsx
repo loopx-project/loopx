@@ -41,8 +41,12 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   const showTurn = (next: ManagerTurn | null) => { turnRef.current = next; setTurn(next); };
   const running = turn?.state === 'streaming' || turn?.state === 'stopping';
 
+  const openedFor = useRef<string | undefined | null>(null);
+  const coreDown = failure !== null;
   useEffect(() => {
-    if (failure) return;
+    // Opened once per token. A core that was down when the page opened is retried once it is back;
+    // a later status refresh does not open another session over the one already open.
+    if (coreDown || (sessionRef.current && openedFor.current === token)) return;
     let alive = true;
     const controller = new AbortController();
     setError(null);
@@ -50,6 +54,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
       .then(({ sessionId: id, messages: history }) => {
         if (!alive) return;
         sessionRef.current = id;
+        openedFor.current = token;
         setSessionId(id);
         setMessages(history);
       })
@@ -58,9 +63,9 @@ export function StewardConversation({ token, failure }: { token: string | undefi
         setError(managerErrorText(cause));
       });
     return () => { alive = false; controller.abort(); };
-    // The conversation opens once per token; a later core outage surfaces in the send path.
+    // A core outage after the session opened surfaces in the send path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, coreDown]);
 
   useEffect(() => {
     scrollAnchor.current?.scrollIntoView({ block: 'end' });
