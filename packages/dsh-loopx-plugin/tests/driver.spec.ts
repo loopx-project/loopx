@@ -2600,7 +2600,7 @@ describe('same-session LoopX driver', () => {
 })
 
 describe('GoalBar exact-Session Driver bridge', () => {
-  it.each(['unfinished', 'bound', 'different-agent', 'no-step', 'one-completion'] as const)(
+  it.each(['unfinished', 'bound', 'bound-body-failure', 'different-agent', 'no-step', 'one-completion'] as const)(
     'reconciles an original selection after Host completion on restore (%s)', async variant => {
       const host = fakeAgent()
       const original = 'dsh-prior-original-turn'
@@ -2609,7 +2609,7 @@ describe('GoalBar exact-Session Driver bridge', () => {
         goalId, agentId, turnInstanceId: original, selectionRequired: true,
       } as const
       host.appendEvent(userSkillInvocationEvent())
-      const completed = variant === 'unfinished' ? 2 : 1
+      const completed = variant === 'unfinished' || variant === 'bound-body-failure' ? 2 : 1
       for (let turn = 0; turn < completed; turn += 1) {
         host.appendEvent(sessionEvent('turn/start', { turn }))
         host.appendEvent(sessionEvent('user/message', {
@@ -2620,7 +2620,11 @@ describe('GoalBar exact-Session Driver bridge', () => {
       }
       const fixture = runnerFixture()
       const observed: string[] = []
+      let receiptBound = variant === 'bound'
       const runner: FileRunner = async (file, args, options) => {
+        if (variant === 'bound-body-failure' && receiptBound && args.includes('heartbeat-prompt')) {
+          throw new LoopXCliError('transport', 'body unavailable after original selection', false)
+        }
         if (!args.includes('receipt')) return fixture.runner(file, args, options)
         observed.push(args[args.indexOf('--turn-instance-id') + 1] ?? '')
         const identity = { goal_id: goalId, agent_id: agentId, turn_instance_id: original }
@@ -2629,7 +2633,7 @@ describe('GoalBar exact-Session Driver bridge', () => {
             ok: true, schema_version: 'quota_receipt_readback_v0', ...identity,
             agent_id: variant === 'different-agent' ? 'agent-other' : agentId,
             heartbeat_receipt: { status: 'committed', turn_instance_id: original,
-              ...(variant === 'bound' ? { settlement_identity: identity } : {
+              ...(receiptBound ? { settlement_identity: identity } : {
                 selection_required: true, settlement_binding_owed: true,
               }),
             },
@@ -2649,10 +2653,19 @@ describe('GoalBar exact-Session Driver bridge', () => {
         } else {
           await waitFor(() => observed.length === 1)
           const exactBinding = { goalId, loopxAgentId: agentId }
-          if (variant === 'unfinished') {
+          if (variant === 'unfinished' || variant === 'bound-body-failure') {
             await waitFor(() => driver.hasRecoveryAttention(capture, exactBinding))
             expect(fixture.quotaCalls).toHaveLength(0)
             expect(host.nextTurn).toHaveLength(0)
+            if (variant === 'bound-body-failure') {
+              receiptBound = true
+              await driver.evaluateActivatedSession(capture)
+              expect(driver.hasRecoveryAttention(capture, exactBinding)).toBe(false)
+              expect(host.nextTurn).toHaveLength(0)
+              expect(fixture.quotaCalls[0]).toContain('fresh-turn')
+              expect(observed).toEqual([original, original])
+              return
+            }
             await driver.evaluateActivatedSession(capture)
             await waitFor(() => host.nextTurn.length === 1)
             expect(fixture.quotaCalls[0]).toContain(original)
