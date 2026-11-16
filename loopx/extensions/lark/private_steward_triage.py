@@ -151,6 +151,15 @@ def _buttons(card: Mapping[str, Any]) -> list[Mapping[str, Any]]:
             if element.get("tag") == "action" for button in element["actions"]]
 
 
+def _card_element_matches(observed: object, expected: Mapping[str, Any]) -> bool:
+    if observed == expected:
+        return True
+    text = expected.get("text")
+    if expected.get("tag") != "div" or not isinstance(text, Mapping) or text.get("tag") != "plain_text":
+        return False
+    return observed == {**expected, "text": {**text, "tag": "lark_md"}}
+
+
 def _read_exact_card(
     transport: LarkPrivateConversations, record: dict[str, Any], selected: dict[str, Any],
 ) -> bool:
@@ -160,17 +169,27 @@ def _read_exact_card(
         message_id=stamp["message_id"], chat_id=record["event"]["chat_id"],
         app_id=selected["observation"]["bot_app_id"],
     )
-    # A lossy visual projection cannot prove which callback values were sent.
     try:
         payload = json.loads(observed) if isinstance(observed, str) else observed
     except ValueError:
         return False
+    if not isinstance(payload, Mapping) or set(payload) - {"header", "elements", "config"}:
+        return False
+    config = payload.get("config", {})
+    if not isinstance(config, Mapping) or config.get("enable_forward", False) is not False:
+        return False
     expected = stamp["card"]
+    # Lark's user_card_content adds an empty title i18n map and can rewrite
+    # plain text div tags. Compare the full structure, including action values.
+    header = expected["header"]
+    observed_header = payload.get("header")
+    if observed_header not in (header, {**header, "title": {**header["title"], "i18n": {}}}):
+        return False
+    elements = payload.get("elements")
     return (
-        isinstance(payload, Mapping) and payload.get("header") == expected["header"]
-        and payload.get("elements") == expected["elements"]
-        and (not isinstance(payload.get("config"), Mapping)
-             or payload["config"].get("enable_forward") is not True)
+        isinstance(elements, list) and len(elements) == len(expected["elements"])
+        and all(_card_element_matches(actual, original)
+                for actual, original in zip(elements, expected["elements"]))
     )
 
 
@@ -355,8 +374,8 @@ def reconcile(transport: LarkPrivateConversations, path: Path) -> int:
                     return retire("provider_delivery_receipt_unknown")
                 if not previous and _buttons(stamp["card"]):
                     key = (record["profile"], current["observation"]["bot_app_id"])
-                    ready = transport.steward_callback_readiness.get(key)
-                    if ready is None or not ready():
+                    stream = transport.steward_callback_streams.get(key)
+                    if stream is None or not stream.ready():
                         stamp["card"] = steward_triage_without_buttons(
                             stamp["card"], query_result=stamp["action"]["operation"] == "query",
                         )

@@ -19,7 +19,7 @@ from functools import cached_property, partial
 from itertools import tee
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...capabilities.native_chat.external_conversations import (
     ChatExternalConversations,
@@ -55,6 +55,9 @@ from . import private_steward_triage as triage
 from .return_files import uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
                                presentation_phase, presentation_stream, project_progress)
+
+if TYPE_CHECKING:
+    from .team_plan_confirmation import TeamPlanReviewCallbackStream
 
 # Conservative transport budget, not a claim about the provider's maximum.
 # Reserve edits for a final/closing notice; continue long Turns on a new draft.
@@ -319,7 +322,7 @@ class LarkPrivateConversations:
         self.bindings = self.core.bindings
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
         self.reaction_feedback = reaction_feedback
-        self.steward_callback_readiness: dict[tuple[str, str], Callable[[], bool]] = {}
+        self.steward_callback_streams: dict[tuple[str, str], TeamPlanReviewCallbackStream] = {}
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._historical_image_probe_at: dict[Path, float] = {}
