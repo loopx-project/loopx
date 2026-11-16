@@ -11,14 +11,14 @@ import { clockLabel } from '../timeline';
 import { useInTitlebar, useLongPress, useStoredFlag, useStoredSet } from '../hooks';
 import { attentionCount, threadMark, waitingLabel, type ThreadMark } from '../notices';
 import { folderName } from '../paths';
-import { buildActivity, buildMerged, buildSidebar, externalThreadRow, handoverGroups, markTerms, navOverflow, projectDir, SEARCH_MIN, taggedAgents, withExternalSessions, type HostSource } from '../sidebar';
+import { buildActivity, buildMerged, buildSidebar, externalThreadRow, handoverGroups, isLoopxRow, markTerms, navOverflow, projectDir, SEARCH_MIN, taggedAgents, withExternalSessions, type HostSource } from '../sidebar';
 import { timeAgo } from '../sessions';
 import { deliveredPreview } from '../timeline';
 import { HostSwitcher } from './Hosts';
 import { Menu } from './Menu';
 import type { HostIconName } from '@calli/extension-api';
 import { HostIcon } from '../extensions/ui';
-import { AgentMark, IconBell, IconChevron, IconClock, IconClose, IconDesktop, IconEdit, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSparkle, IconServer } from './icons';
+import { AgentMark, IconBell, IconChevron, IconCrab, IconClock, IconClose, IconDesktop, IconEdit, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSparkle, IconServer } from './icons';
 import { t } from '../i18n';
 
 export { folderName } from '../paths';
@@ -234,7 +234,12 @@ export function Sidebar({
   const [byActivity, setByActivity] = useStoredFlag(`${storagePrefix}.activity`);
   // This machine's sessions that are not threads yet mix into the list by their time; every
   // machine's own list (the merged view) shows threads only.
-  const withExternal = merged ? threads : withExternalSessions(threads, external);
+  const everyRow = merged ? threads : withExternalSessions(threads, external);
+  // The crab button: only the conversations that belong to a LoopX Goal, among every row there is.
+  const [loopxOnly, setLoopxOnly] = useStoredFlag(`${storagePrefix}.loopx`);
+  const loopxCount = everyRow.filter(isLoopxRow).length;
+  const filtering = loopxOnly && !merged;
+  const withExternal = filtering ? everyRow.filter(isLoopxRow) : everyRow;
   const model = buildSidebar(withExternal, sections, search);
   const mergedModel = merged ? buildMerged(merged, search, new Date(), selectedId) : null;
   const activity = byActivity && !mergedModel ? buildActivity(withExternal, search, new Date(), selectedId) : null;
@@ -251,6 +256,29 @@ export function Sidebar({
   const MARK_LABELS = { waiting: t('notices.unknown.label'), running: t('status.running'), error: t('status.error'), unread: t('sidebar.unread') } as const;
   const agentById = new Map((agents ?? []).map((a) => [a.id, a]));
   const tagged = taggedAgents(agents ?? []);
+
+  /**
+   * The row's second line, the same grey small type for every conversation: where it came from and
+   * when, and for a LoopX Goal conversation the Goal first (struck through once the Goal is gone).
+   */
+  const subLine = (thread: Thread) => {
+    const info = thread.external ? thread.external.loopx : thread.loopxInfo;
+    const origin = thread.external ? thread.external.origin : thread.origin;
+    const agent = agentById.get(thread.agent)?.label ?? thread.agent;
+    const source = origin === 'app' ? t('sessions.sourceApp', agent) : origin === 'cli' ? t('sessions.sourceCli', agent) : agent;
+    const when = timeAgo(thread.updatedAt, Date.now());
+    return (
+      <span className="thread-sub">
+        {info && <>
+          <span className="thread-sub-crab" aria-hidden="true"><IconCrab size={11} /></span>
+          <span className={`thread-sub-goal${info.missing ? ' gone' : ''}`} title={info.missing ? t('sidebar.loopxDeleted') : info.goalTitle}>{info.goalTitle}</span>
+          <span className="thread-sub-sep" aria-hidden="true">·</span>
+        </>}
+        <span className="thread-sub-source">{source}</span>
+        {when && <><span className="thread-sub-sep" aria-hidden="true">·</span><span className="thread-sub-time">{when}</span></>}
+      </span>
+    );
+  };
 
   /**
    * `chain`: the handover chain this row stands for, newest first, as `handoverGroups` gives it.
@@ -298,6 +326,7 @@ export function Sidebar({
             {flat && on?.label && <span className="thread-host" title={on.label}>{on.label}</span>}
             {flat && <span className="thread-dir">{folderName(projectDir(thread).cwd)}</span>}
           </span>
+          {subLine(thread)}
           {detail && <span className="thread-preview">{detail}</span>}
         </span>
         <span className="thread-meta">
@@ -374,6 +403,7 @@ export function Sidebar({
               {busy && <span className="thread-note external">{t('sidebar.externalImporting')}</span>}
               {flat && <span className="thread-dir">{folderName(projectDir(thread).cwd)}</span>}
             </span>
+            {subLine(thread)}
           </span>
           <span className="thread-meta">
             {agent?.icon ? (
@@ -673,6 +703,18 @@ export function Sidebar({
                 <IconBell size={compact ? 20 : 16} />
                 {waitingOnYou > 0 && <span className="bell-dot" aria-hidden="true" />}
               </button>
+              {!merged && (
+                <button
+                  className={`round-btn loopx-btn${loopxOnly ? ' on' : ''}`}
+                  aria-label={t('sidebar.loopxOnly')}
+                  aria-pressed={loopxOnly}
+                  title={t('sidebar.loopxOnly')}
+                  onClick={() => setLoopxOnly(!loopxOnly)}
+                >
+                  <IconCrab size={compact ? 20 : 16} />
+                  {loopxOnly && <span className="loopx-count" aria-hidden="true">{loopxCount}</span>}
+                </button>
+              )}
               <button className="round-btn" aria-label={t('sidebar.search')} title={t('sidebar.search')} onClick={() => setSearching(true)}>
                 <IconSearch size={compact ? 20 : 16} />
               </button>

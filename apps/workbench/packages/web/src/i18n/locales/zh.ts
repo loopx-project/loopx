@@ -3088,6 +3088,27 @@ export const zh = {
   'loopx.goal.status.state_projection_gap': '状态记录有缺口',
   'loopx.goal.status.run_artifact_missing': '运行产物缺失',
   'loopx.goal.status.unknown': '状态未知',
+  // wb-sessions
+  'sessions.sourceApp': (agent: string) => `${agent} app`,
+  'sessions.sourceCli': (agent: string) => `${agent} CLI`,
+  'sidebar.loopxOnly': '只看 LoopX 会话',
+  'sidebar.loopxDeleted': 'Goal 已删除',
+  'general.autoImportLocal': '自动导入本机会话',
+  'general.autoImportLocalHint': '默认列出这台机器上所有 agent 已有的会话，点开才读取内容。关闭后只列出 LoopX Goal 的会话。',
+  'general.autoImportLocalOn': '开启',
+  'general.autoImportLocalOff': '仅 LoopX 会话',
+  'loopx.panel.title': 'LoopX Goal',
+  'loopx.panel.current': '当前任务',
+  'loopx.panel.todos': '待办',
+  'loopx.panel.heartbeat': '心跳',
+  'loopx.panel.wakenBy': (who: string) => `由 ${who} 唤醒`,
+  'loopx.panel.openGoal': '打开 Goal',
+  'loopx.panel.wake.app': 'Codex app',
+  'loopx.panel.wake.cli': 'Codex CLI',
+  'loopx.panel.wake.ide': 'Codex IDE',
+  'loopx.panel.wake.workbench': 'Workbench',
+  'loopx.panel.wake.unknown': '外部宿主',
+  'loopx.driven': '这个会话仍由 Codex app 的心跳驱动。两边同时发消息会冲突，请只在一边操作。',
 };
 
 export type Messages = typeof zh;

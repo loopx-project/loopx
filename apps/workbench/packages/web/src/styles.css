@@ -15687,3 +15687,34 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   .steward-head { padding: 0 10px 4px; }
   .goal-tabs { overflow-x: auto; }
 }
+
+/* wb-sessions: the LoopX filter in the sidebar's top row, and the second line of every conversation row. */
+.loopx-btn { position: relative; }
+.loopx-btn.on { border-color: transparent; background: var(--text); color: var(--bg); box-shadow: none; }
+.loopx-btn.on:hover { background: var(--text); }
+.loopx-count {
+  position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box;
+  border-radius: var(--radius-pill); background: var(--bg); color: var(--text); border: 1px solid var(--text);
+  font-size: 10px; font-weight: 600; line-height: 14px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.thread-sub { display: flex; align-items: center; gap: 0; min-width: 0; font-size: 11.5px; line-height: 1.35; color: var(--muted); white-space: nowrap; }
+.thread-sub > span { flex: none; }
+.thread-sub-crab { display: inline-flex; margin-right: 3px; color: var(--muted); }
+.thread-sub-goal { flex: 0 1 auto !important; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.thread-sub-goal.gone { text-decoration: line-through; color: var(--faint); }
+.thread-sub-sep { margin: 0 5px; color: var(--faint); }
+.thread-sub-source { flex: 0 1 auto !important; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* wb-sessions: the LoopX Goal group at the top of the session panel. */
+.loopx-group-head { cursor: default; }
+.loopx-group-body { display: flex; flex-direction: column; gap: 6px; padding: 2px 14px 10px 36px; }
+.loopx-group-name { font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.loopx-group-name.gone { text-decoration: line-through; color: var(--muted); font-weight: 400; }
+.loopx-group-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
+.loopx-group-line > span:first-child { flex: none; min-width: 5.5em; }
+.loopx-group-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.loopx-group-note { margin: 0; font-size: 12px; color: var(--muted); }
+.loopx-group-open { align-self: flex-start; }
+
+/* wb-sessions: the grey line above the composer while the desktop app still wakes this conversation. */
+.loopx-driven { margin: 0 4px 6px; font-size: 12px; line-height: 1.45; color: var(--muted); }

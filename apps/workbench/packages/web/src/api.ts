@@ -10,6 +10,8 @@ export interface GeneralSettings {
   startupPage: 'new-thread' | 'recent-thread';
   /** Shared automatic archive window. Null means conversations stay in the sidebar. */
   autoArchiveDays: AutoArchiveDays;
+  /** List every conversation the agents on this machine already have; off: only LoopX Goal conversations. */
+  autoImportLocal: boolean;
 }
 import type { DraftModelPreference, ModelPreferencePatch } from '../../daemon/src/model-preferences';
 export type { DraftModelPreference } from '../../daemon/src/model-preferences';
@@ -326,6 +328,10 @@ export interface Thread {
    * daemon): the row mixes into the list by time, and clicking it imports the session.
    */
   external?: ExternalSession;
+  /** Which Goal this conversation is on, for lists; absent on an ordinary one. */
+  loopxInfo?: SessionLoopx | null;
+  /** Which front end started the agent session (its app or its terminal client), when its file says. */
+  origin?: 'app' | 'cli' | null;
 }
 
 /** A thread's native goal, as the goal card shows it. Served by the daemon, then updated by events. */
@@ -916,6 +922,22 @@ export interface ExternalSession {
   cwd: string;
   title: string;
   updatedAt: string | null;
+  /** Which front end started it (the agent's app or its terminal client), when its file says. */
+  origin?: 'app' | 'cli' | null;
+  loopx?: SessionLoopx;
+}
+
+/** What makes a conversation a LoopX Goal conversation, and how that was found out. */
+export interface SessionLoopx {
+  goalId: string;
+  /** The Goal's name; the id itself when the core gave none. */
+  goalTitle: string;
+  /** The core no longer has this Goal: the conversation is listed, bound to nothing. */
+  missing?: boolean;
+  /** `core`: the core's external-session bindings; `content`: the session's own text; `workbench`: started here. */
+  basis: 'core' | 'content' | 'workbench';
+  source: string;
+  goals?: string[];
 }
 
 /** One page of `GET /api/local-sessions`. */

@@ -123,6 +123,9 @@ export function withExternalSessions(threads: Thread[], external: ExternalSessio
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
 }
 
+/** Whether a row (a thread, or a session not yet a thread) is a LoopX Goal conversation. */
+export const isLoopxRow = (thread: Thread): boolean => Boolean(thread.external ? thread.external.loopx : thread.loopxInfo);
+
 /** A thread appears exactly once: under "pinned" if pinned, else under its section if it has one,
  * else under its project (working directory). Threads keep the order they arrive in.
  *
