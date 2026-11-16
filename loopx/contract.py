@@ -406,6 +406,32 @@ def _retire_owned_probe(process: subprocess.Popen[str] | subprocess.Popen[bytes]
             pass
 
 
+# Git takes its pathspec mode from the environment as well as from argv, and
+# these variables are resolved after `--literal-pathspecs`, so an inherited
+# `GIT_GLOB_PATHSPECS=1` turns every literal directory this module asks for
+# back into a glob. Git then rejects a name that is not a valid pattern, which
+# a scan would otherwise read as a clean empty selection.
+_GIT_PATHSPEC_ENVIRONMENT_KEYS = (
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+    "GIT_LITERAL_PATHSPECS",
+)
+
+
+def _literal_git_environment() -> dict[str, str]:
+    """The caller's environment without a pathspec mode of its own.
+
+    Nothing else is removed: hooks, credential helpers and the repository
+    discovery below keep the environment the operator set up.
+    """
+
+    environment = dict(os.environ)
+    for key in _GIT_PATHSPEC_ENVIRONMENT_KEYS:
+        environment.pop(key, None)
+    return environment
+
+
 def _git_query(*arguments: str) -> _GitAnswer | None:
     """One bounded local Git read, or None when it cannot answer in budget.
 
@@ -424,6 +450,7 @@ def _git_query(*arguments: str) -> _GitAnswer | None:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=_literal_git_environment(),
             start_new_session=os.name == "posix",
         )
     except OSError:
@@ -457,6 +484,7 @@ def _git_query_bytes(*arguments: str) -> _GitBytesAnswer | None:
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=_literal_git_environment(),
             start_new_session=os.name == "posix",
         )
     except OSError:
@@ -1135,7 +1163,9 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
     if tracked is None:
         raise GitProbeUnavailable("git did not answer the tracked-file enumeration")
     if tracked.returncode != 0:
-        return []
+        # Git answered and refused the enumeration. Reporting no files here
+        # would hand the caller a clean scan of a directory it never read.
+        raise GitProbeUnavailable("git refused the tracked-file enumeration")
 
     files: list[Path] = []
     for record in tracked.stdout.split(b"\0"):

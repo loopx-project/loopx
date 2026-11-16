@@ -205,3 +205,59 @@ def test_a_non_git_directory_still_scans_cleanly(tmp_path: Path) -> None:
 
     assert boundary["ok"] is True
     assert boundary["unavailable_git_probes"] == []
+
+
+def test_a_refused_tracked_enumeration_is_not_a_clean_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git refusing the enumeration must not read as an empty selection."""
+
+    repo = _repository(tmp_path)
+    real_query = contract._git_query_bytes
+
+    def refuse(*arguments: str) -> contract._GitBytesAnswer | None:
+        if "ls-files" in arguments:
+            return contract._GitBytesAnswer(returncode=128, stdout=b"")
+        return real_query(*arguments)
+
+    monkeypatch.setattr(contract, "_git_query_bytes", refuse)
+
+    with pytest.raises(contract.GitProbeUnavailable):
+        contract._tracked_scan_files(repo)
+
+    boundary = contract.scan_public_boundary([repo])
+    assert boundary["ok"] is False
+    assert boundary["unavailable_git_probes"] == [str(repo.resolve())]
+
+    checked = contract.check_contract(
+        registry_path=_registry(tmp_path),
+        runtime_root_override=None,
+        scan_roots=[repo],
+        limit=5,
+    )
+    assert checked["ok"] is False
+    codes = [diagnostic["code"] for diagnostic in checked["error_diagnostics"]]
+    assert "public_boundary_scan_git_unavailable" in codes
+    assert not [
+        check for check in checked["checks"] if check.startswith("public boundary scan clean")
+    ]
+
+
+def test_a_literal_git_read_drops_only_the_pathspec_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The isolation keeps every other inherited Git setting."""
+
+    for key in (
+        "GIT_GLOB_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
+        "GIT_LITERAL_PATHSPECS",
+    ):
+        monkeypatch.setenv(key, "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+
+    environment = contract._literal_git_environment()
+
+    assert not [key for key in environment if "PATHSPECS" in key]
+    assert environment["GIT_CONFIG_GLOBAL"] == "/dev/null"

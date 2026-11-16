@@ -649,3 +649,39 @@ def test_check_json_exception_under_byte_root_is_decodable(
     assert display_path_bytes(payload["registry"]) == os.fsencode(registry)
     assert display_path_bytes(payload["runtime_root"]) == os.fsencode(runtime_root)
     assert display_path_bytes(payload["scan_roots"][0]) == os.fsencode(root)
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="Git's pathspec environment is POSIX-only here"
+)
+def test_an_inherited_pathspec_mode_cannot_empty_the_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A selected pruned directory reads the same with Git's glob mode inherited."""
+
+    from loopx.contract import _tracked_scan_files
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    pruned = repo / ".venv"
+    pruned.mkdir()
+    (pruned / "pyvenv.cfg").write_text("home = /usr\n", encoding="utf-8")
+    leak = pruned / "leak.md"
+    _write_raw_name(str(leak), "ticket t-20260828123456-example\n")
+    _git(repo, "add", "-f", "--", ".venv")
+    _git(repo, "commit", "-m", "tracked file in a pruned directory")
+
+    plain = _tracked_scan_files(pruned)
+    monkeypatch.setenv("GIT_GLOB_PATHSPECS", "1")
+    inherited = _tracked_scan_files(pruned)
+    assert plain == inherited == [leak.resolve()]
+
+    boundary = scan_public_boundary([pruned], registry={})
+    assert boundary["ok"] is False
+    assert boundary["hits"] == ["leak.md:1: internal_task_id"]
+    assert boundary["unavailable_git_probes"] == []
+
+    # A selected directory with nothing tracked stays a clean empty result.
+    empty = repo / "empty"
+    empty.mkdir()
+    assert _tracked_scan_files(empty) == []
