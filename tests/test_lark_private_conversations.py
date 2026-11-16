@@ -7357,8 +7357,11 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
 
 
 @pytest.mark.parametrize("background_slots", [0, 2])
-@pytest.mark.parametrize("origin", ["lark", "web"])
-def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_path, monkeypatch, background_slots, origin):
+@pytest.mark.parametrize("origin", ["lark", "web", "card"])
+@pytest.mark.parametrize("backlog", ["failed_turn", "sent_card", "unknown_card_send"])
+def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(
+    tmp_path, monkeypatch, background_slots, origin, backlog,
+):
     from loopx.extensions.lark import goal_topic_runtime_service as worker
 
     release_old, release_rest = threading.Event(), threading.Event()
@@ -7376,8 +7379,15 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     transport._web_projection_paths = lambda: [web] if web.exists() else []
     fresh = web if origin == "web" else tmp_path / "z-current.json"
     for index in range(slots * 3):
-        (tmp_path / f"old-{index:02}.json").write_text(json.dumps({"status": "delivered",
-            "request_ref": str(index), "session_id": "original", "turn_id": "failed"}))
+        if backlog == "failed_turn":
+            row = {"status": "delivered", "request_ref": str(index),
+                   "session_id": "original", "turn_id": "failed"}
+        else:
+            stamp = {"send_started_at": "2026-01-01T00:00:00+00:00"}
+            if backlog == "sent_card":
+                stamp["message_id"] = f"om_{index:032x}"
+            row = {"status": "captured", "triage": stamp}
+        (tmp_path / f"old-{index:02}.json").write_text(json.dumps(row))
 
     def reconcile(path):
         with changed:
@@ -7409,7 +7419,10 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         with changed:
             assert len(started) == slots
         fresh.parent.mkdir(exist_ok=True)
-        fresh.write_text(json.dumps({"status": "pending" if origin == "web" else "accepted"}))
+        fresh_row = {"status": "pending" if origin == "web" else "accepted"}
+        if origin == "card":
+            fresh_row = {"status": "captured", "triage": {"action": {"operation": "menu"}}}
+        fresh.write_text(json.dumps(fresh_row))
         step()  # Retain the new discovery while every existing slot is held.
         release_old.set()
         with changed:
