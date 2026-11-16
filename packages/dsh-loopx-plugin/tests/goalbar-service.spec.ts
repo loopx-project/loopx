@@ -263,6 +263,7 @@ function harness(options: {
   readonly eventSource?: () => SessionEvent[]
   readonly driver?: 'applied' | 'unavailable' | 'none'
   readonly cwd?: string
+  readonly activationFingerprint?: unknown
 } = {}): Harness {
   const host = agentFixture(
     sessionId,
@@ -310,9 +311,13 @@ function harness(options: {
     }
     if (args.includes('goal-lifecycle')) {
       await state.onActivation?.()
+      const payload = activationPayload(state.activation)
+      if (Object.hasOwn(options, 'activationFingerprint')) {
+        payload.observed_state_fingerprint = options.activationFingerprint
+      }
       return {
         exitCode: 0,
-        stdout: JSON.stringify(activationPayload(state.activation)),
+        stdout: JSON.stringify(payload),
         stderr: '',
       }
     }
@@ -903,6 +908,23 @@ describe('GoalBar Host read/watch', () => {
 })
 
 describe('GoalBar Host lifecycle authority', () => {
+  it.each([undefined, null, 'invalid', 'A'.repeat(64)])(
+    'keeps reads available but rejects mutations without a valid Core fingerprint (%s)', async fingerprint => {
+      const fixture = harness({ activationFingerprint: fingerprint })
+      try {
+        expect((await fixture.service.handle(readRequest(), new AbortController().signal)).result.kind)
+          .toBe('present')
+        for (const op of ['start', 'pause'] as const) {
+          fixture.activation = op === 'start' ? 'stopped' : 'active'
+          expect((await fixture.service.handle(actionRequest(op), new AbortController().signal)).result)
+            .toEqual({ kind: 'rejected', code: 'binding_validation_failed' })
+        }
+        expect(fixture.calls.some(args => args.includes('--execute'))).toBe(false)
+        expect(fixture.driverCalls).toEqual([])
+      } finally { await fixture.service.dispose() }
+    },
+  )
+
   it('uses one immediate action lane and blocks later reads through child reap', async () => {
     const fixture = harness()
     const mutation = pending<FileResult>()
