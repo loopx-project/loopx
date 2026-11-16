@@ -172,10 +172,10 @@ def codex_context_directory(*, directory: str | None = None, root: str | None = 
         return directory
     import hashlib
 
-    parent = _private_root(root)
     session = session if session is not None else os.environ.get("CODEX_THREAD_ID")
     if not isinstance(session, str) or not session:
         raise NativeContextSessionUnavailable("native session context requires CODEX_THREAD_ID or a native hook session")
+    parent = _private_root(root)
     child = parent / hashlib.sha256(session.encode()).hexdigest()
     if create:
         child.mkdir(mode=0o700, exist_ok=True)

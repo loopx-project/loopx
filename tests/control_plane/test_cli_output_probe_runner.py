@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -127,9 +128,11 @@ def test_runner_uses_the_pytest_scenario_alias_without_rewriting_stdout(
 
     assert len(rows) == len(emitted) == len(fixture_roots) == 1
     root = fixture_roots[0]
-    assert root.parent == Path("/tmp")
-    assert root.name.startswith("loopx-cli-budget-")
-    assert len(root.name.removeprefix("loopx-cli-budget-")) == 12
+    expected_parent = Path(tempfile.gettempdir()) if os.name == "nt" else Path("/tmp")
+    prefix = "lxb-" if os.name == "nt" else "loopx-cli-budget-"
+    assert root.parent == expected_parent
+    assert root.name.startswith(prefix)
+    assert len(root.name.removeprefix(prefix)) == 12
     assert not root.exists()  # The shared context cleans up its alias.
     # Full paths remain in the untouched JSON wire, including escaped Windows backslashes.
     assert json.dumps(str(root))[1:-1] in emitted[0]
@@ -250,7 +253,7 @@ def test_public_quota_reader_preserves_long_goal_and_is_read_only(tmp_path, prov
 
     project, runtime, registry, state = probe._write_fixture(tmp_path.resolve(), probe.SCENARIOS[0])
     stop = "Preserve every original constraint. 完整保留停止条件。\n" * 1000
-    state.write_text(state.read_text() + "\n## Constraints\n\n" + stop)
+    state.write_text(state.read_text(encoding="utf-8") + "\n## Constraints\n\n" + stop, encoding="utf-8")
     import_fixture_authority(registry, probe.GOAL_ID, provider=provider)
     command = probe._surface_commands(project=project, runtime=runtime, registry_path=registry,
         state_file=state, output_format="json", context_delivery="on")["quota_should_run"]
@@ -269,13 +272,13 @@ def test_public_quota_reader_preserves_long_goal_and_is_read_only(tmp_path, prov
     assert payload["selected_todo"]["agent_id"] == probe.AGENT_IDS[0]
     sources = payload["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     goal = next(row for row in sources if row["source"] == "goal_state")
-    assert goal["content"]["text"].endswith(stop)
+    assert goal["content"]["text"].encode("utf-8") == state.read_bytes()
     assert cost["reader_calls"] >= 2 and cost["body_utf8_bytes"] == len(body.encode())
     assert events.read_bytes() == before
     assert cli_output_fixture.read_cli_context_for_oracle(navigation)[0] == body
     assert events.read_bytes() == before
     reference = json.loads(navigation)["recovery"]["reference_file"]
-    captured = Path(json.loads(Path(reference).read_text())["path"])
+    captured = Path(json.loads(Path(reference).read_text(encoding="utf-8"))["path"])
     captured.write_bytes(captured.read_bytes() + b" ")
     with pytest.raises(AssertionError):
         cli_output_fixture.read_cli_context_for_oracle(navigation)
