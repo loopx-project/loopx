@@ -1290,6 +1290,7 @@ def _terminal_result_validation_stage(
     task_validator: TaskValidator | None,
     confirm_start: Callable[[], None] | None, runtime_root: Path, goal_id: str,
     host_launch_guard: Callable[[], AbstractContextManager[None]] | None,
+    host_dispatch_prepared: bool,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Revalidate an uncommitted terminal result while retaining settled phases."""
     retry = journal["result_revalidation"]
@@ -1322,6 +1323,8 @@ def _terminal_result_validation_stage(
     failed = partial(_terminal_result_validation_failure, plan, journal,
         persist_journal=persist_journal, effects=effects)
 
+    if "typed_result" not in view["completed_phases"] and not host_dispatch_prepared:
+        return None, failed("Terminal work context changed after recovery planning. Retry this Turn to prepare the original Host again.")
     result, phases, terminal = _host_result_stage(plan, request, host_runner=host_runner,
         argv=argv, completion_lifecycle_configured=True, project=project,
         timeout_seconds=timeout_seconds, journal=view, persist_journal=persist_view,
@@ -1939,7 +1942,8 @@ def run_loopx_turn_once(
                 persist_journal=persist_journal, effects=effects, host_runner=host_runner, argv=argv,
                 project=project, timeout_seconds=timeout_seconds, task_validator=task_validator,
                 confirm_start=confirm_start if admission is not None and admission.get("reserved") is True else None,
-                runtime_root=runtime_root, goal_id=goal_id, host_launch_guard=host_launch_guard)
+                runtime_root=runtime_root, goal_id=goal_id, host_launch_guard=host_launch_guard,
+                host_dispatch_prepared=terminal_needs_host)
             if terminal is not None:
                 return finish_recovery(terminal)
 
