@@ -275,3 +275,50 @@ test('a big transcript is read in bounded rounds: 4 MiB per file per scan, the r
     assert.equal(second.total.input, count);
   } finally { m.done(); }
 });
+
+for (const megabytes of [5, 21]) {
+  test(`usage after a ${megabytes} MiB image line is reached across bounded scans`, async () => {
+    const m = makeMeter();
+    try {
+      const path = claudeTranscript(m.home, '11111111-1111-1111-1111-111111111111', [
+        claudeReply('msg_before_image', '2026-11-09T10:15:00Z', { input_tokens: 1, output_tokens: 1 }),
+      ]);
+      await m.meter.scan();
+      appendFileSync(path, JSON.stringify({ type: 'user', message: { content: [
+        { type: 'image', source: { type: 'base64', data: 'A'.repeat(megabytes << 20) } },
+      ] } }) + '\n');
+      appendFileSync(path, JSON.stringify(claudeReply('msg_after_image', '2026-11-09T10:16:00Z', { input_tokens: 2, output_tokens: 2 })) + '\n');
+      await m.meter.scan();
+      assert.equal(m.meter.report(1, undefined, undefined).total.replies, 1, 'one scan remains bounded');
+      for (let i = 1; i < Math.ceil(megabytes / 4); i++) await m.meter.scan();
+      assert.equal(m.meter.report(1, undefined, undefined).total.replies, 2);
+      assert.equal(m.meter.report(1, undefined, undefined).total.input, 3);
+      await m.meter.scan();
+      assert.equal(m.meter.report(1, undefined, undefined).total.replies, 2, 'no recount on an idle scan');
+    } finally { m.done(); }
+  });
+}
+
+test('a partial usage line survives idle scans and a truncated file resets it', async () => {
+  const m = makeMeter();
+  try {
+    const path = claudeTranscript(m.home, '11111111-1111-1111-1111-111111111111', []);
+    const line = JSON.stringify(claudeReply('msg_partial', '2026-11-09T10:15:00Z', { input_tokens: 3, output_tokens: 2 }, '模型'));
+    const bytes = Buffer.from(line);
+    const split = bytes.indexOf(Buffer.from('模型')) + 1; // split a UTF-8 character across scans
+    appendFileSync(path, bytes.subarray(0, split));
+    await m.meter.scan();
+    await m.meter.scan();
+    assert.equal(m.meter.report(1, undefined, undefined).total.replies, 0);
+    appendFileSync(path, Buffer.concat([bytes.subarray(split), Buffer.from('\n')]));
+    await m.meter.scan();
+    assert.equal(m.meter.report(1, undefined, undefined).total.replies, 1);
+    assert.equal(m.meter.report(1, undefined, undefined).models[0].name, '模型');
+    appendFileSync(path, 'x'.repeat(5 << 20));
+    await m.meter.scan();
+    writeFileSync(path, JSON.stringify(claudeReply('msg_rewritten', '2026-11-09T10:16:00Z', { input_tokens: 4, output_tokens: 1 })) + '\n');
+    await m.meter.scan();
+    assert.equal(m.meter.report(1, undefined, undefined).total.replies, 2);
+    assert.equal(m.meter.report(1, undefined, undefined).total.input, 7);
+  } finally { m.done(); }
+});

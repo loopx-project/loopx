@@ -35,8 +35,11 @@ export type UsageBucket = { input: number; cacheWrite: number; cacheRead: number
 
 interface FileState {
   session: string;
-  /** File position after the last complete line read; a partial tail is read again next scan. */
+  /** Read cursor, including a partial line carried into the next bounded scan. */
   offset: number;
+  pending: Buffer[];
+  pendingBytes: number;
+  skipping: boolean;
   /** Claude: every content block of a reply repeats its usage; only the first is a new reply. */
   lastId: string;
   /** Codex: the model of the latest turn_context. */
@@ -232,6 +235,9 @@ export class MachineUsageMeter {
       state = {
         session: transcriptSession(path),
         offset: size > SMALL_FILE ? await startOffset(path, size, cutoff) : 0,
+        pending: [],
+        pendingBytes: 0,
+        skipping: false,
         lastId: '',
         model: '',
         lastTotal: 0,
@@ -358,10 +364,8 @@ function tokensOf(usage: UsageBucket): number {
 }
 
 /**
- * Reads what a transcript gained from `state.offset` (at most MAX_READ this pass), handing every
- * complete line to `onLine` and leaving the offset just past the last complete line — a partial
- * tail is read again next scan, so a line still being written is not lost. Lines longer than
- * MAX_LINE are skipped: usage lines are small, and a picture line would be megabytes.
+ * Reads at most MAX_FILE_ROUND bytes, carrying the cursor and partial line across scans.
+ * Lines longer than MAX_LINE are skipped through their newline with bounded memory.
  */
 async function readLines(path: string, state: FileState, onLine: (line: string) => void): Promise<void> {
   const size = await sizeOf(path);
@@ -375,48 +379,34 @@ async function readLines(path: string, state: FileState, onLine: (line: string) 
   }
   try {
     const chunk = Buffer.alloc(1 << 16);
-    let offset = state.offset; // the read cursor
-    let complete = state.offset; // the position after the last complete line seen
-    let pending: Buffer[] = []; // the line under the cursor so far
-    let pendingBytes = 0;
-    let skipping = false;
-    while (offset < end) {
-      const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, end - offset), offset);
+    while (state.offset < end) {
+      const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, end - state.offset), state.offset);
       if (bytesRead <= 0) break;
       let at = 0;
       while (at < bytesRead) {
-        const nl = chunk.indexOf(0x0a, at);
-        if (nl < 0 || nl >= bytesRead) {
-          // The rest of the chunk belongs to a line that continues past it.
-          if (!skipping) {
-            pending.push(Buffer.from(chunk.subarray(at, bytesRead)));
-            pendingBytes += bytesRead - at;
-            if (pendingBytes > MAX_LINE) { pending = []; skipping = true; }
-          }
-          offset += bytesRead - at;
-          break;
-        }
-        if (!skipping) {
-          pending.push(Buffer.from(chunk.subarray(at, nl)));
-          pendingBytes += nl - at;
-          if (pendingBytes > MAX_LINE) {
-            pending = [];
-            skipping = true;
+        const nl = chunk.subarray(0, bytesRead).indexOf(0x0a, at);
+        const until = nl < 0 ? bytesRead : nl;
+        if (!state.skipping) {
+          state.pendingBytes += until - at;
+          if (state.pendingBytes > MAX_LINE) {
+            state.pending = [];
+            state.pendingBytes = 0;
+            state.skipping = true;
           } else {
-            onLine(Buffer.concat(pending).toString('utf8'));
-            pending = [];
-            pendingBytes = 0;
+            state.pending.push(Buffer.from(chunk.subarray(at, until)));
           }
         }
-        pending = [];
-        pendingBytes = 0;
-        skipping = false;
-        offset += nl + 1 - at;
-        complete = offset;
-        at = nl + 1;
+        if (nl >= 0) {
+          if (!state.skipping) onLine(Buffer.concat(state.pending).toString('utf8'));
+          state.pending = [];
+          state.pendingBytes = 0;
+          state.skipping = false;
+        }
+        const next = nl < 0 ? bytesRead : nl + 1;
+        state.offset += next - at;
+        at = next;
       }
     }
-    state.offset = complete;
   } finally {
     await handle.close();
   }
