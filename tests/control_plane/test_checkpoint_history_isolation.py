@@ -20,7 +20,6 @@ from tests.test_goal_mode_mcp_settlement import (
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_growing_settled_backend_history_uses_one_observation_batch(provider, tmp_path, monkeypatch):
     import tempfile
-    from loopx.control_plane.goals import checkpoint_context_io as io
 
     # A distinct real Effect process inherits this test-only IO probe before
     # any production handler is imported. It never touches an active Goal.
@@ -70,7 +69,9 @@ def test_growing_settled_backend_history_uses_one_observation_batch(provider, tm
         if count not in (1, 3, 5):
             continue
         calls = []
-        effect = io._checkpoint_effect
+        from loopx.control_plane.goals import checkpoint_observation
+
+        effect = checkpoint_observation.effect_runtime_result
 
         def observe(method, request):
             calls.append(method)
@@ -78,7 +79,7 @@ def test_growing_settled_backend_history_uses_one_observation_batch(provider, tm
 
         sink.write_text("")
         with monkeypatch.context() as patch:
-            patch.setattr(io, "_checkpoint_effect", observe)
+            patch.setattr(checkpoint_observation, "effect_runtime_result", observe)
             assert pending_first_delivery_progress(tmp_path / "runtime", GOAL_ID,
                 registry_path=registry) is None
         assert calls == ["turn.first_delivery.observe"]
@@ -174,15 +175,15 @@ def test_recovered_history_retains_original_unspent_accounting(provider, loss, t
             path.unlink()
         else:
             path.write_text("{", encoding="utf-8")
-    from loopx.control_plane.goals import checkpoint_context_io as io
+    from loopx.control_plane.goals import checkpoint_observation
     calls = []
-    effect = io._checkpoint_effect
+    effect = checkpoint_observation.effect_runtime_result
 
     def observe(method, request):
         calls.append(method)
         return effect(method, request)
 
-    monkeypatch.setattr(io, "_checkpoint_effect", observe)
+    monkeypatch.setattr(checkpoint_observation, "effect_runtime_result", observe)
     progress = pending_first_delivery_progress(runtime, GOAL_ID, AGENT_ID, registry_path=registry)
     assert calls == ["turn.first_delivery.observe"]  # No per-Turn bridge or repair.
     assert progress["stage"] == "settlement_pending", progress

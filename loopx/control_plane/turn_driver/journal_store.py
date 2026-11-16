@@ -241,6 +241,8 @@ def reconcile_settled_turn_journal(
         return None
     path = turn_journal_path(runtime_root, goal_id=identity.goal_id, turn_key=key)
     journal = load_turn_journal(path)
+    if journal is None:
+        raise RuntimeError("Original Turn journal disappeared before reconciliation")
     goal_ref = journal["plan"].get("goal_ref")
     with quota_accounting_admission(runtime_root=runtime_root, registry_path=registry_path,
             goal_id=identity.goal_id, goal_ref=goal_ref, operation="turn-journal-receipt-reconciliation") as admission:
@@ -248,7 +250,7 @@ def reconcile_settled_turn_journal(
                 operation="turn_journal_runtime_artifact_guard"):
             with exclusive_cross_runtime_file_lock(shadow_maintenance_lock_target(runtime_root, identity.goal_id),
                     operation="turn_journal_runtime_artifact_commit"):
-                request = {"path": str(path.resolve()), "runtime_root": str(runtime_root.resolve()),
+                request: dict[str, Any] = {"path": str(path.resolve()), "runtime_root": str(runtime_root.resolve()),
                            "settlement_identity": identity.as_dict()}
                 if goal_ref is not None:
                     request.update(goal_ref=goal_ref, source_admission=admission)

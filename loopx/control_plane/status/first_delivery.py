@@ -2,7 +2,7 @@
 from pathlib import Path
 from typing import Any
 
-from ..goals.checkpoint_context_io import pending_first_delivery_progress
+from ..goals.checkpoint_observation import pending_first_delivery_progress
 from ..quota.states import quota_item_is_paused
 
 
