@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { t } from '../i18n';
 import type { Thread } from '../api';
 import { GoalLifecycle } from './GoalLifecycle';
+import { GoalAcceptance } from './GoalAcceptance';
 import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput } from '../loopx/since-you-looked';
 import { fetchGoalDetail, type LoopxGoalDetail } from '../loopx/goal-detail';
 import { goalOf } from '../loopx/launch';
@@ -80,7 +81,7 @@ export function GoalWorkPage({ token, goalId, goals, goalsLoaded, attention, fai
       </nav>
     </header>
     {tab === 'overview'
-      ? <GoalOverview goal={goal} attention={attention.find(item => item.goalId === goal.goalId) ?? null} detail={detail} />
+      ? <GoalOverview token={token} goal={goal} attention={attention.find(item => item.goalId === goal.goalId) ?? null} detail={detail} />
       : <GoalConversations token={token} goalId={goal.goalId} title={goal.title} threads={threads} onOpenThread={onOpenThread} defaultAgent={defaultAgent} />}
   </div>;
 }
@@ -89,7 +90,7 @@ export function GoalWorkPage({ token, goalId, goals, goalsLoaded, attention, fai
  * The overview tab: Vitals, "since you looked", and the rows that wait on the person. The marker
  * (what changed since the last visit) is local to the browser.
  */
-export function GoalOverview({ goal, attention, detail }: { goal: LoopxGoal; attention: LoopxAttention | null; detail: LoopxGoalDetail | null }) {
+export function GoalOverview({ token, goal, attention, detail }: { token?: string; goal: LoopxGoal; attention: LoopxAttention | null; detail: LoopxGoalDetail | null }) {
   const openUser = detail?.userTodos.open ?? attention?.userTodos.open ?? 0;
   const openAgent = detail?.agentTodos.open ?? attention?.agentTodos.open ?? 0;
   const doneUser = detail ? detail.userTodos.done : attention ? attention.userTodos.done : null;
@@ -130,6 +131,7 @@ export function GoalOverview({ goal, attention, detail }: { goal: LoopxGoal; att
       <h2>{t('loopx.objective')}</h2>
       <p>{goal.objective}</p>
     </section> : null}
+    <GoalAcceptance token={token} goal={goal} />
   </div>;
 }
 

@@ -4,6 +4,8 @@
  * The full dashboard projection is much larger; grow this only when a shipped page needs more.
  */
 
+import { parseObservation, type Observation } from './acceptance';
+
 /** One goal as the sidebar and the work page's overview show it. */
 export interface LoopxGoal {
   goalId: string;
@@ -14,6 +16,8 @@ export interface LoopxGoal {
   activationState: string;
   lifecyclePhase: string | null;
   updatedAt: string | null;
+  /** The core's read-only acceptance observation: gaps, guards, next action. Null when it sent none. */
+  acceptance?: Observation | null;
 }
 
 /** One attention-queue row: what the core says is waiting, and on whom. */
@@ -131,6 +135,7 @@ interface RawGoal {
   activation_state?: string;
   lifecycle_phase?: string;
   updated_at?: string;
+  acceptance_observation?: unknown;
 }
 
 function todoCounts(raw: RawTodoSummary | undefined): LoopxTodoCounts {
@@ -159,6 +164,7 @@ export function parseLoopxStatus(payload: unknown): LoopxStatus {
     activationState: String(goal.activation_state ?? 'unknown'),
     lifecyclePhase: text(goal.lifecycle_phase),
     updatedAt: text(goal.updated_at),
+    acceptance: parseObservation(goal.acceptance_observation),
   })).filter(goal => goal.goalId && goal.status !== 'legacy-runtime');
   const attentionQueue = (record.attention_queue ?? {}) as Record<string, unknown>;
   const rawAttention = Array.isArray(attentionQueue.items) ? (attentionQueue.items as RawAttention[]) : [];

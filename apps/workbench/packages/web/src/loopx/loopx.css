@@ -62,3 +62,22 @@
 /* The bell's red dot: something waits on the person */
 .activity-btn .bell-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: #e5484d; box-shadow: 0 0 0 2px var(--bg, #fff); }
 .loopx-notify-note { margin: 6px 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+/* Goal acceptance card */
+.goal-acceptance { margin-top: 24px; }
+.goal-acceptance-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.goal-acceptance h3 { margin: 18px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.goal-acceptance ul { list-style: none; margin: 6px 0; padding: 0; }
+.goal-acceptance li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 6px 0; }
+.goal-acceptance li small { flex-basis: 100%; color: var(--muted); }
+.goal-acceptance-note { margin: 4px 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.goal-accept-chip { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
+.goal-accept-chip.is-accepted { background: #dff3e4; color: #1d6b3a; }
+.goal-accept-chip.is-failed { background: #fbe3e1; color: #a1281f; }
+.goal-accept-chip.is-stale, .goal-accept-chip.is-partial { background: #fbf0d8; color: #8a5a00; }
+.goal-accept-plan { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; }
+.goal-accept-plan h3 { margin-top: 0; }
+.goal-accept-actions { display: flex; gap: 8px; margin-top: 10px; }
+.goal-accept-gap { padding: 8px 0; border-top: 1px solid var(--border); }
+.goal-accept-gap p { margin: 2px 0; }
+.goal-accept-objective { margin: 10px 0 2px; font-weight: 600; }
