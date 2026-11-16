@@ -1,6 +1,7 @@
 """Native replay continuity: completed deliveries, real history changes, fallback."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -151,8 +152,6 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
 ])
 def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monkeypatch, replay):
     """A selected read can survive a qualified replay without proving full input."""
-    import hashlib
-
     event = setup(tmp_path, monkeypatch)
     history = tmp_path / "rollout.jsonl"
     append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
@@ -512,6 +511,7 @@ def test_complete_eof_cannot_hide_a_prior_page_missing_from_native_replay(tmp_pa
 @pytest.mark.parametrize(("replay", "retained"), [
     ("present", True), ("batch", True), ("missing", False),
     ("unobserved_copy", False), ("observed_reread", True),
+    ("repeated_resume", False), ("repeated_resume_lost_selection", False),
 ])
 def test_full_capture_resume_requires_the_observed_native_output(tmp_path, monkeypatch, replay, retained):
     event = setup(tmp_path, monkeypatch)
@@ -525,6 +525,17 @@ def test_full_capture_resume_requires_the_observed_native_output(tmp_path, monke
     append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
     payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1500},
         "heartbeat_receipt": {"turn_instance_id": "first"}}
+    repeat_resume = replay in {"repeated_resume", "repeated_resume_lost_selection"}
+    narrative = "Keep the complete validated Goal narrative. " * 280
+    address = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    if repeat_resume:
+        payload.update(goal_id="fixture", selected_todo={"todo_id": "todo_current"},
+            goal_boundary={"stop_condition": "Observe the original stop."},
+            interaction_contract={"schema_version": "loopx_interaction_contract_v0",
+                "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                    "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                    "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+                }}]}}, "user_channel": {}, "cli_channel": {}})
     _, first = project(tmp_path, payload=payload)
     pages = read_pages(tmp_path, first)
     assert len(pages) >= 3 and pages[-1]["eof"]
@@ -543,6 +554,31 @@ def test_full_capture_resume_requires_the_observed_native_output(tmp_path, monke
         append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
             "output": [{"type": "input_text", "text": json.dumps(page)} for page in contents]})
 
+    def read(*args):
+        payload, wire_bytes, first_page = bytearray(), 0, None
+        while True:
+            result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota",
+                "context-read", *args], capture_output=True, text=True, timeout=20, check=False)
+            assert result.returncode == 0, result.stdout + result.stderr
+            page = json.loads(result.stdout)
+            assert page["ok"] and page["offset"] == len(payload)
+            first_page = first_page or page
+            payload.extend(page["content"].encode())
+            wire_bytes += len(result.stdout.encode())
+            if page["eof"]:
+                assert len(payload) == page["total_bytes"]
+                return first_page, payload.decode(), wire_bytes
+            words = shlex.split(page["next_command"])
+            args = words[words.index("context-read") + 1:]
+
+    if repeat_resume:
+        selected, _, _ = read("--capture-file", first["recovery"]["path"], "--capture-sha256",
+            first["recovery"]["sha256"], "--select", address, "--page-bytes", "64000",
+            "--max-page-output-bytes", "64000")
+        assert selected["eof"]
+        open_parent("independent-selection")
+        observe("independent-reader", selected)
+        emit("independent-selection", [selected])
     if replay == "batch":
         open_parent("batch")
         for i, page in enumerate(pages):
@@ -566,6 +602,40 @@ def test_full_capture_resume_requires_the_observed_native_output(tmp_path, monke
     after = context._state(tmp_path)
     assert bool(after.get("candidate")) is retained
     current = {**payload, "heartbeat_receipt": {"turn_instance_id": "second"}}
+    if repeat_resume:
+        assert after.get("consumed_pointers") == {address: before["consumed_pointers"][address]}
+        assert after["context_epoch"] != before["context_epoch"]
+        if replay == "repeated_resume_lost_selection":
+            rows = [json.loads(line) for line in history.read_text().splitlines()]
+            for row in rows:
+                if row["type"] == "response_item" and row["payload"].get("type") == "custom_tool_call_output" \
+                        and row["payload"].get("call_id") == "independent-selection":
+                    row["payload"]["output"] = []
+            history.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        # An ordinary resume can be repeated before any new capture or tool
+        # read. Its original native output must still support the selection.
+        context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+        assert "candidate" not in context._state(tmp_path)
+        current["goal_boundary"] = {"stop_condition": "Observe the current stop."}
+        directory = tmp_path / "second"
+        directory.mkdir(mode=0o700)
+        prepared = context.prepare_codex_context(current, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="second")
+        view = native_context_capture_view(prepared.delivery, directory, context_directory=str(tmp_path),
+            initial_read_plan=prepared.initial_read_plan)
+        assert view["mode"] == "full" and view["target"]["context_epoch"] == after["context_epoch"]
+        command = shlex.split(model_context_reference(view)["first_read_command"])
+        opening, content, wire_bytes = read(*command[command.index("context-read") + 1:])
+        from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+        values = selected_context_values(content)
+        assert values["/goal_boundary/stop_condition"] == "Observe the current stop."
+        if replay == "repeated_resume":
+            assert address in opening.get("previously_delivered_fields", []), wire_bytes
+            assert address not in values
+        else:
+            assert address not in opening.get("previously_delivered_fields", [])
+            assert values[address] == narrative
+        return
     _, wire = project(tmp_path, "second", payload=current)
     if retained:
         assert_file_delta(wire, before["recovery"], current)

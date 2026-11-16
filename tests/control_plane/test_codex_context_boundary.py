@@ -157,7 +157,7 @@ def _configure_provider(home, url):
 @pytest.mark.parametrize(("restore_missing", "complete_capture", "next_change"), [
     (mode, complete, None) for mode in ("original", "unobserved", "verified") for complete in (False, True)
 ] + [
-    ("unobserved", True, change) for change in ("stop", "todo", "source", "content", "compact")
+    ("unobserved", True, change) for change in ("stop", "todo", "source", "content", "compact", "repeat")
 ])
 def test_native_code_mode_resume_requires_observed_coverage(
     tmp_path, monkeypatch, restore_missing, complete_capture, next_change,
@@ -205,6 +205,7 @@ def test_native_code_mode_resume_requires_observed_coverage(
     opening = ""
     saved_page = workspace / "first-page.json"
     initial_requests = None
+    resumed_once = False
     resume_state = first_read = None
     first_pages = []
     current_stop = "Stop before submitting the new result."
@@ -217,6 +218,8 @@ def test_native_code_mode_resume_requires_observed_coverage(
         state = json.loads((context / "session.json").read_bytes())
         if number == 1:
             resume_state = state
+            if next_change == "repeat" and not resumed_once:
+                return None
             if next_change == "compact":
                 assert independent_pointer in state.get("consumed_pointers", {})
                 return "const result=" + read_command("printf synthetic-work") + ";" + CODE_MODE_EXEC_RESULT_FORWARDER
@@ -321,6 +324,14 @@ def test_native_code_mode_resume_requires_observed_coverage(
         initial_requests = len(calls)
         assert _app_server(binary, env, workspace, home, True,
                            sandbox="danger-full-access", resume=session) == session
+        if next_change == "repeat":
+            assert not errors and "candidate" not in resume_state
+            assert resume_state["consumed_pointers"] == {independent_pointer: pointers[independent_pointer]}
+            # Reopen a second time before delivering a new capture.
+            resumed_once = True
+            initial_requests = len(calls)
+            assert _app_server(binary, env, workspace, home, True,
+                               sandbox="danger-full-access", resume=session) == session
     assert not errors
     after = resume_state if next_change else json.loads((context / "session.json").read_bytes())
     if complete_capture:
@@ -348,7 +359,7 @@ def test_native_code_mode_resume_requires_observed_coverage(
     values = selected_context_values("".join(page["content"] for page in first_pages))
     assert values[short_pointer] == current_stop
     reused = independent_pointer in first_page.get("previously_delivered_fields", [])
-    assert reused == (next_change == "stop"), (next_change, first_page["total_bytes"])
+    assert reused == (next_change in {"stop", "repeat"}), (next_change, first_page["total_bytes"])
     if reused:
         assert independent_pointer not in values
         assert first_page["total_bytes"] < len(narrative.encode())

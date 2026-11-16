@@ -5,6 +5,22 @@
 - **Source:** original candidate `648104978fdd67176cccdbb765c5bc3f36bf2ca3`, integrated with target `e8f4c6f8125e3cc0ef912afac653d5542671392f`.
 - **Language mirror:** [中文版](2026-10-30-c1-source-convergence.zh-CN.md)
 
+## Native selections across repeated resume
+
+The existing single-resume repair keeps a selection when the original full
+capture cannot be replayed. On C1 `043463500ddd`, a second resume before the
+next capture discards that selection's read state. The lifecycle owner now
+carries the verified selection checkpoint into the new epoch. A later resume
+checks the original native output again, and the new capture delivers changed
+stop conditions using its current scope.
+
+With native Codex 0.167.0-alpha.4.1 Code Mode and a local fixed provider, the
+next first-read selection after two resumes drops from 11,978 to 631 content
+bytes and from two pages to one. Missing selected output, a changed Todo, source
+or body, and actual compaction require a fresh read. The full capture still
+starts a new baseline after its replay fails. This fixture measures reader
+delivery. Actual model costs and long-horizon outcomes remain open.
+
 ## Quota packet size and repeated continuation audit
 
 The synthetic File quota workflow on main `f38fae05bb9a1` and C1

@@ -65,11 +65,14 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     if (same && event.source === "resume" && request.resume_verified === true
         && !state.pending && candidate?.basis === NATIVE_CONTEXT_BASIS
         && candidate.capture_bytes_verified === true) return state;
-    if (same && event.source === "resume" && fileEpochCurrent) {
-      // Selected outputs can establish their own literal sections on a
-      // qualified replay. They never establish a whole-input candidate.
-      const readScope = jsonObject(state.read_scope);
-      const readScopeCurrent = readScope?.session_id === session && readScope.context_epoch === state.context_epoch;
+    const readScope = jsonObject(state.read_scope);
+    const selectedResume = jsonObject(state.selected_resume);
+    const readScopeCurrent = readScope?.session_id === session && readScope.context_epoch === state.context_epoch;
+    const selectedResumeCurrent = readScopeCurrent && typeof selectedResume?.epoch === "string"
+      && selectedResume.epoch === state.context_epoch;
+    if (same && event.source === "resume" && (fileEpochCurrent || selectedResumeCurrent)) {
+      // A selection has its own replay checkpoint, including after a failed
+      // full replay leaves the recovery file in the old epoch.
       const previous = jsonObject(state.consumed_pointers);
       const replayed = jsonObject(request.resume_sections);
       const retained = Object.fromEntries(Object.entries(replayed ?? {}).filter(([address, digest]) =>
@@ -91,6 +94,8 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
         state.read_scope = {...readScope, context_epoch: state.context_epoch};
         state.consumed_pointers = retained;
         state.confirmed_read_sections = Object.keys(retained);
+        if (selectedResumeCurrent)
+          state.selected_resume = {...selectedResume, scope: state.read_scope, epoch: state.context_epoch};
       } else {
         delete state.consumed_pointers;
         delete state.confirmed_read_sections;
