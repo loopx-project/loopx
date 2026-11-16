@@ -53,6 +53,8 @@ def _cli(registry: Path, runtime: Path, *args: str) -> tuple[int, dict]:
         "independent_validation",
         "declared_validation",
         "stale_lease",
+        "stop_after_progress_validation",
+        "stop_after_completion_validation",
     ],
 )
 def test_builtin_codex_completes_before_accountable_writeback(
@@ -63,6 +65,11 @@ def test_builtin_codex_completes_before_accountable_writeback(
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     terminal = scenario == "terminal"
+    progress = scenario in {"progress", "stop_after_progress_validation"}
+    stopped_after_validation = scenario in {
+        "stop_after_progress_validation",
+        "stop_after_completion_validation",
+    }
     project, runtime, registry = _write_live_fixture(
         tmp_path,
         provider=provider,
@@ -82,7 +89,7 @@ def test_builtin_codex_completes_before_accountable_writeback(
             claimed_by="codex-fixture",
             agent_id="codex-fixture",
             validation_command_json=None
-            if scenario == "progress"
+            if progress
             else json.dumps(
                 [
                     sys.executable,
@@ -146,9 +153,7 @@ def test_builtin_codex_completes_before_accountable_writeback(
         "FAKE_CODEX_RESULT_FIELDS",
         json.dumps(
             {
-                "result_kind": "validated_progress"
-                if scenario == "progress"
-                else "validated_completion",
+                "result_kind": "validated_progress" if progress else "validated_completion",
             }
         ),
     )
@@ -190,6 +195,29 @@ def test_builtin_codex_completes_before_accountable_writeback(
             return run_codex(request, **kwargs)
 
         monkeypatch.setattr(turn_run_once, "run_codex_cli_host", host)
+    if stopped_after_validation:
+        build_validator = turn_run_once.build_loopx_turn_command_validator
+
+        def validate_then_stop(*args, **kwargs):
+            validate = build_validator(*args, **kwargs)
+
+            def checked(plan, result):
+                observation = validate(plan, result)
+                assert observation["status"] == "passed", observation
+                lifecycle = ("goal-lifecycle", "--goal-id", "loopx-turn-fixture", "--operation", "stop")
+                code, preview = _cli(registry, runtime, *lifecycle)
+                assert code == 0 and not preview["written"], preview
+                code, stopped = _cli(
+                    registry, runtime, *lifecycle, "--actor-kind", "owner",
+                    "--expected-state-fingerprint", preview["observed_state_fingerprint"], "--execute",
+                )
+                assert code == 0 and stopped["readback"]["verified"], stopped
+                assert stopped["after_state"] == "stopped", stopped
+                return observation
+
+            return checked
+
+        monkeypatch.setattr(turn_run_once, "build_loopx_turn_command_validator", validate_then_stop)
     argv = [
         "turn",
         "run-once",
@@ -229,6 +257,14 @@ def test_builtin_codex_completes_before_accountable_writeback(
     assert len(journals) == 1
     journal = json.loads(journals[0].read_text())
     assert len(host_log.read_text().splitlines()) == 1
+    if stopped_after_validation:
+        assert code == 1 and result["error_code"] == "goal_stopped", result
+        assert journal["completed_phases"] == ["host_execute", "typed_result", "validation"]
+        read_code, readback = _cli(
+            registry, runtime, "todo", "list", "--goal-id", "loopx-turn-fixture", "--todo-id", todo_id,
+        )
+        assert read_code == 0 and readback["todo"]["status"] == "open", readback
+        return
     if scenario in {"independent_validation", "declared_validation", "stale_lease"}:
         assert result["status"] != "committed", result
         assert "quota_spend" not in journal["completed_phases"]
@@ -250,7 +286,7 @@ def test_builtin_codex_completes_before_accountable_writeback(
         return
     assert code == 0 and result["status"] == "committed", result
     kinds = _effect_kinds(runtime, journal)
-    if scenario == "progress":
+    if progress:
         assert "completion" not in journal["writeback"]
         assert kinds == ["refresh_state", "quota_spend"]
         read_code, readback = _cli(
