@@ -707,6 +707,35 @@ describe('pre-step authority diagnostics', () => {
 })
 
 describe('same-session LoopX driver', () => {
+  it.each(['runtime-context', 'malformed-driver', 'admitted-driver'] as const)(
+    'does not infer recovery from an unrelated completed %s Turn on reopen', async kind => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      host.appendEvent(userSkillInvocationEvent())
+      host.appendEvent(sessionEvent('turn/end', { turn: 0, reason: { kind: 'max-tokens' } }))
+      host.appendEvent(sessionEvent('turn/start', { turn: 1 }))
+      host.appendEvent(sessionEvent('user/message', {
+        ...userMessage('completed background input'), source: kind === 'runtime-context'
+          ? { kind }
+          : kind === 'malformed-driver'
+            ? { kind: 'loopx-continuation' }
+            : { kind: 'loopx-continuation', schemaVersion: 'loopx_dsh_continuation_v0',
+                goalId, agentId, turnInstanceId: 'completed-recovery-turn' },
+      } as unknown as UserMessage))
+      host.appendEvent(sessionEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
+      const driver = makeDriver(fixture)
+      try {
+        driver.observeAgent(host.agent)
+        if (kind === 'admitted-driver') await waitFor(() => host.nextTurn.length === 1)
+        else {
+          await new Promise<void>(resolve => setTimeout(resolve, 0))
+          expect(fixture.quotaCalls).toEqual([])
+          expect(host.nextTurn).toEqual([])
+        }
+      } finally { await driver.dispose() }
+    },
+  )
+
   it.each(['max-tokens', 'aborted'] as const)(
     'retains a reopened Session error pause after %s until explicit Start', async reason => {
       const fixture = runnerFixture()

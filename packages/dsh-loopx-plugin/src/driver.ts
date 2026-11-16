@@ -414,12 +414,20 @@ function foldSessionActivation(session: Agent['session']): ActivationProjection 
 /** Reopening a Session must not erase its last typed failure boundary. */
 function sessionErrorPause(session: Agent['session']): boolean {
   let paused = false
+  let driverTurn = false
   try {
     for (const event of session.snapshotEvents()) {
-      if (event.type === 'user/message' && event.data.source.kind === 'user') paused = false
+      if (event.type === 'turn/start') driverTurn = false
+      if (event.type === 'user/message') {
+        if (event.data.source.kind === 'user') paused = false
+        if (continuationSource(event.data) !== undefined) driverTurn = true
+      }
       if (event.type !== 'turn/end') continue
-      if (event.data.reason.kind === 'completed') paused = false
+      // A later admitted LoopX Turn records successful recovery. Completing
+      // unrelated automatic input is not permission to resume LoopX.
+      if (event.data.reason.kind === 'completed' && driverTurn) paused = false
       if (event.data.reason.kind === 'aborted' || event.data.reason.kind === 'max-tokens') paused = true
+      driverTurn = false
     }
   } catch {
     return true
