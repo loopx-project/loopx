@@ -625,12 +625,42 @@ class LarkPrivateConversations:
                             (canonical, stop_root), observation = envelopes.result(), identity.result()
                     result, message = {"returncode": 0 if canonical else 1}, canonical
             else:
-                result = rendered()
+                if render_content:
+                    # Display text cannot prove a native @. Keep the provider's
+                    # lossless envelope beside it, using this verified App only.
+                    with ThreadPoolExecutor(max_workers=2) as reads:
+                        display = reads.submit(rendered)
+                        envelope = reads.submit(self._group_source_message, record["profile"], event["message_id"])
+                        result, canonical = display.result(), envelope.result()
+                else:
+                    result = rendered()
                 message = _message(json_payload(result), event["message_id"])
             sender = message.get("sender") if isinstance(message, Mapping) else None
             if (result.get("returncode") == 0 and message is not None
                     and message.get("chat_id") == event["chat_id"] and isinstance(sender, Mapping)
                     and sender.get("id") == event["sender_id"] and sender.get("sender_type") == "user"):
+                if render_content and not group:
+                    if (not canonical or canonical.get("chat_id") != event["chat_id"]
+                            or canonical.get("message_id") != event["message_id"]
+                            or canonical.get("sender", {}).get("id") != sender.get("id")
+                            or canonical.get("sender", {}).get("sender_type") != "user"
+                            or canonical.get("deleted") is True
+                            or canonical.get("msg_type", canonical.get("message_type"))
+                            != message.get("msg_type", message.get("message_type"))
+                            or any(message.get(key) and canonical.get(key) != message[key]
+                                   for key in ("root_id", "parent_id", "thread_id"))):
+                        return None
+                    message = {**canonical, "content": message.get("content")}
+                if render_content:
+                    from .event_inbox import lark_event_mentions_bot
+                    if observation is None:
+                        observation = self.bindings.observe(record["profile"])
+                    message["_native_mention"] = (
+                        isinstance(canonical, Mapping) and isinstance(canonical.get("mentions"), list)
+                        and bool(observation.get("bot_open_id") or observation.get("bot_app_id"))
+                        and lark_event_mentions_bot(canonical, bot_display_name="",
+                            bot_app_id=observation.get("bot_app_id"), bot_open_id=observation.get("bot_open_id"),
+                            allow_text_fallback=False))
                 if group:
                     canonical_sender = canonical.get("sender") if isinstance(canonical, Mapping) else None
                     if (canonical is None or canonical.get("chat_id") != event["chat_id"]
@@ -842,8 +872,11 @@ class LarkPrivateConversations:
                       response=admitted.get("response"), response_code=admitted.get("response_code"))
         if admitted.get("context_recovery"):
             record["context_recovery"] = admitted["context_recovery"]
+        if admitted.get("mention_delivery"):
+            record["mention_delivery"] = admitted["mention_delivery"]
         _atomic_write_json(path, record)
-        if admitted["status"] == "prepared" and admitted.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+        if admitted["status"] == "prepared" and (admitted.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
+                or admitted.get("mention_delivery", {}).get("action") == "unresolved"):
             return {"status": "admission_deferred"}
         status = "durably_accepted" if admitted["status"] == "accepted" else (
             "queue_rejected" if admitted["status"] == "rejected" else "command_recorded")
@@ -993,6 +1026,7 @@ class LarkPrivateConversations:
         record_event_timing(profile, event["message_id"], "binding_hint_ready")
         with exclusive_file_lock(path, operation="capture_private_chat_request"):
             record_event_timing(profile, event["message_id"], "capture_lock_acquired")
+            fresh_capture = not path.exists()
             # Retain a candidate from the locally bound owner before provider
             # identity IO can fail. This private receipt grants no execution:
             # recovery still verifies the App, current owner, source and Core
@@ -1006,6 +1040,11 @@ class LarkPrivateConversations:
                     "request_ref": request, "profile": profile, "binding_id": binding["binding_id"],
                     "source": source, "event": event, "deliveries": {}, "status": "captured",
                     **({"capture_origin": "provider_history"} if history_review else {})})
+            mention_capture = self.core.capture_native_mention(binding, source) if fresh_capture else None
+            if fresh_capture and path.exists():
+                captured = _read_json(path)
+                captured["mention_capture"] = mention_capture
+                _atomic_write_json(path, captured)
             try:
                 selected = (None if control_root else self.bindings.resolve(
                     binding_id=binding["binding_id"], **source, include_observation=True))
@@ -1049,6 +1088,10 @@ class LarkPrivateConversations:
                     return {"status": "audience_rejected"}
             # Reuse this admission preflight only; Core rechecks under its
             # source fence, and outbound writes always perform a fresh check.
+            if fresh_capture:
+                record["mention_capture"] = mention_capture
+                if binding.get("audience") != "group":
+                    _atomic_write_json(path, record)
             source_message = self._source_message(record, selected=selected)
             if source_message is None:
                 return {"status": "source_verification_failed"}
@@ -1169,9 +1212,26 @@ class LarkPrivateConversations:
                 else:
                     preflight = (steward_source_preflight(selected["binding"], source_message,
                         lambda fresh: self._source_message(record, selected=fresh)) if command is None else None)
+                    native_mention = command is None and source_message.get("_native_mention") is True
+                    if native_mention:
+                        previous_preflight = preflight
+
+                        def verify_mention(fresh: dict[str, Any]) -> None:
+                            if previous_preflight is not None:
+                                previous_preflight(fresh)
+                            current = self._source_message(record, selected=fresh)
+                            if current is None:
+                                raise PrivateSourceUnavailable("native mention source is unavailable")
+                            if (current.get("_native_mention") is not True
+                                    or any(current.get(key) != source_message.get(key) for key in
+                                           ("content", "parent_id", "root_id", "thread_id"))):
+                                raise ValueError("native mention source changed")
+
+                        preflight = verify_mention
                     admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                         request_ref=request, message=text, command=command, attachments=attachments,
-                        defer_background_stop=defer_background_stop, source_preflight=preflight)
+                        defer_background_stop=defer_background_stop, source_preflight=preflight,
+                        native_mention=native_mention, native_mention_capture=record.get("mention_capture"))
                 record_event_timing(profile, event["message_id"], "core_admission_returned")
             except PrivateSourceUnavailable:
                 return {"status": "source_verification_failed"}
@@ -2372,6 +2432,15 @@ class LarkPrivateConversations:
                 self.admit(row["profile"], row["event"])
                 row = _read_json(path)
                 if row["status"] == "captured" and row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+                    return 0
+                if row["status"] == "captured" and row.get("mention_delivery", {}).get("action") == "unresolved":
+                    # This is an input receipt, not a completed user request.
+                    # The existing worker can settle positive native readback;
+                    # an uncertain send never becomes a new queued Turn.
+                    with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+                        row = _read_json(path)
+                        self._deliver(path, row, "admission", row["response"],
+                            inbox=lambda: self._inbox(row), finalize_source=False)
                     return 0
         native_path = self.core.root / f"{row['request_ref']}.json"
         if native_path.exists():
