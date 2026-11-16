@@ -4,6 +4,7 @@ import argparse
 from functools import partial
 import sys as _sys
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
@@ -476,7 +477,28 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.TERMINAL_CLOSEOUT)
+            if args.host == "codex-cli":
+                # Builtin completion has already retired the original lease.
+                # Verify the exact terminal receipt; never start another completion.
+                observed = terminal_closeout_resolver(effect_ref)
+                receipt = observed.get("payload")
+                if observed.get("kind") == "committed" and isinstance(receipt, dict):
+                    return receipt
+                return {
+                    "ok": False,
+                    "appended": False,
+                    "reason": observed.get("reason") or "Builtin terminal completion receipt is missing",
+                }
             return todo_completion(result, effect_ref=effect_ref)
+
+        def codex_writeback(
+            result: dict[str, object], *, effect_ref: str,
+        ) -> dict[str, object]:
+            # Accountable refresh requires durable controller validation even for
+            # a predeclared terminal Todo. Other hosts keep their existing order.
+            if result.get("result_kind") == "validated_completion":
+                return completion_writeback(result, effect_ref=effect_ref)
+            return writeback(result, effect_ref=effect_ref)
 
         def current_status() -> dict[str, object]:
             return collect_turn_status_payload(
@@ -847,6 +869,19 @@ def execute_turn_run_once(
                 return request_settlement_lifetime(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
 
+        if args.host == "codex-cli" and goal_admission is not None:
+            request_lifetime = settlement_admission or nullcontext
+
+            @contextmanager
+            def codex_settlement_admission():
+                with request_lifetime():
+                    # Independent validation can outlive the running Goal.
+                    # Check the original authority before any settlement effect.
+                    goal_admission.require_running(operation="codex_cli_turn_settle")
+                    yield
+
+            settlement_admission = codex_settlement_admission
+
         def on_managed_start_admitted() -> None:
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
@@ -898,7 +933,8 @@ def execute_turn_run_once(
             retry_failed=bool(args.retry_failed_turn),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
-            writeback=writeback if args.execute else None,
+            writeback=(codex_writeback if args.host == "codex-cli" else writeback)
+            if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             completion_intent=completion_intent if args.execute else None,
             terminal_closeout=terminal_closeout if args.execute else None,
