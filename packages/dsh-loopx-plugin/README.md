@@ -590,6 +590,31 @@ The Driver queues at most one Driver-owned followup per automatic admission.
 Initialization messages use the distinct `dsh-loopx-plugin/init-command`
 source and never satisfy a Driver reservation.
 
+## Driver replacement boundary
+
+Plugin-tree recomposition is not user disposal. When the host replaces the
+plugin inside a live process — a watched module changed and the host evicts
+and re-imports it, or a fiber restart reloads its config — a claimed or
+admitted continuation Turn keeps its Session-owned execution and its single
+settlement identity. The unloading Driver retires its own future work only:
+timers, evaluations, and queued-but-unclaimed reservations. It does not
+cancel the running Turn and does not block the replacement until idle. The
+successor Driver re-attaches to the same live Agents, admits nothing while
+the drained Turn still runs, and after the Turn settles and the Agent is idle
+it evaluates freshly under new admission authority and a new receipt; the
+drained Turn settles through its own already-admitted plan. A Turn that ends
+aborted or at max-tokens after the successor attached still latches the
+error pause through the same `turn/end` contract.
+
+User disable or uninstall of the plugin, removal of its loader entry, and
+host cascade disposal keep the original semantics: a claimed or admitted
+running automatic Turn is cancelled and the disposal awaits idle. The two
+cases are distinguished from the host's own disposal mechanics, not from a
+typed reason: a restart keeps the fiber identity, and a module replacement
+deletes the plugin runtime from the registry before disposing its fibers,
+while user removal disposes the fiber first. Anything not identifiable as
+replacement keeps the cancellation semantics, including older hosts.
+
 ## Installation and upgrade recovery
 
 Check `dsh --version` before choosing an artifact. The current source accepts
