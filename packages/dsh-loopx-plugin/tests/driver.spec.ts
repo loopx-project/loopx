@@ -349,6 +349,7 @@ function runnerFixture(options: {
   readonly heartbeatTurnInstanceId?: string
   readonly heartbeatTaskBody?: string
   readonly rewardMemoryGuidance?: string
+  readonly recovery?: () => Record<string, unknown>
   readonly typedQuotaFailure?: boolean
   readonly bindingStatus?: 'bound' | 'missing' | (() => 'bound' | 'missing')
 } = {}): RunnerFixture {
@@ -455,6 +456,9 @@ function runnerFixture(options: {
               },
             } : {}),
             scheduler_hint: schedulerHint,
+            ...(options.recovery === undefined ? {} : {
+              unsettled_host_turn_recovery: options.recovery(),
+            }),
             ...(options.rewardMemoryGuidance === undefined ? {} : {
               reward_memory_recall: {
                 schema_version: 'agent_turn_recall_v0',
@@ -2053,6 +2057,33 @@ describe('same-session LoopX driver', () => {
 })
 
 describe('GoalBar exact-Session Driver bridge', () => {
+  it('projects only the observed Core recovery hold for the current binding', async () => {
+    const host = fakeAgent()
+    let recoveryState = 'attention_required'
+    const { runner } = runnerFixture({
+      shouldRun: false,
+      schedulerMode: 'stop',
+      recovery: () => ({
+        schema_version: 'unsettled_host_turn_recovery_v0',
+        state: recoveryState,
+      }),
+    })
+    const driver = new LoopXContinuationDriver({ isLiveAgent: agent => agent === host.agent, runner })
+    host.appendEvent(userSkillInvocationEvent())
+    const capture = { agent: host.agent, session: host.agent.session }
+    const expected = { goalId, loopxAgentId: agentId }
+    await driver.evaluateActivatedSession(capture)
+    expect(driver.hasRecoveryAttention(capture, expected)).toBe(true)
+    expect(driver.hasRecoveryAttention(capture, { ...expected, loopxAgentId: 'different-agent' }))
+      .toBe(false)
+    expect(host.nextTurn).toHaveLength(0)
+
+    recoveryState = 'recovery_required'
+    await driver.evaluateActivatedSession(capture)
+    expect(driver.hasRecoveryAttention(capture, expected)).toBe(false)
+    await driver.dispose()
+  })
+
   it.each(['agent/created', 'agent/session-start'] as const)(
     'resets resumed Session state on %s without activating an uninvoked Session',
     async event => {

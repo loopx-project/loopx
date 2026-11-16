@@ -561,6 +561,12 @@ cadence from `scheduler_hint.cold_path_detail.local_scheduler` with
 present, and enforces `unchanged_poll.limits.local_scheduler`. A changed
 `reset_policy.reset_token` resets the unchanged-poll streak.
 
+When Core's recovery allowance is exhausted, the GoalBar for that exact
+Session shows **Prior turn needs recovery**. An owner can repair the original
+Turn or pause and start the Goal to renew the existing allowance. The label
+reflects the Driver's last verified quota decision and updates with the existing
+GoalBar watch. In-flight activity and an explicit Pause keep their usual labels.
+
 If DSH refuses the maintenance slot before admission starts, the Driver waits
 for `Agent.whenIdle()` and re-requests evaluation for that same Session. This
 wait uses no polling timer and is cancelled by Pause, human input, Session

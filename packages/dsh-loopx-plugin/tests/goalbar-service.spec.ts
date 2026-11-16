@@ -407,6 +407,40 @@ async function eventually(predicate: () => boolean): Promise<void> {
 }
 
 describe('GoalBar Host read/watch', () => {
+  it('refreshes the bound snapshot after a recovery hold changes without a Session event', async () => {
+    const fixture = harness()
+    const signal = new AbortController().signal
+    const before = (await fixture.service.handle(readRequest(), signal)).result
+    if (before.kind !== 'present') throw new Error('fixture did not have a binding')
+    expect(before.snapshot).not.toHaveProperty('recoveryAttention')
+
+    let attention = true
+    const unregister = fixture.coordinator.registerDriverBridge({
+      evaluateActivatedSession: async () => ({ kind: 'applied' }),
+      cancelQueued: async () => ({ kind: 'applied' }),
+      hasRecoveryAttention: (capture, expected) => attention
+        && capture.session === fixture.host.agent.session
+        && expected.goalId === goalId && expected.loopxAgentId === loopxAgentId,
+    })
+    try {
+      const watch = (sourceRevision: string) => fixture.service.handle(
+        watchRequest(null, { sourceRevision, expected: { goalId, loopxAgentId } }), signal,
+      )
+      expect((await watch(before.sourceRevision)).result.kind).toBe('source_changed')
+      const held = (await fixture.service.handle(readRequest(), signal)).result
+      if (held.kind !== 'present') throw new Error('expected the same binding on hold')
+      expect(held.snapshot.recoveryAttention).toBe(true)
+      expect((await watch(held.sourceRevision)).result.kind).toBe('timeout')
+
+      attention = false
+      expect((await watch(held.sourceRevision)).result.kind).toBe('source_changed')
+      expect((await fixture.service.handle(readRequest(), signal)).result).toEqual(before)
+    } finally {
+      unregister()
+      await fixture.service.dispose()
+    }
+  })
+
   it('captures the cursor before CLI, runs activation/Todo in parallel, and loses no wake', async () => {
     const fixture = harness()
     fixture.host.events.push(turnEnd(3))

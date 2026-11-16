@@ -22,9 +22,10 @@ export interface LoopXGoalBarProps {
 
 function visibleStatus(
   snapshot: GoalBarSnapshotV1,
-): 'active' | 'running' | 'paused' {
+): 'active' | 'running' | 'paused' | 'recovery' {
   if (snapshot.goalActivation === 'stopped') return 'paused'
-  return snapshot.agentStatus === 'running' ? 'running' : 'active'
+  if (snapshot.agentStatus === 'running') return 'running'
+  return snapshot.recoveryAttention ? 'recovery' : 'active'
 }
 
 function classes(...values: Array<string | undefined | false>): string {

@@ -51,6 +51,8 @@ export interface GoalBarSnapshotV1 {
   readonly goalActivation: GoalBarActivationV1
   readonly agentStatus: GoalBarAgentStatusV1
   readonly progress: GoalBarProgressV1
+  /** Present only after the bound Driver observes a Core recovery hold. */
+  readonly recoveryAttention?: true
 }
 
 export interface GoalBarExpectedBindingV1 {
@@ -337,6 +339,7 @@ export function decodeGoalBarSnapshotV1(
     readonly binding?: GoalBarExpectedBindingV1 | undefined
   } = {},
 ): GoalBarSnapshotV1 | undefined {
+  const recoveryAttention = record(value)?.recoveryAttention
   const input = exactRecord(value, [
     'sessionId',
     'goalId',
@@ -344,6 +347,7 @@ export function decodeGoalBarSnapshotV1(
     'goalActivation',
     'agentStatus',
     'progress',
+    ...(recoveryAttention === true ? ['recoveryAttention'] : []),
   ])
   const progress = exactRecord(input?.progress, ['processed', 'remaining', 'total'])
   if (!isGoalBarSessionId(input?.sessionId)
@@ -368,6 +372,7 @@ export function decodeGoalBarSnapshotV1(
     loopxAgentId: input.loopxAgentId,
     goalActivation: input.goalActivation,
     agentStatus: input.agentStatus,
+    ...(recoveryAttention === true ? { recoveryAttention } : {}),
     progress: {
       processed: progress.processed,
       remaining: progress.remaining,

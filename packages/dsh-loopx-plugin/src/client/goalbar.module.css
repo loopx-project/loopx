@@ -139,6 +139,12 @@
   border-radius: 1px;
 }
 
+.status[data-status="recovery"] .statusMark {
+  background: transparent;
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
 .status[data-status="running"] .statusMark {
   box-shadow: 0 0 0 2px var(--color-surface, var(--dsw-alias-bg-base, #fff));
   outline: 1px solid currentColor;

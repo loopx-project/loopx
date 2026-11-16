@@ -21,6 +21,7 @@ import type {
   GoalBarDriverActionReceipt,
   GoalBarSessionCapture,
 } from './goalbar/events.ts'
+import type { GoalBarExpectedBindingV1 } from './goalbar/protocol.ts'
 
 export const name = 'dsh-loopx-driver'
 export const inject = ['agents', 'loopxBootstrap']
@@ -96,6 +97,7 @@ interface DriverState {
   controller?: AbortController | undefined
   timer?: TimerHandle | undefined
   reservation?: Reservation | undefined
+  recoveryAttention?: Binding | undefined
 }
 
 interface QueuePlan extends Binding {
@@ -110,6 +112,7 @@ interface WaitPlan {
   readonly delayMs?: number | undefined
   readonly schedulerToken?: string | undefined
   readonly unchangedPolls?: number | undefined
+  readonly recoveryAttention?: Binding | undefined
 }
 
 type EvaluationPlan = QueuePlan | WaitPlan
@@ -354,7 +357,10 @@ const QUOTA_INDEX_SCHEMA = 'context_capture_index_v1'
 const QUOTA_SELECTION_SCHEMA = 'context_capture_selection_v1'
 const QUOTA_REQUIRED_POINTERS = ['/ok', '/mode', '/goal_id', '/should_run', '/agent_identity']
 const QUOTA_RECEIPT_POINTER = '/heartbeat_receipt'
-const QUOTA_OPTIONAL_POINTERS = [QUOTA_RECEIPT_POINTER, '/scheduler_hint', '/reward_memory_recall']
+const QUOTA_OPTIONAL_POINTERS = [
+  QUOTA_RECEIPT_POINTER, '/scheduler_hint', '/reward_memory_recall',
+  '/unsettled_host_turn_recovery',
+]
 
 type QuotaReadOptions = Pick<JsonCommandOptions, 'runner' | 'cwd' | 'signal'>
 
@@ -676,6 +682,7 @@ export class LoopXContinuationDriver {
     this.retireReservation(state)
     state.competing = inboxHasPending(agent.inbox)
     state.pauseAfterTurnError = false
+    state.recoveryAttention = undefined
     state.schedulerToken = ''
     state.unchangedPolls = 0
     state.commands.clear()
@@ -721,6 +728,14 @@ export class LoopXContinuationDriver {
     const state = this.stateFor(agent)
     state.pauseAfterTurnError = true
     this.cancelPending(state)
+  }
+
+  hasRecoveryAttention(capture: GoalBarSessionCapture, expected: GoalBarExpectedBindingV1): boolean {
+    if (!this.captureIsLive(capture)) return false
+    const state = this.states.get(capture.agent)
+    return state?.activation.session === capture.session
+      && state.recoveryAttention?.goalId === expected.goalId
+      && state.recoveryAttention.agentId === expected.loopxAgentId
   }
 
   async evaluateActivatedSession(
@@ -922,6 +937,7 @@ export class LoopXContinuationDriver {
         this.retireReservation(existing)
         existing.competing = inboxHasPending(agent.inbox)
         existing.pauseAfterTurnError = false
+        existing.recoveryAttention = undefined
         existing.schedulerToken = ''
         existing.unchangedPolls = 0
         existing.commands.clear()
@@ -1011,6 +1027,7 @@ export class LoopXContinuationDriver {
 
   private async evaluate(state: DriverState): Promise<boolean> {
     if (!this.ready(state)) return false
+    const session = state.agent.session
     const startedAt = performance.now()
     let stage: AdmissionStage = 'maintenance-slot'
     let admissionSignal: AbortSignal | undefined
@@ -1056,6 +1073,10 @@ export class LoopXContinuationDriver {
       if (!waitingForIdle && state.controller === controller) state.controller = undefined
     }
 
+    // A cancelled maintenance result does not describe the current Session.
+    if (!admissionSignal?.aborted && this.ready(state) && state.agent.session === session) {
+      state.recoveryAttention = plan.kind === 'wait' ? plan.recoveryAttention : undefined
+    }
     if (plan.kind === 'wait') {
       if (plan.schedulerToken !== undefined) state.schedulerToken = plan.schedulerToken
       if (plan.unchangedPolls !== undefined) state.unchangedPolls = plan.unchangedPolls
@@ -1142,7 +1163,13 @@ export class LoopXContinuationDriver {
       )
     }
     if (quota.should_run !== true) {
-      return schedulerWait(quota, state.schedulerToken, state.unchangedPolls)
+      const wait = schedulerWait(quota, state.schedulerToken, state.unchangedPolls)
+      const recovery = record(quota.unsettled_host_turn_recovery)
+      return quota.should_run === false
+        && recovery?.schema_version === 'unsettled_host_turn_recovery_v0'
+        && recovery.state === 'attention_required'
+        ? { ...wait, recoveryAttention: binding }
+        : wait
     }
     setStage('heartbeat')
     const heartbeat = await this.readHeartbeat(

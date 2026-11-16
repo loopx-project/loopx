@@ -1,6 +1,6 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type { GoalBarAgentStatusV1 } from './protocol.ts'
+import type { GoalBarAgentStatusV1, GoalBarExpectedBindingV1 } from './protocol.ts'
 
 export interface GoalBarSessionCapture { readonly agent: Agent; readonly session: Session }
 export type GoalBarSessionNotification =
@@ -18,6 +18,7 @@ export type GoalBarDriverActionReceipt = { readonly kind: 'applied' } | {
 export interface GoalBarDriverBridge {
   evaluateActivatedSession(capture: GoalBarSessionCapture): Promise<GoalBarDriverActionReceipt>
   cancelQueued(capture: GoalBarSessionCapture): Promise<GoalBarDriverActionReceipt>
+  hasRecoveryAttention?(capture: GoalBarSessionCapture, expected: GoalBarExpectedBindingV1): boolean
 }
 export interface GoalBarSessionWaitOptions {
   readonly signal: AbortSignal
@@ -149,6 +150,10 @@ export class GoalBarCoordinator {
     return this.invokeDriver('cancelQueued', capture)
   }
 
+  hasRecoveryAttention(capture: GoalBarSessionCapture, expected: GoalBarExpectedBindingV1): boolean {
+    return this.driverBridge?.hasRecoveryAttention?.(capture, expected) === true
+  }
+
   private waitForSessionChange(
     service: WatchServiceState,
     session: Session,
@@ -197,7 +202,7 @@ export class GoalBarCoordinator {
     waiter.resolve(receipt)
   }
   private async invokeDriver(
-    operation: keyof GoalBarDriverBridge,
+    operation: 'evaluateActivatedSession' | 'cancelQueued',
     capture: GoalBarSessionCapture,
   ): Promise<GoalBarDriverActionReceipt> {
     if (capture.agent.session !== capture.session) return { kind: 'unavailable', reason: 'session_unavailable' }
