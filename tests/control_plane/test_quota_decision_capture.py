@@ -692,10 +692,11 @@ def _assert_captured_receipts(command, source, *, cwd, env, output_limit):
     assert recovered['rollout_event'] == source['rollout_event']
 
 
-def _read_bounded_handoff_reply(command, *, cwd, env, output_limit):
+def _read_bounded_handoff_reply(command, *, cwd, env, output_limit, pwsh=None):
     pages = bytearray()
     while command:
-        run = subprocess.run(shlex.split(command), cwd=cwd, env=env, capture_output=True,
+        argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", command] if pwsh else shlex.split(command)
+        run = subprocess.run(argv, cwd=cwd, env=env, capture_output=True,
                              check=True, timeout=30)
         assert len(run.stdout) <= output_limit
         page = json.loads(run.stdout)
@@ -1096,6 +1097,79 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
     assert state.read_bytes() == original_state
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("output_limit", [96, 1700])
+def test_bounded_should_run_reserves_private_windows_recovery(
+    tmp_path, monkeypatch, capsys, provider, output_limit,
+):
+    import shutil
+    from types import SimpleNamespace
+
+    from loopx.cli import main
+    from loopx.control_plane.quota.error_codes import QuotaDecisionTransportError
+    from loopx.control_plane.runtime.private_permissions import protect_private_path
+    from loopx.control_plane.turn_driver import codex_context, decision_capture
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    native = os.name == "nt"
+    pwsh = shutil.which("pwsh") if native else None
+    if native and not pwsh:
+        pytest.skip("requires PowerShell 7 to execute the Windows recovery reader")
+    if not native:
+        # Exercise the capture owner's platform decision with real local files.
+        monkeypatch.setattr(decision_capture, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
+    original_state = state.read_bytes()
+    context, capture_root, temporary = (tmp_path / name for name in ("native", "captures", "temporary"))
+    for directory in (context, capture_root, temporary):
+        directory.mkdir(mode=0o700)
+        protect_private_path(directory, directory=True)
+    monkeypatch.setattr(decision_capture.tempfile, "tempdir", str(temporary.resolve()))
+
+    admitted = []
+
+    def refuse_recovery(payload, *, capture_directory, **kwargs):
+        raw = (capture_directory / "decision.json").read_bytes()
+        assert payload == json.loads(raw) and payload["schema_version"] == "loopx_turn_envelope_v1"
+        admitted.append(raw)
+        raise QuotaDecisionTransportError("Simulated Host delivery failure after guard admission")
+
+    monkeypatch.setattr(codex_context, "prepare_codex_context", refuse_recovery)
+    code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID, "--codex-app", "--complete-turn",
+        "--available-capability", "shell", "--available-capability", "filesystem_read",
+        "--context-delivery", "on", "--codex-context-dir", str(context),
+        "--decision-output-root", str(capture_root), "--max-page-output-bytes", str(output_limit)])
+    output = capsys.readouterr().out
+    refused = json.loads(output)
+    assert code == 1 and refused["ok"] is False and len(output.encode()) <= output_limit
+    captures = list(capture_root.glob("*/decision.json"))
+    if output_limit == 96:
+        assert not captures and not admitted and not list(temporary.glob("lx-*"))
+        assert _heartbeat_receipt_count(runtime, TURN_ID) == 0
+    else:
+        assert refused["error_code"] == "quota_decision_transport_failed", refused
+        capture, = captures
+        original, = admitted
+        reference = refused["captured_decision"]
+        assert reference["sha256"] == sha256(original).hexdigest()
+        recovered = _read_bounded_handoff_reply(
+            refused.get("command") or reference["command"], cwd=project,
+            env={**os.environ, "LOOPX_USAGE_PING": "0"},
+            output_limit=output_limit, pwsh=pwsh,
+        )
+        original_receipt = json.loads(original)["heartbeat_receipt"]
+        assert recovered["heartbeat_receipt"] == original_receipt
+        assert original_receipt["turn_instance_id"] == TURN_ID and capture.read_bytes() == original
+        assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0 and state.read_bytes() == original_state
 
 
 def test_ended_wake_handoff_endpoint_is_rejected_with_current_wake_remedy(tmp_path):

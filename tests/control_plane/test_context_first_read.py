@@ -585,11 +585,7 @@ def test_bounded_windows_restart_recovers_only_the_original_selection(monkeypatc
                 # Exercise the Windows choice through the CLI using real POSIX
                 # private files. Native runs instead exercise the DACL owner.
                 platform.setattr(reader, "os", SimpleNamespace(name="nt", linesep="\r\n"))
-
-                def unavailable_uid():
-                    raise ValueError("POSIX identity is unavailable")
-
-                platform.setattr(captures, "private_capture_uid", unavailable_uid)
+                platform.setattr(captures, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
             code = main(["--registry", str(registry), "--runtime-root", str(runtime),
                 "--format", "json", "quota", "context-read", "--capture-file", str(path),
                 "--capture-sha256", digest, "--select", "/heartbeat_receipt",

@@ -33,7 +33,7 @@ def private_capture_supported() -> bool:
 
 
 def private_capture_uid() -> int:
-    """Require the POSIX identity used by the legacy bounded spend path."""
+    """Require the POSIX identity for a caller using that privacy policy."""
     if not private_capture_supported():
         raise ValueError("private capture validation is unsupported on this platform; "
                          "use the same Turn command without --max-page-output-bytes")
@@ -74,6 +74,16 @@ def private_capture_subdirectory(root: Path, prefix: str) -> Path:
                 error.add_note(f"Could not discard the empty capture directory: {cleanup_error}")
             raise
     return directory
+
+
+def private_context_reader_directory() -> Path:
+    """Allocate a short, private directory for a bounded context reader."""
+    if os.name == "nt":
+        root = Path(tempfile.gettempdir()).resolve(strict=True)
+    else:
+        private_capture_uid()
+        root = Path("/tmp")
+    return private_capture_subdirectory(root, "lx-")
 
 
 def _decision_json(payload: Mapping[str, Any]) -> str:

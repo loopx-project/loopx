@@ -6,7 +6,6 @@ from collections.abc import Callable
 import json
 import os
 import shlex
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -460,21 +459,17 @@ def _compact_context_restart(path: Path, digest: str, *, limit: int, page_bytes:
         return None  # A command and the minimum successful page cannot fit.
     from ..control_plane.runtime.private_permissions import require_private_path
     from ..control_plane.turn_driver.decision_capture import (
-        private_capture_subdirectory, private_capture_uid, require_private_capture_directory,
+        private_context_reader_directory, require_private_capture_directory,
     )
 
     directory = None
     try:
         route = validate_context_reader_route(reader_argv or current_loopx_cli_argv())
-        temp_root = Path("/tmp")
         if os.name == "nt":
             # A Windows reference reader also requires an owned source.
             require_private_capture_directory(path.parent)
             require_private_path(path)
-            temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
-        else:
-            private_capture_uid()
-        directory = private_capture_subdirectory(temp_root, "lx-")
+        directory = private_context_reader_directory()
         locator = directory / "r"
         expected = locator.with_name("r." + "0" * 16) if pinned else locator
         validate_compact_recovery_budget(expected, limit, route, page_bytes=page_bytes,

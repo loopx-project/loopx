@@ -468,18 +468,13 @@ def _quota_failure_reader_route(cli_bin: str | None) -> list[str]:
 
 
 def _prepare_quota_failure_reader(limit: int, *, cli_bin: str | None) -> _QuotaFailureReader:
-    from tempfile import mkdtemp
-
     from .quota_context_reader import validate_compact_recovery_budget
     from ..control_plane.turn_driver.decision_capture import (
-        context_capture_read_command, private_capture_uid,
+        context_capture_read_command, private_context_reader_directory,
     )
 
-    # Use a short same-user POSIX directory because caller-selected capture and
-    # launcher paths can otherwise consume the entire reply.
-    private_capture_uid()
     route = _quota_failure_reader_route(cli_bin)
-    directory = Path(mkdtemp(prefix="lx-", dir="/tmp"))
+    directory = private_context_reader_directory()
     reference = directory / "r"
     # Keep the caller's explicit route for wrappers. When the running
     # release or console script already identifies itself, spell it once.

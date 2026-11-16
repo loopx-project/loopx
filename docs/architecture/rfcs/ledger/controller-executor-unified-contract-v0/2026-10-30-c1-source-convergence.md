@@ -3260,3 +3260,18 @@ through every page of the original selection. Shared source files and
 directories produced no reference, and modifying the original bytes caused
 the emitted command to refuse the read. Native Windows DACL and PowerShell
 execution still require verification on a Windows host.
+
+### Reserve private recovery before capped Windows quota guards
+
+The JSON quota guard reserves room for a recovery reader before admission
+when the caller supplies an output cap. This reservation now shares the
+private directory allocator with restarts of a saved selection. The Windows
+branch uses a physical temporary directory and applies the existing
+owner-only access policy to the new directory.
+
+The File and SQLite fixtures exercise Windows branch selection on macOS.
+At `e9339babfc71`, both guards refused a 1,700-byte cap before admission.
+The updated guard admits once. After an injected Host delivery failure, the
+returned command reads the original capture and receipt within the output
+cap. Both guards refuse a 96-byte cap before writing a capture or receipt.
+The fixtures record zero debits. Native Windows execution remains open.
