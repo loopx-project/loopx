@@ -4,6 +4,7 @@ import type { Thread } from '../api';
 import { GoalLifecycle } from './GoalLifecycle';
 import { GoalAcceptance } from './GoalAcceptance';
 import { GoalFiles } from './GoalFiles';
+import { GoalTasks } from './GoalTasks';
 import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput } from '../loopx/since-you-looked';
 import { fetchGoalDetail, type LoopxGoalDetail } from '../loopx/goal-detail';
 import { goalOf, statusWord } from '../loopx/launch';
@@ -38,9 +39,14 @@ function useGoalDetail(token: string | undefined, goalId: string, refreshKey: nu
  * says unknown; the todo rows come from the scoped status read, which lists as many rows as it
  * carried and says when it carried fewer than it counted.
  */
-export function GoalWorkPage({ token, goalId, goals, goalsLoaded, attention, failure, onRetry, onChanged, threads, onOpenThread, onBrowseFiles, defaultAgent }: {
+export type GoalTab = 'overview' | 'tasks' | 'chat' | 'files';
+export const GOAL_TABS: GoalTab[] = ['overview', 'tasks', 'chat', 'files'];
+
+export function GoalWorkPage({ token, goalId, tab, onTab, goals, goalsLoaded, attention, failure, onRetry, onChanged, threads, onOpenThread, onBrowseFiles, defaultAgent }: {
   token: string | undefined;
   goalId: string;
+  tab: GoalTab;
+  onTab: (tab: GoalTab) => void;
   goals: LoopxGoal[];
   /** False while the status read is still on its way; a missing Goal is then "gone", not "loading". */
   goalsLoaded: boolean;
@@ -53,9 +59,7 @@ export function GoalWorkPage({ token, goalId, goals, goalsLoaded, attention, fai
   onBrowseFiles: (threadId: string) => void;
   defaultAgent: string;
 }) {
-  const [tab, setTab] = useState<'overview' | 'chat' | 'files'>('overview');
   const [refreshKey, setRefreshKey] = useState(0);
-  useEffect(() => { setTab('overview'); }, [goalId]);
   const goal = goals.find(g => g.goalId === goalId) ?? null;
   const { detail } = useGoalDetail(token, goalId, refreshKey);
   if (!goal && goalsLoaded) return <div className="goal-page">
@@ -78,15 +82,18 @@ export function GoalWorkPage({ token, goalId, goals, goalsLoaded, attention, fai
         <GoalLifecycle token={token} goal={goal} onChanged={changed} />
       </div>
       <nav className="goal-tabs" aria-label={t('loopx.tabs')}>
-        <button type="button" className={tab === 'overview' ? 'active' : ''} aria-current={tab === 'overview' ? 'page' : undefined} onClick={() => setTab('overview')}>{t('loopx.tabOverview')}</button>
-        <button type="button" className={tab === 'chat' ? 'active' : ''} aria-current={tab === 'chat' ? 'page' : undefined} onClick={() => setTab('chat')}>{t('loopx.tabConversations')}</button>
-        <button type="button" className={tab === 'files' ? 'active' : ''} aria-current={tab === 'files' ? 'page' : undefined} onClick={() => setTab('files')}>{t('loopx.tabFiles')}</button>
+        <button type="button" className={tab === 'overview' ? 'active' : ''} aria-current={tab === 'overview' ? 'page' : undefined} onClick={() => onTab('overview')}>{t('loopx.tabOverview')}</button>
+        <button type="button" className={tab === 'tasks' ? 'active' : ''} aria-current={tab === 'tasks' ? 'page' : undefined} onClick={() => onTab('tasks')}>{t('loopx.tabTasks')}</button>
+        <button type="button" className={tab === 'chat' ? 'active' : ''} aria-current={tab === 'chat' ? 'page' : undefined} onClick={() => onTab('chat')}>{t('loopx.tabConversations')}</button>
+        <button type="button" className={tab === 'files' ? 'active' : ''} aria-current={tab === 'files' ? 'page' : undefined} onClick={() => onTab('files')}>{t('loopx.tabFiles')}</button>
       </nav>
     </header>
     {tab === 'overview'
       ? <GoalOverview token={token} goal={goal} attention={attention.find(item => item.goalId === goal.goalId) ?? null} detail={detail} />
+      : tab === 'tasks'
+      ? <GoalTasks token={token} goalId={goal.goalId} refreshKey={refreshKey} />
       : tab === 'files'
-      ? <GoalFiles token={token} goalId={goal.goalId} threads={threads} onBrowse={onBrowseFiles} onOpenConversations={() => setTab('chat')} />
+      ? <GoalFiles token={token} goalId={goal.goalId} threads={threads} onBrowse={onBrowseFiles} onOpenConversations={() => onTab('chat')} />
       : <GoalConversations token={token} goalId={goal.goalId} title={goal.title} threads={threads} onOpenThread={onOpenThread} defaultAgent={defaultAgent} />}
   </div>;
 }

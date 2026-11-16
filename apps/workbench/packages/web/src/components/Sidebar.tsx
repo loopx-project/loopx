@@ -73,6 +73,8 @@ interface Props {
   needsYouGoals?: Set<string>;
   activeGoalId?: string | null;
   onOpenGoal?: (goalId: string) => void;
+  /** Straight to a Goal's task board. */
+  onOpenGoalTasks?: (goalId: string) => void;
   /** Opens the machines page, listed behind the nav's "more" button unless it is on screen. */
   onOpenMachines?: () => void;
   machinesActive?: boolean;
@@ -170,6 +172,7 @@ export function Sidebar({
   needsYouGoals = EMPTY_SET,
   activeGoalId = null,
   onOpenGoal,
+  onOpenGoalTasks,
   onOpenMachines,
   machinesActive = false,
   onOpenSchedules,
@@ -737,7 +740,7 @@ export function Sidebar({
           </div>
         )}
         {!down && !search.trim() && goals.length > 0 && onOpenGoal && (
-          <SidebarGoals goals={goals} needsYou={needsYouGoals} activeGoalId={activeGoalId} onOpenGoal={onOpenGoal} />
+          <SidebarGoals goals={goals} needsYou={needsYouGoals} activeGoalId={activeGoalId} onOpenGoal={onOpenGoal} onOpenGoalTasks={onOpenGoalTasks} />
         )}
         {!down && groups}
         {/* Reading the machine's sessions, or importing one, went wrong: said here, where the rows

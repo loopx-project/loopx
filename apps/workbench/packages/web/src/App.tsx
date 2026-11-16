@@ -92,7 +92,7 @@ import { needsExplore, exploreSummary } from './personal-explore';
 import { PersonalSettingsDialog } from './components/PersonalSettingsDialog';
 import { SkillsPage } from './components/SkillsPage';
 import { SchedulesPage } from './components/SchedulesPage';
-import { GoalWorkPage } from './components/GoalWorkPage';
+import { GoalWorkPage, GOAL_TABS, type GoalTab } from './components/GoalWorkPage';
 import { StewardPage } from './components/StewardPage';
 import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
 import { needsYouGoalIds, sortGoalTree } from './loopx/status';
@@ -196,8 +196,14 @@ function quotaAccount(path: string): string | undefined {
 
 /** The Goal id a `#/goals/<id>` address names. */
 function goalIdForHash(hash: string): string | null {
-  const id = hash.startsWith('#/goals/') ? decodeURIComponent(hash.slice('#/goals/'.length)) : '';
+  const id = hash.startsWith('#/goals/') ? decodeURIComponent(hash.slice('#/goals/'.length).split('/')[0]) : '';
   return id ? id : null;
+}
+
+/** The tab a `#/goals/<id>/<tab>` address names; the overview when it names none. */
+function goalTabForHash(hash: string): GoalTab {
+  const tab = hash.startsWith('#/goals/') ? hash.slice('#/goals/'.length).split('/')[1] : '';
+  return GOAL_TABS.find(known => known === tab) ?? 'overview';
 }
 
 /** The page an address opens; null for none (a thread). Skills and MCP are the hub's own machinery, which the demo has none of. */
@@ -517,7 +523,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const loopxNeedsYou = useMemo(() => needsYouGoalIds(loopxStatus?.attention ?? []), [loopxStatus]);
   // A browser alert for each Goal that newly waits on the person. The first read is only the baseline.
   const alertSeen = useRef<Set<string> | null>(null);
-  const openGoalRef = useRef<(goalId: string) => void>(() => undefined);
+  const openGoalRef = useRef<(goalId: string, tab?: GoalTab) => void>(() => undefined);
   useEffect(() => {
     if (!loopxStatus) return;
     const { now, fresh } = newlyWaiting(alertSeen.current, loopxStatus.attention);
@@ -548,6 +554,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [schedulePath, setSchedulePath] = useState(() => window.location.hash.startsWith('#/schedules/') ? window.location.hash.slice('#/schedules/'.length) : '');
   /** The goal the work page shows, from its address. */
   const [goalPath, setGoalPath] = useState(() => goalIdForHash(window.location.hash) ?? '');
+  const [goalTab, setGoalTab] = useState<GoalTab>(() => goalTabForHash(window.location.hash));
   const [machinePath, setMachinePath] = useState(() => window.location.hash.startsWith('#/machines/') ? window.location.hash.slice('#/machines/'.length) : '');
   const [settingsPath, setSettingsPath] = useState(() => start === 'machines' ? 'machines' : window.location.hash.replace(/^#\/settings\/?/, ''));
   // `list`: the phone's thread list was open, so closing settings goes back to it.
@@ -1135,12 +1142,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const extWant = onExt ? (extOpen ? extensionHash(extOpen) : extTarget ?? '') : '';
   useEffect(() => {
     if (threadLink) return;
-    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onGoal ? `#/goals/${encodeURIComponent(goalPath)}` : onSteward ? STEWARD_HASH : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
+    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onGoal ? `#/goals/${encodeURIComponent(goalPath)}${goalTab === 'overview' ? '' : `/${goalTab}`}` : onSteward ? STEWARD_HASH : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
     if (window.location.hash !== want) {
       window.history.replaceState(window.history.state, '', want || window.location.pathname + window.location.search);
     }
     appHref.current = window.location.pathname + window.location.search + window.location.hash;
-  }, [schedulePath, machinePath, goalPath, onSettings, settingsPath, onGoal, onSteward, onObservability, onMachines, onAgents, onTeams, onActivity, onSkills, onSchedules, onMcp, onExtensions, extWant, threadLink]);
+  }, [schedulePath, machinePath, goalPath, goalTab, onSettings, settingsPath, onGoal, onSteward, onObservability, onMachines, onAgents, onTeams, onActivity, onSkills, onSchedules, onMcp, onExtensions, extWant, threadLink]);
 
   // Whether the directory a new thread would start in is a git repository. Asked once per directory picked.
   useEffect(() => {
@@ -1187,7 +1194,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         setView(next);
         if (next === 'schedules') setSchedulePath(hash.startsWith('#/schedules/') ? hash.slice('#/schedules/'.length) : '');
       if (next === 'machines') setMachinePath(hash.startsWith('#/machines/') ? hash.slice('#/machines/'.length) : '');
-        if (next === 'goal') setGoalPath(goalIdForHash(hash) ?? '');
+        if (next === 'goal') { setGoalPath(goalIdForHash(hash) ?? ''); setGoalTab(goalTabForHash(hash)); }
         if (next === 'settings') setSettingsPath(hash.replace(/^#\/settings\/?/, ''));
         if (next === 'ext') setExtTarget(hash);
         setDrawer(false);
@@ -2224,8 +2231,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const openSteward = () => navigate(() => {
     setSelectedId(null); setView('steward'); setDrawer(false);
   });
-  const openGoal = (goalId: string) => navigate(() => {
-    setGoalPath(goalId); setSelectedId(null); setView('goal'); setDrawer(false);
+  const openGoal = (goalId: string, tab: GoalTab = 'overview') => navigate(() => {
+    setGoalPath(goalId); setGoalTab(tab); setSelectedId(null); setView('goal'); setDrawer(false);
   });
   openGoalRef.current = openGoal;
   const [exploreOpen, setExploreOpen] = useState(false);
@@ -2973,6 +2980,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           needsYouGoals={loopxNeedsYou}
           activeGoalId={onGoal ? goalPath : null}
           onOpenGoal={openGoal}
+          onOpenGoalTasks={goalId => openGoal(goalId, 'tasks')}
           onOpenSchedules={showcase ? undefined : openSchedules}
           onOpenDesktop={hasDesktop ? () => { setDrawer(false); setDesktop('open'); } : undefined}
           desktopRunning={desktop === 'minimized'}
@@ -3260,6 +3268,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             <GoalWorkPage
               token={token}
               goalId={goalPath}
+              tab={goalTab}
+              onTab={setGoalTab}
               goals={loopxStatus?.goals ?? []}
               goalsLoaded={!loopxRead.loading}
               attention={loopxStatus?.attention ?? []}
