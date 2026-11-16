@@ -171,7 +171,11 @@ def test_large_refusal_diagnostics_remain_reachable_by_selected_read(tmp_path):
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('output_format', ['json', 'markdown'])
+@pytest.mark.parametrize(('output_format', 'context_delivery'), [
+    pytest.param('json', ('--context-delivery', 'off'), id='json-off'),
+    pytest.param('markdown', ('--context-delivery', 'off'), id='markdown-off'),
+    pytest.param('markdown', (), id='markdown-default'),
+])
 @pytest.mark.parametrize('profile_args', [
     pytest.param((), id='direct'),
     pytest.param(('--runtime-profile', 'generic_cli'), id='profile'),
@@ -179,7 +183,7 @@ def test_large_refusal_diagnostics_remain_reachable_by_selected_read(tmp_path):
                   '--execution-mode', 'interactive'), id='host-fields'),
 ])
 def test_bound_cli_fallback_preserves_capture_and_settles_once(
-        tmp_path, monkeypatch, provider, profile_args, output_format):
+        tmp_path, monkeypatch, provider, profile_args, output_format, context_delivery):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from tests.control_plane.canonical_authority_fixture import (
@@ -202,7 +206,7 @@ def test_bound_cli_fallback_preserves_capture_and_settles_once(
     args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID,
             '--available-capability', 'shell', '--available-capability', 'filesystem_read',
-            '--context-delivery', 'off', *profile_args]
+            *context_delivery, *profile_args]
     capture = tmp_path / 'original-decision'
     guard = subprocess.run(
         [sys.executable, '-m', 'loopx.entrypoint', '--registry', str(registry),
@@ -216,12 +220,10 @@ def test_bound_cli_fallback_preserves_capture_and_settles_once(
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
     assert_complete_turn_decision(full)
-    inline = guard.stdout
+    displayed = guard.stdout
     if output_format == 'markdown':
-        inline = inline.split('```json\n', 1)[1].rsplit('\n```', 1)[0]
-    inline = json.loads(inline)
-    assert inline == full
-    assert full['projection_envelope']['schema_version'] == 'loopx_projection_envelope_v2'
+        displayed = displayed.split('```json\n', 1)[1].rsplit('\n```', 1)[0]
+    displayed = json.loads(displayed)
     fallback = full['blocked_priority_fallback']
     assert full['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
     assert full['selected_todo']['todo_id'] == TODO_ID
@@ -245,14 +247,27 @@ def test_bound_cli_fallback_preserves_capture_and_settles_once(
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
 
-    readback = bytearray()
-    reader = recovery['command']
-    while reader:
-        page = run_emitted(shlex.split(reader))
-        assert page['offset'] == len(readback), page
-        readback.extend(page['content'].encode())
-        reader = page.get('next_command')
-    assert readback == original_bytes
+    def read_emitted_pages(reader):
+        readback = bytearray()
+        while reader:
+            page = run_emitted(shlex.split(reader))
+            assert page['offset'] == len(readback), page
+            readback.extend(page['content'].encode())
+            reader = page.get('next_command')
+        assert page['eof'] and page['total_bytes'] == len(readback), page
+        return bytes(readback)
+
+    if context_delivery:
+        assert full['projection_envelope']['schema_version'] == 'loopx_projection_envelope_v2'
+        assert displayed == full
+    else:
+        assert displayed['schema_version'] == 'context_capture_navigation_v1'
+        first_read = json.loads(read_emitted_pages(displayed['first_read_command']))
+        opening = {item['pointer']: item['value'] for item in first_read['selections']}
+        assert opening['/heartbeat_receipt']['settlement_identity'] == identity
+        assert read_emitted_pages(displayed['command']) == original_bytes
+        assert full['selected_todo']['text'].endswith('Validate and settle the selected delivery.')
+    assert read_emitted_pages(recovery['command']) == original_bytes
 
     steps = {step['kind']: step for step in plan['ordered_steps']}
     assert steps['quota_spend']['owner'] == 'agent'
