@@ -36,6 +36,64 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
 )
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_refresh_and_spend_survive_an_unrelated_invalid_review_receipt(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
+        "--execution-stride-strategy", "off", "--execution-replan-after-turns", "6", "--execute")
+    assert rc == 0, configured
+    turn = "peer-isolation-turn"
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", turn]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
+    assert rc == 0 and guard["should_run"], guard
+    log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    original = log.read_text()
+    receipt = next(json.loads(line) for line in original.splitlines()
+                   if json.loads(line)["event_id"] == guard["heartbeat_receipt"]["event_id"])
+    peer = "codex-peer-fixture"
+    peer_turn = "peer-invalid-review"
+    peer_effect = f"{GOAL_ID}:{peer}:{TODO_ID}:{peer_turn}"
+    peer_receipt = {**receipt, "event_id": "peer-invalid-receipt", "agent_id": peer,
+        "run_id": peer_turn, "details": {**receipt["details"],
+            "settlement_effect_id": peer_effect,
+            "semantic_replan_obligation_id": "replan-0000000000000001",
+            "semantic_replan_review_kind": "periodic_review_due",
+            "semantic_replan_review_stop_condition": None}}
+    with log.open("a") as stream:
+        stream.write(json.dumps(peer_receipt) + "\n")
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    peer_run_path = index.parent / "peer-run.json"
+    peer_markdown_path = index.parent / "peer-run.md"
+    peer_run = {"goal_id": GOAL_ID, "agent_id": peer,
+        "turn_instance_id": peer_turn, "classification": "state_refreshed",
+        "generated_at": "2026-01-01T00:00:00Z", "delivery_outcome": "outcome_progress",
+        "json_path": str(peer_run_path), "markdown_path": str(peer_markdown_path),
+        **({"goal_ref": receipt["goal_ref"]} if "goal_ref" in receipt else {})}
+    peer_run_path.write_text(json.dumps(peer_run))
+    peer_markdown_path.write_text("Synthetic peer work.\n")
+    with index.open("a") as stream:
+        stream.write(json.dumps(peer_run) + "\n")
+    rc, refreshed = _run_cli(registry, runtime, "refresh-state", *binding,
+        "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert rc == 0 and refreshed["appended"], refreshed
+    for _ in range(2):
+        rc, spent = _run_cli(registry, runtime, "quota", "spend-slot", *binding,
+            "--slots", "1", "--source", "heartbeat", "--execute")
+        assert rc == 0, json.dumps(spent)
+    assert _spend_run_count(runtime) == 1
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    for agent_args in ([], ["--agent-id", peer]):
+        rc, rejected = _run_cli(registry, runtime, "status", "--goal-id", GOAL_ID, *agent_args)
+        assert rc == 1 and "receipt review stop condition" in rejected["error"], rejected
+    final_receipts = [json.loads(line) for line in log.read_text().splitlines()]
+    assert receipt in final_receipts and peer_receipt in final_receipts
+
+
 @pytest.mark.parametrize("threshold_override,device_count,threshold,declare_outcome", [
     (None, None, 6, False), (None, None, 6, True), (2, 3, 2, False), (None, 3, 3, False),
     (5, 6, 5, False), (None, 5, 5, False), (6, None, 6, False), (None, 6, 6, False),

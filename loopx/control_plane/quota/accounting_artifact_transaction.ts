@@ -508,13 +508,35 @@ export function resolveQuotaAccountingEffect(
   return { kind: "absent" };
 }
 
+function spendIdentityMismatch(index: JsonObject, retained: JsonObject): boolean {
+  // The spend writers retain these bindings even before commit metadata was
+  // introduced. Missing historical fields are unknown; explicit conflicts are
+  // never authenticated by a matching timestamp or billing terms.
+  return ["agent_id", "effect_ref", "turn_instance_id", "todo_id",
+    "replan_obligation_id", "settlement_identity", "goal_ref"].some(field => {
+    const expected = index[field], actual = retained[field];
+    return expected !== undefined && expected !== null && expected !== "" &&
+      actual !== undefined && actual !== null && actual !== "" &&
+      canonicalJson(expected) !== canonicalJson(actual);
+  });
+}
+
 export async function readQuotaSpendEventFromRun(
   runsDir: string,
   run: JsonObject,
   goalId: string,
 ): Promise<JsonObject | null> {
+  const contract = contractFor("spend");
+  const indexCommit = run[contract.metadataField];
   const inline = jsonObject(run.quota_event);
-  if (inline) return inline;
+  if (inline && indexCommit === undefined) {
+    if (spendIdentityMismatch(run, inline)) {
+      throw new EffectRuntimeRequestError(
+        "quota spend JSON artifact identity does not match its index row",
+      );
+    }
+    return inline;
+  }
   if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
   let targetPath: string;
   try {
@@ -550,15 +572,30 @@ export async function readQuotaSpendEventFromRun(
     throw new EffectRuntimeRequestError("quota spend JSON artifact is malformed");
   }
   const record = requiredObject(value, "quota spend JSON artifact");
+  const artifactCommit = jsonObject(record[contract.metadataField]);
+  // The writer repeats its commit identity in the index and artifact. An
+  // in-directory file can still describe a different debit for the same Goal.
+  const commitMismatch = indexCommit !== undefined && (
+    jsonObject(indexCommit) === null || artifactCommit === null ||
+    canonicalJson(indexCommit) !== canonicalJson(artifactCommit)
+  );
+  // A historical row without a commit reference can still have an explicit
+  // Run timestamp. Preserve omitted historical fields, but reject conflicts.
+  const timestampMismatch = typeof run.generated_at === "string" && run.generated_at !== "" &&
+    typeof record.generated_at === "string" && record.generated_at !== "" &&
+    run.generated_at !== record.generated_at;
+  const event = jsonObject(record.quota_event);
   if (
-    record.classification !== contractFor("spend").classification ||
-    (record.goal_id !== undefined && record.goal_id !== goalId)
+    record.classification !== contract.classification ||
+    (record.goal_id !== undefined && record.goal_id !== goalId) ||
+    commitMismatch || timestampMismatch || spendIdentityMismatch(run, record) ||
+    (event !== null && spendIdentityMismatch(run, event))
   ) {
     throw new EffectRuntimeRequestError(
       "quota spend JSON artifact identity does not match its index row",
     );
   }
-  return jsonObject(record.quota_event);
+  return event;
 }
 
 export async function lookupQuotaAccountingReplay(

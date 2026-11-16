@@ -1088,6 +1088,7 @@ def build_quota_should_run(
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
+    app_scheduler_state_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
@@ -1134,6 +1135,7 @@ def build_quota_should_run(
         goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
         replan_explore_reader=read_explore_context,
+        app_scheduler_state_observer=app_scheduler_state_observer,
     )
 
 
@@ -1835,12 +1837,15 @@ def spend_quota_slot(
                 ),
             }
         if settlement_readback.spend_run_present:
+            # The precheck verified these terms against the retained debit.
+            # Carry them to the existing receipt writer without charging again.
             return {
                 "ok": True,
                 "mode": "spend-slot",
                 "dry_run": not execute,
                 "appended": False,
                 "receipt_repair_required": bool(execute),
+                **spend_request,
                 "goal_id": safe_goal_id,
                 "agent_id": identity.agent_id,
                 "todo_id": identity.todo_id,
