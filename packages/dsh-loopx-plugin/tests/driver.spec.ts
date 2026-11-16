@@ -1325,30 +1325,91 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it('rejects when a downstream pre-step replaces the canonical message', async () => {
+  it.each(['rewritten', 'missing', 'malformed replacement'] as const)(
+    'holds a %s downstream continuation until an explicit evaluation',
+    async change => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const driver = makeDriver(fixture)
+      try {
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        const queued = host.nextTurn.shift() as UserMessage
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, queued)
+        const context = {
+          ...userMessage('derived host context'),
+          source: { kind: 'runtime-context' },
+        } as unknown as UserMessage
+        const rewritten: UserMessage = {
+          ...queued,
+          content: [{ type: 'text', text: 'downstream replacement' }],
+        }
+        const alteredSource = { ...queued.source, unexpected: true }
+        const malformed: UserMessage = {
+          ...queued,
+          id: randomUUID() as UserMessage['id'],
+          source: alteredSource,
+        }
+        const messages = change === 'rewritten' ? [rewritten]
+          : change === 'missing' ? [context]
+          : [malformed, context]
+
+        const decision = await driver.onPreStep(
+          host.agent, [queued], new AbortController().signal,
+          async () => ({ kind: 'enter', messages }),
+        )
+        expect(decision).toEqual({ kind: 'reject' })
+
+        host.setStatus('idle')
+        driver.onAgentStatus(host.agent, 'idle')
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        expect(host.nextStep).toEqual([])
+        expect(host.nextTurn).toEqual([])
+        expect(fixture.quotaCalls).toHaveLength(2)
+
+        await expect(driver.evaluateActivatedSession({ agent: host.agent, session: host.agent.session }))
+          .resolves.toEqual({ kind: 'applied' })
+        expect(host.nextTurn).toHaveLength(1)
+        expect(fixture.quotaCalls).toHaveLength(3)
+      } finally {
+        await driver.dispose()
+      }
+    },
+  )
+
+  it('reevaluates after input queued while the downstream listener removes the continuation', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
     const driver = makeDriver(fixture)
-    observeActivated(driver, host)
-    await waitFor(() => host.nextTurn.length === 1)
-    const queued = host.nextTurn.shift() as UserMessage
-    host.setStatus('running')
-    driver.onInboxClaimed(host.agent, queued)
-    const replaced = {
-      ...queued,
-      content: [{ type: 'text' as const, text: 'downstream replacement' }],
-    } satisfies UserMessage
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const queued = host.nextTurn.shift() as UserMessage
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, queued)
+      const human = userMessage('independent input during admission')
 
-    const decision = await driver.onPreStep(
-      host.agent,
-      [queued],
-      new AbortController().signal,
-      async () => ({ kind: 'enter', messages: [replaced] }),
-    )
+      const decision = await driver.onPreStep(
+        host.agent, [queued], new AbortController().signal, async () => {
+          host.agent.followup(human)
+          driver.onInboxInserted(host.agent, human)
+          return { kind: 'enter', messages: [] }
+        },
+      )
+      expect(decision).toEqual({ kind: 'reject' })
+      expect(host.nextTurn).toEqual([human])
 
-    expect(decision).toEqual({ kind: 'reject' })
-    expect(fixture.quotaCalls).toHaveLength(2)
-    await driver.dispose()
+      // The host consumes the queued human input before its next idle event.
+      expect(host.nextTurn.shift()).toBe(human)
+      host.setStatus('idle')
+      driver.onAgentStatus(host.agent, 'idle')
+      await waitFor(() => host.nextTurn.length === 1)
+      expect(host.nextTurn[0]?.source.kind).toBe('loopx-continuation')
+      expect(fixture.quotaCalls).toHaveLength(3)
+    } finally {
+      await driver.dispose()
+    }
   })
 
   it('rejects when a downstream pre-step adds a typed source field', async () => {

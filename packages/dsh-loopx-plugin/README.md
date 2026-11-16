@@ -586,6 +586,10 @@ DSH's built-in `runtime-context`, `time-context`, and `skill-catalog` producers
 may share the step with that continuation, including after downstream listeners.
 The source's `kind` identifies those producers; a plugin's snapshot or catalog
 `form` alone does not make its message host-owned context.
+If a downstream pre-step listener removes or rewrites the reserved continuation
+and leaves no competing input, the Driver holds automatic admission until the
+next human message or an explicit GoalBar Pause and Start. A rejected batch's
+host context is restored only alongside independent input.
 The Driver queues at most one Driver-owned followup per automatic admission.
 Initialization messages use the distinct `dsh-loopx-plugin/init-command`
 source and never satisfy a Driver reservation.
