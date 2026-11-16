@@ -89,7 +89,8 @@ export function StewardConversation({ token, failure }: { token: string | undefi
           after: cursorRef.current || undefined,
           onEvent: (event: ManagerEvent) => {
             if (event.id) cursorRef.current = event.id;
-            setTurn(current => (current ? applyManagerEvent(current, event) : current));
+            // The ref follows each event at once: when the stream closes, finishTurn reads it before a render.
+            setTurn(current => (turnRef.current = current ? applyManagerEvent(current, event) : current));
           },
         });
         // The stream closed: the turn ended (interrupted turns close without a terminal event).
@@ -110,7 +111,14 @@ export function StewardConversation({ token, failure }: { token: string | undefi
 
   const send = async (text: string) => {
     const body = text.trim();
-    if (!body || turn || !sessionId || failure) return;
+    // Only a turn still streaming holds the conversation. One that ended without its history coming
+    // back (a dropped stream, a failed read) stays on screen but does not block the next message.
+    if (!body || running || !sessionId || failure) return;
+    const left = turnRef.current;
+    if (left) {
+      if (left.answer) setMessages(current => [...(current ?? []), { id: `turn-${left.turnId}`, role: 'agent', text: left.answer, createdAt: null, turnId: left.turnId }]);
+      setTurn(null);
+    }
     setError(null);
     const localId = `local-${Date.now()}`;
     setDraft('');
@@ -123,6 +131,9 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     } catch (cause) {
       if (cause instanceof ManagerError && cause.status === 409 && typeof cause.body.active_turn_id === 'string') {
         // A turn is already running (this page or the dashboard opened it); show it instead of failing.
+        // This message was not sent: it goes back to the draft for after that turn.
+        setMessages(current => (current ?? []).filter(m => m.id !== localId));
+        setDraft(body);
         const turnId = cause.body.active_turn_id;
         const eventsPath = `/api/loopx/api/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`;
         setTurn({ turnId, eventsPath, state: 'streaming', steps: [], answer: '', error: null });
@@ -171,7 +182,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
       <h2>{t('loopx.stewardHelloTitle')}</h2>
       <div className="steward-greeting-asks" aria-label={t('loopx.stewardAskLabel')}>
         {GREETING_ASKS().map(ask => (
-          <button key={ask} type="button" className="steward-ask" disabled={turn !== null} onClick={() => void send(ask)}>{ask}</button>
+          <button key={ask} type="button" className="steward-ask" disabled={running} onClick={() => void send(ask)}>{ask}</button>
         ))}
       </div>
     </div> : null}
