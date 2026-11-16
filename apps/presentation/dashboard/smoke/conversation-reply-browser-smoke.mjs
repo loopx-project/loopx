@@ -80,11 +80,20 @@ async function checkReturnedFiles(ready, page, errors, writes) {
     }
   }
   await page.screenshot({path: resolve(output, `${baseline ? "before" : "after"}-files-desktop.png`), animations: "disabled"});
+  const historyPath = `/api/chat/sessions/${ready.sessionId}`;
+  const readerRequest = page.context().waitForEvent("request", {predicate: request =>
+    new URL(request.url()).pathname === historyPath
+    && new URL(request.frame().url()).searchParams.get("reportMessageId") === ready.fileMessageId});
   const opened = page.context().waitForEvent("page");
   await timeline.getByRole("link", {name: "单独阅读完整答复"}).click();
   const report = await opened;
   report.on("pageerror", error => errors.push(error.message));
   await report.getByRole("heading", {name: "结果已核验 / Verified result", exact: true}).waitFor();
+  const readerQuery = new URL((await readerRequest).url()).searchParams;
+  if (!baseline) {
+    assert.equal(readerQuery.get("turn_id"), answer.turn_id, "The saved answer reads its original Turn");
+    assert.equal(readerQuery.get("message_limit"), "200");
+  }
   assert.equal(await report.locator("a[download]").count(), baseline ? 0 : ready.files.length);
   await report.screenshot({path: resolve(output, `${baseline ? "before" : "after"}-files-reader.png`), animations: "disabled"});
   if (!baseline) {
@@ -109,6 +118,18 @@ async function checkReturnedFiles(ready, page, errors, writes) {
     const url = ready.origin + answer.attachments[0].data_url;
     assert.equal((await page.request.get(url.replace(ready.sessionId, "unrelated-session"))).status(), 404);
     assert.equal((await page.request.get(url, {headers: {Origin: "https://unrelated.example"}})).status(), 403);
+
+    const legacy = new URL(report.url());
+    legacy.searchParams.delete("reportTurnId");
+    const legacyRead = report.waitForRequest(request => new URL(request.url()).pathname === historyPath);
+    await report.goto(legacy.toString());
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+    assert.equal(new URL((await legacyRead).url()).searchParams.has("turn_id"), false);
+
+    legacy.searchParams.set("reportTurnId", "unrelated-turn");
+    await report.goto(legacy.toString());
+    await report.getByText(/This answer was not found|Could not load this answer/).waitFor();
+    assert.equal(await report.locator("a[download]").count(), 0);
   }
   child.stdin.write("inspect\n");
   const inspection = await next();

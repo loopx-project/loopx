@@ -1,6 +1,6 @@
 import {useEffect, useMemo, useRef, useState} from "react";
 
-import {fetchChatSession, type ChatSessionSnapshot, type ChatVisibleMessage} from "../../data/chat";
+import {fetchChatSession, fetchChatSessionHistory, type ChatSessionSnapshot, type ChatVisibleMessage} from "../../data/chat";
 import {visibleAgentMessage} from "./answer-text";
 import {readWorkspaceLocale} from "./i18n";
 import {resolveConversationScope} from "../../../../../../loopx/control_plane/collaboration/conversation_scope";
@@ -24,7 +24,8 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
   messageId: string;
   statusUrl: string;
 }) {
-  const scope = JSON.stringify([statusUrl || "/status.json", sessionId, messageId]);
+  const turnId = new URLSearchParams(window.location.search).get("reportTurnId");
+  const scope = JSON.stringify([statusUrl || "/status.json", sessionId, messageId, turnId]);
   const [loaded, setLoaded] = useState<{scope: string; value: ReportState} | null>(null);
   // A late read from the preceding source never appears in the new reader.
   const state: ReportState = loaded?.scope === scope ? loaded.value : {kind: "loading"};
@@ -44,7 +45,10 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
     setLoaded({scope, value: {kind: "loading"}});
     setCopied(false);
     setCopyFailed(false);
-    void fetchChatSession(sessionId, controller.signal).then((snapshot) => {
+    const read = turnId === null
+      ? fetchChatSession(sessionId, controller.signal)
+      : fetchChatSessionHistory(sessionId, controller.signal, turnId);
+    void read.then((snapshot) => {
       if (!live) return;
       if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1"
         || snapshot.session.session_id !== sessionId) throw new Error("The saved Session changed during read.");
@@ -53,7 +57,7 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
       setLoaded({scope, value: message ? {kind: "ready", snapshot, message} : {kind: "missing", snapshot}});
     }).catch(() => { if (live) setLoaded({scope, value: {kind: "error"}}); });
     return () => {live = false; controller.abort(); copyAttempt.current += 1; document.title = previousTitle;};
-  }, [scope, sessionId, messageId, zh, readRevision]);
+  }, [scope, sessionId, messageId, turnId, zh, readRevision]);
 
   const navigation = answerReportNavigation(
     (state.kind === "ready" || state.kind === "missing") ? state.snapshot.session : null, window.location.href, statusUrl, zh,
@@ -180,6 +184,7 @@ export function answerReportNavigation(
   const managed = scope.kind === "owner_goal" && session?.managed_agent_id;
   url.searchParams.delete("reportSessionId");
   url.searchParams.delete("reportMessageId");
+  url.searchParams.delete("reportTurnId");
   url.searchParams.delete("todo");
   url.searchParams.delete("messageSession");
   url.searchParams.delete("message");
