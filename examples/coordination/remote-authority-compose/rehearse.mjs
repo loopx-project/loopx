@@ -103,9 +103,10 @@ try {
   assert.equal(renewed.status, "applied");
   const beforeTakeover = client("b", "request", {...b, operation: "claim", request_id: "rehearsal-too-early"});
   assert.equal(beforeTakeover.result.status, "failed");
-  const remaining = Date.parse(renewed.lease.expires_at) - Date.now();
-  assert(Number.isFinite(remaining) && remaining <= 21_000);
-  await sleep(Math.max(remaining, 0) + 250);
+  // Both timestamps belong to the authority; the host clock may differ.
+  const leaseDuration = Date.parse(renewed.lease.expires_at) - Date.parse(renewed.lease.updated_at);
+  assert(Number.isFinite(leaseDuration) && leaseDuration > 0 && leaseDuration <= 21_000);
+  await sleep(leaseDuration + 250);
 
   const claimB = {...b, operation: "claim", request_id: "rehearsal-claim-b"};
   const takeover = client("b", "request", claimB).result;
