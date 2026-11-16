@@ -524,6 +524,12 @@ Kernel は、その仕組みを 5 つの問いにまとめています。それ�
 | どのエビデンスが変わったか？ | コンパクトな実行履歴、検証、ブロッカー、受け入れられた writeback。 |
 | ループを続けてよいか？ | クォータ、ケイパビリティ、安全なフォールバック、スケジューラーのヒント、停止条件。 |
 
+Goal の停止は `loopx goal-lifecycle --goal-id <id> --operation stop` でプレビューできます。
+資格を元に戻すには `--operation resume` を使います。遷移を適用するには
+`--actor-kind owner --execute` を使い、Goal のアクションビューから提供された場合は最新の `--expected-state-fingerprint` を付けたままにします。
+通常の CLI とスタンドアロンの
+[`loopx-core`](packages/loopx-core/README.md) CLI は、同じライフサイクルオーナーを使います。
+
 <details>
 <summary>アーキテクチャ、コントロールプレーンの画面、ランタイムの責任</summary>
 
