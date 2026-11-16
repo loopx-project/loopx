@@ -315,6 +315,8 @@ async function checkQueuedReply(ready, page, errors, writes) {
   await context.locator("summary").focus(); await page.keyboard.press("Enter");
   await context.getByText("原要求：保留已有结果和失败记录。Original requirement: retain results and failed attempts.", {exact: true}).waitFor();
   assert.equal(await context.locator("section").count(), 1);
+  assert.equal(await context.locator("blockquote ol").first().evaluate(node => getComputedStyle(node).listStyleType), "decimal");
+  assert.deepEqual(await context.locator("blockquote ol").evaluateAll(lists => lists.map(list => list.start)), [1, 2, 3, 7, 0]);
   assert.equal(await message.locator(".personal-queue-message").getByText(body, {exact: true}).count(), 1);
   await page.screenshot({path: resolve(output, "queue-expanded-desktop.png"), animations: "disabled"});
   await page.setViewportSize({width: 390, height: 844});
