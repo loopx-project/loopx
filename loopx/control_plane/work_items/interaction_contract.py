@@ -1422,7 +1422,7 @@ def _build_interaction_cli_channel(
             registry_path=registry_path,
         )
     )
-    channel = {
+    channel: dict[str, Any] = {
         "next_cli_actions": _admitted_interaction_next_cli_actions(
             payload,
             mode=mode,
