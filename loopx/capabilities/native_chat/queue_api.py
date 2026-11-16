@@ -4,6 +4,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ...chat_store import CHAT_STORE_SCHEMA_VERSION
+from ...extensions.lark.private_ingress import project_private_reply_history
 
 
 class ChatQueueRequestMixin:
@@ -63,7 +64,12 @@ class ChatQueueRequestMixin:
                 self._session_context(session)
             rows: list[dict[str, Any]] = []
             for turn in store.queued_turns(session_id, strict=True, include_reserved=True):
-                text = str(turn.get("message") or "")
+                # Reuse history's exact admission/source checks before truncating;
+                # a preview cannot decode a partial context envelope.
+                original = {"role": "user", "origin": turn.get("origin"),
+                            "turn_id": turn["turn_id"], "text": str(turn.get("message") or "")}
+                visible = project_private_reply_history(store, session, [original])[0]
+                text = visible.get("reply_context", {}).get("source_text", original["text"])
                 rows.append({
                     "turn_id": turn["turn_id"],
                     "created_at": turn["created_at"],
