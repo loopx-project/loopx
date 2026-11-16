@@ -41,7 +41,9 @@ ADAPTER = REPO_ROOT / "scripts" / "dsh_turn_host_adapter.py"
 def _write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
-    workspace = root / "workspace"
+    # The native host and accountable writeback share the actual local Goal
+    # workspace; a separate sibling is not a producing-worktree receipt.
+    workspace = project
     runtime.mkdir(parents=True)
     workspace.mkdir(parents=True)
     (workspace / "docs").mkdir()
@@ -350,7 +352,8 @@ def main() -> int:
                 host=args.host,
                 timeout_seconds=args.timeout_seconds,
             )
-            exit_code, payload = _run_cli([*base, "--execute"])
+            with contextlib.chdir(workspace):
+                exit_code, payload = _run_cli([*base, "--execute"])
 
             marker_valid = (
                 marker_path.is_file()
@@ -363,9 +366,10 @@ def main() -> int:
                 replay_base = list(base)
                 idx = replay_base.index("--turn-instance-id")
                 del replay_base[idx : idx + 2]
-                replay_exit_code, replay = _run_cli(
-                    [*replay_base, "--resume-turn-key", turn_key, "--execute"]
-                )
+                with contextlib.chdir(workspace):
+                    replay_exit_code, replay = _run_cli(
+                        [*replay_base, "--resume-turn-key", turn_key, "--execute"]
+                    )
 
             summary = {
                 "schema_version": "loopx_turn_dsh_real_e2e_v1",
