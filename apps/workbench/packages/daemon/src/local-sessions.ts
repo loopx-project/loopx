@@ -1,6 +1,7 @@
 import { stat } from 'node:fs/promises';
 import type { AgentAdapter, AgentSessionSummary } from './adapters/types.js';
 import { isWithinWorkdirs } from './workdirs.js';
+import type { SessionEnricher, SessionLoopx } from './session-enrich.js';
 
 /** A conversation an agent on this machine already has, that is not a thread here yet. */
 export interface ExternalSession {
@@ -11,6 +12,10 @@ export interface ExternalSession {
   title: string;
   /** ISO time of the last activity, when the agent says. */
   updatedAt: string | null;
+  /** Which front end started it (the agent's app or its terminal client), when the session file says. */
+  origin?: 'app' | 'cli' | null;
+  /** Set when the session belongs to a LoopX Goal. */
+  loopx?: SessionLoopx;
 }
 
 export interface LocalSessionPage {
@@ -31,6 +36,12 @@ export interface LocalSessionsDeps {
    *  sessions live in (same adapter, same account env): one store is asked once, so a session
    *  never appears under two instances. */
   instances: () => Array<{ id: string; hidden: boolean; store: string }>;
+  /** Reads each session's file for where it came from and which Goal it is on. */
+  enricher?: SessionEnricher;
+  /** Whether every session is listed (the default), or only LoopX ones. */
+  listAll?: () => boolean;
+  /** A scan finished: the place to import and bind what it found. */
+  onScanned?: () => void | Promise<void>;
   /** Overridable for tests. */
   now?: () => number;
 }
@@ -65,6 +76,7 @@ export class LocalSessions {
   private readonly deps: LocalSessionsDeps;
   private readonly enabled: boolean;
   private scanning: Promise<void> | null = null;
+  private timer: NodeJS.Timeout | null = null;
 
   constructor(deps: LocalSessionsDeps, opts: { enabled?: boolean } = {}) {
     this.deps = deps;
@@ -75,6 +87,15 @@ export class LocalSessions {
   start(): void {
     if (!this.enabled) return;
     void this.scan().catch(() => undefined); // one agent failing is not the hub's failure
+    // New conversations keep arriving while nobody has the page open; they are found on this cadence.
+    const timer = setInterval(() => void this.scan().catch(() => undefined), FRESH_MS);
+    timer.unref?.();
+    this.timer = timer;
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
   }
 
   /** A visible page asks for this: fresh enough does nothing, stale kicks one scan (async). */
@@ -134,6 +155,8 @@ export class LocalSessions {
           }
           sessions.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
           sessions.length = Math.min(sessions.length, MAX_PER_AGENT);
+          const adapter = this.deps.adapters.get(id);
+          if (this.deps.enricher && adapter) await this.deps.enricher.enrich(id, adapter, sessions).catch(() => undefined);
         } catch {
           continue; // this agent cannot answer right now; its last list stands
         }
@@ -141,6 +164,21 @@ export class LocalSessions {
       }
     };
     await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, queue.length) }, () => worker()));
+    await Promise.resolve(this.deps.onScanned?.()).catch(() => undefined);
+  }
+
+  /** Every session the last scan found, including those that are threads here. */
+  all(): ExternalSession[] {
+    return [...this.cache.values()].flatMap((entry) => entry.sessions);
+  }
+
+  /** What the last scan knows of one session (ids are unique across agents), whether or not it is a thread here. */
+  find(sessionId: string): ExternalSession | undefined {
+    for (const { sessions } of this.cache.values()) {
+      const found = sessions.find((s) => s.sessionId === sessionId);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   /**
@@ -153,11 +191,12 @@ export class LocalSessions {
     const limit = Number.isFinite(Number(limitRaw)) ? Math.min(Math.max(Number(limitRaw), 1), 500) : 100;
     const cursor = typeof cursorRaw === 'string' && cursorRaw ? cursorRaw : null;
     const owners = this.deps.importedSessions();
+    const listAll = this.deps.listAll?.() ?? true;
     const all: ExternalSession[] = [];
     let scannedAt: string | null = null;
     for (const { at, sessions } of this.cache.values()) {
       if (scannedAt === null || at > Date.parse(scannedAt)) scannedAt = new Date(at).toISOString();
-      for (const session of sessions) if (!owners.has(session.sessionId)) all.push(session);
+      for (const session of sessions) if (!owners.has(session.sessionId) && (listAll || session.loopx)) all.push(session);
     }
     const key = (s: ExternalSession) => `${s.updatedAt ?? ''}|${s.agent}/${s.sessionId}`;
     all.sort((a, b) => key(b).localeCompare(key(a)));

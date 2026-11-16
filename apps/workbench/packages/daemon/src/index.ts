@@ -14,6 +14,7 @@ import { RelayClient } from './relay-client.js';
 import { AgentRegistry, defaultInstances } from './agents.js';
 import { AttachmentStore } from './attachments.js';
 import { LocalSessions } from './local-sessions.js';
+import { SessionEnricher } from './session-enrich.js';
 import { MachineUsageMeter } from './machine-usage.js';
 import { claudeConfigDirs, codexHomes, transcriptHome } from './adapters/transcript-usage.js';
 import { sessionStoreKey } from './adapters/types.js';
@@ -89,11 +90,14 @@ async function main(): Promise<void> {
   // a test or script machine, not the person's) or with LOOCHAT_LOCAL_SCAN=off: the machine behind
   // a throwaway hub is not ours to read.
   const localScan = registry.ownsFile && process.env.LOOCHAT_LOCAL_SCAN !== 'off';
-  const localSessions = new LocalSessions({
+  const localSessions: LocalSessions = new LocalSessions({
     adapters,
     workdirs: () => manager.allowedWorkdirs,
     importedSessions: () => store.agentSessionOwners(),
     instances: () => registry.list().map((instance) => ({ id: instance.id, hidden: !!instance.hidden, store: sessionStoreKey(instance) })),
+    enricher: new SessionEnricher({ bindings: () => loopx.lookup().bindings(), goal: (goalId) => loopx.lookup().goal(goalId) }),
+    listAll: () => manager.generalSettings().autoImportLocal,
+    onScanned: (): Promise<void> => loopx.syncSessions(localSessions.all()),
   }, { enabled: localScan });
   const machineUsage = localScan ? new MachineUsageMeter({
     db: store.db,
@@ -117,6 +121,7 @@ async function main(): Promise<void> {
   const loopx = new LoopxService({ dataDir: config.dataDir, adapters, dirs });
   loopx.attach(manager);
   manager.loopx = loopx;
+  manager.sessionIndex = (sessionId) => localSessions.find(sessionId);
   localSessions.start();
   machineUsage?.start();
   manager.recoverInterrupted();

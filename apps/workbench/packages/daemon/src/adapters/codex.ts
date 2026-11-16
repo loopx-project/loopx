@@ -1218,6 +1218,16 @@ export class CodexAppServerAdapter implements AgentAdapter {
     return { configDir, sessionPath, ...(agentSessionId ? { resumeCommand: `env CODEX_HOME=${quoteArg(configDir)} codex resume ${quoteArg(agentSessionId)}` } : {}) };
   }
 
+  /** The rollout's first record names who started it: `originator` (Codex Desktop, codex_cli_rs, …) and `source`. */
+  sessionOrigin(firstLine: string): 'app' | 'cli' | null {
+    let meta: any;
+    try { meta = JSON.parse(firstLine)?.payload; } catch { return null; }
+    const originator = String(meta?.originator ?? '').toLowerCase();
+    if (/desktop|codex[ _-]?app/.test(originator)) return 'app';
+    if (/cli|tui/.test(originator)) return 'cli';
+    return meta?.source === 'cli' && !originator ? 'cli' : null;
+  }
+
   /** The base instructions the conversation was started with, from the rollout's first record. */
   async readSystemPrompt(agentSessionId: string, cwd: string): Promise<SystemPrompt | null> {
     const { sessionPath } = await this.sessionLocation(agentSessionId, cwd);

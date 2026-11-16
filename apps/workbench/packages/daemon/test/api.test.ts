@@ -153,18 +153,23 @@ test('general settings default to a new thread and persist across clients and st
   const path = '/api/general-settings';
   assert.equal((await api(path, {}, false)).status, 401);
   assert.equal((await api(path, { method: 'PUT', body: JSON.stringify({ startupPage: 'recent-thread' }) }, false)).status, 401);
-  assert.deepEqual(await (await api(path)).json(), { startupPage: 'new-thread', autoArchiveDays: null });
+  assert.deepEqual(await (await api(path)).json(), { startupPage: 'new-thread', autoArchiveDays: null, autoImportLocal: true });
   for (const value of [null, {}, { startupPage: 'unknown', autoArchiveDays: null }, { startupPage: true, autoArchiveDays: null }, { startupPage: 'new-thread', autoArchiveDays: 2 }, { startupPage: 'new-thread', autoArchiveDays: '7' }]) {
     assert.equal((await api(path, { method: 'PUT', body: JSON.stringify(value) })).status, 400);
   }
   const saved = await api(path, { method: 'PUT', body: JSON.stringify({ startupPage: 'recent-thread', autoArchiveDays: 7 }) });
   assert.equal(saved.status, 200);
-  assert.deepEqual(await saved.json(), { startupPage: 'recent-thread', autoArchiveDays: 7 });
-  assert.deepEqual(await (await api(path)).json(), { startupPage: 'recent-thread', autoArchiveDays: 7 });
+  assert.deepEqual(await saved.json(), { startupPage: 'recent-thread', autoArchiveDays: 7, autoImportLocal: true });
+  assert.deepEqual(await (await api(path)).json(), { startupPage: 'recent-thread', autoArchiveDays: 7, autoImportLocal: true });
   const reopened = new Store(dataDir);
-  try { assert.deepEqual(reopened.hubSetting('general.settings', null), { startupPage: 'recent-thread', autoArchiveDays: 7 }); }
+  try { assert.deepEqual(reopened.hubSetting('general.settings', null), { startupPage: 'recent-thread', autoArchiveDays: 7, autoImportLocal: true }); }
   finally { reopened.close(); }
-  assert.deepEqual(await (await api(path, { method: 'PUT', body: JSON.stringify({ startupPage: 'new-thread', autoArchiveDays: null }) })).json(), { startupPage: 'new-thread', autoArchiveDays: null });
+  assert.deepEqual(await (await api(path, { method: 'PUT', body: JSON.stringify({ startupPage: 'new-thread', autoArchiveDays: null }) })).json(), { startupPage: 'new-thread', autoArchiveDays: null, autoImportLocal: true });
+  // The local-session switch is its own field: a save that leaves it out keeps it, a non-boolean is refused.
+  const off = await api(path, { method: 'PUT', body: JSON.stringify({ startupPage: 'new-thread', autoImportLocal: false }) });
+  assert.equal((await off.json()).autoImportLocal, false);
+  assert.equal((await (await api(path, { method: 'PUT', body: JSON.stringify({ startupPage: 'new-thread', autoArchiveDays: 3 }) })).json()).autoImportLocal, false);
+  assert.equal((await api(path, { method: 'PUT', body: JSON.stringify({ startupPage: 'new-thread', autoImportLocal: 'no' }) })).status, 400);
 });
 
 test('model preferences persist by instance and model; reads never discard unavailable choices', async () => {

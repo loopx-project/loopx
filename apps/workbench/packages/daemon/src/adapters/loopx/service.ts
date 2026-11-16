@@ -8,9 +8,10 @@ import { isWithinWorkdirs, type Workdirs } from '../../workdirs.js';
 import type { ThreadManager } from '../../threads.js';
 import { corePermission, fromCorePermission, goalAgentFor, LOOPX_PERMISSIONS, LoopxBindings, permissionAvailable, type LoopxBinding, type LoopxPermission } from './binding.js';
 import { goalContextBlock } from './context.js';
-import { applyProposal, CoreError, goalLocale, grantedWorkspaces, loadProposal, previewGoalCreate, registeredGoalRoot, workspaceRef, type GoalDraft } from './core.js';
+import { applyProposal, CoreError, coreJson, goalLocale, grantedWorkspaces, loadProposal, previewGoalCreate, registeredGoalRoot, workspaceRef, type GoalDraft } from './core.js';
 import { coreUrl } from './proxy.js';
 import { cliFromEnv, GoalStateCache, readGoalState, type GoalState, type LoopxCli } from './status.js';
+import type { LoopxLookup, SessionLoopx } from '../../session-enrich.js';
 
 export interface LoopxDeps {
   dataDir: string;
@@ -25,6 +26,8 @@ export interface LoopxHooks {
   binding(threadId: string): LoopxBinding | null;
   /** The block that rides with a Goal conversation's message; empty for an ordinary one. */
   context(threadId: string): Promise<string>;
+  /** What marks this thread as a Goal conversation in a list: its binding, or what the scan read from its session. */
+  info(threadId: string, scanned?: SessionLoopx): SessionLoopx | null;
   /** A Goal conversation never asks the person: its boundary is the sandbox, not a prompt. */
   refuse(threadId: string, request: ApprovalRequest): { optionId: string } | { cancelled: true } | null;
 }
@@ -69,6 +72,80 @@ export class LoopxService implements LoopxHooks {
   attach(manager: ThreadManager): void { this.manager = manager; }
 
   binding(threadId: string): LoopxBinding | null { return this.bindings.get(threadId); }
+
+  info(threadId: string, scanned?: SessionLoopx): SessionLoopx | null {
+    const b = this.bindings.get(threadId);
+    if (!b) return scanned ?? null;
+    return {
+      goalId: b.goalId, goalTitle: b.goalTitle || b.goalId, ...(b.goalMissing ? { missing: true } : {}),
+      basis: b.basis ?? 'workbench', source: b.source ?? (b.proposalId ? 'launch' : 'join'),
+    };
+  }
+
+  /** The core's side of a session scan: its external-session bindings, and whether a Goal still exists. */
+  lookup(): LoopxLookup {
+    return {
+      bindings: async () => {
+        const res = await coreJson<{ bindings?: Array<{ session_id?: string; goal_id?: string; goal_title?: string | null; host_surface?: string }> }>('/api/attached-sessions', {}, this.core);
+        const out = new Map<string, { goalId: string; goalTitle: string | null; hostSurface: string }>();
+        for (const row of res.bindings ?? []) {
+          if (typeof row.session_id === 'string' && typeof row.goal_id === 'string') out.set(row.session_id, { goalId: row.goal_id, goalTitle: row.goal_title ?? null, hostSurface: String(row.host_surface ?? '') });
+        }
+        return out;
+      },
+      goal: async (goalId) => {
+        try { return { title: (await this.states.get(goalId)).title }; }
+        catch (err) { return err instanceof Error && err.message === 'goal_not_found' ? 'missing' : null; }
+      },
+    };
+  }
+
+  /**
+   * Binds what a scan found. A session on a Goal the core has is imported once it is idle (history is
+   * read then, not before) and bound to that Goal under the Goal's registered root; one on a Goal the core
+   * no longer has stays as it is, marked in lists but bound to nothing. Safe to run again.
+   */
+  async syncSessions(sessions: Array<{ agent: string; sessionId: string; updatedAt: string | null; loopx?: SessionLoopx }>, idleMs = 60_000): Promise<void> {
+    const manager = this.manager;
+    if (!manager) return;
+    const titles = new Map<string, string>();
+    for (const s of sessions) if (s.loopx && !s.loopx.missing) titles.set(s.loopx.goalId, s.loopx.goalTitle);
+    // Bindings made here or earlier follow the core: a renamed Goal is renamed, a deleted one is marked.
+    for (const [threadId, binding] of this.bindings.entries()) {
+      const found = await this.lookup().goal(binding.goalId);
+      if (found === null) continue;
+      const patch: Partial<LoopxBinding> = found === 'missing' ? { goalMissing: true } : { goalMissing: undefined, goalTitle: found.title };
+      if (Boolean(binding.goalMissing) !== Boolean(patch.goalMissing) || (found !== 'missing' && binding.goalTitle !== found.title)) { this.bindings.update(threadId, patch); manager.announceLoopx(threadId); }
+    }
+    for (const session of sessions) {
+      const info = session.loopx;
+      if (!info || info.missing) continue;
+      let thread = manager.threadOfSession(session.agent, session.sessionId);
+      if (!thread) {
+        // A conversation that is still being written to by its host is left until it has been quiet a while.
+        if (session.updatedAt && Date.now() - Date.parse(session.updatedAt) < idleMs) continue;
+        thread = await manager.importSession({ agent: session.agent, sessionId: session.sessionId }).catch(() => null);
+        if (!thread) continue;
+      }
+      if (this.bindings.get(thread.id)) continue;
+      const adapter = this.deps.adapters.get(thread.agent);
+      const goalAgentId = adapter ? goalAgentFor(adapter.id) : null;
+      if (!adapter || !goalAgentId) continue;
+      const earlier = this.bindings.threadsOf(info.goalId).map((id) => this.bindings.get(id)!).at(-1);
+      // The core's grant is read from an earlier conversation of the Goal; a Goal with none joins read-only.
+      const permission: LoopxPermission = earlier?.permission === 'workspace_auto' && permissionAvailable(adapter.id, 'workspace_auto').ok ? 'workspace_auto' : 'read_only';
+      let workspace = thread.cwd;
+      const root = this.cli.registry ? await registeredGoalRoot(info.goalId, this.cli.registry).catch(() => null) : null;
+      try { if (root) workspace = realpathSync(root); } catch { /* the root is gone; the thread's own directory stands */ }
+      if (!isWithinWorkdirs(workspace, this.deps.dirs.all())) workspace = thread.cwd;
+      this.bindings.set(thread.id, {
+        goalId: info.goalId, goalAgentId, managedAgentId: earlier?.managedAgentId ?? null, goalInstanceId: earlier?.goalInstanceId ?? null,
+        workspace, permission, goalTitle: titles.get(info.goalId) ?? info.goalTitle, basis: info.basis, source: info.source,
+      });
+      manager.announceLoopx(thread.id);
+      manager.autoHandover.setOverride(thread.id, false);
+    }
+  }
 
   async context(threadId: string): Promise<string> {
     const binding = this.bindings.get(threadId);
@@ -195,7 +272,7 @@ export class LoopxService implements LoopxHooks {
       this.bindings.set(thread.id, {
         goalId, goalAgentId: asked.goalAgentId, managedAgentId: typeof ids.managed_agent_id === 'string' ? ids.managed_agent_id : null,
         goalInstanceId: typeof ids.goal_instance_id === 'string' ? ids.goal_instance_id : null,
-        workspace: asked.path, permission, proposalId, firstMessage: text,
+        workspace: asked.path, permission, proposalId, firstMessage: text, goalTitle: String(params.title ?? goalId), basis: 'workbench', source: 'launch',
       });
       this.previews.delete(proposalId);
       manager.announceLoopx(thread.id);
@@ -244,7 +321,7 @@ export class LoopxService implements LoopxHooks {
         ...(typeof input.model === 'string' && input.model ? { model: input.model } : {}),
         ...(typeof input.effort === 'string' && input.effort ? { effort: input.effort } : {}),
       });
-      this.bindings.set(thread.id, { goalId, goalAgentId, managedAgentId: earlier?.managedAgentId ?? null, goalInstanceId: earlier?.goalInstanceId ?? null, workspace, permission });
+      this.bindings.set(thread.id, { goalId, goalAgentId, managedAgentId: earlier?.managedAgentId ?? null, goalInstanceId: earlier?.goalInstanceId ?? null, workspace, permission, goalTitle: state.title, basis: 'workbench', source: 'join' });
       manager.announceLoopx(thread.id);
       manager.autoHandover.setOverride(thread.id, false);
       const text = typeof input.text === 'string' && input.text.trim() ? input.text.trim() : '';

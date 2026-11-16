@@ -81,6 +81,8 @@ export interface GeneralSettings {
   startupPage: 'new-thread' | 'recent-thread';
   /** Conversations older than this many days are hidden from the sidebar. Null leaves them alone. */
   autoArchiveDays: AutoArchiveDays;
+  /** List every conversation the agents on this machine already have. Off: only LoopX Goal conversations. */
+  autoImportLocal: boolean;
 }
 
 function storedAutoArchiveDays(value: unknown): AutoArchiveDays {
@@ -128,6 +130,10 @@ export type ThreadView = Omit<ThreadRecord, 'worktree' | 'handover' | 'writing'>
   coordination?: { retired?: boolean; rootId: string; children: number; paused: boolean; doing?: string; team?: { name: string; status: import('./teams.js').TaskStatus; role: string; error?: string } };
   /** Set when this is a LoopX Goal conversation: which Goal it belongs to and the permission it runs under. */
   loopx?: import('./adapters/loopx/binding.js').LoopxBinding | null;
+  /** For lists: which Goal this conversation is on and how that was found out (its binding, the core's records, or its own text). */
+  loopxInfo?: import('./session-enrich.js').SessionLoopx | null;
+  /** Which front end started the agent session (its app or its terminal client), when its file says. */
+  origin?: 'app' | 'cli' | null;
   /** Working in the hub's scratch area: a thread that is in no project. */
   scratch: boolean;
   /** The project directory no longer exists, e.g. a temporary checkout removed after a run. */
@@ -428,6 +434,8 @@ export class ThreadManager {
 
   /** The LoopX Goal adapter, when one is attached: a thread it binds is a Goal conversation, every other is ordinary. */
   loopx: LoopxHooks | null = null;
+  /** What the last local-session scan knows of a native session: where it came from, and its Goal. */
+  sessionIndex: ((sessionId: string) => { origin?: 'app' | 'cli' | null; loopx?: import('./session-enrich.js').SessionLoopx } | undefined) | null = null;
 
   /** The skills every agent instance on this machine can reach. Read-mostly, by the skills page. */
   readonly skills: SkillsManager;
@@ -1151,6 +1159,7 @@ export class ThreadManager {
     return {
       startupPage: value?.startupPage === 'recent-thread' ? 'recent-thread' : 'new-thread',
       autoArchiveDays: storedAutoArchiveDays(value?.autoArchiveDays),
+      autoImportLocal: value?.autoImportLocal !== false,
     };
   }
 
@@ -1161,7 +1170,9 @@ export class ThreadManager {
     const startupPage = raw.startupPage;
     if (startupPage !== 'new-thread' && startupPage !== 'recent-thread') throw new HttpError(400, 'invalid startup page');
     const autoArchiveDays = Object.hasOwn(raw, 'autoArchiveDays') ? parseAutoArchiveDays(raw.autoArchiveDays) : current.autoArchiveDays;
-    const value: GeneralSettings = { startupPage, autoArchiveDays };
+    if (Object.hasOwn(raw, 'autoImportLocal') && typeof raw.autoImportLocal !== 'boolean') throw new HttpError(400, 'invalid auto-import setting');
+    const autoImportLocal = Object.hasOwn(raw, 'autoImportLocal') ? raw.autoImportLocal === true : current.autoImportLocal;
+    const value: GeneralSettings = { startupPage, autoArchiveDays, autoImportLocal };
     this.store.saveHubSetting('general.settings', value);
     return value;
   }
@@ -1308,10 +1319,20 @@ export class ThreadManager {
     } : null;
     const failed = thread.status === 'error' ? this.store.lastTurnFailure(thread.id) : null;
     const failure = failed ? { code: failed.code, message: failed.message.slice(0, 500), at: failed.at } : null;
-    return { ...thread, failure, writing: thread.writing ? { ...thread.writing, habits: habitsPath() } : null, handover: thread.handover ? { ...thread.handover, mode: this.store.handoverMode(thread)!, automatic: thread.handover.mode === 'continue', sourceMoved: this.store.handoverSourceMoved(thread)! } : null, autoHandover: { ...this.autoHandover.view(thread.id), resume: this.quotaResume.view(thread.id) }, worktree, resumeCommand, cwdReal, waiting, waitingReason, queued, modelQueue, terminalActivity, scratch, projectGone, runningSince, coordination: this.coordination?.metadata(thread.id), loopx: this.loopx?.binding(thread.id) ?? null };
+    return { ...thread, failure, writing: thread.writing ? { ...thread.writing, habits: habitsPath() } : null, handover: thread.handover ? { ...thread.handover, mode: this.store.handoverMode(thread)!, automatic: thread.handover.mode === 'continue', sourceMoved: this.store.handoverSourceMoved(thread)! } : null, autoHandover: { ...this.autoHandover.view(thread.id), resume: this.quotaResume.view(thread.id) }, worktree, resumeCommand, cwdReal, waiting, waitingReason, queued, modelQueue, terminalActivity, scratch, projectGone, runningSince, coordination: this.coordination?.metadata(thread.id), loopx: this.loopx?.binding(thread.id) ?? null, ...this.sessionInfo(thread) };
   }
 
   /** A thread was just bound to a Goal: tell the pages. */
+  /** The thread an agent session already is, if any (archived ones count). */
+  threadOfSession(agent: string, sessionId: string): ThreadRecord | null {
+    return this.store.findThreadByAgentSession(agent, sessionId);
+  }
+
+  private sessionInfo(thread: ThreadRecord): Pick<ThreadView, 'loopxInfo' | 'origin'> {
+    const scanned = thread.agentSessionId ? this.sessionIndex?.(thread.agentSessionId) : undefined;
+    return { loopxInfo: this.loopx?.info(thread.id, scanned?.loopx) ?? scanned?.loopx ?? null, origin: scanned?.origin ?? null };
+  }
+
   announceLoopx(id: string): void {
     if (this.store.getThread(id)) this.emitThreadEvent(id, null, 'thread.updated', {});
   }

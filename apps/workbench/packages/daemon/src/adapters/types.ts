@@ -440,6 +440,11 @@ export interface AgentAdapter {
    * file holds no prompt; never throws for a missing file.
    */
   readSystemPrompt?(agentSessionId: string, cwd: string): Promise<SystemPrompt | null>;
+  /**
+   * Which front end started a native session, from the session file's first line: `app` for the
+   * agent's desktop app, `cli` for its terminal client, null when the record does not say.
+   */
+  sessionOrigin?(firstLine: string): 'app' | 'cli' | null;
   /** Every conversation the agent has on record, in any directory. With capabilities.history. */
   listSessions?(): Promise<AgentSessionSummary[]>;
   /** Read one session's metadata without listing every session or loading its turns. */
