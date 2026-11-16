@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { newlyWaiting } from '../src/loopx/notify.js';
 import { parseLoopxStatus, type LoopxAttention } from '../src/loopx/status.js';
 
-const waiting = (goalId: string): LoopxAttention => ({ goalId, status: null, waitingOn: 'user', severity: null, recommendedAction: null, userTodos: { open: 1, done: 0, total: 1 }, agentTodos: { open: 0, done: 0, total: 0 } });
+const waiting = (goalId: string): LoopxAttention => ({ goalId, status: null, waitingOn: 'user', severity: null, recommendedAction: null, nextAction: null, topTodo: null, lastActivityAt: null, userTodos: { open: 1, done: 0, total: 1 }, agentTodos: { open: 0, done: 0, total: 0 } });
 
 describe('newlyWaiting', () => {
   it('treats the first read as the baseline, not as news', () => {

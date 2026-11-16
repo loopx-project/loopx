@@ -16,6 +16,8 @@ export interface LoopxGoal {
   activationState: string;
   lifecyclePhase: string | null;
   updatedAt: string | null;
+  /** The agents the core says may work this Goal, when it says any. */
+  agents: string[];
   /** The core's read-only acceptance observation: gaps, guards, next action. Null when it sent none. */
   acceptance?: Observation | null;
 }
@@ -27,6 +29,12 @@ export interface LoopxAttention {
   waitingOn: string | null;
   severity: string | null;
   recommendedAction: string | null;
+  /** The core's own words for what the active state should do next, when it says. */
+  nextAction: string | null;
+  /** The first open todo the projection carries (the user's own first, else the agent's). */
+  topTodo: { text: string; priority: string | null; claimedBy: string | null; updatedAt: string | null } | null;
+  /** The newest todo touch among what the summary carried; null when it carried none. */
+  lastActivityAt: string | null;
   /** The projection carries per-role todo summaries (counts), not the todo rows themselves. */
   userTodos: LoopxTodoCounts;
   agentTodos: LoopxTodoCounts;
@@ -102,6 +110,17 @@ interface RawTodoSummary {
   open_count?: number;
   done_count?: number;
   total_count?: number;
+  first_open_items?: RawTodoItem[];
+  items?: RawTodoItem[];
+}
+
+interface RawTodoItem {
+  text?: string;
+  title?: string;
+  done?: boolean;
+  priority?: string;
+  claimed_by?: string;
+  updated_at?: string;
 }
 
 interface RawAttention {
@@ -110,6 +129,7 @@ interface RawAttention {
   waiting_on?: string;
   severity?: string;
   recommended_action?: string;
+  active_state_next_action?: string;
   user_todos?: RawTodoSummary;
   agent_todos?: RawTodoSummary;
 }
@@ -135,11 +155,38 @@ interface RawGoal {
   activation_state?: string;
   lifecycle_phase?: string;
   updated_at?: string;
+  zcode_goal_eligible_agent_ids?: unknown;
   acceptance_observation?: unknown;
 }
 
 function todoCounts(raw: RawTodoSummary | undefined): LoopxTodoCounts {
   return { open: Number(raw?.open_count ?? 0), done: Number(raw?.done_count ?? 0), total: Number(raw?.total_count ?? 0) };
+}
+
+/** The first todo of a summary, as one honest line: what the core carried, nothing invented. */
+function topTodoOf(...summaries: (RawTodoSummary | undefined)[]): LoopxAttention['topTodo'] {
+  for (const raw of summaries) {
+    const item = raw?.first_open_items?.[0] ?? raw?.items?.find(i => i.done !== true);
+    const text = typeof item?.text === 'string' && item.text.trim() ? item.text.trim()
+      : typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : null;
+    if (text) return {
+      text,
+      priority: typeof item?.priority === 'string' ? item.priority : null,
+      claimedBy: typeof item?.claimed_by === 'string' ? item.claimed_by : null,
+      updatedAt: typeof item?.updated_at === 'string' ? item.updated_at : null,
+    };
+  }
+  return null;
+}
+
+/** The newest `updated_at` among the todo items the summaries carried. */
+function lastActivityOf(...summaries: (RawTodoSummary | undefined)[]): string | null {
+  const stamps: number[] = [];
+  for (const raw of summaries) for (const item of [...(raw?.items ?? []), ...(raw?.first_open_items ?? [])]) {
+    const at = typeof item?.updated_at === 'string' ? Date.parse(item.updated_at) : NaN;
+    if (Number.isFinite(at)) stamps.push(at);
+  }
+  return stamps.length ? new Date(Math.max(...stamps)).toISOString() : null;
 }
 
 function text(value: unknown): string | null {
@@ -164,6 +211,9 @@ export function parseLoopxStatus(payload: unknown): LoopxStatus {
     activationState: String(goal.activation_state ?? 'unknown'),
     lifecyclePhase: text(goal.lifecycle_phase),
     updatedAt: text(goal.updated_at),
+    agents: Array.isArray(goal.zcode_goal_eligible_agent_ids)
+      ? goal.zcode_goal_eligible_agent_ids.filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+      : [],
     acceptance: parseObservation(goal.acceptance_observation),
   })).filter(goal => goal.goalId && goal.status !== 'legacy-runtime');
   const attentionQueue = (record.attention_queue ?? {}) as Record<string, unknown>;
@@ -174,6 +224,9 @@ export function parseLoopxStatus(payload: unknown): LoopxStatus {
     waitingOn: text(item.waiting_on),
     severity: text(item.severity),
     recommendedAction: text(item.recommended_action),
+    nextAction: text(item.active_state_next_action),
+    topTodo: topTodoOf(item.user_todos, item.agent_todos),
+    lastActivityAt: lastActivityOf(item.user_todos, item.agent_todos),
     userTodos: todoCounts(item.user_todos),
     agentTodos: todoCounts(item.agent_todos),
   })).filter(item => item.goalId);

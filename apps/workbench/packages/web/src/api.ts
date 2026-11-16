@@ -1109,7 +1109,12 @@ export function saveToken(token: string): void {
   }
 }
 
-export class AuthError extends Error {}
+/** The hub turned the credential down. `code` says which way a login link died, when it did. */
+export class AuthError extends Error {
+  constructor(message: string, readonly code?: 'link_expired' | 'link_revoked') {
+    super(message);
+  }
+}
 
 export interface VoiceProvider {
   login?: 'ready' | 'required';
@@ -1191,7 +1196,11 @@ export class Api {
       keepalive: opts.keepalive,
       signal: opts.signal,
     });
-    if (res.status === 401) throw new AuthError('unauthorized');
+    if (res.status === 401) {
+      const body = await res.json().catch(() => ({})) as { auth_error?: string };
+      const code = body.auth_error === 'link_expired' || body.auth_error === 'link_revoked' ? body.auth_error : undefined;
+      throw new AuthError('unauthorized', code);
+    }
     if (res.status === 204) return undefined as T;
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError((json as { error?: string }).error ?? `HTTP ${res.status}`, json as Record<string, unknown>, res.status);
@@ -2234,7 +2243,11 @@ export class Api {
       headers: this.voiceHeaders(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (res.status === 401) throw new AuthError('unauthorized');
+    if (res.status === 401) {
+      const body = await res.json().catch(() => ({})) as { auth_error?: string };
+      const code = body.auth_error === 'link_expired' || body.auth_error === 'link_revoked' ? body.auth_error : undefined;
+      throw new AuthError('unauthorized', code);
+    }
     if (res.status === 204) return undefined as T;
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError((json as { error?: string }).error ?? `HTTP ${res.status}`, json as Record<string, unknown>, res.status);

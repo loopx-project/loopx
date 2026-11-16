@@ -27,6 +27,28 @@
         if (typeof saved.palette === 'string') document.documentElement.setAttribute('data-palette', saved.palette);
         else document.documentElement.setAttribute('data-palette', 'codex');
       } catch (e) {}
+      // A login link carries its token in the query, in the fragment's own query (this app routes
+      // by hash), or bare in the fragment (which never reaches a server). Keep it where the app
+      // keeps its credential and scrub the address bar before anything renders, so the token stays
+      // out of history, bookmarks and copied links. An empty token changes nothing.
+      try {
+        (function () {
+          var u = new URL(location.href);
+          var token = u.searchParams.get('token') || '';
+          u.searchParams.delete('token');
+          var rawHash = u.hash.charAt(0) === '#' ? u.hash.slice(1) : u.hash;
+          var at = rawHash.indexOf('?');
+          var route = at === -1 ? rawHash : rawHash.slice(0, at);
+          var bare = at === -1 && route.indexOf('token=') === 0;
+          var params = new URLSearchParams(bare ? rawHash : at === -1 ? '' : rawHash.slice(at + 1));
+          if (params.has('token')) { token = token || params.get('token') || ''; params.delete('token'); }
+          var kept = bare ? params.toString() : route + (params.toString() ? '?' + params.toString() : '');
+          if (!token) return;
+          localStorage.setItem('calli.token', token);
+          var rest = u.pathname + u.search + (kept ? '#' + kept : '');
+          history.replaceState(null, '', rest || location.pathname);
+        })();
+      } catch (e) {}
     </script>
   </head>
   <body>

@@ -93,6 +93,9 @@ import { PersonalSettingsDialog } from './components/PersonalSettingsDialog';
 import { SkillsPage } from './components/SkillsPage';
 import { SchedulesPage } from './components/SchedulesPage';
 import { GoalWorkPage, GOAL_TABS, type GoalTab } from './components/GoalWorkPage';
+import { GoalsPage } from './components/GoalsPage';
+import { AccessSettings } from './components/AccessSettings';
+import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
 import { StewardPage } from './components/StewardPage';
 import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
 import { needsYouGoalIds, sortGoalTree } from './loopx/status';
@@ -128,7 +131,7 @@ import { ConnectDialog, DemoBar } from './components/ConnectDialog';
 import { DemoApi, DemoError } from './demo/DemoApi';
 import { EMPTY_MODEL_PREFERENCE, type DraftModelPreference } from '../../daemon/src/model-preferences';
 import { QUICK_SWITCH_HIDDEN_KEY, clampQuickSwitchBottom, savedQuickSwitchBottom, saveQuickSwitchBottom } from './quick-switch';
-import { IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconImport, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
+import { IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconImport, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
 import { StatReadings } from './components/SessionStats';
 import { ThreadTracePanel } from './components/TracePanel';
 import { chooseLocale, locale, LOCALES, localeChoice, t } from './i18n';
@@ -187,7 +190,7 @@ const EXTENSIONS_HASH = '#/extensions';
 /** The hub's own pages. Any other `#/…` may be an extension's view; see extensions/routes.ts. */
 const CORE_ROUTES = ['#/settings', AGENTS_HASH, TEAMS_HASH, STEWARD_HASH, '#/goals', SKILLS_HASH, MCP_HASH, SCHEDULES_HASH, ACTIVITY_HASH, OBSERVABILITY_HASH, MACHINES_HASH, EXTENSIONS_HASH];
 
-type MainView = 'settings' | 'agents' | 'teams' | 'thread' | 'goal' | 'steward' | 'schedules' | 'activity' | 'observability' | 'machines' | 'skills' | 'mcp' | 'extensions' | 'ext';
+type MainView = 'settings' | 'agents' | 'teams' | 'thread' | 'goal' | 'goals' | 'steward' | 'schedules' | 'activity' | 'observability' | 'machines' | 'skills' | 'mcp' | 'extensions' | 'ext';
 
 function quotaAccount(path: string): string | undefined {
   if (!path.startsWith('quota/')) return undefined;
@@ -212,6 +215,8 @@ function viewForHash(hash: string, connected: boolean): MainView | null {
   if (hash.startsWith('#/machines/')) return 'machines';
   if (hash === '#/settings' || hash.startsWith('#/settings/')) return 'settings';
   if (hash.startsWith('#/thread/')) return null;
+  // The whole list, before any one Goal's own page.
+  if (hash === '#/goals') return 'goals';
   if (hash.startsWith('#/goals/')) return 'goal';
   // The assistant desk and its matters list are gone; their addresses open the steward, their successor.
   if (hash === DESK_HASH || hash.startsWith(`${DESK_HASH}/`) || hash === TODOS_HASH) return 'steward';
@@ -521,6 +526,16 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const loopxRead = useLoopxStatus(token);
   const loopxStatus = loopxRead.status;
   const loopxNeedsYou = useMemo(() => needsYouGoalIds(loopxStatus?.attention ?? []), [loopxStatus]);
+  // What this device logged in with: the hub's own token, or a login link that runs out. A link
+  // that has died ends the session with its own words, so the login page can say what happened.
+  const authKindRead = useAuthKind(token);
+  const authKind = authKindRead.auth;
+  useEffect(() => {
+    const reason = authKindRead.error?.reason;
+    if (token && (reason === 'link_expired' || reason === 'link_revoked')) {
+      onToken('', reason === 'link_expired' ? t('auth.linkExpired') : t('auth.linkRevoked'));
+    }
+  }, [token, authKindRead.error, onToken]);
   // A browser alert for each Goal that newly waits on the person. The first read is only the baseline.
   const alertSeen = useRef<Set<string> | null>(null);
   const openGoalRef = useRef<(goalId: string, tab?: GoalTab) => void>(() => undefined);
@@ -1062,6 +1077,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   useEffect(() => { setAgentsOpen(false); setDraftCollaboration(false); setCollaborationDirectories([]); }, [selectedId, hostId]);
   const onSettings = view === 'settings';
   const onGoal = view === 'goal' && !selectedId;
+  const onGoalsList = view === 'goals' && !selectedId;
   const onSteward = view === 'steward' && !selectedId;
   const onSchedules = view === 'schedules' && !selectedId;
   const onActivity = view === 'activity' && !selectedId;
@@ -1077,7 +1093,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const extOpen = onExt && extensions && extTarget ? resolveExtensionRoute(extTarget, extensions) : null;
   const extName = extOpen ? extensions?.find((e) => e.manifest.id === extOpen.extensionId)?.manifest.name[locale()] ?? extOpen.extensionId : '';
   /** The name of the page the main area shows instead of a thread, for the top bar; null on a thread. */
-  const viewTitle = onSettings ? t('sidebar.settings') : onGoal ? t('loopx.goalsGroup') : onSteward ? t('loopx.steward') : onObservability ? t('obs.title') : onMachines ? t('hosts.machines') : onAgents ? t('agents.title') : onTeams ? t('teams.title') : onSchedules
+  const viewTitle = onSettings ? t('sidebar.settings') : onGoal ? t('loopx.goalsGroup') : onGoalsList ? t('goals.title') : onSteward ? t('loopx.steward') : onObservability ? t('obs.title') : onMachines ? t('hosts.machines') : onAgents ? t('agents.title') : onTeams ? t('teams.title') : onSchedules
       ? t('sidebar.schedules')
       : onActivity
         ? t('activity.title')
@@ -1145,7 +1161,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const extWant = onExt ? (extOpen ? extensionHash(extOpen) : extTarget ?? '') : '';
   useEffect(() => {
     if (threadLink) return;
-    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onGoal ? `#/goals/${encodeURIComponent(goalPath)}${goalTab === 'overview' ? '' : `/${goalTab}`}` : onSteward ? STEWARD_HASH : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
+    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onGoal ? `#/goals/${encodeURIComponent(goalPath)}${goalTab === 'overview' ? '' : `/${goalTab}`}` : onGoalsList ? '#/goals' : onSteward ? STEWARD_HASH : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
     if (window.location.hash !== want) {
       window.history.replaceState(window.history.state, '', want || window.location.pathname + window.location.search);
     }
@@ -1323,7 +1339,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     // In the demo, doing something asks to connect; a part it has no data for just stays empty.
     if (e instanceof DemoError) {
       if (e.write) askToConnect();
-    } else if (e instanceof AuthError) signOut(t('app.tokenExpired'));
+    } else if (e instanceof AuthError) signOut(e.code === 'link_expired' ? t('auth.linkExpired') : e.code === 'link_revoked' ? t('auth.linkRevoked') : t('app.tokenExpired'));
     // A machine that dropped is explained in the main area; the hub is asked at once how it is.
     else if (e instanceof ApiError && e.details.code === 'host_offline') void reloadHosts();
     else setError(message(e));
@@ -1477,7 +1493,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             () => threadFeed.stream(true),
           );
         } catch (e) {
-          if (e instanceof AuthError) return signOut(t('app.tokenExpired'));
+          if (e instanceof AuthError) return signOut(e.code === 'link_expired' ? t('auth.linkExpired') : e.code === 'link_revoked' ? t('auth.linkRevoked') : t('app.tokenExpired'));
           // On another machine, a stream that will not open is how its dropping first shows.
           if (api.host && !ctrl.signal.aborted) void reloadHosts();
         }
@@ -2234,6 +2250,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const openSteward = () => navigate(() => {
     setSelectedId(null); setView('steward'); setDrawer(false);
   });
+  const openGoalsList = () => navigate(() => {
+    setSelectedId(null); setView('goals'); setDrawer(false);
+  });
   const openGoal = (goalId: string, tab: GoalTab = 'overview') => navigate(() => {
     setGoalPath(goalId); setGoalTab(tab); setSelectedId(null); setView('goal'); setDrawer(false);
   });
@@ -2845,10 +2864,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       ...(!demo ? [{ id: 'observability', label: t('obs.title'), icon: IconGauge, render: () => <ObservabilityPage api={api} agents={agents} initial="usage" /> }] : []),
       ...enabledViews(extensions ?? []).filter(v => v.view.sidebar?.pinned === false).map(v => ({ id: `ext:${v.extensionId}/${v.view.id}`, label: v.view.title[locale()], icon: (props: { size?: number }) => <HostIcon name={v.view.icon} {...props} />, onOpen: () => openExtensionView(extensionHash(v)) })),
     ] },
-    { label: t('settings.account'), entries: [demo
-      ? { id: 'connect', label: t('connect.connectHub'), icon: IconSignIn, onOpen: () => navigate(askToConnect) }
-      : { id: 'sign-out', label: t('app.signOut'), icon: IconSignOut, onOpen: () => setConfirmSignOut(true) }],
-    },
+    { label: t('settings.account'), entries: [
+      ...(demo ? [{ id: 'connect', label: t('connect.connectHub'), icon: IconSignIn, onOpen: () => navigate(askToConnect) }] : [
+        { id: 'access', label: t('access.title'), icon: IconShield, render: () => <AccessSettings token={token} auth={authKind} onReplaced={next => onToken(next)} /> },
+        { id: 'sign-out', label: t('app.signOut'), icon: IconSignOut, onOpen: () => setConfirmSignOut(true) },
+      ]),
+    ] },
   ];
   // The same body in both shapes: the standing panel beside the conversation, and the popover a
   // narrow window still gets. Only the standing one keeps itself open behind its own rows.
@@ -2993,10 +3014,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onOpenSteward={showcase ? undefined : openSteward}
           stewardActive={onSteward}
           goals={loopxStatus?.goals ?? []}
-          needsYouGoals={loopxNeedsYou}
+          attentionGoals={loopxStatus?.attention ?? []}
           activeGoalId={onGoal ? goalPath : null}
           onOpenGoal={openGoal}
           onOpenGoalTasks={goalId => openGoal(goalId, 'tasks')}
+          onOpenAllGoals={showcase ? undefined : openGoalsList}
           onOpenSchedules={showcase ? undefined : openSchedules}
           onOpenDesktop={hasDesktop ? () => { setDrawer(false); setDesktop('open'); } : undefined}
           desktopRunning={desktop === 'minimized'}
@@ -3004,6 +3026,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           extensionNav={extensionNav}
           notice={demo && compact ? showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact onConnect={askToConnect} /> : undefined}
         />
+        {/* While the login came through a link, its running-out is standing business: one quiet
+            line at the sidebar's foot, a tap away from where the permanent token goes. */}
+        {authKind?.kind === 'link' && !showcase ? <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} /> : null}
       </aside>
       {!compact && !sidebarHidden && (
         <div
@@ -3297,6 +3322,17 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               onBrowseFiles={threadId => { setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
               defaultAgent={draftAgent || agents[0]?.id || 'codex'}
               pickDirectory={pickGoalDir}
+            />
+          </div>
+        ) : onGoalsList ? (
+          <div key="goals-list" className="scroller">
+            <GoalsPage
+              token={token}
+              goals={loopxStatus?.goals ?? []}
+              attention={loopxStatus?.attention ?? []}
+              activeGoalId={null}
+              onOpenGoal={openGoal}
+              onChanged={() => loopxRead.reload()}
             />
           </div>
         ) : onSteward ? (
