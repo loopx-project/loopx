@@ -422,6 +422,7 @@ class PiSession implements AgentSession {
     });
     child.on('exit', (code, signal) => this.onExit(code, signal));
     child.on('error', (err) => this.onExit(null, String(err)));
+    child.stdin.on('error', (err) => this.onExit(null, String(err)));
   }
 
   private static spawn(
@@ -491,7 +492,11 @@ class PiSession implements AgentSession {
     const id = `req-${this.nextId++}`;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.child.stdin.write(JSON.stringify({ id, type, ...payload }) + '\n');
+      try {
+        this.child.stdin.write(JSON.stringify({ id, type, ...payload }) + '\n');
+      } catch (err) {
+        this.onExit(null, String(err));
+      }
     });
   }
 
@@ -599,6 +604,7 @@ class PiSession implements AgentSession {
   }
 
   private onExit(code: number | null, signal: string | null | NodeJS.Signals): void {
+    if (this.exited) return;
     this.exited = true;
     void this.close().catch(error => console.error('[pi] process cleanup failed:', error));
     const err = new Error(`${this.label} exited (code=${code}, signal=${signal})`);

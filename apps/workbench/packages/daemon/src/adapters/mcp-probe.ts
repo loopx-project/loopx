@@ -45,17 +45,26 @@ export async function probeMcpToolNames(server: ConfiguredMcpServer, timeoutMs =
     }
     let buffer = '';
     let nextId = 1;
-    const pending = new Map<number, (result: any) => void>();
+    let finished = false;
+    const pending = new Map<number, { resolve(result: any): void; reject(error: Error): void }>();
     const finish = (names: string[]) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
+      for (const request of pending.values()) request.reject(new Error('MCP probe ended'));
+      pending.clear();
+      child.stdin.destroy();
       child.kill();
       resolve(names);
     };
     const timer = setTimeout(() => finish([]), timeoutMs);
     const send = (payload: unknown) => {
+      if (finished) return;
       try { child.stdin.write(JSON.stringify(payload) + '\n'); } catch { finish([]); }
     };
+    child.stdin.on('error', () => finish([]));
     child.on('error', () => finish([]));
+    child.on('close', () => finish([]));
     child.stdout!.setEncoding('utf8');
     child.stdout!.on('data', (chunk: string) => {
       buffer += chunk;
@@ -69,12 +78,13 @@ export async function probeMcpToolNames(server: ConfiguredMcpServer, timeoutMs =
         const settle = pending.get(message.id);
         if (settle && message.error === undefined) {
           pending.delete(message.id);
-          settle(message.result);
+          settle.resolve(message.result);
         }
       }
     });
-    const request = (method: string, params: unknown) => new Promise<any>((settle) => {
-      pending.set(nextId, settle);
+    const request = (method: string, params: unknown) => new Promise<any>((resolve, reject) => {
+      if (finished) { reject(new Error('MCP probe ended')); return; }
+      pending.set(nextId, { resolve, reject });
       send({ jsonrpc: '2.0', id: nextId++, method, params });
     });
     void (async () => {
