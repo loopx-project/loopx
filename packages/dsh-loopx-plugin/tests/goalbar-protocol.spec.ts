@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  GOALBAR_ADMISSION_FAILURE_CATEGORIES,
   GOALBAR_ENDPOINTS,
   GOALBAR_READ_FAULT_CODES,
   GOALBAR_REQUEST_VERSION,
@@ -19,6 +20,7 @@ const snapshot: GoalBarSnapshotV1 = {
   goalActivation: 'active',
   agentStatus: 'idle',
   progress: { processed: 2, remaining: 3, total: 5 },
+  continuationAdmission: { state: 'clear' },
 }
 function response(request: GoalBarRequestV1, result: unknown): Record<string, unknown> {
   return { v: GOALBAR_RESPONSE_VERSION, op: request.op, sessionId, result }
@@ -182,5 +184,26 @@ describe('GoalBar snapshot V1 payload', () => {
     })).toBeUndefined()
     expect(decodeGoalBarSnapshotV1({ ...snapshot, rawPayload: '/private/state' }))
       .toBeUndefined()
+  })
+
+  it('decodes every closed admission failure category and nothing else', () => {
+    for (const category of GOALBAR_ADMISSION_FAILURE_CATEGORIES) {
+      const failed = {
+        ...snapshot,
+        continuationAdmission: { state: 'failed', category },
+      }
+      expect(decodeGoalBarSnapshotV1(failed)).toEqual(failed)
+    }
+    for (const admission of [
+      undefined,
+      { state: 'failed' },
+      { state: 'clear', category: 'invalid_response' },
+      { state: 'failed', category: 'unexpected_category' },
+      { state: 'failed', category: 'invalid_response', detail: '/private/stderr' },
+      { state: 'paused' },
+    ]) {
+      expect(decodeGoalBarSnapshotV1({ ...snapshot, continuationAdmission: admission }))
+        .toBeUndefined()
+    }
   })
 })

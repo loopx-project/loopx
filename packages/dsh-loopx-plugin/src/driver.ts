@@ -22,6 +22,11 @@ import type {
   GoalBarSessionCapture,
 } from './goalbar/events.ts'
 import type { GoalBarExpectedBindingV1 } from './goalbar/protocol.ts'
+import { GOALBAR_ADMISSION_CLEAR } from './goalbar/protocol.ts'
+import type {
+  GoalBarAdmissionFailureCategoryV1,
+  GoalBarContinuationAdmissionV1,
+} from './goalbar/protocol.ts'
 
 export const name = 'dsh-loopx-driver'
 export const inject = ['agents', 'loopxBootstrap']
@@ -104,6 +109,8 @@ interface DriverState {
   pauseAfterTurnError: boolean
   schedulerToken: string
   unchangedPolls: number
+  /** Safe category of the last unadmitted admission attempt, for GoalBar projection. */
+  admissionFailure?: { readonly category: GoalBarAdmissionFailureCategoryV1 } | undefined
   readonly commands: Set<string>
   readonly evaluationWaiters: Set<EvaluationWaiter>
   run?: Promise<void> | undefined
@@ -155,6 +162,8 @@ export interface LoopXDriverOptions {
   readonly retryDelaysMs?: readonly number[] | undefined
   readonly runDetached?: (<T>(operation: () => Promise<T>) => Promise<T>) | undefined
   readonly warn?: ((message: string) => void) | undefined
+  /** Notified only when the projected admission failure is set or cleared. */
+  readonly onAdmissionChange?: ((session: Agent['session']) => void) | undefined
 }
 
 const systemClock: DriverClock = Object.freeze({
@@ -707,6 +716,25 @@ function renderThrown(value: unknown): string {
  */
 export type DriverDisposeCause = 'removal' | 'replacement'
 
+/**
+ * Collapse the typed CLI failure into one public-safe GoalBar category.
+ * The raw message, stderr, and paths stay in the host warning log only.
+ */
+function admissionFailureCategory(value: unknown): GoalBarAdmissionFailureCategoryV1 {
+  if (!(value instanceof LoopXCliError)) return 'driver_error'
+  switch (value.kind) {
+    case 'missing':
+      return 'cli_unavailable'
+    case 'typed_failure':
+      return 'admission_rejected'
+    case 'invalid_schema':
+    case 'invalid_json':
+      return 'invalid_response'
+    default:
+      return 'cli_unreachable'
+  }
+}
+
 /** Exact-session driver with typed activation and no binding mirror or failure counter. */
 export class LoopXContinuationDriver {
   private readonly states = new Map<Agent, DriverState>()
@@ -718,6 +746,7 @@ export class LoopXContinuationDriver {
   private readonly retryDelaysMs: readonly number[]
   private readonly runDetached: <T>(operation: () => Promise<T>) => Promise<T>
   private readonly warn: (message: string) => void
+  private readonly onAdmissionChange: ((session: Agent['session']) => void) | undefined
   private command?: LoopXCommand | undefined
   private disposed = false
 
@@ -736,6 +765,7 @@ export class LoopXContinuationDriver {
         // Diagnostic exporters must not interrupt admission or message restoration.
       }
     }
+    this.onAdmissionChange = options.onAdmissionChange
   }
 
   observeAgent(agent: Agent): void {
@@ -761,6 +791,7 @@ export class LoopXContinuationDriver {
     state.retrySelection = false
     state.schedulerToken = ''
     state.unchangedPolls = 0
+    this.clearAdmissionFailure(state)
     state.commands.clear()
     state.activation = foldSessionActivation(agent.session)
     this.requestEvaluation(state)
@@ -864,10 +895,26 @@ export class LoopXContinuationDriver {
     }
     state.retrySelection = false
     this.cancelPending(state)
+    // Pause takes over continuation authority; a latched admission failure
+    // would otherwise keep warning on a Goal the user already paused.
+    this.clearAdmissionFailure(state)
     return this.captureIsLive(capture)
       && state.activation.session === capture.session
       ? { kind: 'applied' }
       : { kind: 'unavailable', reason: 'session_unavailable' }
+  }
+
+  readContinuationAdmission(
+    capture: GoalBarSessionCapture,
+  ): GoalBarContinuationAdmissionV1 {
+    const state = this.states.get(capture.agent)
+    if (state === undefined || state.activation.session !== capture.session) {
+      return GOALBAR_ADMISSION_CLEAR
+    }
+    const failure = state.admissionFailure
+    return failure === undefined
+      ? GOALBAR_ADMISSION_CLEAR
+      : { state: 'failed', category: failure.category }
   }
 
   onSessionEvent(agent: Agent, event: SessionEvent): void {
@@ -1045,6 +1092,9 @@ export class LoopXContinuationDriver {
         existing.retrySelection = false
         existing.schedulerToken = ''
         existing.unchangedPolls = 0
+        // The replaced Session's failure dies with it; its waiters are
+        // invalidated separately, so no admission change is published.
+        existing.admissionFailure = undefined
         existing.commands.clear()
         existing.activation = foldSessionActivation(agent.session)
       }
@@ -1173,6 +1223,7 @@ export class LoopXContinuationDriver {
       }
       if (!controller.signal.aborted && !cancelled) {
         this.warn(`dsh-loopx-driver: admission_failed stage=${stage} ${cliErrorFields(error)} signal_aborted=${admissionSignal?.aborted ?? controller.signal.aborted} elapsed_ms=${Math.round(performance.now() - startedAt)}`)
+        this.recordAdmissionFailure(state, admissionFailureCategory(error))
       }
       return evaluationStarted
     } finally {
@@ -1189,10 +1240,12 @@ export class LoopXContinuationDriver {
       if (plan.schedulerToken !== undefined) state.schedulerToken = plan.schedulerToken
       if (plan.unchangedPolls !== undefined) state.unchangedPolls = plan.unchangedPolls
       if (plan.delayMs !== undefined) this.schedule(state, plan.delayMs)
+      this.clearAdmissionFailure(state)
       return true
     }
     state.schedulerToken = ''
     state.unchangedPolls = 0
+    this.clearAdmissionFailure(state)
     if (!this.ready(state) || state.agent.session !== plan.session) return true
     const message = automaticMessage(plan)
     const reservation: Reservation = {
@@ -1581,6 +1634,22 @@ export class LoopXContinuationDriver {
     state.reservation = undefined
   }
 
+  private recordAdmissionFailure(
+    state: DriverState,
+    category: GoalBarAdmissionFailureCategoryV1,
+  ): void {
+    const current = state.admissionFailure
+    if (current !== undefined && current.category === category) return
+    state.admissionFailure = { category }
+    this.onAdmissionChange?.(state.agent.session)
+  }
+
+  private clearAdmissionFailure(state: DriverState): void {
+    if (state.admissionFailure === undefined) return
+    state.admissionFailure = undefined
+    this.onAdmissionChange?.(state.agent.session)
+  }
+
   private restoreCompetingMessages(
     agent: Agent,
     messages: readonly UserMessage[],
@@ -1639,6 +1708,7 @@ export function apply(ctx: Context): void {
     resolveCommand: signal => resolvePluginLoopXCommand({ signal }),
     runDetached: operation => ctx.agents.withoutInitiator(operation),
     warn: message => { ctx.logger.warn(message) },
+    onAdmissionChange: session => { goalBarCoordinator.publishAdmissionChange(session) },
   })
   const replacementUnload = watchReplacementUnload(ctx)
 

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { isDeepStrictEqual } from 'node:util'
 import {
   LoopXCliError,
   resolveLoopXCommand,
@@ -26,11 +27,13 @@ import {
   unavailableGoalBarSourceRevision,
 } from './read-model.ts'
 import {
+  GOALBAR_ADMISSION_CLEAR,
   GOALBAR_RESPONSE_VERSION,
 } from './protocol.ts'
 import type {
   GoalBarActionResultV1,
   GoalBarExpectedBindingV1,
+  GoalBarContinuationAdmissionV1,
   GoalBarReadFaultCode,
   GoalBarReadResultV1,
   GoalBarRequestV1,
@@ -76,6 +79,9 @@ export interface GoalBarCoordinatorPort {
     capture: GoalBarSessionCapture,
   ): Promise<GoalBarDriverActionReceipt>
   hasRecoveryAttention?(capture: GoalBarSessionCapture, expected: GoalBarExpectedBindingV1): boolean
+  readContinuationAdmission(
+    capture: GoalBarSessionCapture,
+  ): GoalBarContinuationAdmissionV1
 }
 
 export interface GoalBarServiceOptions {
@@ -232,6 +238,8 @@ export class GoalBarService implements GoalBarServiceHandle {
   private readonly actionMaxOutputBytes: number
   private readonly warn: (message: string) => void
   private readonly disposal = new AbortController()
+  /** Last admission value served by a read per session, for watch liveness. */
+  private readonly servedAdmission = new Map<string, GoalBarContinuationAdmissionV1>()
   private activeAction?: ActionAdmission | undefined
   private disposed = false
 
@@ -365,6 +373,7 @@ export class GoalBarService implements GoalBarServiceHandle {
   ): Promise<GoalBarReadResultV1> {
     const capture = this.capture(sessionId)
     if (capture === undefined) {
+      this.servedAdmission.delete(sessionId)
       return {
         kind: 'fault',
         code: 'session_unavailable',
@@ -372,6 +381,13 @@ export class GoalBarService implements GoalBarServiceHandle {
         sourceRevision: unavailableGoalBarSourceRevision(),
       }
     }
+    // Sample the driver admission state before any CLI work, so every read
+    // outcome advances the watch comparison even when the snapshot itself
+    // is hidden or faulty.
+    this.servedAdmission.set(
+      sessionId,
+      this.coordinator.readContinuationAdmission(capture),
+    )
 
     // This cursor is captured before command resolution or any other CLI read.
     const baseSessionEventSeq = latestSessionEventSeq(capture.session)
@@ -440,8 +456,21 @@ export class GoalBarService implements GoalBarServiceHandle {
         // Status is process-local authority and is refreshed at publication.
         agentStatus: capture.agent.status,
         ...(recoveryAttention ? { recoveryAttention: true } : {}),
+        // The latched admission failure is driver-process state for the exact
+        // Session and is refreshed from the same process-local authority.
+        continuationAdmission: this.publishServedAdmission(sessionId, capture),
       },
     }
+  }
+
+  /** Read the live admission state and record it as the served value. */
+  private publishServedAdmission(
+    sessionId: string,
+    capture: LiveCapture,
+  ): GoalBarContinuationAdmissionV1 {
+    const admission = this.coordinator.readContinuationAdmission(capture)
+    this.servedAdmission.set(sessionId, admission)
+    return admission
   }
 
   private async readFault(
@@ -509,6 +538,19 @@ export class GoalBarService implements GoalBarServiceHandle {
     if (cursor !== null && (upperBound === null || cursor > upperBound)) {
       return { kind: 'fault', code: 'session_unavailable' }
     }
+    // An admission change that landed while no watcher was registered (for
+    // example during the client's own re-read) still differs from the last
+    // served value; surface it immediately instead of waiting for an event.
+    const admissionNow = this.coordinator.readContinuationAdmission(capture)
+    if (!isDeepStrictEqual(
+      admissionNow,
+      this.servedAdmission.get(request.sessionId) ?? GOALBAR_ADMISSION_CLEAR,
+    )) {
+      return {
+        kind: 'source_changed',
+        sessionEventSeq: upperBound ?? cursor,
+      }
+    }
     while (!operationSignal.aborted && this.captureIsCurrent(capture)) {
       const remaining = Math.max(0, deadline - Date.now())
       const receipt = await this.watchService.waitForSessionChange(
@@ -548,6 +590,19 @@ export class GoalBarService implements GoalBarServiceHandle {
         cursor = receipt.sessionEventSeq
       } else if (receipt.kind === 'timeout') {
         cursor = receipt.sessionEventSeq
+      } else if (receipt.kind === 'admission_changed'
+        && receipt.sessionId === request.sessionId) {
+        // Driver admission state lives in the read snapshot but not in any
+        // hashed source file, so the watcher must re-read even when the
+        // revision is unchanged. Report it as a source change to force one
+        // bounded re-read; the read itself stays idempotent.
+        if (!this.captureIsCurrent(capture)) {
+          return { kind: 'fault', code: 'session_unavailable' }
+        }
+        return {
+          kind: 'source_changed',
+          sessionEventSeq: latestSessionEventSeq(capture.session) ?? cursor,
+        }
       } else {
         return { kind: 'fault', code: 'session_unavailable' }
       }
