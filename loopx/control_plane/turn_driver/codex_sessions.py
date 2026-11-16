@@ -14,6 +14,7 @@ from typing import Any, cast
 from ...boundary_authority import normalize_checkpointed_boundary_authority_entries
 from ...file_lock import exclusive_file_lock
 from ..runtime.private_permissions import protect_private_path
+from ..runtime.file_paths import windows_extended_path
 from ...runtime import validate_goal_id_path_segment
 from ..content_digest import BARE_SHA256_PATTERN
 from ..projects.registry_codec import (
@@ -84,7 +85,7 @@ def _session_path(
         ).encode("utf-8")
     ).hexdigest()
     goal_id: str = validate_goal_id_path_segment(lineage["goal_id"])
-    return runtime_root / "goals" / goal_id / "turn-sessions" / f"{digest}.json"
+    return windows_extended_path(runtime_root / "goals" / goal_id / "turn-sessions" / f"{digest}.json")
 
 
 def _valid_session_id(value: Any) -> str | None:
@@ -180,6 +181,7 @@ def codex_cli_session_binding(
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     session_scope: str = "todo",
     host: str = "codex-cli",
+    exact_session: bool = False,
 ) -> dict[str, str] | None:
     """Read the original native session from one complete source.
 
@@ -212,6 +214,9 @@ def codex_cli_session_binding(
     return {
         "schema_version": "loopx_turn_session_binding_v0",
         **lineage,
+        **({"session_sha256": hashlib.sha256(json.dumps({key: session.get(key) for key in (
+            "session_id", "session_profile_digest", "operation_profile_digest", "operation_transport")},
+            sort_keys=True).encode()).hexdigest()} if exact_session else {}),
     }
 
 

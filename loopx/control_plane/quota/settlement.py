@@ -161,6 +161,7 @@ class QuotaSettlementReadback:
     writeback: SettlementResult[dict[str, Any]]
     spend: SettlementResult[dict[str, Any]]
     delivery: SettlementResult[dict[str, Any]]
+    spend_qualification: SettlementResult[dict[str, Any]]
     settlement: SettlementResult[dict[str, Any]]
     terminal_closeout: SettlementResult[dict[str, Any]]
     terminal_settlement: SettlementResult[dict[str, Any]]
@@ -200,8 +201,28 @@ def attach_settlement_progress(
     if not isinstance(progress, dict) or progress.get("schema_version") != "quota_settlement_progress_v0":
         raise RuntimeError("TypeScript quota settlement progress missing or invalid")
     payload["settlement_progress"] = dict(progress)
+    if runtime_root is not None:
+        from ..goals.checkpoint_context_io import first_delivery_progress
+
+        delivery = first_delivery_progress(runtime_root, readback, registry_path=registry_path)
+        if delivery is not None:
+            payload["first_delivery_progress"] = delivery
+            if delivery["stage"] in {"direction_pending", "direction_stopped", "direction_failed", "operation_unknown"}:
+                payload["recommended_action"] = delivery["next_action"]
     payload.pop("settlement_owed", None)
     identity = readback.identity.value
+    if (payload.get("ok") is True and goal_ref is not None and registry_path is not None
+            and runtime_root is not None and progress.get("state") == "direction_pending"
+            and progress.get("next_step") == "durable_writeback"):
+        from ..goals.checkpoint_context_io import checkpoint_continuation_required, pending_checkpoint_cli_actions
+        from ..work_items.action_selection_contract import render_cli_command_prefix
+
+        if checkpoint_continuation_required(readback):
+            # An original source result already has admission. Its receipt can
+            # expose the remaining recovery without another fresh-work guard.
+            payload["next_cli_actions"] = pending_checkpoint_cli_actions(readback,
+                command_prefix=render_cli_command_prefix(
+                    registry_path=str(registry_path), runtime_root=str(runtime_root)), goal_ref=goal_ref)
     if payload.get("ok") is not True or progress.get("next_step") != "quota_spend" or identity is None:
         return
     route = loopx_cli_argv()
@@ -255,6 +276,10 @@ def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
     if not isinstance(progress, dict):
         return []
     lines = [f"- settlement: `{progress.get('state')}`"]
+    delivery = payload.get("first_delivery_progress")
+    if isinstance(delivery, dict):
+        lines.extend([f"- first delivery: `{delivery['stage']}`; result committed: {delivery['result_committed']}",
+            f"- next: {delivery['next_action']}"])
     if progress.get("closeout_kind") == "typed_blocked_writeback_no_spend":
         lines.append("- closeout: typed blocked writeback; no quota slot spent")
     elif progress.get("closeout_kind") == "capability_duty_retired_no_spend":
@@ -262,6 +287,8 @@ def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
     owed = payload.get("settlement_owed")
     if isinstance(owed, dict):
         lines.extend([f"- settlement_owed: {owed['reason']}", "", "```sh", owed["command"], "```"])
+    if isinstance(payload.get("goal_ref"), Mapping) and isinstance(payload.get("next_cli_actions"), list):
+        lines.extend(["", "```sh", *payload["next_cli_actions"], "```"])
     return lines
 
 
@@ -530,6 +557,7 @@ def read_heartbeat_settlement(
         writeback=_readback_result(payload.get("writeback")),
         spend=_readback_result(payload.get("spend")),
         delivery=_readback_result(payload.get("delivery")),
+        spend_qualification=_readback_result(payload.get("spend_qualification")),
         settlement=_readback_result(payload.get("settlement")),
         terminal_closeout=_readback_result(payload.get("terminal_closeout")),
         terminal_settlement=_readback_result(payload.get("terminal_settlement")),

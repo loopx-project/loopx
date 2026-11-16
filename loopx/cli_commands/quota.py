@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 import time
 from collections.abc import Callable, Mapping
@@ -8,6 +9,7 @@ from importlib import import_module
 from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from ..cli_runtime import PrintPayload
 
 from .quota_presentation import (
     _compose_explicit_turn_context,
@@ -40,6 +42,7 @@ from ..control_plane.quota.error_codes import (
 )
 from ..control_plane.quota.heartbeat_receipt import (
     attach_uncommitted_heartbeat_receipt,
+    capture_heartbeat_admission_source,
     fail_heartbeat_receipt,
     find_heartbeat_receipt,
     heartbeat_receipt_request_subject,
@@ -81,6 +84,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
             "quota_rollout_details",
             "quota_rollout_replan_obligation_id",
             "quota_rollout_todo_id",
+            "quota_result_work_admission_details",
             "reconcile_existing_heartbeat_receipt_for_turn",
             "render_existing_heartbeat_receipt_payload",
         ),
@@ -147,10 +151,6 @@ def _export(name: str) -> Any:
     return getattr(sys.modules[__name__], name)
 
 
-PrintPayload = Callable[
-    [dict[str, object], str, Callable[[dict[str, object]], str]],
-    None,
-]
 RolloutEventAppender = Callable[..., dict[str, object]]
 
 
@@ -313,6 +313,7 @@ def _prepare_quota_command_execution(
             _export("build_lark_operator_inbox_urgency_projector")
         ),
         force_projection_refresh=turn_start_mutated,
+        **({"goal_ref": goal_ref} if goal_ref is not None else {}),
     )
     return goal_ref, turn_start_hook_dispatch, context
 
@@ -635,6 +636,7 @@ def _record_non_guard_quota_event(
             turn_instance_id=spend_turn_instance_id,
             replan_obligation_id=rollout_replan_obligation_id,
             goal_ref=goal_ref,
+            **({"registry_path": registry_path} if goal_ref is not None else {}),
         )
         attach_reward_memory_ingest_after_spend(
             payload,
@@ -642,6 +644,47 @@ def _record_non_guard_quota_event(
             runtime_root=context.runtime_root,
             registry_path=registry_path,
             readback=readback,
+        )
+
+
+def _read_back_committed_heartbeat(
+    payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    runtime_root: Path,
+    turn_instance_id: str,
+    stall_observation: str,
+    requested_todo_id: str | None,
+    goal_ref: dict[str, str] | None,
+) -> None:
+    """Expose selection only after the original heartbeat receipt is read back."""
+    receipt = find_heartbeat_receipt(
+        runtime_root,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
+    )
+    if receipt:
+        rollout_event_value = payload.get("rollout_event")
+        rollout_event: Mapping[str, object] = (
+            rollout_event_value if isinstance(rollout_event_value, Mapping) else {}
+        )
+        payload["heartbeat_receipt"] = heartbeat_receipt_view(
+            receipt,
+            turn_instance_id=turn_instance_id,
+            status="committed" if rollout_event.get("appended") else "replayed",
+        )
+        _export("commit_requested_action_selection")(payload, requested_todo_id=requested_todo_id)
+    else:
+        fail_heartbeat_receipt(
+            payload,
+            turn_instance_id=turn_instance_id,
+            stall_observation=stall_observation,
+            reason=(
+                "heartbeat receipt append could not be read back; retry "
+                "quota should-run with the same --turn-instance-id"
+            ),
         )
 
 
@@ -710,6 +753,15 @@ def _append_quota_heartbeat_receipt(
             "stall_observation": stall_observation,
             "settlement_effect_id": settlement_identity.effect_id if settlement_identity is not None else "",
         }
+    )
+    if settlement_identity is not None:
+        rollout_details.update(_export("quota_result_work_admission_details")(
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=args.goal_id, todo_id=rollout_todo_id, goal_ref=goal_ref,
+        ))
+    rollout_details = capture_heartbeat_admission_source(
+        payload, details=rollout_details, identity=settlement_identity,
+        registry_path=registry_path, runtime_root=runtime_root,
     )
     try:
         with recovery_admission_append_precondition(
@@ -811,6 +863,7 @@ def _execute_quota_command(
     upgrade_recovery_wait = False
     action_selection_preflight_failed = False
     closeout_query_unavailable = False
+    successor_admission_deferred = False
     action_selection: RequestedQuotaActionSelection | None = None
     heartbeat_stall_observation = "not_evaluated"
     detail_sections: frozenset[str] = frozenset()
@@ -908,7 +961,17 @@ def _execute_quota_command(
                 ),
                 goal_ref=goal_ref,
             )
+            recovery = payload.get("unsettled_host_turn_recovery")
+            successor_admission_deferred = (
+                heartbeat_receipt_existing is None and isinstance(recovery, Mapping)
+                and recovery.get("defer_successor_admission") is True
+            )
+            if successor_admission_deferred:
+                # The original Turn still owns any scheduler follow-up. A new
+                # guard receipt here would supersede it, even if left unbound.
+                payload.pop("scheduler_hint", None)
             action_selection_preflight = (
+                None if successor_admission_deferred else
                 _export("reconcile_requested_quota_action_selection")(
                     payload,
                     args,
@@ -918,8 +981,8 @@ def _execute_quota_command(
                     goal_ref=goal_ref,
                 )
             )
-            action_selection_preflight_failed = action_selection_preflight.rejected
-            if action_selection_preflight.rejected:
+            if action_selection_preflight is not None and action_selection_preflight.rejected:
+                action_selection_preflight_failed = True
                 reentry_args = _export("inline_action_selection_reentry_args")(
                     payload, args, selection=action_selection,
                     preflight=action_selection_preflight,
@@ -939,7 +1002,8 @@ def _execute_quota_command(
                     heartbeat_receipt_existing_appended = (
                         action_selection_preflight.receipt_appended
                     )
-            if heartbeat_turn_id and reentry is None and not action_selection_preflight_failed:
+            if (heartbeat_turn_id and reentry is None and not action_selection_preflight_failed
+                    and not successor_admission_deferred):
                 # A wait receipt grants no recovery allowance. After a valid
                 # resume, bind its first grant under the ordinary append fence.
                 upgrade_recovery_wait = _can_upgrade_recovery_wait(payload, action_selection)
@@ -956,6 +1020,7 @@ def _execute_quota_command(
                         runtime_root=runtime_root,
                         turn_instance_id=heartbeat_turn_id,
                         existing=heartbeat_receipt_existing,
+                        registry_path=registry_path,
                         goal_ref=goal_ref,
                     )
                 else:
@@ -1103,7 +1168,7 @@ def _execute_quota_command(
             replan_obligation_id=rollout_replan_obligation_id,
         )
         if heartbeat_turn_id and args.quota_command == "should-run":
-            if action_selection_preflight_failed or closeout_query_unavailable:
+            if action_selection_preflight_failed or closeout_query_unavailable or successor_admission_deferred:
                 if heartbeat_receipt_existing:
                     _export("render_existing_heartbeat_receipt_payload")(
                         payload,
@@ -1179,6 +1244,20 @@ def _execute_quota_command(
                 spend_turn_instance_id=spend_turn_instance_id, rollout_details=rollout_details,
                 append_cli_rollout_event=append_cli_rollout_event,
             )
+    if (args.quota_command == "should-run" and heartbeat_turn_id and payload.get("ok") is True
+            and not successor_admission_deferred):
+        payload = _restore_quota_work_input(args, payload, heartbeat_turn_id=heartbeat_turn_id,
+            heartbeat_receipt_existing=heartbeat_receipt_existing, registry_path=registry_path,
+            runtime_root=runtime_root, runtime_root_arg=runtime_root_arg, goal_ref=goal_ref)
+    if getattr(args, "scheduler_observation", False):
+        attach_reward_memory_recall_after_should_run(
+            payload,
+            quota_command=args.quota_command,
+            heartbeat_turn_id=heartbeat_turn_id,
+            registry_path=registry_path,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+        )
     return _emit_quota_result(
         payload,
         args,
@@ -1190,3 +1269,160 @@ def _execute_quota_command(
         detail_sections=detail_sections,
         print_payload=print_payload,
     )
+
+
+def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_receipt_existing,
+                              registry_path, runtime_root, runtime_root_arg, goal_ref):
+    """Restore the original captured input after a successful quota guard."""
+    if args.quota_command == "should-run" and heartbeat_turn_id and payload.get("ok") is True:
+        from ..control_plane.goals.checkpoint_context_io import (
+            TurnResultWork, checkpoint_continuation_required, pending_checkpoint_cli_actions,
+            project_completed_first_delivery_cli, read_checkpoint_context, replan_checkpoint_cli_actions,
+            result_work_context, result_work_context_exists, result_work_required,
+        )
+        from ..control_plane.quota.settlement import read_heartbeat_settlement, render_owed_host_command
+        from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
+        from ..control_plane.work_items.action_selection_contract import render_cli_command_prefix
+
+        try:
+            work_readback = read_heartbeat_settlement(runtime_root, goal_id=args.goal_id,
+                agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None),
+                turn_instance_id=heartbeat_turn_id, registry_path=registry_path, goal_ref=goal_ref,
+                resolve_original_binding=True)
+            if (work_readback is not None and work_readback.identity.value is not None
+                    and result_work_required(work_readback)):
+                payload["work_input_restored"] = result_work_context_exists(runtime_root, work_readback.identity.value)
+                progress = work_readback.progress or {}
+                if hold := progress.get("work_authority_hold"):
+                    interaction = payload["interaction_contract"]
+                    channel = interaction["cli_channel"]
+                    channel.pop("settlement_plan", None)
+                    channel.update(next_cli_actions=[], spend_allowed_now=False, spend_after_validation=False)
+                    payload["settlement_progress"] = progress
+                    interaction["agent_channel"]["primary_action"] = payload["recommended_action"] = hold
+                    return payload
+                committed = heartbeat_receipt_existing is not None and TurnResultWork(
+                    registry_path, runtime_root, work_readback.identity.value, goal_ref).result_committed()
+                if progress.get("state") == "direction_pending":
+                    interaction = payload["interaction_contract"]
+                    channel = interaction["cli_channel"]
+                    channel["next_cli_actions"] = pending_checkpoint_cli_actions(work_readback,
+                        command_prefix=render_cli_command_prefix(
+                            registry_path=str(registry_path), runtime_root=str(runtime_root)), goal_ref=goal_ref)
+                    channel.update(spend_allowed_now=False, spend_after_validation=True)
+                    interaction["agent_channel"]["primary_action"] = payload["recommended_action"] = (
+                        "Result retained; read the original Turn's post-result context and complete its direction before spending."
+                    )
+                if committed:
+                    payload["result_committed"] = True
+                    delivery = payload.get("first_delivery_progress")
+                    if not isinstance(delivery, dict):
+                        delivery = {}
+                    identity = work_readback.identity.value
+                    payload["recommended_action"] = (
+                        delivery["next_action"] if delivery.get("settlement_identity") == identity.as_dict()
+                        else "Resume this original Turn's pending settlement; its Todo result is already committed."
+                    )
+                    if (work_readback.writeback_run is None and progress.get("state") == "writeback_required"
+                            and delivery.get("stage") == "direction_pending" and identity.todo_id is not None
+                            and delivery.get("settlement_identity") == identity.as_dict()
+                            and checkpoint_continuation_required(work_readback)):
+                        direction = read_checkpoint_context(
+                            registry_path=registry_path, runtime_root_override=str(runtime_root),
+                            goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+                            turn_instance_id=identity.turn_instance_id, goal_ref=goal_ref, purpose="first_delivery",
+                            reuse_current_first_delivery=True,
+                        )
+                        read_id = direction.get("read_context_id")
+                        if (direction.get("ok") is not True or direction.get("settlement_identity") != identity.as_dict()
+                                or not isinstance(read_id, str) or not read_id):
+                            raise ValueError("First delivery context is unavailable; recover this original Turn.")
+                        context_view = budgeted_settlement_result(
+                            direction, runtime_root=runtime_root, output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+                            deferred_fields=("basis", "context", "replan_context"),
+                            read_instruction=(
+                                "Read the saved result details before judging direction. Keep this read ID and original Turn."
+                            ),
+                        )
+                        interaction = payload["interaction_contract"]
+                        project_completed_first_delivery_cli(
+                            interaction["cli_channel"], identity, direction_context=context_view, read_context_id=read_id,
+                        )
+                        action = (
+                            "Read the original Turn's checkpoint_context in the writeback step, "
+                            "judge the direction, and submit it with the generated command."
+                        )
+                        delivery["next_action"] = action
+                        interaction["agent_channel"]["primary_action"] = payload["recommended_action"] = action
+                elif work_readback.writeback_run is None:
+                    payload["delivery_result_context"] = result_work_context(registry_path=registry_path,
+                        runtime_root=runtime_root, identity=work_readback.identity.value, goal_ref=goal_ref)
+                    interaction = payload.get("interaction_contract", {})
+                    if interaction.get("mode") == "autonomous_replan":
+                        channel = interaction["cli_channel"]
+                        channel["next_cli_actions"] = replan_checkpoint_cli_actions(
+                            channel["next_cli_actions"], work_readback,
+                            command_prefix=render_cli_command_prefix(
+                                registry_path=str(registry_path), runtime_root=str(runtime_root)))
+                    recovery = payload.get("unsettled_host_turn_recovery")
+                    identity = work_readback.identity.value
+                    if (isinstance(recovery, dict)
+                            and recovery.get("repair") in {"blocked_writeback", "durable_writeback"}
+                            and recovery.get("scope") == "current_turn"
+                            and recovery.get("binding_kind") == "todo" and identity.todo_id is not None
+                            and recovery.get("binding_id") == identity.todo_id
+                            and recovery.get("turn_instance_id") == identity.turn_instance_id):
+                        context_args = ["checkpoint-context", "--purpose", "delivery_result",
+                                        "--goal-id", identity.goal_id, "--agent-id", identity.agent_id,
+                                        "--todo-id", identity.todo_id, "--turn-instance-id", identity.turn_instance_id]
+                        if goal_ref is not None:
+                            context_args.extend(["--goal-instance-id", goal_ref["goal_instance_id"]])
+                        prefix = render_cli_command_prefix(registry_path=str(registry_path),
+                                                           runtime_root=str(runtime_root))
+                        channel = interaction["cli_channel"]
+                        writeback_prefix = f"{prefix} refresh-state "
+                        read_command = f"{prefix} --format json {shlex.join(context_args)}"
+                        if recovery["repair"] == "durable_writeback":
+                            read_command = render_owed_host_command(shlex.split(read_command))
+                            plan = channel["settlement_plan"]
+                            writeback = next(
+                                step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback"
+                            )
+                            spend = next(
+                                step for step in plan["ordered_steps"] if step["kind"] == "quota_spend"
+                            )
+                            # Recover the result before authoring its post-result direction.
+                            writeback.pop("semantic_closeout_command_template", None)
+                            writeback["command_template"] = render_owed_host_command([
+                                *shlex.split(writeback["command_template"]), "--delivery-read-context", "<read_context_id>",
+                            ])
+                            spend["command_template"] = render_owed_host_command(shlex.split(spend["command_template"]))
+                            writeback["precondition"] = (
+                                "Run the checkpoint-context command first. Revalidate the retained result "
+                                "against that basis and use its read_context_id. Keep the original Turn and wait "
+                                "condition unchanged. If the result returns a pending direction, follow its "
+                                "post-result read and direction commands before spending."
+                            )
+                            channel["next_cli_actions"] = [
+                                read_command, writeback["precondition"], writeback["command_template"],
+                                spend["command_template"],
+                            ]
+                            return payload
+                        channel["next_cli_actions"] = [
+                            read_command,
+                            "Verify the wait against the returned basis. Substitute its read_context_id in the blocked writeback.",
+                            *[
+                                f"{prefix} --format json refresh-state {action.removeprefix(writeback_prefix)}"
+                                " --delivery-read-context '<read_context_id>'"
+                                if action.startswith(writeback_prefix) else action
+                                for action in channel["next_cli_actions"]
+                            ],
+                        ]
+        except (ValueError, OSError, RuntimeError) as error:
+            admitted_receipt = payload.get("heartbeat_receipt")
+            payload = _export("quota_failure_payload")(args, registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg, error=error)
+            payload.update(error_code=getattr(error, "code", "delivery_work_context_unknown"),
+                error=str(error),
+                status="delivery_work_context_unavailable", heartbeat_receipt=admitted_receipt)
+    return payload

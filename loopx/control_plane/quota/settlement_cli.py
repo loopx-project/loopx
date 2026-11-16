@@ -17,6 +17,7 @@ from ..work_items.autonomous_replan_obligation import (
 from .effect_program import SettlementIdentity
 from .error_codes import HeartbeatReceiptIdentityConflictError
 from .heartbeat_receipt import (
+    capture_heartbeat_admission_source,
     heartbeat_receipt_view,
     upgrade_identityless_heartbeat_receipt,
     requalify_bound_heartbeat_receipt,
@@ -40,6 +41,7 @@ def reconcile_existing_heartbeat_receipt(
     runtime_root: Path,
     turn_instance_id: str,
     existing: dict[str, object],
+    registry_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], str, bool, str]:
     """Bind or qualify same-Turn work without replacing its settlement identity."""
@@ -132,6 +134,18 @@ def reconcile_existing_heartbeat_receipt(
                 todo_id=rollout_todo_id,
                 replan_obligation_id=rollout_replan_obligation_id,
             )
+            if registry_path is not None and not (existing_todo_id or existing_replan_obligation_id):
+                # A choice after an unbound observation is a new admission;
+                # historical already-bound receipts keep their original policy.
+                rollout_details.update(quota_result_work_admission_details(
+                    registry_path=registry_path, runtime_root=runtime_root,
+                    goal_id=args.goal_id, todo_id=rollout_todo_id, goal_ref=goal_ref))
+                rollout_details = capture_heartbeat_admission_source(
+                    payload, details=rollout_details,
+                    identity=SettlementIdentity(goal_id=args.goal_id, agent_id=args.agent_id,
+                        todo_id=rollout_todo_id, replan_obligation_id=rollout_replan_obligation_id,
+                        turn_instance_id=turn_instance_id),
+                    registry_path=registry_path, runtime_root=runtime_root)
             receipt, upgraded = upgrade_identityless_heartbeat_receipt(
                 runtime_root,
                 goal_id=args.goal_id,
@@ -152,6 +166,11 @@ def reconcile_existing_heartbeat_receipt(
             if upgraded:
                 receipt_status = "upgraded"
                 receipt_appended = True
+    from .heartbeat_receipt import find_heartbeat_receipt
+    refreshed = find_heartbeat_receipt(runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+        turn_instance_id=turn_instance_id, goal_ref=goal_ref)
+    if refreshed and refreshed.get("event_id") == receipt.get("event_id"):
+        receipt = refreshed
     details_value = receipt.get("details")
     details: Mapping[str, object] = (
         details_value if isinstance(details_value, Mapping) else {}
@@ -167,6 +186,7 @@ def reconcile_existing_heartbeat_receipt_for_turn(
     runtime_root: Path,
     turn_instance_id: str,
     existing: dict[str, object],
+    registry_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], str, bool, str, bool]:
     """Reconcile an existing receipt and report whether the turn is receipt-ready."""
@@ -177,9 +197,21 @@ def reconcile_existing_heartbeat_receipt_for_turn(
         runtime_root=runtime_root,
         turn_instance_id=turn_instance_id,
         existing=existing,
+        registry_path=registry_path,
         goal_ref=goal_ref,
     )
     return receipt, status, appended, stall_observation, True
+
+
+def quota_result_work_admission_details(*, registry_path: Path, runtime_root: Path,
+                                      goal_id: str, todo_id: str | None,
+                                      goal_ref: Mapping[str, object] | None = None) -> dict[str, object]:
+    """Compose new admission metadata using the existing typed checkpoint owner."""
+    from ..goals.checkpoint_context_io import default_result_freshness_policy
+
+    policy = default_result_freshness_policy(runtime_root, goal_id, todo_id, goal_ref)
+    return ({"result_freshness": policy, "checkpoint_continuation": "current_agent_v1"}
+            if policy is not None else {})
 
 
 def render_existing_heartbeat_receipt_payload(

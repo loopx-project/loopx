@@ -35,6 +35,8 @@ function followupArgs(request: JsonObject, command: string): unknown[] {
 export function schedulerAckHint(request: JsonObject): JsonObject {
   const appliedRrule = normalizeSchedulerRrule(request.applied_rrule);
   const args = followupArgs(request, "scheduler-ack-current");
+  const automationId = text(request.automation_id);
+  if (automationId && text(request.surface) === "codex_app") args.push("--automation-id", automationId);
   args.push("--applied-rrule", appliedRrule);
   if (request.host_match_observed) args.push("--host-match-observed", "--reset-token", text(request.reset_token),
     "--identity-signature", text(request.identity_signature));

@@ -33,8 +33,9 @@ def replan_history_from_status(status: Mapping[str, Any], goal_id: str) -> list[
 
         goal = validate_goal_id_path_segment(goal_id)
         path = Path(str(status["runtime_root"])) / "goals" / goal / "runs" / "index.jsonl"
-        return load_index_snapshot(path, include_artifact_status=False).records
-    return snapshot
+        snapshot = load_index_snapshot(path, include_artifact_status=False).records
+    goal_ref = status.get("goal_ref")
+    return [row for row in snapshot if row.get("goal_ref") == goal_ref] if goal_ref is not None else snapshot
 
 
 def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, agent_id: str | None,
@@ -150,7 +151,19 @@ def goal_context_facts(status: Mapping[str, Any] | None, goal_id: str, acceptanc
         from ...materials import goal_state_path
         from ..goals.active_state_metadata import active_state_section_text, split_state_frontmatter
 
-        goal = load_goal_from_registry(Path(str(status["registry"])), goal_id)
+        goal_ref = status.get("goal_ref")
+        if goal_ref is not None:
+            from ..goals.first_party_host_admission import load_first_party_registry_metadata
+            from ..goals.goal_ref_validation import exact_goal_ref
+            from ...registry import registry_goals
+
+            ref = exact_goal_ref(goal_ref["goal_id"], goal_ref["goal_instance_id"])
+            registry = load_first_party_registry_metadata(Path(str(status["registry"])), ref)
+            goal = next((item for item in registry_goals(registry) if item.get("id") == goal_id), None)
+            if ref["goal_id"] != goal_id or goal is None or goal.get("goal_instance_id") != ref["goal_instance_id"]:
+                raise ValueError("Replan context must retain its original GoalRef")
+        else:
+            goal = load_goal_from_registry(Path(str(status["registry"])), goal_id)
         if goal:
             if goal.get("goal_instance_id"):
                 facts["goal_ref"] = {"goal_id": goal_id, "goal_instance_id": goal["goal_instance_id"]}

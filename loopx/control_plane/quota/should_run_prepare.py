@@ -183,6 +183,7 @@ class _QuotaDecisionPreparation:
     include_scheduler_detail: bool
     codex_app_current_rrule: Any
     codex_app_automation_id: Any
+    codex_app_observation_error: str | None
     resolved_scheduler_context: SchedulerExecutionContextResolution
     delivery_continuity_anchor: dict[str, Any] | None
     delivery_continuity_todo: dict[str, Any] | None
@@ -288,11 +289,21 @@ def _prepare_quota_replan_context(
         ),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
     )
+    retained_semantic_source = status_payload.get("_receipt_bound_semantic_source")
+    if reconstruct_review and isinstance(retained_semantic_source, dict):
+        retained_semantic_source = attach_receipt_replan_context(
+            retained_semantic_source, None, goal_id=safe_goal_id, agent_id=agent_frontier_id,
+            source_status=status_payload, stride_strategy=goal_frontier_context["stride_strategy"],
+            explore_reader=replan_explore_reader,
+            goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
+            todo_items=agent_todo_terminal_source_items,
+        )
     replan_obligation = (
         None
         if receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED
         else _preserve_receipt_bound_replan_obligation(
-            goal_frontier_context.get("replan_obligation") if reconstruct_review else None,
+            (retained_semantic_source or goal_frontier_context.get("replan_obligation"))
+            if reconstruct_review else None,
             receipt_bound_replan_obligation_id,
             guard_scoped=receipt_bound_replan_guard_scoped,
             agent_id=agent_frontier_id,
@@ -738,6 +749,7 @@ def _prepare_quota_should_run_item(
     include_scheduler_detail: bool,
     codex_app_current_rrule: Any,
     codex_app_automation_id: Any = None,
+    codex_app_observation_error: str | None = None,
     resolved_scheduler_context: SchedulerExecutionContextResolution,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None,
     registry_goal: dict[str, Any],
@@ -1148,6 +1160,7 @@ def _prepare_quota_should_run_item(
         include_scheduler_detail=include_scheduler_detail,
         codex_app_current_rrule=codex_app_current_rrule,
         codex_app_automation_id=codex_app_automation_id,
+        codex_app_observation_error=codex_app_observation_error,
         resolved_scheduler_context=resolved_scheduler_context,
         delivery_continuity_anchor=delivery_continuity_anchor,
         delivery_continuity_todo=delivery_continuity_todo,

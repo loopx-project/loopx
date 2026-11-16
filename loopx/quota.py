@@ -1066,6 +1066,7 @@ def build_quota_should_run(
     include_agent_todo_detail: bool = False,
     codex_app_current_rrule: Any = None,
     codex_app_automation_id: Any = None,
+    codex_app_observation_error: str | None = None,
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
@@ -1105,7 +1106,7 @@ def build_quota_should_run(
             preferred_yardstick_todo_id=preferred_yardstick_todo_id,
         )
 
-    return _build_quota_should_run(
+    payload = _build_quota_should_run(
         status_payload,
         goal_id=goal_id,
         agent_id=agent_id,
@@ -1114,6 +1115,7 @@ def build_quota_should_run(
         include_agent_todo_detail=include_agent_todo_detail,
         codex_app_current_rrule=codex_app_current_rrule,
         codex_app_automation_id=codex_app_automation_id,
+        codex_app_observation_error=codex_app_observation_error,
         scheduler_execution_context=scheduler_execution_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         receipt_bound_todo_id=receipt_bound_todo_id,
@@ -1135,6 +1137,22 @@ def build_quota_should_run(
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
         replan_explore_reader=read_explore_context,
     )
+    observation_root = runtime_root or status_payload.get("runtime_root")
+    if goal_ref is None and agent_id and observation_root:
+        from .control_plane.goals.checkpoint_context_io import pending_first_delivery_progress
+
+        delivery_progress = pending_first_delivery_progress(
+            Path(observation_root), goal_id, agent_id,
+            registry_path=Path(status_payload["registry"]) if status_payload.get("registry") else None,
+        )
+        if delivery_progress is not None:
+            payload["first_delivery_progress"] = delivery_progress
+            # Observation cannot grant work or override an owner pause/health hold.
+            if (delivery_progress.get("settlement_identity") and payload.get("ok")
+                    and payload.get("state") != "paused"
+                    and delivery_progress.get("stage") != "result_review_pending"):
+                payload["recommended_action"] = delivery_progress["next_action"]
+    return payload
 
 
 def _quota_spend_index_basis(

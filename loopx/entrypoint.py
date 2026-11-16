@@ -111,9 +111,11 @@ def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
         # typed commit owner may decide whether that observation proves an ACK.
         from .upgrade import resolve_codex_app_automation_rrule
 
+        automation_id = _option_value(raw_argv, "--automation-id")
         observed = resolve_codex_app_automation_rrule(
             goal_id=_option_value(raw_argv, "--goal-id"),
             agent_id=_option_value(raw_argv, "--agent-id"),
+            **({"automation_id": automation_id} if automation_id else {}),
         )
         raw_argv = [
             *raw_argv, "--app-automation-current-rrule",

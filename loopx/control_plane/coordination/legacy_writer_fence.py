@@ -141,6 +141,8 @@ def _require_other_goal_source_write_allowed(
 def require_registry_source_write_allowed(
     *, registry_path: Path, runtime_root: Path, goal_id: str, state_file: Path,
     canonical_mutation: bool = True,
+    source_admission: Mapping[str, Any] | None = None,
+    settlement_identity: Mapping[str, Any] | None = None,
 ) -> None:
     """Check the registered source authority while its shared state lock is held.
 
@@ -157,7 +159,27 @@ def require_registry_source_write_allowed(
                 "shadow_source_state_path_mismatch",
                 "the state file is not the source established by the active capture binding",
             )
-    registry = load_registry(registry_path)
+    if source_admission is None:
+        registry = load_registry(registry_path)
+    else:
+        from ..quota.settlement import SettlementIdentity, read_heartbeat_settlement
+        from ..goals.checkpoint_context_io import require_checkpoint_source_recovery
+        from ..goals.first_party_host_admission import load_first_party_registry_metadata
+
+        if settlement_identity is None:
+            raise ValueError("Source projection requires its original checkpoint identity")
+        identity = SettlementIdentity.from_runtime_payload(dict(settlement_identity))
+        if identity.goal_id != goal_id:
+            raise ValueError("Source projection checkpoint Goal does not match its target")
+        goal_ref = source_admission.get("planned_goal_ref")
+        readback = read_heartbeat_settlement(runtime_root, registry_path=registry_path,
+            goal_id=goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+            turn_instance_id=identity.turn_instance_id, replan_obligation_id=identity.replan_obligation_id,
+            goal_ref=goal_ref, source_admission=source_admission, borrow_source_admission=True)
+        if readback is None or readback.writeback_run is None:
+            raise ValueError("Source projection requires the original committed checkpoint")
+        require_checkpoint_source_recovery(readback)
+        registry = load_first_party_registry_metadata(registry_path, goal_ref)
     if canonical_mutation:
         from ..goals.legacy_event_source import require_no_legacy_todo_events
         goal = next((g for g in registry.get("goals", []) if g.get("id") == goal_id), {"id": goal_id})

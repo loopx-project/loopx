@@ -11,7 +11,34 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from ..control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+from ..control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission, FirstPartyHostRuntimeRejected
+
+
+def bind_turn_host_admission(
+    request: Mapping[str, Any], *, goal_admission: FirstPartyHostGoalAdmission | None,
+    registry_path: Path, goal_id: str, goal_ref: Mapping[str, object] | None, agent_id: str | None = None,
+    current_launch_decision: Callable[..., Mapping[str, Any]],
+) -> FirstPartyHostGoalAdmission:
+    """Bind each new direction's launch; business keeps its original witness."""
+    direction = request.get("phase") == "checkpoint_direction"
+    admission = goal_admission
+    if admission is None:
+        admission = FirstPartyHostGoalAdmission.for_plan(
+            registry_path=registry_path, goal_id=goal_id, planned_goal_ref=goal_ref, agent_id=agent_id)
+    if direction and not admission.source_profile:
+        try:
+            checked = current_launch_decision(registry_path, checkpoint_direction=True,
+                checkpoint_context=request.get("checkpoint_context"))
+            if checked.get("refresh_launch_witness") is True:
+                admission = FirstPartyHostGoalAdmission.for_plan(
+                    registry_path=registry_path, goal_id=goal_id, planned_goal_ref=goal_ref, agent_id=agent_id)
+        except FirstPartyHostRuntimeRejected as error:
+            # Binding has not handed control to any Host adapter yet.
+            error.launch_not_started = True
+            raise
+    return admission.with_launch_decision(lambda registry: current_launch_decision(
+        registry, checkpoint_direction=direction,
+        **({"checkpoint_context": request.get("checkpoint_context")} if direction else {})))
 
 
 def prepare_turn_host_arguments(
@@ -97,7 +124,7 @@ def build_codex_cli_host_runner(
     args: argparse.Namespace, *, runtime_root: Path, project: Path,
     registry_path: Path, goal_ref: Mapping[str, object] | None,
     goal_admission: FirstPartyHostGoalAdmission | None,
-    current_launch_decision: Callable[[Path], Mapping[str, Any]],
+    current_launch_decision: Callable[..., Mapping[str, Any]],
     run_codex_cli_host: Callable[..., dict[str, Any]],
 ) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
     """Bind the existing Codex adapter; resolve options/admission only at launch."""
@@ -114,12 +141,9 @@ def build_codex_cli_host_runner(
             "mcp_server": args.codex_mcp_server_json,
             "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
         }
-        options["goal_admission"] = (
-            goal_admission or FirstPartyHostGoalAdmission.for_plan(
-                registry_path=registry_path, goal_id=args.goal_id,
-                planned_goal_ref=goal_ref, agent_id=args.agent_id,
-            )
-        ).with_launch_decision(current_launch_decision)
+        options["goal_admission"] = bind_turn_host_admission(request,
+            goal_admission=goal_admission, registry_path=registry_path,
+            goal_id=args.goal_id, goal_ref=goal_ref, agent_id=args.agent_id, current_launch_decision=current_launch_decision)
         if getattr(args, "codex_operation_tools", False):
             from ..control_plane.turn_driver.codex_operation_host import (
                 run_codex_operation_host,

@@ -74,8 +74,8 @@ def _result(*, status: str, intent: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _goal_config(registry_path: Path, goal_id: str) -> Mapping[str, Any]:
-    registry = load_registry(registry_path)
+def _goal_config(registry_path: Path, goal_id: str, *, registry_data: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+    registry = dict(registry_data) if registry_data is not None else load_registry(registry_path)
     goal = next(
         (
             item
@@ -94,7 +94,8 @@ def _goal_config(registry_path: Path, goal_id: str) -> Mapping[str, Any]:
 
 
 def periodic_report_post_writeback_hooks_for_goal(
-    *, registry_path: Path, goal_id: str, runtime_root: Path | None = None
+    *, registry_path: Path, goal_id: str, runtime_root: Path | None = None,
+    registry_data: Mapping[str, Any] | None = None,
 ) -> tuple[PostWritebackHookRegistration, ...]:
     """Resolve a Goal override or live machine-default profile at composition.
 
@@ -106,7 +107,7 @@ def periodic_report_post_writeback_hooks_for_goal(
     the CLI command that composes them.
     """
 
-    registry = load_registry(registry_path)
+    registry = dict(registry_data) if registry_data is not None else load_registry(registry_path)
     effective_runtime_root = runtime_root or resolve_runtime_root(
         registry,
         registry_path=registry_path,
@@ -121,7 +122,8 @@ def periodic_report_post_writeback_hooks_for_goal(
     )
     if not isinstance(goal, Mapping):
         return ()
-    goal_override = _goal_config(registry_path, goal_id)
+    goal_override = (_goal_config(registry_path, goal_id, registry_data=registry_data)
+        if registry_data is not None else _goal_config(registry_path, goal_id))
     try:
         subscription = resolve_goal_periodic_report_subscription(
             goal,

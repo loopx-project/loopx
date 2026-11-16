@@ -1,5 +1,9 @@
 import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
+import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {checkpointReceiptName, evaluateResultWorkBinding, inFlightWorkAuthorized,
+  originalWorkReceiptDigest} from "../goals/checkpoint_read_context.ts";
 
 import {
   heartbeatReceiptsFromEvents,
@@ -39,7 +43,9 @@ import {
   qualifySettlementHistory,
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
+  isAcceptedInFlightProgressWriteback,
   isAcceptedReplanWriteback,
+  isAcceptedSettlementDirection,
   isCapabilityRetirementWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
@@ -60,6 +66,8 @@ import {
   optionalHeartbeatString as optionalString,
   selectEffectiveHeartbeatReceipt,
   heartbeatWorkRequalification,
+  checkpointContinuationRequired,
+  resultFreshnessRequired,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
@@ -135,7 +143,7 @@ interface ResultBundle extends JsonObject {
 }
 
 type SettlementProgressState = "identity_required" | "writeback_required" |
-  "writeback_receipt_required" | "spend_required" | "spend_receipt_required" | "settled";
+  "writeback_receipt_required" | "direction_pending" | "spend_required" | "spend_receipt_required" | "settled";
 
 function settlementScope(
   runtimeRootValue: unknown,
@@ -160,12 +168,38 @@ export function validateQuotaSettlementScope(
   return settlementScope(runtimeRootValue, goalIdValue);
 }
 
+function originalInFlightWorkAuthorized(root: string, identity: SettlementIdentity, run: JsonObject): boolean {
+  const expected = run.result_work_receipt_sha256;
+  const binding = settlementIdentityPayload(identity);
+  try {
+    const receipt = jsonObject(JSON.parse(readFileSync(join(root, "goals", identity.goal_id, "checkpoint-contexts",
+      checkpointReceiptName(identity.effect_id, true)), "utf8")));
+    if (receipt === null) return false;
+    const indexed = jsonObject(jsonObject(receipt.commit_attempt)?.index_record);
+    // Records from before byte witnesses keep their original contract. A
+    // witness present on either side must verify against the same append.
+    if (expected === undefined && indexed?.result_work_receipt_sha256 === undefined) return true;
+    if (indexed === null || typeof expected !== "string" ||
+        originalWorkReceiptDigest(receipt) !== expected ||
+        canonicalAuthoritySha256(indexed) !== canonicalAuthoritySha256(run)) return false;
+    const restored = evaluateResultWorkBinding({phase: "restore", identity: binding, receipt});
+    const context = jsonObject(run.result_work_context);
+    return restored.ok === true && context?.result_committed !== true &&
+      context?.read_context_id === receipt.read_context_id &&
+      canonicalAuthoritySha256(context?.versions ?? null) === canonicalAuthoritySha256(receipt.versions) &&
+      inFlightWorkAuthorized(restored.basis, binding);
+  } catch (error) {
+    return expected === undefined && (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
 /** Receipt verification owns progress; a durable debit alone is not settlement. */
 function settlementProgress(
   identity: SettlementResult, writeback: SettlementResult, spend: SettlementResult,
   writebackRun: JsonObject | null, spendRun: JsonObject | null,
   spendSource: unknown = "heartbeat",
   noSpendKind: "typed_blocked_writeback_no_spend" | "capability_duty_retired_no_spend" | null = null,
+  directionPending = false,
 ): JsonObject {
   const source = spendSource ?? "heartbeat";
   if (source !== "heartbeat" && source !== "visible-goal") {
@@ -174,12 +208,13 @@ function settlementProgress(
   const state: SettlementProgressState = identity.failure ? "identity_required"
     : writeback.failure ? (writebackRun ? "writeback_receipt_required" : "writeback_required")
     : noSpendKind ? "settled"
+    : directionPending ? "direction_pending"
     : spend.failure ? (spendRun ? "spend_receipt_required" : "spend_required")
     : "settled";
   return {
     schema_version: "quota_settlement_progress_v0", state,
     next_step: identity.failure ? "validation" : writeback.failure ? "durable_writeback"
-      : noSpendKind ? null : spend.failure ? "quota_spend" : null,
+      : noSpendKind ? null : directionPending ? "durable_writeback" : spend.failure ? "quota_spend" : null,
     quota_spend_source: source,
     ...(noSpendKind ? {
       closeout_kind: noSpendKind,
@@ -699,6 +734,10 @@ function terminalResult(
   identity: SettlementIdentity,
   event: JsonObject | null,
 ): SettlementResult<JsonObject> {
+  if (event?.status === "terminal_no_followup" && details(event).no_followup !== true) {
+    return settlementFailed<JsonObject>({kind: "effect_outcome_unknown", step_kind: "terminal_closeout",
+      reason: "Terminal event and its no-follow-up evidence contradict; reconcile the original Turn."});
+  }
   if (!event || details(event).no_followup !== true) {
     return settlementFailed<JsonObject>({
       kind: "receipt_missing",
@@ -1082,6 +1121,7 @@ function failedReadback(
     writeback: bundle(downstreamFailure),
     spend: bundle(downstreamFailure),
     delivery: bundle(downstreamFailure),
+    spend_qualification: bundle(downstreamFailure),
     settlement: bundle(downstreamFailure),
     terminal_closeout: bundle(terminalFailure),
     terminal_settlement: bundle(downstreamFailure),
@@ -1323,7 +1363,22 @@ function readQuotaSettlementFromRequest(
     : blockedNoSpend ? "typed_blocked_writeback_no_spend" : null;
   const terminalCloseout = terminalResult(identity, completionEvent);
   const withWriteback = settlementBindReduce(identityResult, writeback);
-  const settled = noSpendKind ? withWriteback : settlementBindReduce(withWriteback, spend);
+  const workAuthorityHold = writeback.failure === null && writebackRun !== null &&
+    spendRun === null && spendEvent === null && resultFreshnessRequired(heartbeatReceipt) &&
+    checkpointContinuationRequired(heartbeatReceipt) && isAcceptedInFlightProgressWriteback(writebackRun, identity) &&
+    !originalInFlightWorkAuthorized(request.runtime_root, identity, writebackRun)
+    ? "The retained in-flight result has no verified original work authority. Preserve the result and the existing wait. Reconcile the original Todo and lease with their owner before any new work or debit."
+    : null;
+  const directionPending = writeback.failure === null && noSpendKind === null &&
+    (workAuthorityHold !== null ||
+      !isAcceptedSettlementDirection(writebackRun, identity, heartbeatReceipt, semanticReplanGuard.selected_obligation_id));
+  // Keep writeback readable for a post-result context. Debit, replay closeout
+  // and terminal settlement must also preserve the original direction duty.
+  const spendQualification = directionPending ? settlementBindReduce(withWriteback, settlementFailed<JsonObject>({
+    kind: "writeback_rejected", step_kind: "durable_writeback",
+    reason: workAuthorityHold ?? "The original Turn still owes its direction checkpoint. Read checkpoint-context and supplement that same result before spending.",
+  })) : withWriteback;
+  const settled = noSpendKind ? spendQualification : settlementBindReduce(spendQualification, spend);
   const terminalSettlement = settlementBindReduce(settled, terminalCloseout);
   const monitorPoll = committedMonitorPollFromSnapshot(
     snapshot,
@@ -1348,7 +1403,7 @@ function readQuotaSettlementFromRequest(
   const todoBoundReplan = identity.binding_kind === "todo" &&
     semanticReplanGuard.scope === "turn_guard" &&
     semanticReplanGuard.selected_obligation_id !== null;
-  const progressWriteback = writeback.failure === null &&
+  const progressWriteback = writeback.failure === null && workAuthorityHold === null &&
     isAcceptedProgressWriteback(writebackRun, identity);
   const replanWriteback = writeback.failure === null &&
     isAcceptedReplanWriteback(writebackRun, identity);
@@ -1365,12 +1420,13 @@ function readQuotaSettlementFromRequest(
   // reducer so completion, retirement or archival cannot reopen that Turn.
   const replayPhase = monitorPhase === "settled" ? "settled" : receiptBoundReplayPhase({
     binding_kind: identity.binding_kind,
-    writeback_completes_binding: todoBoundReplan || noSpendKind !== null || progressWriteback || replanWriteback,
+    // A retained result seals execution while its direction still owes settlement.
+    writeback_completes_binding: directionPending || todoBoundReplan || noSpendKind !== null || progressWriteback || replanWriteback,
     completion_receipt_present: completionEvent !== null,
     supersede_receipt_present: supersedeEvent?.status === "done" &&
       optionalString(supersedeEvent.todo_id) === identity.todo_id,
     durable_writeback_present: writeback.failure === null,
-    quota_spend_present: spend.failure === null,
+    quota_spend_present: spend.failure === null && !directionPending,
     no_spend_closeout_present: noSpendKind !== null,
   });
 
@@ -1392,14 +1448,27 @@ function readQuotaSettlementFromRequest(
   // A non-material poll need not appear as findWriteback's advancement run.
   // Its exact committed observation still fences an incompatible unavailable
   // claim; retain the normal workspace/vision supplement paths for real polls.
-  const recovery = monitorPoll !== null && request.refresh_retry?.delivery_outcome === "outcome_gap" &&
+  const heldSupplement = workAuthorityHold !== null &&
+    (refreshDecision?.decision === "supplement_checkpoint" || refreshDecision?.decision === "supplement_workspace");
+  const recovery = heldSupplement || (monitorPoll !== null && request.refresh_retry?.delivery_outcome === "outcome_gap" &&
       isTurnScopedSettlementOutcome(request.refresh_retry.delivery_outcome,
-        request.refresh_retry.progress_observation, identity.todo_id)
+        request.refresh_retry.progress_observation, identity.todo_id))
     ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
     : refreshDecision;
+  // A read-only recovery caller needs to preserve a recorded pause when it
+  // renders the direction command. Only refresh requests authorize delivery.
+  const externalDelivery = request.refresh_retry !== null ? refreshExternalDelivery(
+    request.refresh_retry.external_delivery ?? null, identity, events,
+    recovery?.decision !== "reject" && recovery?.decision !== "repair_receipt",
+  ) : directionPending ? refreshExternalDelivery(
+    {suppress: false, resume_key: null}, identity, events, true,
+  ) : null;
 
-  const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-    receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
+  const progress: JsonObject = {
+    ...settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
+      receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind, directionPending),
+    ...(workAuthorityHold === null ? {} : {next_step: null, work_authority_hold: workAuthorityHold}),
+  };
   // The combined caller consumes controls and receipts after verification.
   // Keep original bodies by default and throughout any pending recovery,
   // including the same Runs carried by the four result bundles. Identity,
@@ -1412,6 +1481,7 @@ function readQuotaSettlementFromRequest(
     writeback: bundle(writeback, includeRecords),
     spend: bundle(spend, includeRecords),
     delivery: bundle(withWriteback, includeRecords),
+    spend_qualification: bundle(spendQualification.failure === null ? {...spendQualification, value: {}} : spendQualification),
     settlement: bundle(settled, includeRecords),
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
@@ -1420,10 +1490,8 @@ function readQuotaSettlementFromRequest(
     semantic_replan_guard: semanticReplanGuard,
     writeback_run: includeRecords ? writebackRun : null,
     refresh_recovery: recovery,
-    external_delivery: request.refresh_retry === null ? null : refreshExternalDelivery(
-      request.refresh_retry.external_delivery ?? null, identity, events,
-      recovery?.decision !== "reject" && recovery?.decision !== "repair_receipt",
-    ),
+    external_delivery: request.refresh_retry !== null ||
+      externalDelivery?.error_code === "external_delivery_resume_required" ? externalDelivery : null,
     spend_run: includeRecords ? spendRun : null,
     heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
     writeback_event: includeRecords ? writebackEvent : null,
@@ -1585,4 +1653,45 @@ async function originalSpendRejection(
       ? "the recorded debit has no verifiable billing terms for receipt repair"
       : "the recorded debit differs from the original Turn settlement plan",
   }) : null;
+}
+
+
+/** Default work resumes its original unfinished settlement, not the latest key. */
+export async function selectDefaultResultWorkTurn(value: unknown): Promise<JsonObject> {
+  const raw = requireJsonObject(value, "default result work selection");
+  const request = decodeRequest(raw);
+  return await withQuotaAccountingOwner(request.owner, async () => {
+    const snapshot = await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id);
+    const turns = new Map<string, JsonObject>();
+    const todo = jsonObject(raw.todo);
+    for (const event of snapshot.events) {
+      const fields = details(event);
+      if (event.event_kind !== "quota_should_run" || event.agent_id !== request.agent_id ||
+          !quotaOwnerOwnsProjection(request.owner, event.goal_ref) || !resultFreshnessRequired(event) ||
+          typeof fields.todo_id !== "string" || (request.todo_id !== null && fields.todo_id !== request.todo_id)) continue;
+      if (todo?.status === "done" && ![event.run_id, fields.settlement_effect_id].includes(todo.completion_turn_key)) continue;
+      const turn = String(event.run_id);
+      if (raw.pending_only === true || todo?.status !== "done") {
+        const readback = readQuotaSettlementFromRequest({...request, todo_id: fields.todo_id, turn_instance_id: turn}, snapshot);
+        // A settled planning obligation must not compete with its later work
+        // admission. Ordinary progress still retains its original-Turn result
+        // recovery path; settlement alone is not proof of planning-only work.
+        const guard = jsonObject(readback.semantic_replan_guard);
+        const planned = guard?.scope === "turn_guard" &&
+          typeof guard.selected_obligation_id === "string" &&
+          isAcceptedReplanWriteback(readback.writeback_run, settlementIdentity({
+            goal_id: request.goal_id, agent_id: request.agent_id!,
+            todo_id: fields.todo_id, turn_instance_id: turn,
+          }));
+        if (readback.replay_phase === "settled" && (raw.pending_only === true || planned)) continue;
+      }
+      if (raw.pending_only !== true && todo?.status !== "done" && snapshot.events.some(done => done.event_kind === "todo_complete" &&
+          done.agent_id === request.agent_id && done.run_id === event.run_id && done.todo_id === fields.todo_id &&
+          quotaOwnerOwnsProjection(request.owner, done.goal_ref))) continue;
+      turns.set(turn, event);
+    }
+    if (turns.size > 1) throw new EffectRuntimeRequestError(
+      "Several unfinished Turns match this work; resume an exact original Turn", "delivery_work_turn_ambiguous");
+    return {ok: true, turn_instance_id: [...turns.keys()][0] ?? null};
+  });
 }

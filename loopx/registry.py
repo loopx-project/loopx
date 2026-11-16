@@ -292,7 +292,7 @@ def _boundary_kind_from_classification(classification: str) -> str:
     }.get(classification, "unknown_registry_boundary")
 
 
-def inspect_registry_boundary(path: Path) -> dict[str, Any]:
+def inspect_registry_boundary(path: Path, *, registry_data: dict[str, Any] | None = None) -> dict[str, Any]:
     expanded = path.expanduser()
     if not expanded.exists():
         return {
@@ -303,7 +303,7 @@ def inspect_registry_boundary(path: Path) -> dict[str, Any]:
             "exists": False,
             "error": "registry file does not exist",
         }
-    payload = load_registry(expanded)
+    payload = registry_data if registry_data is not None else load_registry(expanded)
     markers = registry_private_markers(payload)
     classification = classify_registry_boundary(expanded, payload, markers)
     git = _registry_git_probe(expanded)
@@ -367,7 +367,7 @@ def inspect_registry_boundary(path: Path) -> dict[str, Any]:
     }
 
 
-def inspect_registry(path: Path) -> dict[str, Any]:
+def inspect_registry(path: Path, *, registry_data: dict[str, Any] | None = None) -> dict[str, Any]:
     from .quota import goal_quota_config
 
     if not path.exists():
@@ -377,7 +377,7 @@ def inspect_registry(path: Path) -> dict[str, Any]:
             "error": "registry file does not exist",
         }
 
-    payload = load_registry(path)
+    payload = registry_data if registry_data is not None else load_registry(path)
     goals = payload.get("goals") or []
     if not isinstance(goals, list):
         raise ValueError("goals must be a list")

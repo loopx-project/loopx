@@ -42,7 +42,12 @@ from .executor import (
 from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
-from .host_candidate import assert_turn_host_request_version, execution_profile_present
+from .host_candidate import (
+    assert_turn_host_request_version,
+    checkpoint_direction_result_schema,
+    execution_profile_present,
+    render_checkpoint_prompt,
+)
 from .host_process_transport import (
     HostOutputLines,
     HostProcessInterruptionUnconfirmed,
@@ -211,6 +216,8 @@ def codex_cli_result_schema(
 def _result_schema(
     request: Mapping[str, Any] | None, *, checked: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if request and request.get("phase") == "checkpoint_direction":
+        return checkpoint_direction_result_schema()
     text_limits = dict(HOST_RESULT_TEXT_LIMITS)
     properties: dict[str, Any] = {
         "schema_version": {
@@ -390,6 +397,8 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
     request_json = json.dumps(
         model_request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
+    if request.get("phase") == "checkpoint_direction":
+        return render_checkpoint_prompt(request)
     instructions = [
         "Execute exactly one bounded LoopX Turn in the current workspace.",
         ("Use task_context for the admitted work. Its interaction_contract.agent_channel carries work_context, required_reads and primary_action; the outer adapter retains the complete original source and Core effect instructions. " if complete else ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. "))
@@ -428,6 +437,10 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         instructions.append(replan_prompt_instruction(
             _mapping(model_request.get("detail_ref")), packet_path="detail_ref.replan_action_packet"))
     instructions.extend(request.get("capability_instructions") or ())
+    if request.get("delivery_result_context"):
+        instructions.append("Use delivery_result_context.basis as the requirements and dependencies read for this candidate. The adapter carries its original key with validation and submission.")
+    if request.get("result_revalidation"):
+        instructions.append("This is revalidation of a retained candidate on the original Turn. Compare it with the new basis, preserve valid artifacts, and implement only changes demanded by the new requirements before returning a fresh result.")
     checkpointed_approval = (checked["checkpointed_write_approval"] if checked is not None
         else _mapping(envelope.get("boundary")).get("checkpointed_boundary_authority"))
     if checkpointed_approval:

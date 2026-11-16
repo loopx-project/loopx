@@ -17,11 +17,6 @@ from ...file_lock import lock_holder_host_label
 from ..effect_runtime import _node_executable
 from .host_bridge_transport import GuardedHostBridge
 
-# Keep Python's Windows executable/batch launcher compatibility. No timeout,
-# buffering or lifecycle decision lives in this transport-only child.
-_WINDOWS_COMMAND_RELAY = "import subprocess,sys;sys.exit(subprocess.call(sys.argv[1:]))"
-
-
 # A launching owner that must later prove its Host drained names a record path
 # here. The transport consumes it: the Host never inherits it, so a nested
 # LoopX run inside the Host cannot overwrite its parent's record.
@@ -279,8 +274,6 @@ def _host_process_request(
 ) -> dict[str, Any]:
     """Encode the existing bridge request before any Host can launch."""
     command = list(argv)
-    if sys.platform == "win32":
-        command = [sys.executable, "-c", _WINDOWS_COMMAND_RELAY, *command]
     request: dict[str, Any] = {
         "argv": command,
         "cwd": str(project),
@@ -292,6 +285,21 @@ def _host_process_request(
     if delegated_lease is not None:
         request["delegated_lease"] = delegated_lease
     return request
+
+
+def _prepare_windows_launch(
+    containment: ExitStack, command: list[str],
+) -> tuple[Any, list[str], list[str]]:
+    """Own Windows IO resources; the TS bridge still owns launch observation."""
+    from .windows_host_job import WindowsHostJob
+    from ..runtime.private_permissions import protect_private_path
+
+    windows_job = containment.enter_context(WindowsHostJob())
+    report_directory = containment.enter_context(tempfile.TemporaryDirectory(prefix="loopx-host-launch-"))
+    protect_private_path(Path(report_directory), directory=True)
+    report_path = str(Path(report_directory) / "created.json")
+    relay = Path(__file__).with_name("windows_host_command.py")
+    return windows_job, [sys.executable, str(relay), report_path, *command], ["--windows-launch-status", report_path]
 
 
 def run_host_process(
@@ -339,9 +347,9 @@ def run_host_process(
                         if launch_guard is not None else [])
     with ExitStack() as containment:
         windows_job = None
+        launch_report_arguments: list[str] = []
         if sys.platform == "win32":
-            from .windows_host_job import WindowsHostJob
-            windows_job = containment.enter_context(WindowsHostJob())
+            windows_job, request["argv"], launch_report_arguments = _prepare_windows_launch(containment, list(argv))
         proc = subprocess.Popen(
             [
                 _node_executable(),
@@ -349,6 +357,7 @@ def run_host_process(
                 "--experimental-strip-types",
                 str(bridge),
                 *launch_arguments,
+                *launch_report_arguments,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -444,7 +453,9 @@ def run_host_process(
                         windows_job.finish()
                 finally:
                     try:
-                        launch_scope.close()
+                        # Preserve the active setup/Job failure if releasing
+                        # the admission guard also fails.
+                        launch_scope.__exit__(*sys.exc_info())
                     finally:
                         if guarded is not None:
                             guarded.close_output()

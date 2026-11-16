@@ -49,6 +49,12 @@ def _exception(
 
 
 REVIEWED_MAINTAINABILITY_EXCEPTIONS: dict[str, dict[str, Any]] = {
+    "dependency_debt:loopx.control_plane.quota.heartbeat_receipt->loopx.capabilities.todo_replan_cadence.machine_defaults": _exception(
+        "The receipt's cadence witness reads the existing machine-configuration owner; "
+        "it neither creates cadence policy nor grants execution or settles a Turn.",
+        "Inject the resolved cadence at the CLI/source composition boundary when the "
+        "receipt API migrates; retain exact current-policy equality during that move.",
+    ),
     "compatibility_facade:loopx.quota": _exception(
         "The public loopx.quota import surface remains a supported compatibility contract, "
         "including presentation-owned quota event renderers.",

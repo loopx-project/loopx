@@ -74,16 +74,16 @@ SCHEDULER_HINT_APPLICATION_RULE = (
     "automation_update; unavailable -> use fallback_hint.cli_args only when projected "
     "(SQLite/app API "
     "bypass - fallback only), then ack; further failure -> failure_hint; "
-    "ack_needed -> ack. No spend."
+    "ack_needed -> ack. Without either flag, cadence is advice. No spend."
 )
 SCHEDULER_HINT_COMPACT_RULE = (
     "Bootstrap/min interval is a floor; follow current backoff. "
-    + SCHEDULER_STOP_RULE + "Else RRULE apply via automation_update, projected fallback_hint when unavailable, "
-    "then ack/fail. No spend."
+    + SCHEDULER_STOP_RULE + "Else apply_needed -> RRULE via automation_update or projected fallback_hint if unavailable, "
+    "then ack/fail; ack_needed alone -> ack; otherwise keep schedule. No spend."
 )
 SCHEDULER_HINT_THIN_RULE = (
     "Bootstrap/min=floor; backoff. "
-    + SCHEDULER_STOP_RULE + "Else RRULE/projected-fallback_hint/ack/fail."
+    + SCHEDULER_STOP_RULE + "Else apply_needed -> RRULE/fallback_hint/ack/fail; ack_needed alone -> ack; otherwise keep schedule."
 )
 RUNTIME_CAPABILITY_PROJECTION_THIN_RULE = (
     "Observed capabilities -> `--available-capability`; never user gates."

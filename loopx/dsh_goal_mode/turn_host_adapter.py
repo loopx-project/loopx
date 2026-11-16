@@ -46,6 +46,7 @@ from ..control_plane.turn_driver.host_candidate import (
     extract_turn_work_identity,
     parse_model_json as parse_model_json,
     render_prompt as render_prompt,
+    render_checkpoint_prompt,
 )
 from ..control_plane.turn_driver.execution_profile import (
     MANAGED_MODEL_DEFAULT,
@@ -481,7 +482,7 @@ def _execute_turn_host_request(
         )
 
     try:
-        prompt = render_prompt(authority)
+        prompt = render_checkpoint_prompt(request) if request.get("phase") == "checkpoint_direction" else render_prompt(authority)
         runner = (
             load_dsh_runner(config.dsh_runner.expanduser().resolve())
             if config.dsh_runner is not None
@@ -565,6 +566,10 @@ def _execute_turn_host_request(
 
     try:
         candidate = parse_model_json(outcome["final_response"])
+        if request.get("phase") == "checkpoint_direction":
+            if candidate is None:
+                raise DshHostResultError("dsh direction response requires a JSON object")
+            return candidate
         if candidate is None and warn is not None:
             warn("adapter: dsh final response did not contain a JSON result object")
         return build_result(

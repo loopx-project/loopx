@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ..runtime.file_paths import windows_extended_path
 from ..content_digest import ENVELOPED_SHA256_PATTERN
 from .local_authority_shadow_projection import PARTITIONS, sha256_digest, text_digest
 from .coordination_state_contract_generated import (
@@ -94,7 +95,7 @@ def _as_object(value: object) -> dict[str, Any]:
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(windows_extended_path(path).read_text(encoding="utf-8"))
     except (ValueError, UnicodeError) as error:
         raise OutboxError(
             "outbox_file_invalid", f"{path.name} is not valid JSON"
@@ -158,7 +159,7 @@ def _index_entry_files(
     prepared: dict[_EntryKey, Path] = {}
     committed: dict[_EntryKey, Path] = {}
     try:
-        paths = list(directory.iterdir())
+        paths = [directory / path.name for path in windows_extended_path(directory).iterdir()]
     except FileNotFoundError:
         return prepared, committed
     except OSError as error:
@@ -166,10 +167,10 @@ def _index_entry_files(
             "outbox_file_unavailable", "outbox inventory cannot be read"
         ) from error
     for path in paths:
-        if path.name == "drain-cursor.json" and not path.is_symlink():
+        if path.name == "drain-cursor.json" and not windows_extended_path(path).is_symlink():
             continue
         match = _ENTRY_FILE.fullmatch(path.name)
-        if match is None or path.is_symlink() or not path.is_file():
+        if match is None or windows_extended_path(path).is_symlink() or not windows_extended_path(path).is_file():
             raise OutboxError(
                 "outbox_file_invalid", "outbox contains unclassified evidence"
             )
@@ -282,7 +283,7 @@ def retired_residue(directory: Path) -> list[Path]:
     an exact receipt proof before it can be reclaimed.
     """
 
-    if not directory.is_dir():
+    if not windows_extended_path(directory).is_dir():
         return []
     watermark = _retired_watermark(directory)
     prepared, committed = _index_entry_files(directory)
@@ -357,7 +358,7 @@ def cursor_path(directory: Path) -> Path:
 
 def read_cursor(directory: Path) -> dict[str, Any] | None:
     path = cursor_path(directory)
-    if path.is_symlink():
+    if windows_extended_path(path).is_symlink():
         raise OutboxError(
             "outbox_file_invalid", "cursor must belong to its own partition"
         )

@@ -367,15 +367,15 @@ class StewardTurnHost:
         return exclusive_file_lock(self.bindings.path, operation="original_report_effect")
 
     def _task_lease_proof(self, request: Mapping[str, Any], lease: Mapping[str, Any] | None) -> dict[str, Any]:
-        from .steward_commands import native_command
-        observed = native_command(self.controller, ["task-lease", "inspect", "--goal-id", request["actor"]["goal_id"],
-            "--todo-id", request["todo_id"]]).get("lease")
-        if (not lease or not observed or observed.get("status") != "active"
-                or any(observed.get(key) != lease.get(key) for key in
-                    ("owner", "idempotency_key", "lease_epoch", "version"))):
+        from ...control_plane.work_items.task_lease import inspect_task_lease
+        if not lease:
             raise ValueError("the original task execution lease changed")
-        return {"task_lease_idempotency_key": observed["idempotency_key"],
-            "task_lease_expected_version": observed["version"]}
+        observed = inspect_task_lease(registry_path=self.controller.registry_path,
+            runtime_root=self.controller.coordination_runtime_root, goal_id=request["actor"]["goal_id"],
+            todo_id=request["todo_id"], original_lease=dict(lease))
+        proof = observed["execution_proof"]
+        return {"task_lease_idempotency_key": proof["idempotency_key"],
+            "task_lease_expected_version": proof["expected_version"]}
 
     @contextmanager
     def _task_execution_lease(self, request: Mapping[str, Any], turn_id: str, *, recovery: bool = False,

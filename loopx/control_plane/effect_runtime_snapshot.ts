@@ -30,7 +30,8 @@ async function privateFile(path: string, flags: number): Promise<FileHandle> {
     // Fixed package-owned Win32 IO, not a caller-supplied executable or decision owner.
     const helper = fileURLToPath(new URL("./runtime/private_permissions.py", import.meta.url));
     await new Promise<void>((resolve, reject) => {
-      execFile(python, [helper, "--verify-snapshot", path],
+      // This standard-library-only verifier must not run ambient site/PYTHONPATH code.
+      execFile(python, ["-I", "-S", helper, "--verify-snapshot", path],
         {timeout: 5000, windowsHide: true, maxBuffer: 4096},
         error => error ? reject(error) : resolve());
     });

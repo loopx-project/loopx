@@ -84,7 +84,7 @@ def main():
         cmd = list(_gh_prefix())
         if st.get("registry"):
             cmd += ["--registry", st["registry"]]
-        cmd += ["--format", "json", "quota", "should-run", "--goal-id", gid]
+        cmd += ["--format", "json", "quota", "should-run", "--dry-run", "--goal-id", gid]
         if st.get("agent_id"):
             cmd += ["--agent-id", st["agent_id"]]
         out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8,

@@ -1465,7 +1465,9 @@ def check_contract(
             contract_error_diagnostic(code=code, message=message)
         )
 
-    registry_payload = inspect_registry(registry_path)
+    registry_payload = (inspect_registry(registry_path, registry_data=registry)
+        if registry is not None and registry.get("profile_id") == "source_session_v1"
+        else inspect_registry(registry_path))
     if registry_payload.get("ok"):
         checks.append(f"registry goals checked: {registry_payload.get('goal_count')}")
     else:
@@ -1484,7 +1486,9 @@ def check_contract(
             for problem in registry_payload.get("problems") or []:
                 add_global_error("registry_problem", str(problem))
 
-    boundary_payload = inspect_registry_boundary(registry_path)
+    boundary_payload = (inspect_registry_boundary(registry_path, registry_data=registry)
+        if registry is not None and registry.get("profile_id") == "source_session_v1"
+        else inspect_registry_boundary(registry_path))
     if boundary_payload.get("ok"):
         git = boundary_payload.get("git") if isinstance(boundary_payload.get("git"), dict) else {}
         checks.append(

@@ -28,6 +28,7 @@ interface CompleteHintRequest extends JsonObject {
   arbitration: JsonObject | null;
   scheduler_state: JsonObject | null;
   include_detail: boolean;
+  codex_app_observation_error?: string | null;
   current_time: string;
   generated_at: string;
 }
@@ -38,6 +39,9 @@ function requireHintFacts(request: JsonObject): CompleteHintRequest {
   requireBoolean(request.include_detail, "include_detail");
   requireNonEmptyString(request.current_time, "current_time");
   requireNonEmptyString(request.generated_at, "generated_at");
+  if (request.codex_app_observation_error != null) {
+    requireNonEmptyString(request.codex_app_observation_error, "Codex App observation error");
+  }
   const deadlines = request.frontier_deadlines;
   if (!Array.isArray(deadlines) || deadlines.some(deadline => deadline !== null && !jsonObject(deadline)))
     throw new EffectRuntimeRequestError("frontier_deadlines must contain objects or null");
@@ -141,14 +145,16 @@ function resetPolicy(identity: HintIdentity, cadence: Cadence): JsonObject {
     identity_signature: identity.identity_signature};
 }
 
-function resetDetail(profile: HintProfile, identity: HintIdentity, cadence: Cadence, keys: string[]): JsonObject {
+function resetDetail(profile: HintProfile, identity: HintIdentity, cadence: Cadence, keys: string[], preserveAppSchedule: boolean): JsonObject {
   return {...resetPolicy(identity, cadence), schema_version: "scheduler_reset_policy_v0", source: "quota.should-run",
     reset_to: "profile_initial_interval", profile_action: profile.action, local_scheduler_initial_interval_minutes: cadence.local[0],
     clear_unchanged_poll_state: true, identity_key_count: keys.length, profile_signature: identity.profile_signature,
     reset_profile_signature: identity.reset_profile_signature,
     reset_condition_summary: "token_changed|user_feedback|new_or_reassigned_todo|gate_or_material_transition|active_work_projected",
-    after_reset: "apply_initial_interval_before_backoff", app_automation_tool: "automation_update",
-    app_automation_apply: "call_automation_update_to_restore_initial_rrule_on_token_change", no_spend_for_reset: true};
+    ...(preserveAppSchedule ? {after_reset: "preserve_current_app_schedule", app_automation_apply: "none"}
+      : {after_reset: "apply_initial_interval_before_backoff", app_automation_tool: "automation_update",
+        app_automation_apply: "call_automation_update_to_restore_initial_rrule_on_token_change"}),
+    no_spend_for_reset: true};
 }
 
 function loopDetails(profile: HintProfile, cadence: Cadence, replan: JsonObject): JsonObject {
@@ -161,18 +167,22 @@ function loopDetails(profile: HintProfile, cadence: Cadence, replan: JsonObject)
       after_limit: profile.claude_limit !== null ? "stop_loop" : "continue", final_quota_replan_check: replan, no_spend_for_stop: true}};
 }
 
-function backoffDetail(profile: HintProfile, cadence: Cadence, decision: SchedulerBackoffTransitionResult): JsonObject {
+function backoffDetail(profile: HintProfile, cadence: Cadence, decision: SchedulerBackoffTransitionResult, preserveAppSchedule: boolean): JsonObject {
   return {progression_minutes: cadence.app, current_interval_minutes: decision.current_interval_minutes, host_max_interval_minutes: cadence.app_max,
     coarser_wait_fallback: cadence.floor ? "hold_affected_automation" : "local_scheduler_only",
     host_update_failure: "cache_recent_failed_target_and_observed_host_pairs_then_suppress_each_exact_repeat_until_host_changes_ack_or_expiry",
-    ack_required_after_apply: decision.host_transition === "apply_required", ack_required_from_host_match: decision.host_transition === "host_match_ack_required",
+    ack_required_after_apply: !preserveAppSchedule && decision.host_transition === "apply_required",
+    ack_required_from_host_match: decision.host_transition === "host_match_ack_required",
     persist: "reset_token|identity_signature|progression_index|last_applied_rrule|host_update_failures|host_update_failure_compat",
     same_identity_action: profile.advance !== false ? "advance_index_after_applied_interval_elapsed" : "keep_initial_interval_while_active_work",
-    reset_action: "clear_progression_index_apply_initial_rrule", automation_update_scope: "rrule_only_preserve_body_name_status"};
+    ...(preserveAppSchedule ? {reset_action: "clear_progression_index_preserve_current_app_schedule"}
+      : {reset_action: "clear_progression_index_apply_initial_rrule", automation_update_scope: "rrule_only_preserve_body_name_status"})};
 }
 
-function appAutomation(decision: SchedulerBackoffTransitionResult, cadence: Cadence, identity: HintIdentity, stateKey: unknown): JsonObject {
-  const apply = decision.host_transition === "apply_required", match = decision.host_transition === "host_match_ack_required";
+function appAutomation(decision: SchedulerBackoffTransitionResult, cadence: Cadence, identity: HintIdentity, stateKey: unknown, preserveAppSchedule: boolean): JsonObject {
+  const requiresUpdate = decision.host_transition === "apply_required";
+  const apply = requiresUpdate && !preserveAppSchedule;
+  const match = decision.host_transition === "host_match_ack_required";
   const suppressed = decision.host_transition === "recorded_failure_suppressed";
   const backoff: JsonObject = {schema_version: "app_automation_stateful_backoff_v0", state_key: stateKey, identity_signature: identity.identity_signature,
     reset_token: identity.reset_token, progression_index: decision.current_index, current_rrule: decision.current_rrule,
@@ -183,7 +193,7 @@ function appAutomation(decision: SchedulerBackoffTransitionResult, cadence: Cade
     status: decision.current_rrule_already_applied ? "matches_recommended" : "drift_detected"};
   return {recommended_interval_minutes: decision.current_interval_minutes, max_interval_minutes: cadence.app_max,
     unchanged_poll_backoff_multiplier: 2, example_progression_minutes: cadence.app,
-    apply: apply ? "update_automation_cadence_if_possible" : suppressed ? "none_recorded_host_failure" : "none_already_applied",
+    apply: apply ? "update_automation_cadence_if_possible" : requiresUpdate ? "none" : suppressed ? "none_recorded_host_failure" : "none_already_applied",
     host_tool: "automation_update", host_action: apply ? "update_current_heartbeat_rrule" : suppressed ? "none_recorded_host_failure" : match ? "ack_observed_rrule_without_update" : "none",
     host_action_contract: apply ? "automation_update_rrule_then_quota_scheduler_ack" : suppressed ? "skip_automation_update_for_recorded_host_failure" : match ? "quota_scheduler_ack_from_matching_host_observation" : "skip_automation_update_when_apply_needed_false",
     rrule_source: apply ? "scheduler_hint.app_automation.recommended_rrule" : null, stateful_backoff: backoff, no_spend_for_cadence_change: true};
@@ -216,8 +226,11 @@ function attachAppFollowups(app: JsonObject, request: JsonObject, facts: JsonObj
   }
   if (backoff.ack_needed) app.ack_hint = projection.ack({...scope, applied_rrule: backoff.current_rrule,
     reset_token: backoff.reset_token, identity_signature: backoff.identity_signature, host_match_observed: true,
+    automation_id: request.automation_id,
     after: backoff.apply_needed ? app.execution_interval_policy ? "automation_update_then_readback_actual_rrule" : "automation_update_rrule_success" : "matching_host_rrule_observed",
-    scheduler_host_facts: facts ? {...facts, operation: "ack", applied_rrule: backoff.current_rrule,
+    scheduler_host_facts: facts ? {...facts, ...(scope.surface === "codex_app" && request.automation_id
+      ? {automation_id: request.automation_id} : {}),
+      operation: "ack", applied_rrule: backoff.current_rrule,
       observed_host_rrule: observed, source: "quota_scheduler_ack", host_match_observed: true} : null});
 }
 
@@ -249,7 +262,21 @@ function buildCadenceHint(request: CompleteHintRequest, selected: HintProfile): 
   const applicable = context.app_automation_applicability === "applicable" || context.codex_app_applicability === "applicable";
   const surface = applicable ? context.host_surface : "codex_app";
   const stateKey = state.state_key || APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY;
-  const app = appAutomation(decision, cadence, identity, stateKey);
+  const observationError = request.codex_app_observation_error;
+  if (applicable && surface === "codex_app" && observationError) {
+    const app: JsonObject = {
+      apply: "none", host_action: "none", ack_required: false,
+      recommended_interval_minutes: decision.current_interval_minutes,
+      host_observation: {available: false, reason: observationError},
+      no_spend_for_cadence_change: true,
+    };
+    return completeCadenceProjection(request, profile, {
+      cadence, identity, decision, app, facts: null, withObservation: request, preserveAppSchedule: true,
+    });
+  }
+  // Codex App's ordinary RRULE update cannot guard against a newer user edit.
+  const preserveAppSchedule = applicable && surface === "codex_app" && !cadence.floor && Boolean(decision.observed_host_rrule);
+  const app = appAutomation(decision, cadence, identity, stateKey, preserveAppSchedule);
   if (cadence.floor) {
     app.execution_interval_policy = payload.automation_cadence;
     app.guarantee = cadence.guarantee;
@@ -260,16 +287,16 @@ function buildCadenceHint(request: CompleteHintRequest, selected: HintProfile): 
     identity_signature: identity.identity_signature, progression_minutes: cadence.app});
   const withObservation = {...request, effective_host_rrule: decision.effective_host_rrule};
   attachAppFollowups(app, withObservation, facts, {ack: schedulerAckHint, failure: schedulerFailureHint});
-  return completeCadenceProjection(request, profile, {cadence, identity, decision, app, facts, withObservation});
+  return completeCadenceProjection(request, profile, {cadence, identity, decision, app, facts, withObservation, preserveAppSchedule});
 }
 
 interface CadenceObservation {
   cadence: Cadence; identity: HintIdentity; decision: SchedulerBackoffTransitionResult;
-  app: JsonObject; facts: JsonObject | null; withObservation: JsonObject;
+  app: JsonObject; facts: JsonObject | null; withObservation: JsonObject; preserveAppSchedule: boolean;
 }
 
 function completeCadenceProjection(request: CompleteHintRequest, profile: HintProfile, observation: CadenceObservation): JsonObject {
-  const {cadence, identity, decision, app, facts, withObservation} = observation;
+  const {cadence, identity, decision, app, facts, withObservation, preserveAppSchedule} = observation;
   const payload = request.payload, context = request.context;
   const surface = context.app_automation_applicability === "applicable" || context.codex_app_applicability === "applicable" ? context.host_surface : "codex_app";
   const replan = finalReplan(profile), loops = loopDetails(profile, cadence, replan), keys = identityKeys(profile.cadence_class, context);
@@ -289,11 +316,13 @@ function completeCadenceProjection(request: CompleteHintRequest, profile: HintPr
   const retry = hintPendingRetry(payload);
   if (retry) hint.pending_retry = retry;
   if (surface === "codex_app") {
-    const legacy = structuredClone(app), legacyBackoff = legacy.stateful_backoff as JsonObject;
+    const legacy = structuredClone(app), legacyBackoff = jsonObject(legacy.stateful_backoff);
     legacy.applicability = "applicable";
-    legacy.rrule_source = legacy.recommended_rrule ? "scheduler_hint.codex_app.recommended_rrule" : null;
-    legacyBackoff.schema_version = "codex_app_stateful_backoff_v0";
-    attachAppFollowups(legacy, withObservation, facts, {ack: legacySchedulerAckHint, failure: legacySchedulerFailureHint});
+    legacy.rrule_source = legacyBackoff?.apply_needed === true ? "scheduler_hint.codex_app.recommended_rrule" : null;
+    if (legacyBackoff) {
+      legacyBackoff.schema_version = "codex_app_stateful_backoff_v0";
+      attachAppFollowups(legacy, withObservation, facts, {ack: legacySchedulerAckHint, failure: legacySchedulerFailureHint});
+    }
     hint.codex_app = legacy;
   }
   const cooldown = notificationCooldown(profile, decision, request);
@@ -305,7 +334,8 @@ function completeCadenceProjection(request: CompleteHintRequest, profile: HintPr
     ? Math.min(scheduled, typeof frontierSeconds === "number" ? frontierSeconds : scheduled) : frontierSeconds;
   if (typeof scheduled === "number") (loops.local_scheduler as JsonObject).recheck_after_seconds = recheck;
   if (request.include_detail) hint.cold_path_detail = {schema_version: "scheduler_hint_detail_v0", source: "quota.should-run", ...loops,
-    final_quota_replan_check: replan, reset_policy_detail: resetDetail(profile, identity, cadence, keys), stateful_backoff_detail: backoffDetail(profile, cadence, decision),
+    final_quota_replan_check: replan, reset_policy_detail: resetDetail(profile, identity, cadence, keys, preserveAppSchedule),
+    stateful_backoff_detail: backoffDetail(profile, cadence, decision, preserveAppSchedule),
     ...(profile.detail ? {cadence_context: profile.detail} : {}), ...(frontier ? {frontier_recheck: frontier} : {})};
   return applyHintExecutionContext(hint, context, recheck);
 }

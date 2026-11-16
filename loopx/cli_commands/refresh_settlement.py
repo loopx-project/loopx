@@ -27,10 +27,10 @@ def settle_requested_refresh(payload, args, registry_path, goal_ref):
     """Keep refresh's optional settlement composition with its existing owner."""
     if not getattr(args, "settle_turn", False):
         return
-    from ..control_plane.projects.registry_codec import load_registry
+    from ..control_plane.goals.first_party_host_admission import load_first_party_registry_metadata
     from ..paths import resolve_runtime_root
 
-    runtime_root = resolve_runtime_root(load_registry(registry_path), args.runtime_root)
+    runtime_root = resolve_runtime_root(load_first_party_registry_metadata(registry_path, goal_ref), args.runtime_root)
     settle_refreshed_turn(payload, registry_path=registry_path, runtime_root=runtime_root,
         goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
         replan_obligation_id=args.replan_obligation_id,

@@ -183,6 +183,8 @@ def validate_quota_command_context_request(
         raise QuotaCommandValidationError(
             "turn-scoped quota settlement requires --agent-id"
         )
+    if getattr(args, "automation_id", None) and command != "scheduler-ack-current":
+        raise QuotaCommandValidationError("--automation-id is only valid with quota scheduler-ack-current")
     scheduler_context = (
         _scheduler_execution_context_from_args(args)
         if command in QUOTA_SCHEDULER_COMMANDS
@@ -283,6 +285,7 @@ def prepare_quota_command_context(
         ..., Callable[..., dict[str, object]]
     ],
     force_projection_refresh: bool = False,
+    goal_ref: Mapping[str, str] | None = None,
 ) -> QuotaCommandContext:
     command = args.quota_command
     heartbeat_turn_id, scheduler_context, begin_turn = (
@@ -298,10 +301,26 @@ def prepare_quota_command_context(
     status_limit = max(0, requested_limit)
     if command in QUOTA_SCHEDULER_COMMANDS:
         status_limit = max(status_limit, AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK)
-    runtime_root = resolve_status_projection_cache_runtime_root(
-        registry_path=registry_path,
-        runtime_root_override=runtime_root_arg,
-    )
+    scoped_registry = None
+    if goal_ref is not None and command == "spend-slot":
+        from ..control_plane.goals.first_party_host_admission import load_first_party_registry_metadata
+        from ..paths import resolve_runtime_root
+
+        scoped_registry = load_first_party_registry_metadata(registry_path, goal_ref)
+        runtime_root = resolve_runtime_root(scoped_registry, runtime_root_arg, registry_path=registry_path)
+        if any(bool(getattr(args, key, False)) for key in ("use_projection_cache", "write_projection_cache")):
+            raise QuotaCommandValidationError("Exact-source settlement requires current uncached source facts")
+    else:
+        runtime_root = resolve_status_projection_cache_runtime_root(
+            registry_path=registry_path,
+            runtime_root_override=runtime_root_arg,
+        )
+    if command == "should-run" and not heartbeat_turn_id and args.agent_id and not args.dry_run:
+        from ..control_plane.goals.checkpoint_context_io import restore_default_turn_id
+
+        heartbeat_turn_id = restore_default_turn_id(runtime_root=runtime_root, registry_path=registry_path,
+            goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None),
+            pending_only=True) or mint_turn_instance_id(prefix="work")
     if command == "monitor-poll" and args.execute and (args.todo_id or args.target_key):
         # A selected provider outage precedes unrelated status preparation.
         # An unmigrated source may still recover its original quota transaction;
@@ -362,6 +381,7 @@ def prepare_quota_command_context(
             available_capabilities=args.available_capabilities,
             agent_lane_id=args.agent_id,
             include_presentation_projections=False,
+            **({"registry_data": scoped_registry} if scoped_registry is not None else {}),
         )
         preview = command == "should-run" and getattr(args, "dry_run", False)
         if not preview and bool(getattr(args, "write_projection_cache", False)):

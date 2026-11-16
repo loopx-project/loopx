@@ -957,6 +957,9 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
         )
         if scheduler_hint.get("reason"):
             lines.append(f"- scheduler_hint_reason: {scheduler_hint.get('reason')}")
+        observation = as_dict(app_automation.get("host_observation"))
+        if observation.get("available") is False and observation.get("reason"):
+            lines.append(f"- scheduler_host_observation_unavailable: {observation['reason']}")
         if reset_policy := as_dict(scheduler_hint.get("reset_policy")):
             lines.append(
                 "- scheduler_reset: "

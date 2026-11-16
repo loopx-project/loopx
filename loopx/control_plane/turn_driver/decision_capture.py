@@ -23,20 +23,14 @@ from .native_context_profile import (
     NATIVE_CONTEXT_HISTORY_TOKENS as NATIVE_CONTEXT_HISTORY_TOKENS,
     NATIVE_CONTEXT_OUTPUT_ENV as NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget as native_context_page_budget,
+    private_capture_supported as private_capture_supported,
 )
 
 
-def private_capture_supported() -> bool:
-    """Whether this host has the POSIX identity needed for private capture IO."""
-    return os.name == "posix" and callable(getattr(os, "getuid", None))
-
-
-def private_capture_uid() -> int:
-    """Fail closed until this IO boundary has a qualified non-POSIX ACL reader.
-
-    POSIX mode bits cannot establish Windows privacy. Check before creating or
-    reading private captures, and before evaluating bounded settlement commands.
-    """
+def private_capture_uid() -> int | None:
+    """Use POSIX identity or the existing native Windows DACL verifier."""
+    if os.name == "nt":
+        return None  # Each private leaf is checked through private_permissions.
     if not private_capture_supported():
         raise ValueError("private capture validation is unsupported on this platform; "
                          "use the same Turn command without --max-page-output-bytes")
@@ -59,6 +53,9 @@ def write_decision_capture(
     descriptor, temporary = tempfile.mkstemp(prefix=".decision-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
+            from ..runtime.private_permissions import protect_private_path
+
+            protect_private_path(Path(temporary))
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
@@ -443,7 +440,9 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     """Read one private physical descriptor; the caller verifies capture bytes."""
     from ..effect_runtime import MAX_REQUEST_BYTES
 
-    uid = private_capture_uid()
+    from ..runtime.private_permissions import require_private_path
+
+    private_capture_uid()
     path = Path(value).expanduser().absolute()
     path = path.parent.resolve(strict=True) / path.name
     if path.is_symlink():
@@ -451,8 +450,8 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     descriptor = open_regular_capture(path)
     with os.fdopen(descriptor, "rb") as stream:
         info = os.fstat(stream.fileno())
-        if (info.st_uid != uid or info.st_mode & 0o077
-                or info.st_size > MAX_REQUEST_BYTES):
+        require_private_path(path, descriptor=stream.fileno())
+        if info.st_size > MAX_REQUEST_BYTES:
             raise ValueError("reader reference must be a private regular file owned by this user")
         raw = stream.read(MAX_REQUEST_BYTES + 1)
     if len(raw) > MAX_REQUEST_BYTES:
@@ -480,7 +479,8 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
 
     if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
         raise ValueError("context-read requires the original capture file and its exact SHA-256")
-    uid = private_capture_uid() if private else None
+    if private:
+        private_capture_uid()
     path = Path(value).expanduser().absolute()
     # Parent aliases such as macOS /tmp are normal capture locations.
     # Resolve those once, but never follow a substituted final file.
@@ -492,8 +492,10 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
         metadata = os.fstat(stream.fileno())
         if metadata.st_size > MAX_REQUEST_BYTES:
             raise ValueError("capture must be a regular JSON file within the existing transport size limit")
-        if private and (metadata.st_uid != uid or metadata.st_mode & 0o077):
-            raise ValueError("native context requires a private capture owned by this user")
+        if private:
+            from ..runtime.private_permissions import require_private_path
+
+            require_private_path(path, descriptor=stream.fileno())
         raw = stream.read(metadata.st_size + 1)
     if len(raw) != metadata.st_size or hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")

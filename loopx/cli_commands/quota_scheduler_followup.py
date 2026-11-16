@@ -155,6 +155,7 @@ def build_scheduler_followup_payload(
         host_observation = resolve_codex_app_automation_rrule(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
+            automation_id=getattr(args, "automation_id", None),
         )
         observed_rrule = (
             str(host_observation.get("rrule") or "")

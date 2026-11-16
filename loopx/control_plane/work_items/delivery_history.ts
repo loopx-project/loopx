@@ -1,6 +1,10 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { requireJsonObject } from "../runtime_decode.ts";
+import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
+import {parseQuotaAccountingOwner, withQuotaAccountingOwner, quotaOwnerOwnsProjection} from "../quota/source_admission.ts";
+import {QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA, readQuotaSettlementForAdmittedOwnerFromSnapshot,
+  readQuotaSettlementSnapshot, validateQuotaSettlementScope} from "../quota/settlement_readback.ts";
+import {checkpointContinuationRequired, resultFreshnessRequired} from "../quota/heartbeat_receipt_identity.ts";
 import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
 import { DELIVERY_OUTCOMES, diagnoseDeliveryClaim, isTurnScopedSettlementOutcome, type DeliveryOutcome } from "./delivery_outcome.ts";
 
@@ -178,4 +182,82 @@ export function projectDeliveryHistory(value: unknown): JsonObject {
     small_scale_streak: prefixLength(runs, (run) => ["test_only", "single_surface"].includes(run.delivery_batch_scale)),
     outcome_gap_streak: floorConfigured ? prefixLength(runs, (run) => needsFollowthrough(run.delivery_outcome)) : 0,
   };
+}
+
+/** Qualify selected history under its real source, without granting a debit or
+ * execution right. Keep legacy/off rows unchanged and retain unqualified rows
+ * for display. A single snapshot and one readback per original Turn cover R/Q. */
+export async function projectVerifiedDeliveryHistory(value: unknown): Promise<JsonObject> {
+  const request = requireJsonObject(value, "delivery history");
+  const projected = projectDeliveryHistory(request);
+  const rows = request.runs as JsonObject[], signals = projected.runs as DeliverySignal[];
+  const needsSource = (row: JsonObject) => row.receipt_required === true || Boolean(row.turn_instance_id);
+  const eligible = new Set(rows.flatMap((row, i) => needsSource(row) ? [] : [i]));
+  const managed = rows.map((row, i) => ({row, i})).filter(({row}) => needsSource(row));
+  if (managed.length === 0) return projected;
+  const sourceSignal = (writeback: JsonObject): DeliverySignal => {
+    const facts = {...writeback, ...Object.fromEntries([
+      "delivery_outcome", "delivery_batch_scale", "delivery_turn_kind", "todo_id", "replan_obligation_id",
+    ].map(key => [key, String(writeback[key] ?? "").trim()])),
+      outcome_followthrough_required: writeback.outcome_followthrough_required === true,
+      progress_observation: writeback.progress_observation ?? null};
+    return (projectDeliveryHistory({...request, runs: [facts]}).runs as DeliverySignal[])[0];
+  };
+  for (const {i} of managed) signals[i] = {...signals[i], delivery_outcome: "unknown",
+    delivery_turn_kind: "unknown", outcome_followthrough: null};
+  const source = jsonObject(request.settlement_source);
+  if (source !== null) {
+    try {
+      const {runtimeRoot, goalId} = validateQuotaSettlementScope(source.runtime_root, source.goal_id);
+      const owner = parseQuotaAccountingOwner({runtimeRoot, goalId,
+        goalRefValue: source.goal_ref, sourceAdmissionValue: source.source_admission});
+      await withQuotaAccountingOwner(owner, async () => {
+        const snapshot = await readQuotaSettlementSnapshot(runtimeRoot, goalId);
+        const cached = new Map<string, JsonObject | null>();
+        const counted = new Set<string>();
+        for (const {row, i} of managed) {
+          if (row.goal_id !== goalId || !row.agent_id || !row.turn_instance_id
+              || !quotaOwnerOwnsProjection(owner, row.goal_ref)) continue;
+          const key = JSON.stringify([row.agent_id, row.turn_instance_id]);
+          try {
+            let readback = cached.get(key);
+            if (!cached.has(key)) {
+              cached.set(key, null);
+              readback = readQuotaSettlementForAdmittedOwnerFromSnapshot({schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+                runtime_root: runtimeRoot, goal_id: goalId, agent_id: row.agent_id,
+                turn_instance_id: row.turn_instance_id, resolve_original_binding: true,
+                infer_turn_instance_id: false, allow_unbound_binding: false}, owner, snapshot);
+              cached.set(key, readback);
+            }
+            if (!readback) continue;
+            const heartbeat = jsonObject(readback.heartbeat_receipt);
+            if (row.receipt_required !== true && !checkpointContinuationRequired(heartbeat) && !resultFreshnessRequired(heartbeat)) {
+              // Preserve legacy display units only when the original source
+              // really is unmarked. Dropping R metadata in transport is no proof.
+              // The shipped caller selects at most three rows before this RPC.
+              const legacy = snapshot.runs.find(original => original.goal_id === goalId
+                && original.agent_id === row.agent_id && original.turn_instance_id === row.turn_instance_id
+                && original.generated_at === row.generated_at && original.settlement_identity == null
+                && original.vision_checkpoint == null && quotaOwnerOwnsProjection(owner, original.goal_ref));
+              if (legacy) { signals[i] = sourceSignal(legacy); eligible.add(i); continue; }
+            }
+            const qualification = jsonObject(jsonObject(readback.spend_qualification)?.result);
+            const writeback = jsonObject(readback.writeback_run);
+            const identity = jsonObject(jsonObject(jsonObject(readback.identity)?.result)?.value);
+            if (qualification?.failure !== null || !writeback || identity?.effect_id !== row.effect_id
+                || writeback.generated_at !== row.generated_at
+                || String(jsonObject(writeback.refresh_recovery)?.vision_request_digest ?? "") !== row.vision_request_digest) continue;
+            // Classify verified source facts, never a caller's successful claim.
+            signals[i] = sourceSignal(writeback);
+            if (!counted.has(key)) { eligible.add(i); counted.add(key); }
+          } catch { /* Unavailable/malformed original receipts remain unknown. */ }
+        }
+      });
+    } catch { /* An unavailable or foreign source never qualifies authored rows. */ }
+  }
+  const accepted = signals.filter((_signal, i) => eligible.has(i));
+  return {...projected, runs: signals,
+    small_scale_streak: prefixLength(accepted, run => ["test_only", "single_surface"].includes(run.delivery_batch_scale)),
+    outcome_gap_streak: request.outcome_floor_configured === true
+      ? prefixLength(accepted, run => needsFollowthrough(run.delivery_outcome)) : 0};
 }

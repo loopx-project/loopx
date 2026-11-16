@@ -187,15 +187,15 @@ def find_heartbeat_receipt(
     goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
-    return _effective_heartbeat_receipt(
-        _heartbeat_receipt_events(
-            events,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            turn_instance_id=turn_instance_id,
-            goal_ref=goal_ref,
-        )
-    )
+    event = _effective_heartbeat_receipt(_heartbeat_receipt_events(events,
+        goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn_instance_id, goal_ref=goal_ref))
+    if event:
+        details = event.get("details") or {}
+        ref = details.get("semantic_replan_source_ref")
+        if ref:
+            event = {**event, "details": {**details,
+                "semantic_replan_source": read_guard_source_blob(runtime_root, goal_id, ref)}}
+    return event
 
 
 def ensure_turn_heartbeat_settlement_receipt(
@@ -206,8 +206,11 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_obligation_id: str | None,
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
     quota_spend_source: str | None = None,
+    semantic_replan_source: dict[str, object] | None = None,
     goal_ref: Mapping[str, object] | None = None,
     before_bind: Callable[[], None] | None = None,
+    result_freshness: str | None = None,
+    checkpoint_continuation: str | None = None,
 ) -> dict[str, object]:
     """Idempotently bind a Turn-created quota guard to its settlement identity.
 
@@ -316,10 +319,21 @@ def ensure_turn_heartbeat_settlement_receipt(
             "stall_observation": "not_applicable",
             "source": "loopx_turn_run_once",
         }
+        if result_freshness is not None:
+            details["result_freshness"] = result_freshness
+        if checkpoint_continuation is not None:
+            details["checkpoint_continuation"] = checkpoint_continuation
         if semantic_replan_guard_scoped:
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
             )
+            if semantic_replan_source is not None:
+                source = validate_guard_source(
+                    semantic_replan_source, normalized_semantic_replan_obligation_id
+                )
+                details["semantic_replan_source_ref"] = store_guard_source_blob(
+                    runtime_root, identity.goal_id, source
+                )
             if semantic_replan_capability_guard is not None:
                 details["semantic_replan_capability_id"] = semantic_replan_capability_guard["capability_id"]
                 details["semantic_replan_gap_id"] = semantic_replan_capability_guard["gap_id"]
@@ -632,6 +646,8 @@ def heartbeat_receipt_view(
         "event_id": event.get("event_id"),
         "recorded_at": event.get("recorded_at"),
     }
+    if "result_freshness" in details:
+        receipt["result_freshness"] = details["result_freshness"]
     if details.get("closeout_required") is True:
         receipt["closeout_required"] = True
     todo_id = str(details.get("todo_id") or "").strip()
@@ -677,6 +693,8 @@ def heartbeat_receipt_view(
             "gap_id": details.get("semantic_replan_gap_id"),
             "frontier_revision": details.get("semantic_replan_frontier_revision"),
         }
+    if details.get("semantic_replan_source") is not None:
+        receipt["semantic_replan_source"] = validate_guard_source(details["semantic_replan_source"], semantic_replan_obligation_id)
     pending_action_todo_id = heartbeat_receipt_pending_action_todo_id(event)
     if pending_action_todo_id:
         receipt["pending_action_selection"] = {
@@ -741,3 +759,158 @@ def fail_heartbeat_receipt(
             },
         }
     )
+
+
+def _guard_source_digest(value):
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+        separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def guard_cadence(registry_path, runtime_root, goal_id):
+    from ...agent_registry import load_goal_from_registry
+    from ...capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+    goal = load_goal_from_registry(Path(registry_path), goal_id) or {"id": goal_id}
+    profile = resolve_todo_replan_cadence_goal(goal, Path(runtime_root)).get("execution_profile") or {}
+    return {key: profile[key] for key in ("replan_after_completed_todos", "replan_after_effective_turns") if key in profile}
+
+
+def bounded_guard_source(obligation, cadence):
+    import copy
+    import json
+    from ..work_items.autonomous_replan_obligation import ensure_replan_novelty_policy
+    if not isinstance(obligation, dict) or not obligation.get("obligation_id"):
+        return None
+    value = copy.deepcopy(obligation)
+    value.pop("replan_context", None)
+    # The current native history remains the novelty ledger. Receipt source
+    # stores the complete obligation identity/triggers, not a partial ledger schema.
+    if ensure_replan_novelty_policy(value)["obligation_id"] != value["obligation_id"]:
+        raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: obligation codec mismatch")
+    if len(json.dumps(value, ensure_ascii=False).encode()) > 65536:
+        raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: bounded source exceeds 64KiB")
+    return {"schema_version": "semantic_replan_source_v1", "obligation": value,
+        "sha256": _guard_source_digest(value), "cadence": dict(cadence)}
+
+
+def guard_source_from_decision(
+    payload: Mapping[str, object] | None,
+    *,
+    obligation_id: str | None,
+    registry_path: Path,
+    runtime_root: Path,
+    goal_id: str,
+) -> dict[str, object] | None:
+    """Capture only the original admitted obligation, never a settlement replay."""
+    if not obligation_id or payload is None:
+        return None
+    obligation = payload.get("autonomous_replan_obligation")
+    packet = payload.get("replan_action_packet") or {}
+    if (not isinstance(obligation, dict)
+        or obligation.get("obligation_id") != obligation_id
+        or obligation.get("settlement_action_packet")
+        or (isinstance(packet, Mapping) and packet.get("settlement_only"))):
+        return None
+    return bounded_guard_source(
+        obligation, guard_cadence(registry_path, runtime_root, goal_id)
+    )
+
+
+def capture_heartbeat_admission_source(
+    payload: Mapping[str, object], *, details: Mapping[str, object],
+    identity: SettlementIdentity | None, registry_path: Path, runtime_root: Path,
+) -> dict[str, object]:
+    """Freeze source IO only after the typed decision admits this binding."""
+    result = dict(details)
+    interaction = payload.get("interaction_contract")
+    agent = interaction.get("agent_channel") if isinstance(interaction, Mapping) else None
+    obligation_id = normalize_todo_replan_obligation_id(result.get("semantic_replan_obligation_id"))
+    # The typed binding can admit replan work while ordinary delivery remains
+    # disabled. A merely observed packet cannot supply that binding.
+    bound_replan = (identity is not None and obligation_id is not None
+        and identity.replan_obligation_id == obligation_id)
+    if (identity is not None and identity.todo_id and obligation_id is not None
+            and payload.get("ok") is True and payload.get("should_run") is True
+            and isinstance(agent, Mapping) and agent.get("delivery_allowed") is not True):
+        from ..work_items.action_selection_contract import todo_replan_source_admitted
+        bound_replan = todo_replan_source_admitted(
+            payload, identity=identity.as_dict(), obligation_id=obligation_id)
+    if (identity is None or payload.get("ok") is not True or payload.get("should_run") is not True
+            or not isinstance(agent, Mapping)
+            or (agent.get("delivery_allowed") is not True and not bound_replan)):
+        # A visible obligation is not a Turn guard. In particular, an
+        # identity-less recovery must leave the later admission free to choose.
+        result.pop("semantic_replan_obligation_id", None)
+        return result
+    source = guard_source_from_decision(payload, obligation_id=obligation_id,
+        registry_path=registry_path, runtime_root=runtime_root, goal_id=identity.goal_id)
+    if source is not None:
+        result["semantic_replan_source_ref"] = store_guard_source_blob(runtime_root, identity.goal_id, source)
+    return result
+
+
+def validate_guard_source(source, obligation_id):
+    from ..work_items.autonomous_replan_obligation import ensure_replan_novelty_policy
+    if not isinstance(source, dict) or source.get("schema_version") != "semantic_replan_source_v1":
+        raise HeartbeatReceiptIdentityConflictError("guard_source_missing: owner must adopt the exact original guard packet; do not rerun with a new obligation ID")
+    value = source.get("obligation")
+    if (not isinstance(value, dict) or value.get("obligation_id") != obligation_id or
+        _guard_source_digest(value) != source.get("sha256") or
+        ensure_replan_novelty_policy(value)["obligation_id"] != obligation_id):
+        raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: exact source digest/obligation mismatch")
+    return source
+
+
+def guard_source_for_turn(runtime_root, *, goal_id, agent_id, turn_instance_id, goal_ref=None):
+    event = find_heartbeat_receipt(Path(runtime_root), goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=turn_instance_id, goal_ref=goal_ref)
+    if not event:
+        return None
+    oid = heartbeat_receipt_semantic_replan_obligation_id(event)
+    if not oid:
+        return None
+    return validate_guard_source((event.get("details") or {}).get("semantic_replan_source"), oid)
+
+
+
+
+def store_guard_source_blob(
+    runtime_root: Path, goal_id: str, source: Mapping[str, object],
+) -> str:
+    import json
+    import hashlib
+    from ..runtime.document_io import atomic_write_state_text
+
+    text = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    raw = text.encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    path = rollout_event_log_path(Path(runtime_root), goal_id).parent / "heartbeat-guard-sources" / f"{digest}.json"
+    try:
+        if not path.exists():
+            atomic_write_state_text(path, text, create_only=True, private=True)
+    except FileExistsError:
+        pass
+    if path.read_bytes() != raw:
+        raise HeartbeatReceiptIdentityConflictError(
+            "guard_source_invalid: immutable blob conflict"
+        )
+    return digest
+
+
+def read_guard_source_blob(runtime_root,goal_id,ref):
+    import re
+    import json
+    import hashlib
+    if not isinstance(ref,str) or not re.fullmatch(r"[0-9a-f]{64}",ref):
+        raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: malformed source ref")
+    path=rollout_event_log_path(Path(runtime_root),goal_id).parent/"heartbeat-guard-sources"/(ref+".json")
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        raise HeartbeatReceiptIdentityConflictError(
+            "guard_source_missing: immutable source blob unavailable"
+        ) from None
+    if hashlib.sha256(raw).hexdigest()!=ref:
+        raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: stored source bytes changed")
+    return json.loads(raw)

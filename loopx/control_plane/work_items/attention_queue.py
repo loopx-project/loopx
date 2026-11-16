@@ -191,6 +191,7 @@ def build_attention_queue(
     include_stopped_goal_context: bool = False,
     include_goal_channel_projection: bool = True,
     agent_lane_id: str | None = None,
+    settlement_source_for_goal: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the executable attention queue or a stopped-Goal archive view.
 
@@ -225,6 +226,12 @@ def build_attention_queue(
         active_state_item: dict[str, Any] | None = None
         current_status_run = context.latest_run(goal)
         goal_latest_runs = goal.get("latest_runs") if isinstance(goal.get("latest_runs"), list) else []
+        settlement_source = ({"runtime_root": str(runtime_root), "goal_id": goal["id"],
+            "registry_path": context.registry_path,
+            **({"goal_ref": {"goal_id": goal["id"], "goal_instance_id": goal["goal_instance_id"]}}
+               if goal.get("goal_instance_id") else {})} if runtime_root is not None else None)
+        if settlement_source_for_goal is not None:
+            settlement_source = settlement_source_for_goal(goal)
         if goal.get("registry_member"):
             try:
                 active_state_fields, active_state_item = _active_state_goal_context(
@@ -296,6 +303,7 @@ def build_attention_queue(
             interface_budget_cadence = context.interface_budget_cadence_for_runs(goal_latest_runs)
             context.enrich_project_asset(
                 item,
+                settlement_source=settlement_source,
                 latest_validation=context.project_asset_latest_validation(context.latest_run(goal)),
                 latest_runs=goal_latest_runs,
                 execution_profile=(
@@ -349,6 +357,7 @@ def build_attention_queue(
                 )
                 context.enrich_project_asset(
                     item,
+                    settlement_source=settlement_source,
                     user_todos=item.get("user_todos") if isinstance(item.get("user_todos"), dict) else None,
                     agent_todos=item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else None,
                     quota=item.get("quota") if isinstance(item.get("quota"), dict) else None,
@@ -370,6 +379,7 @@ def build_attention_queue(
                     item["quota"] = guarded_quota
                     context.enrich_project_asset(
                         item,
+                        settlement_source=settlement_source,
                         user_todos=item.get("user_todos") if isinstance(item.get("user_todos"), dict) else None,
                         agent_todos=item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else None,
                         quota=guarded_quota,

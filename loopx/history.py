@@ -489,6 +489,12 @@ def collect_history(
             tolerate_undecodable=tolerate_undecodable,
         )
         runs = index_snapshot.records
+        scoped_goal_ref = None
+        if registry.get("profile_id") == "source_session_v1":
+            from .control_plane.goals.goal_ref_validation import exact_goal_ref
+
+            scoped_goal_ref = exact_goal_ref(current_goal_id, meta.get("goal_instance_id"))
+            runs = [run for run in runs if run.get("goal_ref") == scoped_goal_ref]
         raw_count = index_snapshot.raw_count
         runs = [
             run
@@ -530,6 +536,7 @@ def collect_history(
             quota = quota_with_unreadable_index_rows(quota, index_snapshot.undecodable_count)
         goal_record: dict[str, Any] = {
             "id": current_goal_id,
+            **({"goal_instance_id": scoped_goal_ref["goal_instance_id"]} if scoped_goal_ref else {}),
             **goal_parent_fields(meta),
             "activation_state": activation_state.value,
             "registry_goal_digest": registry_goal_digests.get(current_goal_id),

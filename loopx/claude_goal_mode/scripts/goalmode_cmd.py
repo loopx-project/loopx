@@ -146,7 +146,7 @@ def goal_detail(ctx):
     payload = {}
     try:
         cmd = gh_prefix() + (["--registry", reg] if reg else []) + \
-            ["--format", "json", "quota", "should-run", "--goal-id", gid]
+            ["--format", "json", "quota", "should-run", "--dry-run", "--goal-id", gid]
         if agent:
             cmd += ["--agent-id", agent]
         out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,

@@ -381,6 +381,7 @@ def resolve_codex_app_automation_rrule(
     agent_id: str | None = None,
     thread_id: str | None = None,
     root: Path | None = None,
+    automation_id: str | None = None,
 ) -> dict[str, Any]:
     """Resolve one active Codex App heartbeat RRULE without exposing its body."""
 
@@ -394,26 +395,28 @@ def resolve_codex_app_automation_rrule(
         entry
         for entry in manifest.get("entries", [])
         if isinstance(entry, dict)
-        and entry.get("installed") is True
         and str(entry.get("goal_id") or "") == safe_goal_id
         and (not safe_agent_id or str(entry.get("agent_id") or "") == safe_agent_id)
+        and (automation_id or entry.get("installed") is True)
+        and (not automation_id or entry.get("automation_id") == automation_id)
         and (
             not safe_thread_id
             or str(entry.get("target_thread_id") or "") == safe_thread_id
         )
-        and str(entry.get("rrule") or "").strip()
     ]
-    if len(candidates) != 1:
+    parse_error_count = int(manifest.get("parse_error_count") or 0)
+    # An unreadable file can hide another matching heartbeat.
+    if len(candidates) != 1 or parse_error_count:
+        reason = "no matching active Codex App heartbeat RRULE"
+        if len(candidates) > 1:
+            reason = "Codex App heartbeat RRULE is ambiguous"
+        elif parse_error_count:
+            reason = "Codex App heartbeat manifest could not be fully read"
         result = {
             "available": False,
-            "reason": (
-                "Codex App heartbeat RRULE is ambiguous"
-                if candidates
-                else "no matching active Codex App heartbeat RRULE"
-            ),
+            "reason": reason,
             "candidate_count": len(candidates),
         }
-        parse_error_count = int(manifest.get("parse_error_count") or 0)
         if parse_error_count:
             result["manifest_parse_error_count"] = parse_error_count
             result["manifest_parse_errors"] = manifest.get("parse_errors") or []
@@ -422,6 +425,11 @@ def resolve_codex_app_automation_rrule(
             )
         return result
     entry = candidates[0]
+    status = str(entry.get("status") or "").upper()
+    if status in ("PAUSED", "DELETED"):
+        return {"available": False, "reason": f"Codex App heartbeat is {status.lower()}"}
+    if status != "ACTIVE" or not str(entry.get("rrule") or "").strip():
+        return {"available": False, "reason": "Codex App heartbeat has no readable active schedule"}
     return {
         "available": True,
         "rrule": entry["rrule"],

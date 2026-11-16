@@ -11,7 +11,9 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { normalizeVisionUnchangedReason } from "../goals/vision_checkpoint.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { projectMcpInteraction } from "./host_interaction.ts";
+import { TURN_CONTROLLER_CONTRACT } from "./turn_contract_generated.ts";
 import {
+  jsonObject,
   requireBoolean,
   requireJsonObject,
   requireNonEmptyString,
@@ -23,18 +25,21 @@ export const HOST_TODO_COMPLETION_TRANSACTION_SCHEMA_VERSION =
   "loopx_host_todo_completion_transaction_v0";
 export const HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION =
   "loopx_host_todo_completion_transaction_v1";
+export const HOST_TODO_FIRST_DELIVERY_TRANSACTION_SCHEMA_VERSION = "loopx_host_todo_completion_transaction_v2";
 export const HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION =
   "loopx_host_todo_completion_reduction_v0";
 export const HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION =
   "host_adapter_todo_settlement_v0";
 
-const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "vision_context", "project_guard"] as const;
+const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "vision_context", "project_guard", "wait"] as const;
 export const HOST_ADAPTER_SETTLEMENT_STEP_KINDS = [
   "guard",
   "lifecycle_completion",
   "durable_writeback",
   "quota_spend",
   "terminal_closeout",
+  "delivery_context",
+  "direction_context",
 ] as const;
 const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
 
@@ -56,7 +61,14 @@ interface HostTodoCompletionRequest {
   vision_path: string | null;
   vision_unchanged_reason: string | null;
   checkpoint_read_context_id: string | null;
+  first_delivery: boolean;
+  current_agent_checkpoint: boolean;
+  retained_result_present: boolean | null;
+  legacy_first_delivery_enrolled: boolean | null;
+  original_completion_recorded: boolean;
+  delivery_read_context_id: string | null;
   goal_instance_id: string | null;
+  turn_instance_id: string | null;
   provider_outcomes: readonly ProviderOutcome[];
 }
 
@@ -65,11 +77,37 @@ interface ProviderOutcome {
   output: string;
 }
 
+interface ProviderArgumentBinding extends JsonObject {
+  argument: string;
+  step_kind: HostTodoCompletionStepKind;
+  path: readonly string[];
+  fallback_when?: {step_kind: HostTodoCompletionStepKind; condition: JsonObject};
+}
+
 interface ProviderStep extends JsonObject {
   step_kind: HostTodoCompletionStepKind;
   args: readonly string[];
   legacy_args: readonly string[] | null;
   continue_when: JsonObject | null;
+  argument_bindings?: readonly ProviderArgumentBinding[];
+}
+
+const GUARD_SPEND_SOURCE_PATH = ["interaction_contract", "cli_channel", "quota_spend_source"];
+const GUARD_RECOVERY_SOURCE_PATH = ["settlement_progress", "quota_spend_source"];
+
+function projectedQuotaSource(guard: JsonObject | null): string | null {
+  if (guard === null) return null;
+  const contract = jsonObject(guard.interaction_contract);
+  if (contract === null) return "heartbeat"; // Preserve unprojected legacy guards.
+  const source = jsonObject(contract.cli_channel)?.quota_spend_source ??
+    jsonObject(guard.settlement_progress)?.quota_spend_source;
+  return source === "heartbeat" || source === "visible-goal" ? source : null;
+}
+
+function settledGuard(guard: JsonObject | null): boolean {
+  const source = jsonObject(jsonObject(guard?.interaction_contract)?.cli_channel)?.quota_spend_source;
+  return guard?.effective_action === EffectiveAction.HEARTBEAT_SETTLED_SKIP &&
+    guard.result_committed === true && source == null;
 }
 
 interface GuardSelection extends JsonObject {
@@ -82,7 +120,7 @@ interface GuardSelection extends JsonObject {
 function decodePhase(value: JsonObject): HostTodoCompletionPhase {
   requireStringLiteral(
     value.schema_version,
-    [HOST_TODO_COMPLETION_TRANSACTION_SCHEMA_VERSION, HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION] as const,
+    [HOST_TODO_COMPLETION_TRANSACTION_SCHEMA_VERSION, HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION, HOST_TODO_FIRST_DELIVERY_TRANSACTION_SCHEMA_VERSION] as const,
     "schema_version",
     "schema_version is unsupported",
   );
@@ -131,14 +169,22 @@ function decodeRequest(
   const todoId = typedTodoId(value.todo_id, "todo_id");
   const optionalText = (field: string): string | null => value[field] == null
     ? null : requireNonEmptyString(value[field], field);
-  const visionPath = optionalText("vision_path");
-  const unchanged = normalizeVisionUnchangedReason(optionalText("vision_unchanged_reason"));
+  const defaultCheckpoint = value.current_agent_checkpoint === true;
+  const visionPath = defaultCheckpoint && !value.checkpoint_read_context_id ? null : optionalText("vision_path");
+  const unchanged = defaultCheckpoint && !value.checkpoint_read_context_id ? null : normalizeVisionUnchangedReason(optionalText("vision_unchanged_reason"));
   const readContextId = optionalText("checkpoint_read_context_id");
+  const firstDelivery = value.schema_version === HOST_TODO_FIRST_DELIVERY_TRANSACTION_SCHEMA_VERSION;
+  const resultContextId = optionalText("delivery_read_context_id");
+  if (value.first_delivery === true && !firstDelivery) throw new EffectRuntimeRequestError("First delivery requires the v2 host contract.");
+  if (firstDelivery && value.first_delivery !== true) throw new EffectRuntimeRequestError("v2 requires explicit first_delivery opt-in.");
+  if (firstDelivery && value.no_follow_up === true && !defaultCheckpoint) {
+    throw new EffectRuntimeRequestError("Protected no-follow-up completion is not supported by this protocol stage; no effects were admitted. Use the existing ordinary contract or a real successor intent, without changing an unresolved original Turn.");
+  }
   if (visionPath && unchanged) {
     throw new EffectRuntimeRequestError("choose a vision patch or an unchanged reason, not both");
   }
   if ((visionPath || unchanged || readContextId || phase === "vision_refresh" || phase === "vision_context") &&
-      value.schema_version !== HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION) {
+      value.schema_version !== HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION && !firstDelivery) {
     throw new EffectRuntimeRequestError("host vision authoring requires v1");
   }
   if (phase === "vision_refresh" && !visionPath && !unchanged) {
@@ -147,7 +193,7 @@ function decodeRequest(
   if (phase === "vision_context" && (visionPath || unchanged || readContextId)) {
     throw new EffectRuntimeRequestError("vision context reads cannot submit a decision or receipt");
   }
-  if (readContextId && phase !== "vision_refresh") {
+  if (readContextId && phase !== "vision_refresh" && !firstDelivery) {
     throw new EffectRuntimeRequestError("checkpoint read context belongs only to vision recovery");
   }
   const goalId = requireNonEmptyString(value.goal_id, "goal_id");
@@ -194,6 +240,16 @@ function decodeRequest(
     vision_path: visionPath,
     vision_unchanged_reason: unchanged,
     checkpoint_read_context_id: readContextId,
+    first_delivery: firstDelivery,
+    current_agent_checkpoint: defaultCheckpoint,
+    retained_result_present: value.retained_result_present == null ? null
+      : requireBoolean(value.retained_result_present, "retained_result_present"),
+    legacy_first_delivery_enrolled: value.legacy_first_delivery_enrolled == null ? null
+      : requireBoolean(value.legacy_first_delivery_enrolled, "legacy_first_delivery_enrolled"),
+    original_completion_recorded: value.original_completion_recorded === undefined ? false
+      : requireBoolean(value.original_completion_recorded, "original_completion_recorded"),
+    delivery_read_context_id: resultContextId,
+    turn_instance_id: optionalText("turn_instance_id"),
     goal_instance_id: parsedGoalRef?.kind === "parsed"
       ? parsedGoalRef.value.goalInstanceId.value
       : null,
@@ -202,10 +258,14 @@ function decodeRequest(
   if (phase === "finalize") {
     request.provider_outcomes = decodeProviderOutcomes(value.provider_outcomes);
   }
+  if (firstDelivery && (visionPath || unchanged) && !readContextId) {
+    throw new EffectRuntimeRequestError("Read the post-result direction context before authoring Vision; an adapter cannot bind old Vision to a new read.");
+  }
   return request;
 }
 
 function turnInstanceId(request: HostTodoCompletionRequest): string {
+  if (request.turn_instance_id !== null) return request.turn_instance_id;
   const identityParts = request.goal_instance_id === null
     ? [request.goal_id, request.agent_id, request.todo_id]
     : [
@@ -286,10 +346,20 @@ function exactIdentityConditions(
   ];
 }
 
-function guardContinueWhen(identity: JsonObject): JsonObject {
+function guardContinueWhen(identity: JsonObject, requireOriginalWork = true): JsonObject {
   const path = ["heartbeat_receipt", "settlement_identity"];
   return all(
     equals(["ok"], true),
+    any(notObjectAt(["interaction_contract"]),
+      equals(GUARD_SPEND_SOURCE_PATH, "heartbeat"), equals(GUARD_SPEND_SOURCE_PATH, "visible-goal"),
+      all(nullish(GUARD_SPEND_SOURCE_PATH), any(equals(GUARD_RECOVERY_SOURCE_PATH, "heartbeat"),
+        equals(GUARD_RECOVERY_SOURCE_PATH, "visible-goal"))),
+      all(nullish(GUARD_SPEND_SOURCE_PATH), equals(["effective_action"], EffectiveAction.HEARTBEAT_SETTLED_SKIP),
+        equals(["result_committed"], true))),
+    ...(requireOriginalWork ? [any(nullish(["heartbeat_receipt", "result_freshness"]),
+      equals(["work_input_restored"], true),
+      equals(["result_committed"], true),
+      objectAt(["writeback_run"]))] : []),
     any(
       all(
         objectAt(path),
@@ -341,6 +411,9 @@ function completionContinueWhen(identity: JsonObject): JsonObject {
 function writebackContinueWhen(identity: JsonObject): JsonObject {
   return all(
     equals(["ok"], true),
+    any(notObjectAt(["settlement_progress"]),
+      equals(["settlement_progress", "quota_spend_source"], "heartbeat"),
+      equals(["settlement_progress", "quota_spend_source"], "visible-goal")),
     ...exactIdentityConditions(["settlement_identity"], identity),
     objectAt(["settlement_result"]),
     nullish(["settlement_result", "failure"]),
@@ -378,7 +451,14 @@ function writebackArgs(request: HostTodoCompletionRequest, identity: JsonObject)
     ...(request.vision_path ? ["--agent-vision-json", request.vision_path] : []),
     ...(request.vision_unchanged_reason ? ["--vision-unchanged-reason", request.vision_unchanged_reason] : []),
     ...(request.checkpoint_read_context_id ? ["--checkpoint-read-context", request.checkpoint_read_context_id] : []),
+    ...(request.first_delivery && !request.current_agent_checkpoint
+      ? ["--first-delivery", "--progress-scope", "goal"] : []),
   ];
+}
+
+function readRetainedDirectionAfterWriteback(request: HostTodoCompletionRequest): boolean {
+  return request.current_agent_checkpoint && (request.retained_result_present !== false ||
+    (request.legacy_first_delivery_enrolled !== true && !request.original_completion_recorded));
 }
 
 function providerSteps(
@@ -402,11 +482,12 @@ function providerSteps(
       : []),
   ];
   const lifecycleArgs = request.completion_args.filter(
-    (arg) => arg !== "--no-follow-up",
+    (arg) => request.current_agent_checkpoint || arg !== "--no-follow-up",
   );
   if (request.goal_instance_id) {
     lifecycleArgs.push("--goal-instance-id", request.goal_instance_id);
   }
+  if (request.delivery_read_context_id) lifecycleArgs.push("--delivery-read-context", request.delivery_read_context_id);
   const steps: ProviderStep[] = [
     {
       step_kind: "guard",
@@ -420,7 +501,7 @@ function providerSteps(
         "--execution-mode",
         request.execution_mode,
       ],
-      continue_when: guardContinueWhen(identity),
+      continue_when: guardContinueWhen(identity, !request.first_delivery),
     },
     {
       step_kind: "lifecycle_completion",
@@ -436,6 +517,11 @@ function providerSteps(
     },
     {
       step_kind: "quota_spend",
+      // Readback retains the original admission source even when a settled
+      // guard no longer projects another spend. Never infer it from a profile.
+      argument_bindings: [{argument: "--source", step_kind: "durable_writeback",
+        path: ["settlement_progress", "quota_spend_source"],
+        fallback_when: {step_kind: "guard", condition: notObjectAt(["interaction_contract"])}}],
       args: [
         "quota",
         "spend-slot",
@@ -476,6 +562,19 @@ function providerSteps(
       legacy_args: null,
       continue_when: null,
     });
+  }
+  if (request.first_delivery && !request.checkpoint_read_context_id) {
+    const purpose = request.delivery_read_context_id || request.current_agent_checkpoint ? "first_delivery" : "delivery_result";
+    const retainBeforeDirection = purpose === "first_delivery" && readRetainedDirectionAfterWriteback(request);
+    const context: ProviderStep = {step_kind: purpose === "delivery_result" ? "delivery_context" : "direction_context",
+      args: ["checkpoint-context", "--goal-id", request.goal_id, "--agent-id", request.agent_id,
+        "--todo-id", request.todo_id, "--turn-instance-id", turnId, "--purpose",
+        retainBeforeDirection ? "supplement_checkpoint" : purpose,
+        ...(request.goal_instance_id ? ["--goal-instance-id", request.goal_instance_id] : [])],
+      legacy_args: null, continue_when: null};
+    // A first-delivery receipt already enrolled by the completed-Turn guard
+    // requires its direction judgment before the writer accepts the result.
+    return [...steps.slice(0, retainBeforeDirection ? 3 : purpose === "first_delivery" ? 2 : 1), context];
   }
   return steps;
 }
@@ -741,6 +840,62 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
   const steps = providerSteps(request, identity);
   const outcomes = request.provider_outcomes;
   validateOutcomeOrder(outcomes, steps);
+  if (request.first_delivery && !request.checkpoint_read_context_id) {
+    const last = outcomes.at(-1);
+    const context = last ? parseObject(last.output) : null;
+    const postResult = request.delivery_read_context_id !== null || request.current_agent_checkpoint;
+    const expectedStep = postResult ? "direction_context" : "delivery_context";
+    if (request.current_agent_checkpoint && last?.step_kind === "lifecycle_completion" && context?.ok === false &&
+        (context.error_code === "checkpoint_read_context_stale" ||
+          context.error_code === "checkpoint_read_context_unknown_or_replaced")) {
+      return reduction("finalize", "provider_result", identity, null, {...context,
+        result_read_recovery: {
+          settlement_identity: identity,
+          read: {tool: "should_run", arguments: {revalidate_todo_id: request.todo_id}},
+          retry: {tool: "complete_task", arguments: {delivery_read_context_id: "<read_context_id>"}},
+          instructions: "Run the read action and verify it returned this settlement identity. Revalidate the " +
+            "candidate and evidence against the new basis, then retry the original completion intent with " +
+            "the returned read_context_id as delivery_read_context_id and the revalidated evidence.",
+        },
+      });
+    }
+    if (outcomes.length !== steps.length || last?.step_kind !== expectedStep || context?.ok !== true ||
+        !identityMatches(context, identity)) {
+      return reduction("finalize", "provider_result", identity, null, context ?? {ok: false, error: "First delivery stopped before context readback."});
+    }
+    const committedContext = jsonObject(context.context);
+    if (postResult && readRetainedDirectionAfterWriteback(request)) {
+      const retained = outcomeAt(outcomes, 2);
+      if (!retained || retained.ok !== true || !identityMatches(retained, identity) ||
+          typeof retained.json_path !== "string" || !retained.json_path ||
+          jsonObject(retained.first_delivery_progress)?.outcome_retained !== true) {
+        return reduction("finalize", "blocked", identity, null,
+          blockedResult(request, "durable_writeback", "direction requires the original retained result"));
+      }
+    }
+    if (request.current_agent_checkpoint && context.status === "committed" &&
+        context.purpose === "supplement_checkpoint" && typeof committedContext?.read_context_id === "string" &&
+        committedContext.read_context_id.length > 0) {
+      // Resume the proven original append, never attach a new read to an old decision.
+      return {...reduction("finalize", "execute", identity,
+        providerEffect(providerSteps({...request, checkpoint_read_context_id: committedContext.read_context_id}, identity)), null),
+        resume_checkpoint_read_context_id: committedContext.read_context_id};
+    }
+    return reduction("finalize", "provider_result", identity, null, {
+      schema_version: HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION, ok: true, completed: postResult,
+      settlement_complete: false, settlement_identity: identity,
+      stage: postResult ? "direction_pending" : "result_review_pending",
+      ...(postResult ? {completion: outcomeAt(outcomes, 1)} : {}), context,
+      recovery: {tool: "complete_task", ...(request.current_agent_checkpoint ? {} : {first_delivery: true}),
+        delivery_read_context_id: request.delivery_read_context_id ?? context.read_context_id,
+        ...(postResult ? {read_context_id: context.read_context_id} : {}),
+        instruction: postResult
+          ? request.current_agent_checkpoint
+            ? "Read this post-result context and judge direction. Continue complete_task with its read_context_id, the new Vision decision and your original completion arguments. The original result key is restored automatically; replay does not repeat work."
+            : "Read this post-result context and judge direction. Call complete_task with the original completion intent, both read identities and the new Vision decision. Result replay does not repeat work."
+          : "Read this result basis, check the candidate and validation, then call complete_task with this delivery_read_context_id and the same intended result. Do not submit Vision until the post-result context is returned."},
+    });
+  }
 
   if (outcomes.length === 0) {
     return reduction(
@@ -753,6 +908,16 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
   }
 
   const guard = guardSelection(outcomes[0].output);
+  const guardPayload = parseObject(outcomes[0].output);
+  if (jsonObject(guardPayload?.heartbeat_receipt)?.result_freshness === "turn_result_freshness_required_v1" &&
+      guardPayload?.work_input_restored !== true && guardPayload?.result_committed !== true) {
+    return reduction("finalize", "blocked", identity, null, {
+      ...blockedResult(request, "validation", "No original work read preceded this result. Revalidate the retained candidate against the returned basis before retrying."),
+      error_code: "delivery_work_read_required", settlement_identity: identity,
+      context: guardPayload?.delivery_result_context ?? null,
+      recovery: {tool: "complete_task", instruction: "Read the returned work basis and validate this candidate on the original Turn, then retry the same completion. The adapter carries its original key; preserve valid artifacts."},
+    });
+  }
   if (guard.state !== "selected") {
     return reduction(
       "finalize",
@@ -795,6 +960,12 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
         { guard_state: "invalid" },
       ),
     );
+  }
+
+  const spendSource = projectedQuotaSource(guardPayload);
+  if (spendSource === null && !settledGuard(guardPayload)) {
+    return reduction("finalize", "blocked", identity, null,
+      blockedResult(request, "guard", "quota guard has no supported turn-scoped spend source"));
   }
 
   if (outcomes.length < 2) {
@@ -903,12 +1074,20 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
         spend.idempotent_replay === true ||
         spend.receipt_repaired === true),
   );
+  const readbackSource = jsonObject(writeback.settlement_progress)?.quota_spend_source;
+  const modernGuard = jsonObject(guardPayload?.interaction_contract) !== null;
+  const originalReplay = spend?.source === undefined && spend?.idempotent_replay === true &&
+    jsonObject(writeback.settlement_progress)?.state === "settled";
+  const sourceMatches = (readbackSource === "heartbeat" || readbackSource === "visible-goal"
+    ? spend?.source === readbackSource || originalReplay : !modernGuard) &&
+    (!modernGuard || spendSource === null || readbackSource === spendSource);
   if (
     !spend ||
     spend.ok !== true ||
     !spendCommitted ||
     !identityMatches(spend, identity) ||
-    !nullableFailure(spend)
+    !nullableFailure(spend) ||
+    !sourceMatches
   ) {
     return reduction(
       "finalize",
@@ -918,7 +1097,8 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
       blockedResult(
         request,
         "quota_spend",
-        reasonFrom(spend) || "quota spend did not append a receipt",
+        !sourceMatches ? "quota spend source does not match the admitted readback"
+          : reasonFrom(spend) || "quota spend did not append a receipt",
         { completion },
       ),
     );
@@ -981,6 +1161,7 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
     ok: true,
     completed: true,
     status: "done",
+    ...(request.current_agent_checkpoint ? {settlement_complete: true, stage: "settled"} : {}),
     goal_id: request.goal_id,
     todo_id: request.todo_id,
     settlement_identity: identity,
@@ -996,6 +1177,48 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
       },
     } : {}),
   });
+}
+
+
+// Unfinished MCP work uses the same scoped guard owner. No lifecycle, vision,
+// result validation, writeback or quota effect belongs to this quiet wait.
+function waitForUnfinishedWork(request: HostTodoCompletionRequest, value: JsonObject): JsonObject {
+  const reason = requireNonEmptyString(value.wait_reason, "wait_reason").trim();
+  if (!reason || reason.length > 240) throw new EffectRuntimeRequestError("wait_reason must contain 1..240 characters");
+  if (request.completion_args.length || request.no_follow_up || request.first_delivery ||
+      request.current_agent_checkpoint || request.vision_path || request.vision_unchanged_reason ||
+      request.checkpoint_read_context_id || request.delivery_read_context_id) {
+    throw new EffectRuntimeRequestError("unfinished wait cannot submit completion or a vision decision");
+  }
+  if (request.turn_instance_id === null) {
+    return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase: "wait",
+      result: {schema_version: HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION, ok: false, completed: false,
+        error: "Read should_run before waiting on an admitted unfinished Todo."}};
+  }
+  const {payload: identity} = expectedIdentity(request);
+  if (value.guard_output === undefined) {
+    const guard = providerSteps(request, identity)[0];
+    return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase: "wait", identity,
+      args: [...guard.args], legacy_args: guard.legacy_args};
+  }
+  if (typeof value.guard_output !== "string") throw new EffectRuntimeRequestError("guard_output must be a string");
+  let guard: JsonObject | null = null;
+  try {guard = jsonObject(JSON.parse(value.guard_output));} catch { /* Reject corrupt provider output below. */ }
+  const selection = guardSelection(value.guard_output);
+  const selected = jsonObject(guard?.selected_todo);
+  const valid = guard?.ok === true && guard.should_run === true && guard.normal_delivery_allowed === true &&
+    guard.work_input_restored === true && selected?.status === "open" && selected.todo_id === request.todo_id &&
+    selection.state === "selected" && selection.todo_id === request.todo_id &&
+    selection.settlement_identity !== null && guardIdentityMatches(selection, identity);
+  if (!valid) return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase: "wait", identity,
+    result: blockedResult(request, "guard", reasonFrom(guard) || "Current guard does not admit unfinished work on the original Turn.")};
+  return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase: "wait", identity,
+    result: {schema_version: HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION, ok: true, completed: false,
+      settlement_complete: false, goal_id: request.goal_id, todo_id: request.todo_id, settlement_identity: identity,
+      result_kind: TURN_CONTROLLER_CONTRACT.vocabularies.turn_result_kind.WAIT, reason,
+      task_validation: {status: "not_required", validator_kind: "stop_result"},
+      effects: {host_invoked: false, todo_completed: false, state_written: false, quota_spent: false},
+      next_tool: "should_run"}};
 }
 
 export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
@@ -1019,6 +1242,7 @@ export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
     };
   }
   const request = decodeRequest(value, phase);
+  if (phase === "wait") return waitForUnfinishedWork(request, value);
   if (phase === "finalize") return finalize(request);
   const { payload: identity } = expectedIdentity(request);
   if (phase === "vision_context") {
@@ -1029,7 +1253,9 @@ export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
         "--turn-instance-id", String(identity.turn_instance_id),
         ...(request.goal_instance_id
           ? ["--goal-instance-id", request.goal_instance_id]
-          : [])],
+          : []), ...(request.first_delivery ? ["--purpose",
+            readRetainedDirectionAfterWriteback(request)
+              ? "supplement_checkpoint" : "first_delivery", "--decision-scope", "goal"] : [])],
     };
   }
   if (phase === "vision_refresh") {

@@ -82,6 +82,8 @@ def project_current_canonical_todos(
     execute: bool = True,
     registry_data: Mapping[str, Any] | None = None,
     canonical_snapshot: dict[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
+    settlement_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Render one exact canonical head into machine-owned Markdown regions."""
 
@@ -159,6 +161,8 @@ def project_current_canonical_todos(
                     runtime_root=runtime_root,
                     goal_id=goal_id,
                     state_file=state_path,
+                    source_admission=source_admission,
+                    settlement_identity=settlement_identity,
                 )
                 if missing_this_attempt:
                     atomic_write_state_text(state_path, projection.markdown, create_only=True)
@@ -222,6 +226,8 @@ def settle_canonical_todo_projection(
     state_file: Path | None = None,
     only_if_promoted: bool = False,
     canonical_snapshot: dict[str, Any] | None = None,
+    registry_data: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Drain the committed provider head, preserving a successful mutation."""
 
@@ -246,6 +252,9 @@ def settle_canonical_todo_projection(
             state_file=state_file,
             execute=True,
             canonical_snapshot=canonical_snapshot,
+            registry_data=registry_data,
+            source_admission=source_admission,
+            settlement_identity=payload.get("settlement_identity"),
         )
     except Exception as error:  # noqa: BLE001 - canonical commit already landed
         if isinstance(error, LocalCoordinationAuthorityUnavailable):
@@ -282,6 +291,8 @@ def recover_refresh_todo_projection(
     payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
     goal_id: str, project: Path | None = None, state_file: Path | None = None,
     canonical_snapshot: dict[str, Any] | None = None,
+    registry_data: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """A committed refresh/replay is a recovery opportunity, never a new Todo write.
 
@@ -297,6 +308,8 @@ def recover_refresh_todo_projection(
         payload, registry_path=registry_path, runtime_root=runtime_root,
         goal_id=goal_id, project=project, state_file=state_file, only_if_promoted=True,
         canonical_snapshot=canonical_snapshot,
+        registry_data=registry_data,
+        source_admission=source_admission,
     )
 
 

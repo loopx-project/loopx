@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .control_plane.work_items.replan_history_codec import (
     REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS as _REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS,
@@ -608,12 +609,14 @@ def compact_post_handoff_run(run: dict[str, Any], profile: dict[str, Any] | None
 
 def project_post_handoff_history(
     runs: list[dict[str, Any]], profile: dict[str, Any] | None = None,
+    *, settlement_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not runs:
         return {}
     floor = execution_profile_outcome_floor(profile)
     floor_configured = bool(floor.get("outcome_markers") or floor.get("surface_only_hints"))
-    projection = project_delivery_history(runs, outcome_floor_configured=floor_configured)
+    projection = project_delivery_history(runs, outcome_floor_configured=floor_configured,
+                                          settlement_source=settlement_source)
     compact_runs = []
     for run, signal in zip(runs, projection["runs"], strict=True):
         compact = {field: run[field] for field in (
@@ -646,6 +649,7 @@ def project_asset_handoff_state(
     ready: bool,
     project_asset: dict[str, Any],
     latest_runs: list[dict[str, Any]] | None,
+    settlement_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _project_asset_handoff_state_read_model(
         ready=ready,
@@ -656,7 +660,7 @@ def project_asset_handoff_state(
         is_handoff_ready_run=is_handoff_ready_run,
         is_custom_post_handoff_work_run=is_custom_post_handoff_work_run,
         is_status_neutral_run=is_status_neutral_run,
-        project_delivery_history=project_post_handoff_history,
+        project_delivery_history=partial(project_post_handoff_history, settlement_source=settlement_source),
     )
 
 
@@ -664,13 +668,14 @@ def project_asset_handoff_readiness(
     item: dict[str, Any],
     *,
     latest_runs: list[dict[str, Any]] | None = None,
+    settlement_source: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     return _project_asset_handoff_readiness_read_model(
         item,
         latest_runs=latest_runs,
         project_asset_handoff_check_projection=project_asset_handoff_check_projection,
         handoff_budget_contract=handoff_budget_contract,
-        project_asset_handoff_state=project_asset_handoff_state,
+        project_asset_handoff_state=partial(project_asset_handoff_state, settlement_source=settlement_source),
     )
 
 
@@ -686,6 +691,7 @@ def enrich_project_asset(
     orchestration: dict[str, Any] | None = None,
     subagent_activity: dict[str, Any] | None = None,
     interface_budget_cadence: dict[str, Any] | None = None,
+    settlement_source: dict[str, Any] | None = None,
 ) -> None:
     _enrich_project_asset_read_model(
         item,
@@ -703,7 +709,7 @@ def enrich_project_asset(
         project_asset_quota_summary=project_asset_quota_summary,
         compact_execution_profile=compact_execution_profile,
         compact_orchestration_policy=compact_orchestration_policy,
-        project_asset_handoff_readiness=project_asset_handoff_readiness,
+        project_asset_handoff_readiness=partial(project_asset_handoff_readiness, settlement_source=settlement_source),
         project_asset_quota_state=project_asset_quota_state,
         project_asset_user_todo_open_count=project_asset_user_todo_open_count,
         build_long_task_cadence_hint=build_long_task_cadence_hint,
@@ -1092,6 +1098,7 @@ def build_attention_queue(
     registry_path: Path | None = None,
     include_goal_channel_projection: bool = True,
     agent_lane_id: str | None = None,
+    settlement_source_for_goal: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1161,6 +1168,7 @@ def build_attention_queue(
         include_stopped_goal_context=include_stopped_goal_context,
         include_goal_channel_projection=include_goal_channel_projection,
         agent_lane_id=agent_lane_id,
+        settlement_source_for_goal=settlement_source_for_goal,
     )
     if runtime_root is not None:
         for item in queue.get("items") or []:
@@ -1359,6 +1367,7 @@ def collect_status(
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
     include_presentation_projections: bool = True,
+    registry_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     with effect_runtime_request_scope():
         return _collect_status_read_model(
@@ -1378,4 +1387,5 @@ def collect_status(
             agent_lane_id=agent_lane_id,
             include_presentation_projections=include_presentation_projections,
             context=build_status_collection_context(),
+            registry_data=registry_data,
         )
