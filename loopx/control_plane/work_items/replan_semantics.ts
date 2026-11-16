@@ -574,6 +574,19 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation === "requirements") {
     const strideControl = strideControlContract(object(obligation.replan_context), obligation.obligation_id);
     const writeback = writebackProjection(required, externalReview, strideControl !== null);
+    if (required.includes("coverage_backed_no_followup")) {
+      writeback.writeback_contract = {...object(writeback.writeback_contract),
+        no_followup_requirements: {
+          cli_args: ["--progress-result-class", "no_followup", "--progress-coverage-scope-id", "<coverage-scope-id>",
+            "--progress-evidence-id", "<evidence-id>",
+            "--agent-vision-json", "<file>"],
+          vision_fields: {state: "no_followup", "path_delta.outcome": "stop"},
+          preserve: ["vision_patch"],
+          rule: "Use verified scope coverage and the vision_authoring path_delta fields with evidence_refs. " +
+            "Retain the current complete vision_patch: changing durable fields requires outcome=replan and cannot be combined with stop. " +
+            "Write back and spend with the original settlement_plan identity, not a later obligation.",
+        }};
+    }
     if (requiresStrideDecision(obligation)) {
       const contract = object(writeback.writeback_contract);
       writeback.cli_semantic_args = VISION_CLI_ARGS;

@@ -13,6 +13,8 @@ import shlex
 import typing
 from collections.abc import Collection, Mapping
 
+from ...install_contract import render_host_cli_command
+
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction, agent_scope_frontier_action as _agent_scope_frontier_action
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
 from ..agents.workspace_guard import delivery_workspace_refresh_hint
@@ -633,7 +635,7 @@ def _selection_recovery_command(
 
 def _render_replan_successor_closeout_guard(
     *, settlement_plan: Mapping[str, Any] | None,
-    scheduler_args: str, typed_quota_guard: str, settlement_args: str,
+    scheduler_args: str, typed_quota_guard: str,
 ) -> str | None:
     """Render this host's guard for an existing TS-owned pure replan identity."""
     if not scheduler_args or not settlement_plan:
@@ -642,7 +644,11 @@ def _render_replan_successor_closeout_guard(
     if not isinstance(identity, Mapping) or identity.get("binding_kind") != "autonomous_replan":
         # Todo-bound replans retain their distinct closeout path.
         return None
-    return typed_quota_guard + settlement_args
+    # The receipt recovers the obligation; should-run accepts only its Turn.
+    return render_host_cli_command([
+        *shlex.split(typed_quota_guard),
+        "--turn-instance-id", str(identity["turn_instance_id"]),
+    ])
 
 
 def _deferred_resume_continuation(
@@ -1019,7 +1025,7 @@ def _admitted_interaction_next_cli_actions(
             ),
             successor_closeout_guard=_render_replan_successor_closeout_guard(
                 settlement_plan=settlement_plan, scheduler_args=scheduler_args,
-                typed_quota_guard=typed_quota_guard, settlement_args=settlement_args,
+                typed_quota_guard=typed_quota_guard,
             ),
         )
     return _terminal_cli_actions(
