@@ -391,7 +391,17 @@ function authority(request: LifecycleDecisionRequest):
     if (actor !== null) {
       const rejection = registeredTodoMutationRejection(todo, actor, registered);
       if (rejection !== null) return result("rejected", rejection);
-    } else if (todo.claimed_by !== null || todo.bound_agent !== null ||
+      return { mode: "single_agent_compatibility", ownershipGate: "not_required" };
+    }
+    // Single-agent goals have no second agent to act for the owner, and the
+    // terminal CLI has no human owner actor, so an actorless owner decision
+    // closing an exact linked user gate uses the same override as multi-agent
+    // mode. The override requires the exact decision scope link; unlinked
+    // owned/bound/excluded records still require an accountable actor.
+    if (exactUserGateOverride(request)) {
+      return { mode: "exact_user_gate_decision_scope_override", ownershipGate: "not_required" };
+    }
+    if (todo.claimed_by !== null || todo.bound_agent !== null ||
         todo.blocks_agent !== null || todo.excluded_agents.length > 0) {
       // Actorless compatibility is limited to genuinely unowned Todo records;
       // ownership, binding, and exclusion facts require an accountable actor.
@@ -462,6 +472,23 @@ function terminalFence(
       request.todo.bound_agent !== null && request.todo.bound_agent === request.actor_agent_id &&
       !delegated && !timeActive && !explicitFence &&
       ownerIdentityEligible(request, request.actor_agent_id)) {
+    return result("apply", "terminal_fence_not_required", {
+      authority_mode: authorityMode, lease_fence: "not_required",
+      next_lease: lease?.present && lease.status !== "released"
+        ? {...lease, active: false, status: "released"} : null,
+    });
+  }
+  // In single-agent goals there is no peer set to attribute an execution
+  // lease across, and the terminal CLI has no human owner actor: an owner
+  // decision on an exact linked user gate records a decision rather than
+  // executing work, and retires any expired lease lineage with the Todo
+  // transition. Multi-agent hard-lease goals keep their attributed-actor
+  // gate contract, registered actors keep the ordinary lease requirement, and
+  // an active holder or an explicitly supplied fence is never bypassed.
+  if (request.registered_agents.length <= 1 && request.command === "complete" &&
+      authorityMode === "exact_user_gate_decision_scope_override" &&
+      request.todo.role === "user" && request.todo.task_class === "user_gate" &&
+      request.actor_agent_id === null && !timeActive && !explicitFence) {
     return result("apply", "terminal_fence_not_required", {
       authority_mode: authorityMode, lease_fence: "not_required",
       next_lease: lease?.present && lease.status !== "released"
