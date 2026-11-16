@@ -444,8 +444,10 @@ def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "LOOPX_PYTEST_STACK " in result.stdout + result.stderr
+        diag = json.loads((root / "ci-shard-diagnostics.json").read_text(encoding="utf-8"))
+        assert diag["execution_complete"] is True and diag["deadline_exceeded"] is False
         cases = ET.parse(root / "results.xml").findall(".//testcase")
-        seen.append({case.attrib["name"] for case in cases})
+        seen.append({name for case in cases if (name := case.attrib.get("name"))})
         partial = subprocess.run(
             [sys.executable, "-m", "coverage", "report", "--fail-under=100"],
             cwd=root, env=env, capture_output=True, check=False,
@@ -541,6 +543,26 @@ def test_shard_names_failed_cases_before_the_remaining_tests_finish(tmp_path: Pa
     cases = ET.parse(tmp_path / "junit.xml").findall(".//testcase")
     assert len(cases) == 2
     assert len([case for case in cases if case.find("failure") is not None]) == 1
+
+
+def test_python_shards_preserve_two_workers_and_deadline_diagnostics() -> None:
+    shard_job = yaml.safe_load(WORKFLOW)["jobs"]["test-shard"]
+    assert shard_job["timeout-minutes"] == 60
+    steps = {step.get("name", f"idx-{idx}"): step for idx, step in enumerate(shard_job["steps"])}
+    isolation = steps["Prepare native shell isolation"]["run"]
+    assert "if ! command -v bwrap >/dev/null 2>&1; then" in isolation
+    run_args = shlex.split(steps["Run test shard"]["run"])
+    assert run_args[run_args.index("-n") + 1] == "2"
+    assert run_args[run_args.index("--ci-session-deadline") + 1] == "3300"
+    assert run_args[run_args.index("--ci-diagnostics-file") + 1] == "ci-shard-diagnostics.json"
+    junit_upload = steps["Upload full-shard outcomes for selection audit"]
+    assert junit_upload["if"] == "${{ !cancelled() }}"
+    assert junit_upload["with"]["path"] == "junit.xml"
+    diag_upload = steps["Upload shard timeout and progress diagnostics"]
+    assert diag_upload["if"] == "always()"
+    assert diag_upload["with"]["name"] == "python-diagnostics-${{ matrix.shard }}"
+    assert diag_upload["with"]["path"] == "ci-shard-diagnostics.json"
+    assert diag_upload["with"]["if-no-files-found"] == "warn"
 
 
 def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:

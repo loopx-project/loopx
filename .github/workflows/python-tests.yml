@@ -615,7 +615,9 @@ jobs:
       cancel-in-progress: false
     # All shards were still progressing at 83-94% when the 45m job
     # deadline cancelled run 37916979857. Reserve setup/reporting headroom
-    # without changing test-level deadlines, collection or worker count.
+    # without changing test-level deadlines, collection or worker count; an inner
+    # 55m cooperative session deadline preserves partial JUnit and diagnostics
+    # before the 60m runner limit terminates the job.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -647,8 +649,10 @@ jobs:
         # Ubuntu 24.04 may need an executable-scoped userns profile for bwrap.
         # Do not disable AppArmor or the system-wide unprivileged-userns guard.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          if ! command -v bwrap >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends bubblewrap
+          fi
           if ! bwrap --unshare-all --ro-bind / / /bin/true; then
             sudo tee /etc/apparmor.d/loopx-qualification-bwrap >/dev/null <<'PROFILE'
           abi <abi/4.0>,
@@ -663,12 +667,14 @@ jobs:
       - name: Run test shard
         # Split the whole collection, not a hand-maintained list of directories.
         # Without timing history least_duration alternates equal-weight tests.
-        # Each runner retains the measured two-worker pool.
-        # Cooperative per-test Python stacks diagnose stalls without terminating tests.
+        # Each runner retains the measured two-worker pool; cooperative stacks
+        # and the 55m inner deadline diagnose slow/blocked cases without masking failures.
         run: >-
           python -m pytest -v -n 2 -m "not stage2c_e2e"
           -p scripts.ci.pytest_timing
           --ci-stall-after 120
+          --ci-session-deadline 3300
+          --ci-diagnostics-file ci-shard-diagnostics.json
           --splits 6 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration
           --durations=25 --durations-min=1
@@ -676,12 +682,20 @@ jobs:
           --cov=loopx
           --cov-report=term
       - name: Upload full-shard outcomes for selection audit
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: python-junit-${{ matrix.shard }}
           path: junit.xml
           if-no-files-found: error
+          retention-days: 7
+      - name: Upload shard timeout and progress diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-diagnostics-${{ matrix.shard }}
+          path: ci-shard-diagnostics.json
+          if-no-files-found: warn
           retention-days: 7
       - name: Upload shard coverage
         uses: actions/upload-artifact@v7

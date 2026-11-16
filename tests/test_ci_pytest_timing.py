@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -575,3 +576,247 @@ def test_real_oversized_parameter_ids_keep_distinct_identity_and_bounded_display
     assert all("Authorization" not in line and "$TOKEN" not in line
                for line in log.read_text().splitlines() if line.startswith(PREFIX))
     assert max(len(line) for line in log.read_text().splitlines() if line.startswith(PREFIX)) < 1200
+
+
+@pytest.mark.parametrize("deadline", ["-1", "nan", "inf", "-inf"])
+def test_session_deadline_rejects_invalid_values_before_running_tests(tmp_path, deadline):
+    (tmp_path / "test_subject.py").write_text(
+        "from pathlib import Path\n"
+        "def test_unreachable(): Path('ran').touch()\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "-q",
+            "-p", "scripts.ci.pytest_timing",
+            "--ci-session-deadline=" + deadline,
+        ],
+        cwd=tmp_path,
+        env=environment(),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 4
+    assert "--ci-session-deadline must be finite and nonnegative" in result.stderr
+    assert not (tmp_path / "ran").exists()
+
+
+@pytest.mark.parametrize("workers,deadline", [(0, "0.6"), (2, "2.5")])
+def test_session_deadline_flushes_partial_junit_and_in_flight_diagnostics(
+    tmp_path, workers, deadline,
+):
+    (tmp_path / "test_subject.py").write_text(
+        "import time\nfrom pathlib import Path\n"
+        "def test_fast():\n"
+        "    Path('fast.done').touch()\n"
+        "def test_blocked():\n"
+        "    waited = 0.0\n"
+        "    while not Path('fast.done').exists() and waited < 5.0:\n"
+        "        time.sleep(0.02)\n"
+        "        waited += 0.02\n"
+        "    Path('blocked.entered').touch()\n"
+        "    time.sleep(25)\n",
+        encoding="utf-8",
+    )
+    log = tmp_path / "deadline.log"
+    diag_path = tmp_path / "ci-shard-diagnostics.json"
+    junit_path = tmp_path / "junit.xml"
+    with log.open("w") as output:
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "pytest", "-v", "-n", str(workers),
+                "-p", "scripts.ci.pytest_timing",
+                "--ci-session-deadline", deadline,
+                "--ci-diagnostics-file", str(diag_path),
+                "--junitxml", str(junit_path),
+            ],
+            cwd=tmp_path,
+            env=environment(),
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+            check=False,
+        )
+    assert result.returncode == 2, log.read_text()
+    assert (tmp_path / "blocked.entered").exists(), log.read_text()
+    assert junit_path.is_file(), "partial JUnit must be flushed on cooperative deadline"
+    cases = {
+        name
+        for case in ET.parse(junit_path).findall(".//testcase")
+        if (name := case.attrib.get("name"))
+    }
+    assert "test_fast" in cases
+    diag = json.loads(diag_path.read_text(encoding="utf-8"))
+    assert diag["schema_version"] == "loopx_ci_pytest_diagnostics_v1"
+    assert diag["deadline_exceeded"] is True
+    assert diag["execution_complete"] is False
+    assert diag["pytest_exit_code"] == 2
+    assert diag["selected_cases"] == 2
+    assert diag["finished_cases"] == 1
+    assert any(row["display_nodeid"] == "test_subject.py::test_blocked" for row in diag["in_flight_cases"])
+    log_text = log.read_text()
+    assert "LOOPX_PYTEST_DEADLINE " in log_text
+    report = read_log(log)
+    assert report["execution_complete"] is False
+    assert report["pytest_exit_code"] == 2
+    assert report["selected_cases"] == 2
+    assert report["finished_cases"] == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX descendant ps inspection")
+def test_stall_snapshot_reports_descendant_child_process_basename_without_argv(tmp_path):
+    (tmp_path / "test_subject.py").write_text(
+        "import subprocess, sys, time\nfrom pathlib import Path\n"
+        "def test_wait_child():\n"
+        "    proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'])\n"
+        "    try:\n"
+        "        Path('entered').touch()\n"
+        "        while not Path('release').exists():\n"
+        "            time.sleep(0.01)\n"
+        "    finally:\n"
+        "        proc.kill()\n"
+        "        proc.wait(timeout=5)\n",
+        encoding="utf-8",
+    )
+    log = tmp_path / "child-stall.log"
+    with log.open("w") as output:
+        process = subprocess.Popen(
+            [
+                sys.executable, "-m", "pytest", "-q", "-n", "0",
+                "-p", "scripts.ci.pytest_timing",
+                "--ci-stall-after=0.1",
+            ],
+            cwd=tmp_path,
+            env=environment(),
+            stdout=output,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while True:
+                text = log.read_text()
+                if (tmp_path / "entered").exists() and "[child pid=" in text:
+                    break
+                assert process.poll() is None, text
+                assert time.monotonic() < deadline, "Expected child process metadata in stall snapshot: " + text
+                time.sleep(0.02)
+        finally:
+            (tmp_path / "release").touch()
+            process.wait(timeout=10)
+    assert process.returncode == 0
+    text = log.read_text()
+    assert "  [child pid=" in text
+    assert "comm=" in text
+    assert "time.sleep(20)" not in text
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+def test_collection_exceeding_session_deadline_aborts_and_writes_diagnostics(
+    tmp_path: Path,
+    workers: int,
+) -> None:
+    (tmp_path / "conftest.py").write_text(
+        "import time\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    time.sleep(1.5)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_subject.py").write_text(
+        "import time\nfrom pathlib import Path\n"
+        "def test_never_runs():\n"
+        "    Path('ran').touch()\n"
+        "    time.sleep(5.0)\n",
+        encoding="utf-8",
+    )
+    log = tmp_path / "slow-collection.log"
+    diag_path = tmp_path / "ci-shard-diagnostics.json"
+    junit_path = tmp_path / "junit.xml"
+    started = time.monotonic()
+    with log.open("w") as output:
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "pytest", "-v", "-n", str(workers),
+                "-p", "scripts.ci.pytest_timing",
+                "--ci-session-deadline", "0.4",
+                "--ci-diagnostics-file", str(diag_path),
+                "--junitxml", str(junit_path),
+            ],
+            cwd=tmp_path,
+            env=environment(),
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            timeout=20,
+            check=False,
+        )
+    wall = time.monotonic() - started
+    log_text = log.read_text(encoding="utf-8")
+    assert result.returncode == 2, log_text
+    assert wall < 4.5, f"Expected early abort before 5s test, took {wall:.2f}s:\n{log_text}"
+    assert not (tmp_path / "ran").exists(), log_text
+    assert diag_path.is_file(), log_text
+    diag = json.loads(diag_path.read_text(encoding="utf-8"))
+    assert diag["schema_version"] == "loopx_ci_pytest_diagnostics_v1"
+    assert diag["deadline_exceeded"] is True
+    assert diag["execution_complete"] is False
+    assert diag["pytest_exit_code"] == 2
+    assert diag["finished_cases"] == 0
+    assert "LOOPX_PYTEST_DEADLINE " in log_text
+    assert junit_path.is_file(), log_text
+    cases = {
+        name
+        for case in ET.parse(junit_path).findall(".//testcase")
+        if (name := case.attrib.get("name"))
+    }
+    assert "test_never_runs" not in cases
+    report = read_log(log)
+    assert report["execution_complete"] is False
+    assert report["pytest_exit_code"] == 2
+
+
+def test_runtestloop_entry_aborts_when_session_deadline_already_elapsed(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+    from scripts.ci.pytest_timing import TimingObserver
+
+    diag_path = tmp_path / "ci-shard-diagnostics.json"
+    dsession = SimpleNamespace(shuttingdown=False, shouldstop=False)
+    config = SimpleNamespace(
+        getoption=lambda key: 0.4 if key == "ci_session_deadline" else (str(diag_path) if key == "ci_diagnostics_file" else 0),
+        pluginmanager=SimpleNamespace(get_plugin=lambda name: dsession if name == "dsession" else None),
+    )
+    session = SimpleNamespace(shouldstop=False)
+    observer = TimingObserver(config)  # type: ignore[arg-type]
+    # Simulate deadline firing between collection and pytest_runtestloop (outside active hooks)
+    observer.started -= 1.0
+    observer._on_deadline(session)  # type: ignore[arg-type]
+    assert observer.deadline_exceeded is True
+    assert isinstance(session.shouldstop, str) and "0.4s" in session.shouldstop
+    assert dsession.shouldstop == session.shouldstop
+    assert diag_path.is_file()
+    diag = json.loads(diag_path.read_text(encoding="utf-8"))
+    assert diag["deadline_exceeded"] is True
+
+    hook = observer.pytest_runtestloop(session)  # type: ignore[arg-type]
+    with pytest.raises(pytest.Session.Interrupted):
+        next(hook)
+
+    # Also cover entering pytest_runtestloop when elapsed >= deadline before timer fired.
+    diag_path2 = tmp_path / "ci-shard-diagnostics-2.json"
+    dsession2 = SimpleNamespace(shuttingdown=False, shouldstop=False)
+    config2 = SimpleNamespace(
+        getoption=lambda key: 0.4 if key == "ci_session_deadline" else (str(diag_path2) if key == "ci_diagnostics_file" else 0),
+        pluginmanager=SimpleNamespace(get_plugin=lambda name: dsession2 if name == "dsession" else None),
+    )
+    session2 = SimpleNamespace(shouldstop=False)
+    observer2 = TimingObserver(config2)  # type: ignore[arg-type]
+    observer2.started -= 1.0
+    hook2 = observer2.pytest_runtestloop(session2)  # type: ignore[arg-type]
+    with pytest.raises(pytest.Session.Interrupted):
+        next(hook2)
+    assert observer2.deadline_exceeded is True
+    assert dsession2.shouldstop == session2.shouldstop
+    assert diag_path2.is_file()
+    assert json.loads(diag_path2.read_text(encoding="utf-8"))["deadline_exceeded"] is True
