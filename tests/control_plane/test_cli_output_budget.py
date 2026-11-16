@@ -1098,8 +1098,9 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
             output_format="json",
         )["quota_should_run_todo_summary_detail"]
 
-        default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
-        detail_exit_code, detail_text = _invoke_cli(detail_command, read_context=True)
+        # Compare the two renderings before either can admit a Turn.
+        default_exit_code, default_text = _invoke_cli(default_command + ["--dry-run"], read_context=True)
+        detail_exit_code, detail_text = _invoke_cli(detail_command + ["--dry-run"], read_context=True)
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
@@ -1490,8 +1491,9 @@ def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
             output_format="json",
         )["quota_should_run_user_todo_summary_detail"]
 
-        default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
-        detail_exit_code, detail_text = _invoke_cli(detail_command, read_context=True)
+        # A live guard can commit a receipt that changes the next guard's selection.
+        default_exit_code, default_text = _invoke_cli(default_command + ["--dry-run"], read_context=True)
+        detail_exit_code, detail_text = _invoke_cli(detail_command + ["--dry-run"], read_context=True)
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
@@ -1546,8 +1548,8 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
             output_format="json",
         )["quota_should_run_goal_boundary_detail"]
 
-        default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
-        detail_exit_code, detail_text = _invoke_cli(detail_command, read_context=True)
+        default_exit_code, default_text = _invoke_cli(default_command + ["--dry-run"], read_context=True)
+        detail_exit_code, detail_text = _invoke_cli(detail_command + ["--dry-run"], read_context=True)
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
