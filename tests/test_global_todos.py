@@ -1,7 +1,13 @@
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import loopx.global_todos as global_todos
+from loopx.control_plane.goals.contract_health import (
+    contract_error_diagnostic,
+    contract_error_views,
+)
 
 
 def build_payload(
@@ -135,6 +141,32 @@ def test_global_todos_error_redacts_local_paths(tmp_path) -> None:
     assert payload["ok"] is False
     assert str(tmp_path) not in payload["error"]
     assert "<local-path-redacted>" in payload["error"]
+
+
+@pytest.mark.parametrize("failure", ["global_contract", "unknown_goal", "registry"])
+def test_global_todos_keeps_unverified_scope_unavailable(monkeypatch, tmp_path, failure) -> None:
+    diagnostic = contract_error_diagnostic(code="canonical_authority_required",
+        message="Unavailable canonical source.", goal_id="unknown" if failure == "unknown_goal" else "cold")
+    diagnostics = [diagnostic]
+    if failure == "global_contract":
+        diagnostics.append(contract_error_diagnostic(code="registry_contract", message="Global contract failed."))
+    status = {
+        **status_for("ready"),
+        "ok": False,
+        "global_registry": {"available": True, "ok": failure != "registry"},
+        "contract": {"ok": False, **contract_error_views(diagnostics)},
+        "run_history": {"goals": [
+            {"id": "ready", "registry_member": True},
+            {"id": "cold", "registry_member": True},
+        ]},
+    }
+    calls = patch_manager_reads(monkeypatch, status=status, quotas={})
+
+    payload = build_payload(tmp_path)
+
+    assert payload["ok"] is False
+    assert "todos" not in payload
+    assert calls == {"status": 1, "quota": []}
 
 
 def test_global_todos_error_survives_projection_runtime_failure(monkeypatch) -> None:
