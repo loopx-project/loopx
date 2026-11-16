@@ -936,7 +936,8 @@ class ChatRequestHandler(
             media = self.server.private_media_history
             contexts = getattr(self.server.runtime_controller, "project_contexts", None)
             bindings = getattr(contexts, "conversation_bindings", None)
-            markers = [] if selection["turn_id"] is not None else media.read(store, bindings, session)
+            scoped = selection["turn_id"] is not None or selection["report_message_id"] is not None
+            markers = [] if scoped else media.read(store, bindings, session)
             payload = read_chat_history_selection(
                 self.server.runtime_controller.coordination_runtime_root, store, session_id,
                 registry=self.server.registry_path, selection=selection,

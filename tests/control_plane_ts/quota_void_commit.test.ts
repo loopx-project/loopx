@@ -328,6 +328,57 @@ test("void does not use another debit's artifact even at the same timestamp", as
   assert.equal(await readFile(fixture.targetJsonPath, "utf8"), otherDebit);
 });
 
+test("legacy debit bindings must agree in the index, artifact and event", async (t) => {
+  const fixture = await targetFixture(t, { inline: false });
+  const record = JSON.parse(await readFile(fixture.targetJsonPath, "utf8"));
+  const index = JSON.parse(fixture.indexContent);
+  // Each identity was persisted by the legacy writer independently of its
+  // timestamp. Exercise both artifact locations through the actual void path.
+  const bindings = {
+    agent_id: ["agent-a", "agent-b"],
+    effect_ref: ["debit-a", "debit-b"],
+    turn_instance_id: ["turn-a", "turn-b"],
+    todo_id: ["todo-a", "todo-b"],
+    replan_obligation_id: ["replan-a", "replan-b"],
+    settlement_identity: [{ effect_id: "turn-a" }, { effect_id: "turn-b" }],
+  };
+  for (const [field, [original, other]] of Object.entries(bindings)) {
+    for (const nested of [false, true]) {
+      const retainedIndex = `${JSON.stringify({ ...index, [field]: original })}\n`;
+      await writeFile(fixture.indexPath, retainedIndex);
+      const conflict = nested
+        ? { ...record, quota_event: { ...record.quota_event, [field]: other } }
+        : { ...record, [field]: other };
+      const artifact = `${JSON.stringify(conflict)}\n`;
+      await writeFile(fixture.targetJsonPath, artifact);
+      await assert.rejects(
+        async () => evaluateQuotaVoidCommit(await request(fixture, { execute: false })),
+        /quota spend JSON artifact identity does not match its index row/,
+      );
+      assert.equal(await readFile(fixture.indexPath, "utf8"), retainedIndex);
+      assert.equal(await readFile(fixture.targetJsonPath, "utf8"), artifact);
+      if (nested) {
+        const inlineIndex = JSON.stringify({ ...index, [field]: original,
+          quota_event: conflict.quota_event });
+        await writeFile(fixture.indexPath, inlineIndex);
+        await assert.rejects(
+          async () => evaluateQuotaVoidCommit(await request(fixture, { execute: false })),
+          /quota spend JSON artifact identity does not match its index row/,
+        );
+        assert.equal(await readFile(fixture.indexPath, "utf8"), inlineIndex);
+        await writeFile(fixture.indexPath, retainedIndex);
+      }
+    }
+    // Omitted or empty historical identity fields remain compatible. An
+    // explicit conflict is stronger evidence than a matching timestamp.
+    for (const absent of [undefined, null, ""]) {
+      await writeFile(fixture.targetJsonPath, JSON.stringify({ ...record, [field]: absent }));
+      const result = await evaluateQuotaVoidCommit(await request(fixture, { execute: false }));
+      assert.equal(result.status, "preview");
+    }
+  }
+});
+
 test("legacy index rows without goal identity use the requested goal", async (t) => {
   const fixture = await targetFixture(t, { inline: false });
   const indexRecord = JSON.parse(fixture.indexContent) as Record<string, unknown>;

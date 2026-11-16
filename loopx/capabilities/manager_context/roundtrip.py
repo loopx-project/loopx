@@ -427,24 +427,46 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
     ]
 
 
+def _saved_answer_rows(messages, message_id, expected_turn_id):
+    matches = [row for row in messages if row.get("message_id") == message_id]
+    if len(matches) > 1:
+        raise ValueError("saved answer has conflicting message identities")
+    if not matches or matches[0].get("role") not in {"agent", "assistant"}:
+        return [], []
+    answer = matches[0]
+    turn_id = answer.get("turn_id")
+    if expected_turn_id is not None and turn_id != expected_turn_id:
+        return [], []
+    if not turn_id:
+        return [answer], [answer]
+    original = [row for row in messages if row.get("turn_id") == turn_id]
+    question = next((row for row in original if row.get("role") == "user"), None)
+    return ([question, answer] if question else [answer]), original
+
+
 def project_chat_session_snapshot(root, store, session_id, *, registry,
-                                  message_limit=None, message_cursor=None, turn_id=None,
+                                  message_limit=None, message_cursor=None, turn_id=None, report_message_id=None,
                                   resume_from=None, project_history_messages=None, include_turn_error=False):
     """Project return delivery state into one existing Chat snapshot."""
 
     turn = None
-    if turn_id is not None:
+    if turn_id is not None and report_message_id is None:
         if message_limit is None:
             raise ValueError("a selected original Turn requires paged history")
         turn = store.load_turn(session_id, turn_id)
         if not turn or turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
             raise ValueError("original Turn is unavailable from this Session")
-    strict = message_limit is not None or resume_from is not None
+    strict = message_limit is not None or resume_from is not None or report_message_id is not None
     # Read the status first: terminal completion persists its answer before
     # publishing completed. An older message prefix must not appear final.
     snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
                 else store.session_snapshot(session_id))
-    if turn is not None:
+    report_context = None
+    if report_message_id is not None:
+        snapshot["messages"], report_context = _saved_answer_rows(snapshot["messages"], report_message_id, turn_id)
+        snapshot["report_message_id"] = report_message_id
+        snapshot["active_turn"] = None
+    elif turn is not None:
         status = turn["status"]
         snapshot["selected_turn"] = {"turn_id": turn_id, "status": status, "terminal": status in TERMINAL_TURN_STATES}
         # Failure records persist the reason with the status, before appending the message.
@@ -464,7 +486,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     from .chat_history import page_chat_messages
     page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
                               cursor=message_cursor, turn_id=turn_id) if message_limit is not None else None)
-    context_messages = snapshot["messages"]
+    context_messages = snapshot["messages"] if report_context is None else report_context
     if page is not None:
         context_messages = context_messages[:page["message_page"]["total"]]
         snapshot["messages"] = page["messages"]
@@ -475,8 +497,14 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     # Use the frozen context to choose the carrier, projecting only this page.
     # A question and answer can straddle pages without duplicating a commitment
     # or re-reading every off-page Turn for each page.
-    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"],
+    projected = project_collaboration(store, root, session_id, snapshot["messages"],
         registry=registry, context_messages=context_messages)
+    if report_message_id is not None:
+        # Collaboration may include the original receipt carrier. The saved
+        # answer only exposes its precise answer and the question it displays.
+        visible_ids = {row.get("message_id") for row in snapshot["messages"]}
+        projected = [row for row in projected if row.get("message_id") in visible_ids]
+    snapshot["messages"] = projected
     # Provider-owned history joins the selected page at the composition root.
     # Core capabilities never import an extension projection sink.
     if page is not None:
@@ -487,9 +515,13 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
 
 def parse_chat_history_selection(query):
     """Validate one HTTP history selection before any recovery observation."""
-    if (set(query) - {"message_limit", "message_cursor", "turn_id", "known_history", "task_goal_id", "task_todo_id"}
+    keys = set(query)
+    report = "report_message_id" in keys
+    if (keys - {"message_limit", "message_cursor", "turn_id", "known_history",
+                      "task_goal_id", "task_todo_id", "report_message_id"}
             or any(len(values) != 1 or not values[0] for values in query.values())
-            or ("message_limit" not in query and set(query) & {"message_cursor", "turn_id", "known_history"})):
+            or (report and keys - {"report_message_id", "turn_id"})
+            or (not report and "message_limit" not in keys and keys & {"message_cursor", "turn_id", "known_history"})):
         raise ValueError("invalid history page arguments")
     limit = int(query["message_limit"][0]) if "message_limit" in query else None
     if limit is not None and not 1 <= limit <= 200:
@@ -512,7 +544,8 @@ def parse_chat_history_selection(query):
             raise ValueError("invalid known history proof")
         parsed_basis = (basis, count, proof)
     return {"message_limit": limit, "message_cursor": query.get("message_cursor", [None])[0],
-            "turn_id": query.get("turn_id", [None])[0], "known_history": parsed_basis, "task_scope": task_scope}
+            "turn_id": query.get("turn_id", [None])[0], "known_history": parsed_basis, "task_scope": task_scope,
+            "report_message_id": query.get("report_message_id", [None])[0]}
 
 
 def prepare_chat_history_session(store, session_id, selection, *, recover_turn):
@@ -520,7 +553,7 @@ def prepare_chat_history_session(store, session_id, selection, *, recover_turn):
     task_scope = selection["task_scope"]
     turn_id = selection["turn_id"]
     if task_scope is None:
-        if turn_id is None:
+        if turn_id is None and selection["report_message_id"] is None:
             recover_turn(session_id)
         return store.load_session(session_id) or {}
 
@@ -553,6 +586,7 @@ def read_chat_history_selection(root, store, session_id, *, registry, selection,
         snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry,
             message_limit=selection["message_limit"], message_cursor=selection["message_cursor"],
             turn_id=selection["turn_id"], project_history_messages=project_history_messages,
+            report_message_id=selection["report_message_id"],
             include_turn_error=selection["task_scope"] is not None)
         snapshot["messages"] = project_provider(snapshot["messages"])
         if selection["message_limit"] == 200 and selection["turn_id"] is None:

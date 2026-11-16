@@ -544,6 +544,19 @@ async function readRelocatedSpendReceipt(
   return receipt;
 }
 
+function spendIdentityMismatch(index: JsonObject, retained: JsonObject): boolean {
+  // The spend writers retain these bindings even before commit metadata was
+  // introduced. Missing historical fields are unknown; explicit conflicts are
+  // never authenticated by a matching timestamp or billing terms.
+  return ["agent_id", "effect_ref", "turn_instance_id", "todo_id",
+    "replan_obligation_id", "settlement_identity", "goal_ref"].some(field => {
+    const expected = index[field], actual = retained[field];
+    return expected !== undefined && expected !== null && expected !== "" &&
+      actual !== undefined && actual !== null && actual !== "" &&
+      canonicalJson(expected) !== canonicalJson(actual);
+  });
+}
+
 export async function readQuotaSpendEventFromRun(
   runsDir: string,
   run: JsonObject,
@@ -553,7 +566,14 @@ export async function readQuotaSpendEventFromRun(
   const contract = contractFor("spend");
   const indexCommit = run[contract.metadataField];
   const inline = jsonObject(run.quota_event);
-  if (inline && indexCommit === undefined) return inline;
+  if (inline && indexCommit === undefined) {
+    if (spendIdentityMismatch(run, inline)) {
+      throw new EffectRuntimeRequestError(
+        "quota spend JSON artifact identity does not match its index row",
+      );
+    }
+    return inline;
+  }
   if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
   const originalPath = run.json_path.trim();
   const recordedPath = resolve(originalPath);
@@ -601,17 +621,19 @@ export async function readQuotaSpendEventFromRun(
   const timestampMismatch = typeof run.generated_at === "string" && run.generated_at !== "" &&
     typeof record.generated_at === "string" && record.generated_at !== "" &&
     run.generated_at !== record.generated_at;
+  const event = jsonObject(record.quota_event);
   if (
     record.classification !== contract.classification ||
     (record.goal_id !== undefined && record.goal_id !== goalId) ||
-    commitMismatch || timestampMismatch ||
+    commitMismatch || timestampMismatch || spendIdentityMismatch(run, record) ||
+    (event !== null && spendIdentityMismatch(run, event)) ||
     (relocatedReceipt !== null && canonicalJson(record) !== canonicalJson(relocatedReceipt.record))
   ) {
     throw new EffectRuntimeRequestError(
       "quota spend JSON artifact identity does not match its index row",
     );
   }
-  return jsonObject(record.quota_event);
+  return event;
 }
 
 export async function lookupQuotaAccountingReplay(

@@ -4,6 +4,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .control_plane.goals.contract_health import (
+    CONTRACT_ERROR_DIAGNOSTIC_SCHEMA_VERSION,
+    contract_error_views,
+)
 from .control_plane.projection_envelope_facts import (
     render_projection_envelope_markdown,
     seal_projection_envelope,
@@ -392,10 +396,50 @@ def _deduplicate_todos(
     return list(deduplicated.values())
 
 
+def _scoped_status_failure(
+    status_payload: dict[str, Any],
+) -> tuple[set[str], set[str]] | None:
+    registry = as_dict(status_payload.get("global_registry"))
+    contract = as_dict(status_payload.get("contract"))
+    diagnostics = contract.get("error_diagnostics")
+    if (
+        registry.get("available") is not True
+        or registry.get("ok") is not True
+        or contract.get("ok") is not False
+        or contract.get("global_errors")
+        or not isinstance(diagnostics, list)
+        or not diagnostics
+        or not all(
+            isinstance(row, dict)
+            and row.get("schema_version") == CONTRACT_ERROR_DIAGNOSTIC_SCHEMA_VERSION
+            for row in diagnostics
+        )
+    ):
+        return None
+    views = contract_error_views(diagnostics)
+    if (
+        views["global_errors"]
+        or views["errors"] != contract.get("errors")
+        or len(views["error_diagnostics"]) != len(diagnostics)
+    ):
+        return None
+    failed_goals = set(views["goal_errors"])
+    registered_goals = {
+        row["id"]
+        for row in as_list(as_dict(status_payload.get("run_history")).get("goals"))
+        if isinstance(row, dict) and row.get("registry_member") is True
+        and isinstance(row.get("id"), str) and row["id"]
+    }
+    if not failed_goals or not failed_goals <= registered_goals:
+        return None
+    return registered_goals, failed_goals
+
+
 def _queue_goal_ids(
     status_payload: dict[str, Any],
     *,
     scan_limit: int,
+    eligible_goals: set[str] | None = None,
 ) -> tuple[list[str], int]:
     queue = as_dict(status_payload.get("attention_queue"))
     unique_goal_ids: list[str] = []
@@ -412,6 +456,12 @@ def _queue_goal_ids(
         reported_count = max(0, int(queue.get("item_count") or 0))
     except (TypeError, ValueError):
         reported_count = 0
+    # A degraded status queue can include a synthetic contract warning in
+    # place of the failed Goal. Only the observed registry can name read scopes.
+    if eligible_goals is not None:
+        eligible = [goal_id for goal_id in unique_goal_ids if goal_id in eligible_goals]
+        reported_count -= len(unique_goal_ids) - len(eligible)
+        unique_goal_ids = eligible
     available_count = max(len(unique_goal_ids), reported_count)
     return unique_goal_ids[:scan_limit], available_count
 
@@ -426,6 +476,7 @@ def _todos_envelope(
     goal_scan_omitted: int,
     shown_count: int,
     available_count: int,
+    failed_status_goals: set[str] | None = None,
 ) -> dict[str, Any]:
     global_registry = as_dict(status_payload.get("global_registry"))
     status_envelope = as_dict(status_payload.get("projection_envelope"))
@@ -467,7 +518,13 @@ def _todos_envelope(
         omitted.append(
             {"reason": "attention_goals_not_scanned", "count": goal_scan_omitted}
         )
-    if status_payload and status_payload.get("ok") is not True:
+    if failed_status_goals:
+        omitted.append({
+            "reason": "status_unavailable",
+            "count": len(failed_status_goals),
+            "refs": [_redact_text(goal_id, limit=120) for goal_id in sorted(failed_status_goals)[:8]],
+        })
+    elif status_payload and status_payload.get("ok") is not True:
         omitted.append({"reason": "status_unavailable", "count": 1})
     queue = status_payload.get("attention_queue")
     queue_read = isinstance(queue, dict) and isinstance(queue.get("items"), list)
@@ -516,7 +573,7 @@ def _todos_envelope(
             "scope": "global",
             "expected_count": expected,
             "included_count": (
-                max(0, expected - excluded - goal_scan_omitted)
+                max(0, expected - excluded - goal_scan_omitted - len(failed_status_goals or ()))
                 if expected is not None
                 else 0
             ),
@@ -554,21 +611,27 @@ def build_global_todos(
         limit=scan_limit,
     )
     status_read_at = now_utc_iso()
-    if status_payload.get("ok") is not True:
+    status_ok = status_payload.get("ok") is True
+    scoped_failure = None if status_ok else _scoped_status_failure(status_payload)
+    registered_goals, failed_status_goals = scoped_failure or (set(), set())
+    goal_ids, available_goal_count = _queue_goal_ids(
+        status_payload,
+        scan_limit=scan_limit,
+        eligible_goals=registered_goals - failed_status_goals if scoped_failure else None,
+    )
+    if not status_ok and (scoped_failure is None or not goal_ids):
         return build_global_todos_error(
             "Global status source unavailable.",
             status_payload=status_payload,
             status_read_at=status_read_at,
         )
-
-    goal_ids, available_goal_count = _queue_goal_ids(
-        status_payload,
-        scan_limit=scan_limit,
-    )
-    warnings: list[dict[str, Any]] = []
+    warnings = [
+        _warning("quota_unavailable", goal_id=goal_id, detail="The Goal's status contract check failed.")
+        for goal_id in sorted(failed_status_goals)
+    ]
     classified: list[dict[str, Any]] = []
     quota_read_at = now_utc_iso()
-    quota_unavailable = 0
+    quota_unavailable = len(failed_status_goals)
     for goal_id in goal_ids:
         quota_payloads, was_unavailable = _quotas_for_goal(
             status_payload,
@@ -655,6 +718,7 @@ def build_global_todos(
             goal_scan_omitted=max(0, available_goal_count - len(goal_ids)),
             shown_count=returned_count,
             available_count=matched_count,
+            failed_status_goals=failed_status_goals,
         ),
         "omissions": [
             (
