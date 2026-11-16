@@ -53,7 +53,7 @@ def external_progress_review_context(
         _receipt_number_codec(row, loaded[index])
         for row, index in zip(qualification["selected"], qualification["selected_indices"], strict=True)
     ] if qualification else []
-    result = {
+    result: dict[str, Any] = {
         "policy": policy,
         "receipts": receipts,
         "summary": progress_review_receipt_summary(

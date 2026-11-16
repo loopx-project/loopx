@@ -1141,7 +1141,7 @@ def build_quota_should_run(
     )
     observation_root = runtime_root or status_payload.get("runtime_root")
     if goal_ref is None and agent_id and observation_root:
-        from .control_plane.goals.checkpoint_context_io import pending_first_delivery_progress
+        from .control_plane.goals.checkpoint_observation import pending_first_delivery_progress
 
         delivery_progress = pending_first_delivery_progress(
             Path(observation_root), goal_id, agent_id,

@@ -7,9 +7,10 @@ import hashlib
 import json
 import shlex
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 from uuid import uuid4
 
+from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import cross_runtime_lock_witness, exclusive_cross_runtime_file_lock, exclusive_run_index_lock
 from ...history import load_index, load_registry
 from ...paths import resolve_runtime_root
@@ -26,29 +27,30 @@ from ..todos.machine_region import find_todo_source_regions
 from .active_state_metadata import split_state_frontmatter
 from .goal_frontier import latest_agent_vision_from_runs
 from .first_party_host_admission import load_first_party_registry_metadata
+from .state_resolution import resolve_goal_state
+from .checkpoint_observation import (
+    CheckpointReadContextRejected as CheckpointReadContextRejected,
+    delivery_observation_todos,
+    pending_first_delivery_progress as pending_first_delivery_progress,
+)
 
 
-class CheckpointReadContextRejected(ValueError):
-    def __init__(self, result: dict[str, Any]) -> None:
-        super().__init__(result["error"])
-        self.code = result["error_code"]
-        self.payload = {"checkpoint_read_context": result}
-
-
-def _checkpoint_effect(method: str, request: dict[str, Any]) -> Any:
+def _checkpoint_effect(method: str, request: dict[str, Any]) -> dict[str, Any]:
     try:
         # The complete Goal prose and archived Todo basis can exceed the 2 MiB
         # RPC wire. Only this locked local checkpoint path opts into the exact,
         # digest-bound same-UID snapshot transport; default effects stay bounded.
         small_policy = method == "goal.checkpoint_read_context.work_binding" and request.get("phase") in (
             "admission", "policy", "direction_policy", "source_recovery_admission")
-        return effect_runtime_result(method, request,
+        result = effect_runtime_result(method, request,
             large_local_snapshot=not small_policy and method not in ("goal.checkpoint_read_context.inspect_attempt",
-                                                "goal.checkpoint_read_context.inspect_history",
-                                                "turn.first_delivery.observe"))
+                                                "goal.checkpoint_read_context.inspect_history"))
     except EffectRuntimeRejected as error:
         raise CheckpointReadContextRejected({"ok": False, "error": str(error),
             "error_code": error.diagnostic_code, "reread_required": False}) from error
+    if not isinstance(result, dict):
+        raise RuntimeError("invalid typed checkpoint effect result")
+    return result
 
 
 def _resolve(runtime_root: Path, **request: Any) -> dict[str, Any]:
@@ -93,19 +95,19 @@ def default_result_freshness_policy(root: Path, goal_id: str, todo_id: str | Non
         from ..coordination.local_authority import validate_canonical_todo_read
 
         validate_canonical_todo_read(result["source_failure"], goal_id=goal_id)
-    return result["policy"]
+    return cast(str | None, result["policy"])
 
 
 def result_work_required(readback: Any) -> bool:
     return _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
         "phase": "policy", "heartbeat_receipt": readback.heartbeat_receipt,
-    })["required"]
+    })["required"] is True
 
 
 def checkpoint_continuation_required(readback: Any) -> bool:
     return _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
         "phase": "direction_policy", "heartbeat_receipt": readback.heartbeat_receipt,
-    })["required"]
+    })["required"] is True
 
 
 def replan_checkpoint_cli_actions(actions: list[str], readback: Any, *, command_prefix: str) -> list[str]:
@@ -184,6 +186,9 @@ def pending_checkpoint_cli_actions(readback: Any, *, command_prefix: str,
     # Fill required command fields from that verified run, never new defaults.
     run = readback.writeback_run
     writeback = settlement_step_command(plan, SettlementStepKind.DURABLE_WRITEBACK)
+    spend = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
+    if writeback is None or spend is None:
+        raise ValueError("Checkpoint recovery requires its original settlement commands")
     template = shlex.split(writeback)
     scale = run.get("delivery_batch_scale")
     if scale is None:
@@ -200,7 +205,7 @@ def pending_checkpoint_cli_actions(readback: Any, *, command_prefix: str,
             (readback.external_delivery or {}).get("error_code") == "external_delivery_resume_required"):
         tokens.append("--suppress-external-sinks")
     actions = replan_checkpoint_cli_actions([
-        shlex.join(tokens), settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND),
+        shlex.join(tokens), spend,
     ], readback, command_prefix=command_prefix)[1:]
     if host_shell:
         return [_render_checkpoint_host_command(shlex.split(action)) for action in actions]
@@ -215,7 +220,7 @@ def project_completed_first_delivery_cli(channel: dict[str, Any], identity: Sett
     plan = channel.get("settlement_plan")
     writeback = settlement_step_command(plan, SettlementStepKind.DURABLE_WRITEBACK)
     actions = channel["next_cli_actions"]
-    if not writeback or plan["identity"] != identity.as_dict() or writeback not in actions:
+    if not isinstance(plan, dict) or not writeback or plan["identity"] != identity.as_dict() or writeback not in actions:
         raise ValueError("First delivery recovery requires the original settlement writeback command")
     writeback_step = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
     tokens = shlex.split(writeback_step.pop("semantic_closeout_command_template", None) or writeback)
@@ -279,7 +284,7 @@ def _recover_result_work_receipt(root: Path, identity: SettlementIdentity,
             if restored.get("ok") is not True:
                 raise CheckpointReadContextRejected(restored)
             atomic_write_json(path, restored["receipt"])
-            return restored["receipt"]
+            return cast(dict[str, Any], restored["receipt"])
 
 
 def read_retained_result_for_replay(
@@ -294,7 +299,7 @@ def read_retained_result_for_replay(
     })
     if result.get("ok") is not True:
         raise CheckpointReadContextRejected(result)
-    return result["replay_result"]
+    return cast(dict[str, Any], result["replay_result"])
 
 
 def result_work_read_id(root: Path, identity: SettlementIdentity) -> str:
@@ -323,7 +328,7 @@ def restore_default_turn_id(*, runtime_root: Path, registry_path: Path, goal_id:
     from ..quota.settlement import QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA
     todo = None
     if not pending_only and todo_id:
-        from ...todos import list_goal_todos
+        from ..todos.list_readback import list_goal_todos
 
         todo = list_goal_todos(registry_path=registry_path, goal_id=goal_id, todo_id=todo_id,
             runtime_root_arg=str(runtime_root)).get("todo")
@@ -343,7 +348,7 @@ def restore_default_turn_id(*, runtime_root: Path, registry_path: Path, goal_id:
                 "error_code": error.diagnostic_code, "reread_required": False}) from error
     if result.get("ok") is not True:
         raise CheckpointReadContextRejected(result)
-    return result["turn_instance_id"]
+    return cast(str | None, result["turn_instance_id"])
 
 
 def result_work_context(*, registry_path: Path, runtime_root: Path,
@@ -384,8 +389,6 @@ def result_work_context(*, registry_path: Path, runtime_root: Path,
 def check_result_work_context(*, registry_path: Path, runtime_root: Path,
                              identity: SettlementIdentity, context: Mapping[str, Any],
                              goal_ref: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    from ...state_refresh import resolve_goal_state
-
     registry = (load_first_party_registry_metadata(registry_path, goal_ref)
         if goal_ref is not None else load_registry(registry_path))
     _, _, state_file = resolve_goal_state(registry=registry, goal_id=identity.goal_id,
@@ -416,7 +419,8 @@ def check_result_work_context(*, registry_path: Path, runtime_root: Path,
 
 
 def bind_result_validation(*, runtime_root: Path, identity: SettlementIdentity, candidate: Mapping[str, Any],
-                           validation: Mapping[str, Any], context: Mapping[str, Any], binding=None) -> dict[str, Any]:
+                           validation: Mapping[str, Any], context: Mapping[str, Any],
+                           binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
     receipt = _read_context_receipt(_receipt_path(runtime_root, identity, "delivery_result"))
     if receipt.get("read_context_id") != context.get("read_context_id"):
         raise CheckpointReadContextRejected({"ok": False, "error_code": "delivery_validation_binding_mismatch",
@@ -443,7 +447,7 @@ def bind_terminal_result_validation(*, runtime_root: Path, request: Mapping[str,
     })
     if result.get("ok") is not True:
         raise CheckpointReadContextRejected(result)
-    return result["binding"]
+    return cast(dict[str, Any], result["binding"])
 
 
 def terminal_validation_effect_io(*, runtime_root: Path, request: Mapping[str, Any],
@@ -503,8 +507,9 @@ class TurnResultWork:
 
         canonical = read_canonical_todos_if_promoted(
             runtime_root=self.runtime_root, goal_id=self.identity.goal_id)
-        todo = next((row for row in canonical["todos"] if row.get("todo_id") == self.identity.todo_id), None)
-        if todo is None:
+        todo_id = self.identity.todo_id
+        todo = next((row for row in canonical["todos"] if row.get("todo_id") == todo_id), None)
+        if todo is None or todo_id is None:
             raise ValueError(f"durable completion todo_id {self.identity.todo_id!r} was not found in canonical provider state")
         # Managed journals use the Turn id; the CLI/MCP settlement adapter uses
         # its fully scoped effect id. Both name this identity, never another Turn.
@@ -514,10 +519,10 @@ class TurnResultWork:
         # observes its decision without issuing validation or committing work.
         transaction = reduce_todo_completion_transaction(todo=todo, projection_source="materialized",
             completion_turn_key=completion_key, no_followup=False,
-            goal_id=self.identity.goal_id, todo_id=self.identity.todo_id,
+            goal_id=self.identity.goal_id, todo_id=todo_id,
             completion_identity_source="turn_settlement", requested_has_successor=False, dry_run=True)
         fence = transaction["fence"]
-        return fence["outcome"] == "replay" and fence["status"] == "done"
+        return bool(fence["outcome"] == "replay" and fence["status"] == "done")
 
     def prepare_request(self, journal: dict[str, Any], request: dict[str, Any], *,
                         post_result_checkpoint: Callable[[], bool] | None,
@@ -568,7 +573,7 @@ class TurnResultWork:
             identity=self.identity, context=context, goal_ref=self.goal_ref)
 
     def bind(self, context: Mapping[str, Any], candidate: Mapping[str, Any],
-             validation: Mapping[str, Any], binding=None) -> dict[str, Any]:
+             validation: Mapping[str, Any], binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
         return bind_result_validation(runtime_root=self.runtime_root, identity=self.identity,
             candidate=candidate, validation=validation, context=context, binding=binding)
 
@@ -718,7 +723,7 @@ def first_delivery_progress(
         read_unavailable = True
     try:
         if canonical_todos is None:
-            canonical_todos = _delivery_observation_todos(root, identity.goal_id, registry_path)
+            canonical_todos = delivery_observation_todos(root, identity.goal_id, registry_path)
         selected = next((todo for todo in canonical_todos if todo["todo_id"] == identity.todo_id), {})
         committed = selected.get("status") == "done" and selected.get("completion_turn_key") in {identity.effect_id, identity.turn_instance_id}
     except (ValueError, OSError):
@@ -760,41 +765,6 @@ def first_delivery_progress(
             "completion_requested_continuation", "completion_turn_key")},
     })
     return {**progress, "settlement_identity": identity.as_dict()}
-
-
-def _delivery_observation_todos(root: Path, goal_id: str, registry_path: Path | None) -> list[dict[str, Any]]:
-    from ..coordination.local_authority import read_canonical_todos_if_promoted
-    canonical = read_canonical_todos_if_promoted(runtime_root=root, goal_id=goal_id)
-    if canonical is not None:
-        return canonical.get("todos", [])
-    if registry_path is None:
-        return []
-    from ...todos import resolve_todo_state_path
-    _, state = resolve_todo_state_path(registry_path=registry_path, goal_id=goal_id, project=None, state_file=None)
-    active, archived, _ = parse_todo_source(state.read_text(encoding="utf-8"))
-    return [*active["user"], *active["agent"], *archived]
-
-
-def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | None = None,
-                                   *, registry_path: Path | None = None) -> dict[str, Any] | None:
-    """Read provider facts once; the typed owners observe all historical Turns.
-
-    This remains an alias observation, as before. A Todo source path does not
-    grant exact GoalRef admission or authorize historical receipt repair.
-    """
-    try:
-        todos = [{key: todo.get(key) for key in (
-            "todo_id", "status", "no_followup", "completion_continuation",
-            "completion_requested_continuation", "completion_turn_key")}
-            for todo in _delivery_observation_todos(root, goal_id, registry_path)]
-    except (ValueError, OSError):
-        todos = None
-    return _checkpoint_effect("turn.first_delivery.observe", {
-        "runtime_root": str(root.resolve()), "goal_id": goal_id,
-        "agent_id": agent_id, "todos": todos,
-        # Keep the caller's historical scan order across Python/Node platforms.
-        "receipt_names": [path.name for path in (root / "goals" / goal_id / "checkpoint-contexts").glob("*.json")],
-    })
 
 
 def delivery_result_context_input(
@@ -916,21 +886,19 @@ def _local_source_facts(
     ]
     newest = [run for _, run in sorted(enumerate(runs),
         key=lambda pair: (str(pair[1].get("generated_at") or ""), pair[0]), reverse=True)]
-    facts = {
+    facts: dict[str, Any] = {
         "todos": todos, "frontmatter": metadata, "goal_prose": prose, "acceptance": None,
         "agent_vision": latest_agent_vision_from_runs(newest, goal_id=identity.goal_id, agent_id=identity.agent_id),
         "source": {"state_file": str(state_file.resolve()), "runtime_root": str(root.resolve()),
                    "authority": "legacy_markdown"},
     }
-    from ...state_refresh import resolve_goal_state, registered_agents_for_goal
-
     # A scoped read receipt grants no generic capture or mutation authority.
     # Only the reader holding quota's exact-source admission takes this path.
     registry = (load_first_party_registry_metadata(registry_path, goal_ref)
         if source_admission is not None else load_registry(registry_path))
     goal, _, current_path = resolve_goal_state(registry=registry, goal_id=identity.goal_id,
         project_override=None, state_file_override=None)
-    if current_path.resolve() != state_file.resolve() or identity.agent_id not in registered_agents_for_goal(goal):
+    if current_path.resolve() != state_file.resolve() or identity.agent_id not in registered_agent_ids_for_goal(goal):
         raise ValueError("Checkpoint source or Agent registration changed; reread the original Turn")
     facts["source"].update(registry_path=str(registry_path.resolve()), goal_ref=goal_ref,
         registry_goal=goal)
@@ -1005,9 +973,6 @@ def read_checkpoint_context(
     restore_issued_for: SettlementIdentity | None = None,
     reuse_current_first_delivery: bool = False,
 ) -> dict[str, Any]:
-    # Local import avoids a cycle with refresh-state's persistence adapter.
-    from ...state_refresh import resolve_goal_state, registered_agents_for_goal
-
     if restore_issued_for is not None and purpose != "delivery_result":
         raise ValueError("only an issued result work read can be restored")
     goal_id = validate_goal_id_path_segment(goal_id)
@@ -1016,7 +981,7 @@ def read_checkpoint_context(
     root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
     goal, _, path = resolve_goal_state(registry=registry, goal_id=goal_id,
         project_override=project, state_file_override=state_file)
-    if agent_id not in registered_agents_for_goal(goal):
+    if agent_id not in registered_agent_ids_for_goal(goal):
         raise ValueError("checkpoint-context requires a registered Agent")
     with quota_accounting_admission(
         runtime_root=root,

@@ -493,7 +493,7 @@ def collect_history(
         if registry.get("profile_id") == "source_session_v1":
             from .control_plane.goals.goal_ref_validation import exact_goal_ref
 
-            scoped_goal_ref = exact_goal_ref(current_goal_id, meta.get("goal_instance_id"))
+            scoped_goal_ref = exact_goal_ref(current_goal_id, cast(str, meta.get("goal_instance_id")))
             runs = [run for run in runs if run.get("goal_ref") == scoped_goal_ref]
         raw_count = index_snapshot.raw_count
         runs = [
