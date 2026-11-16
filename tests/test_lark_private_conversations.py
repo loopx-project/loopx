@@ -7657,10 +7657,10 @@ def test_unreadable_recovery_hint_does_not_delay_new_private_reply(tmp_path, mon
     assert attempts == [new, old]
 
 
-@pytest.mark.parametrize(("initial", "body_scan_fails"), [
-    ("accepted", False), ("accepted", True), ("delivered", False),
+@pytest.mark.parametrize(("initial", "failure"), [
+    ("accepted", None), ("accepted", "body_scan"), ("delivered", None), ("delivered", "priority_read"),
 ])
-def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, body_scan_fails):
+def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, failure):
     from concurrent.futures import Future
     from loopx.chat_store import _atomic_write_json, _read_json
     from loopx.extensions.lark import goal_topic_runtime_service as worker
@@ -7689,6 +7689,7 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     # left no effect. A later full discovery finds eligibility, while the fast
     # body scan continues to exclude the now-delivered receipt.
     path = tmp_path / "original.json"
+    fresh = tmp_path / "new-reply.json"
     record = {"status": initial, "request_ref": "original", "session_id": "session",
               "turn_id": "turn", "event": {"message_id": "source"}, "profile": "fixture"}
     _atomic_write_json(path, record)
@@ -7706,6 +7707,10 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
         return attempts.count("recovery") < required_recoveries
 
     def reconcile(receipt):
+        if receipt == fresh:
+            attempts.append("fresh")
+            _atomic_write_json(receipt, {"status": "delivered"})
+            return 1
         assert receipt == path
         current = _read_json(receipt)
         if current["status"] == "accepted":
@@ -7729,7 +7734,7 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     pending_body_paths = transport.pending_body_paths
 
     def scan_bodies():
-        if body_scan_fails and clock[0] == 101:
+        if failure == "body_scan" and clock[0] == 101:
             raise OSError("temporary body scan failure")
         return pending_body_paths()
 
@@ -7740,14 +7745,27 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     def drive(step, **_):
         for tick in (100, 101, 102, 161, 162, 222, 223):
             clock[0] = float(tick)
+            if failure == "priority_read" and tick == 101:
+                # The full scan already found this original, and the next
+                # historical probe is backed off. Only its priority read fails.
+                assert transport._context_recovery_probe_at[path] == 160
+                path.write_bytes(b"\xff")
+                _atomic_write_json(fresh, {"status": "accepted"})
+            if failure == "priority_read" and tick == 102:
+                assert attempts == ["fresh"]
+                _atomic_write_json(path, record)
             step()
+            if failure == "priority_read" and tick == 102:
+                assert recovery_times == [102.0], "the ready historical request waited for a second discovery"
 
     monkeypatch.setattr(service._delivery_worker, "repeat", drive)
     service._reconcile_private()
     expected = ["body", "recovery"] if initial == "accepted" else ["recovery", "recovery"]
+    if failure == "priority_read":
+        expected.insert(0, "fresh")
     assert len(discoveries) >= 2
     assert attempts == expected, (attempts, discoveries)
-    if body_scan_fails:
+    if failure == "body_scan":
         assert recovery_times == [102.0]
     assert _read_json(path) == {**record, "status": "delivered"}
 

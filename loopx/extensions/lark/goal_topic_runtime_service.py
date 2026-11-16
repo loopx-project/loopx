@@ -225,17 +225,17 @@ class LarkGoalTopicRuntimeService:
                     # local hint never admits/replays a request or skips its
                     # original grant and provider-attempt checks.
                     recovering: dict[Path, bool] = {}
-                    for path in tuple(ready):
+                    for path in ready:
                         try:
                             recovering[path] = recovery_path(path)
                         except (OSError, ValueError, KeyError, TypeError, AttributeError):
-                            # A journal can become unreadable after discovery.
-                            # Keep it on disk for a later scan and schedule the other replies.
-                            del ready[path]
+                            # Keep an already discovered request eligible for the next
+                            # scan. Its historical discovery may be backed off.
+                            continue
                     active_background = sum(job is not None for job in (feedback, reports, attention, ingress, discovery))
                     due_background = sum((reports_ready, attention_ready, ingress_ready))
                     scheduled_body = False
-                    for path in sorted(ready, key=lambda path: (recovering[path], attempted.get(path, 0))):
+                    for path in sorted(recovering, key=lambda path: (recovering[path], attempted.get(path, 0))):
                         occupied = len(pending) + active_background
                         if occupied >= 4 or self._closed.is_set():
                             break
