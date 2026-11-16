@@ -763,6 +763,7 @@ def build_live_quota_should_run_decision(
             scheduler_context=resolved_context, available_capabilities=available_capabilities,
             include_scheduler_detail=include_scheduler_detail,
             codex_app_rrule=observed_rrule, codex_app_automation_id=observed_automation_id or None,
+            codex_app_observation_error=codex_app_observation_error,
             turn_instance_id=turn_instance_id, receipt_bound_todo_id=receipt_bound_todo_id,
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         )
@@ -973,6 +974,7 @@ def build_live_quota_should_run_decision(
                 codex_app_scheduler_state=app_scheduler_state,
                 codex_app_current_rrule=observed_rrule,
                 codex_app_automation_id=observed_automation_id or None,
+                codex_app_observation_error=codex_app_observation_error,
             ),
             scheduler_execution_context=resolved_context,
             goal_ref=goal_ref,
@@ -1059,6 +1061,7 @@ def _build_remote_authority_wait_decision(
     scheduler_context: SchedulerExecutionContextResolution,
     available_capabilities: list[str] | None, turn_instance_id: str | None,
     include_scheduler_detail: bool, codex_app_rrule: str, codex_app_automation_id: str | None,
+    codex_app_observation_error: str | None,
     receipt_bound_todo_id: str | None, receipt_bound_replan_obligation_id: str | None,
 ) -> dict[str, Any]:
     from ...quota import _build_quota_plan_for_goal
@@ -1112,6 +1115,7 @@ def _build_remote_authority_wait_decision(
             available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
             codex_app_scheduler_state=state, codex_app_current_rrule=codex_app_rrule,
             codex_app_automation_id=codex_app_automation_id,
+            codex_app_observation_error=codex_app_observation_error,
         )
 
     if scope_matches and not settled:
