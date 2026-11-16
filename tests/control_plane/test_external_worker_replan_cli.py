@@ -21,7 +21,8 @@ def _admitted_replan_for_worker(quota, command, turn, **kwargs):
     # These recovery cases supply a receipt from an explicitly admitted Host
     # Turn. A normal scheduler observation must not commit that admission.
     assert command[-1] == "--scheduler-observation"
-    bound = quota([*command[:-1], "--context-delivery", "off", "--include-detail", "scheduler",
+    guard = [arg for arg in command[:-1] if arg != "--dry-run"]
+    bound = quota([*guard, "--context-delivery", "off", "--include-detail", "scheduler",
                    "--turn-instance-id", turn], **kwargs)
     return project_scheduler_observation(bound)
 
