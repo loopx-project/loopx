@@ -154,6 +154,27 @@ def _buttons(card: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 def _card_element_matches(observed: object, expected: Mapping[str, Any]) -> bool:
     if observed == expected:
         return True
+    if expected.get("tag") == "action":
+        if not isinstance(observed, Mapping) or set(observed) != {"tag", "actions"} or observed["tag"] != "action":
+            return False
+        actual, original = observed["actions"], expected.get("actions")
+        if not isinstance(actual, list) or not isinstance(original, list) or len(actual) != len(original):
+            return False
+        identifiers = []
+        for button, source in zip(actual, original):
+            if (not isinstance(button, Mapping)
+                    or set(button) != {"tag", "text", "type", "custom_action_id", "behaviors"}
+                    or set(source) != {"tag", "text", "type", "value"}
+                    or source.get("tag") != "button" or button["tag"] != "button"
+                    or button["type"] != source["type"]
+                    or button["text"] not in (source["text"], {**source["text"], "i18n": {}})
+                    or button["behaviors"] != [{"type": "callback"}]):
+                return False
+            identifier = button["custom_action_id"]
+            if not isinstance(identifier, str) or not identifier or len(identifier) > 200:
+                return False
+            identifiers.append(identifier)
+        return len(set(identifiers)) == len(identifiers)
     text = expected.get("text")
     if expected.get("tag") != "div" or not isinstance(text, Mapping) or text.get("tag") != "plain_text":
         return False
@@ -179,8 +200,11 @@ def _read_exact_card(
     if not isinstance(config, Mapping) or config.get("enable_forward", False) is not False:
         return False
     expected = stamp["card"]
-    # Lark's user_card_content adds an empty title i18n map and can rewrite
-    # plain text div tags. Compare the full structure, including action values.
+    # The provider can elide callback values, add empty i18n maps and rewrite
+    # plain text div tags. This readback checks the exact App, message, chat
+    # and visible controls. It cannot attest omitted parameters: capture_callback
+    # independently matches the complete authenticated value to the outbound
+    # record and revalidates the current binding and permitted Goal scope.
     header = expected["header"]
     observed_header = payload.get("header")
     if observed_header not in (header, {**header, "title": {**header["title"], "i18n": {}}}):

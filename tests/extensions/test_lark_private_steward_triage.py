@@ -21,7 +21,7 @@ from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntim
 from loopx.file_lock import try_exclusive_file_lock
 
 
-def fixture_card_provider(provider, transport, monkeypatch):
+def fixture_card_provider(provider, transport, monkeypatch, *, opaque_callback_values=False):
     """Model a Bot send UUID and Lark's legacy user_card_content projection."""
     deliveries = {}
     sends = []
@@ -45,6 +45,17 @@ def fixture_card_provider(provider, transport, monkeypatch):
                 for row in card["elements"]:
                     if row["tag"] == "div" and row["text"]["tag"] == "plain_text":
                         row["text"]["tag"] = "lark_md"
+                    if row["tag"] == "action" and opaque_callback_values:
+                        for index, button in enumerate(row["actions"]):
+                            del button["value"]
+                            button["text"]["i18n"] = {}
+                            button["custom_action_id"] = f"opaque-callback-{index}"
+                            button["behaviors"] = [{"type": "callback"}]
+                # Preserve observed update metadata; it does not attest which
+                # parameters the provider omitted from this read projection.
+                if opaque_callback_values:
+                    message["updated"] = True
+                    message["update_time"] = str(int(message["create_time"]) + 10000)
                 message["body"] = {"content": json.dumps(card, ensure_ascii=False)}
             return {**result, "stdout": json.dumps(payload, ensure_ascii=False)}
         key = args[args.index("--idempotency-key") + 1]
@@ -61,7 +72,9 @@ def fixture_card_provider(provider, transport, monkeypatch):
                 "sender": {"id": provider.profile_apps[profile], "sender_type": "app"},
                 "body": {"content": json.dumps(card, ensure_ascii=False)},
                 "create_time": str(int(time.time() * 1000)),
+                "deleted": False, "updated": False,
             }
+            provider.messages[message_id]["update_time"] = provider.messages[message_id]["create_time"]
             if lost[0]:
                 lost[0] = False
                 # The child ran and the result was lost after committing the write.
@@ -87,7 +100,8 @@ def event_for(message_id, action, *, suffix="1", **changes):
             "timestamp": str(int(time.time() * 1000)), "action_value": action, **changes}
 
 
-def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, monkeypatch):
+@pytest.mark.parametrize("opaque_callback_values", [False, True])
+def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, monkeypatch, opaque_callback_values):
     store, runtime, provider, transport, binding, capture, _ = steward
     registry = json.loads(runtime.registry_path.read_text())
     registry["goals"] = [{"id": "demo-a"}, {"id": "demo-b"}]
@@ -101,7 +115,7 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
     assert transport.reconcile() == 1
     before = capture.read_bytes(), store.messages(original["session_id"])
     native_refs = set(transport.core.root.glob("*.json"))
-    writes, lost = fixture_card_provider(provider, transport, monkeypatch)
+    writes, lost = fixture_card_provider(provider, transport, monkeypatch, opaque_callback_values=opaque_callback_values)
     reads = []
     unavailable = {"demo-a", "demo-b"}
 
@@ -203,8 +217,16 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
     forwarding["config"]["enable_forward"] = True
     for drifted in (altered, forwarding):
         provider.messages[picker_id]["body"]["content"] = json.dumps(drifted)
-        with pytest.raises(ValueError, match="original Steward card could not be verified"):
-            service._handle_private_steward_callback(profile, current, action)
+        if opaque_callback_values and drifted is altered:
+            # Parameters are absent from this read view. The actual click
+            # supplies the changed value, which the outbound record denies.
+            changed_action = drifted["elements"][0]["actions"][0]["value"]
+            changed_event = {**current, "action_value": changed_action}
+            with pytest.raises(ValueError, match="callback does not match the original Steward card"):
+                service._handle_private_steward_callback(profile, changed_event, changed_action)
+        else:
+            with pytest.raises(ValueError, match="original Steward card could not be verified"):
+                service._handle_private_steward_callback(profile, current, action)
     provider.messages[picker_id]["body"]["content"] = original_card
     assert transport.reconcile() == 0
     assert writes == sends_before_denials
