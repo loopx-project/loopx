@@ -15654,11 +15654,11 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   display: flex;
   flex-direction: column;
   height: 100%;
-  max-width: calc(var(--content-w) + 32px);
   width: 100%;
   margin: 0 auto;
-  padding: 10px 0 0;
+  padding: 0;
 }
+.steward-page .steward-composer { width: 100%; max-width: calc(var(--content-w) + 32px); margin-inline: auto; }
 
 .goal-masthead {
   display: flex;
@@ -15718,14 +15718,8 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .goal-failure { margin: 8px 0; font-size: 13px; }
 .goal-objective p { margin: 4px 0; font-size: 14px; }
 
-/* The head carries only the steward's on-demand knowledge as icon buttons at the right edge; the
-   app topbar above it owns the back button and the title. */
-.steward-head {
-  display: flex;
-  align-items: center;
-  padding: 0 16px 6px;
-}
-.steward-head-actions { margin-left: auto; display: flex; gap: 4px; }
+/* The steward's buttons sit in the app topbar, at its right edge, like a thread's. */
+.steward-actions { display: flex; gap: 2px; }
 .steward-head-btn { position: relative; color: var(--muted); }
 .steward-head-btn:hover:not(:disabled) { color: var(--text); }
 /* The count of what waits on the person, as the topbar's other badges wear it. */
@@ -15737,8 +15731,8 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   height: 15px;
   padding: 0 4px;
   border-radius: var(--radius-pill, 999px);
-  background: var(--warn);
-  color: var(--on-color);
+  background: var(--text);
+  color: var(--surface);
   font-size: 10px;
   font-weight: 600;
   line-height: 15px;
@@ -15746,31 +15740,37 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
-.steward-brief-panel { display: flex; flex-direction: column; min-width: 240px; max-width: 340px; }
-.steward-brief-stats { display: flex; flex-direction: column; gap: 8px; margin: 0; }
-.steward-brief-stats > div { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+
+/* The steward's menus: a heading with its count, quiet one-line rows, and the way to every Goal. */
+.steward-menu { display: flex; flex-direction: column; width: 300px; max-width: calc(100vw - 32px); }
+.steward-menu-head { display: flex; align-items: baseline; gap: 6px; padding: 6px 10px 6px; color: var(--muted); font-size: 12.5px; }
+.steward-menu-count { color: var(--faint); font-variant-numeric: tabular-nums; }
+.steward-menu-list { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; scrollbar-width: thin; }
+.steward-menu-row {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 7px 10px; border: 0; border-radius: var(--radius-sm, 8px);
+  background: none; color: var(--text); text-align: left; cursor: pointer;
+}
+.steward-menu-row:hover { background: var(--hover, rgba(31, 30, 28, 0.06)); }
+.steward-menu-dot { flex: none; width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: var(--faint); }
+.steward-menu-dot.warn { background: var(--text); }
+.steward-menu-dot.ok { background: var(--ok, #3f8f5a); }
+.steward-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.steward-menu-title { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steward-menu-sub { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steward-menu-empty { margin: 0; padding: 4px 10px 10px; color: var(--faint); font-size: 13px; }
+.steward-menu-foot {
+  margin-top: 4px; padding: 8px 10px; border: 0; border-top: 1px solid var(--border);
+  background: none; color: var(--muted); font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.steward-menu-foot:hover { color: var(--text); }
+.steward-brief-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0; padding: 2px 6px 8px; }
+.steward-brief-stats > div { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border-radius: var(--radius-sm, 8px); background: var(--well, rgba(31, 30, 28, 0.04)); }
+.steward-brief-stats dd { order: -1; margin: 0; font-size: 20px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .steward-brief-stats dt { color: var(--faint); font-size: 12px; }
-.steward-brief-stats dd { margin: 0; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .steward-hint { margin: 0 0 8px; color: var(--faint); font-size: 13px; }
 
-.steward-row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  margin: 6px 0;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: var(--radius, 10px);
-  background: var(--well, rgba(31, 30, 28, 0.04));
-  text-align: left;
-  cursor: pointer;
-}
-
-.steward-row:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); }
-.steward-row strong { font-size: 14px; }
-.steward-row small { color: var(--faint); font-size: 12px; }
 
 /* ── Batch B: the steward conversation, the Goal tabs, lifecycle and todo rows ── */
 
@@ -15825,7 +15825,10 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 16px 8px;
+  /* The column is centred by padding, not by narrowing the box, so the scrollbar is the pane's own. */
+  padding: 12px max(16px, calc((100% - var(--content-w)) / 2)) 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -15922,7 +15925,6 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 @media (max-width: 640px) {
   .goal-vitals { flex-wrap: wrap; }
   .goal-vital { flex: 1 1 40%; }
-  .steward-head { padding: 0 10px 4px; }
   .goal-tabs { overflow-x: auto; }
 }
 

@@ -95,7 +95,7 @@ import { GoalWorkPage, GOAL_TABS, type GoalTab } from './components/GoalWorkPage
 import { GoalsPage } from './components/GoalsPage';
 import { AccessSettings } from './components/AccessSettings';
 import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
-import { StewardPage } from './components/StewardPage';
+import { StewardActions, StewardPage } from './components/StewardPage';
 import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
 import { needsYouGoalIds, sortGoalTree } from './loopx/status';
 import { ActivityPage } from './components/ActivityPage';
@@ -3136,6 +3136,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               </button>
             </div>
           )}
+          {onSteward && !selected && (
+            <div className="topbar-actions">
+              <StewardActions goals={loopxStatus?.goals ?? []} attention={loopxStatus?.attention ?? []} failure={loopxRead.failure}
+                onOpenGoal={openGoal} onOpenAll={showcase ? undefined : openGoalsList} />
+            </div>
+          )}
         </header>}
 
         {/* Rows that wait for a decision, in the flow of the page rather than over it: a newer
@@ -3323,13 +3329,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           </div>
         ) : onSteward ? (
           <div key="steward" className="scroller">
-            <StewardPage
-              token={token}
-              goals={loopxStatus?.goals ?? []}
-              attention={loopxStatus?.attention ?? []}
-              failure={loopxRead.failure}
-              onOpenGoal={openGoal}
-            />
+            <StewardPage token={token} failure={loopxRead.failure} />
           </div>
         ) : onActivity ? (
           // The same document shape: days from the top, each conversation's asks under its name.
