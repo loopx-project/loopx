@@ -543,8 +543,16 @@ def _git_probe(path: Path) -> dict[str, Any]:
         rel_path = str(path)
 
     def _ask(*arguments: str) -> bool | None:
+        """Git's yes, its no, or a failed query no caller may read as "no".
+
+        Both probes below answer with 0 or 1; any other status is Git refusing
+        the question, which must stay distinguishable from a negative answer.
+        """
+
         answer = _git_query(*arguments)
-        return None if answer is None else answer.returncode == 0
+        if answer is None or answer.returncode not in (0, 1):
+            return None
+        return answer.returncode == 0
 
     tracked = _ask(
         "--literal-pathspecs", "-C", str(repo_root),
@@ -559,9 +567,11 @@ def _git_probe(path: Path) -> dict[str, Any]:
             "tracked": None,
             "ignored": None,
         }
+    # `check-ignore` rejects pathspec magic outright -- the literal global
+    # option makes it exit 128 -- so the leading `./` is what keeps a name that
+    # starts with `:` from being read as magic here.
     ignored = _ask(
-        "--literal-pathspecs", "-C", str(repo_root),
-        "check-ignore", "-q", "--", rel_path,
+        "-C", str(repo_root), "check-ignore", "-q", "--", f"./{rel_path}",
     )
     return {
         "inside_worktree": True,
@@ -1441,7 +1451,13 @@ def scan_public_boundary(
                     continue
                 if not git.get("tracked"):
                     skipped_private_state_files.append(rel_or_abs(path, root))
-                    if git.get("inside_worktree") and not git.get("ignored"):
+                    ignored_flag = git.get("ignored")
+                    if ignored_flag is None:
+                        # Git refused the ignore question: the file is still
+                        # skipped, but a clean scan would claim it is protected.
+                        ownership_unavailable = True
+                        unavailable_git_probes.append(rel_or_abs(path, root))
+                    elif git.get("inside_worktree") and ignored_flag is False:
                         private_state_git_warnings.append(
                             f"{_display_scan_path(path, root)}: private state should be gitignored"
                         )

@@ -685,3 +685,63 @@ def test_an_inherited_pathspec_mode_cannot_empty_the_selection(
     empty = repo / "empty"
     empty.mkdir()
     assert _tracked_scan_files(empty) == []
+
+
+def test_private_state_keeps_ignored_unignored_and_tracked_apart(
+    tmp_path: Path,
+) -> None:
+    """Git's own `.gitignore` answer decides whether the warning is due."""
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    for name in ("ignored", "plain", "tracked"):
+        directory = repo / name
+        directory.mkdir()
+        (directory / "ACTIVE_GOAL_STATE.md").write_text("state\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore", "tracked/ACTIVE_GOAL_STATE.md")
+    _git(repo, "commit", "-m", "private state fixture")
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        json.dumps({"schema_version": "0.1", "goals": []}), encoding="utf-8"
+    )
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+
+    def investigate(name: str) -> tuple[int, dict]:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "--registry",
+                str(registry),
+                "--runtime-root",
+                str(runtime_root),
+                "check",
+                "--scan-root",
+                str(repo / name),
+            ],
+            cwd=repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={**os.environ, "PYTHONPATH": str(REPOSITORY_ROOT)},
+            check=False,
+            timeout=120,
+        )
+        return result.returncode, json.loads(result.stdout.decode("utf-8"))
+
+    code, ignored = investigate("ignored")
+    assert code == 0, ignored
+    assert ignored["warnings"] == []
+    assert ignored["public_boundary_scan"]["unavailable_git_probes"] == []
+
+    code, plain = investigate("plain")
+    assert code == 0, plain
+    assert plain["warnings"] == ["ACTIVE_GOAL_STATE.md: private state should be gitignored"]
+
+    code, tracked = investigate("tracked")
+    assert code == 1, tracked
+    assert tracked["errors"] == ["ACTIVE_GOAL_STATE.md: local_private_state"]
