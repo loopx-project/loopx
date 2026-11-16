@@ -187,6 +187,7 @@ def collect_status(
         current_registry=registry,
         registry_path=registry_path,
         include_goal_channel_projection=include_presentation_projections,
+        agent_lane_id=agent_lane_id,
     )
     # No later projection consumes the shared status snapshot.
     del todo_snapshot
