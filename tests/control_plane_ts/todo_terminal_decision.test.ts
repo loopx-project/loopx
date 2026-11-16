@@ -393,9 +393,9 @@ test("single-agent goals consult the exact user gate override for owner decision
   assert.equal(unlinked.outcome, "rejected");
   assert.equal(unlinked.code, "actor_required");
 
-  // A registered actor on the same gate is admitted through the same override,
-  // which is consulted first, so the audit mode is the override and not
-  // single-agent compatibility.
+  // Registered actors keep ordinary single-agent compatibility, while
+  // unregistered or excluded actors remain rejected even when the scope link
+  // matches.
   const viaActor = evaluateCoordinationTodoTerminalDecision(request({
     registered_agents: ["agent-a"],
     todo: gate,
@@ -404,7 +404,27 @@ test("single-agent goals consult the exact user gate override for owner decision
     decision_outcome: "approve",
   }));
   assert.equal(viaActor.outcome, "apply");
-  assert.equal(viaActor.authority_mode, "exact_user_gate_decision_scope_override");
+  assert.equal(viaActor.authority_mode, "single_agent_compatibility");
+
+  const unregistered = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    todo: gate,
+    decision_target: target,
+    actor_agent_id: "bogus",
+    decision_outcome: "approve",
+  }));
+  assert.equal(unregistered.outcome, "rejected");
+  assert.equal(unregistered.code, "actor_not_registered");
+
+  const excluded = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    todo: { ...gate, excluded_agents: ["agent-a"] },
+    decision_target: target,
+    actor_agent_id: "agent-a",
+    decision_outcome: "approve",
+  }));
+  assert.equal(excluded.outcome, "rejected");
+  assert.equal(excluded.code, "actor_excluded");
 });
 
 test("actorless owner gate decisions do not require an execution lease", () => {
@@ -455,6 +475,55 @@ test("actorless owner gate decisions do not require an execution lease", () => {
   assert.equal(actor.outcome, "rejected");
   assert.equal(actor.code, "handoff_mode_requires_lease");
   assert.equal(actor.lease_fence, "required");
+
+  // Any expired lease lineage is retired together with the Todo transition,
+  // while an active holder or explicit lease fence is never bypassed.
+  const expiredLease = {
+    present: true,
+    active: false,
+    status: "active",
+    owner: "agent-a",
+    idempotency_key: "old-lease",
+    version: 2,
+    lease_epoch: 1,
+    write_scopes: [],
+  };
+  const retired = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    handoff_mode: "hard_lease",
+    todo: gate,
+    decision_target: target,
+    lease: expiredLease,
+    actor_agent_id: null,
+    decision_outcome: "approve",
+  }));
+  assert.equal(retired.outcome, "apply");
+  assert.equal(retired.lease_fence, "not_required");
+  assert.equal(retired.next_lease?.status, "released");
+
+  const activeHolder = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    handoff_mode: "hard_lease",
+    todo: gate,
+    decision_target: target,
+    lease: { ...expiredLease, active: true },
+    actor_agent_id: null,
+    decision_outcome: "approve",
+  }));
+  assert.equal(activeHolder.outcome, "rejected");
+  assert.equal(activeHolder.code, "lease_fence_required");
+
+  const explicitFence = evaluateCoordinationTodoTerminalDecision(request({
+    registered_agents: ["agent-a"],
+    handoff_mode: "hard_lease",
+    todo: gate,
+    decision_target: target,
+    actor_agent_id: null,
+    decision_outcome: "approve",
+    lease_idempotency_key: "stale-key",
+  }));
+  assert.equal(explicitFence.outcome, "rejected");
+  assert.equal(explicitFence.code, "handoff_mode_requires_lease");
 });
 
 test("hard-lease terminal transition releases the exact owned generation", () => {

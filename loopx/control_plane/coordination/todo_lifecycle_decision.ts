@@ -388,19 +388,20 @@ function authority(request: LifecycleDecisionRequest):
   const retired = retiredHandoffModeRejection(request.handoff_mode);
   if (retired !== null) return result("rejected", retired);
   if (registered.length <= 1) {
-    // The exact linked user gate override is consulted before single-agent
-    // compatibility, matching the multi-agent branch below: a single-agent
-    // goal's user gate otherwise can never be resolved by an owner decision
-    // (the terminal CLI has no human owner actor), so the gate would be
-    // permanently stuck. The override still requires the exact decision scope
-    // link; it grants nothing beyond closing that one linked gate.
-    if (exactUserGateOverride(request)) {
-      return { mode: "exact_user_gate_decision_scope_override", ownershipGate: "not_required" };
-    }
     if (actor !== null) {
       const rejection = registeredTodoMutationRejection(todo, actor, registered);
       if (rejection !== null) return result("rejected", rejection);
-    } else if (todo.claimed_by !== null || todo.bound_agent !== null ||
+      return { mode: "single_agent_compatibility", ownershipGate: "not_required" };
+    }
+    // Single-agent goals have no second agent to act for the owner, and the
+    // terminal CLI has no human owner actor, so an actorless owner decision
+    // closing an exact linked user gate uses the same override as multi-agent
+    // mode. The override requires the exact decision scope link; unlinked
+    // owned/bound/excluded records still require an accountable actor.
+    if (exactUserGateOverride(request)) {
+      return { mode: "exact_user_gate_decision_scope_override", ownershipGate: "not_required" };
+    }
+    if (todo.claimed_by !== null || todo.bound_agent !== null ||
         todo.blocks_agent !== null || todo.excluded_agents.length > 0) {
       // Actorless compatibility is limited to genuinely unowned Todo records;
       // ownership, binding, and exclusion facts require an accountable actor.
@@ -479,15 +480,18 @@ function terminalFence(
   }
   // An owner decision on an exact linked user gate has no agent actor to hold
   // an execution lease: the gate records a decision, it does not execute work,
-  // so there is no holder to acquire for and no lineage to release. Only the
-  // actorless exact-scope override is admitted this way; a registered actor
-  // keeps the ordinary lease requirement below, and an active holder or an
-  // explicitly supplied fence is never bypassed.
+  // so there is no holder to acquire for, and any expired lease lineage is
+  // retired together with the Todo transition. Only the actorless exact-scope
+  // override is admitted this way; a registered actor keeps the ordinary lease
+  // requirement below, and an active holder or an explicitly supplied fence is
+  // never bypassed.
   if (request.command === "complete" && authorityMode === "exact_user_gate_decision_scope_override" &&
       request.todo.role === "user" && request.todo.task_class === "user_gate" &&
       request.actor_agent_id === null && !timeActive && !explicitFence) {
     return result("apply", "terminal_fence_not_required", {
       authority_mode: authorityMode, lease_fence: "not_required",
+      next_lease: lease?.present && lease.status !== "released"
+        ? {...lease, active: false, status: "released"} : null,
     });
   }
   // Deferred work cannot acquire a lease. Superseding a retired wait is a
