@@ -194,12 +194,6 @@ def test_explicit_combined_writeback_returns_the_original_turn_receipts(tmp_path
     assert rc == 0 and todo["todo"]["status"] == "open"
 
 
-
-
-
-
-
-
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
