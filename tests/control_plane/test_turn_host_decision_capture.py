@@ -658,6 +658,7 @@ def test_real_host_reads_original_capture_after_source_change(
     source = source.replace("    turn_number = int(match.group(1)) + 1\n",
         '    request = json.loads(prompt.split("Turn request:\\n", 1)[1])\n'
         '    revalidation = request["result_revalidation"]\n'
+        '    assert request["session"]["action"] == "resume"\n'
         '    assert revalidation["candidate"]["result_kind"] == "validated_progress"\n'
         '    assert revalidation["original_context"]["read_context_id"] != request["delivery_result_context"]["read_context_id"]\n'
         '    turn_number = int(match.group(1))\n')

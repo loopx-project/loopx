@@ -455,6 +455,23 @@ test("failed Host recovery uses only the supplied Session Binding check", () => 
   ]);
 });
 
+test("retained progress cannot revalidate on an unverified Host Session", () => {
+  const input = request("failed");
+  input.retry_failed = true;
+  input.journal.completed_phases = ["host_execute", "typed_result"];
+  input.journal.receipt = { turn_key: turnKey, failed_phase: "validation" };
+  input.journal.validation_stage = "result_freshness";
+  input.journal.result_revalidation = { candidate: { result_kind: "validated_progress" } };
+  input.journal.checkpoint_host_binding = { session_sha256: "original-session" };
+  assert.equal(interpretTurnJournal(input).recovery_decision.reason, "binding_check_unavailable");
+  input.session_recovery_check = {
+    kind: "host_session_binding",
+    outcome: "passed",
+    reason: "session_binding_matched",
+  };
+  assert.equal(interpretTurnJournal(input).recovery_decision.reinvoke_host, true);
+});
+
 test("retryable Host failure may reinvoke only inside its attempt budget", () => {
   for (const [kind, backoffSeconds] of [
     ["provider_capacity", 30],
