@@ -59,6 +59,8 @@ def test_monitor_observation_never_projects_gate_completion(tmp_path, tmp_path_f
     projected = actions(guard)
     assert "condition unmet" in projected[0]
     assert projected[1] == MONITOR_USER_GATE_NOTICE
+    # The notice never points an observation at a gate, linked or unrelated.
+    assert "pending user action" not in MONITOR_USER_GATE_NOTICE and "report" not in MONITOR_USER_GATE_NOTICE
     commands = [action for action in projected if action.startswith("loopx ")]
     assert len(commands) == 1 and " quota monitor-poll " in commands[0], projected
     assert not any("todo complete" in action or "--decision-outcome" in action for action in projected)

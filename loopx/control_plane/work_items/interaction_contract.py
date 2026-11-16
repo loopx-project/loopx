@@ -466,12 +466,11 @@ def _due_monitor_cli_actions(
 # Observation is evidence, never an owner decision: no completion command is projected.
 # Keep the text free of quote characters; consumers shlex-split every action.
 MONITOR_USER_GATE_NOTICE = (
-    "A Monitor observation never completes or approves a User gate, even when it observes what that gate "
-    "is waiting for. Do not pass the id or claim proof of this Turn to a gate completion, and do not attach "
-    "evidence to the gate through todo update. Record the observation with the poll below; an open gate "
-    "stays the decision of its owner, so report the observed evidence as that pending user action and yield. "
-    "Work that may continue on an observed change without an owner decision belongs in the successor of "
-    "that poll (--material-change with --next-agent-todo), not behind a User gate."
+    "A Monitor observation never completes or approves a User gate. Do not pass the id or claim proof "
+    "of this Turn to a gate completion, and do not attach evidence to a gate through todo update. "
+    "Record the observation with the poll below and yield. Work that may continue on an observed change "
+    "without an owner decision belongs in the successor of that poll (--material-change with "
+    "--next-agent-todo), not behind a User gate."
 )
 
 

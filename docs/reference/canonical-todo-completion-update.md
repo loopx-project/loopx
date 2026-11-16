@@ -227,9 +227,9 @@ Two attempts stay rejected by their existing owners: completing the gate with
 the Monitor Turn (`settlement binding does not match the original quota
 guard`), and attaching evidence through a plain `todo update`
 (`handoff_mode_requires_lease`). The agent records the observation with
-`quota monitor-poll`, reports the observed evidence as the gate's pending user
-action, and yields. The gate owner completes it through the User lifecycle with
-their own decision; the linked target then resumes for a fresh guarded Turn.
+`quota monitor-poll` and yields. An observation is not tied to any gate, so it is
+not reported as one. The gate owner completes a gate through the User lifecycle
+with their own decision; a linked target then resumes for a fresh guarded Turn.
 
 Work that may continue on an observed change without an owner decision does not
 belong behind a User gate. Emit it from the observation itself with
