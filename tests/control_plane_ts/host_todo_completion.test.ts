@@ -252,13 +252,17 @@ test("default current-Agent completion reads post-result facts and resumes a pro
   const prepared = prepare(enabled);
   const identity = identityFrom(prepared);
   const steps = (prepared.provider_effect as {steps: {step_kind: string}[]}).steps;
-  assert.deepEqual(steps.map(s => s.step_kind), ["guard", "lifecycle_completion", "direction_context"]);
-  const outcomes = providerOutcomes(identity).slice(0, 2);
-  const context = {ok: true, settlement_identity: identity, read_context_id: "read-A", basis: {}};
+  assert.deepEqual(steps.map(s => s.step_kind), ["guard", "lifecycle_completion", "durable_writeback", "direction_context"]);
+  const outcomes = providerOutcomes(identity, {durable_writeback: {
+    ok: true, appended: true, settlement_identity: identity, json_path: "original-result.json",
+    first_delivery_progress: {outcome_retained: true},
+  }}).slice(0, 3);
+  const context = {ok: true, settlement_identity: identity, read_context_id: "read-A",
+    purpose: "supplement_checkpoint", basis: {}};
   const pending = finalize([...outcomes, {step_kind: "direction_context", output: JSON.stringify(context)}], enabled);
   assert.equal((pending.result as Record<string, unknown>).stage, "direction_pending");
   assert.equal((pending.result as Record<string, unknown>).settlement_complete, false);
-  const committed = {...context, status: "committed", context: {purpose: "first_delivery", read_context_id: "original-A"}};
+  const committed = {...context, status: "committed", context: {purpose: "supplement_checkpoint", read_context_id: "original-A"}};
   const resume = finalize([...outcomes, {step_kind: "direction_context", output: JSON.stringify(committed)}], enabled);
   assert.equal(resume.decision, "execute");
   assert.equal(resume.resume_checkpoint_read_context_id, "original-A");

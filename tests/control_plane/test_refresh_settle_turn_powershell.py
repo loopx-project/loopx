@@ -121,13 +121,30 @@ def test_pinned_powershell_launcher_settles_original_turn_once(
         assert result["ok"] and result["settlement_identity"] == identity
         return result
 
-    if composed:
-        action = [*prefix, *refresh, "--settle-turn"]
-    else:
-        owed = run([*prefix, *refresh])["settlement_owed"]
+    action = [*prefix, *refresh, *(["--settle-turn"] if composed else [])]
+    first = run(action)
+    if first["settlement_progress"]["state"] == "direction_pending":
+        assert not first.get("settlement_owed")
+        assert _spend_run_count(runtime) == 0
+        read, submit = first["next_cli_actions"]
+        context = run(["-Command", read])
+        assert context["purpose"] == "supplement_checkpoint"
+        vision = tmp_path / "current-direction.json"
+        vision.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "vision_closed",
+            "vision_patch": {"acceptance_summary": "The original verified result is retained."},
+        }), encoding="utf-8")
+        submit = submit.replace("<read-context-id>", context["read_context_id"]).replace(
+            "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", str(vision).replace("'", "''"),
+        )
+        action = ["-Command", submit + (" --settle-turn" if composed else "")]
+        first = run(action)
+    if not composed:
+        owed = first["settlement_owed"]
         assert _spend_run_count(runtime) == 0
         action = ["-Command", owed["command"]]
-    first = run(action)
+        first = run(action)
     assert first["settlement_progress"]["state"] == "settled"
     assert _spend_run_count(runtime) == 1
     if not composed:

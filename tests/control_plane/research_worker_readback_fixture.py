@@ -105,17 +105,19 @@ def serve(root: Path, mode: str) -> None:
             goal_id=GOAL, agent_id=AGENT, state_file=str(root / "worker.json"),
             wake_cmd=shlex.join([sys.executable, str(host), str(dispatches), "1" if mode == "unknown" else "0"]),
             once=mode == "unknown", error_backoff_seconds=5.0, quota_timeout_seconds=60, wake_timeout_seconds=15)
-        with redirect_stdout(io.StringIO()):
+        with redirect_stdout(io.StringIO()) as worker_trace:
             returned = worker.run_worker(args, sleep=_unexpected_timer)
-        assert returned == (1 if mode == "unknown" else 0)
+        assert returned == (1 if mode == "unknown" else 0), worker_trace.getvalue()
         assert json.loads(dispatches.read_text()) == 1
         assert index.read_bytes() == before
         state = json.loads(Path(args.state_file).read_text())
-        original = state["replan_attempts"][0]["obligation_id"]
-        original_turn = state["replan_attempts"][0]["settlement_identity"]["turn_instance_id"]
-        assert original_turn
+        attempt, = state["replan_attempts"]
+        original = attempt["obligation_id"]
+        # This worker uses an observation-only quota guard. The browser must
+        # display the recorded obligation without inventing a Turn binding.
+        assert attempt.get("settlement_identity") is None
         receipt = receipt_path_for_goal({"id": GOAL}, root / "project" / "ACTIVE_GOAL_STATE.md")
-        assert json.loads(receipt.read_text())["worker_observations"][AGENT]["turn_instance_id"] == original_turn
+        assert json.loads(receipt.read_text())["worker_observations"][AGENT].get("turn_instance_id") is None
         synced = sync_project_registry_to_global(registry_path=Path(args.registry),
             runtime_root_override=args.runtime_root, goal_id=GOAL)
         assert synced["ok"] is True
@@ -131,8 +133,7 @@ def serve(root: Path, mode: str) -> None:
             def serve_forever(self, poll_interval=0.5):
                 print(json.dumps({"port": self.server_address[1], "registry": args.registry,
                     "runtime": args.runtime_root, "goal_id": GOAL, "agent_id": AGENT,
-                    "obligation_id": original, "turn_instance_id": original_turn,
-                    "receipt": str(receipt), "dispatches": str(dispatches),
+                    "obligation_id": original, "receipt": str(receipt), "dispatches": str(dispatches),
                     "dashboard_registry": str(dashboard_registry),
                     "history": str(index)}),
                     file=output, flush=True)
