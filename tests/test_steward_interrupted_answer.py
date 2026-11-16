@@ -1190,7 +1190,10 @@ def test_cleared_visible_answer_is_only_stable_historical_review_evidence(monkey
     assert not set(calls) - {"GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
 
 
-@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash", "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail", "authenticated-host", "file-read", "file-running", "cleared-answer"])
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "source-edited-at-send", "source-recalled-at-send",
+    "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash",
+    "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail",
+    "authenticated-host", "file-read", "file-running", "cleared-answer"])
 def test_original_worker_answers_interrupted_steward_question_once(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     import loopx.chat_manager as manager_module
     import loopx.chat_runtime as runtime_module
@@ -1384,7 +1387,39 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
             assert recovered["context_recovery"]["answer_review"] is True
             done = runtime.wait_for_turn(session_id=recovered["session_id"], turn_id=recovered["turn_id"], timeout_sec=15)
             assert done["status"] == ("failed" if fault == "review-action" else "completed"), done
-            transport.reconcile_request(path)
+            if fault in {"source-edited-at-send", "source-recalled-at-send"}:
+                # Change the original provider source after the first check,
+                # while the final reply preview is in flight.
+                original_message = provider.messages[event["message_id"]]
+                change = ({"content": "Edited after review"} if fault == "source-edited-at-send"
+                          else {"deleted": True})
+                changed = {**original_message, **change}
+                reply = transport._reply_runner
+                previewed = False
+
+                def preview_then_change(args):
+                    nonlocal previewed
+                    result = reply(args)
+                    if "--dry-run" in args and ("+messages-reply" in args or "+messages-send" in args):
+                        previewed = True
+                        provider.messages[event["message_id"]] = changed
+                    return result
+
+                writes = list(provider.writes)
+                with monkeypatch.context() as send:
+                    send.setattr(transport, "_reply_runner", preview_then_change)
+                    delivery_count = transport.reconcile_request(path)
+                assert previewed
+                assert delivery_count == 0 and provider.writes == writes
+                assert not transport.core.read_request(ref).get("delivery_verified")
+                assert transport.reconcile_request(path) == 0 and provider.writes == writes
+                # Once the same frozen source is available again, the original
+                # completed review can be delivered without another Turn.
+                provider.messages[event["message_id"]] = original_message
+                assert transport.reconcile_request(path) == 1
+                assert len(provider.writes) == len(writes) + 1
+            else:
+                transport.reconcile_request(path)
             current = transport.core.read_request(ref)
             assert current["delivery_verified"]
             for later in new_question:
