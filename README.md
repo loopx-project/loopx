@@ -14,7 +14,7 @@ progress, decisions and verifiable results so work can continue across sessions.
 
 [![Local-first state](https://img.shields.io/badge/local--first-state-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[Get started](#quick-start) · [Why LoopX](#why-loopx) · [24/7 Always-On](#always-on-agents) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+[Get started](#start-with-one-goal) · [Why LoopX](#why-loopx) · [24/7 Always-On](#building-247-always-on-agents-without-hand-rolling-the-5-subsystems) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#community--contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
 </div>
 
@@ -94,9 +94,9 @@ protected actions.
 
 | What you want to do | Start here |
 | --- | --- |
-| Keep a coding or research agent working across sessions | [Install and start](#quick-start) |
+| Keep a coding or research agent working across sessions | [Install and start](#start-with-one-goal) |
 | Manage personal projects, schedules and decisions in one place | [Personal Agent Workspace](#meet-the-personal-agent-workspace) |
-| Wire up a 24/7 always-on agent without hand-rolling infra | [24/7 Always-On Agent Control Plane](#always-on-agents) |
+| Wire up a 24/7 always-on agent without hand-rolling infra | [24/7 Always-On Agent Control Plane](#building-247-always-on-agents-without-hand-rolling-the-5-subsystems) |
 | Let agents collaborate and deliver verifiable results | [Agent collaboration guide](docs/product/use-cases/cross-runtime/README.md) |
 
 LoopX keeps the durable work state in one compact layer:
@@ -268,7 +268,7 @@ Choose a walkthrough with a result you can inspect:
 
 ### Start From Your Agent
 
-After the [two-step setup](#quick-start), use the entry for your host in a
+After the [two-step setup](#start-with-one-goal), use the entry for your host in a
 session opened on your project:
 
 | Host | Start and confirm continuation |
@@ -465,7 +465,7 @@ creator dogfooding, reproducible demos, and explicit evidence-strength labels.
   Five execution modes on 15 matched tasks compare self-verification, scores,
   and cost. More self-verification did not consistently yield higher scores.
 - **[LHTB × LoopX](https://loopx-project.github.io/loopx/benchmarks/lhtb/):**
-  The [results above](#lhtb-results) lead into five execution mechanisms,
+  The [results above](#lhtb-higher-mean-reward-with-the-same-model) lead into five execution mechanisms,
   task-level comparisons, regressions, and exploratory task-type analysis.
 - **[DeepSWE behavior analysis](https://loopx-project.github.io/loopx/benchmarks/deepswe/behavior-discovery/)** (Chinese):
   Selected cases examine how domain hints relate to requirement retention and
@@ -599,7 +599,7 @@ owner. See [Architecture](docs/architecture.md) and
 [Anthropic's *Building always-on agents*](https://claude.com/resources/articles/building-always-on-agents)
 make persistent personal agents and sleep/wake event-driven runs a familiar product
 and architecture model. LoopX approaches that space as an open, provider-neutral
-[24/7 control plane](#always-on-agents) for agents you already run—not as a hosted
+[24/7 control plane](#building-247-always-on-agents-without-hand-rolling-the-5-subsystems) for agents you already run—not as a hosted
 replacement for either product.
 
 - **Personal agent:** use the shipped Workspace and connected Lark surfaces to

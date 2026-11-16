@@ -14,7 +14,7 @@
 
 [![Local-first state](https://img.shields.io/badge/local--first-state-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[はじめる](#quick-start) · [なぜ LoopX なのか](#なぜ-loopx-なのか) · [24/7 常駐](#always-on-agents) · [動作を見る](#loopx-の動作を見る) · [エビデンス](#エビデンス) · [コントリビュート](#contributing) · [ドキュメント](https://loopx-project.github.io/loopx/docs/) · [English](README.md) · [简体中文](README.zh-CN.md)
+[はじめる](#1-つのゴールから始める) · [なぜ LoopX なのか](#なぜ-loopx-なのか) · [24/7 常駐](#5-つのサブシステムを自作せずに-247-常駐エージェントを構築する) · [動作を見る](#loopx-の動作を見る) · [エビデンス](#エビデンス) · [コントリビュート](#コミュニティとコントリビューション) · [ドキュメント](https://loopx-project.github.io/loopx/docs/) · [English](README.md) · [简体中文](README.zh-CN.md)
 
 </div>
 
@@ -92,9 +92,9 @@ Claude Code では `/loopx <complex task>` を使います。その他のラン�
 
 | やりたいこと | ここから始める |
 | --- | --- |
-| コーディングや研究のエージェントをセッションをまたいで働かせ続ける | [インストールして始める](#quick-start) |
+| コーディングや研究のエージェントをセッションをまたいで働かせ続ける | [インストールして始める](#1-つのゴールから始める) |
 | 個人のプロジェクト、スケジュール、意思決定を 1 か所で管理する | [Personal Agent Workspace](#personal-agent-workspace-の紹介) |
-| インフラを自作せずに 24/7 常駐エージェントを構築する | [24/7 常駐エージェントのコントロールプレーン](#always-on-agents) |
+| インフラを自作せずに 24/7 常駐エージェントを構築する | [24/7 常駐エージェントのコントロールプレーン](#5-つのサブシステムを自作せずに-247-常駐エージェントを構築する) |
 | エージェント同士を連携させ、検証可能な結果を納品させる | [エージェント連携ガイド](docs/product/use-cases/cross-runtime/README.md) |
 
 LoopX は、永続的な作業状態を 1 つのコンパクトなレイヤーに保持します：
@@ -266,7 +266,7 @@ Authenticode 証明書がありません（Windows で SmartScreen の確認が�
 
 ### 使っている Agent から始める
 
-[2 ステップのセットアップ](#quick-start)の後、プロジェクトで開いたセッションで
+[2 ステップのセットアップ](#1-つのゴールから始める)の後、プロジェクトで開いたセッションで
 お使いのホスト用のエントリを使います：
 
 | ホスト | 開始と継続の確認 |
@@ -461,7 +461,7 @@ LoopX の作者は、この手順を
   対応する 15 タスクで 5 つの実行モードを比較し、自己検証、スコア、
   コストを比べています。自己検証を増やしても、一貫して高いスコアにはなりませんでした。
 - **[LHTB × LoopX](https://loopx-project.github.io/loopx/benchmarks/lhtb/)：**
-  [上記の結果](#lhtb-results)から、5 つの実行メカニズム、
+  [上記の結果](#lhtb同じモデルでより高い平均報酬)から、5 つの実行メカニズム、
   タスク単位の比較、悪化した事例、探索的なタスクタイプ分析へと続きます。
 - **[DeepSWE の行動分析](https://loopx-project.github.io/loopx/benchmarks/deepswe/behavior-discovery/)**（中国語）：
   選ばれた事例をもとに、ドメインのヒントが要件の保持や
@@ -595,7 +595,7 @@ LoopX はアーキテクチャを明示的に保つことで、エージェン�
 [Anthropic の *Building always-on agents*](https://claude.com/resources/articles/building-always-on-agents)
 によって、常駐するパーソナルエージェントや、スリープ/起床によるイベント駆動の実行は、おなじみの製品
 およびアーキテクチャのモデルになっています。LoopX はこの領域に、すでに実行しているエージェントのための、オープンでプロバイダー非依存の
-[24/7 コントロールプレーン](#always-on-agents)としてアプローチします。いずれかの製品を
+[24/7 コントロールプレーン](#5-つのサブシステムを自作せずに-247-常駐エージェントを構築する)としてアプローチします。いずれかの製品を
 置き換えるホスト型サービスではありません。
 
 - **パーソナルエージェント：** 提供済みの Workspace と接続済みの Lark の画面を使って、

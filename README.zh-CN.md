@@ -14,7 +14,7 @@
 
 [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
-[快速上手](#快速开始) · [为什么需要 LoopX](#为什么需要-loopx) · [7×24 常驻架构](#always-on-agents) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md) · [日本語](README.ja.md)
+[快速上手](#从一个目标开始) · [为什么需要 LoopX](#为什么需要-loopx) · [7×24 常驻架构](#搭建-724-常驻在线-agent无需从零手搓-5-大底层组件) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#社区与贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md) · [日本語](README.ja.md)
 
 </div>
 
@@ -81,9 +81,9 @@ LoopX 会按需把它变成可见的任务、决策门和证据。Claude Code �
 
 | 你想做什么 | 从这里开始 |
 | --- | --- |
-| 让编程或研究 Agent 跨会话持续干活 | [安装并开始](#快速开始) |
+| 让编程或研究 Agent 跨会话持续干活 | [安装并开始](#从一个目标开始) |
 | 在一个入口管理个人项目、定时任务与待决事项 | [个人 Agent 工作区](#认识个人-agent-工作区) |
-| 不从零手搓基础设施，直接搭建 7×24 常驻在线 Agent | [7×24 常驻 Agent 控制面](#always-on-agents) |
+| 不从零手搓基础设施，直接搭建 7×24 常驻在线 Agent | [7×24 常驻 Agent 控制面](#搭建-724-常驻在线-agent无需从零手搓-5-大底层组件) |
 | 让多个 Agent 分工协作，交付可验收的结果 | [Agent 协作指南](docs/product/use-cases/cross-runtime/README.md#中文指南) |
 
 LoopX 把长期控制状态留在同一层紧凑状态里：
@@ -227,7 +227,7 @@ App 为 ad-hoc 签名，尚未 notarize。Windows 预览版目前手动更新，
 
 ### 从你已经在用的 Agent 启动
 
-完成上面的[两步启动](#快速开始)后，在打开了你项目的会话里使用对应入口：
+完成上面的[两步启动](#从一个目标开始)后，在打开了你项目的会话里使用对应入口：
 
 | 宿主 | 启动并确认续跑 |
 | --- | --- |
@@ -408,7 +408,7 @@ creator dogfooding、reproducible demo 和证据强度标签见
   在相同的 15 个任务上对照 5 种执行模式，比较自验证行为、得分与成本。
   更多自验证并未稳定转化为更高得分。
 - **[LHTB × LoopX](https://loopx-project.github.io/loopx/benchmarks/lhtb/?lang=zh)**：
-  从[上方核心结果](#lhtb-results)进入五种执行机制、逐题对比、退步案例
+  从[上方核心结果](#lhtb同一模型更高的平均-reward)进入五种执行机制、逐题对比、退步案例
   与探索性任务类型分析。
 - **[DeepSWE 行为分析](https://loopx-project.github.io/loopx/benchmarks/deepswe/behavior-discovery/)**：
   通过精选案例观察领域提示、需求保留与验证选择之间的关系，提出有待复验的机制假设。
@@ -529,7 +529,7 @@ provider 的打包和生命周期，不是另一个控制面 owner。详见
 [Grok Bot](https://x.ai/news/introducing-grok-bot) 以及
 [Anthropic《Building always-on agents》](https://claude.com/resources/articles/building-always-on-agents)
 正在让“把工作交给 7×24 常驻个人 Agent”与“休眠—事件唤醒”成为越来越清晰的产品与架构共识。LoopX
-选择的是开放、Provider-neutral 的[7×24 控制面](#always-on-agents)路线，连接你已经在用的 Agent，
+选择的是开放、Provider-neutral 的[7×24 控制面](#搭建-724-常驻在线-agent无需从零手搓-5-大底层组件)路线，连接你已经在用的 Agent，
 而不是提供这两款托管产品的等价替代。
 
 - **个人 Agent：**通过已发布的工作区与关联飞书入口查看目标、调整方向、处理决策。
