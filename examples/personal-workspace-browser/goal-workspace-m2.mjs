@@ -187,19 +187,26 @@ async function runM2Pass({browser, collectCoverage, url}) {
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
       await page.screenshot({path:resolve(outputDir,'overview-populated-mobile.png'),animations:'disabled'});
       await page.setViewportSize({width:1440,height:1000});
+      // The dependency readback can regroup rows after the status shell renders.
+      await now.locator('[data-todo-id="scale-199"][data-work-class="waiting_dependency"]').waitFor({state: 'attached'});
       const expandStart = performance.now();
-      // Open each still-closed disclosure by keyboard. Owner groups can re-render
-      // while this runs, so a positional list could re-toggle an open group shut
-      // and skip another; the budget below covers every toggle.
-      // Bind Enter to the current summary: a re-render can retire a node
-      // between a separate focus call and a global keyboard command.
-      const closedWork = now.locator('.goal-work-more:not([open]) > summary');
-      const visibleWork = () => now.locator('.goal-owner-group [data-todo-id]:visible').count();
-      for (const deadline = Date.now() + 5000; await visibleWork() !== 200 && Date.now() < deadline;) {
-        if (await closedWork.count()) {await closedWork.first().press('Enter');}
-        else await page.waitForTimeout(50);
+      const deadline = expandStart + 5000;
+      const timeLeft = () => Math.max(1, deadline - performance.now());
+      const todoIds = rows => rows.map(row => row.dataset.todoId);
+      const originalOrder = await now.locator('.goal-owner-group [data-todo-id]').evaluateAll(todoIds);
+      // Bind each keyboard action to its owner and wait for that disclosure's
+      // native open state before interacting with another group.
+      for (const ownerId of new Set(many.map(todo => todo.claimed_by ?? ""))) {
+        const group = now.locator(`.goal-owner-group[data-owner-id="${ownerId}"]`);
+        const disclosure = group.locator('.goal-work-more');
+        if (await disclosure.getAttribute('open', {timeout: timeLeft()}) === null) {
+          await disclosure.locator(':scope > summary').press('Enter', {timeout: timeLeft()});
+        }
+        await group.locator('.goal-work-more[open]').waitFor({state: 'attached', timeout: timeLeft()});
       }
-      assert.equal(await visibleWork(),200,"All work remains reachable in the original owner order");
+      const visibleOrder = await now.locator('.goal-owner-group [data-todo-id]:visible').evaluateAll(todoIds);
+      assert.deepEqual([...visibleOrder].sort(), many.map(todo => todo.todo_id).sort(), "Every original task is visible");
+      assert.deepEqual(visibleOrder, originalOrder, "All work remains reachable in the original owner order");
       const expandMs = performance.now() - expandStart;
       if (!collectCoverage) assert.ok(expandMs < 2000, `Full 200-item expansion exceeded 2s budget: ${expandMs}ms`);
       await now.getByRole('button',{name:'关系图',exact:true}).click();
