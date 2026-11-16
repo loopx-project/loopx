@@ -1399,6 +1399,21 @@ workflow costs less.
 
 ### Budget Failure Decisions
 
+The hosted W07 Windows job reached its final Chat rebuild at 29m57s after
+the native recovery, CLI differential, and SQLite suites passed. The 30-minute
+job limit cancelled that rebuild. On the same local Windows setup, the
+checkout's final build and source verification took 20.29s for `02cc3381`
+and 17.74s for `0fdf2a081`, both using the real `python.exe` with an unusable
+`python3.exe` on PATH. Set the Windows job limit to 35 minutes. Keep the
+original steps, per-step limits, and required job result.
+
+W07 的托管 Windows job 在原生恢复、CLI 差分和 SQLite 套件通过后，用时
+29 分 57 秒进入最后的 Chat 重建。30 分钟的 job 上限取消了重建。同一台
+Windows 主机上使用真实的 `python.exe`，并在 PATH 中放入不可用的
+`python3.exe` 时，`02cc3381` 与 `0fdf2a081` 的构建和源码验证分别用时
+20.29 秒和 17.74 秒。将 Windows job 上限调整为 35 分钟，保留各步骤、
+单步时限和必须通过的 job 结果。
+
 The complete inline `quota should-run --context-delivery off` small fixture
 emits 23,483 JSON characters on `02cc3381` and 38,997 on `d047aab50` with the
 same native Windows interpreter and fixture route. The admitted Turn now
