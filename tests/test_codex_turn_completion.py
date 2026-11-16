@@ -15,6 +15,8 @@ from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
 from loopx.cli import build_parser, main
 from loopx.cli_commands import turn_run_once
 from loopx.cli_commands.turn import handle_turn_command
+from loopx.control_plane.quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
+from loopx.control_plane.quota.settlement import SettlementIdentity
 from loopx.control_plane.todos.mutation_api import add_goal_todo
 from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -41,6 +43,19 @@ def _cli(registry: Path, runtime: Path, *args: str) -> tuple[int, dict]:
             ]
         )
     return code, json.loads(output.getvalue())
+
+
+def _retain_legacy_admission(runtime: Path, todo_id: str, preview: dict) -> None:
+    # These tests exercise the lifecycle of Turns admitted before W07's
+    # result and direction checkpoints became default. Keep the old receipt
+    # shape so the test still reaches the same settlement and recovery oracles.
+    ensure_turn_heartbeat_settlement_receipt(
+        runtime,
+        SettlementIdentity(goal_id="loopx-turn-fixture", agent_id="codex-fixture",
+                           todo_id=todo_id, turn_instance_id=preview["resume_turn_key"]),
+        semantic_replan_guard_scoped=True,
+        semantic_replan_obligation_id=None,
+    )
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -252,13 +267,16 @@ def test_builtin_codex_completes_before_accountable_writeback(
         "--no-global-sync",
         "--execute",
     ]
+    code, preview = _cli(registry, runtime, *argv[:-1])
+    assert code == 0, preview
+    _retain_legacy_admission(runtime, todo_id, preview)
     code, result = _cli(registry, runtime, *argv)
     journals = list((runtime / "goals" / "loopx-turn-fixture" / "turns").glob("*.json"))
     assert len(journals) == 1
     journal = json.loads(journals[0].read_text())
     assert len(host_log.read_text().splitlines()) == 1
     if stopped_after_validation:
-        assert code == 1 and result["error_code"] == "goal_stopped", result
+        assert code == 1 and result.get("error_code") == "goal_stopped", result
         assert journal["completed_phases"] == ["host_execute", "typed_result", "validation"]
         read_code, readback = _cli(
             registry, runtime, "todo", "list", "--goal-id", "loopx-turn-fixture", "--todo-id", todo_id,
@@ -428,11 +446,10 @@ def test_native_terminal_closeout_keeps_the_original_lease_and_turn(
         "--no-global-sync",
         "--validation-command-json",
         json.dumps([sys.executable, "-c", validation]),
-        "--execute",
     ]
 
-    def invoke(*extra: str):
-        args = build_parser().parse_args([*base, *extra])
+    def invoke(*extra: str, execute: bool = True):
+        args = build_parser().parse_args([*base, *extra, *(["--execute"] if execute else [])])
         args.host, args.session_scope = "codex-app-server", "agent"
         result: dict = {}
         code = handle_turn_command(
@@ -467,6 +484,9 @@ def test_native_terminal_closeout_keeps_the_original_lease_and_turn(
         monkeypatch.setattr(
             turn_run_once, "write_turn_validated_completion", lose_terminal_attempt
         )
+    code, preview = invoke("--todo-id", todo_id, execute=False)
+    assert code == 0, preview
+    _retain_legacy_admission(runtime, todo_id, preview)
     code, result = invoke("--todo-id", todo_id)
     journal = _turn_journal(runtime)
     if interruption is not None:

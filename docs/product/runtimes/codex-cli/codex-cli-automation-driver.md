@@ -94,14 +94,15 @@ another CLI after its wrapper implements the typed stdin/stdout contract in the
 host-neutral protocol.
 
 The built-in Codex result schema accepts `validated_completion` for a fully
-delivered selected Todo. After independent validation, the adapter invokes the
-existing Todo lifecycle, including its controller-declared validator, before
-accountable refresh and one quota debit. It retains the original launch lease
+delivered selected Todo. After independent validation, a Turn without a work
+checkpoint uses the existing Todo lifecycle and its controller-declared validator
+before accountable refresh and one quota debit. A checkpoint-bound recovery
+preserves the original Turn's settlement order. It retains the original launch lease
 generation in the Turn journal for completion and cached-result recovery;
 lease loss or a newer same-Agent generation cannot authorize the old result.
 `validated_progress` remains partial progress and never silently completes work.
-For a predeclared terminal Todo, closeout after debit uses the original
-completion receipt and closes the same Turn.
+After debit, a predeclared terminal Todo closes the same Turn. The adapter uses
+an existing completion receipt when the governing order has already recorded it.
 Goal acceptance remains a separate owner check.
 
 After independent validation, the adapter checks the original Goal's running
@@ -110,11 +111,12 @@ that validation, the Turn retains its validation checkpoint and leaves the
 Todo and quota untouched.
 
 内置 Codex 的结果格式支持 `validated_completion`，用于已满足全部要求的已选 Todo。
-独立验证通过后，adapter 先调用现有 Todo 生命周期及 controller 声明的完成验证器，
-再写回可核算进展并扣额一次。Turn journal 保留启动时的原租约代次，完成和缓存结果
+独立验证通过后，没有工作 checkpoint 的 Turn 先调用现有 Todo 生命周期及 controller 声明的完成验证器，
+再写回可核算进展并扣额一次。绑定 checkpoint 的恢复沿用原 Turn 的结算顺序。
+Turn journal 保留启动时的原租约代次，完成和缓存结果
 恢复都使用该代次；租约丢失或同 Agent 的新代次不能授权旧结果。`validated_progress`
-仍表示部分进展，不会被静默升级为完成。对于预声明的终态 Todo，扣额后按原完成回执
-收尾同一轮 Turn。Goal 验收仍由原 owner 单独检查。
+仍表示部分进展，不会被静默升级为完成。预声明的终态 Todo 在扣额后收尾同一轮 Turn，
+已有完成回执时会复用该回执。Goal 验收仍由原 owner 单独检查。
 
 独立验证结束后，adapter 会在结算前重新检查原 Goal 的运行权限。验证期间若 owner
 停止 Goal，Turn 保留验证记录，Todo 和额度不变。
