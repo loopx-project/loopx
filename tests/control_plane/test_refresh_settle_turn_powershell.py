@@ -126,7 +126,16 @@ def test_pinned_powershell_launcher_settles_original_turn_once(
     if first["settlement_progress"]["state"] == "direction_pending":
         assert not first.get("settlement_owed")
         assert _spend_run_count(runtime) == 0
-        read, submit = first["next_cli_actions"]
+        actions = first.get("next_cli_actions")
+        assert isinstance(actions, list) and len(actions) == 2, {
+            "settlement_progress": first["settlement_progress"],
+            "delivery_stage": (first.get("first_delivery_progress") or {}).get("stage"),
+            "result_context_present": first.get("result_work_context") is not None,
+            "checkpoint_decision": (first.get("vision_checkpoint") or {}).get("decision"),
+            "refresh_decision": (first.get("refresh_recovery") or {}).get("decision"),
+            "appended": first.get("appended"),
+        }
+        read, submit = actions
         context = run(["-Command", read])
         assert context["purpose"] == "supplement_checkpoint"
         vision = tmp_path / "current-direction.json"
