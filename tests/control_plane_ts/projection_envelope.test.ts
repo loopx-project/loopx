@@ -175,6 +175,24 @@ test("shared source facts restore exact freshness, scope and optional future val
     ["projection_envelope"]), historical);
 });
 
+test("sharing keeps later read times when a quota observation crosses a clock tick", () => {
+  const earlier = at(-1);
+  const projection = sealProjectionEnvelope(sealRequest({
+    projection: "quota_should_run",
+    sources: Array.from({length: 7}, (_, index) => ({
+      source_id: `source_${index}`, read_status: "read", item_count: 1,
+      last_read_at: index < 2 ? OBSERVED : earlier,
+    })),
+  }));
+  const shared = shareProjectionSourceFields(projection,
+    contextSourceIdentity({projection_envelope: projection}), ["projection_envelope"]);
+  assert.equal((shared.source_defaults as Row).last_read_at, earlier);
+  assert.deepEqual(sources(shared).slice(0, 2).map(row => row.last_read_at), [OBSERVED, OBSERVED]);
+  const restored = expandProjectionSourceFields(shared);
+  assert.deepEqual(restored, projection);
+  assert.deepEqual(sources(restored).map(row => row.staleness_seconds), [0, 0, 1, 1, 1, 1, 1]);
+});
+
 test("the projection reader accepts earlier inline responses with stored derived facts", () => {
   const projection = sealProjectionEnvelope(sealRequest());
   const previous = {

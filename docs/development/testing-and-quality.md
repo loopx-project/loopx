@@ -1415,18 +1415,27 @@ workflow costs less.
 
 The default quota source and its detail selectors now carry complete v1 in both
 JSON and Markdown. The same frozen public fixture with context delivery Off
-measures the following characters at `main@0c3b2fd2` and C1's default-source
-tree integrated with that main revision:
+measures the following characters at frozen `main@f15ebdd16b5e` and C1's
+complete source at `e29bd8aa50b9`:
 
 | Fixture | Main JSON / Markdown | Complete v1 JSON / Markdown | Markdown allowance |
 | --- | ---: | ---: | ---: |
-| Small | 23,289 / 7,476 | 22,931 / 22,954 | 24,000 |
-| Crowded | 42,349 / 8,143 | 42,223 / 42,325 | 43,000 |
+| Small | 23,289 / 7,476 | 22,855 / 22,954 | 24,000 |
+| Crowded | 42,965 / 8,143 | 42,839 / 42,941–43,017 | 43,100 |
 | Multi-agent | 25,514 / 6,441 | 26,239 / 26,339 | 27,000 |
 
-Retain the original 10,000 / 17,000 / 7,000 Markdown failures. The small native
-Windows observation is 23,254, leaving 746 characters under its new allowance.
-The six detail selectors measure 23,066, 23,889 or 23,927 Markdown characters; their
+The crowded carrier varies when status sources and two later reads cross a
+clock tick. Shared `source_defaults.last_read_at` still names the earlier read;
+the two later sources retain explicit timestamps. These overrides account for
+exactly 76 characters: 42,941 becomes 43,017. Retain the original 43,000-ceiling
+failure; calibrate only this presentation regression allowance to 43,100,
+leaving 83 characters above the observed carrier. Preserve both read times and
+their exact expansion rather than dropping freshness evidence. This changes no
+production output, transport limit, execution budget or model-cost claim.
+
+Retain the original 10,000 / 17,000 / 7,000 Markdown failures. The earlier small
+native Windows observation is 23,254; it is not current full Windows coverage.
+The earlier six detail-selector measurements are 23,066, 23,889 or 23,927 Markdown characters; their
 allowances are 24,000 or 24,500 respectively. JSON, line, collection-growth and
 explicit v0 compatibility limits retain their existing values. Production
 output retains the measured complete source and its cost.
@@ -1442,9 +1451,15 @@ Windows qualification, actual model use and outcome/cost comparisons remain
 separate evidence.
 
 默认 quota 及其 detail 选择器的 JSON、Markdown 都承载完整 v1。上表使用同一冻结
-公开夹具并关闭渐进交付，保留原 Markdown 10,000 / 17,000 / 7,000 超限事实。
-原生 Windows 小场景实测 23,254，新 24,000 呈现预算留 746 字符余量。六个 detail
-选择器实测 23,066、23,889 或 23,927，对应预算 24,000 或 24,500。JSON、行数、集合增长、
+公开夹具并关闭渐进交付。crowded 的状态来源与后续两次读取跨过时钟刻度时，共用
+`source_defaults.last_read_at` 保留较早时间，两条后读来源各保留显式时间戳，恰好增加
+76 字符，42,941 变为 43,017。保留原 43,000 超限，仅将该展示回归预算校准为
+43,100，留 83 字符余量；保留两组读取时间与精确展开，不删新鲜度证据。
+生产正文、传输限制、执行预算及模型成本结论均不因此改变。
+
+原 Markdown 10,000 / 17,000 / 7,000 超限事实保留。较早的原生 Windows 小场景为
+23,254，不代表当前完整 Windows 资格。较早六个 detail 选择器实测 23,066、23,889 或
+23,927，对应预算 24,000 或 24,500。JSON、行数、集合增长、
 显式 v0 兼容上限及生产正文保留，完整来源的实际交付成本按实测展示。
 
 两种格式均检查当前完整版本及绑定，拒绝仅有标题、旧版本、缺少绑定或交互合同。
