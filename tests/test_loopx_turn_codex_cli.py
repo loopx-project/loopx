@@ -1052,6 +1052,25 @@ def test_source_goal_change_after_session_selection_prevents_host_launch(
     assert binding.read_bytes() == original_binding
 
 
+def test_codex_refuses_replaced_session_selected_for_recovery(tmp_path, monkeypatch):
+    executable, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    runtime = tmp_path / "runtime"
+    options = {"runtime_root": runtime, "project": tmp_path, "codex_bin": str(executable)}
+    request = _request()
+    run_codex_cli_host(request, **options)
+    original = codex_cli_session_binding(runtime, request["turn_envelope"], exact_session=True)
+    request["session"].update(action="resume", session_sha256=original["session_sha256"])
+    path = _session_files(runtime)[0]
+    binding = json.loads(path.read_bytes())
+    binding["session_id"] = "replacement-session"
+    path.write_text(json.dumps(binding), encoding="utf-8")
+
+    with pytest.raises(BuiltInHostError, match="Original Codex session changed"):
+        run_codex_cli_host(request, **options)
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1
+
+
 def test_codex_source_session_descriptor_persists_exact_goal_ref(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

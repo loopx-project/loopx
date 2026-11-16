@@ -29,6 +29,7 @@ from .codex_sessions import (
     select_codex_cli_session,
     codex_session_profile_digest,
     require_codex_session_profile,
+    require_original_codex_session,
     approved_codex_workspace_write_resume,
 )
 from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
@@ -900,6 +901,7 @@ def run_codex_cli_host(
         runtime_root, lineage=lineage, session_scope=session_scope,
         goal_admission=goal_admission,
     )
+    require_original_codex_session(planned_session, binding)
     profile_digest = (codex_session_profile_digest(
         project=project, codex_bin=str(resolved),
         home=Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser(),

@@ -330,13 +330,15 @@ def reconcile_failed_turn_session_request(
             "planned_session_action_unsupported",
             "failed-Turn recovery requires a start_new or resume session action",
         )
-    if planned_action == "resume":
+    digest = session_binding.get("session_sha256") if session_binding is not None else None
+    if planned_action == "resume" and digest is None:
         return dict(request)
     return {
         **request,
         "session": {
-            **session,
-            "binding_status": "failed_turn_recovery",
+            **(planned_session if planned_action == "resume" else
+               {**session, "binding_status": "failed_turn_recovery"}),
+            **({"session_sha256": digest} if digest is not None else {}),
         },
     }
 

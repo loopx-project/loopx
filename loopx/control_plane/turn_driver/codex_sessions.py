@@ -23,6 +23,7 @@ from ..projects.registry_codec import (
 )
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .driver import session_identity_fields, turn_host_lineage
+from .host_failure import BuiltInHostError
 
 CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
 MANAGED_CLI_SESSION_SCHEMA_VERSION = "loopx_managed_cli_session_v1"
@@ -173,6 +174,18 @@ def _read_codex_cli_session_document(
     return value if isinstance(value, dict) else {"malformed": True}
 
 
+def _session_sha256(session: Mapping[str, Any]) -> str:
+    values = {key: session.get(key) for key in (
+        "session_id", "session_profile_digest", "operation_profile_digest", "operation_transport")}
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+
+
+def require_original_codex_session(plan: Mapping[str, Any], binding: Mapping[str, Any] | None) -> None:
+    expected = plan.get("session_sha256")
+    if expected is not None and (binding is None or _session_sha256(binding) != expected):
+        raise BuiltInHostError("Original Codex session changed before dispatch", failure_kind="contract_rejected")
+
+
 def codex_cli_session_binding(
     runtime_root: Path,
     turn_envelope: Mapping[str, Any] | object = _ABSENT_EXECUTOR_ADAPTER,
@@ -214,9 +227,7 @@ def codex_cli_session_binding(
     return {
         "schema_version": "loopx_turn_session_binding_v0",
         **lineage,
-        **({"session_sha256": hashlib.sha256(json.dumps({key: session.get(key) for key in (
-            "session_id", "session_profile_digest", "operation_profile_digest", "operation_transport")},
-            sort_keys=True).encode()).hexdigest()} if exact_session else {}),
+        **({"session_sha256": _session_sha256(session)} if exact_session else {}),
     }
 
 
@@ -369,6 +380,8 @@ def select_managed_operation_session(
     elif host == "dsh" and original is not None and binding is None:
         raise ValueError("existing session is not a qualified DSH operation binding; select fresh explicitly")
     action = session_plan.get("action")
+    if host == "codex-cli":
+        require_original_codex_session(session_plan, binding)
     has_binding = binding is not None if host == "dsh" else bool(binding)
     if action not in {"start_new", "resume"} or (action == "resume") != has_binding:
         raise ValueError(f"managed {'DSH' if host == 'dsh' else 'Codex'} session changed after Turn planning")

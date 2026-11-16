@@ -57,6 +57,7 @@ def assess_failed_turn_retry_request(
     journal: Mapping[str, Any],
     *,
     session_binding_resolver: SessionBindingResolver | None,
+    require_retained_session: bool = False,
 ) -> tuple[dict[str, Any], dict[str, str] | None, ValueError | None]:
     """Return the retry request and the exact Host Session check it used."""
 
@@ -77,7 +78,7 @@ def assess_failed_turn_retry_request(
     receipt = dict(receipt_value) if isinstance(receipt_value, Mapping) else {}
     revalidation = journal.get("result_revalidation")
     original_binding = journal.get("checkpoint_host_binding")
-    retained_session = (isinstance(revalidation, Mapping) and bool(revalidation)
+    retained_session = require_retained_session or (isinstance(revalidation, Mapping) and bool(revalidation)
         and revalidation.get("phase") != "terminal_closeout"
         and isinstance(original_binding, Mapping) and bool(original_binding))
     if "host_recovery" in journal:
@@ -90,9 +91,11 @@ def assess_failed_turn_retry_request(
             return rejected("host_recovery_kind_unsupported", "failed-Turn host recovery has an unsupported kind")
         if receipt.get("failed_phase") != "host_execute":
             return rejected("host_failure_phase_mismatch", "failed-Turn session recovery requires a host execution failure")
-    elif not (retained_session and journal.get("validation_stage") == "result_freshness"
+    elif not (require_retained_session or retained_session and journal.get("validation_stage") == "result_freshness"
               and receipt.get("failed_phase") == "validation"):
         return dict(request), None, None
+    if retained_session and not original_binding:
+        return rejected("session_binding_missing", "retained result requires its original Host Session")
     if session_binding_resolver is None:
         return rejected(
             "binding_resolver_unavailable",
