@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { goalCardActions, goalElapsedMs, goalIsActive, type GoalCardProps } from '../src/components/GoalCard.js';
+import { goalMenuActions } from '../src/components/ComposerMenu.js';
 import type { GoalView } from '../src/api.js';
 
 const view = (over: Partial<GoalView>): GoalView => ({
@@ -37,4 +38,20 @@ test('the card offers what the agent supports right now', () => {
   assert.deepEqual(goalCardActions(view({ status: 'active' }), true, zcode.actions, zcode.controls), ['pause']);
   // Nothing supported, nothing offered; the clock and the details still stand.
   assert.deepEqual(goalCardActions(view({}), false), []);
+});
+
+
+test('agents without live goal cards retain supported menu controls while a turn runs', () => {
+  const capability = { actions: ['set', 'show', 'clear'] as const, controls: ['clear'] as const };
+  const goal = { actions: [...capability.actions], controls: [...capability.controls] };
+  assert.deepEqual(goalMenuActions(goal, false, false).map(({ action, blocked }) => [action, !!blocked]),
+    [['set', false], ['show', false], ['clear', false]]);
+  assert.deepEqual(goalMenuActions(goal, true, false).map(({ action, blocked }) => [action, !!blocked]),
+    [['set', true], ['show', true], ['clear', false]]);
+});
+
+test('live goal cards own their controls and Plan still blocks starting a goal', () => {
+  const goal = { live: true, actions: [...codex.actions!], controls: [...codex.controls!] };
+  assert.deepEqual(goalMenuActions(goal, false, false), [{ action: 'set', blocked: '' }]);
+  assert.ok(goalMenuActions(goal, false, true)[0].blocked);
 });

@@ -23,14 +23,17 @@ const waitFor = async (fn) => {
 const read = async (thread) => (await api(daemon, `/api/threads/${thread.id}`)).json();
 const send = async (thread, text) => {
   const res = await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text }) });
-  assert.ok(res.ok);
+  assert.ok(res.ok, await res.clone().text());
 };
 async function makeThread(title, agent = 'codex') {
   const response = await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent, cwd: daemon.workdir, title }) });
   assert.equal(response.status, 201);
   const thread = await response.json();
   await send(thread, 'usage');
-  await waitFor(async () => (await read(thread)).status === 'idle');
+  await waitFor(async () => {
+    const value = await read(thread);
+    return value.status === 'idle' && !['checking', 'preparing', 'countdown'].includes(value.autoHandover?.state);
+  });
   return thread;
 }
 async function select(page, thread, mobile = false) {
@@ -133,7 +136,7 @@ test('effort slider, model subview, reset and compression work in both themes an
       assert.equal(await usagePanel.getByRole('slider', { name: '思考强度' }).count(), 0);
       await shot(page, `compact-${tag}`);
       await fits(page, usagePanel);
-      await usagePanel.getByRole('button', { name: '压缩 精简较早的对话，释放上下文' }).click();
+      await usagePanel.getByRole('button', { name: '压缩', exact: true }).click();
       await usagePanel.waitFor({ state: 'hidden' });
       assert.equal(await usage.getAttribute('aria-expanded'), 'false');
       await page.getByText('上下文压缩完成。', { exact: true }).waitFor();
@@ -221,7 +224,7 @@ test('compression queues once during a turn and preserves a draft; pi uses its o
     const usage = page.locator('.composer .usage');
     const usagePanel = page.locator('.context-usage-panel');
     await usage.click();
-    await usagePanel.getByRole('button', { name: /压缩 本轮结束后/ }).click();
+    await usagePanel.getByRole('button', { name: '本轮后压缩', exact: true }).click();
     await usagePanel.waitFor({ state: 'hidden' });
     assert.equal(await usage.getAttribute('aria-expanded'), 'false');
     await waitFor(async () => (await read(thread)).queued.length === 1);
@@ -237,7 +240,7 @@ test('compression queues once during a turn and preserves a draft; pi uses its o
     const pi = await makeThread('pi 压缩操作', 'pi');
     await select(page, pi);
     await usage.click();
-    await usagePanel.getByRole('button', { name: '压缩 精简较早的对话，释放上下文' }).click();
+    await usagePanel.getByRole('button', { name: '压缩', exact: true }).click();
     await usagePanel.waitFor({ state: 'hidden' });
     assert.equal(await usage.getAttribute('aria-expanded'), 'false');
     await page.getByText('已压缩上下文：150.0k → 约 32.0k tokens。', { exact: true }).waitFor();

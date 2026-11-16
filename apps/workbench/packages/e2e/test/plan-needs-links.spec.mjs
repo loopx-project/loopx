@@ -2,9 +2,11 @@
 // ask must land in the tray above the composer, where it is answered, never on a new-thread page
 // with `thread not found`. The plan and the proactive runs are scripted routes, as the tray shots
 // script them, because a scripted run is the only way to hold one in `asking`.
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { api, startDaemon, launchBrowser, openUi } from '../harness.mjs';
+
+describe('legacy assistant workspace', { skip: 'The legacy assistant desk, plan list and personal source settings are not shipped in LoopX Workbench.' }, () => {
 
 const request = async (daemon, path, method = 'GET', body) => {
   const res = await api(daemon, path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -99,4 +101,6 @@ test('a needs-you row leads to the ask or the session it names, never a thread-n
     await browser.close();
     await daemon.stop();
   }
+});
+
 });

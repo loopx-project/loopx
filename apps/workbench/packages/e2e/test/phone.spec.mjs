@@ -78,13 +78,13 @@ test('the list has its pages as rows, and search behind a button', async () => {
   await page.locator('.menu-btn').click();
   await settle();
   const list = page.locator('.sidebar');
-  for (const name of ['计划', '新对话', '搜索对话', '配置']) {
+  for (const name of ['LoopX 管家', '新对话', '搜索对话', '配置']) {
     assert.equal(await list.getByRole('button', { name, exact: true }).isVisible(), true, name);
   }
-  // What is not an everyday thing sits behind the settings button: the archive, importing, signing out.
+  // What is not an everyday thing sits behind the settings button: the archive and signing out.
   assert.equal(await list.getByRole('button', { name: '已归档', exact: true }).count(), 0);
   await list.getByRole('button', { name: '配置', exact: true }).tap();
-  for (const name of ['已归档', '导入历史', '退出']) {
+  for (const name of ['已归档', '退出']) {
     await page.locator('.settings-nav').getByRole('button', { name, exact: true }).waitFor({ timeout: 5_000 });
   }
   // Signing out costs the saved token, so it asks first; backing out leaves everything as it was.

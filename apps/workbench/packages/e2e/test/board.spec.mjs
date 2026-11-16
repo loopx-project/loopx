@@ -214,19 +214,11 @@ test('right click opens the host menu instead of the browser menu; a click peeks
   } finally { await page.close(); }
 });
 
-test('new chat opens a draft in the filtered project; the assistant button hands the board over', { timeout: 60000 }, async () => {
+test('new chat opens a draft in the filtered project', { timeout: 60000 }, async () => {
   const page = await openBoard();
   try {
     await page.getByRole('button', { name: '新对话' }).click();
     await page.locator('.composer-slot').waitFor();
-    await page.goto(daemon.base + '/#/board');
-    const ask = page.getByRole('button', { name: '让助手看看' });
-    await ask.waitFor();
-    await ask.click();
-    // The host asks for consent once, then opens the assistant with the summary as the person's message.
-    const allow = page.getByRole('button', { name: /允许|授权/ });
-    if (await allow.count()) await allow.first().click();
-    await page.getByText('帮我看看看板上这').first().waitFor();
   } finally { await page.close(); }
 });
 

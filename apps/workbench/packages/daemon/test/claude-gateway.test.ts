@@ -26,19 +26,19 @@ test('Claude gateway discovery reads account settings and capabilities without s
   // No ACP executable: a discovery request must not spawn a query or try switching an Opus model.
   const adapter = new ClaudeAcpAdapter(['nonexistent-acp-for-gateway-test'], { CLAUDE_CONFIG_DIR: configDir, ANTHROPIC_BASE_URL: 'http://127.0.0.1:1' });
   const models = await adapter.models();
-  assert.deepEqual(models.map(m => m.id), ['claude-openrouter-4o', 'claude-gpt-5-6-sol']);
-  assert.deepEqual(models.map(m => m.efforts), [['max'], ['low', 'high']]);
-  assert.deepEqual(models.map(m => m.images), [false, true]);
-  assert.equal(models[1].isDefault, true);
-  assert.equal(models[0].label, 'Gateway Opus');
+  assert.deepEqual(models.map(m => m.id), ['claude-gpt-5-6-sol', 'claude-openrouter-4o', 'claude-gpt-5-4', 'claude-openrouter-3o']);
+  assert.deepEqual(models.map(m => m.efforts), [['low', 'high'], ['max'], [], undefined]);
+  assert.deepEqual(models.map(m => m.images), [true, false, undefined, undefined]);
+  assert.equal(models[0].isDefault, true);
+  assert.equal(models[1].label, 'Gateway Opus');
   assert.equal(gateway.state.requests.length, 2, 'all discovery pages are read');
   assert.ok(gateway.state.requests.every(r => r.authorization === 'Bearer gateway-test-token'));
   assert.equal(await adapter.models(), models, 'reuse the discovered catalog until refreshed');
   gateway.state.models.push({ id: 'claude-gpt-6-sol', display_name: 'Gateway GPT 6' });
-  assert.equal((await adapter.models(true)).length, 3, 'refresh discovers a new visible model');
+  assert.equal((await adapter.models(true)).length, 5, 'refresh discovers a new visible model');
 });
 
-test('Claude gateway discovery shows only GPT 5.5+ and openrouter-4o families', async t => {
+test('Claude gateway discovery preserves the gateway catalog and order while hiding routing groups', async t => {
   const ferryHome = mkdtempSync(join(tmpdir(), 'loochat-gateway-no-ferry-'));
   t.after(() => rmSync(ferryHome, { recursive: true, force: true }));
   const gateway = await modelGateway();
@@ -54,17 +54,15 @@ test('Claude gateway discovery shows only GPT 5.5+ and openrouter-4o families', 
     { id: 'claude-openrouter-4o-max[1m]', display_name: 'Ferry Opus 5.5 Max 1M' },
     { id: 'claude-openrouter-3o', display_name: 'Ferry Opus 4.8' },
     { id: 'claude-seed-evolving', display_name: 'Ferry Seed-Evolving' },
+    { id: 'auto/balanced', display_name: 'Automatic routing' },
   ];
   const adapter = new ClaudeAcpAdapter(['nonexistent-acp-for-gateway-test'], {
     ANTHROPIC_BASE_URL: gateway.url, CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', LOOCHAT_TRAEX_BIN: 'nonexistent-traex-for-gateway-test', FERRY_HOME: ferryHome,
   });
   assert.deepEqual((await adapter.models()).map(m => m.id), [
-    'claude-openrouter-4o',
-    'claude-openrouter-4o-max[1m]',
-    'claude-gpt-6-1-sol',
-    'claude-gpt-6-astra',
-    'claude-gpt-5-6-luna',
-    'claude-gpt-5-5',
+    'claude-gpt-6-1-sol', 'claude-gpt-6-astra', 'claude-gpt-5-6-luna',
+    'claude-gpt-5-5', 'claude-gpt-5-4', 'claude-gpt-5-2',
+    'claude-openrouter-4o', 'claude-openrouter-4o-max[1m]', 'claude-openrouter-3o', 'claude-seed-evolving',
   ]);
 });
 
@@ -130,7 +128,8 @@ test('local Ferry models carry upstream loads without inventing queue sizes, and
   assert.equal(standard.isDefault, true);
   assert.equal(models.find(m => m.id.endsWith('[1m]'))?.loadPercent, 184);
   assert.equal(models.find(m => m.id.includes('astra'))?.loadPercent, 0);
-  assert.equal(models[0].loadPercent, undefined, 'a similar display name is not a config match');
+  const unmatched = models.find(model => model.id === 'claude-openrouter-4o')!;
+  assert.equal(unmatched.loadPercent, undefined, 'a similar display name is not a config match');
   assert.ok(models.filter(m => m.label.startsWith('Ferry ')).every(m => m.queueSize === null));
   assert.equal(models.at(-1)?.queueSize, undefined, 'unrelated models never receive local status');
   assert.equal(models.at(-1)?.queuePosition, undefined, 'even a matching cache entry cannot enrich a non-Ferry model');
@@ -138,8 +137,8 @@ test('local Ferry models carry upstream loads without inventing queue sizes, and
   assert.equal(standard.queueObservedAt, observedAt);
   assert.equal(models.find(m => m.id.endsWith('[1m]'))?.queuePosition, 550);
   assert.equal(models.find(m => m.id.includes('astra'))?.queuePosition, 0, 'only an explicit observation means nonqueued');
-  assert.equal(models[0].queuePosition, null, 'an unobserved model is not nonqueued');
-  assert.equal(models[0].queueObservedAt, undefined);
+  assert.equal(unmatched.queuePosition, null, 'an unobserved model is not nonqueued');
+  assert.equal(unmatched.queueObservedAt, undefined);
   seed(23);
   seedQueue(37);
   assert.equal(await adapter.models(), models, 'reuse status with the catalog until explicitly refreshed');

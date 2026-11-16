@@ -1,4 +1,4 @@
-import { test, before, after } from 'node:test';
+import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDaemon, openUi, launchBrowser } from '../harness.mjs';
 
+describe('legacy history import page', { skip: 'The standalone history import page is retired; local sessions now appear in the sidebar.' }, () => {
 let daemon;
 let browser;
 let dir;
@@ -66,3 +67,5 @@ for (const mobile of [false, true]) {
     });
   }
 }
+
+});

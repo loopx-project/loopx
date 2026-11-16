@@ -1,8 +1,10 @@
 // Lark settings, source status and two-level signal disclosure use fictional browser mocks.
 // The daemon has an isolated home and no usable Lark CLI; the empty list uses its actual route.
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startDaemon, launchBrowser, api, openUi, closeSettings } from '../harness.mjs';
+
+describe('legacy assistant workspace', { skip: 'The legacy assistant desk, plan list and personal source settings are not shipped in LoopX Workbench.' }, () => {
 
 const meetingEvents = ['vc.meeting.participant_meeting_ended_v1', 'vc.note.generated_v1', 'minutes.minute.generated_v1'];
 const lark = { enabled: true, people: [], chats: [], intervalMin: 30, events: ['im.message.receive_v1', ...meetingEvents] };
@@ -472,4 +474,6 @@ test('meeting materials are a second lazy read, with explicit retry, bounded tex
     assert.equal([...materialReads.values()].reduce((sum, count) => sum + count, 0), 12, 'list disclosure reuses every material result');
     assert.deepEqual(errors, []);
   } finally { listGate.resolve(); waitingGate.resolve(); await browser.close(); await daemon.stop(); }
+});
+
 });

@@ -57,7 +57,7 @@ test('the fork button copies the thread and opens the copy', async () => {
   await page.locator('.composer textarea').click();
   await page.keyboard.type('second turn');
   await page.keyboard.press('Enter');
-  await page.getByText('hi there second turn').waitFor({ timeout: 10_000 });
+  await page.getByText(/hi there \[Hub work mode: execute\][\s\S]*second turn/).waitFor({ timeout: 10_000 });
   assert.equal((await page.locator('.topbar-title').innerText()).includes('（分叉）'), true);
 
   // Every finished answer offers a fork: the copy ends with that turn.
@@ -70,13 +70,15 @@ test('forking under an earlier answer copies the thread up to that turn only', a
   // The thread on screen has two turns. The agent's own record of its session says the same.
   const threads = await (await api(daemon, '/api/threads')).json();
   const source = threads.find((t) => t.title.includes('（分叉）'));
+  const events = await (await api(daemon, `/api/threads/${source.id}/events`)).json();
+  const prompts = events.filter(event => event.type === 'turn.started').map(event => event.data.text);
   writeFileSync(
     messagesFile,
     JSON.stringify({
       [source.agentSessionId]: [
-        { role: 'user', content: 'hello fork' },
+        { role: 'user', content: prompts[0] },
         { role: 'assistant', content: [{ type: 'text', text: 'hi there hello fork' }] },
-        { role: 'user', content: 'second turn' },
+        { role: 'user', content: prompts[1] },
         { role: 'assistant', content: [{ type: 'text', text: 'hi there second turn' }] },
       ],
     }),
@@ -87,7 +89,7 @@ test('forking under an earlier answer copies the thread up to that turn only', a
   await page.getByText('hi there hello fork').waitFor({ timeout: 5_000 });
   // The second turn stayed behind.
   assert.equal(await page.locator('.row.user').count(), 1);
-  assert.equal(await page.getByText('hi there second turn').count(), 0);
+  assert.equal(await page.locator('.row.assistant').filter({ hasText: 'second turn' }).count(), 0);
 
   // On the agent's side the copy was forked from the second turn's message, not cloned whole.
   const copy = (await (await api(daemon, '/api/threads')).json()).find((t) => t.title.includes('（分叉）（分叉）'));
@@ -98,6 +100,6 @@ test('forking under an earlier answer copies the thread up to that turn only', a
   await page.locator('.composer textarea').click();
   await page.keyboard.type('another way');
   await page.keyboard.press('Enter');
-  await page.getByText('hi there another way').waitFor({ timeout: 10_000 });
+  await page.getByText(/hi there \[Hub work mode: execute\][\s\S]*another way/).waitFor({ timeout: 10_000 });
   assert.equal(await page.locator('.row.user').count(), 2);
 });

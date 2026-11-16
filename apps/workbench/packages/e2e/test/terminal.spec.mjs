@@ -1,4 +1,4 @@
-// The web terminal: opens from the thread header (desktop) and the thread menu (phone), runs a
+// The web terminal: opens from the thread menu on desktop and phone, runs a
 // real shell on the host, survives its panel being closed and reopened, and ends cleanly.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,12 +38,13 @@ async function openThreadWithTerminalButton(page, title) {
   return thread;
 }
 
-test('the header button opens a terminal that runs commands and survives closing', async () => {
+test('the thread menu opens a terminal that runs commands and survives closing', async () => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
   try {
     await openThreadWithTerminalButton(page, '终端桌面');
-    await page.getByLabel('打开终端').click();
+    await page.getByLabel('这个对话的更多操作').click();
+    await page.getByRole('menuitem', { name: '打开终端', exact: true }).click();
     await page.locator('.term-panel').waitFor();
 
     await page.locator('.term-body').click();
@@ -63,7 +64,8 @@ test('the header button opens a terminal that runs commands and survives closing
     // Closing the panel hides the terminal; reopening reattaches and replays what already ran.
     await page.getByLabel('关闭').click();
     assert.equal(await page.locator('.term-panel').count(), 0);
-    await page.getByLabel('打开终端').click();
+    await page.getByLabel('这个对话的更多操作').click();
+    await page.getByRole('menuitem', { name: '打开终端', exact: true }).click();
     await page.locator('.term-panel').waitFor();
     await termShows(page, 'e2e-ok');
     // The replay passes the old question through xterm again; its answer must not reach the shell.
@@ -78,7 +80,8 @@ test('the header button opens a terminal that runs commands and survives closing
     const otherTyped = [];
     other.on('request', (r) => { if (r.method() === 'POST' && /\/terminals\/[^/]+\/input$/.test(r.url())) otherTyped.push(JSON.parse(r.postData()).data); });
     await openThreadWithTerminalButton(other, '终端旁观');
-    await other.getByLabel('打开终端').click();
+    await other.getByLabel('这个对话的更多操作').click();
+    await other.getByRole('menuitem', { name: '打开终端', exact: true }).click();
     await other.locator('.term-panel').waitFor();
     await other.evaluate(() => { document.hasFocus = () => false; });
     await page.bringToFront();

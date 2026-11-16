@@ -35,7 +35,7 @@ async function openMemory(page, screenshot) {
   await openUi(page, daemon);
   assert.equal(await page.locator('.sidebar-inner button', { hasText: /^记忆$/ }).count(), 0);
   await openSettings(page);
-  const open = page.getByRole('menuitem', { name: '记忆', exact: true });
+  const open = page.locator('.settings-nav').getByRole('button', { name: '记忆', exact: true });
   await open.waitFor();
   await open.scrollIntoViewIfNeeded();
   if (screenshot) await page.screenshot({ path: screenshot });
@@ -54,7 +54,7 @@ test('memory is inactive until installed, then renders read-only in both themes 
   assert.equal(await page.locator('.sidebar-inner button', { hasText: /^记忆$/ }).count(), 0);
   assert.equal(requests.length, 0, 'uninstalled extension does not read memory');
   await openSettings(page);
-  assert.equal(await page.getByRole('menuitem', { name: '记忆', exact: true }).count(), 0);
+  assert.equal(await page.locator('.settings-nav').getByRole('button', { name: '记忆', exact: true }).count(), 0);
   await page.keyboard.press('Escape');
   await page.evaluate(() => { location.hash = '#/extensions'; });
   const card = page.locator('.ext-card').filter({ has: page.getByRole('heading', { name: '记忆', exact: true }) });
@@ -119,7 +119,7 @@ test('refresh observes outside changes; disabling and uninstalling remove the vi
     await changeExtension(false);
     await page.locator('.memory-page').waitFor({ state: 'detached' });
     await openSettings(page);
-    assert.equal(await page.getByRole('menuitem', { name: '记忆', exact: true }).count(), 0);
+    assert.equal(await page.locator('.settings-nav').getByRole('button', { name: '记忆', exact: true }).count(), 0);
     await page.keyboard.press('Escape');
     assert.equal((await api(daemon, '/api/extensions/memory/memory/sources')).status, 403);
     await page.evaluate(() => { location.hash = '#/extensions'; });
@@ -130,7 +130,7 @@ test('refresh observes outside changes; disabling and uninstalling remove the vi
     await api(daemon, '/api/extensions/memory', { method: 'DELETE' });
     await page.locator('.memory-page').waitFor({ state: 'detached' });
     await openSettings(page);
-    assert.equal(await page.getByRole('menuitem', { name: '记忆', exact: true }).count(), 0);
+    assert.equal(await page.locator('.settings-nav').getByRole('button', { name: '记忆', exact: true }).count(), 0);
     assert.equal((await api(daemon, '/api/extensions/memory/memory/sources')).status, 403);
   } finally { await page.close(); }
 });

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { startDaemon, launchBrowser, api, openUi } from '../harness.mjs';
 
-test('all provider failures use quiet expandable notices in the assistant and thread view', async () => {
+test('all provider failures use quiet expandable notices in the thread view', async () => {
   const daemon = await startDaemon({ LOOCHAT_RETRY_TICK_MS: '600000' }, {
     agents: [{ id: 'agy', adapter: 'agy', label: 'Agent 1', command: ['fake-agy'] }],
   });
@@ -32,8 +32,8 @@ test('all provider failures use quiet expandable notices in the assistant and th
     { message: 'Unknown provider failure <script>throw new Error("unsafe")</script>', summary: '本轮出错' },
   ];
   try {
-    await request('/api/personal/settings', 'PUT', { agent: 'agy', directory: daemon.workdir });
-    const { threadId } = await request('/api/personal/say', 'POST', { text: '整理今天的待办' });
+    const { id: threadId } = await request('/api/threads', 'POST', { agent: 'agy', cwd: daemon.workdir, title: 'Provider failures' });
+    await request(`/api/threads/${threadId}/turns`, 'POST', { text: 'Check provider availability' });
     await wait(async () => (await request(`/api/threads/${threadId}`)).status === 'idle');
     await request('/api/handover-settings', 'PUT', { enabled: false, resume: false, threshold: 90, orders: {} });
     // The fake provider returns real errors through the adapter and daemon, with no live database writes.
@@ -55,10 +55,10 @@ test('all provider failures use quiet expandable notices in the assistant and th
       const errors = [];
       page.on('pageerror', e => errors.push(e.message));
       await openUi(page, daemon);
-      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; location.hash = '#/desk'; }, theme);
-      await page.locator('.chat-flow .error-box').first().waitFor();
+      await page.evaluate(id => { location.hash = '#/thread/' + id; }, threadId);
+      await page.locator('.thread .error-box').first().waitFor();
       for (const sample of samples) {
-        const card = page.locator('.chat-flow .error-box').filter({ has: page.locator('.error-heading', { hasText: sample.summary }) }).first();
+        const card = page.locator('.thread .error-box').filter({ has: page.locator('.error-heading', { hasText: sample.summary }) }).first();
         await card.waitFor();
         assert.equal(await card.locator('.error-toggle').getAttribute('aria-expanded'), 'false');
         assert.equal(await card.locator('.error-detail').textContent(), '', 'raw details are not built while closed');
@@ -68,20 +68,20 @@ test('all provider failures use quiet expandable notices in the assistant and th
         assert.equal(await card.locator('.error-detail script').count(), 0, 'provider text stays text');
         await card.locator('.error-toggle').click();
       }
-      // A real fake-agent failure checks the assistant's live retry state, not a mocked card.
+      // A real fake-agent failure checks the live retry state, not a mocked card.
       if (name === 'desktop-light') {
         await request(`/api/threads/${threadId}/turns`, 'POST', { text: 'provider-error: API error (attempt 2): UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server', queue: true });
         if (supportsRetry) await wait(async () => Boolean((await request(`/api/threads/${threadId}`)).autoRetry));
       }
-      const last = page.locator('.chat-flow .error-box').last();
+      const last = page.locator('.thread .error-box').last();
       await last.locator('.error-heading').filter({ hasText: /服务繁忙.*503/ }).waitFor();
       if (supportsRetry) await last.locator('.error-retry').waitFor();
       await last.scrollIntoViewIfNeeded();
-      const initialComposer = await page.locator('.chat-composer').boundingBox();
+      const initialComposer = await page.locator('.composer').boundingBox();
       await page.screenshot({ path: join(shots, `${name}-collapsed.png`), animations: 'disabled' });
       await last.locator('.error-toggle').click();
       assert.match(await last.innerText(), /API error \(attempt 2\).*503/);
-      const expandedComposer = await page.locator('.chat-composer').boundingBox();
+      const expandedComposer = await page.locator('.composer').boundingBox();
       assert.equal(expandedComposer.y, initialComposer.y, 'expanding a detail keeps the composer fixed');
       await last.scrollIntoViewIfNeeded();
       await page.screenshot({ path: join(shots, `${name}-expanded.png`), animations: 'disabled' });
@@ -92,11 +92,6 @@ test('all provider failures use quiet expandable notices in the assistant and th
         await last.locator('.error-retry').waitFor({ state: 'detached' });
         assert.equal((await request(`/api/threads/${threadId}`)).autoRetry, null);
       }
-      // The same stored turn in a normal thread uses the same rendering.
-      await page.evaluate(id => { location.hash = '#/thread/' + id; }, threadId);
-      await page.locator('.chat-home').waitFor({ state: 'detached' });
-      await page.locator('.error-box').last().waitFor();
-      assert.equal(await page.locator('.error-box').last().locator('.error-toggle').getAttribute('aria-expanded'), 'false');
       assert.deepEqual(errors, []);
       await page.close();
     }

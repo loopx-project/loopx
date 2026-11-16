@@ -1,9 +1,11 @@
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDaemon, launchBrowser, openUi } from '../harness.mjs';
 import { arrangeAdvance, routes } from './proactive-fixture.mjs';
+
+describe('legacy assistant workspace', { skip: 'LoopX Workbench replaces the legacy assistant and plans pages with the steward and Goals.' }, () => {
 
 const openDesk = async (page, daemon) => {
   await openUi(page, daemon);
@@ -213,4 +215,6 @@ for (const width of [1440, 390]) for (const colorScheme of ['light', 'dark']) te
     assert.deepEqual(data.requests.answers, [{ answer: '合入吧' }]);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); await daemon.stop(); }
+});
+
 });

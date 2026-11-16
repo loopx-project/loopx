@@ -46,10 +46,10 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
         await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
         await page.locator('.composer .composer-context').waitFor();
       };
-      const plans = async () => {
+      const steward = async () => {
         await sidebar();
-        await page.locator('.sidebar').getByRole('button', { name: '计划', exact: true }).click();
-        await page.locator('.todos-page').waitFor();
+        await page.locator('.sidebar').getByRole('button', { name: 'LoopX 管家', exact: true }).click();
+        await page.locator('.steward-page').waitFor();
       };
       const noteCount = () => page.locator('.composer .note-strip').count();
       const box = () => page.locator('.composer textarea');
@@ -72,7 +72,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       await addNote();
       await box().fill('source draft');
 
-      await plans();
+      await steward();
       await newThread();
       // Wait through draft persistence too: a late replay must not become a saved new-thread draft.
       await page.waitForTimeout(600);
@@ -90,7 +90,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       assert.equal(await box().inputValue(), 'source draft');
 
       // The composer unmounts on the plans page. Its last note event must not replay on mount.
-      await plans();
+      await steward();
       await newThread();
       assert.equal(await noteCount(), 0, 'a new thread must not replay the source note');
       assert.equal(await box().inputValue(), 'new draft');
@@ -99,13 +99,13 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       await open('note source');
       assert.equal(await noteCount(), 1, 'the source keeps exactly one copy');
       assert.equal(await box().inputValue(), 'source draft');
-      await plans();
+      await steward();
       await open('note source');
       assert.equal(await noteCount(), 1, 'returning to the source does not duplicate its note');
       if (shots) await page.screenshot({ path: join(shots, `source-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`), animations: 'disabled' });
 
       await page.locator('.composer .quote-remove').click();
-      await plans();
+      await steward();
       await open('note source');
       assert.equal(await noteCount(), 0, 'a removed note stays removed after remount');
       await page.reload();
@@ -122,7 +122,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       await page.locator('.composer .send-btn:not(.stop)').click();
       await page.locator('.main .thread .row.user .notes-chip').last().waitFor();
       await page.locator('.composer .note-strip').waitFor({ state: 'detached' });
-      await plans();
+      await steward();
       await newThread();
       await page.waitForTimeout(600);
       assert.equal(await noteCount(), 0, 'a sent note cannot reappear in a new thread');

@@ -1,10 +1,12 @@
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { launchBrowser } from '../harness.mjs';
+
+describe('legacy desk pet', { skip: 'LoopX Workbench does not mount the legacy Pet or DeskPage components.' }, () => {
 
 test('a pet reply naming a child opens its parent pile, and an unconfigured delegate opens settings', { timeout: 30_000 }, async () => {
   // Check the Desk/Pet contract independently of the Router transport and sprite installation. The pet
@@ -191,4 +193,6 @@ test('the pet clears a growing composer and phone switcher, preserves dragged po
     await browser?.close();
     server.close();
   }
+});
+
 });

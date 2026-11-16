@@ -1,8 +1,10 @@
 // Observe mode through the real backend. The batch and the stages are scripted onto real responses:
 // Lark and worker arrivals have no HTTP way in, and the daemon's own tests cover how they merge.
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startDaemon, launchBrowser, api, openUi } from '../harness.mjs';
+
+describe('legacy assistant workspace', { skip: 'LoopX Workbench replaces the legacy assistant and plans pages with the steward and Goals.' }, () => {
 
 const json = async (daemon, path, method = 'GET', body) => {
   const response = await api(daemon, path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -131,4 +133,6 @@ test('the desk says where matters stand, in the head and on each pile', async ()
     await waitFor(() => sent.length > 0, 'the unsubscribe', 5000);
     assert.deepEqual(sent[0], { unsubscribe: [{ kind: 'lark-task', ref: 'task-1' }] });
   } finally { await browser.close(); await daemon.stop(); }
+});
+
 });

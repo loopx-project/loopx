@@ -95,14 +95,14 @@ test('search sits behind a button, and Escape puts it away', async () => {
 
 test('the settings button holds what is not an everyday thing, and signing out asks first', async () => {
   const list = page.locator('.sidebar');
-  for (const name of ['计划', '新对话', '搜索对话', '配置']) {
+  for (const name of ['LoopX 管家', '新对话', '搜索对话', '配置']) {
     assert.equal(await list.getByRole('button', { name, exact: true }).isVisible(), true, name);
   }
   assert.equal(await list.getByRole('button', { name: '已归档', exact: true }).count(), 0);
 
   const gear = list.getByRole('button', { name: '配置', exact: true });
   await gear.click();
-  for (const name of ['外观', '已归档', '导入历史', '退出']) {
+  for (const name of ['外观', '已归档', '退出']) {
     await page.locator('.settings-nav').getByRole('button', { name, exact: true }).waitFor({ timeout: 5_000 });
   }
   assert.equal(await page.locator('.settings-page').count(), 1, 'settings occupies the main page');
@@ -158,7 +158,7 @@ test('filed by project a row is its title; activity and search add the latest as
   await page.keyboard.press('Escape');
 });
 
-test("her conversation is reached through her, not listed again among the threads", async () => {
+test("her conversation is reached through her, not listed again among the threads", { skip: "The legacy assistant page is not shipped in LoopX Workbench." }, async () => {
   await api(daemon, '/api/personal/settings', { method: 'PUT', body: JSON.stringify({ agent: 'pi', directory: daemon.workdir }) });
   await (await api(daemon, '/api/personal/say', { method: 'POST', body: JSON.stringify({ text: 'hello' }) })).json();
   // Told apart by the hub's answer: another thread with her name is still an ordinary thread.

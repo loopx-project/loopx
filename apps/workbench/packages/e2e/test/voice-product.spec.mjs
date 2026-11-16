@@ -48,7 +48,7 @@ async function mediaFixture(context) {
 
 async function threadPage(context, title, agent = 'voice-provider', server = daemon) {
   const response = await api(server, '/api/threads', { method: 'POST', body: JSON.stringify({
-    agent, cwd: server.workdir, title,
+    agent, cwd: server.workdir, title, permissionMode: 'ask',
   }) });
   assert.equal(response.status, 201);
   const thread = await response.json();

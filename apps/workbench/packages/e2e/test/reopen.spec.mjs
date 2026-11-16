@@ -132,8 +132,12 @@ test('copying the conversation takes all of it, not only the turns on screen', a
   await page.locator('.composer textarea').click();
   await page.keyboard.type('/export');
   await page.keyboard.press('Enter');
-  await page.getByText('已复制对话').waitFor({ timeout: 15_000 });
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  let copied = '';
+  for (const deadline = Date.now() + 15_000; !copied.includes('first answer line 39'); ) {
+    assert.ok(Date.now() < deadline, 'the complete export reached the clipboard');
+    copied = await page.evaluate(() => navigator.clipboard.readText());
+    if (!copied.includes('first answer line 39')) await page.waitForTimeout(50);
+  }
   for (const name of ['first', 'second', 'latest']) {
     assert.ok(copied.includes(`${name} question`) && copied.includes(`${name} answer line 39`), `the ${name} turn is in the copy`);
   }

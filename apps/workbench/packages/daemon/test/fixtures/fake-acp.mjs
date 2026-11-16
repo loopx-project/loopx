@@ -395,7 +395,7 @@ rl.on('line', (line) => {
         }, 100);
         return;
       }
-      if (text === 'speed?') {
+      if (text.split('\n')[0] === 'speed?') {
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `speed:${currentSpeed}` } });
         if (process.env.FAKE_ACP_SPEED_REVOKED) { currentSpeed = 'off'; update({ sessionUpdate: 'config_option_update', configOptions: sessionInfo().configOptions }); }
         out({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } }); return;

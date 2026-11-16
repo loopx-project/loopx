@@ -109,9 +109,9 @@ test('a turn stopped by a plan that ran out offers another account of the same t
       assert.equal((await takeover.json()).agent, 'claude2');
       assert.equal((await takeover.json()).handover.mode, 'continue');
       await page.locator('.topbar-title').filter({ hasText: '（接手）' }).waitFor();
-      // A same-type relay leaves no seam: the merged conversation reads as one.
+      // The merged conversation keeps the handover details in a collapsed disclosure.
       await page.locator('.merged-history').waitFor();
-      assert.equal(await page.locator('.handover-boundary').count(), 0);
+      assert.equal(await page.locator('.handover-boundary').count(), 1);
       assert.deepEqual(errors, []);
       await context.close();
     }

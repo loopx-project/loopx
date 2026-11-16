@@ -50,17 +50,17 @@ test('zcode context and compression work with measured or unknown usage on deskt
       await input.fill('压缩后保留这段草稿');
       await usage.click();
       const panel = page.locator('.context-usage-panel');
-      await panel.getByText(measured ? '上下文已用 48k / 128k' : '暂未获取上下文用量，下一次响应后更新。', { exact: true }).waitFor();
+      await panel.getByText(measured ? '48K / 128K' : '暂未获取上下文用量，下一次响应后更新。', { exact: true }).waitFor();
       assert.equal(await page.locator('.model-control-panel').count(), 0);
       if (measured) assert.equal(await panel.locator('.context-percent').innerText(), '38%');
-      else assert.equal(await panel.locator('.context-percent').count(), 0);
+      else assert.equal(await panel.locator('.context-percent').innerText(), '?');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
       if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
         mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
         await page.waitForTimeout(300);
         await page.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `zcode-context-${mobile ? 'phone' : 'desktop'}-${colorScheme}-${measured ? 'measured' : 'unknown'}.png`) });
       }
-      await panel.getByRole('button', { name: '压缩 精简较早的对话，释放上下文', exact: true }).click();
+      await panel.getByRole('button', { name: '压缩', exact: true }).click();
       await panel.waitFor({ state: 'hidden' });
       assert.equal(await usage.getAttribute('aria-expanded'), 'false');
       await page.getByText('已压缩', { exact: true }).waitFor();
@@ -71,10 +71,10 @@ test('zcode context and compression work with measured or unknown usage on deskt
       await usage.click();
       if (measured) {
         await panel.locator('.context-percent').getByText('6%', { exact: true }).waitFor();
-        await panel.getByText('上下文已用 8k / 128k', { exact: true }).waitFor();
+        await panel.getByText('8K / 128K', { exact: true }).waitFor();
       } else {
         await panel.getByText('暂未获取上下文用量，下一次响应后更新。', { exact: true }).waitFor();
-        assert.equal(await panel.locator('.context-percent').count(), 0);
+        assert.equal(await panel.locator('.context-percent').innerText(), '?');
       }
       assert.equal(await input.inputValue(), '压缩后保留这段草稿');
     } finally { await context.close(); }

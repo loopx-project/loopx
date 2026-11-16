@@ -89,7 +89,8 @@ test('install an independent LoopX package, configure and inspect shared work in
       await p.getByRole('dialog').getByText('部分内容：来源未提供完整待办列表。').waitFor();
       await shot(p, `loopx-detail-${mobile ? 'phone' : 'desktop'}-${theme}`);
       await p.getByRole('button', { name: '关闭', exact: true }).click();
-      await p.locator('.ext-board-card').filter({ hasText: 'Plugin validation' }).click();
+      await p.locator('.ext-board-card').filter({ hasText: 'Plugin validation' }).locator('.ext-board-open').click();
+      if (!mobile) await p.locator('.thread-peek').getByRole('button', { name: '打开完整页面', exact: true }).click();
       await p.locator('.composer-slot .work-summary-row').waitFor();
       await shot(p, `loopx-thread-${mobile ? 'phone' : 'desktop'}-${theme}`);
       await p.goto(daemon.base + '/#/extensions');

@@ -54,13 +54,6 @@ test('with the keyboard up, the app fills what is left of the screen, wherever t
   const safeBottom = () => page.evaluate(() => document.documentElement.style.getPropertyValue('--safe-bottom'));
   assert.equal(await safeBottom(), '0px', 'the home-indicator inset is under the keyboard, so no band is kept for it');
 
-  // The plan page lives in the same visible part, and its line for a new plan can be typed on.
-  await page.locator('.menu-btn').click();
-  await page.locator('.sidebar').getByRole('button', { name: '计划' }).click();
-  await page.waitForTimeout(500); // the list slides away
-  const field = await box('.todos-page .todo-add');
-  assert.ok(field.top >= 344 && field.bottom <= 844, `the new-plan line is inside the visible part (${field.top}–${field.bottom})`);
-
   // Keyboard down again: back to the whole screen.
   await keyboard(844, 0);
   assert.deepEqual(await box('.app'), { top: 0, bottom: 844, height: 844 });

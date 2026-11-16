@@ -28,11 +28,18 @@ async function signedIn(locale) {
 
 const lang = (page) => page.evaluate(() => document.documentElement.lang);
 
+const close = async page => {
+  for (let n = 0; n < 4 && await page.locator('.settings-page').count(); n++) await page.locator('.settings-topbar button').click();
+  await page.locator('.settings-page').waitFor({ state: 'detached' });
+};
+
 /** Picks a language from the settings menu, which starts the page over in it. */
 async function choose(page, settings, menu, name) {
   await page.locator('.sidebar').getByRole('button', { name: settings, exact: true }).click();
-  await page.getByRole('menuitem', { name: menu, exact: true }).hover();
-  await Promise.all([page.waitForEvent('load'), page.getByRole('menuitemradio', { name, exact: true }).click()]);
+  await page.locator('.settings-nav').getByRole('button', { name: menu, exact: true }).click();
+  await Promise.all([page.waitForEvent('load'), page.getByRole('radio', { name, exact: true }).click()]);
+  await page.locator('.settings-page').waitFor();
+  await close(page);
   await page.locator('.sidebar-inner').waitFor({ state: 'attached', timeout: 15_000 });
 }
 
@@ -65,12 +72,11 @@ test('a language picked in the menu applies everywhere and outlives a reload', a
 
   // The menu marks what is chosen, and lists every language under its own name.
   await page.locator('.sidebar').getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('menuitem', { name: 'Language', exact: true }).hover();
-  for (const name of ['Follow system', '简体中文', 'English', '日本語']) await page.getByRole('menuitemradio', { name, exact: true }).waitFor();
-  assert.equal(await page.getByRole('menuitemradio', { name: 'English', exact: true }).getAttribute('aria-checked'), 'true');
-  assert.equal(await page.getByRole('menuitemradio', { name: 'Follow system', exact: true }).getAttribute('aria-checked'), 'false');
-  await page.keyboard.press('Escape');
-  await page.keyboard.press('Escape');
+  await page.locator('.settings-nav').getByRole('button', { name: 'Language', exact: true }).click();
+  for (const name of ['Follow system', '简体中文', 'English', '日本語']) await page.getByRole('radio', { name, exact: true }).waitFor();
+  assert.equal(await page.getByRole('radio', { name: 'English', exact: true }).getAttribute('aria-checked'), 'true');
+  assert.equal(await page.getByRole('radio', { name: 'Follow system', exact: true }).getAttribute('aria-checked'), 'false');
+  await close(page);
 
   await choose(page, 'Settings', 'Language', '日本語');
   assert.equal(await lang(page), 'ja-JP');

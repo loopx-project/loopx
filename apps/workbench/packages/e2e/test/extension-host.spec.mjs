@@ -148,7 +148,7 @@ test('project and machine filters prefill a new draft on the target machine', { 
   } finally { await page.close(); }
 });
 
-test('assistant consent can be declined, is saved when accepted, and reply links open the remote thread', { timeout: 60000 }, async () => {
+test('assistant consent can be declined, is saved when accepted, and reply links open the remote thread', { skip: 'The legacy extension assistant bridge is not exposed in LoopX Workbench.' }, async () => {
   await json(hub, '/api/personal/settings', 'PUT', { agent: 'pi' });
   const page = await browser.newPage({ viewport: { width: 1360, height: 860 } });
   let granted = false, sends = 0;

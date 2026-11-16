@@ -64,9 +64,11 @@ test('an SVG the answer links shows as a picture, and no link leaves the thread'
   await page.keyboard.press('Escape');
   await page.locator('.lightbox').waitFor({ state: 'detached' });
 
-  // Not a picture: the path goes to the clipboard, since there is nowhere to go.
+  // A text file opens in the file viewer without navigating away from the conversation.
   await page.locator('.markdown a', { hasText: 'the notes' }).click();
-  await page.locator('.file-link-note', { hasText: '已复制路径' }).waitFor({ timeout: 3000 });
+  await page.locator('.files-panel').getByRole('heading', { name: 'notes', exact: true }).waitFor();
+  await page.locator('.files-panel').getByRole('button', { name: '关闭文件', exact: true }).click();
+  await page.locator('.files-panel').waitFor({ state: 'detached' });
 
   const web = page.locator('.markdown a', { hasText: 'the site' });
   assert.equal(await web.getAttribute('href'), 'https://example.com/');

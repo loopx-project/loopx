@@ -49,11 +49,11 @@ test('the compact thread menu preserves nested actions, keyboard return and the 
         await open();
         await root.locator('.quota-preview[aria-busy=false]').waitFor();
         assert.deepEqual(await root.locator(':scope > .menu-cell .menu-label').allTextContents(),
-          mobile ? ['文件', '打开终端', '置顶', '标记为未读', '重命名', '复制', '分叉与交接', '归档', '永久删除'] : ['文件', '打开终端', '置顶', '标记为未读', '重命名', '复制', '分叉与交接', '轨迹', '归档', '永久删除']);
+          mobile ? ['文件', 'Git', '打开终端', '置顶', '标记为未读', '重命名', '复制', '分叉与交接', '归档', '永久删除'] : ['文件', 'Git', '打开终端', '置顶', '标记为未读', '重命名', '复制', '分叉与交接', '轨迹', '归档', '永久删除']);
         // Thread items now sit at the first level instead of behind "整理", so the page menu grew
         // by a row; it still fits a phone screen without scrolling.
         const pageMenu = await root.boundingBox();
-        assert.ok(pageMenu.height <= (mobile ? 565 : 515), 'the page menu stays within the accepted footprint');
+        assert.ok(pageMenu.height <= (mobile ? 565 : 515), `the page menu stays within the accepted footprint: ${width}, ${pageMenu.height}`);
         assert.ok(pageMenu.y + pageMenu.height <= page.viewportSize().height, 'the whole page menu is on screen');
         assert.equal(await root.locator('.menu-row').first().evaluate(el => el.offsetHeight), mobile ? 44 : 36);
         assert.equal(await root.getByRole('meter').count(), 2, 'only the main pair occupies the root menu');

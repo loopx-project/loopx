@@ -85,6 +85,8 @@ export async function startDaemon(env = {}, opts = {}) {
   mkdirSync(binDir);
   shim(binDir, 'fake-pi', 'fake-pi.mjs');
   shim(binDir, 'fake-claude', 'fake-acp.mjs');
+  writeFileSync(join(binDir, 'fake-claude-quota'),
+    `#!/bin/sh\nFAKE_CLAUDE_SESSION_USED=25 exec "${join(fixtures, 'fake-claude-usage.sh')}" "$@"\n`, { mode: 0o755 });
   shim(binDir, 'fake-agy', 'fake-agy.mjs');
   // The dsh adapter wants the same fake ACP agent shaped the way DeepSeek Harness answers.
   writeFileSync(
@@ -106,6 +108,8 @@ export async function startDaemon(env = {}, opts = {}) {
     LOOCHAT_AUTO_JOIN: 'off',
     LOOCHAT_HUB_URL: '',
     LOOCHAT_HUB_TOKEN: '',
+    // Core integration tests must provide their own upstream, never the resident service.
+    LOOCHAT_LOOPX_CORE_URL: 'http://127.0.0.1:1',
     LOOCHAT_TOKEN: TOKEN,
     LOOCHAT_HOST: '127.0.0.1',
     LOOCHAT_PORT: String(port),
@@ -115,6 +119,15 @@ export async function startDaemon(env = {}, opts = {}) {
     LOOCHAT_WEB_DIR: join(repoRoot, 'web', 'dist'),
     LOOCHAT_PI_BIN: 'fake-pi',
     LOOCHAT_CLAUDE_ACP_BIN: 'fake-claude',
+    // Quota probes and gateway settings must belong to the fake account too.
+    LOOCHAT_CLAUDE_QUOTA_BIN: join(binDir, 'fake-claude-quota'),
+    CLAUDE_CONFIG_DIR: join(dataDir, 'claude-config'),
+    ANTHROPIC_BASE_URL: '',
+    ANTHROPIC_AUTH_TOKEN: '',
+    ANTHROPIC_API_KEY: '',
+    ANTHROPIC_MODEL: '',
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '',
+
     LOOCHAT_AGY_BIN: 'fake-agy',
     LOOCHAT_DSH_BIN: 'fake-dsh',
     PI_CODING_AGENT_DIR: join(dataDir, 'pi-agent'),
@@ -150,7 +163,10 @@ export async function startDaemon(env = {}, opts = {}) {
     } catch {
       // not up yet
     }
-    if (Date.now() > deadline) throw new Error(`daemon did not start; log:\n${log}`);
+    if (Date.now() > deadline) {
+      child.kill('SIGTERM');
+      throw new Error(`test daemon ${child.pid} did not start; log:\n${log}`);
+    }
     if (child.exitCode !== null) throw new Error(`daemon exited with ${child.exitCode}; log:\n${log}`);
     await new Promise((r) => setTimeout(r, 100));
   }

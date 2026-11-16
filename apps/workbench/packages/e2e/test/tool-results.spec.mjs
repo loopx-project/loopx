@@ -44,8 +44,11 @@ test('tool results stay at the bottom right of expanded details, including empty
           await result.waitFor();
           assert.equal(await result.innerText(), label);
           assert.equal(await result.evaluate(el => getComputedStyle(el).textAlign), 'right');
-          const body = await step.locator('.step-detail-content').boundingBox();
-          const footer = await result.boundingBox();
+          // Read both rectangles in the same frame while the conversation settles its scroll.
+          const { body, footer } = await step.evaluate(el => ({
+            body: el.querySelector('.step-detail-content').getBoundingClientRect().toJSON(),
+            footer: el.querySelector('.step-result').getBoundingClientRect().toJSON(),
+          }));
           assert.ok(footer.y >= body.y + body.height - 1, 'the result is below the scrollable content');
           assert.equal(await step.locator('.step-detail-content .step-result').count(), 0);
         };

@@ -1,11 +1,13 @@
 // The proactive surfaces through the real backend: the scheduler's own tick starts each run (up to
 // one 30s tick per test), the fake agent does the work, and git shows what the buttons did.
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDaemon, launchBrowser, api, openUi } from '../harness.mjs';
+
+describe('legacy assistant workspace', { skip: 'LoopX Workbench replaces the legacy assistant and plans pages with the steward and Goals.' }, () => {
 
 const json = async (daemon, path, method = 'GET', body) => {
   const response = await api(daemon, path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -117,4 +119,6 @@ test('discarding sandbox work removes its worktree and branch and leaves the rep
     assert.equal(git('rev-parse', 'HEAD'), head);
     assert.equal(git('branch', '--list', run.branch), '');
   } finally { await browser.close(); await daemon.stop(); }
+});
+
 });

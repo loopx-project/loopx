@@ -50,7 +50,7 @@ test('token activity shows a year of days, tells unknown from empty, and reads a
         if (mobile) await page.locator('.menu-btn').click();
         await page.getByRole('button', { name: '配置', exact: true }).click();
         await page.locator('.settings-nav').getByRole('button', { name: '用量与诊断' }).click();
-        const panel = page.getByRole('dialog', { name: '用量与诊断', exact: true });
+        const panel = page.locator('.obs-page');
         const heatmap = panel.locator('.obs-heatmap');
         await heatmap.locator('.heat-cell').first().waitFor();
         const head = heatmap.locator('.obs-chart-head');

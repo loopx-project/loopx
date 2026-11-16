@@ -8,6 +8,7 @@ import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 const shots = '/tmp/loochat-handover-merged-shots';
 const chainDialog = async page => {
   await page.getByLabel('这个对话的更多操作').click();
+  await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
   await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
 };
@@ -115,8 +116,14 @@ test('three handover segments load on upward navigation, keep their action targe
         await openLatest();
         await chainDialog(page); await page.getByRole('menuitem', { name: '只看这一段', exact: true }).click();
         await page.getByText('C 问题 10', { exact: true }).waitFor();
-        await scrollUp(); await page.locator('.bubble', { hasText: 'DEFERRED_HANDOVER' }).waitFor();
-        assert.equal(await page.locator('.handover-boundary').count(), 0);
+        // Wait for the view switch before requesting any older turns still missing locally.
+        await page.locator('.history-segment').waitFor({ state: 'detached' });
+        if (await page.locator('.older-messages').count()) await page.locator('.older-messages').click();
+        const boundary = page.locator('.handover-boundary');
+        await boundary.waitFor();
+        if (await boundary.locator('.handover-card-head').getAttribute('aria-expanded') !== 'true') await boundary.locator('.handover-card-head').click();
+        await boundary.locator('.handover-card-body', { hasText: 'DEFERRED_HANDOVER' }).waitFor();
+        assert.equal(await boundary.count(), 1);
         await chainDialog(page); await page.getByRole('menuitem', { name: '显示整条链', exact: true }).click();
         await page.getByText('C 问题 10', { exact: true }).waitFor();
         assert.equal(await page.locator('.bubble', { hasText: 'DEFERRED_HANDOVER' }).count(), 0);

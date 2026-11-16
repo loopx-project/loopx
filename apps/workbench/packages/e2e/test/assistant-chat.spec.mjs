@@ -1,10 +1,12 @@
 // The assistant's home: the conversation is the page, the desk a drawer. What the drawer does
 // to the layout, what the phone does with it, and the one decision a dispatch card carries.
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { startDaemon, launchBrowser, api, openUi } from '../harness.mjs';
+
+describe('legacy assistant workspace', { skip: 'LoopX Workbench replaces the legacy assistant and plans pages with the steward and Goals.' }, () => {
 
 const json = async (daemon, path, method = 'GET', body) => {
   const response = await api(daemon, path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -360,4 +362,6 @@ for (const state of ['answered', 'starting']) test(`a dispatch start conflict ${
     assert.ok(started.threadId);
     assert.equal((await json(daemon, '/api/personal/proactive')).runs.find(item => item.id === run.id).threadId, started.threadId);
   } finally { await browser.close(); await daemon.stop(); }
+});
+
 });

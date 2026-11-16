@@ -69,7 +69,7 @@ test('stopping an unfinished compaction never reports success', async () => {
     await page.getByText('正在压缩上下文…', { exact: true }).waitFor();
     await page.getByRole('button', { name: '停止', exact: true }).click();
     await page.getByRole('button', { name: '停止', exact: true }).waitFor({ state: 'hidden' });
-    await page.locator('.work-toggle').click();
+    assert.equal(await page.locator('.work-toggle').getAttribute('aria-expanded'), 'true', 'stopped work keeps the interrupted record open');
     await page.getByText('上下文压缩未完成', { exact: true }).waitFor();
     assert.equal(await page.getByText('上下文已自动压缩', { exact: true }).count(), 0);
   } finally { await context.close(); }

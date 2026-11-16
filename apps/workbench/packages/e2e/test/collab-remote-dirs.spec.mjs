@@ -54,11 +54,8 @@ async function remoteMention(page, mobile, title) {
     await page.getByRole('button', { name: '启用协作', exact: true }).click();
     await page.locator('.composer-add.on').waitFor();
   }
-  const box = page.getByRole('textbox', { name: '消息', exact: true });
-  await box.fill('@');
-  const list = page.getByRole('listbox', { name: '选择协作智能体' });
-  await list.waitFor();
-  await list.getByRole('option', { name: /pi · devbox/ }).click();
+  await openCollaboration(page);
+  await page.getByRole('menu', { name: '协作', exact: true }).getByRole('menuitem', { name: /pi · devbox/ }).click();
   const row = page.locator('.coord-row');
   await row.waitFor();
   return row;

@@ -37,7 +37,7 @@ function fixture(t) {
   const paths = {
     app: join(home, '.local/share/loochat'),
     env: join(home, '.config/loochat/.env'),
-    unit: join(home, '.config/systemd/user/calli.service'),
+    unit: join(home, '.config/systemd/user/loochat.service'),
   };
   return { run, read, state, home, paths };
 }
@@ -70,6 +70,17 @@ test('running it again updates in place: same token, and the restart waits for i
   assert.equal(read('restart.log').trim(), 'restart.sh --no-build');
 });
 
+test('setup preserves current and historical tokens without appending a second current key', t => {
+  const { run, paths } = fixture(t);
+  assert.equal(run().status, 0);
+  for (const key of ['LOOCHAT_TOKEN', 'CALLI_TOKEN', 'RAH_TOKEN']) {
+    writeFileSync(paths.env, `${key}=fixture-existing-token\n`);
+    const result = spawnSync(process.execPath, [join(paths.app, 'scripts/setup.mjs'), '--quiet', '--env', paths.env], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(paths.env, 'utf8'), `${key}=fixture-existing-token\n`);
+  }
+});
+
 test('a dry run changes nothing', (t) => {
   const { run, read, home } = fixture(t);
   const r = run('--dry-run');
@@ -98,7 +109,7 @@ test('without systemd it says how to start by hand', (t) => {
   const r = run();
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /No systemd user session/);
-  assert.match(r.stdout, /LOOCHAT_ENV_FILE=.*npm start -w @loochat\/daemon/);
+  assert.match(r.stdout, /LOOCHAT_ENV_FILE=.*npm start -w @loopx\/loochat/);
 });
 
 test('a failed dependency install names the build tools to get', (t) => {

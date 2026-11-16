@@ -32,12 +32,12 @@ test('usage, request details and actionable diagnostics on desktop/phone in ligh
       const panel = page.locator('.obs-page');
       await panel.getByText('TPM · 最近 60 秒', { exact: true }).waitFor();
       assert.equal(await panel.locator('.obs-metric').nth(1).locator('strong').innerText(), '170');
-      // The range menu must open fully inside the scrolling body, with styled rows.
+      // The range menu belongs to the settings header and stays within the settings page.
       await panel.getByRole('button', { name: '统计范围', exact: true }).click();
       const menu = page.getByRole('menu', { name: '统计范围' });
       const week = menu.getByRole('menuitemradio', { name: '最近 7 天' });
       await week.waitFor();
-      const [box, body] = [await menu.boundingBox(), await panel.locator('.obs-body').boundingBox()];
+      const [box, body] = [await menu.boundingBox(), await page.locator('.settings-page').boundingBox()];
       if (!mobile) assert.ok(box.y >= body.y && box.y + box.height <= body.y + body.height, `menu ${JSON.stringify(box)} outside body ${JSON.stringify(body)}`);
       assert.equal(await menu.getByRole('menuitemradio', { name: '最近 24 小时' }).getAttribute('aria-checked'), 'true');
       if (process.env.LOOCHAT_E2E_SHOTS_DIR) { mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true }); await page.screenshot({ animations: 'disabled', path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `range-selector-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) }); }

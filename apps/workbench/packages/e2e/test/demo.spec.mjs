@@ -38,9 +38,6 @@ test('without a token the page opens on the demo, and asks the daemon nothing', 
   // The one waiting on an approval.
   await page.locator('.sidebar').getByText('修复商品列表滚动跳动').click();
   await page.getByText('npm run e2e -- product-list').first().waitFor();
-  // The plan page is filled in too.
-  await page.locator('.sidebar').getByRole('button', { name: '计划' }).click();
-  await page.getByText('发布 2.0').waitFor();
   assert.deepEqual(apiCalls, [], 'the demo is all in the page');
 });
 

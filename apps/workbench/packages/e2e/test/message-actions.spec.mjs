@@ -90,7 +90,7 @@ test('message actions keep fork visible, attach snapshots, select passages and h
         assert.ok(noteBounds.width > 300 && noteBounds.height < 80, 'notes keep their compact bottom input');
         assert.equal(await page.locator('.dialog-scrim').count(), 0, 'adding a note does not open a modal');
         assert.equal(await page.locator('.composer-box').evaluate(element => getComputedStyle(element).visibility), 'hidden');
-        assert.equal(await page.locator('.pet').evaluate(element => getComputedStyle(element).visibility), 'hidden', 'the assistant cannot cover the note controls');
+        assert.equal(await page.locator('.pet').count(), 0, 'the legacy pet is not mounted');
         if (shots) await page.screenshot({ path: join(shots, `mobile-${theme}-note.png`) });
         await note.getByRole('button').tap();
         await composer.locator('.note-strip').nth(2).waitFor();

@@ -198,6 +198,10 @@ test('opening a running task starts with a summary then merges subsequent full l
   try {
     browser = await launchBrowser();
     for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark']) {
+      const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: mobile, hasTouch: mobile, colorScheme });
+      const page = await context.newPage();
+      // Connect the browser before the timed fixture starts; opening the running thread remains the tested action.
+      await openUi(page, daemon);
       const thread = await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title: '途中打开' }) })).json();
       const started = await (await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'slowthink attach-running' }) })).json();
       const deadline = Date.now() + 5000;
@@ -207,12 +211,9 @@ test('opening a running task starts with a summary then merges subsequent full l
         assert.ok(Date.now() < deadline, 'the first tool completed before opening history');
         await new Promise(resolve => setTimeout(resolve, 25));
       }
-      const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: mobile, hasTouch: mobile, colorScheme });
       try {
-        const page = await context.newPage();
         const requests = [];
         page.on('request', req => requests.push(req.url()));
-        await openUi(page, daemon);
         const connected = page.waitForResponse(r => r.url().includes(`/threads/${thread.id}/stream?`));
         if (mobile) await page.locator('.menu-btn').click();
         await page.locator('.thread-item').filter({ hasText: '途中打开' }).first().click();

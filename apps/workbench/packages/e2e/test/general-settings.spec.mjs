@@ -56,7 +56,7 @@ test('general startup preference is shared, respects recent activity and explici
       await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
       if (await page.locator('.settings-page').count()) await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
       await dialog.waitFor({ state: 'detached' });
-      assert.deepEqual(await (await api(daemon, '/api/general-settings')).json(), { startupPage: 'recent-thread', autoArchiveDays: 7 });
+      assert.deepEqual(await (await api(daemon, '/api/general-settings')).json(), { startupPage: 'recent-thread', autoArchiveDays: 7, autoImportLocal: true });
       await page.reload();
       await page.locator('.topbar-title', { hasText: 'Latest conversation' }).waitFor();
       // An explicit new-thread action is not undone by subsequent list updates.
@@ -65,8 +65,8 @@ test('general startup preference is shared, respects recent activity and explici
       await page.locator('.topbar-title', { hasText: '新对话' }).waitFor();
       await page.goto(`${daemon.base}/#/thread/${older.id}`);
       await page.locator('.topbar-title', { hasText: 'Older pinned conversation' }).waitFor();
-      await page.goto(`${daemon.base}/#/todos`);
-      await page.waitForFunction(() => location.hash === '#/todos' && !document.querySelector('.thread-row.active'));
+      await page.goto(`${daemon.base}/#/steward`);
+      await page.waitForFunction(() => location.hash === '#/steward' && !document.querySelector('.thread-row.active'));
       await context.close();
     }
     // A different device reads the preference from the daemon, with no browser storage to copy.
@@ -84,7 +84,7 @@ test('general startup preference is shared, respects recent activity and explici
     await page.getByRole('menuitemradio', { name: '新会话页面', exact: true }).click();
     await dialog.getByRole('alert').waitFor();
     assert.match(await dialog.getByRole('button', { name: '默认打开页面', exact: true }).innerText(), /最近会话/);
-    assert.deepEqual(await (await api(daemon, '/api/general-settings')).json(), { startupPage: 'recent-thread', autoArchiveDays: 7 });
+    assert.deepEqual(await (await api(daemon, '/api/general-settings')).json(), { startupPage: 'recent-thread', autoArchiveDays: 7, autoImportLocal: true });
     await page.unroute('**/api/general-settings');
     await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
       if (await page.locator('.settings-page').count()) await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();

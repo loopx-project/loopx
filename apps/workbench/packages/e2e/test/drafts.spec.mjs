@@ -45,9 +45,9 @@ test('each thread keeps its own draft', async () => {
   await open('first thread');
   assert.equal(await box().inputValue(), 'half a thought for the first');
 
-  // The plan page has no box; coming back from it, the draft is still there.
-  await page.locator('.side-link', { hasText: '计划' }).click();
-  await page.locator('.todos-page').waitFor();
+  // Leaving the conversation for the steward preserves the conversation draft.
+  await page.locator('.side-link', { hasText: 'LoopX 管家' }).click();
+  await page.locator('.steward-page').waitFor();
   await open('second thread');
   assert.equal(await box().inputValue(), 'something for the second');
 

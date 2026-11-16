@@ -59,7 +59,9 @@ test('preparation and response waits survive reload and clear on output, stop an
         assert.ok(stopped.some(e => e.turnId === next.turnId && e.type === 'turn.done' && e.data.stopReason === 'cancelled'));
         await post(`/api/threads/${thread.id}/turns`, { text: 'wait-first-fail' });
         await wait.waitFor();
-        await page.getByText('provider unavailable', { exact: true }).waitFor();
+        const failure = page.locator('.error-box').last();
+        await failure.locator('.error-toggle').click();
+        await failure.getByText('provider unavailable', { exact: true }).waitFor();
         await wait.waitFor({ state: 'detached' });
         assert.deepEqual(errors, []);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal overflow');

@@ -33,10 +33,10 @@ test('Ferry picker shows observed queues and safely degrades without a cache acr
     seedQueue(550);
     const capabilities = { effort: { low: { supported: true }, medium: { supported: true }, high: { supported: true } } };
     gateway.state.models = [
+      { id: 'claude-openrouter-4o', display_name: 'Ferry Opus 5.5', capabilities },
       { id: 'claude-gpt-6-1-sol', display_name: 'Ferry GPT-6.1-Sol', capabilities },
       { id: 'claude-gpt-6-1-sol-max[1m]', display_name: 'Ferry GPT-6.1-Sol Max 1M', capabilities },
       { id: 'claude-gpt-6-astra', display_name: 'Ferry GPT-6-Astra', capabilities },
-      { id: 'claude-openrouter-4o', display_name: 'Ferry Opus 5.5', capabilities },
       { id: 'claude-gpt-5-5', display_name: 'Ferry GPT-5.5', capabilities },
     ];
     // Do not forward credentials, a live gateway or a real Ferry cache inherited from this session.

@@ -1,8 +1,10 @@
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { startDaemon, launchBrowser, openUi, api } from '../harness.mjs';
+
+describe('legacy assistant workspace', { skip: 'LoopX Workbench replaces the legacy assistant and plans pages with the steward and Goals.' }, () => {
 
 const json = async (daemon, path, method = 'GET', body) => {
   const response = await api(daemon, path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -110,4 +112,6 @@ test('delegation destinations, searchable mobile models, compact empty notes and
     await page.locator('.settings-nav').getByRole('button', { name: '推送', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: '后台还没更新到这个版本，重启 hub 后再试' }).waitFor();
   } finally { await browser.close(); await daemon.stop(); }
+});
+
 });

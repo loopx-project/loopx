@@ -1,9 +1,11 @@
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startDaemon, launchBrowser, openUi, api, closeSettings } from '../harness.mjs';
+
+describe('legacy assistant workspace', { skip: 'LoopX Workbench replaces the legacy assistant and plans pages with the steward and Goals.' }, () => {
 
 const wait = async fn => { for (let i = 0; i < 300; i++) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } throw new Error('timed out'); };
 const json = async (daemon, path, method = 'GET', body) => {
@@ -161,4 +163,6 @@ test('personal plans, delegation, proposals, lazy details, follow-up, wishes and
       await ctx.close();
     }
   } finally { await browser.close(); await daemon.stop(); rmSync(files, { recursive: true, force: true }); }
+});
+
 });

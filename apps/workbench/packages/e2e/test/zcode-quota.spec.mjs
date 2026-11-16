@@ -74,7 +74,7 @@ test('quota reopens immediately, survives page reload and retains the last readi
         await panel.getByRole('button', { name: '全部刷新', exact: true }).click();
         await pending.seen;
         await row.getByRole('meter').filter({ hasText: '2%' }).waitFor();
-        await row.getByRole('status').filter({ hasText: '更新中' }).waitFor();
+        await row.locator('.quota-preview[aria-busy=true]').waitFor();
         assert.equal(await row.getByText('正在查询额度…', { exact: true }).count(), 0);
         if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
           mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
@@ -94,7 +94,7 @@ test('quota reopens immediately, survives page reload and retains the last readi
         await panel.getByRole('button', { name: '全部刷新', exact: true }).click();
         await pending.seen;
         await row.getByRole('meter').filter({ hasText: '36%' }).waitFor();
-        await row.getByRole('status').filter({ hasText: '更新中' }).waitFor();
+        await row.locator('.quota-preview[aria-busy=true]').waitFor();
         pending.respond({ status: 503, json: { error: '暂时无法查询额度' } });
         await row.getByRole('status').filter({ hasText: '刷新失败' }).waitFor();
         assert.ok(await row.getByRole('meter').filter({ hasText: '36%' }).isVisible());

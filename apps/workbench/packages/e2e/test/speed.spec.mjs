@@ -74,31 +74,28 @@ test('lightning toggles speed, restores selection, sends in Plan and clears on m
 });
 
 
-test('Claude speed uses its own protocol and unsupported agents hide the control', { timeout: 30000 }, async () => {
+test('catalogs without speed metadata do not offer a lightning toggle', { timeout: 30000 }, async () => {
   const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
   try {
     const page = await context.newPage();
     for (const agent of ['claude', 'pi']) {
       const title = `速度能力 ${agent}`;
       const res = await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent, title, cwd: daemon.workdir }) });
-      assert.equal(res.status, 201); const thread = await res.json();
+      assert.equal(res.status, 201);
       await openUi(page, daemon);
       await page.locator('.thread-title', { hasText: title }).first().click();
       await page.getByRole('button', { name: /^模型与思考强度：/ }).click();
-      if (agent === 'pi') { assert.equal(await page.locator('.model-speed-toggle').count(), 0); continue; }
-      await page.getByRole('button', { name: '开启加速', exact: true }).click();
-      await page.keyboard.press('Escape');
-      await page.locator('.composer textarea').fill('speed?');
-      await page.getByRole('button', { name: '发送', exact: true }).click();
-      await page.getByText('speed:on', { exact: true }).waitFor();
-      const updated = await (await api(daemon, `/api/threads/${thread.id}`)).json();
-      assert.equal(updated.speed, 'fast');
+      // Claude listing no longer selects every model to probe Fast; the native protocol is
+      // covered in daemon speed tests. Neither this catalog nor Pi advertises a UI toggle.
+      const models = await (await api(daemon, `/api/agents/${agent}/models`)).json();
+      assert.ok(models.every(model => !model.speeds?.length));
+      assert.equal(await page.locator('.model-speed-toggle').count(), 0);
     }
   } finally { await context.close(); }
 });
 
 test('a newer UI keeps the lightning toggle with older Hub model responses in all four layouts', { timeout: 60000 }, async () => {
-  for (const agent of ['codex', 'claude']) for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark']) {
+  for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 }, isMobile: mobile, hasTouch: mobile, colorScheme });
     try {
       const page = await context.newPage();
@@ -107,9 +104,9 @@ test('a newer UI keeps the lightning toggle with older Hub model responses in al
         const models = await response.json();
         await route.fulfill({ response, json: models.map(model => ({ ...model, speeds: model.speeds?.map(({ isFast, ...speed }) => speed) })) });
       });
-      const title = `旧接口 ${agent} ${mobile} ${colorScheme}`;
-      const speed = agent === 'codex' ? 'priority' : 'fast';
-      const res = await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent, title, cwd: daemon.workdir, speed, effort: 'high' }) });
+      const title = `旧接口 codex ${mobile} ${colorScheme}`;
+      const speed = 'priority';
+      const res = await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'codex', title, cwd: daemon.workdir, model: 'gpt-big', speed, effort: 'high' }) });
       assert.equal(res.status, 201); const thread = await res.json();
       await openUi(page, daemon);
       if (mobile) await page.locator('.menu-btn').click();
@@ -118,7 +115,7 @@ test('a newer UI keeps the lightning toggle with older Hub model responses in al
       if (mobile) await page.locator('.composer textarea').tap();
       await page.getByRole('button', { name: /^模型与思考强度：/ }).click();
       assert.equal(await page.getByRole('button', { name: '关闭加速', exact: true }).getAttribute('aria-pressed'), 'true');
-      if (shots) await page.screenshot({ animations: 'disabled', path: join(shots, `legacy-${agent}-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
+      if (shots) await page.screenshot({ animations: 'disabled', path: join(shots, `legacy-codex-${mobile ? 'phone' : 'desktop'}-${colorScheme}.png`) });
       for (const [name, expected] of [['关闭加速', 'default'], ['开启加速', speed]]) {
         await Promise.all([
           page.waitForResponse(r => r.url().endsWith(`/api/threads/${thread.id}`) && r.request().method() === 'PATCH' && r.ok()),

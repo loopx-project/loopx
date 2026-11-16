@@ -31,10 +31,10 @@ async function makeThread(hub, agent, title) {
 
 async function send(hub, thread, text) {
   const response = await api(hub, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text }) });
-  assert.ok(response.ok);
+  assert.ok(response.ok, await response.clone().text());
   for (let i = 0; i < 100; i++) {
     const current = await (await api(hub, `/api/threads/${thread.id}`)).json();
-    if (current.status !== 'running') {
+    if (current.status !== 'running' && !['checking', 'preparing', 'countdown'].includes(current.autoHandover?.state)) {
       assert.equal(current.status, 'idle');
       return;
     }

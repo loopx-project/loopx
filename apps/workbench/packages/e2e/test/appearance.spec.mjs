@@ -43,13 +43,13 @@ async function openPanel() {
 
 test('out of the box the page follows the system, in the default palette', async () => {
   await openUi(page, daemon);
-  assert.deepEqual(await look(), { theme: 'light', palette: 'paper', bg: '#f8f6f1', meta: '#f8f6f1' });
-  await painted('rgb(248, 246, 241)');
+  assert.deepEqual(await look(), { theme: 'light', palette: 'codex', bg: '#ffffff', meta: '#ffffff' });
+  await painted('rgb(255, 255, 255)');
 
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark');
-  assert.deepEqual(await look(), { theme: 'dark', palette: 'paper', bg: '#1b1a18', meta: '#1b1a18' });
-  await painted('rgb(27, 26, 24)');
+  assert.deepEqual(await look(), { theme: 'dark', palette: 'codex', bg: '#212121', meta: '#212121' });
+  await painted('rgb(33, 33, 33)');
   await page.emulateMedia({ colorScheme: 'light' });
   await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'light');
 });
@@ -58,11 +58,11 @@ test('a palette and a mode chosen in the panel show at once', async () => {
   await openPanel();
   const panel = page.getByRole('region', { name: '外观' });
   assert.equal(await panel.getByRole('radio', { name: '跟随系统' }).getAttribute('aria-checked'), 'true');
-  assert.equal(await panel.getByRole('radio', { name: '纸' }).getAttribute('aria-checked'), 'true');
+  assert.equal(await panel.getByRole('radio', { name: 'Codex' }).getAttribute('aria-checked'), 'true');
 
   await panel.getByRole('radio', { name: 'Nord' }).click();
   assert.equal(await panel.getByRole('radio', { name: 'Nord' }).getAttribute('aria-checked'), 'true');
-  assert.equal(await panel.getByRole('radio', { name: '纸' }).getAttribute('aria-checked'), 'false');
+  assert.equal(await panel.getByRole('radio', { name: 'Codex' }).getAttribute('aria-checked'), 'false');
   // The page behind the panel is already in the new colours, and so is what a phone paints its status bar with.
   assert.deepEqual(await look(), { theme: 'light', palette: 'nord', bg: '#eceff4', meta: '#eceff4' });
   await painted('rgb(236, 239, 244)');
@@ -105,7 +105,7 @@ test('a palette this build does not know falls back to the default', async () =>
   await page.evaluate(() => localStorage.setItem('calli.appearance', JSON.stringify({ mode: 'dark', palette: 'from-the-future' })));
   await page.reload();
   await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).waitFor({ timeout: 10_000 });
-  assert.deepEqual(await look(), { theme: 'dark', palette: 'paper', bg: '#1b1a18', meta: '#1b1a18' });
+  assert.deepEqual(await look(), { theme: 'dark', palette: 'codex', bg: '#212121', meta: '#212121' });
 });
 
 test('the slash menu opens the panel too', async () => {

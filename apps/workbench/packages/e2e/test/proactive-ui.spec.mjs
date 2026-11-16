@@ -1,9 +1,11 @@
 // The proactive surfaces against a scripted API: every state of a run, including the ones a real
 // run takes luck to reach. proactive-flow.spec.mjs walks the same surfaces through the real backend.
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startDaemon, launchBrowser, openUi } from '../harness.mjs';
 import { arrangeProactive, routes } from './proactive-fixture.mjs';
+
+describe('legacy assistant workspace', { skip: 'LoopX Workbench replaces the legacy assistant and plans pages with the steward and Goals.' }, () => {
 
 const openDesk = async page => {
   // The desk is the drawer's own tab on the assistant's home; its address opens it directly.
@@ -143,4 +145,6 @@ test('the settings section stays one line until turned on, and a rejected reposi
     await page.locator('.personal-settings').getByText('已保存', { exact: true }).waitFor();
     assert.deepEqual(saved.at(-1), { mode: 'auto', repos: [] }, 'enabled is never sent');
   } finally { await browser.close(); await daemon.stop(); }
+});
+
 });

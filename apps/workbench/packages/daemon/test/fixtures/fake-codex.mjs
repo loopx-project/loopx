@@ -229,7 +229,7 @@ const runTurn = (text, turnId, done) => {
     if (text.endsWith('expired')) setTimeout(() => { awaitingInput.delete(id); notify('serverRequest/resolved', { requestId: id }); done(); }, 120);
     return;
   }
-  if (text === 'speed?') { say(`model:${currentModel};effort:${currentEffort};speed:${currentSpeed};mode:${currentWorkMode};approval:${currentApproval}`); done(); return; }
+  if (text.split('\n')[0] === 'speed?') { say(`model:${currentModel};effort:${currentEffort};speed:${currentSpeed};mode:${currentWorkMode};approval:${currentApproval}`); done(); return; }
   if (text === 'plan-draft') { say(`mode:${currentWorkMode};model:${currentModel};effort:${currentEffort};approval:${currentApproval}`); planResult(turnId); done(); return; }
   const collaboration = coordinationFixture(text);
   if (collaboration !== null) { say(collaboration); done(); return; }
@@ -279,7 +279,7 @@ const runTurn = (text, turnId, done) => {
     setTimeout(() => process.exit(1), 20);
     return;
   }
-  if (text.includes('tool')) {
+  if (text.split('\n')[0].includes('tool')) {
     const id = 'exec-1';
     const output = text.includes('longoutput') ? Array.from({ length: 120 }, (_, i) => `Output line ${i + 1}: partial out`).join('\n') : 'partial out';
     notify('item/started', { turnId, item: { type: 'commandExecution', id, command: 'npm test', cwd: '/tmp/one', status: 'inProgress' } });

@@ -104,6 +104,8 @@ const openStages = (page) => page.locator('.writing-chip').click();
 test('writing mode on desktop: chip and stages, article preview, write and save, conflicts, end', { timeout: 240000 }, async () => {
   for (const colorScheme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme });
+    // Fix the sidebar width for the 640px article check; the width matrix below uses product defaults.
+    await context.addInitScript(() => localStorage.setItem('calli.sidebar.width', '288'));
     try {
       const page = await context.newPage();
       const shot = async (name) => shots && page.screenshot({ path: join(shots, `${prefix}-${name}-desktop-${colorScheme}.png`), animations: 'disabled' });
@@ -131,7 +133,7 @@ test('writing mode on desktop: chip and stages, article preview, write and save,
 
       // One chip; the stages live behind it, each with its word of advice, the current one checked.
       await openStages(page);
-      const pop = page.getByRole('menu');
+      const pop = page.getByRole('menu', { name: '写作阶段', exact: true });
       await pop.waitFor();
       assert.equal(await pop.getByRole('menuitemradio', { name: /^初稿/ }).getAttribute('aria-checked'), 'true');
       await shot('stages');
@@ -148,6 +150,7 @@ test('writing mode on desktop: chip and stages, article preview, write and save,
       assert.ok(panelBox && panelBox.width >= 640, `the panel is ${panelBox?.width}px wide for the body`);
       assert.equal(await panel.locator('.files-tree').count(), 0, 'the tree starts folded for the body');
       // What the body takes, it leaves whole: the composer's bottom row keeps its full words.
+      await page.evaluate(() => Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {}))));
       const composer = await page.evaluate(() => {
         const bar = [...document.querySelectorAll('.composer-bar')].at(-1);
         return [...(bar?.children ?? [])].filter((c) => c.scrollWidth > c.clientWidth + 1).length;
@@ -219,7 +222,7 @@ test('writing mode on desktop: chip and stages, article preview, write and save,
       await page.reload();
       await page.locator('.thread-title', { hasText: title }).first().click();
       await openStages(page);
-      await page.getByRole('menu').getByRole('menuitem', { name: /^打开正文/ }).click();
+      await page.getByRole('menu', { name: '写作阶段', exact: true }).getByRole('menuitem', { name: /^打开正文/ }).click();
       await panel.getByRole('textbox', { name: '正文', exact: true }).waitFor();
       assert.equal(await panel.getByRole('textbox', { name: '正文', exact: true }).inputValue(), edited, 'the draft came back after reload');
       await panel.getByRole('textbox', { name: '正文', exact: true }).focus();
@@ -285,7 +288,7 @@ test('writing mode on desktop: chip and stages, article preview, write and save,
 
       // End: the chip goes, the body stays.
       await openStages(page);
-      await page.getByRole('menu').getByRole('menuitem', { name: '结束写作' }).click();
+      await page.getByRole('menu', { name: '写作阶段', exact: true }).getByRole('menuitem', { name: '结束写作' }).click();
       await page.locator('.writing-bar').waitFor({ state: 'detached' });
       assert.equal((await view(thread.id)).writing, null);
       assert.equal(readFileSync(file, 'utf8'), theirs);
@@ -307,8 +310,9 @@ test('the open body leaves the composer its whole bottom row', { timeout: 120000
       await api(daemon, `/api/threads/${thread.id}/writing`, { method: 'PUT', body: JSON.stringify({ stage: 'second' }) });
       await select(page, title, false);
       await openStages(page);
-      await page.getByRole('menu').getByRole('menuitem', { name: /^打开正文/ }).click();
+      await page.getByRole('menu', { name: '写作阶段', exact: true }).getByRole('menuitem', { name: /^打开正文/ }).click();
       await page.locator('.files-panel .files-markdown.article h1', { hasText: NAME }).waitFor();
+      await page.evaluate(() => Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {}))));
       const measured = await page.evaluate(() => {
         const bar = [...document.querySelectorAll('.composer-bar')].at(-1);
         const cut = [...(bar?.children ?? [])].filter((c) => c.scrollWidth > c.clientWidth + 1).map((c) => c.className.toString().slice(0, 30));

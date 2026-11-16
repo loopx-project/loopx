@@ -1,9 +1,10 @@
 // The plan page: a list of the user's own plans with sub-items, ticked off when done and linked
 // to the threads that work on them.
-import { test, before, after } from 'node:test';
+import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
+describe('legacy plans page', { skip: 'LoopX Workbench replaces the legacy plans page with Goals.' }, () => {
 let daemon;
 let browser;
 let page;
@@ -193,4 +194,6 @@ test('on a touch screen there is no handle; the row menu moves a plan up and dow
   await phone.waitForFunction((t) => [...document.querySelectorAll('.todos-list > .todo > .todo-line .todo-text')].at(-2)?.textContent === t, last);
   assert.deepEqual(await rows(), [...before.slice(0, -2), last, before.at(-2)]);
   await ctx.close();
+});
+
 });

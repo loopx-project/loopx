@@ -40,12 +40,13 @@ test('TRAE model load and weekly quota appear in existing controls in both theme
       await page.getByRole('button', { name: '配置', exact: true }).click();
       await page.locator('.settings-nav').getByRole('button', { name: '额度', exact: true }).click();
       const list = page.getByRole('region', { name: '额度', exact: true });
-      const row = list.getByRole('button', { name: '查看 TRAE CLI 的额度详情', exact: true });
+      const open = list.getByRole('button', { name: '查看 TRAE CLI 的额度详情', exact: true });
+      const row = list.locator('.quota-account-row').filter({ has: page.getByRole('button', { name: '查看 TRAE CLI 的额度详情', exact: true }) });
       await row.getByRole('meter').waitFor();
       assert.match(await page.locator('.quota-board-row').first().innerText(), /TRAE CLI/);
-      assert.equal(await row.locator('.quota-percent').innerText(), '剩余 99%');
+      assert.equal(await row.locator('.quota-percent').innerText(), '99%');
       await row.locator('.quota-load.high').waitFor();
-      await row.click();
+      await open.click();
       const detail = page.getByRole('region', { name: 'TRAE CLI', exact: true });
       assert.match(await detail.locator('.quota-load').innerText(), /负载\s*184%/);
       assert.match(await detail.getByRole('meter').getAttribute('aria-label'), /Big 1\.0/);

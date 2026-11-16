@@ -88,22 +88,7 @@ test('settings pages preserve navigation, guard drafts and load details on entry
       await auto.getByRole('status').filter({ hasText: '已保存' }).waitFor();
       const storedCompact = await (await api(daemon, '/api/autocompact-settings')).json();
       assert.equal(storedCompact.settings.enabled, initialCompact !== 'true');
-      await navigate(page, '#/settings/assistant');
-      await page.locator('.settings-related').waitFor();
-      const profilePath = '/api/personal/profile';
-      const before = requests.filter(path => path === profilePath).length;
-      await page.getByRole('button', { name: '我在意什么', exact: true }).click();
-      await page.locator('.profile-field').waitFor();
-      assert.equal(requests.filter(path => path === profilePath).length, before + 1);
-      await page.locator('.profile-field').fill('Unsaved profile draft');
-      await page.goBack();
-      await warning.waitFor();
-      await warning.getByRole('button', { name: '取消', exact: true }).click();
-      assert.equal(await page.locator('.profile-field').inputValue(), 'Unsaved profile draft');
-      assert.ok(page.url().endsWith('#/settings/assistant/profile'));
-      await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
-      await warning.getByRole('button', { name: '放弃修改', exact: true }).click();
-      await page.locator('.settings-related').waitFor();
+      // Legacy assistant/profile settings are not shipped; push and handover above exercise draft guards.
       await navigate(page, '#/settings/machines');
       await page.getByRole('button', { name: '添加机器', exact: true }).waitFor();
       await page.screenshot({ path: `${shots}/machines-${mobile ? 'phone' : 'desktop'}-${theme}.png`, animations: 'disabled' });

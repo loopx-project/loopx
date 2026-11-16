@@ -129,7 +129,7 @@ test('new drafts belong to their machine and survive switching and reloading', a
 });
 
 test('images sent through the hub are stored and displayed on the other machine', async () => {
-  await page.locator('.thread-item', { hasText: /^开发机上的对话$/ }).click();
+  await page.locator('.thread-item').filter({ has: page.locator('.thread-title', { hasText: /^开发机上的对话$/ }) }).click();
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64');
   await page.setInputFiles('.composer input[type=file]', { name: 'dot.png', mimeType: 'image/png', buffer: png });
   await page.locator('.composer textarea').fill('remote image');

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startDaemon, launchBrowser, openUi, api } from '../harness.mjs';
 
-test('Pi new-thread and personal model pickers work while MCP discovery is blocked', async () => {
+test('Pi new-thread model picker works while MCP discovery is blocked', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pi-model-ui-')), state = join(dir, 'state');
   writeFileSync(state, JSON.stringify({ mcpHold: true }));
   const daemon = await startDaemon({ FAKE_PI_CATALOG_FILE: state, FAKE_PI_REQUIRE_NO_MCP: '1', FAKE_PI_MANY_MODELS: '1',
@@ -18,7 +18,9 @@ test('Pi new-thread and personal model pickers work while MCP discovery is block
       await openUi(page, daemon);
       if (mobile) await page.locator('.composer textarea').tap();
       await page.locator('.model-control-trigger').click();
-      await page.locator('.effort-model').click();
+      const models = page.locator('.model-control-panel');
+      await models.getByRole('menuitemradio').or(models.locator('.effort-model')).first().waitFor();
+      if (await models.locator('.effort-model').count()) await models.locator('.effort-model').click();
       await page.getByRole('menuitemradio', { name: /^Plain\b/ }).click();
       await page.keyboard.press('Escape');
       await page.locator('.composer textarea').fill(`Model selection ${mobile ? 'phone' : 'desktop'}`);
@@ -26,15 +28,6 @@ test('Pi new-thread and personal model pickers work while MCP discovery is block
       await page.locator('.composer .send-btn').click();
       assert.equal((await (await created).json()).model, 'fake/plain');
       await page.locator('.row.assistant').waitFor();
-      await page.evaluate(() => { location.hash = '#/todos'; });
-      await page.locator('.personal-summary').click();
-      const settings = page.getByRole('region', { name: '私人设置', exact: true });
-      await settings.locator('.personal-setting-line').nth(2).getByRole('button').click();
-      await page.getByLabel('筛选模型').fill('Model 40');
-      await page.getByRole('menuitemradio', { name: 'Model 40', exact: true }).click();
-      await settings.getByRole('button', { name: '保存', exact: true }).click();
-      await settings.waitFor({ state: 'detached' });
-      assert.equal((await (await api(daemon, '/api/personal/settings')).json()).model, 'fake/model-40');
       await context.close();
     }
   } finally { writeFileSync(state, '{}'); await browser.close(); await daemon.stop(); rmSync(dir, { recursive: true, force: true }); }
@@ -56,7 +49,9 @@ test('Pi image capabilities refresh open desktop and phone composers after backg
       await openUi(page, daemon);
       if (mobile) await page.locator('.composer textarea').tap();
       await page.locator('.model-control-trigger').click();
-      await page.locator('.effort-model').click();
+      const models = page.locator('.model-control-panel');
+      await models.getByRole('menuitemradio').or(models.locator('.effort-model')).first().waitFor();
+      if (await models.locator('.effort-model').count()) await models.locator('.effort-model').click();
       await page.getByRole('menuitemradio', { name: /^Plain\b/ }).click();
       await page.keyboard.press('Escape');
       await page.locator('.composer textarea').fill('Inspect image');

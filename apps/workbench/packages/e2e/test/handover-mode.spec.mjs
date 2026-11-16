@@ -28,7 +28,7 @@ const select = async (page, title, mobile) => {
 };
 const dialog = async page => {
   await page.getByLabel('这个对话的更多操作').click();
-  await page.getByRole('menuitem', { name: '交接', exact: true }).click();
+  await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click(); await page.getByRole('menuitem', { name: '交接', exact: true }).click();
   const value = page.getByRole('dialog', { name: '交接', exact: true });
   await value.locator('.handover-summary').waitFor(); return value;
 };
@@ -41,11 +41,12 @@ const handover = async (page, modal) => {
 const uiSend = async (page, id, text) => {
   await page.locator('.composer textarea').fill(text);
   await page.getByRole('button', { name: '发送', exact: true }).click();
-  await wait(async () => (await request(`/api/threads/${id}/events`)).some(e => e.type === 'turn.started' && e.data.text === text));
+  await wait(async () => (await request(`/api/threads/${id}/events`)).some(e => e.type === 'turn.started' && (e.data.displayText ?? e.data.text) === text));
   await idle(id);
 };
 const chainDialog = async page => {
   await page.getByLabel('这个对话的更多操作').click();
+  await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
   await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
 };
@@ -75,7 +76,7 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
       const branch = await handover(page, modal);
       assert.equal(branch.handover.mode, 'branch');
       assert.equal((await request(`/api/threads/${source.id}`)).status, 'running');
-      assert.equal(await page.locator('.handover-readonly, .merged-history').count(), 0);
+      assert.equal(await page.locator('.handover-readonly, .current-segment').count(), 0);
       await sidebar(page, mobile);
       const card = page.locator('.handover-group').filter({ has: page.locator('.thread-title', { hasText: source.title }) });
       assert.equal(await card.count(), 1);
@@ -89,9 +90,9 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
       await uiSend(page, branch.id, '独立处理新任务');
       await request(`/api/threads/${source.id}/cancel`, 'POST'); await idle(source.id);
       await origin(page);
-      assert.equal(await page.locator('.handover-readonly, .merged-history').count(), 0);
+      assert.equal(await page.locator('.handover-readonly, .current-segment').count(), 0);
       await uiSend(page, source.id, '原会话继续工作');
-      assert.ok(!(await request(`/api/threads/${branch.id}/events`)).some(e => e.type === 'turn.started' && e.data.text === '原会话继续工作'));
+      assert.ok(!(await request(`/api/threads/${branch.id}/events`)).some(e => e.type === 'turn.started' && (e.data.displayText ?? e.data.text) === '原会话继续工作'));
       await chainDialog(page);
       await page.getByRole('menuitem').filter({ hasText: '接手会话' }).click();
       await uiSend(page, branch.id, '新会话再次独立工作');
@@ -107,11 +108,11 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
       assert.equal(await stopped.locator('.handover-mode-choice').count(), 0);
       const stoppedBranch = await handover(page, stopped);
       assert.equal(stoppedBranch.handover.mode, 'branch');
-      assert.equal(await page.locator('.handover-readonly, .merged-history').count(), 0);
+      assert.equal(await page.locator('.handover-readonly, .current-segment').count(), 0);
       await uiSend(page, stoppedBranch.id, '手动新会话独立处理');
       await origin(page);
       await uiSend(page, stoppedSource.id, '已停原会话仍可独立发送');
-      assert.ok(!(await request(`/api/threads/${stoppedBranch.id}/events`)).some(e => e.type === 'turn.started' && e.data.text === '已停原会话仍可独立发送'));
+      assert.ok(!(await request(`/api/threads/${stoppedBranch.id}/events`)).some(e => e.type === 'turn.started' && (e.data.displayText ?? e.data.text) === '已停原会话仍可独立发送'));
       await page.screenshot({ path: join(shots, `idle-manual-${name}.png`), animations: 'disabled' });
 
       const relay = await create(`自动接力任务 ${name}`); await send(relay.id, '准备自动接力的任务'); await idle(relay.id);
@@ -141,11 +142,11 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
       assert.equal((await request(`/api/threads/${relay.id}`)).autoHandover.override, false);
       assert.equal((await request(`/api/threads/${continued.id}`)).autoHandover.override, null);
       await uiSend(page, relay.id, '取消接力后发回原会话');
-      assert.ok(!(await request(`/api/threads/${continued.id}/events`)).some(e => e.type === 'turn.started' && e.data.text === '取消接力后发回原会话'));
+      assert.ok(!(await request(`/api/threads/${continued.id}/events`)).some(e => e.type === 'turn.started' && (e.data.displayText ?? e.data.text) === '取消接力后发回原会话'));
       await chainDialog(page);
       await page.getByRole('menuitem').filter({ hasText: '接手会话' }).click();
       await uiSend(page, continued.id, '取消接力后接手会话也能发送');
-      assert.ok(!(await request(`/api/threads/${relay.id}/events`)).some(e => e.type === 'turn.started' && e.data.text === '取消接力后接手会话也能发送'));
+      assert.ok(!(await request(`/api/threads/${relay.id}/events`)).some(e => e.type === 'turn.started' && (e.data.displayText ?? e.data.text) === '取消接力后接手会话也能发送'));
       await chainDialog(page);
       await page.locator('.handover-entry small').filter({ hasText: /^已取消接力 ·/ }).waitFor();
       await page.keyboard.press('Escape');
@@ -164,7 +165,7 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
       await page.locator('.merged-history').waitFor({ state: 'detached' });
       await origin(page);
       await uiSend(page, resumedRelay.id, '解除接力后发回当前会话');
-      assert.ok(!(await request(`/api/threads/${resumedNext.id}/events`)).some(e => e.type === 'turn.started' && e.data.text === '解除接力后发回当前会话'));
+      assert.ok(!(await request(`/api/threads/${resumedNext.id}/events`)).some(e => e.type === 'turn.started' && (e.data.displayText ?? e.data.text) === '解除接力后发回当前会话'));
       await page.screenshot({ path: join(shots, `resumed-source-${name}.png`), animations: 'disabled' });
       assert.deepEqual(errors, []);
     } finally { await context.close(); }

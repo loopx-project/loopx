@@ -196,7 +196,9 @@ test('onboarding: clicking later prevents auto-popup after refresh, manual trigg
 
       // Manual trigger from settings menu (labeled "配置" in zh-CN)
       await page.getByRole('button', { name: '配置', exact: true }).click();
-      await page.getByRole('menuitem', { name: '添加 agent' }).click();
+      await page.locator('.settings-nav').getByRole('button', { name: 'Agents', exact: true }).click();
+      await page.getByRole('button', { name: '添加 agent', exact: true }).click();
+      await page.getByRole('button', { name: '接入已安装的 agent 或已有账号', exact: true }).click();
 
       // Opens directly into results view
       const resultsDialog = page.locator('.onboard-dialog-results');

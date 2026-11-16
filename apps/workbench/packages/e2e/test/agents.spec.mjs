@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
+import { startDaemon, openUi, api, launchBrowser, closeSettings } from '../harness.mjs';
 
 let daemon;
 let browser;
@@ -16,18 +16,15 @@ before(async () => {
   // Two configured instances (the built-ins plus a second pi account with its own environment)
   // and an extra `agy2` shim on PATH for discovery.
   daemon = await startDaemon({
-    LOOCHAT_AGENTS_JSON: JSON.stringify({
-      agents: [
+    FAKE_PI_MESSAGES_FILE: (messagesFile = join(mkdtempSync(join(tmpdir(), 'loochat-e2e-msgs-')), 'messages.json')),
+    LOOCHAT_E2E_DISCOVER_AGY2: '1',
+  }, { agents: [
         { id: 'claude', adapter: 'claude', command: ['fake-claude'] },
         { id: 'pi', adapter: 'pi', command: ['fake-pi'] },
         { id: 'pi2', adapter: 'pi', label: 'pi 备用', command: ['fake-pi'], env: { FAKE_PI_LABEL: 'pi2' } },
         { id: 'agy', adapter: 'agy', command: ['fake-agy'] },
         { id: 'traex', adapter: 'traex', command: ['traex', 'acp', 'serve'] },
-      ],
-    }),
-    FAKE_PI_MESSAGES_FILE: (messagesFile = join(mkdtempSync(join(tmpdir(), 'loochat-e2e-msgs-')), 'messages.json')),
-    LOOCHAT_E2E_DISCOVER_AGY2: '1',
-  });
+      ] });
   browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   page = await ctx.newPage();
@@ -49,6 +46,7 @@ test('a second account of the same CLI is its own entry, with its own environmen
   assert.equal(agents.find((a) => a.id === 'pi2').label, 'pi 备用');
 
   await page.locator('.composer .context-btn').first().click();
+  await page.locator('.agent-picker-panel').getByRole('button', { name: /^pi/ }).click();
   await page.getByRole('menuitemradio', { name: 'pi 备用' }).click();
   await page.locator('.composer textarea').click();
   await page.keyboard.type('hello');
@@ -57,21 +55,30 @@ test('a second account of the same CLI is its own entry, with its own environmen
   await page.getByText('[pi2] there hello').waitFor({ timeout: 15_000 });
 });
 
-test('a CLI found on PATH can be added from the picker', async () => {
-  await page.locator('.new-thread').click();
-  await page.locator('.composer .context-btn').first().click();
-  const found = page.getByRole('button', { name: /agy2/ });
+test('a CLI found on PATH can be added through agent settings', async () => {
+  await page.locator('.sidebar').getByRole('button', { name: '配置', exact: true }).click();
+  await page.locator('.settings-nav').getByRole('button', { name: 'Agents', exact: true }).click();
+  await page.getByRole('button', { name: '添加 agent', exact: true }).click();
+  await page.getByRole('button', { name: '接入已安装的 agent 或已有账号', exact: true }).click();
+  const dialog = page.locator('.onboard-dialog-results');
+  const found = dialog.getByRole('checkbox', { name: /agy2/ });
   await found.waitFor({ timeout: 10_000 });
+  // Discovery preselects new installations; explicitly choose only the fixture CLI.
+  for (const box of await dialog.getByRole('checkbox').all()) {
+    if (await box.isEnabled() && await box.getAttribute('aria-checked') === 'true') await box.click();
+  }
   await found.click();
-  // Adding selects it: the picker's trigger now says agy2, and the agents list has it.
-  await page.waitForFunction(() => document.querySelector('.composer .context-btn')?.textContent?.includes('agy2'), null, { timeout: 10_000 });
+  await dialog.getByRole('button', { name: '连接 1 个', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
   const agents = await (await api(daemon, '/api/agents')).json();
   assert.ok(agents.some((a) => a.id === 'agy2' && a.available));
+  await closeSettings(page);
 });
 
 test('turns the terminal added show up marked, and sending asks first', async () => {
-  await page.locator('.new-thread').click();
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
   await page.locator('.composer .context-btn').first().click();
+  await page.locator('.agent-picker-panel').getByRole('button', { name: /^pi/ }).click();
   await page.getByRole('menuitemradio', { name: /^pi$/ }).click();
   await page.locator('.composer textarea').click();
   await page.keyboard.type('from the web');
@@ -80,11 +87,13 @@ test('turns the terminal added show up marked, and sending asks first', async ()
 
   const threads = await (await api(daemon, '/api/threads')).json();
   const thread = threads.find((t) => t.title === 'from the web');
+  const events = await (await api(daemon, `/api/threads/${thread.id}/events`)).json();
+  const prompt = events.find(event => event.type === 'turn.started').data.text;
   writeFileSync(
     messagesFile,
     JSON.stringify({
       [thread.agentSessionId]: [
-        { role: 'user', content: 'from the web' },
+        { role: 'user', content: prompt },
         { role: 'assistant', content: [{ type: 'text', text: 'hi there from the web' }] },
         { role: 'user', content: 'typed in the terminal' },
         { role: 'assistant', content: [{ type: 'text', text: 'answered in the terminal' }] },

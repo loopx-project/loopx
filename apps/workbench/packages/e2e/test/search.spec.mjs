@@ -14,7 +14,9 @@ const post = async (path, body, method = 'POST') => {
 const say = async (id, text) => {
   await post(`/api/threads/${id}/turns`, { text });
   for (let n = 0; n < 200; n++) {
-    if ((await (await api(daemon, `/api/threads/${id}`)).json()).status !== 'running') return;
+    const thread = await (await api(daemon, `/api/threads/${id}`)).json();
+    // A finished turn can still hold the send queue while automatic handover checks quota.
+    if (thread.status !== 'running' && !['checking', 'preparing', 'countdown'].includes(thread.autoHandover?.state)) return;
     await new Promise(r => setTimeout(r, 50));
   }
   throw new Error('thread did not finish');
@@ -74,7 +76,6 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       await hits.getByText('对话里没有找到。').waitFor();
       await box.fill('灯塔水母');
       await hits.locator('.search-hit', { hasText: '已归档' }).first().click();
-      await page.getByText('已从归档恢复').waitFor();
       await page.locator('.thread .row.user', { hasText: '灯塔水母的养殖笔记' }).waitFor();
       assert.equal((await (await api(daemon, `/api/threads/${shelved.id}`)).json()).archivedAt, null);
       assert.deepEqual(errors, []);

@@ -55,10 +55,10 @@ const create = async (page, agent, title, mobile) => {
   return thread;
 };
 const screenshot = async (page, name) => { if (shots) await page.screenshot({ path: join(shots, `${name}.png`), animations: 'disabled' }); };
-const waitForPaletteWidth = page => page.waitForFunction(() => {
+const waitForPaletteLayout = page => page.waitForFunction(() => {
   const menu = document.querySelector('.command-menu')?.getBoundingClientRect();
   const composer = document.querySelector('.composer-box')?.getBoundingClientRect();
-  return menu && composer && Math.abs(menu.width - composer.width) < 0.5;
+  return menu && composer && Math.abs(menu.width - composer.width) < 0.5 && menu.y >= 0 && menu.bottom <= composer.top;
 });
 
 test('long catalogs scroll by touch and wheel without losing the draft or opening the phone sidebar', { timeout: 180000 }, async () => {
@@ -81,7 +81,7 @@ test('long catalogs scroll by touch and wheel without losing the draft or openin
         await add(page).click();
         await search(page, kind === 'skill' ? '技能' : '操作', mobile ? '' : `scroll-${kind}`);
         if (mobile) await page.setViewportSize({ width: 390, height });
-        await waitForPaletteWidth(page);
+        await waitForPaletteLayout(page);
         const palette = page.locator('.command-menu');
         const query = palette.getByRole('textbox');
         await item(page, new RegExp(`^/scroll-${kind}-40`)).waitFor({ state: 'attached' });
@@ -145,7 +145,7 @@ test('long catalogs scroll by touch and wheel without losing the draft or openin
       if (mobile) {
         await add(page).click();
         await search(page, '操作', '');
-        await waitForPaletteWidth(page);
+        await waitForPaletteLayout(page);
         const bounds = await page.locator('.command-menu').boundingBox();
         const from = { x: bounds.x + 12, y: bounds.y + 100 };
         // A sideways gesture starting in the catalog must not navigate to the sidebar.
@@ -175,7 +175,7 @@ test('desktop plus and slash share a full-width catalog with search, keyboard se
       await query.waitFor();
       assert.deepEqual(await page.getByRole('option').allTextContents(), slashEntries);
       assert.equal(await query.evaluate(el => el === document.activeElement), true);
-      await waitForPaletteWidth(page);
+      await waitForPaletteLayout(page);
       const bounds = await page.locator('.command-menu').boundingBox();
       const composer = await page.locator('.composer-box').boundingBox();
       assert.equal(Math.round(bounds.width), Math.round(composer.width));
@@ -227,7 +227,7 @@ test('add menu offers searchable actions and skills and controls goals without l
       await search(page, '技能', 'inspect');
       if (mobile) {
         await page.setViewportSize({ width: 390, height: 450 });
-        await waitForPaletteWidth(page);
+        await waitForPaletteLayout(page);
         const bounds = await page.locator('.command-menu').boundingBox();
         const composer = await page.locator('.composer-box').boundingBox();
         assert.equal(Math.round(bounds.width), Math.round(composer.width), 'skills span the composer width');
@@ -250,7 +250,7 @@ test('add menu offers searchable actions and skills and controls goals without l
       await add(page).click();
       await search(page, '操作', '模型');
       if (mobile) {
-        await waitForPaletteWidth(page);
+        await waitForPaletteLayout(page);
         const bounds = await page.locator('.command-menu').boundingBox();
         const composer = await page.locator('.composer-box').boundingBox();
         assert.equal(Math.round(bounds.width), Math.round(composer.width), 'actions use the same wide palette');
@@ -341,7 +341,7 @@ test('goal actions follow capabilities, Plan blocks starting a goal, and Pi skil
     await page.locator('.composer textarea[placeholder="先分析和讨论方案"]').waitFor();
     await openGoal(page);
     assert.equal(await item(page, /^设置目标/).isDisabled(), true);
-    assert.equal(await item(page, /^继续目标/).isDisabled(), true);
+    assert.equal(await item(page, /^继续目标/).count(), 0, 'live goal controls remain on the card');
     const query = page.getByRole('textbox', { name: '搜索操作与技能' });
     await query.fill('设置目标');
     await query.press('ArrowDown');

@@ -14,7 +14,7 @@ const post = async (path, body) => {
 const waitIdle = async id => {
   for (let n = 0; n < 200; n++) {
     const thread = await (await api(daemon, `/api/threads/${id}`)).json();
-    if (thread.status !== 'running') return;
+    if (thread.status !== 'running' && !['checking', 'preparing', 'countdown'].includes(thread.autoHandover?.state)) return;
     await new Promise(r => setTimeout(r, 50));
   }
   throw new Error('thread did not finish');
@@ -31,7 +31,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       await openUi(page, daemon);
       if (phone) await page.locator('.menu-btn').click();
       await page.locator('.thread-row', { hasText: title }).click();
-      // On the desktop collaboration is switched on first; on the phone the @ alone starts it.
+      // Desktop can enable collaboration first; choosing a collaborator also starts it on phones.
       if (!phone) {
         await openCollaboration(page);
         await page.locator('.coord-picker-head button').click();
@@ -41,37 +41,16 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
         assert.equal(await page.locator('.coord-bar').count(), 0);
       }
       const box = page.getByRole('textbox', { name: '消息', exact: true });
-      const list = page.getByRole('listbox', { name: '选择协作智能体' });
-      // An @ is only a character until an agent is picked: a word nobody goes by, an address, and a
-      // list turned away all leave it as text, and the list stays away while that word is typed.
-      await box.fill('@nobody');
-      assert.equal(await list.count(), 0);
-      await box.fill('mail a@b');
-      assert.equal(await list.count(), 0);
-      await box.fill('@');
-      await list.waitFor();
-      await list.getByRole('button', { name: '不选择智能体' }).click();
-      await list.waitFor({ state: 'detached' });
-      await box.pressSequentially('c');
-      assert.equal(await box.inputValue(), '@c');
-      assert.equal(await list.count(), 0);
-      if (!phone) {
-        await box.fill('');
-        await box.fill('@');
-        await list.waitFor();
-        await box.press('Escape');
-        await list.waitFor({ state: 'detached' });
-        await box.pressSequentially('c');
-        assert.equal(await list.count(), 0);
-      }
+      await box.fill('Keep this draft while choosing a collaborator');
+      await openCollaboration(page);
+      const list = page.getByRole('menu', { name: '协作', exact: true });
       assert.equal(await page.locator('.coord-row').count(), 0);
-      await box.fill('');
-      await box.fill('@');
-      await list.waitFor();
-      assert.ok(await page.getByRole('option', { name: /claude/i }).first().locator('svg').count());
+      const choiceRow = list.getByRole('menuitem', { name: /claude/i }).first();
+      assert.ok(await choiceRow.locator('svg').count());
       const shots = '/tmp/loochat-coordination-shots'; mkdirSync(shots, { recursive: true });
       await page.screenshot({ path: `${shots}/${phone ? 'phone' : 'desktop'}-${colorScheme}-menu.png` });
-      await page.getByRole('option', { name: /claude/i }).first().click();
+      await choiceRow.click();
+      assert.equal(await box.inputValue(), 'Keep this draft while choosing a collaborator');
       // The agent gets a line of its own, and the caret is there for its task; Enter goes back to the message.
       const row = page.locator('.coord-row');
       assert.match(await row.innerText(), /claude/i);
@@ -111,7 +90,9 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === '');
       await page.locator('.composer-add.on').waitFor();
       await page.locator('.coord-row').waitFor({ state: 'detached' });
-      await page.locator('.row.user .bubble', { hasText: '只看异常处理' }).waitFor();
+      const asked = page.locator('.row.user .bubble', { hasText: '请审查接口文档' });
+      await asked.waitFor();
+      assert.ok(!(await asked.innerText()).includes('[指定协作对象]'), 'protocol instructions stay out of the visible message');
 
       // The fixture invokes the actual injected CLI, creating a normal member thread.
       const directive = Buffer.from(JSON.stringify({ args: ['spawn', '--agent', 'claude', '--name', '文档审查', '--message-file', '-', '--request-id', 'review'], text: '检查接口与异常处理 LOOCHAT_REPORT' })).toString('base64');

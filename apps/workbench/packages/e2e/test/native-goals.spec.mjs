@@ -26,8 +26,9 @@ test('native goals, immediate controls and persisted results on desktop/phone in
         if (mobile) await page.locator('.menu-btn').click();
         await page.locator('.thread-title', { hasText: title }).first().click();
         const input = page.locator('.composer textarea');
-        await input.fill('/goal');
-        await page.getByRole('option', { name: /\/goal/ }).waitFor();
+        await page.getByRole('button', { name: '添加与模式', exact: true }).click();
+        await page.getByRole(mobile ? 'menuitem' : 'option', { name: /^设置目标/ }).click();
+        assert.match(await input.inputValue(), /^\/goal/);
         await page.waitForTimeout(350); // Let the command menu and mobile navigation settle.
         if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
           mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
