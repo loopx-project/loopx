@@ -6,9 +6,9 @@ import { HttpError } from '../../errors.js';
 import type { AgentAdapter, ApprovalRequest } from '../types.js';
 import { isWithinWorkdirs, type Workdirs } from '../../workdirs.js';
 import type { ThreadManager } from '../../threads.js';
-import { goalAgentFor, LOOPX_PERMISSIONS, LoopxBindings, permissionAvailable, type LoopxBinding, type LoopxPermission } from './binding.js';
+import { corePermission, fromCorePermission, goalAgentFor, LOOPX_PERMISSIONS, LoopxBindings, permissionAvailable, type LoopxBinding, type LoopxPermission } from './binding.js';
 import { goalContextBlock } from './context.js';
-import { applyProposal, CoreError, goalLocale, grantedWorkspaces, loadProposal, previewGoalCreate, workspaceRef, type GoalDraft } from './core.js';
+import { applyProposal, CoreError, goalLocale, grantedWorkspaces, loadProposal, previewGoalCreate, registeredGoalRoot, workspaceRef, type GoalDraft } from './core.js';
 import { coreUrl } from './proxy.js';
 import { cliFromEnv, GoalStateCache, readGoalState, type GoalState, type LoopxCli } from './status.js';
 
@@ -52,10 +52,16 @@ export class LoopxService implements LoopxHooks {
   private readonly states: GoalStateCache;
   private manager: ThreadManager | null = null;
   private readonly core: URL;
+  private readonly cli: LoopxCli;
+  /**
+   * What each preview was asked for, by proposal. Confirming a preview dispatches exactly this, never what
+   * the confirmation request says. Held in memory: after a restart the person previews again.
+   */
+  private readonly previews = new Map<string, { agent: string; goalAgentId: string; permission: LoopxPermission; path: string; ref: string }>();
 
   constructor(private readonly deps: LoopxDeps) {
     this.bindings = new LoopxBindings(join(deps.dataDir, 'loopx-threads.json'));
-    const cli = deps.cli ?? cliFromEnv();
+    const cli = this.cli = deps.cli ?? cliFromEnv();
     this.states = new GoalStateCache((goalId) => readGoalState(goalId, cli));
     this.core = deps.core ?? coreUrl();
   }
@@ -102,17 +108,22 @@ export class LoopxService implements LoopxHooks {
     return { adapter, goalAgentId, permission: permission as LoopxPermission };
   }
 
-  /** The directory must be allowed here and be one the core lets a Goal be created in. */
-  private async workspace(cwd: unknown): Promise<{ path: string; ref: string }> {
+  private allowedDir(cwd: unknown): string {
     const raw = asText(cwd, 'cwd', 1000);
     let real: string;
     try { real = realpathSync(raw); if (!statSync(real).isDirectory()) throw new Error('not a directory'); }
     catch { throw new HttpError(400, 'cwd does not exist'); }
     if (!isWithinWorkdirs(real, this.deps.dirs.all())) throw new HttpError(400, 'cwd is not in the allowed workdirs');
+    return real;
+  }
+
+  /** The directory must be allowed here and be one the core lets a Goal be created in, matched by the core's own reference. */
+  private async workspace(cwd: unknown): Promise<{ path: string; ref: string }> {
+    const real = this.allowedDir(cwd);
     const granted = await grantedWorkspaces(this.core).catch((err) => { throw new HttpError(err instanceof CoreError ? err.status : 502, err.message, { code: err.code ?? 'loopx_core_unavailable' }); });
-    const hit = granted.find((g) => g.path === real || g.ref === workspaceRef(real));
-    if (!hit) throw new HttpError(409, '这个目录还没有授予 LoopX 核心，不能在这里创建 Goal', { code: 'workspace_not_granted', candidates: granted.map((g) => ({ path: g.path, title: g.title })) });
-    return { path: hit.path, ref: hit.ref };
+    const ref = workspaceRef(real);
+    if (!granted.some((g) => g.ref === ref)) throw new HttpError(409, '这个目录还没有授予 LoopX 核心，不能在这里创建 Goal', { code: 'workspace_not_granted', candidates: granted.map((g) => ({ title: g.title })) });
+    return { path: real, ref };
   }
 
   private fail(err: unknown): never {
@@ -132,75 +143,101 @@ export class LoopxService implements LoopxHooks {
     const draft: GoalDraft = {
       goalId: `goal-${operationId}`,
       title: (typeof input.title === 'string' && input.title.trim() ? input.title.trim() : Array.from(objective).slice(0, 80).join('')),
-      objective, completion, boundary, goalAgentId, workspaceRef: ws.ref, permission, operationId, locale: goalLocale(acceptLanguage),
+      objective, completion, boundary, goalAgentId, workspaceRef: ws.ref, permission: corePermission(permission), operationId, locale: goalLocale(acceptLanguage),
     };
     try {
       const { proposal } = await previewGoalCreate(draft, this.core);
+      this.previews.set(proposal.proposal_id, { agent: input.agent, goalAgentId, permission, path: ws.path, ref: ws.ref });
       return { proposalId: proposal.proposal_id as string, goalId: draft.goalId, title: draft.title, workspace: ws.path, agent: input.agent, goalAgent: goalAgentId, permission, objective, completion, boundary, status: proposal.status };
     } catch (err) { return this.fail(err); }
   }
 
-  /** Step 2: apply the reviewed Goal, then open this daemon's own thread for it and send the first message. */
+  /**
+   * Step 2: apply the reviewed Goal, then open this daemon's own thread for it and send the first message.
+   * Agent, permission and directory come from the preview and the core's reviewed proposal; a request that
+   * names different ones is refused. A launch that failed after the core created the Goal is safe to retry.
+   */
   async apply(input: any) {
     const manager = this.manager;
     if (!manager) throw new HttpError(503, 'loopx adapter is not attached');
     const proposalId = asText(input.proposalId, 'proposalId', 200);
     const known = this.bindings.byProposal(proposalId);
-    if (known) return { threadId: known, goalId: this.bindings.get(known)!.goalId, reused: true };
-    const { adapter, goalAgentId, permission } = this.pick(input.agent, input.permission);
+    if (known) {
+      const bound = this.bindings.get(known)!;
+      if (bound.firstMessage === undefined) return { threadId: known, goalId: bound.goalId, reused: true };
+      try { return { ...(await this.dispatch(known, bound.firstMessage)), goalId: bound.goalId, reused: true }; } catch (err) { return this.fail(err); }
+    }
+    const asked = this.previews.get(proposalId);
+    if (!asked) throw new HttpError(409, '这份预览已失效，请重新预览', { code: 'preview_expired' });
+    if (input.agent !== undefined && input.agent !== asked.agent) throw new HttpError(409, '确认的 agent 和预览时不同，请重新预览', { code: 'agent_mismatch' });
+    if (input.permission !== undefined && input.permission !== asked.permission) throw new HttpError(409, '确认的权限和预览时不同，请重新预览', { code: 'permission_mismatch' });
+    const adapter = this.pick(asked.agent, asked.permission).adapter;
     try {
       const { proposal: reviewed } = await loadProposal(proposalId, this.core);
       const params = reviewed.normalized_parameters ?? {};
-      if (reviewed.action_kind !== 'goal.create' || params.open_session !== false || params.agent_id !== goalAgentId) throw new HttpError(409, '这份预览不是这次发起的 Goal');
-      const granted = await grantedWorkspaces(this.core);
-      const ws = granted.find((g) => g.ref === params.workspace_ref);
-      if (!ws) throw new HttpError(409, '预览里的目录已不在核心授予的范围内', { code: 'workspace_not_granted' });
-      const applied = await applyProposal(proposalId, this.core);
-      const done = applied.proposal;
+      const permission = fromCorePermission(params.permission);
+      if (reviewed.action_kind !== 'goal.create' || params.open_session !== false || params.agent_id !== asked.goalAgentId
+        || params.workspace_ref !== asked.ref || permission !== asked.permission) throw new HttpError(409, '这份预览不是这次发起的 Goal');
+      const done = reviewed.status === 'applied' ? reviewed : await (async () => {
+        if (!(await grantedWorkspaces(this.core)).some((g) => g.ref === asked.ref)) throw new HttpError(409, '预览里的目录已不在核心授予的范围内', { code: 'workspace_not_granted' });
+        return (await applyProposal(proposalId, this.core)).proposal;
+      })();
       if (done.status !== 'applied' || done.receipt?.outcome !== 'goal_created') throw new HttpError(409, '核心没有创建这个 Goal（预览可能已过期），请重新预览', { code: 'proposal_not_applied', status: done.status });
+      if (fromCorePermission(done.normalized_parameters?.permission ?? params.permission) !== permission) throw new HttpError(409, '核心创建的 Goal 权限和预览不一致', { code: 'permission_mismatch' });
       const ids = done.receipt.resource_ids ?? {};
       const goalId = String(ids.goal_id ?? params.goal_id);
       const thread = await manager.createThread({
-        agent: input.agent, cwd: ws.path, title: String(params.title ?? goalId), permissionMode: 'ask',
+        agent: asked.agent, cwd: asked.path, title: String(params.title ?? goalId), permissionMode: 'ask',
         ...(typeof input.model === 'string' && input.model ? { model: input.model } : {}),
         ...(typeof input.effort === 'string' && input.effort ? { effort: input.effort } : {}),
       });
+      const text = typeof input.text === 'string' && input.text.trim() ? input.text.trim() : `开始推进 Goal「${params.title}」。先核对目标边界和现有待办，再汇报你的计划；遇到权限边界时停下来说明。`;
       this.bindings.set(thread.id, {
-        goalId, goalAgentId, managedAgentId: typeof ids.managed_agent_id === 'string' ? ids.managed_agent_id : null,
+        goalId, goalAgentId: asked.goalAgentId, managedAgentId: typeof ids.managed_agent_id === 'string' ? ids.managed_agent_id : null,
         goalInstanceId: typeof ids.goal_instance_id === 'string' ? ids.goal_instance_id : null,
-        workspace: ws.path, permission, proposalId,
+        workspace: asked.path, permission, proposalId, firstMessage: text,
       });
+      this.previews.delete(proposalId);
       manager.announceLoopx(thread.id);
       // A handover would move the conversation to another agent and leave the Goal's boundary behind.
       manager.autoHandover.setOverride(thread.id, false);
-      const text = typeof input.text === 'string' && input.text.trim() ? input.text.trim() : `开始推进 Goal「${params.title}」。先核对目标边界和现有待办，再汇报你的计划；遇到权限边界时停下来说明。`;
-      const started = await manager.startTurn(thread.id, { text, fromUser: true } as never);
-      return { threadId: thread.id, goalId, turnId: 'turnId' in started ? started.turnId : null, adapter: adapter.id };
+      return { ...(await this.dispatch(thread.id, text)), goalId, adapter: adapter.id };
     } catch (err) { return this.fail(err); }
   }
 
+  /** Sends a launch's first message; only once it has gone out does the binding stop carrying it. */
+  private async dispatch(threadId: string, text: string) {
+    const started = await this.manager!.startTurn(threadId, { text, fromUser: true } as never);
+    this.bindings.update(threadId, { firstMessage: undefined });
+    return { threadId, turnId: 'turnId' in started ? started.turnId : null };
+  }
+
   /**
-   * A new conversation on a Goal that already exists. The core must know the Goal and have it active.
-   * The conversation works in the directory an earlier conversation of this Goal used; a Goal made
-   * elsewhere (the dashboard) has none yet, so the caller names the directory (`cwd`), which has to be
-   * allowed here. The core does not expose a Goal's registered root to read, so that case is trusted.
+   * A new conversation on a Goal that already exists. The core must know the Goal and have it active. The
+   * conversation works in the root the Goal is registered under, read back from the registry; a `cwd` the
+   * caller names must be that root. The permission is the one an earlier conversation of this Goal was
+   * created under by the core; a Goal with none here (made in the dashboard) joins read-only.
    */
   async join(input: any) {
     const manager = this.manager;
     if (!manager) throw new HttpError(503, 'loopx adapter is not attached');
     const goalId = asText(input.goalId, 'goalId', 200);
     const earlier = this.bindings.threadsOf(goalId).map((id) => this.bindings.get(id)!).at(-1);
-    const { goalAgentId, permission } = this.pick(input.agent, input.permission ?? earlier?.permission ?? (this.deps.adapters.get(input.agent)?.id === 'codex' ? 'workspace_auto' : 'read_only'));
+    const ceiling: LoopxPermission = earlier?.permission ?? 'read_only';
+    const asked = input.permission ?? (ceiling === 'workspace_auto' && this.deps.adapters.get(input.agent)?.id === 'codex' ? 'workspace_auto' : 'read_only');
+    if (asked === 'workspace_auto' && ceiling !== 'workspace_auto') throw new HttpError(409, '这个 Goal 不是以工作区写入权限创建的，只能只读加入', { code: 'permission_mismatch' });
+    const { goalAgentId, permission } = this.pick(input.agent, asked);
     let state: GoalState;
     try { state = await this.states.get(goalId, true); }
     catch (err) { throw new HttpError(404, err instanceof Error && err.message === 'goal_not_found' ? 'LoopX 核心里没有这个 Goal' : `读不到这个 Goal：${err instanceof Error ? err.message : err}`, { code: 'goal_not_found' }); }
     if (state.activation && state.activation !== 'active') throw new HttpError(409, `这个 Goal 当前不是活跃状态（${state.activation}）`, { code: 'goal_not_active' });
-    let workspace = earlier?.workspace;
-    if (!workspace) {
-      const raw = asText(input.cwd, 'cwd', 1000);
-      try { workspace = realpathSync(raw); if (!statSync(workspace).isDirectory()) throw new Error('not a directory'); } catch { throw new HttpError(400, 'cwd does not exist'); }
-      if (!isWithinWorkdirs(workspace, this.deps.dirs.all())) throw new HttpError(400, 'cwd is not in the allowed workdirs');
-    }
+    if (!this.cli.registry) throw new HttpError(503, '没有配置 LoopX registry，读不到这个 Goal 的工作目录', { code: 'goal_root_unknown' });
+    const root = await registeredGoalRoot(goalId, this.cli.registry).catch(() => null);
+    if (!root) throw new HttpError(409, 'registry 里读不到这个 Goal 的工作目录', { code: 'goal_root_unknown' });
+    let workspace: string;
+    try { workspace = realpathSync(root); } catch { throw new HttpError(409, `这个 Goal 的工作目录不存在：${root}`, { code: 'goal_root_unknown' }); }
+    if (!isWithinWorkdirs(workspace, this.deps.dirs.all())) throw new HttpError(400, 'Goal 的工作目录不在允许的目录内', { code: 'workspace_not_allowed' });
+    if (input.cwd !== undefined && input.cwd !== null && input.cwd !== '' && this.allowedDir(input.cwd) !== workspace) throw new HttpError(409, '只能在 Goal 登记的工作目录里加入', { code: 'workspace_mismatch', workspace });
     try {
       const thread = await manager.createThread({
         agent: input.agent, cwd: workspace, title: state.title !== goalId ? state.title : goalId, permissionMode: 'ask',

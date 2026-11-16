@@ -42,7 +42,7 @@ export interface GoalPreview {
 
 /** The daemon refused or the core was unreachable. `code` names the case the card handles itself. */
 export class LoopxError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string, readonly candidates?: { path: string; title: string }[]) { super(message); }
+  constructor(message: string, readonly status: number, readonly code?: string, readonly candidates?: { title: string }[]) { super(message); }
 }
 
 async function call<T>(token: string | undefined, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -51,7 +51,7 @@ async function call<T>(token: string | undefined, path: string, body?: unknown, 
     headers: { Authorization: `Bearer ${token ?? ''}`, 'Accept-Language': localeTag(), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const json = await res.json().catch(() => ({})) as { error?: string; code?: string; candidates?: { path: string; title: string }[] };
+  const json = await res.json().catch(() => ({})) as { error?: string; code?: string; candidates?: { title: string }[] };
   if (!res.ok) throw new LoopxError(json.error ?? `HTTP ${res.status}`, res.status, json.code, json.candidates);
   return json as T;
 }

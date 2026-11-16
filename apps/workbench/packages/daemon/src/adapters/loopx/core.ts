@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { coreUrl } from './proxy.js';
 
 /** The core refused or failed; `status` is the core's own, `code` its error_code when it gave one. */
@@ -30,12 +31,23 @@ export function workspaceRef(root: string): string {
   return `workspace-${createHash('sha256').update(root).digest('hex').slice(0, 12)}`;
 }
 
-export interface CoreProject { title: string; goal_workspace_ref?: string; workspace_path?: string }
+export interface CoreProject { title: string; goal_workspace_ref?: string }
 
-/** The directories the core lets a Goal be created in. Others need the core restarted with --scan-path. */
-export async function grantedWorkspaces(core?: URL): Promise<{ ref: string; path: string; title: string }[]> {
+/**
+ * The directories the core lets a Goal be created in, by their opaque creation reference and display title.
+ * The core does not say their paths; a directory chosen here is matched by computing its reference.
+ * Others need the core restarted with --scan-path.
+ */
+export async function grantedWorkspaces(core?: URL): Promise<{ ref: string; title: string }[]> {
   const res = await coreJson<{ projects: CoreProject[] }>('/api/chat/projects', {}, core);
-  return res.projects.flatMap((p) => p.goal_workspace_ref && p.workspace_path ? [{ ref: p.goal_workspace_ref, path: p.workspace_path, title: p.title }] : []);
+  return res.projects.flatMap((p) => p.goal_workspace_ref ? [{ ref: p.goal_workspace_ref, title: p.title }] : []);
+}
+
+/** The project root a Goal is registered under, read from the registry the status CLI reads. Null when it is not listed. */
+export async function registeredGoalRoot(goalId: string, registry: string): Promise<string | null> {
+  const raw = JSON.parse(await readFile(registry, 'utf8')) as { goals?: { id?: unknown; repo?: unknown }[] };
+  const goal = (raw.goals ?? []).find((g) => g?.id === goalId);
+  return goal && typeof goal.repo === 'string' && goal.repo ? goal.repo : null;
 }
 
 export interface GoalDraft {
@@ -46,6 +58,7 @@ export interface GoalDraft {
   boundary: string;
   goalAgentId: string;
   workspaceRef: string;
+  /** In the core's words (see corePermission). */
   permission: string;
   operationId: string;
   /** The words the Goal's own fields are written in (the first task, the labels in the objective). Defaults to Chinese, as the core's first users read it. */

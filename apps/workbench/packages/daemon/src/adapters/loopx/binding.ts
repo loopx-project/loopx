@@ -5,6 +5,12 @@ import { dirname } from 'node:path';
 export const LOOPX_PERMISSIONS = ['read_only', 'workspace_auto'] as const;
 export type LoopxPermission = (typeof LOOPX_PERMISSIONS)[number];
 
+/** The words the core's goal.create review uses for the same two choices. */
+const CORE_PERMISSION: Record<LoopxPermission, string> = { read_only: 'read_only', workspace_auto: 'workspace_write_on_confirmation' };
+export const corePermission = (p: LoopxPermission): string => CORE_PERMISSION[p];
+export const fromCorePermission = (p: unknown): LoopxPermission | null =>
+  (Object.keys(CORE_PERMISSION) as LoopxPermission[]).find((k) => CORE_PERMISSION[k] === p) ?? null;
+
 /**
  * The part of a thread that makes it a LoopX Goal conversation. A thread without a binding is an
  * ordinary conversation and runs exactly as it does in Calli: nothing else in the daemon knows what
@@ -22,6 +28,8 @@ export interface LoopxBinding {
   permission: LoopxPermission;
   /** The creation proposal that made this Goal; a retried launch finds its thread again by it. */
   proposalId?: string;
+  /** Kept until the first message has gone out; a retried launch sends it then instead of reporting success. */
+  firstMessage?: string;
 }
 
 /** Bindings live in their own file, so removing this adapter leaves the thread store untouched. */
@@ -49,6 +57,14 @@ export class LoopxBindings {
   byProposal(proposalId: string): string | null {
     for (const [id, b] of this.map) if (b.proposalId === proposalId) return id;
     return null;
+  }
+
+  update(threadId: string, patch: Partial<LoopxBinding>): void {
+    const b = this.map.get(threadId);
+    if (!b) return;
+    const next = { ...b, ...patch };
+    for (const k of Object.keys(next) as (keyof LoopxBinding)[]) if (next[k] === undefined) delete next[k];
+    this.set(threadId, next);
   }
 
   set(threadId: string, binding: LoopxBinding): void {

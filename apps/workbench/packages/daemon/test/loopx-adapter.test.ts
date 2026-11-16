@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { goalAgentFor, LoopxBindings, permissionAvailable, type LoopxBinding } from '../src/adapters/loopx/binding.js';
+import { corePermission, fromCorePermission, goalAgentFor, LoopxBindings, permissionAvailable, type LoopxBinding } from '../src/adapters/loopx/binding.js';
 import { goalContextBlock } from '../src/adapters/loopx/context.js';
 import { goalCreateRequest, goalLocale, workspaceRef } from '../src/adapters/loopx/core.js';
 import { GoalStateCache, projectGoalState, readGoalState } from '../src/adapters/loopx/status.js';
@@ -53,6 +53,9 @@ test('only codex may write inside the workspace; only codex and claude can hold 
   assert.equal(goalAgentFor('codex'), 'codex');
   assert.equal(goalAgentFor('claude'), 'claude-code');
   assert.equal(goalAgentFor('pi'), null);
+  assert.equal(corePermission('workspace_auto'), 'workspace_write_on_confirmation');
+  assert.equal(fromCorePermission('read_only'), 'read_only');
+  assert.equal(fromCorePermission('workspace_auto'), null);
 });
 
 test('bindings survive a restart and are found again by the proposal that made them', () => {

@@ -140,7 +140,7 @@ export function GoalConfirm({ token, agent, agentLabel, cwd, permission, text, m
           <p>{error.message}</p>
           {error instanceof LoopxError && error.code === 'workspace_not_granted' && error.candidates?.length ? <>
             <p>{t('loopx.goal.notGranted')}</p>
-            <ul>{error.candidates.map((c) => <li key={c.path}><code>{c.path}</code></li>)}</ul></> : null}
+            <ul>{error.candidates.map((c) => <li key={c.title}><code>{c.title}</code></li>)}</ul></> : null}
           {error instanceof LoopxError && error.code === 'loopx_core_unavailable' && <p>{t('loopx.goal.coreDown')}</p>}
         </div>}
         {failure && <div className="goal-confirm-error" role="alert"><p>{failure}</p></div>}
