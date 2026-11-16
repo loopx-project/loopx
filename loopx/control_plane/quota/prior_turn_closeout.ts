@@ -30,6 +30,8 @@ export interface PriorHostTurnCloseoutCandidate extends JsonObject {
   /** The Todo id or autonomous replan obligation id, per `binding_kind`. */
   binding_id: string;
   settlement_effect_id: string | null;
+  /** The effective guard admitted an autonomous replan under this binding. */
+  admitted_replan?: true;
   /** The effective guard admitted a replan under this Todo's settlement identity. */
   admitted_todo_replan?: true;
 }
@@ -43,6 +45,7 @@ function candidate(
   binding: HeartbeatReceiptBinding,
   turnInstanceId: string,
   fact: HeartbeatReceiptFact,
+  admittedReplan: boolean,
   admittedTodoReplan: boolean,
 ): PriorHostTurnCloseoutCandidate {
   return {
@@ -51,15 +54,16 @@ function candidate(
     binding_kind: binding.binding_kind,
     binding_id: binding.binding_id,
     settlement_effect_id: binding.settlement_effect_id,
+    ...(admittedReplan ? {admitted_replan: true as const} : {}),
     ...(admittedTodoReplan ? {admitted_todo_replan: true as const} : {}),
   };
 }
 
 /**
- * Select prior Turns eligible for closeout readback. A Todo-bound replan
- * carries the Todo settlement identity and a separate semantic obligation.
- * It did not deliver a Todo, so its closeout marker can be false. Fresh
- * admission requires a verified outstanding writeback for this binding.
+ * Select prior Turns eligible for closeout readback. An admitted replan may
+ * carry either its legacy Todo settlement identity or its autonomous-replan
+ * identity. It did not deliver a Todo, so its closeout marker can be false.
+ * Fresh admission requires a verified outstanding writeback for this binding.
  * Explicit pending-closeout discovery can also find admitted replans before
  * writeback, whether their settlement identity is a Todo or an obligation.
  *
@@ -120,9 +124,11 @@ export function selectCloseoutCandidates(
     if (binding === null) continue;
     const admittedReplan = admitsAutonomousReplan(effective, fact);
     const admittedTodoReplan = admittedReplan && binding.binding_kind === "todo";
-    if (!fact.closeout_required && !admittedTodoReplan &&
+    if (!fact.closeout_required && !admittedReplan &&
         !(includeUnwrittenReplans && admittedReplan)) continue;
-    candidates.push({candidate: candidate(binding, turnInstanceId, fact, admittedTodoReplan),
+    candidates.push({candidate: candidate(
+      binding, turnInstanceId, fact, admittedReplan, admittedTodoReplan,
+    ),
       requireWritebackForRecovery: !fact.closeout_required && !includeUnwrittenReplans});
   }
   return {candidates, turnsValidated: validated};
