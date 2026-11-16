@@ -3223,3 +3223,24 @@ With default delivery, full stdout including the reference read remained
 64.0–64.1 KB, against 51.7–51.8 KB on main `f3bdad238739` for this
 normal-work fixture. Actual selective reads and matched model outcomes and
 costs remain part of the default-adoption qualification.
+
+### Deliver the current Goal revision on the initial read
+
+The shared initial reader now delivers the provider-backed Goal objective,
+revision, and digest before the original Goal narrative. The existing Goal
+acceptance owner supplies the revision and continues to decide adoption.
+Supporting history and peer adoption are readable from the same capture.
+
+Bound generic CLI and Codex App CLI tests use the ordinary guard and its
+emitted reader commands on File and SQLite. All four cases omitted the
+current objective from the initial selection at `7a37d7d02e79`. Reading the
+three fields from that same capture required a separate selection. The new
+initial responses are 552 bytes larger in this fixture. Reading the same
+facts costs one fewer reader call and 629 fewer response bytes in each
+case. The objective arrives before the original narrative and reading it
+leaves the original receipt intact with no additional quota effect.
+
+The separate direct CLI fixture without a revised Goal still attributes
+about 10.6 KB of the full-read difference against main to the added
+settlement plan. These observations measure CLI output and reader calls.
+Matched model outcomes and complete costs still require qualification.

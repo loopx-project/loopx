@@ -1127,6 +1127,12 @@ export function initialContextReadGroups(context: JsonObject, decisionFields: re
     ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  const currentAcceptanceSource = (source: unknown): JsonObject | undefined => {
+    const row = object(source), content = object(row?.content);
+    return row?.source === "goal_acceptance" && content?.ok !== false
+      && content?.status === "loaded" && content.decision_read_from_provider === true
+      && content.legacy_fallback_used === false && content.read_complete !== false ? content : undefined;
+  };
   const attentionSources = sourceRows.filter(({source}) => managerReturnAttention(source, requiredInboxReads));
   const requiredReadsPath = ["interaction_contract", "agent_channel", "required_reads"];
   if (!attentionSources.length) include(...requiredReadsPath);
@@ -1189,6 +1195,13 @@ export function initialContextReadGroups(context: JsonObject, decisionFields: re
   // its read obligations in one independently readable opening. The rest is
   // still required under the original ordering and authority.
   const opening = pointers.splice(0);
+  // Deliver the current objective ahead of the historical Goal narrative.
+  // Peer adoption and source history remain available from this capture.
+  for (const {source, index} of sourceRows) {
+    if (!currentAcceptanceSource(source)) continue;
+    for (const field of ["objective", "revision", "digest"])
+      include(...work, "sources", index, "content", "goal_acceptance_contract", "goal_objective", field);
+  }
   include(...work, "user_todos");
   // A complete scoped preference can be larger than a reader page. Visit
   // current narrative sources first, with their availability and provenance,
@@ -1218,7 +1231,7 @@ export function initialContextReadGroups(context: JsonObject, decisionFields: re
     // Its revision/instructions alone cannot fulfill that pre-work delivery.
     include(...source, "content", "current");
     include(...source, "content", "outcome_context");
-    const sourceRow = object(_source), content = object(sourceRow?.content);
+    const content = object(object(_source)?.content);
     const requirements = object(object(content?.goal_acceptance_contract)?.outcome_requirements);
     const outcomes = requirements?.outcomes, navigation = object(content?.outcome_context);
     const identityAgent = object(context.agent_identity)?.agent_id;
@@ -1227,9 +1240,8 @@ export function initialContextReadGroups(context: JsonObject, decisionFields: re
     // Reuse the acceptance owner's relationship navigation; do not infer scope
     // from ownership or prose. This only expands the starting read: other
     // outcomes and the original required-read obligations remain available.
-    const expand = sourceRow?.source === "goal_acceptance" && content?.ok !== false
-      && content?.status === "loaded" && content.decision_read_from_provider === true
-      && content.legacy_fallback_used === false && content.read_complete !== false
+    const acceptance = currentAcceptanceSource(_source);
+    const expand = acceptance !== undefined
       && requirements?.schema_version === GOAL_OUTCOMES_SCHEMA && requirements.current_lifetime === true
       && navigation?.schema_version === OUTCOME_CONTEXT_NAVIGATION_SCHEMA && navigation.coverage_complete === true
       && typeof context.goal_id === "string" && navigation.goal_id === context.goal_id
@@ -1238,7 +1250,7 @@ export function initialContextReadGroups(context: JsonObject, decisionFields: re
       && typeof object(context.selected_todo)?.todo_id === "string"
       && navigation.todo_id === object(context.selected_todo)?.todo_id
       && navigation.outcome_revision === requirements.revision
-      && typeof content.provider_revision === "string" && navigation.provider_revision === content.provider_revision
+      && typeof acceptance.provider_revision === "string" && navigation.provider_revision === acceptance.provider_revision
       && Array.isArray(outcomes) && Array.isArray(suggested)
       && suggested.every(id => typeof id === "string"
         && outcomes.filter(value => object(value)?.id === id).length === 1);
