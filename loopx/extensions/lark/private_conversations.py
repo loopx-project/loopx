@@ -682,6 +682,17 @@ class LarkPrivateConversations:
                                     if row.get("binding_id") == record["binding_id"]), None)
                     if current != selected["binding"]:
                         return None
+                    # Every recovered answer uses the frozen original input,
+                    # including a native result delivered as the first reply
+                    # or as a follow-up to an existing failure notice.
+                    review = (record.get("context_recovery") or {}).get("answer_review") is True
+                    result_turn = (native.get("native_result_recovery") or {}).get("turn_id")
+                    if review or (result_turn is not None and result_turn == record.get("turn_id")):
+                        current_request = self.core.read_request(record["request_ref"])
+                        if (any(current_request.get(key) != record.get(key)
+                                for key in ("request_ref", "binding_id", "source", "session_id", "turn_id"))
+                                or not recovery_source_matches(record, message, current_request)):
+                            return None
                 if sender_identity is not None:
                     if observation is None:
                         return None
@@ -698,21 +709,15 @@ class LarkPrivateConversations:
             and private_source_text(message) == expected_text))
 
     def _source_authority(self, record: dict[str, Any], profile: str, chat_id: str,
-                          message_id: str, *, expected_text: str | None = None,
-                          match_recovery_source: bool = False) -> tuple[str | None, bool]:
+                          message_id: str, *, expected_text: str | None = None) -> tuple[str | None, bool]:
         """Verify one exact outbound operation; retain no identity or grant."""
         if (profile != record["profile"] or chat_id != record["event"]["chat_id"]
                 or message_id != record["event"]["message_id"]):
             return None, False
         identity: dict[str, str] = {}
         record_event_timing(profile, message_id, "outbound_source_check_started")
-        if match_recovery_source:
-            source = self._source_message(record, render_content=False, sender_identity=identity)
-            verified = source is not None and recovery_source_matches(record, source,
-                self.core.read_request(record["request_ref"]))
-        else:
-            verified = self._source_verified(record, sender_identity=identity,
-                **({"expected_text": expected_text} if expected_text is not None else {}))
+        verified = self._source_verified(record, sender_identity=identity,
+            **({"expected_text": expected_text} if expected_text is not None else {}))
         record_event_timing(profile, message_id, "outbound_source_check_returned")
         return identity.get("bot_display_name"), verified
 
@@ -1273,10 +1278,6 @@ class LarkPrivateConversations:
         source_authority = partial(self._source_authority, record)
         if kind == "answer_images":
             source_authority = partial(source_authority, expected_text=record["event"]["content"])
-        elif kind == "terminal" and (record.get("context_recovery") or {}).get("answer_review") is True:
-            # A review answers the frozen original request. A later provider
-            # edit or recall must hold the reply, even after preview succeeded.
-            source_authority = partial(source_authority, match_recovery_source=True)
         phase_state = record["deliveries"].get(phase, {})
         if phase_state.get("verified"):
             return True

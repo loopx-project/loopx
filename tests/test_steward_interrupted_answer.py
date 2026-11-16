@@ -50,12 +50,14 @@ def test_missing_final_message_keeps_the_existing_metadata_contract(tmp_path, la
     assert adapter.start_turn("Preserve the existing typed metadata") == expected
 
 
-@pytest.mark.parametrize("fault", [None, "source-changed", "closed", "stop", "native-unavailable", "action", "lost-ack"])
+@pytest.mark.parametrize("fault", [None, "source-changed", "source-edited-at-send", "source-recalled-at-send",
+    "closed", "stop", "native-unavailable", "action", "lost-ack"])
 def test_original_queue_returns_missing_final_message_from_retained_native_result_without_replay(
     steward, language_server, monkeypatch, fault,
 ):
     from loopx.chat import parse_agent_response
     from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+    from test_lark_private_conversations import assert_recovered_reply_waits_for_original_source
 
     monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
     monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
@@ -96,30 +98,36 @@ def test_original_queue_returns_missing_final_message_from_retained_native_resul
     writes = len(provider.writes)
     restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
         runner=provider, cli_bin="lark-cli")
+    path = restarted.root / f"{ref}.json"
     if fault == "stop":
         monkeypatch.setattr(restarted.core, "_source_stop_observed", lambda *_, **__: True)
-    restarted.reconcile()
+    late_source_change = fault in {"source-edited-at-send", "source-recalled-at-send"}
+    if late_source_change:
+        assert_recovered_reply_waits_for_original_source(
+            restarted, provider, path, event["message_id"], fault, monkeypatch)
+    else:
+        restarted.reconcile()
     recovered = restarted.core.read_request(ref).get("native_result_recovery")
     if fault == "lost-ack":
         assert recovered and recovered["delivery_verified"] is False
-        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        journal = json.loads(path.read_text())
         assert journal["deliveries"]["terminal"]["started"]
         assert not journal["deliveries"]["terminal"].get("attempt")
         after = list(provider.writes)
         restarted.reconcile()
         assert provider.writes == after and len(provider.writes) == writes + 1
-        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        journal = json.loads(path.read_text())
         assert journal["deliveries"]["terminal"]["blocker"] == "provider_delivery_receipt_unknown"
     elif fault == "action":
         assert recovered is None
         assert all("待办尚未写入" in text for _, text in provider.writes[writes:])
         assert restarted.core.read_request(ref).get("native_result_recovery") is None
-    elif fault:
+    elif fault and not late_source_change:
         assert recovered is None and len(provider.writes) == writes
     else:
         assert recovered["delivery_verified"] is True
         assert restarted.core.read_request(ref)["delivery_verified"] is True
-        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        journal = json.loads(path.read_text())
         assert journal["status"] == "delivered" and journal["deliveries"]["terminal"]["verified"]
         terminal = journal["deliveries"]["terminal"]
         assert "Original verified result." in terminal["text"]
