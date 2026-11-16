@@ -36,7 +36,7 @@ test("the project group's + starts a thread with that directory pre-filled", asy
   // A group only exists once a thread runs there; make one over the API.
   await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir }) });
   await page.reload();
-  await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).waitFor({ timeout: 10_000 });
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).waitFor({ timeout: 10_000 });
   await pickPi();
   const name = (await page.locator('.group-name').first().innerText()).trim();
   await page.locator('.thread-group .group-add').first().hover();
@@ -60,7 +60,7 @@ test("the project group's + starts a thread with that directory pre-filled", asy
 test("the section group's + files the new thread into the section", async () => {
   const section = await (await api(daemon, '/api/sections', { method: 'POST', body: JSON.stringify({ name: '支付重构' }) })).json();
   await page.reload();
-  await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).waitFor({ timeout: 10_000 });
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).waitFor({ timeout: 10_000 });
   await pickPi();
 
   const group = page.locator('.thread-group', { hasText: '支付重构' });
@@ -95,7 +95,7 @@ test('search sits behind a button, and Escape puts it away', async () => {
 
 test('the settings button holds what is not an everyday thing, and signing out asks first', async () => {
   const list = page.locator('.sidebar');
-  for (const name of ['计划', '新线程', '搜索线程', '配置']) {
+  for (const name of ['计划', '新对话', '搜索线程', '配置']) {
     assert.equal(await list.getByRole('button', { name, exact: true }).isVisible(), true, name);
   }
   assert.equal(await list.getByRole('button', { name: '已归档', exact: true }).count(), 0);
@@ -125,7 +125,7 @@ test('an open thread names its agent and directory in the top bar, not on the co
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('.composer-context').count(), 0, 'the strip is only for choosing, before the thread exists');
 
-  await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
   await page.locator('.composer-context .context-btn').first().waitFor();
 });
 

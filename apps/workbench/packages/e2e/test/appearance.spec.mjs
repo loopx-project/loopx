@@ -77,7 +77,7 @@ test('a palette and a mode chosen in the panel show at once', async () => {
 
 test('the choice outlives a reload, and a fixed mode does not follow the system', async () => {
   await page.reload();
-  await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).waitFor({ timeout: 10_000 });
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).waitFor({ timeout: 10_000 });
   // The system is light here; the page stays dark because dark was chosen.
   assert.deepEqual(await look(), { theme: 'dark', palette: 'nord', bg: '#2e3440', meta: '#2e3440' });
 
@@ -104,7 +104,7 @@ test('the look is on the page before the app starts', async () => {
 test('a palette this build does not know falls back to the default', async () => {
   await page.evaluate(() => localStorage.setItem('calli.appearance', JSON.stringify({ mode: 'dark', palette: 'from-the-future' })));
   await page.reload();
-  await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).waitFor({ timeout: 10_000 });
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).waitFor({ timeout: 10_000 });
   assert.deepEqual(await look(), { theme: 'dark', palette: 'paper', bg: '#1b1a18', meta: '#1b1a18' });
 });
 

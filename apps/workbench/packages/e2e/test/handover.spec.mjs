@@ -78,7 +78,7 @@ for (const mobile of [false,true]) {
     try {
       await openUi(page,daemon);
       const box=page.locator('.composer textarea');
-      await box.fill('普通新线程的草稿');
+      await box.fill('普通新对话的草稿');
       if(mobile)await page.locator('.menu-btn').click();
       const sourceRow = page.locator('.sidebar .thread-item',{hasText:source.title});
       assert.equal(await sourceRow.locator('.thread-fork').count(), 0);
@@ -133,7 +133,7 @@ for (const mobile of [false,true]) {
       await groupedSourceRow.click();
       await page.locator('.topbar-title',{hasText:source.title+'（接手）'}).waitFor();
       assert.equal(await box.inputValue(),edited);
-      assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('calli.drafts')).new.text),'普通新线程的草稿');
+      assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('calli.drafts')).new.text),'普通新对话的草稿');
       await page.getByRole('button',{name:'发送',exact:true}).click();
       let sent=[];
       for(let n=0;n<100;n++) {

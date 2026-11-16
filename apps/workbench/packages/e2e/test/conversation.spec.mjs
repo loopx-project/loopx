@@ -66,7 +66,7 @@ test('a turn shows thinking, verb-first tool rows, and folds its work away when 
 });
 
 test('while a turn runs its steps stay the story: no changes card until it ends', async () => {
-  await page.locator('.side-nav').getByRole('button', { name: '新线程', exact: true }).click();
+  await page.locator('.side-nav').getByRole('button', { name: '新对话', exact: true }).click();
   await page.locator('.composer .context-btn').first().click();
   await page.getByRole('menuitemradio', { name: /^pi/ }).click();
   await page.locator('.composer textarea').click();
@@ -95,7 +95,7 @@ test('while a turn runs its steps stay the story: no changes card until it ends'
 });
 
 test('a run of calls folds into one line that counts them, and opens to the calls', async () => {
-  await page.locator('.side-nav').getByRole('button', { name: '新线程', exact: true }).click();
+  await page.locator('.side-nav').getByRole('button', { name: '新对话', exact: true }).click();
   await page.locator('.composer .context-btn').first().click();
   await page.getByRole('menuitemradio', { name: /^pi/ }).click();
   await page.locator('.composer textarea').click();

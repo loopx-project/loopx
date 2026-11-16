@@ -43,7 +43,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       };
       const newThread = async () => {
         await sidebar();
-        await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).click();
+        await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
         await page.locator('.composer .composer-context').waitFor();
       };
       const plans = async () => {

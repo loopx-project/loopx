@@ -21,7 +21,7 @@ test('general startup preference is shared, respects recent activity and explici
       const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1400, height: 900 }, isMobile: mobile, colorScheme: theme });
       const page = await context.newPage();
       await openUi(page, daemon);
-      await page.locator('.topbar-title', { hasText: '新线程' }).waitFor();
+      await page.locator('.topbar-title', { hasText: '新对话' }).waitFor();
       if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
       await page.locator('.sidebar').getByRole('button', { name: '配置', exact: true }).click();
       const menu = page.locator('.settings-nav');
@@ -61,8 +61,8 @@ test('general startup preference is shared, respects recent activity and explici
       await page.locator('.topbar-title', { hasText: 'Latest conversation' }).waitFor();
       // An explicit new-thread action is not undone by subsequent list updates.
       if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
-      await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).click();
-      await page.locator('.topbar-title', { hasText: '新线程' }).waitFor();
+      await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
+      await page.locator('.topbar-title', { hasText: '新对话' }).waitFor();
       await page.goto(`${daemon.base}/#/thread/${older.id}`);
       await page.locator('.topbar-title', { hasText: 'Older pinned conversation' }).waitFor();
       await page.goto(`${daemon.base}/#/todos`);
@@ -101,11 +101,11 @@ test('general startup preference is shared, respects recent activity and explici
     await page.unroute('**/api/general-settings');
     await save('new-thread');
     await page.reload();
-    await page.locator('.topbar-title', { hasText: '新线程' }).waitFor();
+    await page.locator('.topbar-title', { hasText: '新对话' }).waitFor();
     await save('recent-thread');
     for (const thread of [older, latest]) await api(daemon, `/api/threads/${thread.id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) });
     await page.reload();
-    await page.locator('.topbar-title', { hasText: '新线程' }).waitFor();
+    await page.locator('.topbar-title', { hasText: '新对话' }).waitFor();
     await other.close();
   } finally { await browser.close(); await daemon.stop(); }
 });

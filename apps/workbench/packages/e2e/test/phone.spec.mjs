@@ -78,7 +78,7 @@ test('the list has its pages as rows, and search behind a button', async () => {
   await page.locator('.menu-btn').click();
   await settle();
   const list = page.locator('.sidebar');
-  for (const name of ['计划', '新线程', '搜索线程', '配置']) {
+  for (const name of ['计划', '新对话', '搜索线程', '配置']) {
     assert.equal(await list.getByRole('button', { name, exact: true }).isVisible(), true, name);
   }
   // What is not an everyday thing sits behind the settings button: the archive, importing, signing out.
@@ -112,7 +112,7 @@ test('a long press on a row opens its menu, and is not a tap', async () => {
   await touch({ x: box.x + 60, y: box.y + box.height / 2 }, null, 700);
   await page.getByRole('menuitem', { name: '置顶' }).waitFor({ timeout: 5_000 });
   assert.equal(await listOpen(), true, 'the list is still open: the press did not open the thread');
-  assert.equal((await page.locator('.topbar-title').textContent()).trim(), '新线程');
+  assert.equal((await page.locator('.topbar-title').textContent()).trim(), '新对话');
   await page.keyboard.press('Escape');
   await page.getByRole('menuitem', { name: '置顶' }).waitFor({ state: 'detached', timeout: 5_000 });
 });
@@ -153,7 +153,7 @@ test('swipes move the list: in from the left edge opens it, leftwards closes it'
 
 test('the new-thread button in the top bar starts a draft', async () => {
   await page.locator('.topbar-new').tap();
-  assert.equal((await page.locator('.topbar-title').innerText()).trim(), '新线程');
+  assert.equal((await page.locator('.topbar-title').innerText()).trim(), '新对话');
   assert.equal(await page.locator('.topbar-sub').count(), 0);
   // A draft still picks its agent and directory in the composer.
   assert.equal(await page.locator('.composer-context').count(), 1);

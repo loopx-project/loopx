@@ -27,7 +27,7 @@ async function screenshot(page, name) {
 }
 async function newThread(page, mobile) {
   if (mobile) await page.locator('.menu-btn').click();
-  await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
 }
 async function agent(page, name) {
   await page.locator('.composer .context-btn').first().click();

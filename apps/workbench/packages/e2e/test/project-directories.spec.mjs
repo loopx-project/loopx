@@ -107,7 +107,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       assert.deepEqual(await (await api(hub, '/api/config')).json(), localBefore);
       await page.locator('.composer textarea').fill(`hello ${tag}`);
       await page.getByRole('button', { name: '发送', exact: true }).click();
-      await page.waitForFunction(() => document.querySelector('.topbar-title')?.textContent !== '新线程');
+      await page.waitForFunction(() => document.querySelector('.topbar-title')?.textContent !== '新对话');
       const threads = await (await api(remote, '/api/threads')).json();
       const created = threads.find((t) => t.cwd === project);
       assert.ok(created);

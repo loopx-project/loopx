@@ -61,7 +61,7 @@ test('each thread keeps its own draft', async () => {
 });
 
 test('a sent first message does not linger in the next new thread', async () => {
-  await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
   await page.locator('.composer .context-btn').first().click();
   await page.getByRole('menuitemradio', { name: /^pi/ }).click();
   await box().fill('third thread');
@@ -69,6 +69,6 @@ test('a sent first message does not linger in the next new thread', async () => 
   await page.locator('.topbar-title', { hasText: 'third thread' }).waitFor({ timeout: 10_000 });
   assert.equal(await box().inputValue(), '');
 
-  await page.locator('.sidebar').getByRole('button', { name: '新线程', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
   assert.equal(await box().inputValue(), '');
 });
