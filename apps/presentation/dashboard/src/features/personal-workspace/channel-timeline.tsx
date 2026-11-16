@@ -23,10 +23,12 @@ import { conversationOrder } from "./conversation-order";
 import { ConversationFind, conversationMessageKey } from "./conversation-find";
 import type { WorkspaceActionPreview, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
-function answerLink(sessionId: string, messageId: string) {
+function answerLink(sessionId: string, messageId: string, turnId?: string) {
   const url = new URL(window.location.href);
   url.searchParams.set("reportSessionId", sessionId);
   url.searchParams.set("reportMessageId", messageId);
+  if (turnId) url.searchParams.set("reportTurnId", turnId);
+  else url.searchParams.delete("reportTurnId");
   url.searchParams.set("view", "conversation");
   url.hash = "";
   return url.toString();
@@ -288,7 +290,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
           <ConversationReplyContext context={item.message.replyContext} zh={locale === "zh-CN"}/>
           {item.message.role === "assistant" && !item.message.pending && item.message.text.length >= MIN_SEPARATE_ANSWER_LENGTH
             && item.message.sourceSessionId && item.message.sourceMessageId
-            ? <a className="personal-answer-link" href={answerLink(item.message.sourceSessionId, item.message.sourceMessageId)}
+            ? <a className="personal-answer-link" href={answerLink(item.message.sourceSessionId, item.message.sourceMessageId, item.message.sourceTurnId)}
                 target="_blank" rel="noopener noreferrer">{locale === "zh-CN" ? "单独阅读完整答复" : "Read full answer separately"}</a>
             : null}
           {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn}/> : null}
