@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 import subprocess
 
 SCHEMA = "loopx_ci_job_plan_v1"
-ROOT_DOCS = {"README.md", "README.zh-CN.md", "CHANGELOG.md", "CONTRIBUTING.md"}
+ROOT_DOCS = {"README.md", "README.zh-CN.md", "README.ja.md", "CHANGELOG.md", "CONTRIBUTING.md"}
 POLICY_PATHS = ("scripts/ci/impact_plan.py", "scripts/ci/review_gate.py", ".github/workflows/python-tests.yml")
 OUTPUTS = ("core_tests", "backend_tests", "python_tests", "stage2c_tests", "presentation_tests")
 PRESENTATION_ROOTS = ("apps/presentation/dashboard/src/", "apps/presentation/dashboard/public/", "loopx/web/chat/")
