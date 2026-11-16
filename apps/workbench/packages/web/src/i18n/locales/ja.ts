@@ -3075,3 +3075,9 @@ export const ja: Messages = {
   'loopx.goal.status.active_state_agent_todo': '継続するタスクあり',
   'loopx.goal.status.state_refreshed': '状態を更新済み',
 };
+  'loopx.goal.status.active_state_user_gate': 'あなたの判断待ち',
+  'loopx.goal.status.active_state_user_todo': 'あなたのタスクあり',
+  'loopx.goal.status.state_incomplete': '状態記録が不完全',
+  'loopx.goal.status.state_projection_gap': '状態記録に欠落あり',
+  'loopx.goal.status.run_artifact_missing': '実行成果物なし',
+  'loopx.goal.status.unknown': '状態不明',

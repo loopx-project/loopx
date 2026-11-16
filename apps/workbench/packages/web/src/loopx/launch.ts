@@ -80,12 +80,18 @@ export const permissionCopy = (p: GoalPermission): { label: string; hint: string
   p === 'read_only' ? { label: t('loopx.goal.perm.read_only'), hint: t('loopx.goal.perm.read_only.hint') }
     : { label: t('loopx.goal.perm.workspace_auto'), hint: t('loopx.goal.perm.workspace_auto.hint') };
 
-/** The core's status words for the bar; a status the hub has no word for shows as the core said it. */
+/** The core's status words for the bar; a status the hub has no word for shows as the core said it, without the underscores. */
 export function statusWord(status: string): string {
   switch (status) {
     case 'connected_without_run': return t('loopx.goal.status.connected_without_run');
     case 'active_state_agent_todo': return t('loopx.goal.status.active_state_agent_todo');
+    case 'active_state_user_gate': return t('loopx.goal.status.active_state_user_gate');
+    case 'active_state_user_todo': return t('loopx.goal.status.active_state_user_todo');
     case 'state_refreshed': return t('loopx.goal.status.state_refreshed');
-    default: return status;
+    case 'state_incomplete': return t('loopx.goal.status.state_incomplete');
+    case 'state_projection_gap': return t('loopx.goal.status.state_projection_gap');
+    case 'run_artifact_missing': return t('loopx.goal.status.run_artifact_missing');
+    case 'unknown': return t('loopx.goal.status.unknown');
+    default: return status.replace(/_/g, ' ');
   }
 }

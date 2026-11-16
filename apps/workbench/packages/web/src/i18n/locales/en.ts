@@ -3079,3 +3079,9 @@ export const en: Messages = {
   'loopx.goal.status.active_state_agent_todo': 'Work to continue',
   'loopx.goal.status.state_refreshed': 'State refreshed',
 };
+  'loopx.goal.status.active_state_user_gate': 'Waiting on your decision',
+  'loopx.goal.status.active_state_user_todo': 'Tasks for you',
+  'loopx.goal.status.state_incomplete': 'State record incomplete',
+  'loopx.goal.status.state_projection_gap': 'State record has a gap',
+  'loopx.goal.status.run_artifact_missing': 'Run output missing',
+  'loopx.goal.status.unknown': 'Status unknown',
