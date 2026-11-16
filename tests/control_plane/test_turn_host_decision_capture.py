@@ -604,7 +604,9 @@ def test_typed_result_recovery_does_not_start_a_pending_goal_host(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("attempt", ["committed", "retry", "changed_before_retry", "missing_capability_before_retry"])
+@pytest.mark.parametrize("attempt", [
+    "committed", "restored_before_retry", "changed_before_retry", "missing_capability_before_retry",
+])
 @pytest.mark.parametrize("legacy_pretty", [False, True])
 def test_real_host_reads_original_capture_after_source_change(
     tmp_path, monkeypatch, provider, attempt, legacy_pretty,
@@ -733,12 +735,16 @@ def test_real_host_reads_original_capture_after_source_change(
     for field in ("work_lane_contract", "execution_obligation"):
         assert source_a[field]
         assert request["task_context"][field] == source_a[field]
-    def change_current_task():
-        update_current_todo("source-b", "--text", current_todo()["todo"]["text"] + " SOURCE_B")
-        assert "SOURCE_B" in current_todo()["todo"]["text"]
 
-    if attempt in {"committed", "changed_before_retry"}:
-        change_current_task()
+    original_text = current_todo()["todo"]["text"]
+
+    def change_current_task(operation):
+        updated_text = original_text + " SOURCE_B"
+        update_current_todo(operation, "--text", updated_text)
+        assert current_todo()["todo"]["text"] == updated_text
+
+    if attempt in {"committed", "restored_before_retry", "changed_before_retry"}:
+        change_current_task("source-b")
     # Execute precisely what the actual subprocess received.
     detail_bytes = subprocess.run(shlex.split(detail["full_decision"]), check=True,
                                   capture_output=True).stdout
@@ -824,6 +830,9 @@ def test_real_host_reads_original_capture_after_source_change(
                 assert not (workspace / f.MARKER_NAME).exists()
                 assert f._quota_spend_count(runtime) == 0
             update_current_todo("restore-shell", "--required-capability", "shell")
+        if attempt == "restored_before_retry":
+            update_current_todo("restore-source-a", "--text", original_text)
+            assert current_todo()["todo"]["text"] == original_text
         code, recovered = f._run_cli(retry)
         if attempt == "changed_before_retry":
             assert code == 1 and recovered["error_code"] == "current_turn_work_changed", recovered
@@ -836,7 +845,7 @@ def test_real_host_reads_original_capture_after_source_change(
             retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
             assert retried["task_context"] == request["task_context"]
             assert retried["detail_ref"] == detail
-            change_current_task()
+            change_current_task("source-b-after-retry")
         assert path.read_bytes() == original
     code, repeated = f._run_cli([*replay, "--resume-turn-key", request["turn_key"], "--execute"])
     if attempt == "changed_before_retry":
@@ -845,7 +854,7 @@ def test_real_host_reads_original_capture_after_source_change(
         assert repeated["host_failure"]["kind"] == "contract_rejected"
     else:
         assert code == 0, repeated
-    assert not any(repeated["effects"].values())
+    assert repeated["replayed"] and not any(repeated["effects"].values())
     assert f._quota_spend_count(runtime) == (0 if attempt == "changed_before_retry" else 1)
     assert path.read_bytes() == original
     # Admission can run between source validation and publication. It cannot

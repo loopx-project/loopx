@@ -856,7 +856,7 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         assert done["status"] == ("failed" if fault in {"native-changed", "review-action", "checkpoint-empty"} else "completed"), done
         restarted.reconcile_request(path)
         delivered = json.loads(path.read_text())
-        terminal = delivered["deliveries"]["terminal.recovery.22.review.1"]
+        terminal = delivered["deliveries"][f"terminal.recovery.{recovery['presentation_key']}"]
         assert terminal["verified"]
         actual = provider.messages[terminal["attempt"]["message_ref"]]
         assert actual["chat_id"] == event["chat_id"] and actual["sender"]["id"] == provider.profile_apps["steward-app"]
