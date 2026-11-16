@@ -567,6 +567,15 @@ Turn or pause and start the Goal to renew the existing allowance. The label
 reflects the Driver's last verified quota decision and updates with the existing
 GoalBar watch. In-flight activity and an explicit Pause keep their usual labels.
 
+A normal DSH completion can also leave the original Turn awaiting required
+Todo selection. For guarded Turns with that explicit requirement, the Driver
+reads the exact receipt before scheduling another automatic Turn. If selection
+is still owed, the Driver retries once with the original Turn identity. A second
+completed attempt that still owes selection shows the recovery status and waits.
+Pause and Start requests another attempt on the same Turn. A committed selection
+lets the Driver follow the ordinary scheduling path. Interactive human messages
+continue to use the native Session.
+
 If DSH refuses the maintenance slot before admission starts, the Driver waits
 for `Agent.whenIdle()` and re-requests evaluation for that same Session. This
 wait uses no polling timer and is cancelled by Pause, human input, Session
