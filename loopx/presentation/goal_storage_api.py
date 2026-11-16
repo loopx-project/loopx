@@ -119,6 +119,52 @@ class GoalStorageRequestMixin:
             payload["preview_id"] = preview_id
         self._send_json(payload, status=200 if result.get("ok") else 409)
 
+    def _storage_source_registry(
+        self, goal_id: str, registry: dict[str, Any], goal: dict[str, Any], root: Path,
+    ) -> Path:
+        invoked = Path(self.server.registry_path).resolve()
+        if not goal.get("source_registry"):
+            return invoked
+
+        from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+
+        route = resolve_goal_source_runtime_route(
+            registry_path=invoked, registry=registry, goal_id=goal_id,
+        )
+        # A Chat runtime can be bound directly to the source behind a global
+        # index. Keep the host's runtime scope and existing same-root plans.
+        if (route["routed_to_source_registry"]
+                and route["invoked_runtime_root"] != str(root)
+                and route["source_runtime_root"] == str(root)):
+            return Path(route["source_registry"])
+        return invoked
+
+    def _storage_cold_snapshot(
+        self, goal_id: str, registry: dict[str, Any], goal: dict[str, Any],
+        root: Path, source_registry: Path,
+    ) -> tuple[Path, dict[str, object], dict[str, object]]:
+        from ..control_plane.coordination.authority_source_capture import build_runtime_shadow_source_snapshot
+        from ..control_plane.goals.state_resolution import resolve_goal_state
+        from ..control_plane.projects.registry_codec import load_project_registry
+        from ..registry import find_registry_goal
+
+        if source_registry != Path(self.server.registry_path).resolve():
+            registry = load_project_registry(source_registry)
+            selected_goal = find_registry_goal(registry, goal_id)
+            if selected_goal is None:
+                raise ValueError("registered Goal source changed")
+            goal = selected_goal
+        _, project, state = resolve_goal_state(
+            registry=registry, goal_id=goal_id, project_override=None, state_file_override=None,
+        )
+        if project is None:
+            raise ValueError("registered project is required")
+        projection, snapshot = build_runtime_shadow_source_snapshot(
+            goal=goal, runtime_root=root, state_path=state, registry_path=source_registry,
+            include_all_archived_todos=True,
+        )
+        return project, projection, snapshot
+
     def _storage_inspect(self) -> None:
         try:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
@@ -133,18 +179,14 @@ class GoalStorageRequestMixin:
             result = self._storage_owner(goal_id, action="migration-readback")
             current = result.get("current")
             if result.get("ok") and isinstance(current, dict) and current.get("canonical") is False:
-                from ..control_plane.coordination.local_authority_shadow_projection import source_effect_runtime_result
-                from ..control_plane.coordination.authority_source_capture import build_runtime_shadow_source_snapshot
-                from ..state_refresh import resolve_goal_state
-
-                _, _, state_path = resolve_goal_state(registry=registry, goal_id=goal_id,
-                    project_override=None, state_file_override=None)
-                projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal,
-                    runtime_root=self.server.runtime_root, state_path=state_path,
-                    registry_path=self.server.registry_path, include_all_archived_todos=True)
+                root = self.server.runtime_root.resolve()
+                source_registry = self._storage_source_registry(goal_id, registry, goal, root)
+                _, projection, snapshot = self._storage_cold_snapshot(
+                    goal_id, registry, goal, root, source_registry,
+                )
                 result = source_effect_runtime_result("coordination.source.inspect_storage", {
                     "schema_version": "loopx_cold_source_inspection_request_v0",
-                    "runtime_root": str(self.server.runtime_root.expanduser().absolute()),
+                    "runtime_root": str(root),
                     "goal_id": goal_id, "projection": projection, "source_snapshot": snapshot,
                 })
             _, saved = self._storage_preview_read(self._storage_preview_path(goal_id), goal_id)
@@ -274,20 +316,12 @@ class GoalStorageRequestMixin:
             request: dict[str, Any] = {"schema_version": "loopx_cold_source_import_request_v0",
                 "action": action, "runtime_root": str(root), "goal_id": goal_id, "operation_id": operation}
             if action == "prepare":
-                from ..control_plane.goals.state_resolution import resolve_goal_state
-                from ..control_plane.coordination.authority_source_capture import build_runtime_shadow_source_snapshot
                 from ..control_plane.coordination.cold_source_backup import create_cold_source_backup
 
-                _, project, state = resolve_goal_state(registry=registry, goal_id=goal_id,
-                    project_override=None, state_file_override=None)
-                if project is None:
-                    raise ValueError("registered project is required")
-                # Source capture witnesses physical filenames. Give backup IO
-                # the same registry route so directory aliases cannot split
-                # its saved member map from the source's byte witness.
-                registry_path = Path(self.server.registry_path).resolve()
-                projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=root,
-                    state_path=state, registry_path=registry_path, include_all_archived_todos=True)
+                registry_path = self._storage_source_registry(goal_id, registry, goal, root)
+                project, projection, snapshot = self._storage_cold_snapshot(
+                    goal_id, registry, goal, root, registry_path,
+                )
                 source_paths = [
                     Path(snapshot["state_path"]), Path(snapshot["registry_source"]["path"]),
                     *(Path(item["path"]) for item in snapshot["evidence_files"]),
@@ -302,6 +336,9 @@ class GoalStorageRequestMixin:
                 request["expected_plan_sha256"] = _token(body, "plan_sha256", 64)
                 if action == "apply":
                     request["writers_stopped"] = body["writers_stopped"]
+                    request["expected_source_registry"] = str(
+                        self._storage_source_registry(goal_id, registry, goal, root)
+                    )
             path = self._storage_preview_path(goal_id)
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             with exclusive_file_lock(path):

@@ -32,7 +32,18 @@ def cold_api(tmp_path, monkeypatch, request, source_modules_present):
             # of this same set before the cold receiver is copied.
             (receiver / "loopx" / name).unlink(missing_ok=True)
     registry = tmp_path / "project/.loopx/registry.json"
-    if request.param:
+    if request.param == "global-source":
+        # Keep Chat bound to the source runtime, but invoke it through the
+        # global registry whose own runtime holds the machine index.
+        global_root = tmp_path / "machine-runtime"
+        global_root.mkdir()
+        payload = json.loads(registry.read_text())
+        payload["common_runtime_root"] = str(global_root)
+        payload["registry_role"] = "global-local"
+        payload["goals"][0]["source_registry"] = str(registry)
+        registry = global_root / "registry.global.json"
+        registry.write_text(json.dumps(payload))
+    elif request.param:
         # The configured registry may live outside conventional Goal folders.
         # Only its explicit backup member can cover this observed source.
         external = tmp_path / "project/source-registry.json"
@@ -211,6 +222,48 @@ def test_cold_http_preview_reload_confirm_original_recovery(cold_api, provider):
     assert read() == later
     assert call("apply", {**saved, "writers_stopped": True})[0] == 200
     assert read() == later
+
+
+@pytest.mark.parametrize("cold_api", ["global-source"], indirect=True)
+def test_cold_http_binds_global_mirror_to_the_registered_source(cold_api):
+    call, read, state, body, runtime, registry, _, restart = cold_api
+    original_state = state.read_bytes()
+    original_mirror = registry.read_bytes()
+    mirror = json.loads(original_mirror)
+    source = runtime.parent / "project/.loopx/registry.json"
+
+    code, observed = call()
+    assert code == 200 and observed["current"]["canonical"] is False, observed
+    assert observed["cold_source"]["active_todo_count"] == 1
+    plan = prepare(call, handoff_mode="soft_claim")
+    saved = carrier(plan)
+    assert plan["coordination_source_backup_verified"] is True
+    assert plan["source_inventory"]["archived_todo_count"] == 1
+    restart()
+    code, pending = call()
+    assert code == 200 and pending["pending_preview"] == saved
+    assert call("recover", saved)[1]["status"] == "prepared"
+    code, refused = call("apply", {**saved, "writers_stopped": False})
+    assert code == 409 and refused["reason_code"] == "cold_import_operator_stop_confirmation_required"
+
+    # The saved plan still has an intact source file, the same Goal and the
+    # same target store. An explicit rebinding must still invalidate Apply.
+    other_registry = source.with_name("other-registry.json")
+    other_registry.write_bytes(source.read_bytes())
+    mirror["goals"][0]["source_registry"] = str(other_registry)
+    registry.write_text(json.dumps(mirror))
+    code, refused = call("apply", {**saved, "writers_stopped": True})
+    assert code == 409 and refused["reason_code"] == "source_registry_changed_retry"
+    assert not list(runtime.rglob("writer-fence.json"))
+
+    registry.write_bytes(original_mirror)
+    code, applied = call("apply", {**saved, "writers_stopped": True})
+    assert code == 200 and applied["status"] == "applied", applied
+    assert applied["current"]["provider"] == "sqlite"
+    assert applied["execution_authority_granted"] is False
+    assert next(row["text"] for row in read()["todos"] if row["todo_id"] == "todo_current") == body
+    assert state.read_bytes() == original_state
+    assert not list(registry.parent.rglob("writer-fence.json"))
 
 
 def test_cold_http_changed_source_backup_and_untrusted_inputs(cold_api):
