@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.control_plane.goals.acceptance import inspect_goal_acceptance, refine_goal_outcome
 from loopx.control_plane.runtime.public_safety import validate_public_safe_value
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+from loopx.control_plane.todos.list_readback import list_goal_todos
 from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
 from loopx.state_refresh import refresh_state_run
 from loopx.status import collect_status
@@ -125,6 +127,64 @@ def test_http_review_discloses_unreadable_map_without_hiding_other_components(wo
     assert not envelope["fresh"] and not envelope["complete"]
     assert "unreadable_sources" in envelope["alert_reasons"]
     assert envelope["coverage"]["omitted"] == [{"reason": "unavailable_components", "count": 1, "refs": []}]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_http_review_keeps_status_evidence_when_the_second_authority_read_fails(
+    workspace, tmp_path, monkeypatch, provider,
+):
+    server, _, _ = workspace
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime = make_project(tmp_path / "canonical", provider=provider)
+    server.registry_path = registry
+    server.runtime_root = runtime
+    server.runtime_root_override = str(runtime)
+    state = registry.parent / "ACTIVE_GOAL_STATE.md"
+    source_before = (registry.read_bytes(), state.read_bytes())
+    head_before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="release-demo")
+    status, before = get(server)
+    assert status == 200 and before["graph"] and before["goal_map"] and before["acceptance"]
+
+    marker = runtime / "authority" / f"provider-{sha256(b'release-demo').hexdigest()}.json"
+    marker_before = marker.read_bytes() if marker.exists() else None
+
+    def read_unavailable_map(**options):
+        # The status snapshot is already collected. Now fail only the map's
+        # independent provider read, using the real authority selector.
+        marker.write_text('{"private_fixture":"invalid selector"}', encoding="utf-8")
+        try:
+            return list_goal_todos(**options)
+        finally:
+            if marker_before is None:
+                marker.unlink()
+            else:
+                marker.write_bytes(marker_before)
+
+    with monkeypatch.context() as patch:
+        patch.setattr("loopx.chat.status_api.list_goal_todos", read_unavailable_map)
+        status, partial = get(server)
+    assert status == 200, partial
+    assert partial["goal_id"] == "release-demo"
+    assert partial["graph"] == before["graph"]
+    assert partial["acceptance"] == before["acceptance"]
+    assert partial["goal_map"] is None
+    envelope = partial["projection_envelope"]
+    assert not envelope["fresh"] and not envelope["complete"]
+    assert "unreadable_sources" in envelope["alert_reasons"]
+    assert envelope["coverage"]["included_count"] == 2
+    assert any(source["source_id"] == "goal_todos" and source["read_status"] == "unreadable"
+               for source in envelope["sources"])
+    validate_public_safe_value(partial)
+    assert "private_fixture" not in json.dumps(partial)
+
+    status, restored = get(server)
+    assert status == 200 and restored["goal_map"]["nodes"] == before["goal_map"]["nodes"]
+    assert restored["goal_map"]["projection_envelope"]["fresh"]
+    head_after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="release-demo")
+    assert (head_after["provider_revision"], head_after["todos"]) == (
+        head_before["provider_revision"], head_before["todos"],
+    )
+    assert (registry.read_bytes(), state.read_bytes()) == source_before
 
 
 def test_http_review_inherits_source_age_and_replay_keeps_observation(workspace, monkeypatch):

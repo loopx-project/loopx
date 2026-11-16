@@ -463,6 +463,10 @@ def append_rollout_event(log_path: Path, event: Mapping[str, Any]) -> dict[str, 
     return payload
 
 
+class RolloutAppendPreconditionChanged(RuntimeError):
+    """The proposed transition needs to be recomputed before append."""
+
+
 def append_rollout_event_once(
     log_path: Path,
     event: Mapping[str, Any],

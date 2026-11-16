@@ -165,15 +165,36 @@ test("read-only session lineage consumes one complete source without relaxing Ho
   assert.deepEqual(complete, before);
 });
 
+test("current Host dispatch refuses a captured selection that still requires reentry", () => {
+  const source = payload();
+  source.action_selection_qualification = {
+    state: "rejected", requested_todo_id: "todo_111111111111111111111111",
+    recovery_action: "reenter_guard_without_selection",
+  };
+  const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  for (const operation of ["host_context", "host_dispatch_context", "complete_host_lineage"]) {
+    assert.throws(() => evaluateTurnEnvelope({operation, payload: complete,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: "sha256:" + "a".repeat(64)}}),
+    /unadmitted action selection cannot carry execution or settlement authority/);
+  }
+});
+
 test("operation preflight optionally shares the existing normalized session lineage", () => {
-  const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: payload(), scheduler_execution_args: ""});
+  const source = payload();
+  (source.goal_boundary as JsonObject).checkpointed_boundary_authority = {
+    schema_version: "checkpointed_boundary_authority_v0", active_count: 1, active_write_scope: ["src/**"],
+  };
+  const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
   const before = structuredClone(complete);
+  const legacy = evaluateTurnEnvelope({operation: "host_dispatch_context", payload: complete, envelope});
+  assert.equal(legacy.checkpointed_write_approval, true);
   for (const carrier of [{envelope}, {complete_host_request: {
     schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`,
   }}]) {
     const request = {operation: "host_dispatch_context", payload: complete, ...carrier};
     const original = evaluateTurnEnvelope(request);
+    assert.deepEqual(original, legacy);
     assert.equal(Object.hasOwn(original, "session_lineage"), false);
     assert.deepEqual(evaluateTurnEnvelope({...request, include_session_lineage: false}), original);
     const shared = evaluateTurnEnvelope({...request, include_session_lineage: true});
@@ -187,6 +208,45 @@ test("operation preflight optionally shares the existing normalized session line
     for (const damaged of [null, {...complete, reason: "changed source"}]) {
       assert.throws(() => evaluateTurnEnvelope({...request, payload: damaged, include_session_lineage: true}));
     }
+  }
+  assert.deepEqual(complete, before);
+});
+
+test("Host task presentation is source-checked and keeps task and backlog facts", () => {
+  const source = payload();
+  source.future_task_data = {instructions: "Preserve the final stop. ".repeat(200), value: -0};
+  source.agent_todo_summary = {backlog_items: [{todo_id: "later", text: "Required dependency."}]};
+  const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
+  const before = structuredClone(complete);
+  for (const operation of ["host_context", "host_dispatch_context"]) {
+    const request = {operation, payload: complete, envelope};
+    const plain = evaluateTurnEnvelope(request);
+    assert.deepEqual(evaluateTurnEnvelope({...request, include_model_context: false}), plain);
+    const checked = evaluateTurnEnvelope({...request, include_model_context: true});
+    assert.equal(checked.model_context_schema_version, "loopx_turn_model_context_v0");
+    const view = structuredClone(complete);
+    const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>((row, key) =>
+      (row as Record<string | number, unknown>)[key], root);
+    for (const edit of (checked.model_context_changes as JsonObject).changes as JsonObject[]) {
+      const path = edit.path as (string | number)[], key = path.at(-1)!;
+      const parent = at(view, path.slice(0, -1)) as Record<string | number, unknown>;
+      if (edit.remove) delete parent[key];
+      else parent[key] = edit.from ? at(complete, edit.from as (string | number)[]) : edit.value;
+    }
+    assert.deepEqual(view.future_task_data, complete.future_task_data);
+    assert.deepEqual(view.agent_todo_summary, complete.agent_todo_summary);
+    assert.deepEqual(view.goal_boundary, complete.goal_boundary);
+    assert.deepEqual((view.interaction_contract as JsonObject).agent_channel,
+      (complete.interaction_contract as JsonObject).agent_channel);
+    assert.equal(Object.hasOwn(view.interaction_contract as JsonObject, "cli_channel"), false);
+    assert.equal(Object.hasOwn(view, "contract_binding"), false);
+    delete checked.model_context_schema_version; delete checked.model_context_changes;
+    assert.deepEqual(checked, plain);
+    for (const invalid of [null, 0, "true", {}, []])
+      assert.throws(() => evaluateTurnEnvelope({...request, include_model_context: invalid}), /must be a boolean/);
+    assert.throws(() => evaluateTurnEnvelope({...request, payload: {...complete, reason: "tampered"},
+      include_model_context: true}), /integrity mismatch/);
   }
   assert.deepEqual(complete, before);
 });
@@ -855,6 +915,11 @@ test("settlement-only replans preserve owed commands and do not demand another o
     assert.match(String((envelope.action as JsonObject).recommended_action), /original Turn settlement/);
     assert.equal((envelope.action as JsonObject).primary_action, (interaction.agent_channel as JsonObject).primary_action);
     assert.deepEqual(quotaActionSignatureDocument(source), turnEnvelopeActionSignatureDocument(envelope));
+    const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+    const host = evaluateTurnEnvelope({operation: "host_dispatch_context", payload: complete,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: "sha256:" + "a".repeat(64)}});
+    assert.equal(host.primary_action, (interaction.agent_channel as JsonObject).primary_action);
+    assert.equal(host.replan_admitted, true);
   }
 });
 
@@ -1064,6 +1129,11 @@ test("pending capability action outranks stale replan commands and remains signe
     envelope: buildTurnEnvelope({payload: replanContract, scheduler_execution_args: ""})});
   assert.equal(replanHost.primary_action, "produce one required semantic outcome");
   assert.equal(replanHost.replan_admitted, true);
+  for (const [decision, expected] of [[contract, host], [replanContract, replanHost]]) {
+    assert.deepEqual(evaluateTurnEnvelope({operation: "host_context", payload: decision,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: "sha256:" + "a".repeat(64)}}),
+    expected);
+  }
   (source.pending_capability_intent as JsonObject).command = "untrusted replacement";
   assert.throws(() => buildTurnEnvelope({payload: source,
     scheduler_execution_args: ""}), /action is unsupported/);

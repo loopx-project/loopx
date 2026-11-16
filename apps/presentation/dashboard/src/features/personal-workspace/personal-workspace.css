@@ -543,7 +543,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-return-delivery.is-verification_required { color: var(--pw-blue-ink); }
 .personal-return-delivery.is-explicit_unverified { color: var(--pw-amber); }
 .personal-message-images { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
-.personal-message-images img { width: min(220px, 100%); max-height: 180px; object-fit: cover; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; }
+.personal-message-images img { width: min(220px, 100%); max-height: 180px; aspect-ratio: auto 4 / 3; object-fit: cover; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; }
 
 /* Agent prose: card bubble + rendered Markdown */
 .personal-message:not(.is-user) > div {
@@ -1366,6 +1366,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-run-drawer-tabs button { min-height: 36px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--pw-muted); cursor: pointer; font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 500; }
 .personal-run-drawer-tabs button[aria-selected="true"] { background: #fff; color: var(--pw-text); box-shadow: 0 1px 4px rgb(30 28 20 / 12%); }
 .personal-session-summary { margin-top: 12px; }
+.personal-task-receipt-result { margin-top: 12px; overflow-wrap: anywhere; }
+.personal-task-receipt-answer p { color: var(--pw-text); font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-session-message-record { margin-top: 14px; }
 .personal-session-message-record > h3 { margin: 0 0 10px; color: var(--pw-faint); font-size: var(--text-caption); line-height: var(--leading-caption); letter-spacing: .06em; text-transform: uppercase; }
 .personal-session-message-record ol { display: grid; gap: 0; padding: 0; margin: 0; list-style: none; }

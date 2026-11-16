@@ -16,6 +16,7 @@ import {
 } from "../../loopx/control_plane/effect_runtime_io.ts";
 import {
   ACCEPTED_CLOSEOUTS,
+  RECOVERY_ADMISSION_LIMIT,
   PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
   UNSETTLED_HOST_TURN_RECOVERY_REQUEST_SCHEMA,
   preflightPriorHostTurnCloseout,
@@ -248,6 +249,74 @@ const ADVANCEMENT_OPEN = {
   cadence: null,
 };
 
+test("the admission bound keeps debt identity, deduplicates replays, and accepts owner resume and legal closeout", async () => {
+  const original = receipt("owed", closeoutRequired("owed", "todo_alpha"));
+  const runtime = await runtimeWith([original]);
+  try {
+    const candidate = candidateFrom(await preflight(runtime.root));
+    const initial = reduce(candidate, undefined, READ_TODO(ADVANCEMENT_OPEN));
+    const checkpoint = (initial.recovery as JsonObject).admission_checkpoint as JsonObject;
+    const admitted = (id: string, patch: JsonObject = {}) => receipt(id,
+      {...checkpoint, should_run: true, ...patch});
+    const history = [original,
+      admitted("recovery-a"), admitted("recovery-a"),
+      admitted("other-debt", {recovery_owed_turn_id: "different"}),
+      admitted("recovery-b"), admitted("recovery-c")];
+    const log = join(runtime.root, "goals", GOAL, "rollout-event-log.jsonl");
+    await writeFile(log, history.map(event => JSON.stringify(event)).join("\n") + "\n");
+    const observed = await preflight(runtime.root);
+    assert.deepEqual(observed.recovery_admissions,
+      {count: RECOVERY_ADMISSION_LIMIT, owner_action_id: null, checkpoint});
+    const decide = (facts: JsonObject, missing = observed.missing_receipts) => reduceUnsettledHostTurnRecovery({
+      schema_version: UNSETTLED_HOST_TURN_RECOVERY_REQUEST_SCHEMA,
+      goal_id: GOAL, agent_id: AGENT, candidate, missing_receipts: missing,
+      recovery_admissions: observed.recovery_admissions, binding_facts: facts,
+    });
+    const attention = decide(READ_TODO(ADVANCEMENT_OPEN));
+    assert.equal(attention.status, "attention_required");
+    assert.equal((attention.obligation as JsonObject).must_attempt_work, false);
+    assert.equal((attention.recovery as JsonObject).settlement_effect_id, candidate.settlement_effect_id);
+    assert.equal(decide(READ_TODO({...ADVANCEMENT_OPEN, status: "blocked"})).status, "none");
+    const owner = await preflightPriorHostTurnCloseout({
+      schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+      runtime_root: runtime.root, goal_id: GOAL, agent_id: AGENT,
+      exclude_turn_instance_id: "current", owner_action_id: "explicit-owner-resume",
+    });
+    assert.deepEqual(owner.recovery_admissions, {
+      count: 0, owner_action_id: "explicit-owner-resume",
+      checkpoint: {...checkpoint, recovery_owner_action_id: "explicit-owner-resume"},
+    });
+    const replay = await preflight(runtime.root, "recovery-c");
+    assert.equal((replay.recovery_admissions as JsonObject).count, 2);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("losing an owner activation projection cannot renew its exhausted allowance", async () => {
+  const original = receipt("owed", closeoutRequired("owed", "todo_alpha"));
+  const runtime = await runtimeWith([original]);
+  try {
+    const candidate = candidateFrom(await preflight(runtime.root));
+    const recovery = reduce(candidate, undefined, READ_TODO(ADVANCEMENT_OPEN)).recovery as JsonObject;
+    const checkpoint = recovery.admission_checkpoint as JsonObject;
+    const history = [original, ...["old-owner", "current-owner", "current-owner", "current-owner"].map(
+      (owner, index) => receipt(`admission-${index}`, {...checkpoint,
+        should_run: true, recovery_owner_action_id: owner}),
+    )];
+    await writeFile(join(runtime.root, "goals", GOAL, "rollout-event-log.jsonl"),
+      history.map(event => JSON.stringify(event)).join("\n") + "\n");
+    // Controller activation has no owner id. Keep the latest recorded owner
+    // epoch, without counting admissions before that owner's explicit reset.
+    assert.deepEqual((await preflight(runtime.root)).recovery_admissions, {
+      count: 3, owner_action_id: "current-owner",
+      checkpoint: {...checkpoint, recovery_owner_action_id: "current-owner"},
+    });
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("the preflight reads the persisted receipts and names the newest required closeout", async () => {
   const runtime = await runtimeWith([
     receipt("turn-old", closeoutRequired("turn-old", "todo_older")),
@@ -355,14 +424,19 @@ test("exact preflight filters stale owners before selecting the newest Turn", as
     const result = await withSourceAdmission(
       runtime.root,
       instanceB,
-      async (binding) => await preflightPriorHostTurnCloseout({
-        schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
-        runtime_root: runtime.root,
-        goal_id: GOAL,
-        agent_id: AGENT,
-        exclude_turn_instance_id: "current-turn",
-        ...binding,
-      }),
+      async (binding) => {
+        const request = {
+          schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+          runtime_root: runtime.root,
+          goal_id: GOAL,
+          agent_id: AGENT,
+          exclude_turn_instance_id: "current-turn",
+          ...binding,
+        };
+        const borrowed = await preflightPriorHostTurnCloseout({...request, borrow_source_admission: true});
+        assert.equal(candidateFrom(borrowed).prior_turn_instance_id, "turn-b");
+        return await preflightPriorHostTurnCloseout(request);
+      },
     );
     assert.equal(candidateFrom(result).prior_turn_instance_id, "turn-b");
 
@@ -410,6 +484,27 @@ test("a receipt that does not opt in never becomes a recovery obligation", async
     assert.equal(result.turns_validated, 2);
   } finally {
     await runtime.close();
+  }
+});
+
+test("an admitted Todo-bound replan without verified writeback does not hold a later guard", async () => {
+  const admitted = {
+    ...closeoutRequired("turn-replan", "todo_alpha"), closeout_required: false,
+    semantic_replan_obligation_id: `replan-${"b".repeat(16)}`,
+    ok: true, should_run: true, interaction_mode: "autonomous_replan",
+    must_attempt_work: true, delivery_allowed: false, quiet_noop_allowed: false,
+  };
+  const runtime = await runtimeWith([
+    receipt("turn-normal", closeoutRequired("turn-normal", "todo_beta")),
+    receipt("turn-replan", admitted),
+  ]);
+  const replanOnly = await runtimeWith([receipt("turn-replan", admitted)]);
+  try {
+    assert.equal(candidateFrom(await preflight(runtime.root)).prior_turn_instance_id, "turn-normal");
+    assert.equal((await preflight(replanOnly.root)).reason, "no_prior_turn_requires_closeout");
+  } finally {
+    await runtime.close();
+    await replanOnly.close();
   }
 });
 
@@ -852,6 +947,17 @@ test("typed lifecycle closeouts are accepted and other open Todos are not", asyn
         assert.equal(verdict.status, "none");
         assert.equal(verdict.accepted_closeout, accepted);
       }
+      const ordinaryPending = reduce(candidate, ["quota_spend_receipt"], READ_TODO(todo));
+      assert.equal(ordinaryPending.status, verdict.status);
+      assert.equal(ordinaryPending.accepted_closeout, verdict.accepted_closeout);
+
+      const replanPending = reduce(
+        {...candidate, admitted_todo_replan: true},
+        ["quota_spend_receipt"],
+        READ_TODO(todo),
+      );
+      assert.equal(replanPending.status, "recovery_required");
+      assert.equal((replanPending.recovery as JsonObject).repair, "resume_prior_turn");
     }
   } finally {
     await runtime.close();
@@ -887,6 +993,18 @@ test("an unsettled Turn keeps the exact public recovery payload", async () => {
       binding_target_key: "key-1",
       binding_cadence: "1h",
       repair: "resume_prior_turn",
+      admissions_without_progress: 0,
+      admission_limit: 3,
+      admission_checkpoint: {
+        recovery_checkpoint_schema: "unsettled_recovery_admission_v0",
+        recovery_owed_turn_id: "turn-a",
+        recovery_binding_kind: "todo",
+        recovery_binding_id: "todo_alpha",
+        recovery_effect_id: `${GOAL}:${AGENT}:todo_alpha:turn-a`,
+        recovery_missing_writeback: true,
+        recovery_missing_spend: true,
+        recovery_owner_action_id: null,
+      },
     });
     const obligation = verdict.obligation as JsonObject;
     assert.equal(obligation.lane, "control_plane_recovery");

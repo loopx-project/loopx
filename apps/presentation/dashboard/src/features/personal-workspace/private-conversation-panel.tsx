@@ -1,10 +1,10 @@
 import {MessageSquareText, RefreshCw} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
-import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
+import {ChatApiError, connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversationSettings, fetchPrivateConversationDiagnostics,
   changePrivateAgentTarget, changeOwnerNotifications, prepareManagedSteward, configureStewardMonitor, configureStewardReport, fetchChatProjects, fetchChatCapabilities, fetchLarkGroupChats, type PrivateConversation,
   discoverBoundChatSession, selectAppSteward, type BoundConversationTarget,
-  type ChatProject, type LarkApp, type PrivateConversationStopRecovery} from "../../data/chat";
+  type ChatProject, type LarkApp, type PrivateConversationSettings, type PrivateConversationDiagnostics} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import {StewardManagedMode} from "./steward-managed-mode";
 import "./private-conversation.css";
@@ -14,11 +14,17 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
   const zh = locale === "zh-CN";
   const [projects, setProjects] = useState<ChatProject[]>([]);
   const [executors, setExecutors] = useState<string[]>([]);
-  const [rows, setRows] = useState<PrivateConversation[]>([]);
-  const [connectionsLoading, setConnectionsLoading] = useState(true);
-  const [recoveries, setRecoveries] = useState<PrivateConversationStopRecovery[]>([]);
-  const [revision, setRevision] = useState(0);
-  const [appStewardBindingId, setAppStewardBindingId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<PrivateConversationSettings | null>(null);
+  const [diagnostics, setDiagnostics] = useState<PrivateConversationDiagnostics | null>(null);
+  const [settingsUnavailable, setSettingsUnavailable] = useState(false);
+  const [diagnosticsUnavailable, setDiagnosticsUnavailable] = useState(false);
+  const [refreshAfterMutation, setRefreshAfterMutation] = useState(0);
+  const currentDiagnostics = diagnostics?.revision === settings?.revision ? diagnostics : null;
+  const observed = new Map(currentDiagnostics?.connections.map(row => [row.binding_id, row]));
+  const rows = (settings?.connections ?? []).map(row => ({...row, ...observed.get(row.binding_id)}));
+  const recoveries = currentDiagnostics?.stop_recoveries ?? [];
+  const revision = settings?.revision ?? 0;
+  const appStewardBindingId = settings?.app_steward_binding_id ?? null;
   const [app, setApp] = useState("");
   const [project, setProject] = useState("");
   const [executor, setExecutor] = useState("");
@@ -34,6 +40,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
   const [busy, setBusy] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const openController = useRef<AbortController | null>(null);
+  const connectionRead = useRef<{cancel: () => void; refresh: () => void} | null>(null);
   useEffect(() => () => openController.current?.abort(), []);
   async function openOriginal(bindingId: string) {
     setOpening(bindingId); setError("");
@@ -47,11 +54,6 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
     finally { if (!controller.signal.aborted) setOpening(null); }
   }
 
-  async function refresh() {
-    const state = await fetchPrivateConversations();
-    setRows(state.connections); setRecoveries(state.stop_recoveries); setRevision(state.revision);
-    setAppStewardBindingId(state.app_steward_binding_id);
-  }
   useEffect(() => {
     let active = true;
     const failed = (error: unknown) => {if (active) setError(String(error));};
@@ -64,18 +66,87 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
       const choices = (capabilities.adapters ?? []).filter(row => row.available).map(row => row.agent_id);
       setExecutors(choices); setExecutor(choices.includes("codex") ? "codex" : choices[0] ?? "");
     }}).catch(failed);
-    let timer: ReturnType<typeof setTimeout>;
-    async function readConnections() {
-      try {
-        const state = await fetchPrivateConversations(AbortSignal.timeout(5000));
-        if (active) {setRows(state.connections); setRecoveries(state.stop_recoveries); setRevision(state.revision);
-          setAppStewardBindingId(state.app_steward_binding_id);}
-      } catch (error) {failed(error);}
-      finally {if (active) {setConnectionsLoading(false); timer = setTimeout(() => void readConnections(), 5000);}}
-    }
-    void readConnections();
-    return () => {active = false; clearTimeout(timer);};
+    return () => {active = false;};
   }, []);
+
+  useEffect(() => {
+    if (busy) return;
+    let active = true;
+    let settingsRequest: AbortController | undefined;
+    let diagnosticsRequest: {controller: AbortController; revision: number} | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    function cancel() {
+      active = false;
+      clearTimeout(timer);
+      settingsRequest?.abort();
+      diagnosticsRequest?.controller.abort();
+    }
+    function scheduleSettings(delayMs: number) {
+      clearTimeout(timer);
+      timer = setTimeout(() => void readSettings(), delayMs);
+    }
+    function bindingChanged(cause: unknown) {
+      return cause instanceof ChatApiError && cause.payload.http_status === 409;
+    }
+    async function readDiagnostics(current: PrivateConversationSettings) {
+      const controller = new AbortController();
+      diagnosticsRequest = {controller, revision: current.revision};
+      const {signal} = controller;
+      setDiagnosticsUnavailable(false);
+      try {
+        const fresh = await fetchPrivateConversationDiagnostics(current, AbortSignal.any([signal, AbortSignal.timeout(30000)]));
+        if (!signal.aborted) setDiagnostics(fresh);
+      } catch (cause) {
+        if (signal.aborted) return;
+        setDiagnostics(null);
+        if (bindingChanged(cause)) {
+          settingsRequest?.abort();
+          setSettings(null);
+          setSettingsUnavailable(false);
+          scheduleSettings(500);
+        } else {
+          setDiagnosticsUnavailable(true);
+        }
+      } finally {
+        if (diagnosticsRequest?.controller === controller) diagnosticsRequest = undefined;
+      }
+    }
+    async function readSettings(refreshDiagnostics = false) {
+      if (!active) return;
+      clearTimeout(timer);
+      settingsRequest?.abort();
+      if (refreshDiagnostics) diagnosticsRequest?.controller.abort();
+      const request = new AbortController();
+      settingsRequest = request;
+      const {signal} = request;
+      let nextReadMs = 5000;
+      try {
+        const current = await fetchPrivateConversationSettings(AbortSignal.any([signal, AbortSignal.timeout(5000)]));
+        if (signal.aborted) return;
+        setSettings(current);
+        setSettingsUnavailable(false);
+        // Keep polling authorization while a single diagnostics read for this revision is in flight.
+        if (refreshDiagnostics || diagnosticsRequest?.revision !== current.revision) {
+          diagnosticsRequest?.controller.abort();
+          void readDiagnostics(current);
+        }
+      } catch (cause) {
+        if (signal.aborted) return;
+        diagnosticsRequest?.controller.abort();
+        diagnosticsRequest = undefined;
+        setDiagnostics(null);
+        setSettings(null);
+        const changed = bindingChanged(cause);
+        setSettingsUnavailable(!changed);
+        if (changed) nextReadMs = 500;
+      } finally {
+        if (!signal.aborted) scheduleSettings(nextReadMs);
+      }
+    }
+    connectionRead.current = {cancel, refresh: () => void readSettings(true)};
+    void readSettings();
+    return () => {cancel(); connectionRead.current = null;};
+  }, [busy, refreshAfterMutation]);
 
   useEffect(() => {
     let active = true;
@@ -101,12 +172,15 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
   }
 
   async function act(operation: () => Promise<unknown>) {
+    connectionRead.current?.cancel();
+    setDiagnostics(null);
     setBusy(true); setError("");
     try {await operation();} catch (error) {setError(String(error));}
     finally {
       // A failed stop may follow a committed revocation. Read its current
       // revision and exact recovery target even when the mutation returned 400.
-      try {await refresh();} catch (error) {setError(String(error));}
+      setSettings(null);
+      setRefreshAfterMutation(value => value + 1);
       setBusy(false);
     }
   }
@@ -127,8 +201,13 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
         <p>{zh ? "发送文字、图片或图文消息开始；后续消息进入原会话队列。/status 查看工作区、角色与持久排队状态，/help 查看用法与解绑入口，/stop 停止当前聊天执行，/new 开启新会话。文件、音视频、附在控制命令或已选择 Agent 上的图片会明确提示暂不支持。" : "Send text, images or image/text posts to begin; follow-ups queue in the same Session. /status shows the workspace, role and durable queue, /help explains commands and where to unbind, /stop stops the current Chat Turn, /new starts a new conversation. Files, audio/video, and images sent with control commands or to a selected attached Agent receive an explicit unsupported response."}</p>
         {audience === "owner" ? <p>{zh ? "管家新委托：/delegate --tokens N 具体目标。先读预览，再用原私聊的完整 /confirm 命令确认；15 分钟过期。原生执行保持只读，总 token 上限可能被运行中的请求超过；没有默认定时调度。回执提供 /stop-commission 停止和 /resume-commission 恢复命令；恢复保留原线程及累计用量。" : "Steward commission: /delegate --tokens N objective. Read the preview, then use its full /confirm command in the original private Chat within 15 minutes. Native execution remains read-only; in-flight requests can exceed the total token allowance. No default schedule. Receipts provide /stop-commission and /resume-commission commands; recovery retains the original thread and cumulative usage."}</p> : null}
       </ContextHelp>
-      <button className="personal-private-refresh" disabled={busy} aria-label={zh ? "刷新状态" : "Refresh status"} onClick={() => void act(refresh)} type="button"><RefreshCw size={16} aria-hidden="true"/></button>
+      <button className="personal-private-refresh" disabled={busy} aria-label={zh ? "刷新状态" : "Refresh status"} onClick={() => {
+        setError(""); connectionRead.current?.refresh();
+      }} type="button"><RefreshCw size={16} aria-hidden="true"/></button>
     </header>
+    {settings && !currentDiagnostics ? <p role="status">{diagnosticsUnavailable
+      ? (zh ? "监听、送达和停止状态暂不可用。可刷新重试。" : "Listener, delivery and stop status are unavailable. Refresh to retry.")
+      : (zh ? "正在读取监听、送达和停止状态…" : "Reading listener, delivery and stop status…")}</p> : null}
     {appStewardBindingId !== null && !rows.some(row => row.binding_id === appStewardBindingId) ? <div className="personal-detail-actions">
       <p role="alert">{zh ? "已选的 App 对话来源已失效。" : "The selected App Conversation source is unavailable."}</p>
       <button type="button" disabled={busy} onClick={() => void act(() => selectAppSteward(null, revision))}>
@@ -149,8 +228,9 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
         ? (zh ? `LoopX 管家 · 全部已注册工作 · ${row.goal_count} 个 Goal` : `LoopX steward · All registered work · ${row.goal_count} Goals`)
         : (zh ? `LoopX 管家 · 已选范围 · ${row.goal_count} 个 Goal` : `LoopX steward · Selected scope · ${row.goal_count} Goals`)) : (row.grant === "workspace_write" ? (zh ? "普通项目助手 · 已授权工作区读写" : "Project assistant · Workspace writes authorized") : (zh ? "普通项目助手 · 只读对话" : "Project assistant · Read-only Chat"))}</p>
       {row.audience === "group" ? <p>{zh ? `群话题助手 · 已授权 ${row.group_count} 个群 · 独立工作区隔离` : `Group topic assistant · ${row.group_count} authorized groups · Isolated workspace`}</p> : null}
-      <p>{row.executor_endpoint_id} · {zh ? "监听状态" : "Listener"}: {listenerLabel(row.listener_status)}</p>
-      <p>{zh ? `待处理或回复：${row.pending_count}` : `Pending execution or reply: ${row.pending_count}`}</p>
+      <p>{row.executor_endpoint_id}{row.listener_status !== undefined
+        ? <> · {zh ? "监听状态" : "Listener"}: {listenerLabel(row.listener_status)}</> : null}</p>
+      {row.pending_count !== undefined ? <p>{zh ? `待处理或回复：${row.pending_count}` : `Pending execution or reply: ${row.pending_count}`}</p> : null}
       {row.ingress ? <p role={row.ingress.status === "gap" || row.ingress.status === "unavailable" ? "alert" : "status"}>
         {row.ingress.status === "gap"
           ? (zh ? `${row.ingress.source_gap_count} 条原消息缺少收件记录，需核对；历史任务不会自动重放。`
@@ -162,7 +242,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
                 : `Sources reconciled · ${new Date(row.ingress.last_complete_at * 1000).toLocaleTimeString(locale)}`)
               : (zh ? "原消息核对待运行。" : "Source reconciliation has not run yet.")}
       </p> : null}
-      {row.context_kind === "steward" && row.audience === "owner" ? <div>
+      {row.context_kind === "steward" && row.audience === "owner" && currentDiagnostics ? <div>
         {row.owner_attention?.available ? <>
           <label style={{display: "flex", alignItems: "center", gap: 8, minHeight: 44}}><input type="checkbox" style={{width: "auto", margin: 0, flexShrink: 0}} checked={row.owner_attention.enabled} disabled={busy}
             onChange={event => {const setting = row.owner_attention; if (setting?.available) void act(() =>
@@ -190,7 +270,7 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
           {row.owner_attention.unconfirmed_count > 0 ? <p role="status">{zh ? "有通知发送结果尚未确认；服务只恢复原回执，不重复发送。" : "A notification receipt is unconfirmed; the service recovers the original receipt without resending."}</p> : null}
         </> : <p role="status">{zh ? "自动通知状态尚未确认，请刷新后重试。" : "Automatic notification state is unavailable. Refresh to retry."}</p>}
       </div> : null}
-      {row.recovery_count > 0 ? <p role="status">{zh ? "存在尚未确认的发送回执。服务会读取原回执恢复；不要重新发送同一任务。检查 App 登录、权限和原会话后刷新状态。" : "A send receipt is unconfirmed. The service reads the original receipt to recover; avoid resending the same task. Check this App login, permissions and original Session, then refresh status."}</p> : null}
+      {row.recovery_count !== undefined && row.recovery_count > 0 ? <p role="status">{zh ? "存在尚未确认的发送回执。服务会读取原回执恢复；不要重新发送同一任务。检查 App 登录、权限和原会话后刷新状态。" : "A send receipt is unconfirmed. The service reads the original receipt to recover; avoid resending the same task. Check this App login, permissions and original Session, then refresh status."}</p> : null}
       {!row.context_available ? <p role="alert">{zh ? "工作区授权已失效；请恢复原工作区或重新选择。旧会话不会移到其它工作区。" : "The workspace grant is unavailable. Restore the original workspace or select a new one; the old Session will not move."}</p> : null}
       {row.context_kind === "project" && row.audience !== "group" ? <PrivateAgentTargets row={row} revision={revision} zh={zh} busy={busy} act={act}/> : null}
       {row.context_kind === "steward" && row.audience === "owner" && row.managed_steward !== undefined
@@ -208,10 +288,10 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
       <p role="alert">{zh ? `授权已撤销；${row.pending_count} 项执行尚未确认停止。重试只停止此旧授权的工作，不恢复授权，也不影响新连接。` : `Access is revoked; ${row.pending_count} executions have not confirmed stop. Retry stops only this previous grant's work, without restoring access or affecting the new connection.`}</p>
       <button disabled={busy} onClick={() => void act(() => disconnectPrivateConversation(row.binding_id, revision))} type="button">{zh ? "重试停止旧授权任务" : "Retry stop for previous grant"}</button>
     </article>)}
-    {rows.length === 0 ? <p>{connectionsLoading ? (zh ? "正在读取已有连接…" : "Reading existing connections…")
-      : error ? (zh ? "连接读取暂不可用，请刷新重试。" : "Connections unavailable. Refresh to retry.")
-      : (zh ? "尚未连接助手。" : "No assistant connected.")}</p> : null}
-    <details className="personal-private-setup" open={rows.length === 0}>
+    {settingsUnavailable ? <p role="alert">{zh ? "连接读取暂不可用，请刷新重试。" : "Connections unavailable. Refresh to retry."}</p>
+      : settings === null ? <p role="status">{zh ? "正在读取已有连接…" : "Reading existing connections…"}</p>
+      : rows.length === 0 ? <p>{zh ? "尚未连接助手。" : "No assistant connected."}</p> : null}
+    <details className="personal-private-setup" open={settings !== null && rows.length === 0}>
       <summary>{zh ? "连接助手" : "Connect an assistant"}</summary>
       <div className="personal-private-setup-body">
         <div className="personal-private-fields">
@@ -261,20 +341,24 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
   </section>;
 }
 
-function PrivateAgentTargets({row, revision, zh, busy, act}: {row: PrivateConversation; revision: number; zh: boolean;
+function PrivateAgentTargets({row, revision, zh, busy, act}: {
+  row: PrivateConversationSettings["connections"][number] & Partial<Pick<PrivateConversation, "agent_candidates">>;
+  revision: number; zh: boolean;
   busy: boolean; act: (operation: () => Promise<unknown>) => Promise<void>}) {
   const [session, setSession] = useState("");
-  const candidates = row.agent_candidates.filter(item => !row.agent_targets.some(target => target.session_id === item.session_id));
+  const candidates = row.agent_candidates?.filter(item => !row.agent_targets.some(target => target.session_id === item.session_id));
   return <div>
     <p>{zh ? "直连注册 Agent：只授权确切的已有 attached Session。消息进入原宿主队列；此处不创建 Agent、不继承其它目标或提高宿主权限。一个 Session 的 App 受众固定，撤销后也不能换给另一 App。" : "Direct registered Agent: grant an exact existing attached Session. Messages enter its original host queue; this creates no Agent, inherits no other Goals and raises no host permission. The Session audience remains fixed even after revocation."}</p>
     {row.agent_targets.map(target => <p key={target.target_ref}>{target.agent_id} · {target.goal_id}<br/>
       <code>/agent {target.target_ref}</code> <button type="button" disabled={busy} onClick={() => void act(() => changePrivateAgentTarget(row.binding_id, revision, {target_ref: target.target_ref}))}>{zh ? "撤销直连授权" : "Revoke direct access"}</button></p>)}
+    {candidates !== undefined ? <>
     <label>{zh ? "已有 Agent 会话" : "Existing Agent Session"}<select value={session} disabled={busy} onChange={event => setSession(event.target.value)}>
       <option value="">{zh ? "选择确切会话" : "Select exact Session"}</option>
       {candidates.map(item => <option key={item.session_id} value={item.session_id}>{item.agent_id} · {item.goal_id} · {item.session_id.slice(-6)}</option>)}
     </select></label>
     <button type="button" disabled={busy || !candidates.some(item => item.session_id === session)} onClick={() => void act(() => changePrivateAgentTarget(row.binding_id, revision, {session_id: session}))}>{zh ? "授权此 App 直连" : "Grant this App direct access"}</button>
-    {row.agent_candidates.length === 0 ? <p>{zh ? "暂无此工作区的可用 attached Agent 会话。请先在原宿主完成注册和 attached-session-bind；普通聊天仍可直接使用，不需要创建 Goal。" : "No eligible attached Agent Session in this workspace. Register and bind it in its original host first; ordinary Chat remains available without a Goal."}</p> : null}
+    {row.agent_candidates?.length === 0 ? <p>{zh ? "暂无此工作区的可用 attached Agent 会话。请先在原宿主完成注册和 attached-session-bind；普通聊天仍可直接使用，不需要创建 Goal。" : "No eligible attached Agent Session in this workspace. Register and bind it in its original host first; ordinary Chat remains available without a Goal."}</p> : null}
+    </> : null}
     <p>{zh ? "私聊 /agents 查看当前可用授权，复制完整 /agent 命令选择；/project 返回原项目对话。实时停止或新建 Agent 会话请在原宿主处理。" : "Use /agents to list usable grants, select with the full /agent command, and /project to return to project Chat. Stop or create Agent Sessions in their original host."}</p>
   </div>;
 }

@@ -180,7 +180,7 @@ class StewardManagedMode:
 
 
 class ManagedTaskValidationUnavailable(ValueError):
-    """A native selection has no usable caller-declared independent validator."""
+    """A native selection has no usable owner-declared independent validator."""
 
 
 def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, workspace: Path,
@@ -292,11 +292,23 @@ class ManagedSessionTurn:
         if request.get("work_kind") == "scheduled_task":
             from .session_calendar_tasks import SessionCalendarTasks
             report["scheduled_task"] = SessionCalendarTasks(self.controller).admission(request)
+        creation = {}
+        if "creation_request" in request:
+            from .creation_queue import creation_request_facts
+            retained = request["creation_request"]
+            if not isinstance(retained, dict) or not isinstance(retained.get("creation_operation_id"), str):
+                raise ValueError("the original creation request is unavailable")
+            facts = creation_request_facts(self.controller, actor["session_id"],
+                proposal_id=retained["creation_operation_id"])
+            if facts is None:
+                raise ValueError("the original creation request source is unavailable")
+            creation = {"creation_proposal": facts["proposal"],
+                "current_original_task": facts["current_original_task"]}
         return ChatConversationBindings._core("collaboration.session.managed_turn.admit", {
             "session": session, "request": request, "turn": turn,
             "goal": StewardManagedMode(self.controller, None)._goal(actor["goal_id"]),
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
-            "monitor_todo": monitor, **report,
+            "monitor_todo": monitor, **report, **creation,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **StewardTurnHost(self.controller).report_quota_basis(request),
@@ -304,7 +316,8 @@ class ManagedSessionTurn:
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
-                operation_id: str | None = None, include_calendar_task_sources: bool = False) -> dict[str, Any]:
+                operation_id: str | None = None, include_calendar_task_sources: bool = False,
+                include_original_task: bool = False) -> dict[str, Any]:
         session = self.store.load_session(session_id)
         if not session:
             raise KeyError("chat session was not found")
@@ -322,6 +335,10 @@ class ManagedSessionTurn:
             result["available"] = True
         except ValueError as exc:
             result["reason"] = str(exc)
+        if include_original_task:
+            if agent_id is not None and agent_id != session.get("managed_agent_id"):
+                raise ValueError("select the original registered Agent for Task entry")
+            result["task"] = self._original_task_entry(session_id)
         if session.get("managed_agent_id"):
             from .steward_reports import ManagedSessionReports
             from .session_calendar_tasks import SessionCalendarTasks
@@ -336,14 +353,67 @@ class ManagedSessionTurn:
             result["calendar_task_sources"] = SessionCalendarTasks(self.controller).source_options(session_id)
         return result
 
+    def creation_request(self, session_id: str) -> dict[str, Any] | None:
+        from .creation_queue import creation_request_facts, project_creation_request
+        return project_creation_request(creation_request_facts(self.controller, session_id))
+
+    def _original_task_entry(self, session_id: str) -> dict[str, Any]:
+        """Observe the existing creation/validation owners without any effects.
+
+        The returned plan does not claim a Task or authorize a model. Native
+        submit still rechecks current admission and every validation source.
+        """
+        from ...control_plane.effect_runtime import effect_runtime_result
+        from ...control_plane.goals.acceptance import inspect_goal_acceptance
+
+        session = self.store.load_session(session_id) or {}
+        request = self._request(session_id, session.get("managed_agent_id") or "", "original-task-preview")
+        actor = request["actor"]
+        unavailable: dict[str, Any] = {"todo_id": None, "state": "unbound", "source": None,
+            "canonical_done": False}
+        try:
+            creation = self.creation_request(session_id)
+            if creation is not None:
+                request = self._request(session_id, creation["agent_id"], creation["operation_id"], creation["todo_id"])
+                request["creation_request"] = creation
+                retained_turn = self.store.turn_for_client(session_id, "managed." + creation["operation_id"])
+                unavailable.update(creation_request=creation, creation_turn=None)
+                if retained_turn is not None and retained_turn.get("loopx_request") != request:
+                    raise ValueError("the original creation operation belongs to another managed request")
+                unavailable["creation_turn"] = retained_turn
+            self.admit(request)
+            basis = inspect_goal_acceptance(registry_path=self.controller.registry_path,
+                runtime_root=str(self.controller.coordination_runtime_root), goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], validation_workspace_path=Path(actor["workspace_path"]))
+            selected = effect_runtime_result("goal.task.creation_selection", {"basis": basis})
+            if selected["todo_id"] is None:
+                return {**unavailable, "reason": selected["reason"]}
+            todo_id = selected["todo_id"]
+            unavailable["todo_id"] = todo_id
+            request["todo_id"] = todo_id
+            self.admit(request)
+            plan = self._validation_source(request, todo_id)["plan"]
+            # Return only the display observation; commands, pins and private
+            # declarations stay with their existing owner.
+            self.admit(request)
+            return {**{key: plan[key] for key in ("todo_id", "state", "source", "observation", "canonical_done")},
+                **{key: unavailable[key] for key in ("creation_request", "creation_turn") if key in unavailable}}
+        except (OSError, ValueError, RuntimeError) as exc:
+            reason = ("the original task source is temporarily unavailable" if isinstance(exc, OSError)
+                else str(exc))
+            return {**unavailable, "reason": reason}
+
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,
                todo_id: str | None = None, monitor_deadline: str | None = None,
                report_window: dict[str, Any] | None = None,
-               scheduled_window: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
+               scheduled_window: dict[str, Any] | None = None,
+               _creation_request: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
         from ...attached_session import managed_session_goal_commit
         controller = self.controller
         with controller._session_adapter_lock(session_id):
             request = self._request(session_id, agent_id, operation_id, todo_id)
+            if _creation_request is not None:
+                request["creation_request"] = _creation_request
             if scheduled_window is not None:
                 if report_window is not None or monitor_deadline is not None or not todo_id:
                     raise ValueError("a calendar task requires its original finite Todo")
@@ -410,43 +480,145 @@ class ManagedSessionTurn:
                 registry_path=controller.registry_path, session_id=session_id)
             with commit():
                 admitted = self.admit(request, selection_recovery=selection_recovery)
+                if _creation_request is not None:
+                    self._validation_source(request, _creation_request["todo_id"])
+                    if not self._creation_allowance(request):
+                        raise ValueError("the original creation task has no current preparation admission")
                 accepted = self.store.accept_managed_turn(session_id, client_turn_id=client_id,
                     message="Advance the currently admitted native LoopX work.",
                     display_message="生成本期定时报告。" if report_window is not None else
                         "执行本期定时任务。" if scheduled_window is not None else
                         "检查当前 Goal 原生任务状态。" if monitor_deadline is not None else "推进一次 LoopX 任务。",
                     origin="native_loopx", loopx_execution=True, loopx_request=request)
-            try:
-                session = self.store.load_session(session_id)
-                if admitted["observation_only"]:
-                    from .steward_monitor import StewardObservationAdapter
-                    adapter = StewardObservationAdapter(session.get("upstream_thread_id"))
-                else:
-                    adapter = controller._ensure_adapter_locked(session, work_dir=Path(admitted["workspace_path"]),
-                        objective="Advance this Goal's authorized work.", accepted_turn_id=accepted.turn["turn_id"])
-                    if Path(adapter.session.work_dir).resolve() != Path(admitted["workspace_path"]).resolve():
-                        raise ValueError("the original managed conversation workspace changed")
-                controller._start_accepted_turn_worker(session_id=session_id, turn_id=accepted.turn["turn_id"],
-                    message=accepted.turn["message"], attachments=[], adapter=adapter, loopx_execution=True)
-            except Exception as exc:
-                controller._fail_queue_preparation(session_id, accepted.turn["turn_id"], exc)
-                raise
+            self._dispatch_accepted_turn(accepted.turn, admitted)
             return accepted.turn, accepted.created
 
+    def _dispatch_accepted_turn(self, turn: dict[str, Any], admitted: dict[str, Any]) -> None:
+        session_id = turn["session_id"]
+        request = turn.get("loopx_request") or {}
+        if "creation_request" in request:
+            from ...attached_session import managed_session_goal_commit
+            with managed_session_goal_commit(store=self.store, registry_path=self.controller.registry_path,
+                    session_id=session_id)():
+                admitted = self.admit(request, turn=turn)
+                self._validation_source(request, request["todo_id"])
+                if not self._creation_allowance(request):
+                    return  # Retain the accepted, unstarted operation for a fresh state signal.
+        try:
+            session = self.store.load_session(session_id)
+            if admitted["observation_only"]:
+                from .steward_monitor import StewardObservationAdapter
+                adapter = StewardObservationAdapter(session.get("upstream_thread_id"))
+            else:
+                adapter = self.controller._ensure_adapter_locked(session,
+                    work_dir=Path(admitted["workspace_path"]), objective="Advance this Goal's authorized work.",
+                    accepted_turn_id=turn["turn_id"])
+                if Path(adapter.session.work_dir).resolve() != Path(admitted["workspace_path"]).resolve():
+                    raise ValueError("the original managed conversation workspace changed")
+            self.controller._start_accepted_turn_worker(session_id=session_id, turn_id=turn["turn_id"],
+                message=turn["message"], attachments=[], adapter=adapter, loopx_execution=True)
+        except Exception as exc:
+            self.controller._fail_queue_preparation(session_id, turn["turn_id"], exc)
+            raise
+
+    def consume_creation_request(self, creation: dict[str, Any]) -> bool:
+        """Consume one saved request through the existing managed acceptance owner."""
+        from ...attached_session import managed_session_goal_commit
+        from .creation_queue import queued_turn_unstarted
+        session_id = creation["session_id"]
+        request = self._request(session_id, creation["agent_id"], creation["operation_id"], creation["todo_id"])
+        request["creation_request"] = creation
+        with self.controller._session_adapter_lock(session_id):
+            existing = self.store.turn_for_client(session_id, "managed." + creation["operation_id"])
+            if existing is not None:
+                if existing.get("loopx_request") != request:
+                    raise ValueError("the original creation operation belongs to another managed request")
+                if not queued_turn_unstarted(existing):
+                    return False  # Unknown, failed and completed operations are never re-executed.
+                with managed_session_goal_commit(store=self.store, registry_path=self.controller.registry_path,
+                        session_id=session_id)():
+                    admitted = self.admit(request, turn=existing)
+                    self._validation_source(request, creation["todo_id"])
+                    if not self._creation_allowance(request):
+                        return True
+                self._dispatch_accepted_turn(existing, admitted)
+                return True
+            self.admit(request)
+            self._validation_source(request, creation["todo_id"])
+            if not self._creation_allowance(request):
+                return True
+        self.submit(session_id, agent_id=creation["agent_id"], operation_id=creation["operation_id"],
+            todo_id=creation["todo_id"], _creation_request=creation)
+        return True
+
+    def _creation_allowance(self, request: dict[str, Any]) -> bool:
+        """Read the existing typed selected-work admission, without binding or effects.
+
+        Preparation may require the native owner to claim a lease. Its final
+        admission and launch guards still own execution after this observation.
+        """
+        from ...status import collect_status, AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
+        from ...control_plane.quota.live_decision import build_live_quota_should_run_decision
+        from ...control_plane.scheduler.execution_context import scheduler_execution_context_for_turn
+        from ...control_plane.work_items.action_selection_contract import current_action_selection_admission
+        from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+        actor = request["actor"]
+        root = self.controller.coordination_runtime_root
+        status = collect_status(registry_path=self.controller.registry_path,
+            runtime_root_override=str(root), limit=AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
+            goal_id=actor["goal_id"], agent_lane_id=actor["agent_id"],
+            available_capabilities=None, include_presentation_projections=False)
+        decision = build_live_quota_should_run_decision(status,
+            goal_id=actor["goal_id"], agent_id=actor["agent_id"], available_capabilities=None,
+            include_scheduler_detail=False, codex_app_current_rrule=None,
+            registry_path=self.controller.registry_path, runtime_root=root,
+            requested_action_todo_id=request["todo_id"], turn_instance_id=request["turn_instance_id"],
+            workspace_path=Path(actor["workspace_path"]),
+            goal_ref=capture_first_party_host_goal_ref(registry_path=self.controller.registry_path,
+                goal_id=actor["goal_id"]),
+            scheduler_execution_context=scheduler_execution_context_for_turn(
+                host="codex-app-server", execution_mode="isolated-headless"))
+        agent = (decision.get("interaction_contract") or {}).get("agent_channel") or {}
+        _, admitted = current_action_selection_admission(decision,
+            requested_todo_id=request["todo_id"], agent_must_attempt=agent.get("must_attempt") is True,
+            agent_delivery_allowed=agent.get("delivery_allowed"))
+        return admitted
+
     def _validation_source(self, request: dict[str, Any], todo_id: str) -> dict[str, Any]:
-        from ...control_plane.todos.list_readback import list_goal_todos
-        readback = list_goal_todos(registry_path=self.controller.registry_path, goal_id=request["actor"]["goal_id"],
-            todo_id=todo_id, role="agent", runtime_root_arg=str(self.controller.coordination_runtime_root))
-        rows = [readback["todo"]] if readback.get("todo") else []
-        if len(rows) != 1 or rows[0].get("completion_validation_required") is not True:
+        from ...control_plane.effect_runtime import effect_runtime_result
+        from ...control_plane.goals.acceptance import inspect_goal_acceptance, validation_effect_files_current
+        from ...control_plane.todos.completion_validation import resolve_private_completion_validation_declaration
+        from ...materials import goal_state_path
+        actor = request["actor"]
+        workspace = Path(actor["workspace_path"])
+        basis = inspect_goal_acceptance(registry_path=self.controller.registry_path,
+            runtime_root=str(self.controller.coordination_runtime_root), goal_id=actor["goal_id"],
+            agent_id=actor["agent_id"], todo_id=todo_id, validation_workspace_path=workspace)
+        todo = basis.get("todo")
+        goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
+        if not isinstance(todo, dict) or goal is None:
+            raise ManagedTaskValidationUnavailable("the selected task's canonical validation source is unavailable")
+        declaration = resolve_private_completion_validation_declaration(canonical_todo=todo,
+            state_file=goal_state_path(goal), runtime_root=self.controller.coordination_runtime_root,
+            registry_path=self.controller.registry_path, goal_id=actor["goal_id"], todo_id=todo_id,
+            role=todo.get("role"), persist_if_resolved=False)
+        # Only the existing owner can resolve acceptance to explicit null.
+        # Applicable unbound/stale checks and failed reads must never fall back.
+        plan = effect_runtime_result("goal.task.validation_plan", {
+            "todo_id": todo_id, "basis": basis, "declaration": declaration})
+        if plan["state"] != "ready":
             raise ManagedTaskValidationUnavailable("the selected task needs its existing independent argv validation declaration")
-        return rows[0]
+        if not validation_effect_files_current(effects=plan["effects"],
+                registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                validation_workspace_path=workspace):
+            raise ManagedTaskValidationUnavailable("the selected task's declared verifier files changed or are unavailable")
+        return {**todo, "plan": plan}
 
     def prepare_validation(self, request: dict[str, Any], native_request: dict[str, Any], *,
                            _checked_work_identity: dict[str, str] | None = None) -> None:
         from ...control_plane.turn_driver.driver import selected_turn_todo, turn_host_lineage
         from ...control_plane.turn_driver.command_validation import build_loopx_turn_command_validator
-        from ...control_plane.todos.completion_validation_store import read_completion_validation_declaration
+        from ...control_plane.goals.acceptance import run_goal_acceptance_validation_effect
         # Dispatch can reuse its just-checked identity within this invocation;
         # direct callers still check the complete source through the same owner.
         if "work_contract" in native_request:
@@ -460,20 +632,47 @@ class ManagedSessionTurn:
         self.validation_basis = self._validation_source(request, selected["todo_id"])
         if re.fullmatch(r"cadence_[a-f0-9]{64}", self.validation_basis.get("target_key") or "") and request.get("work_kind") != "scheduled_task":
             raise ValueError("the original calendar Task must execute through its scheduled Session admission")
-        declaration = read_completion_validation_declaration(runtime_root=self.controller.coordination_runtime_root,
-            goal_id=request["actor"]["goal_id"], todo_id=selected["todo_id"],
-            expected_digest=self.validation_basis["completion_validation_sha256"])
-        if not declaration or not declaration.get("validation_command_argv"):
-            raise ManagedTaskValidationUnavailable("the selected task requires its existing argv validation declaration")
-        self.task_validator = build_loopx_turn_command_validator(declaration["validation_command_argv"],
-            project=Path(request["actor"]["workspace_path"]), timeout_seconds=declaration.get("validation_timeout_seconds") or 20)
+        actor = request["actor"]
+        workspace = Path(actor["workspace_path"])
+        validators = []
+        for effect in self.validation_basis["plan"]["effects"]:
+            if "criterion_id" not in effect:
+                if not effect.get("validation_argv"):
+                    raise ManagedTaskValidationUnavailable("the selected task requires its existing argv validation declaration")
+                # Preserve raw typed model-result JSON on the command's stdin,
+                # plus its existing receipt and optional reflection attestation.
+                validators.append(build_loopx_turn_command_validator(effect["validation_argv"],
+                    project=workspace, timeout_seconds=effect["validation_timeout_seconds"] or 20))
+            else:
+                def goal_check(_plan, _result, effect=effect):
+                    receipt = run_goal_acceptance_validation_effect(effect=effect,
+                        registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                        validation_workspace_path=workspace)
+                    return {"status": "passed" if receipt["passed"] else "failed",
+                        "validator_kind": "command", "summary": receipt.get("summary") or
+                            ("independent Goal acceptance check passed" if receipt["passed"] else
+                             "independent Goal acceptance check failed"),
+                        "exit_code": receipt["exit_code"],
+                        **({"recovery_kind": "repair_required"} if not receipt["passed"] else {})}
+                validators.append(goal_check)
+
+        def validate_checks(plan, result):
+            receipts = [check(plan, result) for check in validators]
+            if len(receipts) == 1:
+                return receipts[0]
+            failed = next((row for row in receipts if row["status"] != "passed"), None)
+            # Keep the existing receipt contract and the caller's optional
+            # reflection attestation. Every required check has executed.
+            return failed or {**receipts[-1], "summary": f"{len(receipts)} independent task checks passed"}
+
+        self.task_validator = validate_checks
 
     def validator(self, request: dict[str, Any], *, turn_id: str):
-        """Resolve only the native selection's immutable, caller-declared argv.
+        """Execute the current owner-resolved Goal and required Todo checks.
 
         No browser or model argument may install a host validation command.
-        The captured canonical digest and fresh source must agree before and
-        after the existing command validator reads the task's real artifact.
+        Definition, work, claim and lifecycle must agree before and after the
+        existing validators read the task's real artifact.
         """
         from ...control_plane.turn_driver.driver import (
             COMPLETE_TURN_PLAN_SCHEMA_VERSION, selected_turn_todo, turn_host_lineage,
@@ -486,15 +685,15 @@ class ManagedSessionTurn:
             selected = (turn_host_lineage(plan) if "work_contract" in plan or plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
                         else selected_turn_todo(plan.get("turn_envelope") or {}))
             basis = self.validation_basis
-            if not basis or not self.task_validator or basis["todo_id"] != selected["todo_id"]:
+            if not basis or not self.task_validator or basis["plan"]["todo_id"] != selected["todo_id"]:
                 raise ValueError("the original task validation source was not captured before model work")
 
             def current():
                 self.admit(request, turn=self.store.load_turn(actor["session_id"], turn_id))
                 fresh = self._validation_source(request, selected["todo_id"])
-                if any(fresh.get(key) != basis.get(key) for key in
-                       ("completion_validation_sha256", "completion_validation_revision")):
-                    raise ValueError("the selected task's validation declaration changed")
+                if (fresh["plan"]["task_basis_sha256"] != basis["plan"]["task_basis_sha256"]
+                        or fresh["plan"]["observation"]["basis_sha256"] != basis["plan"]["observation"]["basis_sha256"]):
+                    raise ValueError("the selected task's validation source or work changed")
 
             current()
             receipt = self.task_validator(plan, result)

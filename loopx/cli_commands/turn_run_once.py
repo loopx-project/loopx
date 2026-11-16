@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import sys as _sys
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
@@ -475,7 +477,28 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.TERMINAL_CLOSEOUT)
+            if args.host == "codex-cli":
+                # Builtin completion has already retired the original lease.
+                # Verify the exact terminal receipt; never start another completion.
+                observed = terminal_closeout_resolver(effect_ref)
+                receipt = observed.get("payload")
+                if observed.get("kind") == "committed" and isinstance(receipt, dict):
+                    return receipt
+                return {
+                    "ok": False,
+                    "appended": False,
+                    "reason": observed.get("reason") or "Builtin terminal completion receipt is missing",
+                }
             return todo_completion(result, effect_ref=effect_ref)
+
+        def codex_writeback(
+            result: dict[str, object], *, effect_ref: str,
+        ) -> dict[str, object]:
+            # Accountable refresh requires durable controller validation even for
+            # a predeclared terminal Todo. Other hosts keep their existing order.
+            if result.get("result_kind") == "validated_completion":
+                return completion_writeback(result, effect_ref=effect_ref)
+            return writeback(result, effect_ref=effect_ref)
 
         def current_status() -> dict[str, object]:
             return collect_turn_status_payload(
@@ -767,18 +790,24 @@ def execute_turn_run_once(
 
         host_runner: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None
         session_binding_resolver = None
-        if args.host == "codex-app-server":
-            def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-                return current_turn_host_launch_decision(args, registry_path=current_registry,
-                    runtime_root=runtime_root, identity=settlement_identity,
-                    planned_effective_action=execution_context["effective_action"],
-                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
-                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                    turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref)
 
+        def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
+            # Native and stdio transports recheck the original work at launch.
+            # A global route checks its source even if the mirror is unchanged.
+            return current_turn_host_launch_decision(
+                args, registry_path=current_registry, runtime_root=runtime_root,
+                identity=settlement_identity,
+                planned_effective_action=execution_context["effective_action"],
+                planned_selected_work_basis=execution_context.get("selected_work_basis"),
+                scheduler_execution_context=payload.get("scheduler_execution_context") or {},
+                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+                turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref,
+            )
+
+        if args.host == "codex-app-server":
             native_admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
-            )).with_launch_decision(native_launch_decision)
+            )).with_launch_decision(current_launch_decision)
 
             def run_native_host(request: Mapping[str, Any]) -> dict[str, Any]:
                 return native_host_runner(request, lambda: native_admission.launch_lifetime(
@@ -787,22 +816,6 @@ def execute_turn_run_once(
             host_runner = run_native_host
             session_binding_resolver = native_session_binding_resolver
         elif args.host == "codex-cli":
-
-            def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-                # Revalidate the already admitted identity through the same
-                # owner. In a global route the source is checked first, even
-                # when its mirror still advertises old quota or health.
-                return current_turn_host_launch_decision(
-                    args, registry_path=current_registry, runtime_root=runtime_root,
-                    identity=settlement_identity,
-                    planned_effective_action=execution_context["effective_action"],
-                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
-                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                    # Keep this Turn's already dispatched required reads at launch.
-                    turn_start_hook_dispatch=turn_start_hook_dispatch,
-                    goal_ref=goal_ref,
-                )
-
             host_runner = build_codex_cli_host_runner(
                 args, runtime_root=runtime_root, project=project,
                 registry_path=registry_path, goal_ref=goal_ref,
@@ -856,6 +869,19 @@ def execute_turn_run_once(
                 return request_settlement_lifetime(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
 
+        if args.host == "codex-cli" and goal_admission is not None:
+            request_lifetime = settlement_admission or nullcontext
+
+            @contextmanager
+            def codex_settlement_admission():
+                with request_lifetime():
+                    # Independent validation can outlive the running Goal.
+                    # Check the original authority before any settlement effect.
+                    goal_admission.require_running(operation="codex_cli_turn_settle")
+                    yield
+
+            settlement_admission = codex_settlement_admission
+
         def on_managed_start_admitted() -> None:
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
@@ -872,6 +898,11 @@ def execute_turn_run_once(
                 semantic_replan_guard_scoped=replan_guard_scoped,
                 semantic_replan_obligation_id=replan_obligation_id,
                 semantic_replan_capability_guard=capability_guard,
+                quota_spend_source=(
+                    quota_spend_source_for_execution_context(payload.get("scheduler_execution_context"))
+                    if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None
+                    else None
+                ),
                 goal_ref=goal_ref,
             )
 
@@ -902,7 +933,8 @@ def execute_turn_run_once(
             retry_failed=bool(args.retry_failed_turn),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
-            writeback=writeback if args.execute else None,
+            writeback=(codex_writeback if args.host == "codex-cli" else writeback)
+            if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             completion_intent=completion_intent if args.execute else None,
             terminal_closeout=terminal_closeout if args.execute else None,
@@ -919,6 +951,10 @@ def execute_turn_run_once(
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,
+            host_launch_guard=(partial(
+                goal_admission.with_launch_decision(current_launch_decision).launch_lifetime,
+                operation="turn_external_host_launch",
+            ) if raw_argv is not None and goal_admission is not None else None),
         )
         if args.execute:
             result.update(drain_committed_turn_post_writeback_hooks(

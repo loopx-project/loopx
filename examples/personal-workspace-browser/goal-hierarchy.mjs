@@ -55,11 +55,9 @@ export const goalHierarchyScenario = {
       assert.deepEqual(directory.goals.map(goal => [goal.id, goal.parent_goal_id]).sort(),
         captures.map(([id, _name, parent]) => [id, parent]).sort(),
         "The real directory preserves every parent, including orphans and cycles");
-      const entry = new URL(url);
       const researchFocus = {research_lens: "graph", research_goal: "calibration", research_node: JSON.stringify(["source-one", "source-two"]),
         research_pack: "a".repeat(64), research_analysis_goal: "calibration"};
-      for (const [key, value] of Object.entries(researchFocus)) entry.searchParams.set(key, value);
-      context = await openWorkspacePage(browser, entry.href, {collectCoverage, beforeGoto: async (_api, page) => {
+      context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_api, page) => {
         await page.addInitScript(({statusUrl}) => {
           localStorage.setItem("loopx-status-source-catalog-v1", JSON.stringify({
             schemaVersion: 1,
@@ -100,7 +98,11 @@ export const goalHierarchyScenario = {
       const row = id => page.locator(`[data-reorder-goal="${id}"]`);
       const assertResearchFocus = () => {
         const query = new URL(page.url()).searchParams;
-        for (const [key, value] of Object.entries(researchFocus)) assert.equal(query.get(key), value, `${key} survives workspace navigation`);
+        for (const [key, value] of Object.entries(researchFocus)) assert.equal(query.get(key), value, `${key} stays with Calibration`);
+      };
+      const assertNoResearchFocus = () => {
+        const query = new URL(page.url()).searchParams;
+        for (const key of Object.keys(researchFocus)) assert.equal(query.get(key), null, `switching Goals clears ${key}`);
       };
       const assertTreeLayout = async () => {
         const bounds = await page.locator(".personal-goal-row").evaluateAll(rows => rows.map(row => {
@@ -123,7 +125,6 @@ export const goalHierarchyScenario = {
       await row("research").locator(".personal-goal-link").click();
       await page.getByRole("button", {name: "只看此 Goal 及子 Goal", exact: true}).click();
       await page.waitForURL(target => target.searchParams.get("rootGoalId") === "research");
-      assertResearchFocus();
       await row("portfolio").waitFor();
       await waitForStatusReads(subtreeGoalIds, "scoped subtree reads");
       await page.waitForLoadState("networkidle");
@@ -134,7 +135,12 @@ export const goalHierarchyScenario = {
       await row("portfolio").getByRole("button", {name: "展开子 Goal：Portfolio", exact: true}).focus();
       await page.keyboard.press("Enter");
       await row("calibration").locator(".personal-goal-link").click();
-      await waitForStatusReads([], "status reads before reload");
+      await row("calibration").locator('[aria-current="page"]').waitFor();
+      const calibrationBookmark = new URL(page.url());
+      for (const [key, value] of Object.entries(researchFocus)) calibrationBookmark.searchParams.set(key, value);
+      await page.goto(calibrationBookmark.href, {waitUntil: "networkidle"});
+      await waitForStatusReads(subtreeGoalIds, "status reads before reload");
+      assertResearchFocus();
       statusReads.length = 0;
       await page.reload({waitUntil: "networkidle"});
       await waitForStatusReads(subtreeGoalIds, "reloaded subtree reads");
@@ -144,17 +150,22 @@ export const goalHierarchyScenario = {
       assert.equal(new URL(page.url()).searchParams.get("rootGoalId"), "research");
       assertResearchFocus();
       const scopedCalibration = page.url();
-      const unscopedGraphBookmark = new URL(scopedCalibration);
-      unscopedGraphBookmark.searchParams.delete("research_goal");
-      unscopedGraphBookmark.searchParams.delete("research_analysis_goal");
-      await page.goto(unscopedGraphBookmark.href, {waitUntil: "networkidle"});
       await row("graph").locator(".personal-goal-link").click();
       await page.waitForURL(target => target.searchParams.get("goalId") === "graph");
-      const unscopedQuery = new URL(page.url()).searchParams;
-      assert.equal(unscopedQuery.get("research_lens"), null,
-        "switching Goals clears an unscoped research lens instead of applying it to the destination Goal");
-      assert.equal(unscopedQuery.get("research_node"), null,
-        "switching Goals clears unscoped research node bookmarks together with the lens");
+      assertNoResearchFocus();
+      await page.goBack({waitUntil: "networkidle"});
+      await row("calibration").locator('[aria-current="page"]').waitFor();
+      assertResearchFocus();
+      const legacyCalibrationBookmark = new URL(scopedCalibration);
+      legacyCalibrationBookmark.searchParams.delete("research_goal");
+      legacyCalibrationBookmark.searchParams.delete("research_analysis_goal");
+      await page.goto(legacyCalibrationBookmark.href, {waitUntil: "networkidle"});
+      await row("calibration").locator('[aria-current="page"]').waitFor();
+      const legacyQuery = new URL(page.url()).searchParams;
+      for (const key of Object.keys(researchFocus)) assert.equal(legacyQuery.get(key), legacyCalibrationBookmark.searchParams.get(key));
+      await row("graph").locator(".personal-goal-link").click();
+      await page.waitForURL(target => target.searchParams.get("goalId") === "graph");
+      assertNoResearchFocus();
       await page.goto(scopedCalibration, {waitUntil: "networkidle"});
       await row("calibration").locator('[aria-current="page"]').waitFor();
       assertResearchFocus();
@@ -169,6 +180,8 @@ export const goalHierarchyScenario = {
       await page.getByRole("button", {name: "调整 Goal 顺序", exact: true}).click();
       await page.getByRole("button", {name: "全部 Goals", exact: true}).click();
       await row("daily").waitFor();
+      await row("calibration").locator('[aria-current="page"]').waitFor();
+      assertResearchFocus();
       await page.goBack({waitUntil: "networkidle"});
       await row("calibration").locator('[aria-current="page"]').waitFor();
       assert.equal(await row("daily").count(), 0, "Back restores the root scope and selected child");

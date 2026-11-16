@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import (
     HeartbeatReceiptIdentityConflictError,
     QuotaActionSelectionConflictError,
@@ -165,6 +166,10 @@ def _requested_quota_action_selection_preflight(
                 "heartbeat receipt settlement identity conflicts with the "
                 "current selected Todo: explicitly requested Todo differs"
             )
+        return None
+    if payload.get("effective_action") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value:
+        # Recovery preempts the choice. Keep the exact recovery actions in the
+        # response; the rollout owner leaves this Turn unbound until reentry.
         return None
     interaction = payload.get("interaction_contract")
     agent_channel = (

@@ -366,6 +366,15 @@ general supersession, global closeout, cross-Agent reassignment and S11 model/
 benchmark adoption remain open. This is a disclosed default guidance change,
 not qualification of the complete R4 contract.
 
+The [Goal contract evolution proposal](goal-contract-evolution-v0.md) composes
+operating-objective revision and supporting requirement evolution under these
+same owners. A source-bound change set retains original intent and version
+history, validates each effect's authority, publishes coupled changes atomically,
+and identifies affected peers without a unanimous barrier. Record storage and
+bounded decision context follow that semantic boundary. Current local template
+commit remains narrower; this proposal neither enables general supersession nor
+proves model use. Its E1–E9 and M1–M3 refine R4/R5's existing acceptance work.
+
 ### 3.8 Invalid evidence and affected consumers
 
 Recovery and work switching must preserve the different observations defined

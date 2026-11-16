@@ -35,7 +35,7 @@ const ACCEPTANCE_HOLD_TRIGGERS = new Set(["goal_acceptance_stale", "goal_accepta
 // These review kinds carry no evidence window, capability or lifecycle duty.
 // A vision gap dominates the ordinary outcome gap's discharge policy, so the
 // same scalar receipt can retain a mixed review after its work links change.
-const SCALAR_REVIEW_KINDS = new Set(["goal_outcome_uncovered", "vision_acceptance_gap"]);
+const SCALAR_REVIEW_KINDS = new Set(["goal_outcome_uncovered", "vision_acceptance_gap", "monitor_no_change_streak"]);
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
 export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
@@ -111,11 +111,28 @@ function historicalAckDelta(
   const ackTurn = typeof ack.turn_instance_id === "string" ? ack.turn_instance_id.trim() : "";
   const generated = typeof ack.generated_at === "string"
     ? parseTodoTimestampMicros(ack.generated_at) : null;
+  // A generated_at that is already strictly later proves order on its own.
+  // The compact run clock is whole seconds, so a stamp inside the admission
+  // second can be either side of a fractional guard_recorded_at. That
+  // candidate needs the original refresh_state event, bound to this Goal,
+  // Agent, obligation, and ACK Turn, with both its recorded time and its
+  // log position after admission. Missing or conflicting order stays pending.
+  const admissionSecond = admitted / 1_000_000n * 1_000_000n;
+  const preciseLater = generated !== null && generated > admitted;
+  const sameSecond = generated !== null && generated % 1_000_000n === 0n &&
+    generated >= admissionSecond && !preciseLater;
+  const written = typeof ack.writeback_recorded_at === "string"
+    ? parseTodoTimestampMicros(ack.writeback_recorded_at) : null;
+  const writebackAfterAdmission = sameSecond && written !== null && written > admitted &&
+    ack.writeback_follows_admission === true && ack.writeback_goal_id === goal &&
+    ack.writeback_agent_id === agent && ack.writeback_turn_instance_id === ackTurn &&
+    ack.writeback_obligation_id === selected;
+  const afterAdmission = preciseLater || writebackAfterAdmission;
   const outcomes = strings(delta.outcomes);
   const satisfying = strings(delta.satisfying_outcomes);
   return ack.schema_version === "autonomous_replan_ack_v0" && ack.recorded === true &&
     ack.goal_id === goal && ack.agent_id === agent && ackTurn && ackTurn !== guardTurn &&
-    generated !== null && generated > admitted &&
+    generated !== null && afterAdmission &&
     delta.schema_version === "replan_semantic_delta_v0" && delta.accepted === true &&
     delta.obligation_id === selected && outcomes.length > 0 && satisfying.length > 0 &&
     outcomes.every(outcome => KNOWN_OUTCOMES.has(outcome)) &&
@@ -183,9 +200,22 @@ function lifecycleSource(request: JsonObject): JsonObject {
   }
   const inferred = indexInferredSuccessors([...generations.values()].map(item => {
     const resume = readResume(item.resume_when) ?? "";
+    const updated = typeof item.updated_at === "string" ? parseTodoTimestampMicros(item.updated_at) : null;
+    // A successor bound to this review can add its dependency after admission.
+    // It closes the live frontier, but cannot remove the admitted source. The
+    // exact original trigger/digest checks below still fence reconstruction.
+    // This review id is created at admission, and canonical Todo timestamps are
+    // whole seconds, so an updated_at in the admission second or later is
+    // post-admission (the same bound closeout already uses). An earlier
+    // second, a different review, or a missing or invalid timestamp keeps the
+    // existing edge.
+    const reviewSuccessor = typeof request.selected_obligation_id === "string" &&
+      item.replan_obligation_id === request.selected_obligation_id &&
+      item.claimed_by === agent && item.last_actor_agent_id === agent &&
+      updated !== null && updated >= admissionSecond;
     return {id: todoId(item.todo_id), advancement: taskClass(item) === "advancement_task",
-      unblocks: todoId(item.unblocks_todo_id),
-      resumes: resume.startsWith("todo_done:") ? todoId(resume.slice(10)) : null};
+      unblocks: reviewSuccessor ? null : todoId(item.unblocks_todo_id),
+      resumes: !reviewSuccessor && resume.startsWith("todo_done:") ? todoId(resume.slice(10)) : null};
   }));
   const items = request.items.map(object).filter(item => {
     const completed = typeof item.completed_at === "string" ? parseTodoTimestampMicros(item.completed_at) : null;
@@ -263,17 +293,20 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       ![null, "open", "settlement_pending"].includes(request.replay_phase as string | null)) {
     throw new EffectRuntimeRequestError("receipt-bound replan facts are malformed");
   }
+  const writebackCommitted = request.replay_phase === "settlement_pending";
   let original: JsonObject | null = null;
   let openVisionReview: JsonObject | null = null;
+  let recoveredLifecycle: JsonObject | null = null;
   let delta: JsonObject | null = null;
   let historicalAckRecorded = false;
-  for (const value of request.transition_candidates) {
+  const candidates = writebackCommitted ? [] : request.transition_candidates;
+  for (const value of candidates) {
     const candidate = object(value);
     const obligation = object(candidate.obligation);
     if (request.guard_scoped && object(candidate.source_obligation).resolution_mode === "todo_lifecycle_settlement") {
       const recovered = lifecycleObligation({...candidate, obligation: candidate.source_obligation,
         selected_obligation_id: selected, agent_id: request.agent_id});
-      if (recovered) return {obligation: recovered};
+      if (recovered) recoveredLifecycle = recovered;
     }
     const historical = historicalAckDelta(request, candidate, selected);
     if (historical !== null) {
@@ -305,7 +338,6 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       break;
     }
   }
-  const writebackCommitted = request.replay_phase === "settlement_pending";
   if (delta !== null || writebackCommitted) {
     const reason = writebackCommitted
       ? "The original Turn writeback is verified. Settle its existing quota receipt once; do not repeat work or select its successor."
@@ -335,6 +367,9 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       },
     }};
   }
+  // A canonical successor can satisfy the original review without rewriting
+  // its completed Todo. With no such receipt, keep the lifecycle recovery.
+  if (recoveredLifecycle !== null) return {obligation: recoveredLifecycle};
   if (current?.obligation_id === selected) {
     return {obligation: {...current, selection_binding: "heartbeat_receipt"}};
   }
@@ -514,7 +549,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation === "receipt_review_source") {
     const kinds = triggerKinds(obligation);
     const triggers = Array.isArray(obligation.triggers) ? obligation.triggers : [];
-    // Plain vision/outcome reviews share a scalar receipt source. Other mixed,
+    // Plain frontier reviews share a scalar receipt source. Other mixed,
     // restricted, lifecycle and capability obligations must retain their
     // source-specific evidence and discharge rules through their own owners.
     return {review_source: obligation.schema_version === "autonomous_replan_obligation_v0" &&
@@ -528,7 +563,8 @@ export function projectReplanSemantics(value: unknown): JsonObject {
       obligation.progress_baseline == null && obligation.progress_window == null &&
       triggers.every(trigger => object(trigger).progress_baseline == null && object(trigger).progress_window == null) &&
       typeof obligation.stop_condition === "string" && obligation.stop_condition.trim() && obligation.stop_condition.length <= 240
-      ? {kind: kinds.includes("vision_acceptance_gap") ? "vision_acceptance_gap" : "goal_outcome_uncovered",
+      // Fixed precedence keeps the selected kind independent of trigger order.
+      ? {kind: ["vision_acceptance_gap", "goal_outcome_uncovered", "monitor_no_change_streak"].find(kind => kinds.includes(kind)),
         stop_condition: obligation.stop_condition} : null};
   }
   if (request.operation === "transition_eligibility") {

@@ -62,6 +62,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"sync-global",
 		"uninstall-project",
 		"version",
+		"postgres",
 		"host-mode-plan",
 		"migrate-local-state",
 	}
@@ -77,7 +78,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands", "version",
 	"bootstrap", "connect", "configure-goal", "start-goal", "bootstrap-command-pack",
 	"register-agent", "bind-agent-thread",
-	"authority-archive", "coordination-shadow", "extension", "slash-commands",
+	"authority-archive", "postgres", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
@@ -85,6 +86,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"heartbeat-prompt",
 	"heartbeat-prequota",
 	"goal-acceptance",
+	"goal-lifecycle",
 	"host-mode-plan",
 	"capability",
 	"history",
@@ -323,7 +325,11 @@ def cli_invocation_route(argv: list[str]):
 		if option == "--cli-bin":
 			program = argument
 		index += 1
-	with loopx_cli_route(program):
+	# A standalone core may be invoked without activating its environment. Its
+	# returned commands must stay on this artifact, even when PATH/PYTHONPATH
+	# names another LoopX installation. Explicit routes remain caller-owned.
+	default_argv = [sys.executable, "-I", "-m", "loopx.entrypoint"] if _standalone_core() else None
+	with loopx_cli_route(program, default_argv=default_argv):
 		yield
 
 
@@ -488,6 +494,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.authority_archive import register_authority_archive_command
 
 		register_authority_archive_command(subparsers, add_subcommand_format)
+	elif command == "postgres":
+		from .cli_commands.postgres import register_postgres_commands
+
+		register_postgres_commands(subparsers, add_subcommand_format)
 	elif command == "coordination-shadow":
 		from .cli_commands.coordination_shadow import register_coordination_shadow_command
 
@@ -524,6 +534,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.goal_acceptance import register_goal_acceptance_command
 
 		register_goal_acceptance_command(subparsers, add_subcommand_format)
+	elif command == "goal-lifecycle":
+		from .cli_commands.goal_lifecycle import register_goal_lifecycle_command
+
+		register_goal_lifecycle_command(subparsers)
 	elif command == "host-mode-plan":
 		from .cli_commands.host_mode_plan import register_host_mode_plan_command
 
@@ -592,6 +606,12 @@ def _dispatch_common_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
+	if args.command == "goal-lifecycle":
+		from .cli_commands.goal_lifecycle import handle_goal_lifecycle_command
+
+		return handle_goal_lifecycle_command(
+			args, registry_path=registry_path, print_payload=print_payload,
+		)
 	if args.command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
 
@@ -658,6 +678,13 @@ def _dispatch_common_command(
 		from .cli_commands.authority_archive import handle_authority_archive_command
 
 		return handle_authority_archive_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "postgres":
+		from .cli_commands.postgres import handle_postgres_command
+
+		return handle_postgres_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)

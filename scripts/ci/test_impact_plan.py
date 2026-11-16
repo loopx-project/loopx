@@ -28,6 +28,14 @@ class ImpactTests(unittest.TestCase):
                          "apps/presentation/dashboard/public/icon.svg"):
                 self.assertEqual(candidate([Change(status, path), Change("M", "docs/design.md")])[0], "presentation")
 
+    def test_root_readme_locales_are_documents(self):
+        readmes = ("README.md", "README.zh-CN.md", "README.ja.md")
+        for path in readmes:
+            for status in ("A", "M", "D"):
+                with self.subTest(path=path, status=status):
+                    self.assertEqual(candidate([Change(status, path)])[0], "docs")
+        self.assertEqual(candidate([Change("M", path) for path in readmes])[0], "docs")
+
     def test_one_shared_unknown_prompt_test_or_dependency_forces_full(self):
         for path in ("loopx/cli.py", "loopx/control_plane/goals/vision_checkpoint.ts",
                      "loopx/claude_goal_mode/commands/loopx.md", "tests/test_ui.py",

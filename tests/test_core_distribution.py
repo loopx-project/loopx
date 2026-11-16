@@ -7,6 +7,7 @@ product invocation run from the installed artifact, isolated from this checkout.
 from __future__ import annotations
 
 import importlib.util
+import csv
 import json
 import os
 import re
@@ -66,21 +67,49 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
 
 
 @pytest.fixture
-def core_python():
+def core_python(tmp_path):
     value = os.environ.get("LOOPX_CORE_TEST_PYTHON")
     if not value:
         pytest.skip("set LOOPX_CORE_TEST_PYTHON to a clean installed core environment")
     executable = Path(value).absolute()
     assert executable.is_file(), executable
+    # Every selected qualification caller must use the installed Core owner,
+    # including when the separate identity test was not selected.
+    script = '''import importlib.metadata as m,json,loopx
+from pathlib import Path
+installed=m.distribution('loopx-core')
+assert installed.version==loopx.__version__
+try:m.distribution('loopx')
+except m.PackageNotFoundError:pass
+else:raise AssertionError('the ordinary distribution must not be installed')
+direct_url=json.loads(installed.read_text('direct_url.json') or '{}')
+assert not direct_url.get('dir_info',{}).get('editable',False),'editable Core is not installed qualification'
+recorded=next((entry for entry in installed.files or () if entry.as_posix()=='loopx/__init__.py'),None)
+assert recorded is not None,'the installed Core RECORD must own loopx/__init__.py'
+package=Path(loopx.__file__).resolve()
+record_path=Path(installed.locate_file(recorded)).resolve()
+assert record_path==package,('imported namespace is not owned by installed Core',str(package),str(record_path))
+assert package.is_relative_to(Path(installed.locate_file('')).resolve()),'Core namespace resolves outside its installed location'
+'''
+    probe = subprocess.run([str(executable), "-I", "-c", script], cwd=tmp_path,
+        env=_environment(str(executable)), capture_output=True, text=True, timeout=30)
+    assert probe.returncode == 0, (
+        "LOOPX_CORE_TEST_PYTHON must select a clean installed loopx-core distribution",
+        probe.stdout, probe.stderr,
+    )
     return str(executable)
 
 
 def _command(python, arguments):
     # -I excludes PYTHONPATH and the current directory. No product import may
     # resolve to the parent test's editable source checkout.
-    return [python, "-I", "-c",
-            "import json,sys;from loopx.entrypoint import main;raise SystemExit(main(json.loads(sys.argv[1])))",
-            json.dumps(arguments)]
+    source = "import json,sys;from loopx.entrypoint import main;code=main(json.loads(sys.argv[1]));"
+    if any(arguments[index:index + 2] == ["turn", "run-once"] for index in range(len(arguments) - 1)):
+        # These task fixtures leave reward memory disabled. Check the executed
+        # CLI and replay rather than inferring their closure from helper tests.
+        source += ("assert 'loopx.capabilities.reward_memory.runtime_hooks' not in sys.modules;"
+                   "assert 'loopx.capabilities.reward_memory.read_authority' not in sys.modules;")
+    return [python, "-I", "-c", source + "raise SystemExit(code)", json.dumps(arguments)]
 
 
 def _environment(python, overrides=None):
@@ -99,12 +128,8 @@ def _run(python, arguments, cwd, *, environment=None, expected=0):
 
 
 def test_installed_core_identity_help_and_unavailable_workspace(core_python, tmp_path):
-    script = '''import importlib.metadata as m,importlib.util as u,json,loopx
+    script = '''import importlib.util as u,json,loopx
 from pathlib import Path
-assert m.version('loopx-core')==loopx.__version__
-try:m.distribution('loopx')
-except m.PackageNotFoundError:pass
-else:raise AssertionError('the ordinary distribution must not be installed')
 for name in ('loopx.cli','loopx.chat','loopx.web','loopx.canary'):assert u.find_spec(name) is None,name
 from loopx.release_manifest import _distribution_runtime_fingerprint
 assert _distribution_runtime_fingerprint() is not None
@@ -182,6 +207,70 @@ def test_installed_core_guided_start_identity_and_readback(core_python, tmp_path
                    "--goal-id", GOAL, "--agent-id", AGENT, "--host-surface", host_surface, "--goal-text", objective)
     assert pack["goal_start_contract"]["goal_text"] == objective
     assert pack["goal_start_contract"]["explicit_invocation_confirms_project_local_state_writes"] is True
+
+
+@pytest.mark.parametrize("explicit_route", [False, True])
+def test_installed_core_generated_commands_keep_their_distribution(
+    core_python, tmp_path, monkeypatch, explicit_route,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime = tmp_path / "project", tmp_path / "runtime"
+    project.mkdir()
+    prefix = ["--runtime-root", str(runtime), "--format", "json"]
+    environment = {"TRAECLI_THREAD_ID": "core-session"}
+
+    def command(*arguments):
+        return json.loads(_run(core_python, list(arguments), project,
+                               environment=environment).stdout)
+
+    command(*prefix, "bootstrap", "--project", str(project), "--goal-id", GOAL,
+            "--objective", "Verify the inventory report.", "--write-scope", "docs/**")
+    command(*prefix, "register-agent", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--require-new", "--execute")
+    command(*prefix, "bind-agent-thread", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--thread-id", "core-session", "--host-surface", "traex-cli", "--execute")
+    route = ["--cli-bin", "loopx"] if explicit_route else []
+    pack = command(*prefix, *route, "bootstrap-command-pack", "--project", str(project),
+                   "--goal-id", GOAL, "--host-surface", "traex-cli")
+    assert pack["agent_id"] == AGENT
+    # Execute the complete returned command, rather than discarding its
+    # executable and replaying only the arguments through the test's Python.
+    arguments = shlex.split(pack["host_loop_activation"]["activation_input_command"])
+    if os.name == "nt" and arguments[0] == "&":
+        arguments = arguments[1:]
+    foreign = tmp_path / "foreign" / "loopx"
+    foreign.mkdir(parents=True)
+    (foreign / "__init__.py").write_text("", encoding="utf-8")
+    (foreign / "entrypoint.py").write_text(
+        "from pathlib import Path\n"
+        "Path('foreign-cli-used').write_text('foreign package', encoding='utf-8')\n"
+        "def main(argv=None): return 91\n",
+        encoding="utf-8",
+    )
+    inherited = _environment(core_python, environment)
+    inherited["PYTHONPATH"] = str(foreign.parent)
+    result = subprocess.run(arguments, cwd=project, env=inherited,
+                            capture_output=True, text=True, timeout=45)
+    marker = project / "foreign-cli-used"
+    if explicit_route:
+        assert result.returncode == 91 and marker.exists(), (result.stdout, result.stderr)
+    else:
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert not marker.exists()
+        payload = json.loads(result.stdout)
+        assert payload["ok"] and payload["goal_id"] == GOAL and payload["agent_id"] == AGENT
+        doctor_command = shlex.split(pack["commands"]["doctor"])
+        if os.name == "nt" and doctor_command[0] == "&":
+            doctor_command = doctor_command[1:]
+        diagnosed = subprocess.run(
+            [*doctor_command, "--installation-only", "--deep", "--format", "json"],
+            cwd=project, env=inherited, capture_output=True, text=True, timeout=90,
+        )
+        assert diagnosed.returncode == 0, (diagnosed.stdout, diagnosed.stderr)
+        assert json.loads(diagnosed.stdout)["ok"]
+        assert not marker.exists()
 
 
 @pytest.mark.parametrize("route", ["help", "preview", "catalog"])
@@ -268,6 +357,48 @@ def test_installed_core_deep_doctor_rejects_missing_runtime_file(core_python, tm
         backup.rename(original)
 
 
+@pytest.mark.parametrize("damage", ["missing_module", "redirected_module", "missing_console", "missing_console_file"])
+def test_installed_core_module_doctor_requires_recorded_entrypoints(core_python, tmp_path, monkeypatch, damage):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    probe = subprocess.run([core_python, "-I", "-c",
+        "from importlib.metadata import distribution;"
+        "print(next(str(p.locate()) for p in distribution('loopx-core').files "
+        "if str(p).endswith('.dist-info/RECORD')))"],
+        capture_output=True, text=True, check=True)
+    record = Path(probe.stdout.strip())
+    original = record.read_bytes()
+    rows = list(csv.reader(original.decode("utf-8").splitlines()))
+    changed = []
+    for row in rows:
+        if damage == "missing_console" and Path(row[0]).name.lower() in {"loopx", "loopx.exe", "loopx-script.py"}:
+            continue
+        if row[0] == "loopx/entrypoint.py" and damage in {"missing_module", "redirected_module"}:
+            if damage == "missing_module":
+                continue
+            row[0] = "loopx/unrecorded-entrypoint.py"
+        changed.append(row)
+    try:
+        console = Path(core_python).parent / ("loopx.exe" if os.name == "nt" else "loopx")
+        backup = console.with_suffix(".core-test-backup")
+        if damage == "missing_console_file":
+            console.rename(backup)
+        with record.open("w", encoding="utf-8", newline="") as stream:
+            csv.writer(stream).writerows(changed)
+        result = subprocess.run(
+            [core_python, "-I", "-m", "loopx.entrypoint", "doctor", "--installation-only", "--deep", "--format", "json"],
+            cwd=tmp_path, env=_environment(core_python), capture_output=True, text=True, timeout=90,
+        )
+        assert result.returncode == 1, (result.stdout, result.stderr)
+        checks = {check["id"]: check for check in json.loads(result.stdout)["checks"]}
+        assert checks["command_package_same_distribution"]["ok"] is False
+    finally:
+        record.write_bytes(original)
+        if damage == "missing_console_file" and backup.exists():
+            backup.rename(console)
+
+
 @pytest.fixture(params=["sqlite", "file"])
 def task(tmp_path, monkeypatch, core_python, request):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -334,6 +465,88 @@ def _spends(runtime):
                for line in index.read_text().splitlines()) if index.exists() else 0
 
 
+def test_installed_core_goal_lifecycle_preserves_work_and_resumes_execution(core_python, task):
+    workspace, runtime, registry, arguments = task
+    host_started = workspace / "lifecycle-host-started"
+    host_script = workspace / "lifecycle-host.py"
+    host_script.write_text(
+        "import pathlib\npathlib.Path('lifecycle-host-started').write_text('started')\n" + HOST_SOURCE,
+    )
+    arguments = list(arguments)
+    arguments[arguments.index("--host-adapter-command-json") + 1] = json.dumps(
+        [core_python, "-I", str(host_script)],
+    )
+    todo_argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "todo", "list", "--goal-id", GOAL]
+    original_todo = json.loads(_run(core_python, todo_argv, workspace).stdout)["todos"][0]
+    todo_id = original_todo["todo_id"]
+    lease_argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "task-lease", "inspect", "--goal-id", GOAL, "--todo-id", todo_id]
+    original_lease = json.loads(_run(core_python, lease_argv, workspace).stdout)["lease"]
+    global_registry = runtime / "registry.global.json"
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "goal-lifecycle", "--goal-id", GOAL]
+    for operation, state in (("stop", "stopped"), ("resume", "active")):
+        before = (registry.read_bytes(), global_registry.read_bytes())
+        preview = json.loads(_run(core_python, [*prefix, "--operation", operation], workspace).stdout)
+        assert preview["dry_run"] and not preview["written"]
+        assert (registry.read_bytes(), global_registry.read_bytes()) == before
+        refused = json.loads(_run(core_python, [*prefix, "--operation", operation,
+            "--execute"], workspace, expected=1).stdout)
+        assert refused["written"] is False
+        stale = json.loads(_run(core_python, [*prefix, "--operation", operation,
+            "--actor-kind", "owner", "--expected-state-fingerprint", "0" * 64,
+            "--execute"], workspace, expected=1).stdout)
+        assert stale["error_kind"] == "goal_action_stale" and stale["written"] is False
+        assert (registry.read_bytes(), global_registry.read_bytes()) == before
+        result = json.loads(_run(core_python, [*prefix, "--operation", operation,
+            "--actor-kind", "owner", "--expected-state-fingerprint", preview["observed_state_fingerprint"],
+            "--execute"], workspace).stdout)
+        assert result["written"] and result["readback"]["verified"]
+        for path in (registry, global_registry):
+            goal = next(goal for goal in json.loads(path.read_text())["goals"] if goal["id"] == GOAL)
+            assert goal["activation"]["state"] == state
+        assert json.loads(_run(core_python, todo_argv, workspace).stdout)["todos"][0] == original_todo
+        assert json.loads(_run(core_python, lease_argv, workspace).stdout)["lease"] == original_lease
+        if state == "stopped":
+            blocked = json.loads(_run(core_python, arguments, workspace, expected=1).stdout)
+            assert blocked["ok"] is False, blocked
+            # An entered executor preserves uncertainty in its error response.
+            # Independent fixture observations below establish actual effects.
+            for effect in ("host_invoked", "state_written", "quota_spent"):
+                value = blocked["effects"][effect]
+                assert value is False or value is None, blocked
+        assert _spends(runtime) == 0
+        assert not host_started.exists()
+        assert not (workspace / "host-invocations").exists()
+        assert not (workspace / "squares.json").exists()
+    result = json.loads(_run(core_python, arguments, workspace).stdout)
+    key = _assert_committed(core_python, workspace, runtime, result)
+    assert host_started.read_text() == "started"
+    replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", key], workspace).stdout)
+    _assert_committed(core_python, workspace, runtime, replay)
+    assert replay["effects"]["host_invoked"] is False
+    assert replay["effects"]["state_written"] is False
+    assert replay["effects"]["quota_spent"] is False
+
+
+@pytest.mark.parametrize("operation", ["stop", "resume"])
+@pytest.mark.parametrize("actor", ["owner", "controller"])
+def test_installed_core_goal_lifecycle_respects_outer_controller(core_python, task, operation, actor):
+    workspace, runtime, registry, arguments = task
+    before = (registry.read_bytes(), (runtime / "registry.global.json").read_bytes())
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "goal-lifecycle", "--goal-id", GOAL, "--operation", operation, "--actor-kind", actor]
+    environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "1", "LOOPX_KUNLUNCODE_OUTER_GOAL_ID": GOAL}
+    preview = json.loads(_run(core_python, prefix, workspace, environment=environment).stdout)
+    assert preview["written"] is False
+    blocked = _run(core_python, [*prefix, "--execute"], workspace, environment=environment, expected=2)
+    assert blocked.stdout == ""
+    assert json.loads(blocked.stderr)["error_code"] == "kunluncode_outer_controller_write_owned"
+    assert (registry.read_bytes(), (runtime / "registry.global.json").read_bytes()) == before
+    assert _spends(runtime) == 0 and not (workspace / "host-invocations").exists()
+
+
 def _assert_committed(core_python, workspace, runtime, result):
     assert result["status"] == "committed", result
     assert result["validation"]["status"] == "passed"
@@ -353,8 +566,29 @@ def _assert_committed(core_python, workspace, runtime, result):
     return result["resume_turn_key"]
 
 
-def test_installed_core_executes_checks_and_replays_once(core_python, task):
+@pytest.mark.parametrize("checkpoint", [None, "continue", "no_change"])
+def test_installed_core_executes_checks_and_replays_once(core_python, task, checkpoint):
     workspace, runtime, registry, arguments = task
+    if checkpoint is not None:
+        vision = {
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "active",
+            "vision_patch": {"acceptance_summary": "Independently check squares and preserve exact replay."},
+            "path_delta": {
+                "schema_version": "goal_path_delta_v0", "outcome": checkpoint,
+                "prior_assumption": "The requested squares still needed a result check.",
+                "observed_reality": "The requested artifact is available for independent validation.",
+                "retained": ["The original squares request and acceptance."],
+                "evidence_refs": ["artifact:squares.json"],
+            },
+        }
+        host_index = arguments.index("--host-adapter-command-json") + 1
+        host_script = workspace / "checkpoint-host.py"
+        host_script.write_text(HOST_SOURCE.replace(
+            "'vision_unchanged_reason':'The requested squares remain the objective.'",
+            f"'path_delta_mode':'unchanged','agent_vision_json':{json.dumps(vision)!r}",
+        ))
+        arguments[host_index] = json.dumps([core_python, "-I", str(host_script)])
     history = json.loads(_run(core_python, ["--registry", str(registry), "--runtime-root", str(runtime),
         "--format", "json", "history", "trajectory-hygiene", "--goal-id", GOAL], workspace).stdout)
     assert history["ok"] is True
@@ -369,6 +603,11 @@ def test_installed_core_executes_checks_and_replays_once(core_python, task):
         "--format", "json", "turn", "inspect-journal", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-key", key], workspace).stdout)
     assert inspected["ok"] is True
+    if checkpoint is not None:
+        journal_path = runtime / "goals" / GOAL / "turns" / f"{key.removeprefix('sha256:')}.json"
+        journal = json.loads(journal_path.read_text())
+        assert journal["host_result"]["result_kind"] == "validated_completion"
+        assert journal["host_result"]["agent_vision"]["path_delta"]["outcome"] == checkpoint
 
 
 @pytest.mark.skipif(os.name == "nt", reason="this qualification injects a POSIX SIGKILL")

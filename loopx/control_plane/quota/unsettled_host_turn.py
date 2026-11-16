@@ -11,20 +11,24 @@ from __future__ import annotations
 from .effective_action import EffectiveAction
 from .states import quota_item_is_paused
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from ...rollout_event_log import RolloutAppendPreconditionChanged
 from ..effect_runtime import (
     EffectRuntimeRejected,
     EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
+from ..scheduler.arbitration import SchedulerArbitration
 from ..scheduler.execution_context import SchedulerExecutionContextResolution
+from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..todos.todo_semantics import todo_item_task_class
 from ..work_items.interaction_contract import (
     _scoped_cli_args,
-    build_interaction_contract,
+    _build_interaction_contract_projection,
 )
 from .error_codes import (
     CloseoutQueryUnavailableError,
@@ -172,7 +176,8 @@ def _prior_closeout_preflight(
     current_turn_instance_id: str | None,
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
-) -> tuple[dict[str, Any], list[str], dict[str, Any]] | None:
+    owner_action_id: str | None = None,
+) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]] | None:
     """Ask the typed owner which prior Turn must still be closed out.
 
     The preflight reads the goal's persisted guards and the selected Turn's
@@ -180,43 +185,57 @@ def _prior_closeout_preflight(
     than a megabyte log, and a settled prior Turn never causes a bound-fact read.
     """
 
-    try:
-        with quota_accounting_admission(
+    with quota_accounting_admission(
+        runtime_root=runtime_root,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        goal_ref=goal_ref,
+        operation="prior-host-turn-closeout-preflight",
+        lock_legacy_index=False,
+    ) as source_admission:
+        return _read_prior_closeout_preflight(
             runtime_root=runtime_root,
-            registry_path=registry_path,
             goal_id=goal_id,
+            agent_id=agent_id,
+            current_turn_instance_id=current_turn_instance_id,
             goal_ref=goal_ref,
-            operation="prior-host-turn-closeout-preflight",
-            lock_legacy_index=False,
-        ) as source_admission:
-            request_runtime_root = (
-                runtime_root.expanduser().resolve()
-                if source_admission is not None
-                else runtime_root.expanduser()
-            )
-            result = effect_runtime_result(
-                PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
-                {
-                    "schema_version": (
-                        PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA
-                    ),
-                    "runtime_root": str(request_runtime_root),
-                    "goal_id": goal_id,
-                    "agent_id": agent_id,
-                    "exclude_turn_instance_id": current_turn_instance_id,
-                    **(
-                        {"goal_ref": dict(goal_ref)}
-                        if goal_ref is not None
-                        else {}
-                    ),
-                    **(
-                        {"source_admission": dict(source_admission)}
-                        if source_admission is not None
-                        else {}
-                    ),
-                },
-                timeout=PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS,
-            )
+            owner_action_id=owner_action_id,
+            source_admission=source_admission,
+        )
+
+
+def _read_prior_closeout_preflight(
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    agent_id: str,
+    current_turn_instance_id: str | None,
+    goal_ref: Mapping[str, Any] | None,
+    owner_action_id: str | None,
+    source_admission: Mapping[str, Any] | None,
+    borrow_source_admission: bool = False,
+) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]] | None:
+    try:
+        request_runtime_root = (
+            runtime_root.expanduser().resolve()
+            if source_admission is not None
+            else runtime_root.expanduser()
+        )
+        result = effect_runtime_result(
+            PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
+            {
+                "schema_version": PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+                "runtime_root": str(request_runtime_root),
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "exclude_turn_instance_id": current_turn_instance_id,
+                "owner_action_id": owner_action_id,
+                **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
+                **({"source_admission": dict(source_admission)} if source_admission is not None else {}),
+                **({"borrow_source_admission": True} if borrow_source_admission else {}),
+            },
+            timeout=PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS,
+        )
     except EffectRuntimeResponseAmbiguous as exc:
         # This method only reads receipts. A lost query response is not a
         # possibly committed mutation, and must not send the operator hunting
@@ -254,7 +273,59 @@ def _prior_closeout_preflight(
     return (
         dict(candidate), [str(name) for name in missing_receipts],
         dict(monitor_poll) if isinstance(monitor_poll, Mapping) else {},
+        dict(result["recovery_admissions"]),
     )
+
+
+@contextmanager
+def recovery_admission_append_precondition(
+    payload: Mapping[str, Any],
+    *,
+    registry_path: Path,
+    runtime_root: Path,
+    goal_id: str,
+    agent_id: str,
+    turn_instance_id: str,
+    goal_ref: Mapping[str, Any] | None,
+) -> Iterator[Callable[[], None] | None]:
+    recovery = payload.get("unsettled_host_turn_recovery")
+    if (payload.get("should_run") is not True or not isinstance(recovery, Mapping)
+            or recovery.get("state") != "recovery_required"):
+        yield None
+        return
+
+    from ...agent_registry import load_goal_from_registry
+    from ..goals.activation import goal_is_stopped, goal_owner_resume_id
+
+    # The append owns the rollout lock. Acquire any source-lifetime locks
+    # first, as quota settlement does, and reuse those locks for the read.
+    with quota_accounting_admission(
+        runtime_root=runtime_root,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        goal_ref=goal_ref,
+        operation="recovery_admission_append",
+        lock_legacy_index=False,
+    ) as source_admission:
+        def check() -> None:
+            goal = load_goal_from_registry(registry_path, goal_id)
+            if goal is None or goal_is_stopped(goal):
+                raise RolloutAppendPreconditionChanged("The Goal is unavailable or stopped before recovery admission.")
+            current = _read_prior_closeout_preflight(
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                current_turn_instance_id=turn_instance_id,
+                goal_ref=goal_ref,
+                owner_action_id=goal_owner_resume_id(goal),
+                source_admission=source_admission,
+                borrow_source_admission=source_admission is not None,
+            )
+            if (current is None or current[3]["checkpoint"] != recovery["admission_checkpoint"]
+                    or current[3]["count"] != recovery["admissions_without_progress"]):
+                raise RolloutAppendPreconditionChanged("The recovery admission basis changed before append.")
+
+        yield check
 
 
 def _unsettled_host_turn_recovery(
@@ -265,6 +336,7 @@ def _unsettled_host_turn_recovery(
     agent_id: str | None,
     current_turn_instance_id: str | None,
     goal_ref: Mapping[str, Any] | None = None,
+    owner_action_id: str | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id or not current_turn_instance_id:
         return None
@@ -275,10 +347,11 @@ def _unsettled_host_turn_recovery(
         current_turn_instance_id=current_turn_instance_id,
         registry_path=registry_path,
         goal_ref=goal_ref,
+        owner_action_id=owner_action_id,
     )
     if preflight is None:
         return None
-    selected, missing_receipts, monitor_poll = preflight
+    selected, missing_receipts, monitor_poll, recovery_admissions = preflight
     # A candidate carries exactly one binding: the Todo it must read, or the
     # autonomous replan obligation that has no Todo to read.
     todo_id = (
@@ -308,6 +381,7 @@ def _unsettled_host_turn_recovery(
             "candidate": selected,
             "missing_receipts": missing_receipts,
             "binding_facts": binding_facts,
+            "recovery_admissions": recovery_admissions,
         },
     )
     if not isinstance(verdict, Mapping) or (
@@ -317,7 +391,7 @@ def _unsettled_host_turn_recovery(
     status = verdict.get("status")
     if status == "none":
         return None
-    if status != "recovery_required":
+    if status not in ("recovery_required", "attention_required"):
         raise RuntimeError("TypeScript recovery result shape mismatch")
     recovery = verdict.get("recovery")
     obligation = verdict.get("obligation")
@@ -337,15 +411,18 @@ def apply_unsettled_host_turn_recovery_if_required(
     agent_id: str | None,
     current_turn_instance_id: str | None,
     available_capabilities: list[str] | None,
+    project_scheduler_hint: Callable[..., dict[str, Any]],
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
     goal_ref: Mapping[str, Any] | None = None,
+    owner_action_id: str | None = None,
 ) -> bool:
     """Preempt ordinary selection when the preceding host Turn lacks closeout."""
 
     if quota_item_is_paused(payload):
         return False
+
     verdict = _unsettled_host_turn_recovery(
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -353,12 +430,18 @@ def apply_unsettled_host_turn_recovery_if_required(
         agent_id=agent_id,
         current_turn_instance_id=current_turn_instance_id,
         goal_ref=goal_ref,
+        owner_action_id=owner_action_id,
     )
     if verdict is None:
         return False
-    return _apply_recovery_projection(payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
+    arbitration = _apply_recovery_projection(
+        payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
         current_turn_instance_id=current_turn_instance_id, available_capabilities=available_capabilities,
-        scheduler_execution_context=scheduler_execution_context)
+        scheduler_execution_context=scheduler_execution_context,
+    )
+    if verdict["recovery"].get("state") == "attention_required":
+        payload["scheduler_hint"] = project_scheduler_hint(payload, arbitration=arbitration)
+    return True
 
 
 def apply_receipt_bound_wait_recovery(
@@ -449,19 +532,24 @@ def _apply_recovery_projection(
     payload: dict[str, Any], *, verdict: Mapping[str, Any], registry_path: Path, runtime_root: Path,
     current_turn_instance_id: str | None, available_capabilities: list[str] | None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
-) -> bool:
+) -> SchedulerArbitration:
     recovery = verdict["recovery"]
     obligation = verdict["obligation"]
+    attention = recovery.get("state") == "attention_required"
+    if attention:
+        from .settlement_precedence import clear_quota_action_projections
+
+        clear_quota_action_projections(payload)
     payload.pop("selected_todo", None)
     payload.pop("todo_id", None)
     payload.pop("action_portfolio", None)
     payload.update(
         {
-            "decision": "unsettled_host_turn_recovery",
-            "should_run": True,
-            "state": "eligible",
+            "decision": "blocked_wait" if attention else "unsettled_host_turn_recovery",
+            "should_run": obligation["must_attempt_work"],
+            "state": "waiting" if attention else "eligible",
             "effective_action": EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value,
-            "actionable_by_codex": True,
+            "actionable_by_codex": obligation["must_attempt_work"],
             "normal_delivery_allowed": False,
             "recovery_delivery_allowed": False,
             "self_repair_allowed": False,
@@ -471,6 +559,7 @@ def _apply_recovery_projection(
             "safe_bypass_kind": None,
             "safe_bypass_policy": None,
             "reason": obligation["reason"],
+            **({"reason_code": obligation["reason_code"], "requires_user_action": True} if attention else {}),
             "recommended_action": obligation["recommended_action"],
             "unsettled_host_turn_recovery": recovery,
             "heartbeat_recommendation": {
@@ -479,10 +568,10 @@ def _apply_recovery_projection(
                 "notify": obligation["notify"],
                 "spend_policy": obligation["spend_policy"],
                 "reason": obligation["recommendation_reason"],
-                "agent_must_attempt": True,
+                "agent_must_attempt": obligation["must_attempt_work"],
             },
             "execution_obligation": {
-                "must_attempt_work": True,
+                "must_attempt_work": obligation["must_attempt_work"],
                 "kind": "unsettled_host_turn_recovery",
                 "contract": obligation["contract"],
                 "contract_obligation": obligation["contract_obligation"],
@@ -503,15 +592,18 @@ def _apply_recovery_projection(
             "automation_liveness": {
                 "schema_version": "automation_liveness_v0",
                 "keep_active": True,
-                "pause_allowed": False,
-                "automation_action": "execute_bounded_recovery",
+                "pause_allowed": attention,
+                "automation_action": "wait_for_owner" if attention else "execute_bounded_recovery",
                 "reason": obligation["unsettled_reason"],
                 "spend_policy": obligation["spend_policy"],
             },
         }
     )
-    interaction_contract = build_interaction_contract(
+    if attention:
+        payload["effective_action"] = EffectiveAction.BLOCKED_WAIT.value
+    interaction_contract, arbitration = _build_interaction_contract_projection(
         payload,
+        agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=current_turn_instance_id,
@@ -529,4 +621,4 @@ def _apply_recovery_projection(
         cli_channel["spend_allowed_now"] = obligation.get("spend_allowed_now") is True
         cli_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     payload["interaction_contract"] = interaction_contract
-    return True
+    return arbitration

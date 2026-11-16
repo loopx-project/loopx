@@ -578,7 +578,7 @@ def test_offline_worker_timeout_does_not_leave_a_copy_or_stop_shared_runtime(tmp
     assert normal["activation_performed"] is False
 
 
-def test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication(tmp_path):
+def test_real_sqlite_history_above_20000_is_verified_through_outer_backup(tmp_path):
     registry, runtime, state = promoted_create_fixture(tmp_path, provider="sqlite")
     project = state.parents[3]
     owner = Path(__file__).parents[1] / "loopx/control_plane/coordination"
@@ -615,25 +615,24 @@ const readback=await store.loadAuthority();
 if(readback.status!=='loaded'||Number(readback.cursor)!==r.last)throw new Error('Fixture readback mismatch');
 process.stdout.write(JSON.stringify(audit));
 """
-    for first, last, expected in [(2, 20000, "readable"), (20001, 20001, "refused")]:
+    for first, last in [(2, 20000), (20001, 20001)]:
         seeded = subprocess.run(["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
             "--input-type=module", "-e", script], input=json.dumps({"root": str(runtime), "first": first, "last": last}),
             text=True, capture_output=True, check=True, timeout=120)
-        assert json.loads(seeded.stdout)["commits"] == last
+        verified = json.loads(seeded.stdout)
+        assert verified["commits"] == last
         backup = execute_state_backup_plan(build_state_backup_plan(project=project, runtime_root=runtime,
             registry_path=registry, output_dir=tmp_path / "backups", backup_id=f"history-{last}",
             include_registry_projects=False, include_automations=False, include_skills=False))
         destination = tmp_path / f"inert-{last}"
         code, result = _cli("backup-state", "verify", "--archive", backup["archive_path"],
             "--manifest", backup["manifest_path"], "--destination", destination, "--execute")
-        if expected == "readable":
-            assert code == 0, result
-            [goal] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
-            assert goal["state"] == "readable" and goal["facts"]["history_commits"] == 20000
-        else:
-            assert code == 1 and result["error_code"] == "authority_history_capacity", result
-            assert not destination.exists()
-            assert not list(tmp_path.glob(".loopx-recovery-*"))
+        assert code == 0, result
+        [goal] = [row for row in result["components"] if row["owner_kind"] == "coordination_authority"]
+        assert goal["state"] == "readable"
+        assert goal["facts"]["history_commits"] == last
+        assert goal["facts"]["cursor"] == str(last)
+        assert (destination / "recovery-audit.json").is_file()
 
 
 def test_digest_refusal_precedes_tar_decoding_and_writes_nothing(tmp_path):

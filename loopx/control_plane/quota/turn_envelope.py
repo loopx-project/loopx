@@ -148,7 +148,9 @@ def turn_plan_host_source(request: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def captured_turn_host_input(request: Mapping[str, Any]) -> dict[str, Any]:
-    """Transport original-reader metadata after complete-source validation."""
+    """Use the checked wire or transfer original-reader metadata from v0."""
+    if "turn_envelope" not in request:
+        return {**request, "schema_version": COMPLETE_TURN_HOST_REQUEST_SCHEMA}
     envelope = _wire_mapping(request.get("turn_envelope"))
     model_input = {**{key: value for key, value in request.items() if key != "turn_envelope"},
                    "schema_version": COMPLETE_TURN_HOST_REQUEST_SCHEMA}
@@ -182,22 +184,49 @@ def assert_turn_host_request_version(request: Mapping[str, Any]) -> None:
 def complete_turn_host_source(
     request: Mapping[str, Any], *, operation: str = "host_context",
     include_session_lineage: bool = False,
+    include_model_context: bool = False,
     recorded_capability_result: bool = False,
 ) -> dict[str, Any] | None:
     if "schema_version" in request:
         assert_turn_host_request_version(request)
     if "work_contract" not in request:
         return None
-    header = ({"complete_host_request": {key: request[key] for key in (
-        "schema_version", "turn_key", "source_decision_hash", "detail_ref",
-    ) if key in request}} if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA else {})
-    # Identity-only current callers need no executor adapter. Keep an explicit
-    # adapter, even a damaged one, on the typed owner's full Host validation.
-    adapter = ({"envelope": _wire_mapping(request.get("turn_envelope"))}
-               if "turn_envelope" in request or operation != "complete_host_lineage" else {})
-    return _turn_envelope_result(operation, payload=request["work_contract"], **adapter, **header,
+    wire = {}
+    if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA:
+        wire["complete_host_request"] = {key: request[key] for key in (
+            "schema_version", "turn_key", "source_decision_hash", "detail_ref",
+        ) if key in request}
+    elif "turn_envelope" in request or operation != "complete_host_lineage":
+        # An explicit historical adapter still requires full validation.
+        wire["envelope"] = _wire_mapping(request.get("turn_envelope"))
+    checked = _turn_envelope_result(operation, payload=request["work_contract"], **wire,
                                  **({"recorded_capability_result": True} if recorded_capability_result else {}),
+                                 **({"include_model_context": True} if include_model_context else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
+    if include_model_context:
+        changes = checked.pop("model_context_changes", None)
+        if not isinstance(changes, dict):
+            raise RuntimeError("TypeScript Host model-context projection is missing")
+        checked["model_context"] = _apply_context_projection_changes(
+            dict(request["work_contract"]), changes,
+        )
+    return checked
+
+
+def projected_host_model_input(request: Mapping[str, Any], checked: Mapping[str, Any]) -> dict[str, Any]:
+    """Render task data with original-reader provenance, never a new source.
+
+    The full v1 wire/journal remains unchanged. Applying the TS owner's path
+    edits above preserves original Python numbers and complete task text.
+    """
+    context = checked.get("model_context")
+    if not isinstance(context, dict):
+        raise RuntimeError("checked Host model-context projection is missing")
+    original = captured_turn_host_input(request)
+    return {**{key: value for key, value in original.items()
+               if key not in {"work_contract", "schema_version"}},
+            "schema_version": checked["model_context_schema_version"],
+            "source_schema_version": original["schema_version"], "task_context": context}
 
 
 def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:

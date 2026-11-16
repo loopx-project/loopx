@@ -17,6 +17,7 @@ import sys
 import time
 from typing import Any
 
+from ..command_invocation import loopx_cli_argv
 from ..entrypoint import pin_utf8_stdio
 from ..file_lock import exclusive_file_lock
 
@@ -41,7 +42,7 @@ def retryable_native_error(error: Any) -> bool:
 
 
 def _core_args(args: argparse.Namespace, command: list[str]) -> list[str]:
-    result = [args.cli_bin, "--format", "json"]
+    result = [*loopx_cli_argv(args.cli_bin), "--format", "json"]
     for flag, value in (
         ("--registry", args.registry),
         ("--runtime-root", args.runtime_root),
@@ -63,18 +64,15 @@ def _core_args(args: argparse.Namespace, command: list[str]) -> list[str]:
 
 
 def _admitted(args: argparse.Namespace) -> bool:
+    # The retry gate observes Core. The resumed heartbeat reads its own work.
     read = subprocess.run(
-        _core_args(args, ["quota", "should-run"]),
+        _core_args(args, ["quota", "should-run", "--scheduler-observation"]),
         capture_output=True,
         text=True,
         encoding="utf-8",
         timeout=10,
         check=True,
-        env={
-            **{key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
-            # This machine read needs Core's decision, not model context navigation.
-            "LOOPX_CONTEXT_DELIVERY": "off",
-        },
+        env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
     )
     return json.loads(read.stdout).get("should_run") is True
 

@@ -9,9 +9,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from contextlib import ExitStack
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ...chat_action_store import ActionConflictError, ChatActionStore
 from ...thread_agent_binding import resolve_registry_thread_agent_binding
 from ..goals.activation import goal_is_stopped
 from .goal_instance_scope import (
@@ -20,11 +19,16 @@ from .goal_instance_scope import (
     decide_collaboration_lifecycle,
 )
 
+if TYPE_CHECKING:
+    from ...chat_action_store import ChatActionStore
+
 
 def _store(runtime_root: Path) -> ChatActionStore:
     root = runtime_root / "chat" / "actions"
     if not (root / "actions.json").is_file():
         raise ValueError("canonical operation store is unavailable")
+    from ...chat_action_store import ChatActionStore
+
     return ChatActionStore(root)
 
 
@@ -184,6 +188,8 @@ def agent_operation_action(
     real producer/verifier pair is integrated.
     """
     store = _store(runtime_root)
+    from ...chat_action_store import ActionConflictError
+
     proposal = store.load(proposal_id)
     if proposal is None:
         raise ValueError("canonical operation was not found")

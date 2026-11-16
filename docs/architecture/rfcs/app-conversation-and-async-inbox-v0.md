@@ -189,6 +189,15 @@ it cannot silently fall back to a peer or ordinary conversation. Goal-scoped,
 project, explicit original, managed-Agent and remote/read-only views retain their
 own navigation. A newly selected preference does not retarget an already frozen
 original conversation.
+The default `POST /api/chat/sessions` manager entry resolves the same saved
+choice on the server, including for API callers. It resumes that original
+Session or rejects the request; a new-session/model override cannot silently
+create a separate local steward. Existing explicitly addressed Sessions retain
+their identity. If the original Session closes or changes identity during
+discovery, the manager request fails with its history preserved. A verified
+Lark bot with an unavailable owner login is reported
+as an owner-login recovery, without clearing the selection or weakening source
+verification. Restore the original owner's login for the same App and retry.
 Overview quick prompts and its composer use the same explicit choice and the
 existing exact Session send, active-Turn queue, stream recovery and readback.
 Resolving the entry does not open Chat or block Goal navigation. Sending stays
@@ -351,6 +360,15 @@ the notice. Its source time participates in history pagination; late rows
 invalidate any affected prefix, and a changed notice refreshes the App's
 transcript even when no Turn runs. The notice carries no resource bytes or
 credentials, creates no Turn, and does not resend the original reply.
+
+For same-origin, bound steward history, the App can request image addresses in
+place of inline base64. The history proof includes the address derived from the
+exact original image. The image read checks the Session, message, slot and
+content digest before returning the original bytes. The App loads images near
+the viewport. A failed read can retry in the original message. Refresh adopts a
+new image address only from verified history for the same Session, message and
+slot; an old content digest stays unavailable. Legacy clients, documents, and
+Turn input keep their existing formats.
 
 The implementation decision follows primary-source comparisons, not a claim
 that shared context already guarantees two-way delivery:
@@ -1743,10 +1761,13 @@ A delivered failure notice is not a completed business request. The existing
 private reply scanner now discovers eligible unfinished ordinary Codex steward
 requests after the legacy manager-context migration. Context version 21 restores
 the complete visible user/assistant history in native persisted history. Large
-restores use bounded UTF-8 prefixes, with native compaction between them before
-the next prefix or user request. A scheduling acknowledgement is insufficient:
-the matching compaction item and successful terminal native Turn must finish.
-Small restores and resumed threads retain their existing path. Core's visible
+restores use bounded UTF-8 prefixes. After a successful compaction, the
+adapter uses Codex's recomputed context size to fit additional bounded imports
+within the remaining window, with room reserved for prompt overhead. If the
+estimate is unavailable, it keeps compacting between prefixes. A scheduling
+acknowledgement is insufficient: the matching compaction item and successful
+terminal native Turn must finish. Small restores and resumed threads retain
+their existing path. Core's visible
 transcript is unchanged; the native compactor owns its condensed model context.
 An unknown, failed or interrupted compaction closes the new adapter before its
 binding is published, without replaying injection or starting business work.

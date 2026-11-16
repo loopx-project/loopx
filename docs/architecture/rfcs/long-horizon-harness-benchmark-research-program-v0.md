@@ -674,6 +674,13 @@ For assisted studies only:
 - false escalation and unnecessary gate rate;
 - value of information under a fixed intervention budget.
 
+The [Research human-attention observer](../../reference/trajectory-assessment.md#human-attention-in-research-optional)
+now reads source-bound human inputs, separate active/wait interval unions and
+recorded avoidable-input candidates through the existing pack and citation owner.
+Recorder classifications, partial timing and historical sources remain explicit.
+Synthetic packaged-reader checks qualify this reading path; live capture coverage,
+calibrated necessity and lower attention for equal accepted quality remain unqualified.
+
 ### 6.5 Benchmark integrity and anti-cheating
 
 A correct outcome is not eligible evidence when one arm had access to hidden

@@ -3,7 +3,25 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .base import (
+        ContextProviderItem as ContextProviderItem,
+        ContextProviderRetrieval as ContextProviderRetrieval,
+        ContextProviderSync as ContextProviderSync,
+        canonical_context_lines as canonical_context_lines,
+        canonical_context_matches as canonical_context_matches,
+        canonical_context_text as canonical_context_text,
+    )
+    from .bm25 import BM25ContextProvider as BM25ContextProvider
+    from .bm25 import build_bm25_context_provider as build_bm25_context_provider
+    from .factory import build_context_provider as build_context_provider
+    from .factory import register_context_provider as register_context_provider
+    from .openviking import OpenVikingContextProvider as OpenVikingContextProvider
+    from .openviking import build_openviking_context_provider as build_openviking_context_provider
+    from .service_ownership import context_provider_service_restarted as context_provider_service_restarted
+    from .service_ownership import load_context_provider_service_ownership as load_context_provider_service_ownership
 
 _EXPORTS = {
     "canonical_context_text": "base",

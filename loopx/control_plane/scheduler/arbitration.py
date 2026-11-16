@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any
 
 from ..agents.agent_scope_frontier import AGENT_SCOPE_FRONTIER_SCHEMA_VERSION, AgentScopeFrontierAction
+from ..effect_runtime import effect_runtime_result
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 
 SCHEDULER_ARBITRATION_SCHEMA_VERSION = "scheduler_arbitration_v0"
@@ -110,3 +111,14 @@ def _scheduler_arbitration_facts(
                       "vision_wait_state": wait or None, "scope_wait_todo": scoped_wait,
                       "heartbeat_receipt": payload.get("heartbeat_receipt")})
     return facts
+
+
+def monitor_quiet_stall_observation_required(payload: dict[str, Any]) -> bool:
+    """Keep automatic stall supervision unless typed arbitration proves a future wait."""
+    if not exact_blocked_successor_wait_state(payload):
+        return True
+    result = effect_runtime_result(
+        "work_item.blocked_wait_observation.project",
+        _scheduler_arbitration_facts(payload.get("interaction_contract"), payload=payload),
+    )
+    return result["required"] is not False

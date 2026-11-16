@@ -105,25 +105,43 @@ class FakeRuntimeController:
 
     def open_session(self, **kwargs: object) -> tuple[dict[str, object], bool]:
         self.opened_sessions.append(dict(kwargs))
-        existing = self.chat_store.latest_session(
+        managed_agent = kwargs.get("managed_agent_id")
+        channel = f"agent.{managed_agent}" if managed_agent is not None else str(kwargs["channel_id"])
+        session_id = kwargs.get("session_id")
+        existing = self.chat_store.load_session(str(session_id)) if session_id is not None else self.chat_store.latest_session(
             goal_id=str(kwargs["goal_id"]),
             agent_id=str(kwargs["agent_id"]),
-            channel_id=str(kwargs["channel_id"]),
+            channel_id=channel,
         )
         if existing is not None:
             return existing, True
         session = self.chat_store.create_session(
             goal_id=str(kwargs["goal_id"]),
+            goal_instance_id=kwargs.get("goal_instance_id"),
+            **({"session_id": str(session_id)} if session_id is not None else {}),
+            **({"managed_agent_id": str(managed_agent), "managed_workspace_path": str(Path(str(kwargs["work_dir"])).resolve())}
+               if managed_agent is not None else {}),
             agent_id=str(kwargs["agent_id"]),
             adapter_kind="fake",
             upstream_thread_id="thread-goal-create",
-            channel_id=str(kwargs["channel_id"]),
+            upstream_mode="chat" if kwargs["agent_id"] == "codex" else "default",
+            channel_id=channel,
         )
         return session, False
 
     def submit_turn(self, **kwargs: object) -> tuple[dict[str, object], bool]:
         self.submissions.append(dict(kwargs))
-        return ({"turn_id": "turn-correction-1", "status": "queued"}, True)
+        session_id = str(kwargs["session_id"])
+        turn, created = self.chat_store.create_turn(session_id,
+            client_turn_id=str(kwargs["client_turn_id"]), message=str(kwargs["message"]))
+        if created:
+            # The synchronous fake finishes its ordinary reply through the real
+            # Chat completion owner; it never accepts a Goal or Task outcome.
+            self.chat_store.update_turn(session_id, str(turn["turn_id"]),
+                status="completing", started_at=turn["created_at"], completed_at=turn["created_at"],
+                upstream_turn_id=f"synthetic-{turn['turn_id']}", response={"message": "Synthetic ordinary reply."})
+            turn = self.chat_store.finalize_managed_turn_completion(session_id, str(turn["turn_id"]))
+        return turn, created
 
     def capabilities(self) -> list[dict[str, object]]:
         return [
@@ -369,7 +387,8 @@ def assert_http_action_api(root: Path) -> None:
         )
         assert code == 202, correction_applied
         assert correction_applied["proposal"]["status"] == "applied", correction_applied
-        assert correction_applied["turn"]["turn_id"] == "turn-correction-1", correction_applied
+        original_correction = chat_store.turn_for_client(session["session_id"], str(runtime_controller.submissions[1]["client_turn_id"]))
+        assert correction_applied["turn"]["turn_id"] == original_correction["turn_id"], correction_applied
         assert runtime_controller.submissions[1]["session_id"] == session["session_id"]
 
         goal_proposal = previews["goal.create"]

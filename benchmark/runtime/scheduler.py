@@ -23,6 +23,18 @@ def phase_work_reserve(mode: str) -> int:
     return 0 if mode == "heartbeat" else PHASE_WORK_RESERVE_SECONDS
 
 
+def read_phase_deadline(raw: bytes) -> int | float:
+    """Read the initial integer epoch or the scheduler's continued phase clock."""
+    if len(raw) > 64 or not re.fullmatch(rb"[0-9]+(?:\.[0-9]+)?\n?", raw):
+        raise ValueError("Host phase deadline must be an integer or canonical decimal epoch file")
+    body = raw.removesuffix(b"\n")
+    deadline = float(body) if b"." in body else int(body)
+    if not 0 < deadline < 2 ** 53 or (
+            isinstance(deadline, float) and body != repr(deadline).encode("ascii")):
+        raise ValueError("Host phase deadline cannot be represented exactly")
+    return deadline
+
+
 def phase_state_name(root: PurePath, phase_deadline: float) -> str:
     """Name a scheduler phase by the finite clock that owns its allowance."""
     if (isinstance(phase_deadline, bool) or not isinstance(phase_deadline, (int, float))
@@ -384,7 +396,7 @@ def main() -> int:
     parser.add_argument('--retry-failed-state-sha256',
         help='Explicitly continue only this exact returned failure after operator repair')
     parser.add_argument('--idle-host-state-sha256',
-        help='Explicitly hand off this sealed legacy empty-output Host to its verified idle native session')
+        help='Explicitly hand off this sealed returned Host to its verified idle native session')
     args = parser.parse_args()
     state = resume_state_file(args.state_file,
         phase_deadline=float(os.environ["LOOPX_PHASE_DEADLINE_EPOCH"]),

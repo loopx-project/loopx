@@ -227,6 +227,28 @@ is not the raw authority response; a missing `should_run` is not a denial.
 Do not change an experiment's frozen mode, source or clock by changing machine
 settings. Trials retain their explicit configuration and original authority.
 
+### Roll back to another runtime
+
+To disable progressive or differential presentation, use the existing settings
+on the current runtime. An older release may read fewer persisted formats.
+Qualify the exact target on the affected Host and authority provider before
+switching:
+
+1. On isolated state, verify that the target reads the current Goal
+   requirements and the original capture. Include
+   [record-format outcomes](../reference/goal-acceptance-observations.md#long-horizon-record-storage)
+   when present. Reading a saved capture alone does not show that the target
+   can read current authority or finish its pending settlement.
+2. Quiesce new admissions on the affected entrypoint. Retain the original
+   runtime, captures and receipts; reconcile in-flight Turns through that
+   runtime and their original identities.
+3. Switch only to a target that can read the retained state and continue
+   work. Before reopening normal scheduling, check that new admission sees
+   the same requirements and that the earlier effects remain settled once.
+   If the target cannot read the current format, keep a compatible runtime
+   and use its presentation settings. Never restore an older authority
+   snapshot over committed requirements.
+
 ### Troubleshoot without changing task history
 
 | Observation | Check next |

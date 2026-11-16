@@ -9,12 +9,16 @@ the facade dead-ends at argparse and the surface is decorative.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import shlex
 
 import pytest
 from host_surface_cli_probes import (
+    connected_project,
     onboarding_setup_command_installs,
+    run_cli,
     selection_gate_offers_surface,
     start_goal_accepts_surface,
 )
@@ -50,6 +54,61 @@ from loopx.agy_goal_mode import (
 )
 
 HOST_SURFACE = "agy"
+
+
+@pytest.mark.parametrize(
+    "entry", [
+        ("bootstrap-command-pack", "--host-surface", "antigravity-app"),
+        ("agent-onboard", "--agent-type", "antigravity-app"),
+    ],
+)
+def test_antigravity_generated_commands_read_the_project_registry_from_another_directory(
+    tmp_path: Path, entry: tuple[str, ...],
+) -> None:
+    project = connected_project(tmp_path / "project with spaces")
+    registry = project / ".loopx" / "registry.json"
+    runtime = tmp_path / "isolated-runtime"
+    state = project / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\nUse the registered project state.\n", encoding="utf-8")
+    data = json.loads(registry.read_text())
+    data["common_runtime_root"] = str(runtime)
+    data["goals"][0].update(
+        state_file=state.name,
+        coordination={"registered_agents": ["probe-agent"], "agent_model": "peer_v1"},
+    )
+    registry.write_text(json.dumps(data), encoding="utf-8")
+    foreign = tmp_path / "other"
+    foreign.mkdir()
+    # The host may be in another project which happens to use the same Goal id.
+    other = connected_project(foreign)
+    foreign_registry = other / ".loopx" / "registry.json"
+    foreign_registry.write_text(json.dumps({
+        "goals": [{**data["goals"][0], "repo": str(other)}],
+    }), encoding="utf-8")
+    env = {**os.environ, "LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_USAGE_PING": "0"}
+    env.pop("LOOPX_REGISTRY", None)
+    result = run_cli(
+        *entry, "--project", str(project), "--goal-id", "surface-goal",
+        "--agent-id", "probe-agent", cwd=other, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    activation = json.loads(result.stdout)["host_loop_activation"]
+    assert activation["activation_allowed"]
+    mutation = activation["host_mutation"]
+    sidecar = mutation["sidecar_template"]
+    prompt = sidecar["sidecar_json"]["args"][-1]
+    bootstrap, = [line for line in prompt.splitlines() if " heartbeat-prompt " in line]
+    for command in (bootstrap, activation["activation_input_command"]):
+        argv = shlex.split(command)
+        result = run_cli(*argv[1:], cwd=other, env=env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["ok"]
+        guard = next(line for line in payload["task_body"].splitlines() if " quota should-run " in line)
+        guard_argv = shlex.split(guard)
+        assert Path(guard_argv[guard_argv.index("--registry") + 1]) == registry
+    hook = shlex.split(mutation["hooks_template"]["loopx"]["Stop"][0]["command"])
+    assert hook[hook.index("--registry") + 1] == str(registry)
 
 
 def test_start_goal_accepts_the_agy_host_surface(tmp_path: Path) -> None:

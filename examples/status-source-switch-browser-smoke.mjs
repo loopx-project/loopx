@@ -22,7 +22,7 @@ const outputDir = resolve(repoRoot, "output/playwright/status-source-switch");
 const port = Number(process.env.LOOPX_STATUS_SOURCE_SWITCH_PORT ?? "5197");
 const packaged = process.env.LOOPX_STATUS_SOURCE_SWITCH_PACKAGED === "1";
 
-function startServer() {
+async function startServer() {
   if (packaged) {
     return spawn(resolveTestPython(), [
       "-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(repoRoot, "loopx/web"),
@@ -66,7 +66,7 @@ async function selectSource(page, select, label) {
 async function main() {
   const { chromium } = loadPlaywright();
   await mkdir(outputDir, { recursive: true });
-  const server = startServer();
+  const server = await startServer();
   let browser;
   try {
     const appUrl = `http://127.0.0.1:${port}/${packaged ? "chat/" : ""}`;

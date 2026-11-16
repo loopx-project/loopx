@@ -223,6 +223,13 @@ eligible time, `--cadence` is the retry interval, `--monitor-target-key` is the
 stable idempotency key, and optional `--expires-at` is the hard stop after
 which the monitor must not catch up.
 
+When a monitor supplies `--cadence` and omits `--next-due-at`, the create
+transaction derives the first due time once. Retry the original `todo add`
+with the same `--operation-id` to recover its result. Changing an explicit
+due time under that operation ID is a conflict.
+If an older cadence-only create reports a conflict after a lost response,
+read its saved result with `todo receipt --goal-id GOAL --operation-id ID`.
+
 Public Todo updates validate the effective waiting state, not just newly supplied
 `resume_when`. Changing a Monitor-waiting Todo's status/task class or successor
 list must preserve the open advancement-task/independent-successor contract.

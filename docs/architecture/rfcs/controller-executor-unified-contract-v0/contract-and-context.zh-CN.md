@@ -421,6 +421,11 @@ reader；这个分阶段边界保留普通 quota writer 和 thin-heartbeat 的�
 成果与完整成本对照。评审须包含匹配基线／候选版本的真实 provider 成果、拒绝敏感性和
 打包恢复。只有切片合入 main、父提案集成 main 后，父提案的差异才会减少；开 PR 不算。
 
+当前 v1 Host 的派发预检、模型输入和会话身份读回直接校验完整来源与捕获标头。选择
+校验、主动作判定和写权限审批仍由同一套 TypeScript 规则处理。Codex 与结构化 Host
+在最终输入中保留原捕获的材料引用。历史执行投影继续校验过渡期的 v0/v1 成对记录并
+支持已记录工作的恢复。仍依赖该投影的 plan 和 effect 消费方有各自的退役条件。
+
 对 normal、selection、replan、wait、recovery 和 capability-off 的每个 fixture，
 在**三个边界**核对独立编写的义务：组合契约、重建交付、最终模型输入及必需材料读取。
 包含旧 action signature 未覆盖的源变化、必需来源缺失、不兼容消费者和结算响应丢失。

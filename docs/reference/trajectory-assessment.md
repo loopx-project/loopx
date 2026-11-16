@@ -716,6 +716,111 @@ readback. Present the key finding and uncertainty first, episode decisions next,
 and citations/method/cost on demand. CLI success alone does not complete that
 journey or qualify the model assessor.
 
+## Human attention in Research (optional)
+
+The Research view shows recorded human inputs separately from solver tokens and
+elapsed time. It reports clarifications, corrections, reviews, authorization
+decisions and status responses, plus active attention and response waiting where
+observed. Expand **Optimization points and input records** to inspect necessity,
+the associated research episode and original evidence. Opening this view or its
+citations starts no model call. Existing packs show **Not recorded** under
+**Sources and usage** until a human-observation capture is supplied.
+
+Without the optional capture, the native result reader retains its existing
+presentation; attention remains unrecorded in the source disclosure.
+
+![Research without a human-observation capture](../development/assets/research-analysis/attention-before-desktop.webp)
+
+With a supplied capture, the first screen uses a ring and category icons to show
+the share of each type among recorded completed inputs. Rounded percentages
+describe input counts, not cognitive effort. Active attention and response
+waiting have separate time tracks against the capture window; unfilled regions
+do not establish idle time, and the two durations are not added.
+
+This synthetic example has 16 distinct inputs, ten minutes of recorded active
+attention and nineteen minutes of response waiting after separate interval
+unions, within a 59-minute capture window. Timing coverage remains partial. The
+necessity bar shows eight inputs **Marked avoidable** (50%), six required and two
+unknown. These are recorder declarations to inspect through the original
+evidence, not measured savings or a reason to remove required review.
+
+![Recorded human inputs and separate active and waiting time](../development/assets/research-analysis/attention-after-desktop.webp)
+
+The narrow reader keeps optimization evidence in place, with eight inputs per
+page. These are packaged UI screenshots from the retained
+`smoke:research-human-attention` scenario, not live research measurements.
+
+![Narrow reader with source-linked optimization points](../development/assets/research-analysis/attention-optimization-narrow.webp)
+
+研究页将人工介入与求解 Token、经过时间分开展示。圆环和图标表示已记录完成介入
+的类型次数占比，不代表脑力权重；主动投入和等待分别对照记录窗口，不相加，未填色
+不能推断为空闲。必要性比例保留“标记可避免”的限定，不代表实际节省，也不把必要
+审查视为浪费。展开“优化点与介入记录”可核对必要性、关联研究片段与原始依据。
+浏览不调用模型；旧记录在“来源与用量”中显示“未采集”，未采集不能当作零。
+
+An Agent/provider prepares the capture from typed human receipts or explicit
+human observations within the already authorized source root. Add the complete
+capture to the existing input's `sources`, with its exact hash, `first_line: 1`
+and full JSON text; set `human_attention_source_id` to that source's ID. Register
+through the existing `benchmark trajectory-pack-register` command. No new
+permission, capability activation, scheduler or UI form is required.
+
+```json
+{
+  "schema_version": "trajectory_human_attention_v1",
+  "scope": {"goal_id": "study", "case_id": "case", "run_id": "run", "revision": "fixed", "window": "one hour"},
+  "start": "2026-01-01T00:00:00Z",
+  "end": "2026-01-01T01:00:00Z",
+  "complete": false,
+  "events": [{
+    "event_id": "human-receipt-1",
+    "episode_id": "experiment-1",
+    "kind": "correction",
+    "necessity": "avoidable",
+    "occurred_at": "2026-01-01T00:10:00Z",
+    "active": null,
+    "request": {"start": "2026-01-01T00:05:00Z", "end": "2026-01-01T00:10:00Z"},
+    "citation": {"source_id": "human-receipts", "first_line": 2, "last_line": 2}
+  }]
+}
+```
+
+The five scope fields must match the registered input. `kind` is
+`clarification|correction|review|approval|status|other`; `necessity` is
+`required|avoidable|unknown`. Classifications are recorder declarations, not
+independently certified judgments. Use the receipt's stable ID: identical replay
+counts once; conflicting observations for one ID are rejected. Every event needs
+a citation to another registered source, within the assigned episode's evidence;
+`episode_id: null` retains an unassigned input. Preserve required authorization,
+valuable learning and careful final review rather than labelling them waste.
+
+`active` is either a recorded `{start, end}` UTC interval or `null`. `request`
+is a response-wait interval, `null` when unobserved, or `{start, end: null}` for
+a pending request. Pending requests are retained and counted separately; they do
+not count as completed human inputs, reviews or authorization decisions, and
+produce no completed-input optimization point. Intervals must lie inside the declared capture. Active and
+closed waiting intervals each use their own union, so concurrent observations
+are not charged twice. Pending requests have no inferred end. Missing timing
+stays unknown; recorded zero duration is valid. Time coverage and recorder-declared
+event completeness remain visible, including failed and abandoned work.
+This single-human capture does not aggregate different people's overlapping time.
+
+仅依据 typed 人工回执或明确人工观测准备记录；不能从消息的 user 角色、文本关键词、
+自动重规划或待审状态推断人工介入。缺失的来源、时间和必要性保留未知，重复回执只
+计一次。主动投入与已结束等待分别取时间并集，未响应请求不猜测结束时间，也不计入
+已完成介入或其优化点；本格式
+记录同一人的投入，不合并不同人的重叠时间。
+
+Optimization points group inputs explicitly marked avoidable and link each to
+its evidence. Their suggestions are checks to perform, not proven savings or
+permission to remove a gate. The existing explicit synthesis also receives the
+capture with guidance to ground any recommendation in episode evidence and
+subsequent accepted quality. Source changes keep the saved values historical;
+changed captures produce a new analysis identity and cannot reuse old judgments
+silently. Remove the optional binding in a newly registered pack to stop this
+projection; historical packs remain readable. This observer vocabulary belongs
+locally to `benchmark-toolkit`, not to Todo, quota or authorization state.
+
 ## Measured solver session cost (optional)
 
 ### Find expensive Turns and inspect their evidence

@@ -351,7 +351,7 @@ def test_windows_lifecycle_suite_references_existing_tests() -> None:
     assert "tests/control_plane/test_cli_output_differential.py" in args
     assert set(args[args.index("-k") + 1].split(" or ")) == {
         "stable_budget_fixture", "long_path_budget",
-        "probe_process_failure_preserves_utf8_diagnostics",
+        "probe_process_failure_preserves_utf8_diagnostics", "pinned_reader_follows",
     }
 
 

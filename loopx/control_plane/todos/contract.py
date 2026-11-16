@@ -716,26 +716,14 @@ def todo_marker_for_status(status: Any) -> str:
     return " "
 
 
-def encode_metadata_value(value: Any) -> str:
-    compact = compact_todo_text(value)
-    return quote(compact, safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-")
+def encode_metadata_value(value: Any, *, preserve_whitespace: bool = False) -> str:
+    text = str(value or "") if preserve_whitespace else compact_todo_text(value)
+    return quote(text, safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-")
 
 
-def decode_metadata_value(value: Any) -> str:
-    return compact_todo_text(unquote(str(value or "")))
-
-
-def parse_todo_metadata_tokens(line: str) -> list[tuple[str, str]] | None:
-    match = TODO_METADATA_PATTERN.match(line)
-    if not match:
-        return None
-    return [
-        (
-            token.group("key"),
-            decode_metadata_value(token.group("value")),
-        )
-        for token in TODO_METADATA_TOKEN_PATTERN.finditer(match.group("body"))
-    ]
+def decode_metadata_value(value: Any, *, preserve_whitespace: bool = False) -> str:
+    text = unquote(str(value or ""))
+    return text if preserve_whitespace else compact_todo_text(text)
 
 
 MetadataValueNormalizer = Callable[[Any], Any]
@@ -750,6 +738,10 @@ def _truthy_value(value: Any) -> Any:
 def _nonempty_metadata_text(value: Any) -> str | None:
     text = compact_todo_text(value)
     return text or None
+
+
+def _nonblank_verbatim_metadata_text(value: str) -> str | None:
+    return value if value.strip() else None
 
 
 def _optional_output_bool(value: Any) -> bool | None:
@@ -785,6 +777,7 @@ class _TodoMetadataField:
     read_fallback_key: str | None = None
     read_fallback_normalizer: MetadataValueNormalizer | None = None
     block_field: bool = True
+    preserve_whitespace: bool = False
 
     def normalize_for_write(self, value: Any) -> Any:
         normalizer = self.write_normalizer or self.read_normalizer
@@ -1078,11 +1071,20 @@ _TODO_METADATA_FIELD_SCHEMA = (
             "updated_at",
             "completion_turn_key",
             "completion_receipt_id",
-            "validation_command",
-            "validation_command_argv",
-            "validation_label",
-            "validation_timeout_seconds",
         )
+    ),
+    # The declaration digest includes exact command arguments and label text.
+    # Percent encoding keeps these values within one Markdown comment line.
+    *(
+        _TodoMetadataField(key, _nonblank_verbatim_metadata_text,
+                           write_normalizer=_truthy_value, preserve_whitespace=True)
+        for key in ("validation_command", "validation_command_argv")
+    ),
+    _TodoMetadataField("validation_label", _truthy_value, preserve_whitespace=True),
+    _TodoMetadataField(
+        "validation_timeout_seconds",
+        _nonempty_metadata_text,
+        write_normalizer=_truthy_value,
     ),
     _TodoMetadataField(
         "superseded_by",
@@ -1097,6 +1099,22 @@ _TODO_METADATA_FIELD_SCHEMA = (
 _TODO_METADATA_FIELD_BY_TOKEN = {
     field.key: field for field in _TODO_METADATA_FIELD_SCHEMA
 }
+
+
+def parse_todo_metadata_tokens(line: str) -> list[tuple[str, str]] | None:
+    match = TODO_METADATA_PATTERN.match(line)
+    if not match:
+        return None
+    tokens = []
+    for token in TODO_METADATA_TOKEN_PATTERN.finditer(match.group("body")):
+        key = token.group("key")
+        field = _TODO_METADATA_FIELD_BY_TOKEN.get(key)
+        value = decode_metadata_value(
+            token.group("value"),
+            preserve_whitespace=field is not None and field.preserve_whitespace,
+        )
+        tokens.append((key, value))
+    return tokens
 
 
 def _todo_metadata_block_fields() -> tuple[str, ...]:
@@ -1171,11 +1189,14 @@ def normalize_todo_metadata_for_write(values: dict[str, Any]) -> dict[str, Any]:
 
 def _format_todo_metadata_values(values: dict[str, Any]) -> str | None:
     normalized = _normalize_todo_metadata_for_write(values)
-    fields = [
-        f"{field.key}={encode_metadata_value(field.encoder(normalized[field.key]))}"
-        for field in _TODO_METADATA_FIELD_SCHEMA
-        if field.key in normalized
-    ]
+    fields = []
+    for field in _TODO_METADATA_FIELD_SCHEMA:
+        if field.key in normalized:
+            value = encode_metadata_value(
+                field.encoder(normalized[field.key]),
+                preserve_whitespace=field.preserve_whitespace,
+            )
+            fields.append(f"{field.key}={value}")
     if not fields:
         return None
     return f"  <!-- loopx:todo {' '.join(fields)} -->"
@@ -1286,6 +1307,8 @@ def todo_block_metadata(block: dict[str, Any]) -> dict[str, Any]:
             normalized = normalize_todo_completion_recovery(value)
         elif key in {"global_gate", "goal_bound"}:
             normalized = normalize_todo_global_gate(value)
+        elif _TODO_METADATA_FIELD_BY_TOKEN[key].preserve_whitespace:
+            normalized = value
         else:
             normalized = str(value).strip()
         if normalized is not None and normalized != [] and normalized != "":
@@ -1394,6 +1417,8 @@ def metadata_line_for_todo_block(
                 metadata[key] = normalized_global_gate
             else:
                 metadata.pop(key, None)
+        elif _TODO_METADATA_FIELD_BY_TOKEN[key].preserve_whitespace:
+            metadata[key] = value
         elif str(value).strip():
             metadata[key] = str(value).strip()
     if "todo_id" not in metadata and block.get("todo_id"):

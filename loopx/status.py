@@ -228,8 +228,6 @@ from .control_plane.todos.todo_summary import (
     attach_dependency_blockers,
     compact_todo_group as compact_todo_group,
     compact_todo_item as compact_todo_item,
-    open_todo_items as open_todo_items,
-    todo_item_task_class as todo_item_task_class,
     first_open_todo_text,
     open_todo_items as open_todo_items,
     project_asset_todo_summary,
@@ -1093,6 +1091,7 @@ def build_attention_queue(
     current_registry: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     include_goal_channel_projection: bool = True,
+    agent_lane_id: str | None = None,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1161,6 +1160,7 @@ def build_attention_queue(
         goal_id_filter=goal_id_filter,
         include_stopped_goal_context=include_stopped_goal_context,
         include_goal_channel_projection=include_goal_channel_projection,
+        agent_lane_id=agent_lane_id,
     )
     if runtime_root is not None:
         for item in queue.get("items") or []:

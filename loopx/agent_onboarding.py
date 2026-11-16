@@ -482,10 +482,12 @@ def build_agent_onboarding_packet(
         registry_path,
         resolved_goal_id,
     )
+    activation_registry = str(registry_path) if canonical_agent_type == "antigravity-app" else None
     host_loop_activation = build_host_loop_activation_packet(
         agent_type=canonical_agent_type,
         goal_id=resolved_goal_id,
         cli_bin=cli_bin,
+        registry=activation_registry,
         agent_id=agent_id,
         registered_agents=registered_agents,
         available_capabilities=available_capabilities,
@@ -516,6 +518,7 @@ def build_agent_onboarding_packet(
             render_quota_guard_command(
                 resolved_goal_id,
                 cli_bin=cli_bin,
+                registry_path=activation_registry,
                 agent_id=str(selected_agent_id) if selected_agent_id else None,
                 available_capabilities=normalized_available_capabilities,
                 **scheduler_command_binding_for_agent_type(canonical_agent_type),

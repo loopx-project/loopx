@@ -1,5 +1,7 @@
 import type { WorkspaceTranslate } from "./i18n";
 import type { WorkspaceActionPreviewRequest, WorkspaceAgentOption } from "./personal-workspace-model";
+import type {GoalCreationPermission} from "../../../../../../loopx/control_plane/goals/creation_execution_review.ts";
+export type {GoalCreationPermission} from "../../../../../../loopx/control_plane/goals/creation_execution_review.ts";
 import {compactPythonWhitespace, hasPythonNonWhitespaceText} from "../../../../../../loopx/control_plane/coordination/python_whitespace.ts";
 
 type GoalContent = { objective: string; completion: string; boundary: string };
@@ -31,7 +33,8 @@ export function goalCreateContent(input: GoalContent, t: WorkspaceTranslate) {
 
 /** One preview builder for explicit forms and conversational drafts. No effects. */
 export function goalCreateRequest(input: GoalContent & {
-  workspaceRef?: string; agentId: string; permission: string; contextGoalId: string | null; operationId?: string;
+  workspaceRef?: string; agentId: string; permission: GoalCreationPermission; contextGoalId: string | null; operationId?: string;
+  startExecution?: boolean;
 }, t: WorkspaceTranslate): WorkspaceActionPreviewRequest {
   const content = goalCreateContent(input, t);
   return {
@@ -41,6 +44,7 @@ export function goalCreateRequest(input: GoalContent & {
     normalizedParameters: {
       ...content, goal_id: `goal-${input.operationId ?? crypto.randomUUID()}`,
       agent_id: input.agentId, permission: input.permission,
+      ...(input.startExecution === true ? {start_execution: true} : {}),
       workspace_ref: input.workspaceRef ?? "current", heartbeat: { enabled: false, cadence: "1d", timezone: "Asia/Shanghai" },
       stop_condition: "goal_complete",
     },

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -117,13 +118,14 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
             f"  <!-- loopx:todo todo_id=todo_other_source status=open claimed_by={AGENT_ID} "
             "task_class=advancement_task action_kind=validate -->\n")
     _initialize_fixture_authority(project, runtime, provider=provider)
-    request_ids = set()
+    original_messages = {}
     for index in range(23):
+        message = f"Original requirement {index}: " + "核对完整验收证据与后续条件。\n" * (500 if index == 0 else 180)
         result = deliver(runtime, registry, session={"session_id": "source", "channel_id": "manager"},
-            turn={"client_turn_id": f"synthetic-review-{index}", "origin": "web", "message":
-                "Compare the original requirements with the retained report before claiming a result."},
+            turn={"client_turn_id": f"synthetic-review-{index}", "origin": "web", "message": message},
             request={"goal_id": GOAL_ID, "agent_id": AGENT_ID})
-        request_ids.add(result["request_id"])
+        original_messages[result["request_id"]] = message
+    request_ids = set(original_messages)
 
     captures = tmp_path / "captures"
     captures.mkdir(mode=0o700)
@@ -153,23 +155,145 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
     read, = (row for row in first["/interaction_contract/agent_channel/required_reads"] if row.get("kind") == "operator_inbox")
     command = shlex.split(read["command"])
     assert command[0] == str(console)
-    cursor, seen = None, set()
-    while True:
-        result = subprocess.run([*command, *(["--cursor", cursor] if cursor else [])],
-            cwd=project, capture_output=True, text=True, encoding="utf-8", timeout=40)
+    def invoke(argv):
+        result = subprocess.run(argv, cwd=project, capture_output=True, timeout=40)
         assert result.returncode == 0, result.stderr
-        page = json.loads(result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
+        assert 0 < len(result.stdout) <= 12_000
+        return result.stdout.decode()
+
+    def read_receipts():
+        root = _root(runtime)
+        return {file.relative_to(root): file.read_bytes() for file in root.rglob("*.json")}
+
+    cursor, seen, captured_pages, logical_pages = None, set(), 0, 0
+    while True:
+        stdout = invoke([*command, *(["--cursor", cursor] if cursor else [])])
+        page = json.loads(stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
+        logical_pages += 1
+        if "command" in page:
+            assert page["ok"] and not page["read_complete"] and "items" not in page
+            reader = shlex.split(page["command"])
+            assert reader[:3] == [str(console), "--cli-bin", str(console)] and "context-read" in reader
+            assert "--capture-sha256" not in reader and "--capture-file" not in reader
+            reference_path, descriptor = read_context_read_reference(reader[reader.index("--reference-file") + 1])
+            saved = Path(descriptor["path"])
+            pinned = page["sha256"]
+            assert pinned == descriptor["sha256"] and reference_path.parent == saved.parent
+            direct = shlex.split(page["recovery_command"])
+            assert direct[:3] == reader[:3]
+            assert direct[direct.index("--capture-sha256") + 1] == pinned
+            before = read_receipts()
+            raw = bytearray()
+            while reader:
+                part = json.loads(invoke(reader))
+                assert part["ok"] and part["offset"] == len(raw) and part["sha256"] == pinned
+                raw.extend(part["content"].encode("utf-8"))
+                assert len(raw) > part["offset"]
+                assert len(raw) == (part["total_bytes"] if part["eof"] else part["next_offset"])
+                reader = shlex.split(part["next_command"]) if not part["eof"] else None
+                if reader:
+                    assert reader[:3] == direct[:3] and "--capture-sha256" not in reader
+                    assert Path(reader[reader.index("--reference-file") + 1]) == reference_path
+                captured_pages += 1
+            assert raw == saved.read_bytes()
+            if logical_pages == 1:
+                reference_path.unlink()
+                failed = subprocess.run(shlex.split(page["command"]), cwd=project, capture_output=True, timeout=40)
+                assert failed.returncode == 1 and len(failed.stdout) <= 12_000
+                assert "content" not in json.loads(failed.stdout)
+                recovered = json.loads(invoke(direct))
+                assert recovered["offset"] == 0 and recovered["sha256"] == pinned
+                assert raw.startswith(recovered["content"].encode("utf-8"))
+            assert read_receipts() == before
+            page = json.loads(raw)
         page_ids = {item["request_id"] for item in page["items"]}
         assert page["ok"] and page_ids and page_ids <= request_ids - seen
+        for item in page["items"]:
+            assert item["message"] == original_messages[item["request_id"]]
         seen.update(page_ids)
         cursor = page["next_cursor"]
         if cursor is None:
             break
-    assert seen == request_ids
+    assert seen == request_ids and logical_pages == 2 and captured_pages > 1
     _, saved = read_selection(view["recovery"]["command"] + " --select " + shlex.quote(address))
     assert saved[address] == channel["work_context"]["sources"][index]["content"]["unfinished_delegations"]
     assert path.read_bytes() == original
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
+@pytest.mark.skipif(os.name != "posix", reason="exercise the private transport's symlink refusal")
+def test_large_inbox_does_not_fall_back_to_unbounded_output(flow):
+    root, registry, _, create = flow
+    _, _, receipt = create()
+    entry, = (_root(root) / "entries").glob(f"*/{receipt['request_id']}.json")
+    stored = json.loads(entry.read_bytes())
+    message = "Long original request.\n" * 1000
+    _write(entry, {**stored, "message": message})
+    before = entry.read_bytes()
+    destination = root / "untrusted"
+    destination.mkdir()
+    (root / "context-delivery").symlink_to(destination, target_is_directory=True)
+    invocation = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry), "--runtime-root", str(root),
+        "manager-inbox", "read", "--format", "markdown", "--goal-id", "research", "--agent-id", "worker"]
+    result = subprocess.run(invocation, cwd=root, capture_output=True, timeout=40)
+    assert result.returncode == 1 and len(result.stdout) <= 12_000
+    output = result.stdout.decode()
+    failure = json.loads(output.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
+    assert not failure["ok"] and not failure["read_complete"]
+    assert "items" not in failure and "command" not in failure and "Long original request." not in output
+    assert list(destination.iterdir()) == []
+    assert entry.read_bytes() == before
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell 7 is not installed")
+@pytest.mark.parametrize("directory", ["release", "owner's release"])
+def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory):
+    from loopx.command_invocation import loopx_cli_route
+
+    root, registry, _, create = flow
+    _, _, receipt = create()
+    entry, = (_root(root) / "entries").glob(f"*/{receipt['request_id']}.json")
+    stored = json.loads(entry.read_bytes())
+    message = "Preserve the original constraint 核对原约束.\n" * 1100
+    _write(entry, {**stored, "message": message})
+    checkout = Path(__file__).resolve().parents[1]
+    launcher = root / directory / "loopx.ps1"
+    launcher.parent.mkdir()
+    shutil.copyfile(checkout / "scripts/loopx.ps1", launcher)
+    pointer = launcher.with_name("loopx-current-release.json")
+    pointer.write_text(json.dumps({"release_root": str(checkout), "python": sys.executable}), encoding="utf-8")
+    environment = dict(os.environ)
+    environment.pop("LOOPX_CURRENT_RELEASE_FILE", None)
+    environment["LOOPX_USAGE_PING"] = "0"
+    powershell = [shutil.which("pwsh"), "-NoProfile", "-NonInteractive"]
+    with loopx_cli_route(str(launcher)):
+        hook = turn_start_hook(root, registry, "research", "worker", model_read=True)
+        dispatch = dispatch_turn_start_hooks([hook])
+    required_read, = dispatch["required_reads"]
+    opening = subprocess.run([*powershell, "-Command", required_read["command"]], cwd=root, env=environment,
+        capture_output=True, timeout=60)
+    assert opening.returncode == 0, opening.stderr
+    assert 0 < len(opening.stdout) <= 12_000
+    markdown = opening.stdout.decode().replace("\r\n", "\n")
+    view = json.loads(markdown.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
+    before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
+    original = bytearray()
+    command = view["command"]
+    pages = 0
+    while command:
+        output = subprocess.run([*powershell, "-Command", command], cwd=root, env=environment,
+            capture_output=True, timeout=60)
+        assert output.returncode == 0, output.stderr
+        assert 0 < len(output.stdout) <= 12_000
+        page = json.loads(output.stdout)
+        assert page["ok"] and page["offset"] == len(original) and page["sha256"] == view["sha256"]
+        original.extend(page["content"].encode())
+        assert len(original) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+        command = None if page["eof"] else page["next_command"]
+        pages += 1
+    recovered, = json.loads(original)["items"]
+    assert pages > 1 and recovered["request_id"] == receipt["request_id"] and recovered["message"] == message
+    assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -314,8 +438,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert rows[queued["request_id"]]["pending_return_count"] == 1
         assert rows[peer["request_id"]]["step"] == "consume_peer_result"
         manager_read = next(item for item in required_reads if item["hook_id"] == "manager.context_inbox")
-        assert "manager-inbox read" in manager_read["command"]
-        assert ("--format markdown" in manager_read["command"]) == (delivery == "native_files")
+        manager_argv = shlex.split(manager_read["command"])
+        assert "manager-inbox" in manager_argv and "read" in manager_argv
+        assert ("markdown" in manager_argv) == (delivery == "native_files")
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
     if delivery == "native_files":
@@ -334,7 +459,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
 
 
-def test_inbox_markdown_keeps_different_or_missing_guidance_on_each_item():
+@pytest.mark.parametrize("variant", ["identical", "different", "missing"])
+def test_inbox_markdown_keeps_different_or_missing_guidance_on_each_item(tmp_path, variant):
     from loopx.cli_commands.manager_inbox import _read_markdown
 
     items = [
@@ -342,14 +468,26 @@ def test_inbox_markdown_keeps_different_or_missing_guidance_on_each_item():
         {"instruction": "Read the complete source.", "next_action": "Wait for the original return.", "revision": 2},
         {"instruction": "Read the complete source.", "unavailable": True},
     ]
+    advice = {"step": "assess", "answer_owed": True, "future_details": {"attempt": 1}}
+    for item in items:
+        item["receiver_followthrough"] = advice
+    if variant == "different":
+        items[1]["receiver_followthrough"] = {**advice, "future_details": {"attempt": True}}
+    elif variant == "missing":
+        del items[1]["receiver_followthrough"]
     source = {"ok": True, "items": items, "has_more": True, "next_cursor": "scoped-next"}
-    body = _read_markdown(source).split("\n```json\n", 1)[1].removesuffix("\n```")
+    body, ok = _read_markdown(source, runtime_root=tmp_path)
+    assert ok and not (tmp_path / "context-delivery").exists()
+    body = body.split("\n```json\n", 1)[1].removesuffix("\n```")
     view = json.loads(body)
     common = view.pop("shared_item_guidance")
-    assert common == {"instruction": "Read the complete source."}
+    expected = {"instruction": "Read the complete source."}
+    if variant == "identical":
+        expected["receiver_followthrough"] = advice
+    assert common == expected
     assert all("instruction" not in item for item in view["items"])
     view["items"] = [{**common, **item} for item in view["items"]]
-    assert view == source
+    assert json.dumps(view, sort_keys=True) == json.dumps(source, sort_keys=True)
 
 
 def test_real_overflow_keeps_total_and_full_read_route(flow):

@@ -13,6 +13,7 @@ from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
     heartbeat_receipt_settlement_todo_id,
 )
+from ..control_plane.scheduler.arbitration import monitor_quiet_stall_observation_required
 from ..control_plane.scheduler.execution_context import (
     SchedulerExecutionContextResolution,
 )
@@ -201,10 +202,9 @@ def record_automatic_heartbeat_stall(
         turn_instance_id=turn_id,
         goal_ref=goal_ref,
     )
-    if (
-        payload.get("effective_action")
-        != EffectiveAction.MONITOR_QUIET_SKIP.value
-        and existing_stall is None
+    if existing_stall is None and (
+        payload.get("effective_action") != EffectiveAction.MONITOR_QUIET_SKIP.value
+        or not monitor_quiet_stall_observation_required(payload)
     ):
         return payload, status_payload, cache_metadata, "not_applicable"
     from ..capabilities.explore.composition_frontier import (

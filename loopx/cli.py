@@ -117,6 +117,7 @@ from .cli_commands import (
     handle_support_control_command,
     handle_task_lease_command,
     handle_authority_shadow_command,
+    handle_postgres_command,
     handle_version_command,
     handle_usage_ping_command,
     handle_host_mode_plan_command,
@@ -128,6 +129,7 @@ from .cli_commands import (
     register_canary_commands,
     register_coordination_shadow_command,
     register_authority_archive_command,
+    register_postgres_commands,
     register_capability_commands,
     register_doctor_command,
     register_dreaming_commands,
@@ -808,6 +810,16 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if authority_shadow_result is not None:
         return authority_shadow_result
+
+    postgres_result = handle_postgres_command(
+        args,
+        registry_path=registry_path,
+        runtime_root_arg=args.runtime_root,
+        output_format=output_format,
+        print_payload=print_payload,
+    )
+    if postgres_result is not None:
+        return postgres_result
 
     shared_goal_alignment_result = handle_shared_goal_alignment_command(
         args,
