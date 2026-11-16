@@ -1,9 +1,8 @@
 """Real loopback admission/drain and real detached provider replacement."""
 import importlib
-from http.client import HTTPResponse
+from http.client import HTTPResponse, IncompleteRead
 import io
 import json
-import os
 from pathlib import Path
 import socket
 import subprocess
@@ -212,6 +211,73 @@ def test_idle_body_read_closes_before_model_admission(owner, monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
+        thread.join(5)
+
+
+def test_drain_releases_a_response_with_a_stalled_client(owner, monkeypatch):
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    monkeypatch.setattr(relay.RelayHandler, "timeout", 0.25)
+    owner.api_keys().add(expected_revision=1, label="Spare", api_key="sk-" + "synthetic-spare-" * 4)
+    release, stopped = threading.Event(), threading.Event()
+    calls = []
+
+    class StreamingResponse(io.BytesIO):
+        status, headers = 200, {"Content-Type": "application/octet-stream"}
+
+        def read1(self, size):
+            assert release.wait(5)
+            return b"x" * size
+
+    stream = StreamingResponse()
+
+    class Upstream:
+        def open(self, call, timeout):
+            calls.append(call.data)
+            return stream
+
+    class SmallSendBufferRelay(relay.RelayServer):
+        def get_request(self):
+            connection, address = super().get_request()
+            connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+            return connection, address
+
+    server = SmallSendBufferRelay(owner, {"port": 0, "token": "worker", "control_token": "control"},
+                                  opener=Upstream())
+
+    def serve_and_close():
+        try:
+            server.serve_forever()
+        finally:
+            server.server_close()
+            stopped.set()
+
+    thread = threading.Thread(target=serve_and_close)
+    thread.start()
+    body = b'{"model":"selected-model","stream":true}'
+    headers = (b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer worker\r\n"
+               + f"Content-Length: {len(body)}\r\n\r\n".encode())
+    try:
+        with socket.socket() as client, HTTPResponse(client) as response:
+            client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+            client.settimeout(5)
+            client.connect(("127.0.0.1", server.server_port))
+            client.sendall(headers + body)
+            response.begin()
+            assert response.status == 200 and response.chunked
+            live = json.loads(request(server, "/runtime", "worker")[1])
+            assert live["active_requests"] == 1
+            assert request(server, "/control/drain", "control", body=b"", instance=live["instance_id"])[0] == 202
+            release.set()
+            # Keep the socket open without reading any body bytes until the
+            # listener and all its admitted request threads have drained.
+            assert stopped.wait(3), "A stalled client kept the relay from closing"
+            assert stream.closed and server.runtime()["active_requests"] == 0
+            with pytest.raises(IncompleteRead):
+                response.read()
+            assert calls == [body]
+    finally:
+        release.set()
+        server.shutdown()
         thread.join(5)
 
 

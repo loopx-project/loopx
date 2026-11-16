@@ -29,7 +29,7 @@ from .openai_keys import NoRedirect, api_policy
 SCHEMA = "codex_openai_api_relay_v1"
 API_SLOT = "openai-api"
 RUNTIME_SCHEMA = "codex_openai_api_relay_runtime_v1"
-REQUEST_IDLE_TIMEOUT = 10
+CLIENT_IO_TIMEOUT = 10
 ERROR_BODY_LIMIT = 65536
 # Loaded once. Replacing an installed wheel cannot make its old daemon claim
 # the newly installed implementation. No credential or request data is hashed.
@@ -189,7 +189,9 @@ class RelayServer(ThreadingHTTPServer):
 
 class RelayHandler(BaseHTTPRequestHandler):
     server: RelayServer
-    timeout = REQUEST_IDLE_TIMEOUT
+    # This bounds I/O on the loopback client socket. The upstream uses its
+    # own timeout and may produce a response long after the request arrives.
+    timeout = CLIENT_IO_TIMEOUT
 
     def log_message(self, *_args):
         pass
@@ -304,8 +306,6 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._json(503, "api_relay_draining")
             return
         try:
-            # The request idle timeout applies only before model admission.
-            self.connection.settimeout(None)
             self._forward(upstream_path, body, model)
         finally:
             with self.server._admission_lock:

@@ -93,6 +93,8 @@ own route. An authenticated
 new-protocol daemon with a different loaded build stops new admissions, drains
 already admitted model requests, and releases its existing owner lock before one
 new daemon starts. It closes connections still sending headers or request bodies.
+An admitted response can also finish draining when its client stops reading and
+the local socket write times out.
 The model, route credentials, key policy and message queue stay
 with their existing owners. A bounded timeout returns `api_relay_drain_pending`;
 read status later instead of forcing exit or replaying a Turn. Old `/health`
@@ -168,8 +170,12 @@ definition and verify it on readback.
 
 A local authenticated transport sends the original selected model and complete
 Responses body to OpenAI. Model requests require one valid Content-Length and
-are eligible for dispatch after every declared byte has arrived. A connection
-that stalls while sending the request closes after ten seconds of inactivity.
+are eligible for dispatch after every declared byte has arrived. Loopback
+socket reads and writes have a ten-second timeout per operation. A timed-out
+response write closes the relay's upstream connection and leaves the HTTP
+transfer incomplete. Upstream effects remain unknown. Use the existing Turn
+recovery path to determine any further action. Waiting for the upstream response
+uses the upstream timeout.
 An explicit upstream quota rejection, 401, 403 or temporary 429 can
 try the next configured key before output. Each key is attempted at most once per
 request, with typed cooldowns; model permission failures are scoped to that model.
