@@ -1,8 +1,11 @@
 """Permanent Host IO obligations survive retirement of Todo editing effects."""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import json
 import os
 import stat
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -32,6 +35,20 @@ def test_document_bytes_and_permissions_survive_publish_and_readback(tmp_path):
     if os.name == "posix":
         assert stat.S_IMODE(path.stat().st_mode) == 0o640
     assert list(path.parent.iterdir()) == [path]
+
+
+def test_private_json_writer_reads_utf8_under_an_ansi_code_page(tmp_path):
+    path = tmp_path / "owned" / "work-receipt.json"
+    original = {"source": {"registry": "operator's O\u2019Neil registry.json"}}
+    process = subprocess.run(
+        [sys.executable, "-P", "-m", io.__name__, "--write-private-json", str(path)],
+        input=json.dumps(original, ensure_ascii=False).encode("utf-8"),
+        env={**os.environ, "PYTHONPATH": str(Path(io.__file__).resolve().parents[3]),
+             "PYTHONIOENCODING": "cp1252"},
+        capture_output=True, timeout=10, check=False,
+    )
+    assert process.returncode == 0, process.stderr
+    assert json.loads(path.read_bytes()) == original
 
 
 def test_create_only_competing_publishers_preserve_the_winner(tmp_path):
