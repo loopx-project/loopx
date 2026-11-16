@@ -465,6 +465,88 @@ def _spends(runtime):
                for line in index.read_text().splitlines()) if index.exists() else 0
 
 
+def test_installed_core_goal_lifecycle_preserves_work_and_resumes_execution(core_python, task):
+    workspace, runtime, registry, arguments = task
+    host_started = workspace / "lifecycle-host-started"
+    host_script = workspace / "lifecycle-host.py"
+    host_script.write_text(
+        "import pathlib\npathlib.Path('lifecycle-host-started').write_text('started')\n" + HOST_SOURCE,
+    )
+    arguments = list(arguments)
+    arguments[arguments.index("--host-adapter-command-json") + 1] = json.dumps(
+        [core_python, "-I", str(host_script)],
+    )
+    todo_argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "todo", "list", "--goal-id", GOAL]
+    original_todo = json.loads(_run(core_python, todo_argv, workspace).stdout)["todos"][0]
+    todo_id = original_todo["todo_id"]
+    lease_argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "task-lease", "inspect", "--goal-id", GOAL, "--todo-id", todo_id]
+    original_lease = json.loads(_run(core_python, lease_argv, workspace).stdout)["lease"]
+    global_registry = runtime / "registry.global.json"
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "goal-lifecycle", "--goal-id", GOAL]
+    for operation, state in (("stop", "stopped"), ("resume", "active")):
+        before = (registry.read_bytes(), global_registry.read_bytes())
+        preview = json.loads(_run(core_python, [*prefix, "--operation", operation], workspace).stdout)
+        assert preview["dry_run"] and not preview["written"]
+        assert (registry.read_bytes(), global_registry.read_bytes()) == before
+        refused = json.loads(_run(core_python, [*prefix, "--operation", operation,
+            "--execute"], workspace, expected=1).stdout)
+        assert refused["written"] is False
+        stale = json.loads(_run(core_python, [*prefix, "--operation", operation,
+            "--actor-kind", "owner", "--expected-state-fingerprint", "0" * 64,
+            "--execute"], workspace, expected=1).stdout)
+        assert stale["error_kind"] == "goal_action_stale" and stale["written"] is False
+        assert (registry.read_bytes(), global_registry.read_bytes()) == before
+        result = json.loads(_run(core_python, [*prefix, "--operation", operation,
+            "--actor-kind", "owner", "--expected-state-fingerprint", preview["observed_state_fingerprint"],
+            "--execute"], workspace).stdout)
+        assert result["written"] and result["readback"]["verified"]
+        for path in (registry, global_registry):
+            goal = next(goal for goal in json.loads(path.read_text())["goals"] if goal["id"] == GOAL)
+            assert goal["activation"]["state"] == state
+        assert json.loads(_run(core_python, todo_argv, workspace).stdout)["todos"][0] == original_todo
+        assert json.loads(_run(core_python, lease_argv, workspace).stdout)["lease"] == original_lease
+        if state == "stopped":
+            blocked = json.loads(_run(core_python, arguments, workspace, expected=1).stdout)
+            assert blocked["ok"] is False, blocked
+            # An entered executor preserves uncertainty in its error response.
+            # Independent fixture observations below establish actual effects.
+            for effect in ("host_invoked", "state_written", "quota_spent"):
+                value = blocked["effects"][effect]
+                assert value is False or value is None, blocked
+        assert _spends(runtime) == 0
+        assert not host_started.exists()
+        assert not (workspace / "host-invocations").exists()
+        assert not (workspace / "squares.json").exists()
+    result = json.loads(_run(core_python, arguments, workspace).stdout)
+    key = _assert_committed(core_python, workspace, runtime, result)
+    assert host_started.read_text() == "started"
+    replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", key], workspace).stdout)
+    _assert_committed(core_python, workspace, runtime, replay)
+    assert replay["effects"]["host_invoked"] is False
+    assert replay["effects"]["state_written"] is False
+    assert replay["effects"]["quota_spent"] is False
+
+
+@pytest.mark.parametrize("operation", ["stop", "resume"])
+@pytest.mark.parametrize("actor", ["owner", "controller"])
+def test_installed_core_goal_lifecycle_respects_outer_controller(core_python, task, operation, actor):
+    workspace, runtime, registry, arguments = task
+    before = (registry.read_bytes(), (runtime / "registry.global.json").read_bytes())
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "goal-lifecycle", "--goal-id", GOAL, "--operation", operation, "--actor-kind", actor]
+    environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "1", "LOOPX_KUNLUNCODE_OUTER_GOAL_ID": GOAL}
+    preview = json.loads(_run(core_python, prefix, workspace, environment=environment).stdout)
+    assert preview["written"] is False
+    blocked = _run(core_python, [*prefix, "--execute"], workspace, environment=environment, expected=2)
+    assert blocked.stdout == ""
+    assert json.loads(blocked.stderr)["error_code"] == "kunluncode_outer_controller_write_owned"
+    assert (registry.read_bytes(), (runtime / "registry.global.json").read_bytes()) == before
+    assert _spends(runtime) == 0 and not (workspace / "host-invocations").exists()
+
+
 def _assert_committed(core_python, workspace, runtime, result):
     assert result["status"] == "committed", result
     assert result["validation"]["status"] == "passed"
