@@ -7483,6 +7483,59 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(
     assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
 
 
+def test_unreadable_recovery_hint_does_not_delay_new_private_reply(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+
+    old = tmp_path / "old-card.json"
+    new = tmp_path / "new-reply.json"
+    old_row = {"status": "captured", "triage": {"message_id": "om_already_sent"}}
+    old.write_text(json.dumps(old_row), encoding="utf-8")
+    new.write_text(json.dumps({"status": "accepted"}), encoding="utf-8")
+    new_delivered, old_recovered = threading.Event(), threading.Event()
+    attempts = []
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: False)
+
+    discover = transport.pending_body_paths
+
+    def discover_then_lose_old_hint():
+        paths = discover()
+        if not new_delivered.is_set():
+            assert set(paths) == {old, new}
+            old.write_bytes(b"\xff")
+        return paths
+
+    def reconcile(path):
+        attempts.append(path)
+        path.write_text(json.dumps({"status": "delivered"}), encoding="utf-8")
+        (new_delivered if path == new else old_recovered).set()
+        return 1
+
+    transport.pending_body_paths = discover_then_lose_old_hint
+    transport.reconcile_request = reconcile
+    service = worker.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport,
+    )
+
+    def drive(step, **_):
+        step()
+        assert new_delivered.wait(1), "the unreadable card held the new reply"
+        assert old.read_bytes() == b"\xff"
+        old.write_text(json.dumps(old_row), encoding="utf-8")
+        step()
+        assert old_recovered.wait(1)
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    service._reconcile_private()
+    assert attempts == [new, old]
+
+
 @pytest.mark.parametrize(("initial", "body_scan_fails"), [
     ("accepted", False), ("accepted", True), ("delivered", False),
 ])
