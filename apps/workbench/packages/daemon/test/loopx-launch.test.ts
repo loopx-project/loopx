@@ -156,7 +156,7 @@ test('after a restart, a first message that already went out is not sent again',
   const preview = await first.service.preview({ ...launch, cwd: granted, permission: 'read_only' });
   await assert.rejects(first.service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' }));
   const [thread] = first.threads;
-  first.manager.events.get(thread!.id)!.push(...phases('turn-1', 'session_start', 'session_ready', 'prompt_sent'), interrupted('turn-1'));
+  first.manager.events.get(thread!.id)!.push(...phases('turn-1', 'session_start', 'session_ready', 'prompt_sent'), { type: 'message.delta', turnId: 'turn-1' }, interrupted('turn-1'));
   const again = harness('none', { dataDir: first.dataDir, manager: first.manager });
   const done = await again.service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' });
   assert.equal(done.turnId, 'turn-1');
@@ -180,24 +180,43 @@ test('a restart while the agent session was still starting leaves the first mess
   assert.equal((await again.service.apply({ proposalId: preview.proposalId })).turnId, 'turn-2');
   assert.equal(first.turns.length, 2);
   assert.notEqual(again.service.binding(done.threadId)!.firstMessage, undefined);
+  // Handed over but not answered yet: still in flight, still kept.
   first.manager.events.get(done.threadId)!.push(...phases('turn-2', 'prompt_sent'));
+  assert.equal((await again.service.apply({ proposalId: preview.proposalId })).turnId, 'turn-2');
+  assert.notEqual(again.service.binding(done.threadId)!.firstMessage, undefined);
+  first.manager.events.get(done.threadId)!.push({ type: 'turn.done', turnId: 'turn-2', data: { stopReason: 'end_turn' } });
   assert.equal((await again.service.apply({ proposalId: preview.proposalId })).turnId, 'turn-2');
   assert.equal(first.turns.length, 2, 'not sent a third time');
   assert.equal(again.service.binding(done.threadId)!.firstMessage, undefined);
 });
 
-test('a first turn the agent was asked, or had begun answering, is not sent again after a restart', async () => {
-  for (const reached of [phases('turn-1', 'session_start', 'session_ready', 'prompt_sent'), [{ type: 'message.delta', turnId: 'turn-1' }]]) {
+test('a first turn the agent had begun answering, or that ended normally, is not sent again after a restart', async () => {
+  for (const reached of [[{ type: 'message.delta', turnId: 'turn-1' }, interrupted('turn-1')],
+    [...phases('turn-1', 'prompt_sent'), { type: 'turn.done', turnId: 'turn-1', data: { stopReason: 'end_turn' } }]]) {
     const first = harness();
     const preview = await first.service.preview({ ...launch, cwd: granted, permission: 'read_only' });
     const done = await first.service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' });
-    first.manager.events.get(done.threadId)!.push(...reached, interrupted(done.turnId!));
+    first.manager.events.get(done.threadId)!.push(...reached);
     const again = harness('none', { dataDir: first.dataDir, manager: first.manager });
     const retried = await again.service.apply({ proposalId: preview.proposalId });
     assert.equal(retried.turnId, 'turn-1');
     assert.equal(first.turns.length, 1);
     assert.equal(again.service.binding(done.threadId)!.firstMessage, undefined);
   }
+});
+
+test('a restart between prompt_sent and any answer leaves the first message uncertain: kept, not resent, and said so', async () => {
+  const first = harness();
+  const preview = await first.service.preview({ ...launch, cwd: granted, permission: 'read_only' });
+  const done = await first.service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' });
+  // runTurn wrote prompt_sent, then the daemon stopped before session.prompt said anything.
+  first.manager.events.get(done.threadId)!.push(...phases(done.turnId!, 'session_start', 'session_ready', 'prompt_sent'), interrupted(done.turnId!));
+  const again = harness('none', { dataDir: first.dataDir, manager: first.manager });
+  const retried = await again.service.apply({ proposalId: preview.proposalId });
+  assert.equal(retried.turnId, 'turn-1');
+  assert.equal(retried.delivery, 'uncertain');
+  assert.equal(first.turns.length, 1, 'not sent a second time');
+  assert.notEqual(again.service.binding(done.threadId)!.firstMessage, undefined, 'the text is kept');
 });
 
 test('the granted directories carry where they are here, so a Goal can be pointed at one', async () => {

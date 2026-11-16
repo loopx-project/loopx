@@ -70,7 +70,7 @@ export const previewGoal = (token: string | undefined, input: LaunchInput, signa
 
 export interface ApplyInput { proposalId: string; agent: string; permission: GoalPermission; model?: string | null; effort?: string | null; text?: string }
 export const applyGoal = (token: string | undefined, input: ApplyInput) =>
-  call<{ threadId: string; goalId: string; turnId?: string | null; reused?: boolean }>(token, '/api/loopx/launch/apply', { ...input, model: input.model ?? undefined, effort: input.effort ?? undefined });
+  call<{ threadId: string; goalId: string; turnId?: string | null; reused?: boolean; delivery?: 'uncertain' }>(token, '/api/loopx/launch/apply', { ...input, model: input.model ?? undefined, effort: input.effort ?? undefined });
 
 export const fetchGoalBar = (token: string | undefined, threadId: string, refresh = false, signal?: AbortSignal) =>
   call<GoalBarRead>(token, `/api/loopx/goal/${encodeURIComponent(threadId)}${refresh ? '?refresh=1' : ''}`, undefined, signal);
