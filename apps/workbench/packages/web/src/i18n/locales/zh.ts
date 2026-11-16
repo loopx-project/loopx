@@ -2934,7 +2934,7 @@ export const zh = {
   'loopx.goal.workspace': '工作目录',
   'loopx.goal.reviewing': 'LoopX 核心正在检查这份 Goal…',
   'loopx.goal.reviewed': '核心已检查：',
-  'loopx.goal.notGranted': '核心目前只允许在这些目录里创建 Goal（要加目录，用 --scan-path 重启核心）：',
+  'loopx.goal.notGranted': '核心目前只允许在这些目录里创建 Goal。要加目录：在 scripts/workbench.sh 的环境变量 LOOPX_GOAL_WORKSPACES 里加上它（逗号分隔），再运行 scripts/workbench.sh core restart：',
   'loopx.goal.coreDown': 'LoopX 核心没有响应。普通会话不受影响。',
   'loopx.goal.perm.read_only': '只读',
   'loopx.goal.perm.read_only.hint': '可以读项目，不能写任何文件；没人盯着也安全',

@@ -14,9 +14,31 @@ if [ ! -f "$ENVF" ]; then
 fi
 PIDF="$STATE/daemon.pid"
 alive(){ [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
+# The LoopX core (Python chat server) the daemon proxies to. A Goal can only be created in a directory the
+# core has been given, one --scan-path each, the way the dashboard is started. Add projects with
+# LOOPX_GOAL_WORKSPACES=/path/a,/path/b and restart the core: scripts/workbench.sh core restart
+CORE_PORT="${LOOPX_CORE_PORT:-8792}"
+CORE_PIDF="$STATE/core.pid"
+core_alive(){ [ -f "$CORE_PIDF" ] && kill -0 "$(cat "$CORE_PIDF")" 2>/dev/null; }
+core_start(){
+  local REPO_ROOT; REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+  local WS="${LOOPX_GOAL_WORKSPACES:-$REPO_ROOT/loopx}" scan=() item
+  IFS=',' read -ra items <<< "$WS"
+  for item in "${items[@]}"; do [ -n "$item" ] && scan+=(--scan-path "$item"); done
+  ( cd "$REPO_ROOT" && LOOPX_USAGE_PING=0 setsid nohup python3 -m loopx.cli chat --global-registry --host 127.0.0.1 --port "$CORE_PORT" --no-open \
+      --assets-dir "${LOOPX_CHAT_ASSETS:-/data00/home/liuhuadong.hans/code/loopx/loopx/web/chat}" "${scan[@]}" --project-workspace-grant workspace_read \
+      > "$STATE/core.log" 2>&1 < /dev/null & echo $! > "$CORE_PIDF" )
+}
 case "${1:-start}" in
   stop) alive && kill "$(cat "$PIDF")" && echo stopped || echo "not running";;
   status) alive && echo "running pid $(cat "$PIDF") on :$PORT" || echo "not running";;
+  core)
+    case "${2:-start}" in
+      stop) core_alive && kill "$(cat "$CORE_PIDF")" && echo "core stopped" || echo "core not running";;
+      status) core_alive && echo "core running pid $(cat "$CORE_PIDF") on :$CORE_PORT" || echo "core not running";;
+      restart) core_alive && kill "$(cat "$CORE_PIDF")"; sleep 2; core_start; sleep 6; echo "core restarted, log $STATE/core.log";;
+      start) if core_alive; then echo "core already running"; else core_start; sleep 6; echo "core started, log $STATE/core.log"; fi;;
+    esac;;
   start)
     if alive; then echo "already running pid $(cat "$PIDF")"; exit 0; fi
     [ -d "$HERE/packages/daemon/dist" ] && [ -d "$HERE/packages/web/dist" ] || (cd "$HERE" && npm run build)

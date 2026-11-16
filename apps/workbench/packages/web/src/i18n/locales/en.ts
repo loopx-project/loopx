@@ -2936,7 +2936,7 @@ export const en: Messages = {
   'loopx.goal.workspace': 'Workspace',
   'loopx.goal.reviewing': 'The LoopX core is reviewing this Goal…',
   'loopx.goal.reviewed': 'Reviewed by the core: ',
-  'loopx.goal.notGranted': 'The core only lets Goals be created in these directories (restart it with --scan-path to add one):',
+  'loopx.goal.notGranted': 'The core only lets Goals be created in these directories. To add one, put it in LOOPX_GOAL_WORKSPACES (comma separated) for scripts/workbench.sh, then run scripts/workbench.sh core restart:',
   'loopx.goal.coreDown': 'The LoopX core is not responding. Ordinary conversations are not affected.',
   'loopx.goal.perm.read_only': 'Read only',
   'loopx.goal.perm.read_only.hint': 'Can read the project, cannot write; safe unattended',

@@ -2932,7 +2932,7 @@ export const ja: Messages = {
   'loopx.goal.workspace': '作業ディレクトリ',
   'loopx.goal.reviewing': 'LoopX コアがこの Goal を確認しています…',
   'loopx.goal.reviewed': 'コアの確認済み：',
-  'loopx.goal.notGranted': 'コアは現在これらのディレクトリでのみ Goal の作成を許可しています（追加するには --scan-path でコアを再起動）：',
+  'loopx.goal.notGranted': 'コアは現在これらのディレクトリでのみ Goal の作成を許可しています。追加するには scripts/workbench.sh の環境変数 LOOPX_GOAL_WORKSPACES に追加し（カンマ区切り）、scripts/workbench.sh core restart を実行してください：',
   'loopx.goal.coreDown': 'LoopX コアが応答しません。通常の会話には影響しません。',
   'loopx.goal.perm.read_only': '読み取り専用',
   'loopx.goal.perm.read_only.hint': 'プロジェクトは読めますが書き込めません。放置しても安全',
