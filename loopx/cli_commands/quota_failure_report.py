@@ -293,6 +293,7 @@ def captured_quota_failure_view(
     runtime_root: Path | None = None,
     captured_payload: Mapping[str, object] | None = None,
     capture_bytes: bytes | None = None,
+    reserved_reader: _QuotaFailureReader | None = None,
 ) -> dict[str, object]:
     """Bound a failure using the saved decision and its original receipt.
 
@@ -353,21 +354,29 @@ def captured_quota_failure_view(
             paths = [["ok"]]
         pointers = ["/" + "/".join(path) for path in paths]
         selections = [{"path": path, "pointer": pointer} for path, pointer in zip(paths, pointers, strict=True)]
+        # The bounded guard already reserved room for a digest-pinned compact
+        # cursor at this cap. Reuse it so nested capture and runtime paths do
+        # not leave only a few bytes of receipt content per page.
+        reservation = reserved_reader if limit == max_page_output_bytes else None
         try:
-            reader, selected = write_initial_context_read_reference(saved, digest, dict(source), selections)
+            reader, selected = write_initial_context_read_reference(saved, digest, dict(source), selections,
+                reference_file=reservation.reference if reservation is not None else None,
+                reader_argv=reservation.reader_argv if reservation is not None else None)
         except (OSError, ValueError):
             # Existing captures can remain readable when publishing reader metadata fails.
             reader, selected = None, None
+        compact = reservation is not None and reader is not None
+        read_size, read_limit = (None if compact else page_size), limit
         result = {"ok": False, "captured_decision": reference,
             **{key: payload[key] for key in ("error_code", "diagnostic_code") if key in payload},
             "instruction": compact_instruction,
             "command": context_capture_read_command(saved, digest, reference_file=reader,
-                page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
-        read_size, read_limit = page_size, limit
-        if reader is not None and selected is not None:
+                page_bytes=read_size, max_page_output_bytes=limit, reader_argv=reader_argv, compact=compact)}
+        if reader is not None and selected is not None and not compact:
             read_size, read_limit = pinned_context_read_window(reader, selected,
                 page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
-        if runtime_root is not None and (reader is None or not _fits_failure_output(result, limit) or read_limit > limit):
+        if (not compact and runtime_root is not None
+                and (reader is None or not _fits_failure_output(result, limit) or read_limit > limit)):
             from .context_machine import _private_transport_root
 
             try:
@@ -387,7 +396,7 @@ def captured_quota_failure_view(
                 page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
         result["command"] = context_capture_read_command(saved, digest,
             reference_file=reader, page_bytes=read_size, max_page_output_bytes=read_limit,
-            reader_argv=reader_argv)
+            reader_argv=reader_argv, compact=compact)
         if read_limit > limit:
             result["recovery_page_output_bytes"] = read_limit
             result["instruction"] = "Do not rerun admission."
@@ -703,6 +712,7 @@ def quota_captured_transport_failure_view(
             failure, capture_directory=capture_directory, max_page_output_bytes=output_limit,
             capture_sha256=capture_sha256, reader_argv=reader_argv,
             runtime_root=runtime_root, captured_payload=source, capture_bytes=original,
+            reserved_reader=reader,
         )
         if _fits_failure_output(projected, output_limit) and "recovery_page_output_bytes" not in projected:
             return projected

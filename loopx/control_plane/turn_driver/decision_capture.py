@@ -865,7 +865,9 @@ def initial_context_selection_bytes(payload: dict[str, Any], selections: list[di
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
                                         observed_read: dict[str, Any] | None = None,
-                                        reference_directory: Path | None = None) -> tuple[Path, bytes]:
+                                        reference_directory: Path | None = None,
+                                        reference_file: Path | None = None,
+                                        reader_argv: list[str] | None = None) -> tuple[Path, bytes]:
     """Pin the shared rendered selection and return its exact rendered bytes."""
     text_append = observed_read.get("text_append") if observed_read else None
     raw, presented = initial_context_selection_bytes(payload, selections, text_append=text_append)
@@ -873,7 +875,8 @@ def write_initial_context_read_reference(path: Path, digest: str, payload: dict[
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
             list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
         selection_paths=[item["path"] for item in selections],
-        observed_read=observed_read, reference_directory=reference_directory)
+        observed_read=observed_read, reference_directory=reference_directory,
+        reference_file=reference_file, reader_argv=reader_argv)
     return reference, raw
 
 

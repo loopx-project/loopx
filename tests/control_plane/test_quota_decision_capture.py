@@ -713,13 +713,14 @@ def test_real_cli_handoff_preserves_original_receipt(
     assert _spend_run_count(runtime) == 0
 
 
-def _assert_captured_receipts(command, source, *, cwd, env, output_limit):
-    recovered = _read_bounded_handoff_reply(command, cwd=cwd, env=env, output_limit=output_limit)
+def _assert_captured_receipts(command, source, *, cwd, env, output_limit, single_page=False):
+    recovered = _read_bounded_handoff_reply(command, cwd=cwd, env=env, output_limit=output_limit,
+                                            single_page=single_page)
     assert recovered['heartbeat_receipt'] == source['heartbeat_receipt']
     assert recovered['rollout_event'] == source['rollout_event']
 
 
-def _read_bounded_handoff_reply(command, *, cwd, env, output_limit, pwsh=None):
+def _read_bounded_handoff_reply(command, *, cwd, env, output_limit, pwsh=None, single_page=False):
     pages = bytearray()
     while command:
         argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", command] if pwsh else shlex.split(command)
@@ -732,6 +733,7 @@ def _read_bounded_handoff_reply(command, *, cwd, env, output_limit, pwsh=None):
         if page['eof']:
             assert len(pages) == page['total_bytes']
             break
+        assert not single_page, "the original Turn receipts should fit within one bounded recovery page"
         assert page['content'] and page['next_offset'] == len(pages)
         command = page['next_command']
     else:
@@ -1117,9 +1119,10 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
         assert reference['sha256'] == hashlib.sha256(attempts[0]).hexdigest()
         command = failure.get('command') or reference['command']
         assert shlex.split(command)[:3] == [str(launcher), '--cli-bin', str(launcher)]
+        assert 'recovery_page_output_bytes' not in failure
         _assert_captured_receipts(command, original, cwd=project,
             env={**os.environ, 'LOOPX_USAGE_PING': '0', 'PYTHONPATH': str(Path(__file__).resolve().parents[2])},
-            output_limit=failure.get('recovery_page_output_bytes', output_limit))
+            output_limit=output_limit, single_page=True)
         assert saved[0].read_bytes() == attempts[0]
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
