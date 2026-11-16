@@ -13,6 +13,7 @@ export interface Appearance {
 /** The palettes to choose from. Their colours live at the top of styles.css, keyed by these ids. */
 export const PALETTES: ReadonlyArray<{ id: string; name: string }> = [
   { id: 'codex', name: 'Codex' },
+  { id: 'claude', name: 'Claude' },
   { id: 'paper', name: t('appearance.palette.paper') },
   { id: 'graphite', name: t('appearance.palette.graphite') },
   { id: 'catppuccin', name: 'Catppuccin' },
