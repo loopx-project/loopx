@@ -9,16 +9,6 @@
 .composer-goal-permission { width: auto !important; padding: 0 10px; gap: 6px; }
 .composer-goal-permission-name { font-size: 12.5px; }
 
-.goal-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 32px; margin: 0 1px 8px; padding: 6px 12px; border: 1px solid var(--loopx-blue); border-radius: var(--radius, 12px); background: var(--loopx-blue-soft); color: var(--text); font-size: 12.5px; }
-.goal-bar.stale { border-style: dashed; }
-.goal-bar img { flex: none; }
-.goal-bar-title { font-weight: 650; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.goal-bar-status { color: var(--text); }
-.goal-bar-status.warn { color: var(--muted); }
-.goal-bar-todos { color: var(--muted); }
-.goal-bar-permission { margin-left: auto; padding: 1px 8px; border: 1px solid var(--border-strong, var(--border)); border-radius: 999px; color: var(--muted); }
-.goal-bar-refresh { height: 24px; min-width: 24px; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; }
-.goal-bar-refresh:hover:not(:disabled) { color: var(--text); }
 
 .goal-confirm-body { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; text-align: left; }
 .goal-confirm-field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }

@@ -46,37 +46,6 @@ export function GoalPermissionPicker({ capability, value, onChange }: { capabili
   );
 }
 
-/** What a Goal conversation shows above its input: the Goal, where it stands, and under what permission. */
-export function GoalBar({ token, threadId, binding, running, title }: { token: string | undefined; threadId: string; binding: GoalBinding; running: boolean; title?: string }) {
-  const [read, setRead] = useState<GoalBarRead | null>(null);
-  const [busy, setBusy] = useState(false);
-  const alive = useRef(true);
-  const load = async (refresh: boolean) => {
-    setBusy(true);
-    try { const next = await fetchGoalBar(token, threadId, refresh); if (alive.current) setRead(next); }
-    catch (error) { if (alive.current) setRead((prev) => ({ binding, state: prev?.state ?? null, freshness: 'unavailable', observedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) })); }
-    finally { if (alive.current) setBusy(false); }
-  };
-  // The core moves on its own (its heartbeat advances the Goal with no turn here), so the bar polls; a finished turn reads at once.
-  useEffect(() => { alive.current = true; void load(false); const timer = setInterval(() => void load(false), 20000); return () => { alive.current = false; clearInterval(timer); }; }, [threadId, token]);
-  const wasRunning = useRef(running);
-  useEffect(() => { if (wasRunning.current && !running) void load(true); wasRunning.current = running; }, [running]);
-
-  const state = read?.state ?? null;
-  const open = (g: { open: number; total: number } | undefined) => g ? `${g.open}/${g.total}` : '—';
-  return (
-    <div className={`goal-bar${read?.freshness === 'unavailable' ? ' stale' : ''}`} role="status" data-testid="goal-bar">
-      <img src={loopxIcon} alt="" width={16} height={16} />
-      <span className="goal-bar-title" title={binding.goalId}>{state && state.title !== binding.goalId ? state.title : title || binding.goalId}</span>
-      {state ? <span className="goal-bar-status">{statusWord(state.status)}</span>
-        : <span className="goal-bar-status warn">{read ? t('loopx.goal.stateUnavailable') : t('loopx.goal.reading')}</span>}
-      {state && <span className="goal-bar-todos" title={t('loopx.goal.openTotal')}>{t('loopx.goal.agentTodos')} {open(state.agentTodos)} · {t('loopx.goal.yourTodos')} {open(state.userTodos)}</span>}
-      <span className="goal-bar-permission" title={permissionCopy(binding.permission).hint}>{permissionCopy(binding.permission).label}</span>
-      <button type="button" className="goal-bar-refresh" disabled={busy} onClick={() => void load(true)} title={read?.error ?? t('loopx.goal.refresh')} aria-label={t('loopx.goal.refreshState')}>{busy ? '…' : '↻'}</button>
-    </div>
-  );
-}
-
 interface ConfirmProps {
   token: string | undefined;
   agent: string;

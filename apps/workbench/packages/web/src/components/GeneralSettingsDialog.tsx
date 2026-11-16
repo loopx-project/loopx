@@ -28,7 +28,7 @@ export function GeneralSettingsDialog({ api, onSave, onClose }: {
     if (!value || saving) return;
     const before = value;
     const next = { ...value, ...patch };
-    if (next.startupPage === value.startupPage && next.autoArchiveDays === value.autoArchiveDays) return;
+    if (next.startupPage === value.startupPage && next.autoArchiveDays === value.autoArchiveDays && next.autoImportLocal === value.autoImportLocal) return;
     // One write at a time keeps the shown choice aligned with the daemon's saved value.
     setValue(next); setSaving(true); setError('');
     void api.saveGeneralSettings(next).then(saved => { setValue(saved); onSave(saved); })
@@ -65,6 +65,19 @@ export function GeneralSettingsDialog({ api, onSave, onClose }: {
             </Popover>
           </div>
           <p className="panel-hint general-hint">{t('general.startupHint')}</p>
+          <div className="personal-setting-line general-setting-line">
+            <span>{t('general.autoImportLocal')}</span>
+            <Popover label={t('general.autoImportLocal')} triggerLabel={t('general.autoImportLocal')} placement="below" align="end"
+              triggerClassName="context-btn general-select" panelClassName="general-startup-menu" disabled={saving}
+              trigger={<>{t(value.autoImportLocal ? 'general.autoImportLocalOn' : 'general.autoImportLocalOff')}<IconChevron size={12} open /></>}>
+              {close => [true, false].map(autoImportLocal => <button key={String(autoImportLocal)} type="button" className="pop-item compact"
+                role="menuitemradio" aria-checked={value.autoImportLocal === autoImportLocal} onClick={() => { close(); save({ autoImportLocal }); }}>
+                <span className="pop-item-label">{t(autoImportLocal ? 'general.autoImportLocalOn' : 'general.autoImportLocalOff')}</span>
+                <span className="pop-item-check">{value.autoImportLocal === autoImportLocal && <IconCheck size={14} />}</span>
+              </button>)}
+            </Popover>
+          </div>
+          <p className="panel-hint general-hint">{t('general.autoImportLocalHint')}</p>
           <div className="personal-setting-line general-setting-line">
             <span>{t('quickSwitch.handle')}</span>
             <Popover label={t('quickSwitch.handle')} triggerLabel={t('quickSwitch.handle')} placement="below" align="end"

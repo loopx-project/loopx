@@ -77,12 +77,14 @@ type OverviewProps = {
   onLoadingChange?: (loading: boolean) => void;
   persistent?: boolean;
   detail?: OverviewSection;
+  /** Drawn above the sections: what the conversation is on besides files and agents (its LoopX Goal). */
+  goal?: ReactNode;
 };
 type Layout = { height: number; sections: Section[]; counts: Partial<Record<Section, number>> };
 
 /** Preview counts are chosen once per opening; refreshes keep the same slots and footer. */
 export function ThreadOverview(props: OverviewProps) {
-  const { api, threadId, updatedAt, active, team, agents, plan, roots, loadFile, onOpenMember, onOpenDiff, onOpenFile, onPreview, onOpenTrace, onClose, onViewAll, onLoadingChange, persistent = false, detail } = props;
+  const { api, threadId, updatedAt, active, team, agents, plan, roots, loadFile, onOpenMember, onOpenDiff, onOpenFile, onPreview, onOpenTrace, onClose, onViewAll, onLoadingChange, persistent = false, detail, goal } = props;
   const reading = useOverviewReading(api, threadId, updatedAt, active);
   const { outputs, stats, loading, failed } = reading;
   const ready = Boolean(outputs || failed);
@@ -223,7 +225,7 @@ export function ThreadOverview(props: OverviewProps) {
     </div>
   </div>;
   return <div ref={root} className="thread-overview" data-ready={ready && Boolean(layout)} data-limit={limit} aria-busy={loading} style={{ height: layout?.height }}>
-    <div className="overview-content">{content}{failed && !outputs && <p className="overview-empty" role="status">{t('overview.failed')}</p>}{!sections.length && ready && !failed && <p className="overview-empty">{t(available.length ? 'overview.newContent' : 'overview.empty')}</p>}</div>{footer}
+    <div className="overview-content">{goal}{content}{failed && !outputs && <p className="overview-empty" role="status">{t('overview.failed')}</p>}{!sections.length && !goal && ready && !failed && <p className="overview-empty">{t(available.length ? 'overview.newContent' : 'overview.empty')}</p>}</div>{footer}
   </div>;
 }
 

@@ -30,6 +30,13 @@ export interface LoopxBinding {
   proposalId?: string;
   /** Kept until the first message has gone out; a retried launch sends it then instead of reporting success. */
   firstMessage?: string;
+  /** The Goal's name as last read from the core, for lists that cannot ask the core per row. */
+  goalTitle?: string;
+  /** The core no longer has this Goal. The binding stays, so the conversation keeps its record. */
+  goalMissing?: boolean;
+  /** How the thread came to be bound: here (`workbench`), through the core's external-session bindings, or by its own text. */
+  basis?: 'core' | 'content' | 'workbench';
+  source?: string;
 }
 
 /** Bindings live in their own file, so removing this adapter leaves the thread store untouched. */
@@ -48,6 +55,10 @@ export class LoopxBindings {
 
   get(threadId: string): LoopxBinding | null {
     return this.map.get(threadId) ?? null;
+  }
+
+  entries(): Array<[string, LoopxBinding]> {
+    return [...this.map];
   }
 
   threadsOf(goalId: string): string[] {

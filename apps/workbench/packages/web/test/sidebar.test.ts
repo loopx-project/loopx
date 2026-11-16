@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ExternalSession, Section, Thread } from '../src/api.js';
-import { boardStage, buildActivity, buildMerged, buildSidebar, clampSidebarWidth, externalThreadRow, handoverGroups, markTerms, navOverflow, defaultSidebarWidth, savedSidebarWidth, searchTerms, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, taggedAgents, threadAttention, withExternalSessions, type HostSource } from '../src/sidebar.js';
+import { boardStage, buildActivity, buildMerged, buildSidebar, clampSidebarWidth, externalThreadRow, handoverGroups, isLoopxRow, markTerms, navOverflow, defaultSidebarWidth, savedSidebarWidth, searchTerms, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, taggedAgents, threadAttention, withExternalSessions, type HostSource } from '../src/sidebar.js';
 import { threadMark } from '../src/notices.js';
 
 let clock = 0;
@@ -346,4 +346,13 @@ test('the row menu places a thread in the board column the board would', () => {
   assert.equal(boardStage(thread('later-run', { status: 'running', report: { stage: 'backlog', note: '', at, by: 'user' } })), 'doing');
   assert.equal(boardStage(thread('later-wait', { waiting: true, report: { stage: 'backlog', note: '', at, by: 'user' } })), 'blocked');
   assert.equal(boardStage(thread('later-done', { doneAt: at, report: { stage: 'backlog', note: '', at, by: 'user' } })), 'done');
+});
+
+test('the LoopX filter keeps threads and not-yet-imported sessions that belong to a Goal, deleted Goals included', () => {
+  const info = { goalId: 'g', goalTitle: 'G', basis: 'content' as const, source: 'bootstrap' };
+  const goalThread = thread('t1', { loopxInfo: info });
+  const plainThread = thread('t2', {});
+  const goalSession = externalThreadRow({ agent: 'codex', sessionId: 's1', cwd: '/w', title: 'x', updatedAt: null, loopx: { ...info, missing: true } });
+  const plainSession = externalThreadRow({ agent: 'codex', sessionId: 's2', cwd: '/w', title: 'y', updatedAt: null });
+  assert.deepEqual([goalThread, plainThread, goalSession, plainSession].filter(isLoopxRow).map((r) => r.id), ['t1', 'ext:codex:s1']);
 });

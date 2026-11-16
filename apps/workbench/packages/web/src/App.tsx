@@ -60,7 +60,6 @@ import { CollaborationMenu } from './components/CollaborationMenu';
 import { DirectoryPicker } from './components/DirectoryPicker';
 import { Dialog } from './components/Dialog';
 import { HostDown, HostsPanel, MachinePicker } from './components/Hosts';
-import { ImportPanel } from './components/ImportPanel';
 import { Menu } from './components/Menu';
 import { StatusPanel } from './components/StatusPanel';
 import { TerminalPanel } from './components/TerminalPanel';
@@ -97,7 +96,9 @@ import { StewardPage } from './components/StewardPage';
 import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
 import { needsYouGoalIds, sortGoalTree } from './loopx/status';
 import { ActivityPage } from './components/ActivityPage';
-import { GoalBar, GoalConfirm, GoalPermissionPicker, LoopxToggle } from './components/LoopxGoal';
+import { LoopxGoalGroup } from './components/LoopxGoalGroup';
+import { drivenByApp } from './loopx/session';
+import { GoalConfirm, GoalPermissionPicker, LoopxToggle } from './components/LoopxGoal';
 import { defaultGoalPermission, fetchGoalCapabilities, goalOf, type GoalAgentCapability, type GoalPermission } from './loopx/launch';
 import { ExtensionsPage } from './components/ExtensionsPage';
 import { VoiceOrb, VoiceControls } from './components/VoiceOrb';
@@ -128,7 +129,7 @@ import { ConnectDialog, DemoBar } from './components/ConnectDialog';
 import { DemoApi, DemoError } from './demo/DemoApi';
 import { EMPTY_MODEL_PREFERENCE, type DraftModelPreference } from '../../daemon/src/model-preferences';
 import { QUICK_SWITCH_HIDDEN_KEY, clampQuickSwitchBottom, savedQuickSwitchBottom, saveQuickSwitchBottom } from './quick-switch';
-import { IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconImport, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
+import { IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
 import { StatReadings } from './components/SessionStats';
 import { ThreadTracePanel } from './components/TracePanel';
 import { chooseLocale, locale, LOCALES, localeChoice, t } from './i18n';
@@ -641,6 +642,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [externalState, setExternalState] = useState<'off' | 'loading' | 'ready' | 'failed'>('off');
   const [externalError, setExternalError] = useState<{ message: string; retry?: () => void } | null>(null);
   const [importingExternal, setImportingExternal] = useState<string | null>(null);
+  // Bumped when the setting that limits the list changes, so the list is read again at once.
+  const [externalNonce, setExternalNonce] = useState(0);
   const externalScope = api.demo ? 'demo' : hostId ?? '';
   useEffect(() => {
     // The merged every-machine view lists threads only; so does a machine that cannot be asked.
@@ -667,7 +670,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return () => { alive = false; clearInterval(timer); };
     // `externalLoaded` grows only through "show more", which re-reads deliberately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, externalScope, merging]);
+  }, [api, externalScope, merging, externalNonce]);
   const loadMoreExternal = () => {
     if (!externalCursor) return;
     setExternalState('loading');
@@ -752,7 +755,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     if (api.demo || !startupPending.current) return;
     let live = true;
     void api.generalSettings().then(value => { if (live) setStartupSettings(value); })
-      .catch(() => { if (live) setStartupSettings({ startupPage: 'new-thread', autoArchiveDays: null }); });
+      .catch(() => { if (live) setStartupSettings({ startupPage: 'new-thread', autoArchiveDays: null, autoImportLocal: true }); });
     return () => { live = false; };
   }, [api]);
   const [singleSegmentId, setSingleSegmentId] = useState<string | null>(null);
@@ -2397,21 +2400,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return () => { active = false; };
   }, [api, token, hostId, threadLink, hostsLoaded, hosts]);
 
-  // A session that is already a thread may have been archived since; opening it brings it back.
-  const openImported = async (threadId: string) => {
-    try {
-      let thread = await api.thread(threadId);
-      if (thread.archivedAt) {
-        thread = await api.updateThread(threadId, { archived: false });
-        setArchiveKey((k) => k + 1);
-      }
-      openThread(thread);
-    } catch (e) {
-      handleError(e);
-    }
-  };
-
-  const importAgents = agents.filter((a) => a.available && a.capabilities.history);
   const agentLabel = (id: string) => agents.find((a) => a.id === id)?.label ?? id;
   const capsOf = (id: string) => agents.find((a) => a.id === id)?.capabilities;
   const activeCaps = capsOf(activeAgent);
@@ -2559,14 +2547,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           { id: 'archive', label: t('actions.archive'), hint: t('app.cmd.archive'), keywords: ['archive'] },
         ]
       : []),
-    ...(importAgents.length ? [{ id: 'import', label: t('import.title'), hint: t('app.cmd.import'), keywords: ['import', 'resume', 'history'] }] : []),
     { id: 'appearance', label: t('appearance.title'), hint: t('app.cmd.appearance'), keywords: ['theme', 'appearance', 'dark', 'light', '主题'] },
     { id: 'help', label: t('app.cmd.helpLabel'), hint: t('app.cmd.help'), keywords: ['help', 'commands'] },
   ];
 
   const runHubAction = (id: string) => {
     // These are the hub's own machinery, which the demo has none of.
-    if (demo && (id === 'term' || id === 'usage' || id === 'skills' || id === 'mcp' || id === 'import')) return askToConnect();
+    if (demo && (id === 'term' || id === 'usage' || id === 'skills' || id === 'mcp')) return askToConnect();
     if (id === 'new') return newThread();
     if (id === 'status') return setStatusOpen(true);
     if (id === 'term') return openTerminal();
@@ -2579,7 +2566,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     if (id === 'export' && selected) return threadActions.copyConversation(selected);
     if (id === 'model') return setModelSignal((n) => n + 1);
     if (id === 'permission') return setPermissionSignal((n) => n + 1);
-    if (id === 'import') return openSettings('import');
     if (id === 'appearance') return openSettings('appearance');
     if (selected && (id === 'rename' || id === 'pin' || id === 'fork' || id === 'archive')) threadActions.run(id, selected);
   };
@@ -2815,7 +2801,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   const settingsGroups: SettingsGroup[] = [
     { label: t('settings.preferences'), entries: [
-      ...(!demo ? [{ id: 'general', label: t('general.title'), icon: IconSettings, render: () => <GeneralSettingsDialog api={api} onSave={setStartupSettings} onClose={closeSettings} /> }] : []),
+      ...(!demo ? [{ id: 'general', label: t('general.title'), icon: IconSettings, render: () => <GeneralSettingsDialog api={api} onSave={value => { setStartupSettings(value); setExternalNonce(n => n + 1); }} onClose={closeSettings} /> }] : []),
       { id: 'appearance', label: t('appearance.title'), icon: IconPalette, render: () => <AppearancePanel appearance={appearance} theme={theme} onChange={setAppearance} onClose={closeSettings} /> },
       { id: 'language', label: t('locale.menu'), icon: IconLanguage, render: () => <SettingsSection title={t('locale.menu')} hint={t('settings.automatic')}><div className="settings-options">
         {[{ id: 'system' as const, name: t('locale.system') }, ...LOCALES].map(l => <button key={l.id} className="settings-link-row" role="radio" aria-checked={localeChoice() === l.id} onClick={() => navigate(() => chooseLocale(l.id))}><span>{l.name}</span>{localeChoice() === l.id && <IconCheck size={16} />}</button>)}
@@ -2839,7 +2825,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     ] },
     { label: t('settings.history'), entries: [
       { id: 'archive', label: t('archive.title'), icon: IconArchive, render: () => <ArchivePanel api={api} agents={agents} refreshKey={archiveKey} onRestore={thread => threadActions.run('restore', thread)} onDelete={thread => threadActions.run('delete', thread)} onError={handleError} /> },
-      ...(importAgents.length ? [{ id: 'import', label: t('import.title'), icon: IconImport, render: () => <ImportPanel api={api} agents={importAgents} onImported={openThread} onOpen={threadId => void openImported(threadId)} onError={handleError} /> }] : []),
       ...(agents.some(a => !a.hidden && a.capabilities.quota) ? [{ id: 'quota', label: t('app.quota'), icon: IconGauge, render: () => <QuotaBoard api={api} agents={agents} current={activeAgent} account={quotaAccount(settingsPath)} onAccount={id => openSettings(`quota/${encodeURIComponent(id)}`)} /> }] : []),
       { id: 'activity', label: t('activity.title'), icon: IconActivity, render: () => <ActivityPage api={api} agents={agents} onOpenThread={pick} onError={handleError} /> },
       ...(!demo ? [{ id: 'observability', label: t('obs.title'), icon: IconGauge, render: () => <ObservabilityPage api={api} agents={agents} initial="usage" /> }] : []),
@@ -2858,6 +2843,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       onViewAll={(section, returnToPreview = true) => setOverviewDetail({ api, threadId: selected.id, section, returnToPreview })}
       api={api} threadId={selected.id} updatedAt={selected.updatedAt} active={selected.status === 'running'}
       team={overviewTeam} agents={agents} plan={topPlan} roots={threadRoots}
+      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} onOpenGoal={goalId => { close(); openGoal(goalId); }} /> : undefined}
       loadFile={loadFile} persistent={persistent}
       onOpenMember={(member) => { setAgentsStart(member ?? null); setAgentsOpen(true); setFiles(null); }}
       onOpenDiff={(file) => setDiffFile({ threadId: selected.id, file })}
@@ -3490,7 +3476,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           header={header}
           writingMode={draftTeam ? undefined : { active: !!writing, disabled: writingBusy, onChange: active => void changeWriting(active ? 'draft' : null) }}
           takeover={outOfPlan && !voice.state.active ? { from: agentLabel(selected!.agent), current: selected!.agent, go: (agent, note) => threadActions.takeOver(selected!, agent, note) } : undefined}
-          banner={<>{goalOf(selected) && selected && !api.demo && <GoalBar token={token} threadId={selected.id} binding={goalOf(selected)!} running={selected.status === 'running'} title={selected.title} />}{writing && !draftTeam && <WritingBar writing={writing} busy={writingBusy} onStage={stage => void changeWriting(stage)} onEnd={() => void changeWriting(null)}
+          banner={<>{selected && !api.demo && drivenByApp(selected.loopxInfo, selected.origin) && <p className="loopx-driven" role="status">{t('loopx.driven')}</p>}{writing && !draftTeam && <WritingBar writing={writing} busy={writingBusy} onStage={stage => void changeWriting(stage)} onEnd={() => void changeWriting(null)}
             onOpen={file => void openFileLink(file).catch(handleError)}
             habits={habitsPath ? { path: habitsPath, ready: habitsReady } : null}
             onCheckHabits={() => void checkWritingHabits()}
