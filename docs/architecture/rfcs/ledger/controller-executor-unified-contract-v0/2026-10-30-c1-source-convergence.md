@@ -3283,3 +3283,18 @@ view's action along with its required reads and settlement instructions.
 At `e9339babfc71`, the prompt omitted the action clause in four explicit
 legacy view cases across File and SQLite. The same cases verify the returned
 reader command, its saved source, and the prompt after one guard.
+
+### Use the explicit PowerShell launcher for bounded quota recovery
+
+The shared command resolver accepts an existing script at an explicit
+PowerShell path. PowerShell can launch that script without a POSIX execute
+bit. The quota guard uses the supplied launcher to reserve the recovery
+reader before admitting work.
+
+In both File and SQLite fixtures, a 1,700-byte budget now permits admission
+and the emitted recovery command runs verbatim in PowerShell 7 on macOS.
+The fixtures use launcher paths containing spaces and straight and typographic
+apostrophes. They read the original receipts within the limit and retain
+one guard and zero debits. At 96 bytes, both providers refuse before admission.
+Windows filesystem access control and the native Windows Python route
+still require a Windows host.

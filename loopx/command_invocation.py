@@ -136,6 +136,12 @@ def resolve_command_path(
 ) -> Path | None:
     """Resolve executables plus PowerShell scripts discoverable by PowerShell 7."""
 
+    # An explicit script path is invoked by PowerShell. It does not need
+    # the POSIX executable bit, and resolving it must not search PATH.
+    if os.path.dirname(name) and Path(name).suffix.lower() == ".ps1":
+        script = Path(os.path.expanduser(name))
+        return script if script.is_file() else None
+
     source_env = os.environ if env is None else env
     explicit = source_env.get("LOOPX_COMMAND_PATH") if name == "loopx" else None
     if os.name == "nt" and explicit:

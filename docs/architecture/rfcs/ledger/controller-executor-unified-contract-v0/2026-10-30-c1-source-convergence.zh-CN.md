@@ -2431,3 +2431,13 @@ File 和 SQLite 夹具在 macOS 上执行 Windows 分支。两者在 `e9339babfc
 非原生检查点的提示要求 worker 遵循保存视图中的动作、必读材料和结算指引。
 在 `e9339babfc71`，File 和 SQLite 共四个显式旧视图的用例缺少动作指引。
 同一组用例核对返回的读取命令、保存的来源和一次 guard 后交付的提示。
+
+### 带上限的 quota 恢复使用调用方显式指定的 PowerShell 启动器
+
+共享命令解析器接受显式路径上实际存在的 PowerShell 脚本。PowerShell 可以调用
+没有 POSIX 执行位的脚本。quota 守卫在准入前使用调用方指定的启动器预留恢复读取入口。
+
+File 和 SQLite 夹具在 1,700 字节预算下均准入，返回的恢复命令可在 macOS 的
+PowerShell 7 中原样执行。启动器路径含空格、直撇号和弯撇号。两种存储均在上限内
+读回原回执，保留一次 guard 和零扣额。预算为 96 字节时，两者均在准入前拒绝。
+Windows 文件访问控制和原生 Windows Python 入口仍需在 Windows 宿主验证。

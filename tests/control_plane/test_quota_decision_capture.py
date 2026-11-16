@@ -1101,8 +1101,9 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("output_limit", [96, 1700])
+@pytest.mark.parametrize("explicit_powershell", [False, True], ids=["current-cli", "explicit-powershell"])
 def test_bounded_should_run_reserves_private_windows_recovery(
-    tmp_path, monkeypatch, capsys, provider, output_limit,
+    tmp_path, monkeypatch, capsys, provider, output_limit, explicit_powershell,
 ):
     import shutil
     from types import SimpleNamespace
@@ -1114,9 +1115,24 @@ def test_bounded_should_run_reserves_private_windows_recovery(
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
     native = os.name == "nt"
-    pwsh = shutil.which("pwsh") if native else None
-    if native and not pwsh:
-        pytest.skip("requires PowerShell 7 to execute the Windows recovery reader")
+    powershell_reader = native or explicit_powershell
+    pwsh = shutil.which("pwsh") if powershell_reader else None
+    if powershell_reader and not pwsh:
+        pytest.skip("requires PowerShell 7 to execute the recovery reader")
+    launcher_args = []
+    if explicit_powershell:
+        # The installed launcher is a PowerShell script and can have spaces
+        # and quote characters in its path.
+        release = Path(__file__).resolve().parents[2]
+        folder = tmp_path / "reader's O’Neil release"
+        folder.mkdir()
+        launcher = folder / "loopx.ps1"
+        shutil.copyfile(release / "scripts/loopx.ps1", launcher)
+        launcher.with_name("loopx-current-release.json").write_text(json.dumps({
+            "release_root": str(release), "python": sys.executable,
+        }), encoding="utf-8")
+        monkeypatch.delenv("LOOPX_CURRENT_RELEASE_FILE", raising=False)
+        launcher_args = ["--cli-bin", str(launcher)]
     if not native:
         # Exercise the capture owner's platform decision with real local files.
         monkeypatch.setattr(decision_capture, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
@@ -1141,7 +1157,7 @@ def test_bounded_should_run_reserves_private_windows_recovery(
         raise QuotaDecisionTransportError("Simulated Host delivery failure after guard admission")
 
     monkeypatch.setattr(codex_context, "prepare_codex_context", refuse_recovery)
-    code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+    code = main([*launcher_args, "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID, "--codex-app", "--complete-turn",
         "--available-capability", "shell", "--available-capability", "filesystem_read",
