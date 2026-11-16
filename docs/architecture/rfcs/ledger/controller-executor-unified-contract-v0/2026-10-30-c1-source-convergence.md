@@ -3275,3 +3275,11 @@ The updated guard admits once. After an injected Host delivery failure, the
 returned command reads the original capture and receipt within the output
 cap. Both guards refuse a 96-byte cap before writing a capture or receipt.
 The fixtures record zero debits. Native Windows execution remains open.
+
+### Follow the saved action after a Benchmark checkpoint preflight
+
+The non-native checkpoint prompt tells the worker to follow the saved
+view's action along with its required reads and settlement instructions.
+At `e9339babfc71`, the prompt omitted the action clause in four explicit
+legacy view cases across File and SQLite. The same cases verify the returned
+reader command, its saved source, and the prompt after one guard.

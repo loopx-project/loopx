@@ -286,7 +286,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         view = guard_run.stdout
         atomic_write_state_text(view_path, view, private=True)
         reader = bounded_read(view_path, view.encode("utf-8"))
-        reading = ("Read the saved CLI view before work. Follow the required reads and settlement plan. "
+        reading = ("Read the saved CLI view before work and follow its action, required reads and settlement instructions. "
             "Use the original capture for selection, replan or omitted details.\n```sh\n" + reader + "\n```\n"
             + CONTEXT_CAPTURE_PAGE_GUIDANCE + " ")
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
