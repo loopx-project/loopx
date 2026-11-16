@@ -353,6 +353,35 @@ its evidence references; private transport facts are not returned. The derived
 `replan-evidence-*` history reference. Changed paths cannot resolve an old
 decision reference; existing history reference identities are unchanged.
 
+When a Todo record carries a settlement identity, its effect must match the
+recorded Goal, Agent, Todo and Turn before it can count as work or support a
+claim about a later result. The same check qualifies a Todo-bound decision
+before it can consume earlier work. The settlement identity supplies the Turn
+for older rows with no outer Turn field. A supplied outer Turn must agree.
+When the outer Goal is omitted, use the Goal of the scoped history index.
+Apply the settlement owner's v0/v1 validation to a declared Todo binding.
+A v1 Todo decision keeps its Todo binding when projected. When a progress
+observation is attributed to a planned Todo through its `work_item_id`,
+verify any settlement identity against that Todo even if the outer `todo_id`
+is missing. A Todo claim paired with a different settlement binding is a
+conflict. Observations for another obligation can still describe that
+obligation's progress.
+Conflicting records, malformed identities, and identities with a missing or
+unsupported schema version remain readable in history via existing references.
+Records without a settlement identity retain their historical fallback,
+including typed observations whose append position is known from the index.
+
+Todo 记录带有结算身份时，effect 必须与记录中的 Goal、Agent、Todo 和 Turn 一致，
+才能计为工作或支持后续结果的判断。绑定 Todo 的复盘决定也须通过同一身份核对，才可
+将前一份成果标为已接续。旧记录没有外层 Turn 时，从结算身份取得 Turn。已有外层
+Turn 时两处必须一致。省略外层 Goal 时，沿用历史索引所属的 Goal。Todo 绑定遵循
+结算方现有的 v0/v1 校验，v1 Todo 决定在投影中保留 Todo 绑定。进展通过
+`work_item_id` 归给计划中的 Todo 时，即使省略外层 `todo_id`，也要用实际归属的 Todo 核对
+已有结算身份。Todo 声明与其他结算绑定并存时视为冲突。其他义务的观测仍可描述该义务的
+进展。结算身份结构错误、
+schema 缺失或不受支持，以及身份冲突的记录和既有引用均可通过历史查询。没有结算
+身份的记录保留原有兼容行为，包括可从索引确定追加顺序的 typed 进展。
+
 Details are bounded to six distinct progress fingerprints with the full recorded
 count, omitted count, source completeness and missing-order count. These are
 recorded observations, not settled-effective-Turn counts or independent trials.
