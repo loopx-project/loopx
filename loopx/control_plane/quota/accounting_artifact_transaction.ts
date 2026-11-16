@@ -513,8 +513,10 @@ export async function readQuotaSpendEventFromRun(
   run: JsonObject,
   goalId: string,
 ): Promise<JsonObject | null> {
+  const contract = contractFor("spend");
+  const indexCommit = run[contract.metadataField];
   const inline = jsonObject(run.quota_event);
-  if (inline) return inline;
+  if (inline && indexCommit === undefined) return inline;
   if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
   let targetPath: string;
   try {
@@ -550,9 +552,22 @@ export async function readQuotaSpendEventFromRun(
     throw new EffectRuntimeRequestError("quota spend JSON artifact is malformed");
   }
   const record = requiredObject(value, "quota spend JSON artifact");
+  const artifactCommit = jsonObject(record[contract.metadataField]);
+  // The writer repeats its commit identity in the index and artifact. An
+  // in-directory file can still describe a different debit for the same Goal.
+  const commitMismatch = indexCommit !== undefined && (
+    jsonObject(indexCommit) === null || artifactCommit === null ||
+    canonicalJson(indexCommit) !== canonicalJson(artifactCommit)
+  );
+  // A historical row without a commit reference can still have an explicit
+  // Run timestamp. Preserve omitted historical fields, but reject conflicts.
+  const timestampMismatch = typeof run.generated_at === "string" && run.generated_at !== "" &&
+    typeof record.generated_at === "string" && record.generated_at !== "" &&
+    run.generated_at !== record.generated_at;
   if (
-    record.classification !== contractFor("spend").classification ||
-    (record.goal_id !== undefined && record.goal_id !== goalId)
+    record.classification !== contract.classification ||
+    (record.goal_id !== undefined && record.goal_id !== goalId) ||
+    commitMismatch || timestampMismatch
   ) {
     throw new EffectRuntimeRequestError(
       "quota spend JSON artifact identity does not match its index row",

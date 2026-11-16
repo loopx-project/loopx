@@ -304,6 +304,30 @@ test("target lookup falls back to the bounded legacy JSON artifact", async (t) =
   assert.equal((event.after as Record<string, unknown>).spent_slots, 1);
 });
 
+test("void does not use another debit's artifact even at the same timestamp", async (t) => {
+  const fixture = await targetFixture(t, { inline: false, slots: 4 });
+  const record = JSON.parse(await readFile(fixture.targetJsonPath, "utf8"));
+  const commit = { schema_version: "quota_spend_commit_receipt_v0", effect_id: "original-debit",
+    request_digest: `sha256:${"a".repeat(64)}` };
+  const index = JSON.parse(fixture.indexContent);
+  const otherDebit = `${JSON.stringify({ ...record,
+    quota_spend_commit: { ...commit, effect_id: "another-debit" } })}\n`;
+  assert.equal(index.generated_at, record.generated_at);
+  await writeFile(fixture.targetJsonPath, otherDebit, "utf8");
+
+  for (const inline of [false, true]) {
+    const retainedIndex = `${JSON.stringify({ ...index, quota_spend_commit: commit,
+      ...(inline ? { quota_event: record.quota_event } : {}) })}\n`;
+    await writeFile(fixture.indexPath, retainedIndex, "utf8");
+    await assert.rejects(
+      async () => evaluateQuotaVoidCommit(await request(fixture, { execute: false })),
+      /quota spend JSON artifact identity does not match its index row/,
+    );
+    assert.equal(await readFile(fixture.indexPath, "utf8"), retainedIndex);
+  }
+  assert.equal(await readFile(fixture.targetJsonPath, "utf8"), otherDebit);
+});
+
 test("legacy index rows without goal identity use the requested goal", async (t) => {
   const fixture = await targetFixture(t, { inline: false });
   const indexRecord = JSON.parse(fixture.indexContent) as Record<string, unknown>;
