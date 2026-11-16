@@ -36,18 +36,17 @@ HEARTBEAT_NOTIFICATION_RULE_SHORT = (
     f"{OPERATOR_LANGUAGE_RULE_THIN} "
     "`user_channel.notify` controls OUTPUT only: NOTIFY=show; "
     f"{HEARTBEAT_QUIET_COMPLETION_RULE} "
-    "`heartbeat_recommendation.agent_must_attempt`/"
     "`execution_obligation.must_attempt_work`: true=work+writeback; only "
     "false permits no-op. Due/peer work is not a user prompt. Missing NOTIFY "
-    "action: user Todo unprojected; repair LoopX state projection; under "
+    "action: repair unprojected user Todo; under "
     "DONT_NOTIFY repair internally."
 )
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
     "Exact monitor settlement=no refresh/spend; auxiliary poll: continue work. "
-    "Admitted work: settlement_plan even if artifacts unchanged. "
+    "Admitted work, even if artifacts unchanged: cli_channel.settlement_plan.ordered_steps. "
     "Writeback=outcome+vision. "
-    "After committed writeback: same-turn checkpoint-context for missing vision, add "
-    "evidence; stale->reread; unchanged->truthful --vision-unchanged-reason."
+    "Committed writeback lacks vision: same-turn checkpoint-context+evidence; "
+    "stale->reread; unchanged->truthful --vision-unchanged-reason."
 )
 REWARD_MEMORY_OUTCOME_RULE = (
     "`reward_memory_recall.experiment.automatic_ingest=true`: reusable Todo outcomes "
@@ -77,13 +76,13 @@ SCHEDULER_HINT_APPLICATION_RULE = (
     "ack_needed -> ack. Without either flag, cadence is advice. No spend."
 )
 SCHEDULER_HINT_COMPACT_RULE = (
-    "Bootstrap/min interval is a floor; follow current backoff. "
-    + SCHEDULER_STOP_RULE + "Else apply_needed -> RRULE via automation_update or projected fallback_hint if unavailable, "
-    "then ack/fail; ack_needed alone -> ack; otherwise keep schedule. No spend."
+    "Bootstrap/min=floor; backoff. "
+    + SCHEDULER_STOP_RULE + "apply_needed: automation_update RRULE; fallback_hint if unavailable; ack/fail. "
+    "ack_needed: ack; else keep schedule. No spend."
 )
 SCHEDULER_HINT_THIN_RULE = (
     "Bootstrap/min=floor; backoff. "
-    + SCHEDULER_STOP_RULE + "Else apply_needed -> RRULE/fallback_hint/ack/fail; ack_needed alone -> ack; otherwise keep schedule."
+    + SCHEDULER_STOP_RULE + "Else apply_needed: RRULE/fallback_hint/ack/fail; ack_needed alone: ack; else keep schedule."
 )
 RUNTIME_CAPABILITY_PROJECTION_THIN_RULE = (
     "Observed capabilities -> `--available-capability`; never user gates."
@@ -93,7 +92,8 @@ RUNTIME_REPAIR_ROUTING_RULE = (
     "lifecycle/registry and `loopx-self-repair` for runtime/projection drift."
 )
 RUNTIME_EXECUTION_ROUTING_RULE = (
-    "Normal turns use CLI `interaction_contract`; " + RUNTIME_REPAIR_ROUTING_RULE
+    "Normal CLI: `interaction_contract`. Lifecycle/registry: `loopx-project`. "
+    "Runtime/projection drift: `loopx-self-repair`."
 )
 HOST_LOOP_SAFETY_RULE = (
     "Follow user authority and repository rules. "
