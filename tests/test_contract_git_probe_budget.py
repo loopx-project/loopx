@@ -99,7 +99,15 @@ def test_an_unanswered_ownership_question_is_not_a_negative_answer(
     assert observed["ignored"] is None
     # The first unanswered question settles it; the ignore flag of a file whose
     # ownership is unknown cannot change any caller's answer.
-    assert [arguments[2] for arguments in asked] == ["rev-parse", "ls-files"]
+    # Locate the subcommand by name: global Git options such as
+    # ``--literal-pathspecs`` sit in front of it.
+    commands = [
+        argument
+        for arguments in asked
+        for argument in arguments
+        if argument in {"rev-parse", "ls-files", "check-ignore"}
+    ]
+    assert commands == ["rev-parse", "ls-files"]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="the delayed git is a POSIX script")

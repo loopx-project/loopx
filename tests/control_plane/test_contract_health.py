@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,7 @@ from loopx.control_plane.goals.contract_health import (
 )
 from loopx.control_plane.quota.decision_summary import goal_status_health_ok
 from loopx.history import RunHistoryAudit
-from loopx.paths import display_path_bytes
+from loopx.paths import display_report_text
 from loopx.control_plane.quota.should_run import (
     _apply_missing_state_health_guidance,
 )
@@ -230,12 +229,12 @@ def test_registry_goal_problem_keeps_its_goal_owner(tmp_path: Path) -> None:
     assert goal_status_health_ok(status, goal_id=GOAL_A, fallback=False) is True
 
 
+@pytest.mark.parametrize("goal_id", ["goal-byte\udcff", "git-bytes:literal"])
 def test_selected_goal_health_matches_raw_id_before_display_projection(
-    tmp_path: Path,
+    tmp_path: Path, goal_id: str,
 ) -> None:
     """A display label must not remove the scope that selected the error."""
 
-    goal_id = "goal-byte\udcff"
     registry_path = tmp_path / ".loopx" / "registry.json"
     registry_path.parent.mkdir()
     registry_path.write_text(
@@ -281,7 +280,8 @@ def test_selected_goal_health_matches_raw_id_before_display_projection(
         json.dumps(projected, ensure_ascii=False).encode("utf-8").decode("utf-8")
     )
     projected_goal_key = next(iter(decoded["goal_errors"]))
-    assert display_path_bytes(projected_goal_key) == os.fsencode(goal_id)
+    assert projected_goal_key == display_report_text(goal_id)
+    assert decoded["error_diagnostics"][0]["goal_id"] == display_report_text(goal_id)
     assert decoded["ok"] is False
 
 

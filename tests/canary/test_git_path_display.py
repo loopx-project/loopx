@@ -573,6 +573,29 @@ def test_check_exception_payload_projects_every_path(monkeypatch: pytest.MonkeyP
 
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX filename fixture")
+def test_explicit_scan_root_keeps_git_pathspec_magic_literal(tmp_path: Path) -> None:
+    """A directory name is passed to Git as a literal path, not a pathspec."""
+
+    from loopx.contract import _tracked_scan_files
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    magic_dir = repo / ":(missing-magic)"
+    colon_dir = repo / ":"
+    magic_dir.mkdir()
+    colon_dir.mkdir()
+    magic_file = magic_dir / "leak.md"
+    colon_file = colon_dir / "clean.md"
+    _write_raw_name(str(magic_file), "ticket t-20260828123456-example\n")
+    _write_raw_name(str(colon_file), "clean\n")
+    _git(repo, "--literal-pathspecs", "add", "--", str(magic_dir), str(colon_dir))
+    _git(repo, "commit", "-m", "tracked pathspec-like directories")
+
+    assert _tracked_scan_files(magic_dir) == [magic_file.resolve()]
+    assert _tracked_scan_files(colon_dir) == [colon_file.resolve()]
+
+
 @pytest.mark.skipif(
     os.name != "posix", reason="non-UTF-8 Git paths are POSIX-only"
 )
@@ -590,7 +613,9 @@ def test_check_json_exception_under_byte_root_is_decodable(
     loopx_config = root / ".loopx"
     loopx_config.mkdir()
     registry = loopx_config / "registry.json"
-    registry.write_text(json.dumps({"goals": {}}), encoding="utf-8")
+    registry.write_text(
+        json.dumps({"goals": {"invalid": True}}), encoding="utf-8"
+    )
     runtime_root = loopx_config / "runtime"
     runtime_root.mkdir()
 

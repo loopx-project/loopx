@@ -518,7 +518,10 @@ def _git_probe(path: Path) -> dict[str, Any]:
         answer = _git_query(*arguments)
         return None if answer is None else answer.returncode == 0
 
-    tracked = _ask("-C", str(repo_root), "ls-files", "--error-unmatch", "--", rel_path)
+    tracked = _ask(
+        "--literal-pathspecs", "-C", str(repo_root),
+        "ls-files", "--error-unmatch", "--", rel_path,
+    )
     if tracked is None:
         # Ownership is already unproven, and no caller can act on the ignore
         # flag of a file whose ownership is unknown; the second read is wasted.
@@ -528,7 +531,10 @@ def _git_probe(path: Path) -> dict[str, Any]:
             "tracked": None,
             "ignored": None,
         }
-    ignored = _ask("-C", str(repo_root), "check-ignore", "-q", "--", rel_path)
+    ignored = _ask(
+        "--literal-pathspecs", "-C", str(repo_root),
+        "check-ignore", "-q", "--", rel_path,
+    )
     return {
         "inside_worktree": True,
         "root": str(repo_root),
@@ -1121,7 +1127,11 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
     if not rel_root:
         rel_root = "."
 
-    tracked = _git_query_bytes("-C", str(repo_root), "ls-files", "-z", "--", rel_root)
+    # A selected directory is a literal Git path, not a pathspec. Names such
+    # as ``:(missing-magic)`` or ``:`` otherwise change which files Git reads.
+    tracked = _git_query_bytes(
+        "--literal-pathspecs", "-C", str(repo_root), "ls-files", "-z", "--", rel_root
+    )
     if tracked is None:
         raise GitProbeUnavailable("git did not answer the tracked-file enumeration")
     if tracked.returncode != 0:
@@ -1792,7 +1802,7 @@ def display_report_value(value: Any) -> Any:
         return [display_report_value(item) for item in value]
     if isinstance(value, dict):
         return {
-            (display_path_text(key) if isinstance(key, str) else key):
+            (display_report_text(key) if isinstance(key, str) else key):
                 display_report_value(item)
             for key, item in value.items()
         }
