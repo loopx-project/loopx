@@ -19,8 +19,19 @@ export function corePath(path: string): string | null {
   return null;
 }
 
-const DROP_REQUEST = new Set(['host', 'authorization', 'cookie', 'connection', 'content-length', 'origin', 'referer']);
-const DROP_RESPONSE = new Set(['connection', 'transfer-encoding', 'keep-alive']);
+/** Hop-by-hop headers (RFC 9110 §7.6.1) describe one connection and never cross the proxy, either way. */
+const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authenticate', 'proxy-authorization'];
+// The request body is re-sent with its own length, so the incoming framing (chunked or not) is dropped too.
+const DROP_REQUEST = new Set([...HOP_BY_HOP, 'host', 'authorization', 'cookie', 'content-length', 'origin', 'referer']);
+const DROP_RESPONSE = new Set(HOP_BY_HOP);
+
+/** The headers that may be forwarded: none in `drop`, and none the sender named in its Connection header. */
+function forwardable(headers: IncomingMessage['headers'], drop: Set<string>): Record<string, string | string[]> {
+  const named = new Set(String(headers.connection ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean));
+  const out: Record<string, string | string[]> = {};
+  for (const [k, v] of Object.entries(headers)) if (v !== undefined && !drop.has(k) && !named.has(k)) out[k] = v;
+  return out;
+}
 
 export function coreUrl(env: NodeJS.ProcessEnv = process.env): URL {
   return new URL(env.LOOCHAT_LOOPX_CORE_URL || CORE_URL_DEFAULT);
@@ -29,8 +40,7 @@ export function coreUrl(env: NodeJS.ProcessEnv = process.env): URL {
 /** Streams the request to the core and the answer back, so event streams (SSE) keep flowing. */
 export function proxyToCore(req: IncomingMessage, res: ServerResponse, path: string, search: string, core = coreUrl()): Promise<void> {
   return new Promise<void>((resolve) => {
-    const headers: Record<string, string | string[]> = {};
-    for (const [k, v] of Object.entries(req.headers)) if (v !== undefined && !DROP_REQUEST.has(k)) headers[k] = v;
+    const headers = forwardable(req.headers, DROP_REQUEST);
     // The core is Python's http.server, which does not read a chunked request body. The body is buffered
     // (these are small JSON requests) and sent with its length; only the answer is streamed.
     const chunks: Buffer[] = [];
@@ -42,9 +52,7 @@ export function proxyToCore(req: IncomingMessage, res: ServerResponse, path: str
       { hostname: core.hostname, port: core.port || 80, method: req.method, path: path + search,
         headers: { ...headers, host: core.host, ...(payload.length || (req.method !== 'GET' && req.method !== 'HEAD') ? { 'content-length': String(payload.length) } : {}) } },
       (answer) => {
-        const out: Record<string, string | string[]> = {};
-        for (const [k, v] of Object.entries(answer.headers)) if (v !== undefined && !DROP_RESPONSE.has(k)) out[k] = v;
-        res.writeHead(answer.statusCode ?? 502, out);
+        res.writeHead(answer.statusCode ?? 502, forwardable(answer.headers, DROP_RESPONSE));
         answer.pipe(res);
         answer.on('end', resolve);
         answer.on('error', () => { res.destroy(); resolve(); });
