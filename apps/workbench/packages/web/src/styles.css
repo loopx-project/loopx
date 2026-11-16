@@ -15350,15 +15350,15 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .sidebar-goals-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 4px;
   width: 100%;
-  padding: 0 10px;
-  margin-bottom: 2px;
+  margin: 8px 10px 2px;
+  padding: 0;
   border: 0;
   background: transparent;
-  font-size: 12px;
-  font-weight: 600;
   color: var(--faint);
+  font-size: 11px;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -15520,18 +15520,20 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .goals-dot.is-stopped { background: transparent; border: 1.5px solid var(--faint); }
 
 .goals-row-title {
-  flex: 1;
+  /* The name comes first: it takes the room, and only past that does it shorten. */
+  flex: 2 1 55%;
   min-width: 0;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 .goals-row.is-child .goals-row-title { font-size: 13px; color: var(--muted); }
 .goals-row-badge {
+  display: inline-block;
+  vertical-align: 2px;
+  margin-left: 6px;
   flex: none;
   min-width: 16px;
   height: 16px;
@@ -15547,7 +15549,7 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   display: flex;
   align-items: baseline;
   gap: 6px;
-  flex: 2;
+  flex: 1 1 0;
   min-width: 0;
   color: var(--muted);
   font-size: 12.5px;
@@ -15569,11 +15571,13 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   .goals-row-recent { width: auto; }
 }
 
-/* The standing line while the login came through a link: quiet, one tap from the fix. */
+/* The standing line while the login came through a link: pinned above the sidebar's buttons, on
+   the foot's own fade, so a long session list cannot scroll it away. Quiet; a tap from the fix. */
 .link-login-notice {
-  display: block;
-  width: calc(100% - 16px);
-  margin: 6px 8px 8px;
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(54px + var(--safe-bottom));
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius, 10px);

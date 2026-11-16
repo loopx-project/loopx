@@ -2970,6 +2970,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           desktop; the window's band shows around it. Overlays stay outside, over the window. */}
       <div className="shell">
       <aside className="sidebar">
+        {/* footerNotice: while the login came through a link, its running-out is standing
+            business — pinned at the sidebar's foot above the buttons, a tap from the fix. */}
         <Sidebar
           personalDirectory={personal?.directory}
           storagePrefix={showcase ? 'calli.showcase.sidebar' : undefined}
@@ -3025,10 +3027,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           schedulesActive={onSchedules}
           extensionNav={extensionNav}
           notice={demo && compact ? showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact onConnect={askToConnect} /> : undefined}
+          footerNotice={authKind?.kind === 'link' && !showcase ? <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} /> : undefined}
         />
-        {/* While the login came through a link, its running-out is standing business: one quiet
-            line at the sidebar's foot, a tap away from where the permanent token goes. */}
-        {authKind?.kind === 'link' && !showcase ? <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} /> : null}
       </aside>
       {!compact && !sidebarHidden && (
         <div

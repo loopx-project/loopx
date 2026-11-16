@@ -79,6 +79,8 @@ interface Props {
   onOpenGoalTasks?: (goalId: string) => void;
   /** The whole goal list on its own page. */
   onOpenAllGoals?: () => void;
+  /** Pinned at the sidebar's foot, above the buttons: the login-link notice while a link is in use. */
+  footerNotice?: ReactNode;
   /** Opens the machines page, listed behind the nav's "more" button unless it is on screen. */
   onOpenMachines?: () => void;
   machinesActive?: boolean;
@@ -179,6 +181,7 @@ export function Sidebar({
   onOpenGoal,
   onOpenGoalTasks,
   onOpenAllGoals,
+  footerNotice,
   onOpenMachines,
   machinesActive = false,
   onOpenSchedules,
@@ -797,6 +800,9 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-float">
+        {/* Standing business that must not scroll away with the sessions: the login-link notice.
+            It sits above the buttons, on the float's own fade. */}
+        {footerNotice}
         {compact && !down && (
           <button className="new-thread" onClick={onNew}>
             <IconEdit size={19} /> {t('sidebar.newThread')}

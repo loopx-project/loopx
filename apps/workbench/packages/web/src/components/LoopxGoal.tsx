@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import loopxIcon from '../assets/loo-icon-blue.svg';
+import loopxIconLight from '../assets/loo-icon-paper.svg';
+import loopxIconDark from '../assets/loo-icon-dark.svg';
 import '../loopx/loopx.css';
 import { applyGoal, defaultGoalPermission, fetchGoalBar, LoopxError, permissionCopy, previewGoal, statusWord,
   type GoalAgentCapability, type GoalBarRead, type GoalBinding, type GoalPermission, type GoalPreview } from '../loopx/launch';
@@ -13,7 +14,9 @@ export function LoopxToggle({ active, onToggle, disabledReason }: { active: bool
   const title = disabledReason ?? (active ? t('loopx.goal.cancelMode') : t('loopx.goal.handOver'));
   return (
     <button type="button" className={`tool-btn composer-loopx${active ? ' active' : ''}`} disabled={Boolean(disabledReason)} onClick={onToggle} title={title} aria-label={title} aria-pressed={active}>
-      <img src={loopxIcon} alt="" width={18} height={18} />
+      {/* The mark follows the theme's own ink, like every other icon; active wears it in white on black. */}
+      <img className="brand-icon loo-light" src={loopxIconLight} alt="" width={18} height={18} />
+      <img className="brand-icon loo-dark" src={loopxIconDark} alt="" width={18} height={18} />
       {active && <span className="composer-loopx-label">LoopX</span>}
     </button>
   );
@@ -66,7 +69,8 @@ export function GoalBar({ token, threadId, binding, running, title }: { token: s
   const open = (g: { open: number; total: number } | undefined) => g ? `${g.open}/${g.total}` : '—';
   return (
     <div className={`goal-bar${read?.freshness === 'unavailable' ? ' stale' : ''}`} role="status" data-testid="goal-bar">
-      <img src={loopxIcon} alt="" width={16} height={16} />
+      <img className="brand-icon loo-light" src={loopxIconLight} alt="" width={16} height={16} />
+      <img className="brand-icon loo-dark" src={loopxIconDark} alt="" width={16} height={16} />
       <span className="goal-bar-title" title={binding.goalId}>{state && state.title !== binding.goalId ? state.title : title || binding.goalId}</span>
       {state ? <span className="goal-bar-status">{statusWord(state.status)}</span>
         : <span className="goal-bar-status warn">{read ? t('loopx.goal.stateUnavailable') : t('loopx.goal.reading')}</span>}
