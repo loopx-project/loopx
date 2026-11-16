@@ -73,32 +73,26 @@ def assess_failed_turn_retry_request(
             ValueError(message),
         )
 
-    if "host_recovery" not in journal:
-        return dict(request), None, None
-    recovery_value = journal.get("host_recovery")
-    if not isinstance(recovery_value, Mapping):
-        return rejected(
-            "host_recovery_shape_mismatch",
-            "failed-Turn host recovery shape mismatch",
-        )
-    recovery = dict(recovery_value)
-    if recovery.get("schema_version") != HOST_RECOVERY_SCHEMA_VERSION:
-        return rejected(
-            "host_recovery_schema_unsupported",
-            "failed-Turn host recovery has an unsupported schema",
-        )
-    if recovery.get("kind") not in HOST_RECOVERY_KINDS:
-        return rejected(
-            "host_recovery_kind_unsupported",
-            "failed-Turn host recovery has an unsupported kind",
-        )
     receipt_value = journal.get("receipt")
     receipt = dict(receipt_value) if isinstance(receipt_value, Mapping) else {}
-    if receipt.get("failed_phase") != "host_execute":
-        return rejected(
-            "host_failure_phase_mismatch",
-            "failed-Turn session recovery requires a host execution failure",
-        )
+    revalidation = journal.get("result_revalidation")
+    original_binding = journal.get("checkpoint_host_binding")
+    retained_session = (isinstance(revalidation, Mapping) and bool(revalidation)
+        and revalidation.get("phase") != "terminal_closeout"
+        and isinstance(original_binding, Mapping) and bool(original_binding))
+    if "host_recovery" in journal:
+        recovery = journal["host_recovery"]
+        if not isinstance(recovery, Mapping):
+            return rejected("host_recovery_shape_mismatch", "failed-Turn host recovery shape mismatch")
+        if recovery.get("schema_version") != HOST_RECOVERY_SCHEMA_VERSION:
+            return rejected("host_recovery_schema_unsupported", "failed-Turn host recovery has an unsupported schema")
+        if recovery.get("kind") not in HOST_RECOVERY_KINDS:
+            return rejected("host_recovery_kind_unsupported", "failed-Turn host recovery has an unsupported kind")
+        if receipt.get("failed_phase") != "host_execute":
+            return rejected("host_failure_phase_mismatch", "failed-Turn session recovery requires a host execution failure")
+    elif not (retained_session and journal.get("validation_stage") == "result_freshness"
+              and receipt.get("failed_phase") == "validation"):
+        return dict(request), None, None
     if session_binding_resolver is None:
         return rejected(
             "binding_resolver_unavailable",
@@ -123,6 +117,8 @@ def assess_failed_turn_retry_request(
             "binding_resolution_failed",
             "failed-Turn recovery session binding could not be resolved",
         )
+    if retained_session and session_binding != original_binding:
+        return rejected("session_binding_identity_mismatch", "retained result requires its original Host Session")
     try:
         resolved = reconcile_failed_turn_session_request(
             request,

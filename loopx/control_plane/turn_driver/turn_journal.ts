@@ -415,7 +415,12 @@ function recoveryDecision(
     }
   }
 
-  if (journalStatus === "failed" && Object.hasOwn(journal, "host_recovery")) {
+  const revalidation = asObject(journal.result_revalidation);
+  const retainedSession = resumeFrom === "host_execute" && journal.validation_stage === "result_freshness" &&
+    asObject(journal.receipt).failed_phase === "validation" &&
+    Object.keys(revalidation).length > 0 && revalidation.phase !== "terminal_closeout" &&
+    Object.keys(asObject(journal.checkpoint_host_binding)).length > 0;
+  if (journalStatus === "failed" && (Object.hasOwn(journal, "host_recovery") || retainedSession)) {
     const sessionCheck = request.session_recovery_check;
     const normalizedCheck: TurnRecoveryCheck = sessionCheck?.kind === "host_session_binding"
       ? {
