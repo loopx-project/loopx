@@ -521,7 +521,7 @@ class TurnResultWork:
 
     def prepare_request(self, journal: dict[str, Any], request: dict[str, Any], *,
                         post_result_checkpoint: Callable[[], bool] | None,
-                        persist_journal: Callable[[Mapping[str, Any]], None]) -> bool:
+                        persist_journal: Callable[[Mapping[str, Any]], None] | None) -> bool:
         """Persist the original work basis before dispatch or exact cold recovery."""
         original_result_committed = (isinstance(journal.get("result_work_context"), Mapping) and (
                 ("durable_writeback" in journal.get("completed_phases", []) and
@@ -540,8 +540,10 @@ class TurnResultWork:
                 if revalidation is not None:
                     request["result_revalidation"] = revalidation
                     revalidation["reread_required"] = False
-                # Durable work input precedes dispatch, including cold retries.
-                persist_journal(journal)
+                # With deferred persistence, the next Host-attempt write
+                # records this input before dispatch.
+                if persist_journal is not None:
+                    persist_journal(journal)
         return original_result_committed
 
     def read(self, *, reread: bool = False) -> dict[str, Any] | None:

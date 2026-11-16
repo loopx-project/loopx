@@ -180,27 +180,31 @@ def prepare_terminal_host_recovery(journal: Mapping[str, Any] | None, request: d
                                    result_work: TurnResultWork | None,
                                    session_binding_resolver: SessionBindingResolver | None) -> tuple[dict[str, Any], bool]:
     """Restore only unfinished terminal validation and its original request."""
-    validation_reinvokes_host = _validation_reinvokes_host(journal)
-    terminal_retry = (journal or {}).get("result_revalidation") or {}
+    if journal is None or (journal.get("result_revalidation") or {}).get("phase") != "terminal_closeout":
+        return request, False
+    from ..quota.turn_envelope import turn_host_lineage
+
+    terminal_retry = journal["result_revalidation"]
     terminal_view = terminal_retry.get("validation", {})
-    if terminal_retry.get("phase") == "terminal_closeout" and terminal_view.get("status") == "failed":
+    missing_result = "typed_result" not in terminal_view.get("completed_phases", [])
+    if terminal_view.get("status") == "failed" or (
+        terminal_view.get("status") == "in_progress" and missing_result
+    ):
         assessment = assess_existing_turn_recovery({"schema_version": journal["schema_version"],
             "goal_id": goal_id, "turn_key": turn_key, "plan": journal["plan"], **terminal_view}, request,
-            goal_id=goal_id, agent_id=str(plan["turn_envelope"]["agent_id"]), turn_key=turn_key,
+            goal_id=goal_id, agent_id=turn_host_lineage(plan)["agent_id"], turn_key=turn_key,
             retry_failed=True, session_binding_resolver=session_binding_resolver)
         request = require_turn_recovery_continuation(assessment)
-    terminal_work_changed = (result_work is not None and terminal_retry.get("phase") == "terminal_closeout"
-        and terminal_retry.get("validation", {}).get("work_context") != result_work.read())
-    needs_host = (
-        validation_reinvokes_host
-        or journal is None
-        or "typed_result" not in list(journal.get("completed_phases") or [])
-        or terminal_work_changed
-        or isinstance(journal.get("result_revalidation"), dict) and
-            journal["result_revalidation"].get("phase") == "terminal_closeout" and
-            ("typed_result" not in journal["result_revalidation"].get("validation", {}).get("completed_phases", []) or
-             journal["result_revalidation"].get("validation", {}).get("status") == "failed")
-    )
+    needs_host = missing_result or terminal_view.get("status") == "failed"
+    if not needs_host and result_work is not None:
+        current = result_work.read()
+        needs_host = (current != terminal_view.get("work_context") or current == terminal_retry.get("original_context")
+                      or terminal_retry.get("reread_required") is True)
+    if needs_host and (session_binding_resolver is not None or "checkpoint_host_binding" in journal):
+        request, _, error = assess_failed_turn_retry_request(request, journal,
+            session_binding_resolver=session_binding_resolver, require_retained_session=True)
+        if error is not None:
+            raise error
     return request, needs_host
 
 
@@ -216,7 +220,7 @@ def _validation_reinvokes_host(journal: Mapping[str, Any] | None) -> bool:
 
 
 def reset_failed_turn_for_retry(journal: dict[str, Any] | None,
-                                persist_journal: Callable[[Mapping[str, Any]], None]) -> None:
+                                persist_journal: Callable[[Mapping[str, Any]], None] | None) -> None:
     """Reset failed transport phases while retaining committed result facts."""
     from .transaction import TRANSACTION_PHASES
     if journal and journal.get("status") == "failed":
@@ -241,7 +245,8 @@ def reset_failed_turn_for_retry(journal: dict[str, Any] | None,
         journal.pop("host_recovery", None)
         journal.pop("host_failure", None)
         journal["status"] = "in_progress"
-        persist_journal(journal)
+        if persist_journal is not None:
+            persist_journal(journal)
 
 
 def recover_existing_turn(plan: Mapping[str, Any], journal: Mapping[str, Any],

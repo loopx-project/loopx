@@ -1034,6 +1034,7 @@ def execute_turn_run_once(
                 session = dict(request["session"])
                 session["action"] = "resume"
                 session["context_policy"] = {**session.get("context_policy", {}), "mode": "resume"}
+                session["session_sha256"] = binding["session_sha256"]
                 request["session"] = session
             # Built-in hosts hold their own launch lifetime at actual spawn.
             lifetime: AbstractContextManager[None] = nullcontext()

@@ -430,12 +430,37 @@ def test_damaged_work_input_blocks_default_dispatch_and_preserves_admission(prov
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("recovery_window", ["normal", "receipt_replaced", "input_persisted", "commit_response_lost", "commit_receipt_deleted", "commit_receipt_damaged", "commit_race", "binding_race", "terminal_commit_race", "terminal_host_cold", "terminal_validation_cold", "terminal_host_replaced", "terminal_validation_replaced", "terminal_commit_response_lost", "terminal_receipt_deleted", "terminal_receipt_damaged", "terminal_validation_failed", "terminal_stop"])
+@pytest.mark.parametrize("recovery_window", [
+    "normal",
+    "receipt_replaced",
+    "input_persisted",
+    "before_retry_dispatch",
+    "commit_response_lost",
+    "commit_receipt_deleted",
+    "commit_receipt_damaged",
+    "commit_race",
+    "binding_race",
+    "terminal_commit_race",
+    "terminal_host_cold",
+    "terminal_validation_cold",
+    "terminal_host_replaced",
+    "terminal_validation_replaced",
+    "terminal_commit_response_lost",
+    "terminal_receipt_deleted",
+    "terminal_receipt_damaged",
+    "terminal_validation_failed",
+    "terminal_codex_validation_failed",
+    "terminal_launch_rejected",
+    "terminal_stop",
+])
 def test_historical_result_only_turn_retains_candidate_and_revalidates(provider, recovery_window, tmp_path, monkeypatch):
+    from tests.control_plane.test_quota_settlement_cli import REPO_ROOT
     from tests.test_loopx_turn_driver import _write_live_fixture
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     terminal_race = recovery_window.startswith("terminal_")
+    codex = recovery_window == "terminal_codex_validation_failed"
+    fail_validator_once = recovery_window in {"terminal_validation_failed", "terminal_codex_validation_failed"}
     project, runtime, registry = _write_live_fixture(tmp_path, provider=provider,
         **({"todo_metadata_extra": "no_followup=true"} if terminal_race else {}))
     goal, agent = "loopx-turn-fixture", "codex-fixture"
@@ -462,13 +487,38 @@ json.dump({{"schema_version":"loopx_turn_result_v0", "turn_key":r["turn_key"],
     "vision_unchanged_reason":"The valid candidate satisfies the current requirements.", "summary":"Candidate verified."}}, sys.stdout)
 '''
     verifier = 'import json,pathlib,sys; r=json.load(sys.stdin); assert "delivery_result_context" in r; assert pathlib.Path("candidate.txt").read_text()=="valid candidate"'
-    if recovery_window == "terminal_validation_failed":
+    if fail_validator_once:
         verifier += '\nif pathlib.Path("revalidation_started").exists() and not pathlib.Path("failed_validation_once").exists():\n    pathlib.Path("failed_validation_once").touch()\n    sys.exit(1)\n'
     host_path, validator_path = project / "host.py", project / "validator.py"
-    host_path.write_text(host, encoding="utf-8")
+    if codex:
+        from tests.control_plane.host_process_fixture import write_python_host_fixture
+
+        host = host.replace(
+            "r = json.load(sys.stdin)",
+            'r = json.loads(sys.stdin.read().split("Turn request:\\n", 1)[1])\n'
+            'session_id = "original-terminal-session"\n'
+            'if r.get("result_revalidation"):\n'
+            '    assert r["session"]["action"] == "resume" and "resume" in sys.argv\n'
+            '    assert session_id in sys.argv\n'
+            'else:\n'
+            '    assert "resume" not in sys.argv\n'
+            'print(json.dumps({"type": "thread.started", "thread_id": session_id}), flush=True)\n'
+            'output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).open("w", encoding="utf-8")',
+        ).replace("sys.stdout)", "output)").replace(
+            '"classification":"retained_candidate_verified",',
+            '"work_evidence":["artifact:candidate.txt"], "validation_evidence":["check:marker-readback"], '
+            '"classification":"retained_candidate_verified",',
+        )
+        executable = write_python_host_fixture(project / "fixture-codex", "#!/usr/bin/env python3\n" + host)
+        host_args = ("--host", "codex-cli", "--codex-bin", str(executable))
+    else:
+        host_path.write_text(host, encoding="utf-8")
+        host_args = ("--host", "generic-cli",
+                     "--host-adapter-request-schema", "loopx_turn_host_request_v1",
+                     "--host-adapter-command-json", json.dumps([sys.executable, str(host_path)]))
     validator_path.write_text(verifier, encoding="utf-8")
-    args = ("turn", "run-once", "--host", "generic-cli", "--goal-id", goal, "--agent-id", agent,
-            "--project", str(project), "--host-adapter-command-json", json.dumps([sys.executable, str(host_path)]),
+    args = ("turn", "run-once", *host_args, "--goal-id", goal, "--agent-id", agent,
+            "--project", str(project),
             "--validation-command-json", json.dumps([sys.executable, str(validator_path)]),
             "--no-global-sync", "--execute")
     # Gap1 admissions already in flight keep result-only semantics after the
@@ -483,9 +533,6 @@ json.dump({{"schema_version":"loopx_turn_result_v0", "turn_key":r["turn_key"],
             turn_instance_id=preview['resume_turn_key']), semantic_replan_guard_scoped=True,
         semantic_replan_obligation_id=None, result_freshness='turn_result_freshness_required_v1')
     if recovery_window in {"commit_race", "binding_race"} or terminal_race:
-        import os
-        import subprocess
-        from tests.control_plane.test_quota_settlement_cli import REPO_ROOT
         wrapper = project / "change_before_completion.py"
         mutation = f'''import pathlib
 import loopx.cli_commands.turn_run_once as turn
@@ -521,6 +568,46 @@ raise SystemExit(main())
     assert failed["result_revalidation"]["candidate"]["summary"] == "Candidate verified."
     assert first["effects"]["state_written"] is terminal_race and first["effects"]["quota_spent"] is terminal_race
     assert not failed.get("effect_attempts"), "The rejected commit must release its prepared effect"
+    if recovery_window in {"before_retry_dispatch", "terminal_launch_rejected"}:
+        wrapper = project / "interrupt_revalidation.py"
+        if recovery_window == "before_retry_dispatch":
+            injection = """import os
+from loopx.control_plane.goals.checkpoint_context_io import TurnResultWork
+original = TurnResultWork.prepare_request
+def interrupt(self, *args, **kwargs):
+    original(self, *args, **kwargs)
+    os._exit(73)
+TurnResultWork.prepare_request = interrupt
+"""
+        else:
+            injection = """from contextlib import contextmanager
+from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission, FirstPartyHostRuntimeRejected
+original = FirstPartyHostGoalAdmission.launch_lifetime
+@contextmanager
+def reject(self, *, operation):
+    if operation == "turn_external_host_launch":
+        raise FirstPartyHostRuntimeRejected("current_turn_work_changed")
+    with original(self, operation=operation) as admission:
+        yield admission
+FirstPartyHostGoalAdmission.launch_lifetime = reject
+"""
+        wrapper.write_text(injection + "\nfrom loopx.cli import main\nraise SystemExit(main())\n", encoding="utf-8")
+        interrupted = subprocess.run([sys.executable, str(wrapper), "--registry", str(registry),
+            "--runtime-root", str(runtime), "--format", "json", *args, "--resume-turn-key",
+            failed["turn_key"], "--retry-failed-turn"], cwd=project, capture_output=True, text=True,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT)})
+        assert not (project / "revalidation_started").exists(), interrupted.stdout + interrupted.stderr
+        durable = json.loads(journal_path.read_text(encoding="utf-8"))
+        assert durable["completed_phases"] == failed["completed_phases"]
+        if recovery_window == "terminal_launch_rejected":
+            assert interrupted.returncode == 1, interrupted.stdout + interrupted.stderr
+            assert not json.loads(interrupted.stdout)["effects"]["host_invoked"]
+            assert durable["quota_spend"] == failed["quota_spend"]
+            runs = (runtime / "goals" / goal / "runs/index.jsonl").read_text(encoding="utf-8").splitlines()
+            assert sum(json.loads(run).get("classification") == "quota_slot_spent" for run in runs) == 1
+            return
+        assert interrupted.returncode == 73, interrupted.stdout + interrupted.stderr
+        assert durable["status"] == "failed" and durable["host_attempt_count"] == failed["host_attempt_count"]
     if recovery_window in {"receipt_replaced", "input_persisted"}:
         from loopx.control_plane.goals.checkpoint_context_io import result_work_context
         from loopx.control_plane.quota.settlement import SettlementIdentity
@@ -534,9 +621,6 @@ raise SystemExit(main())
             failed["completed_phases"] = []
             journal_path.write_text(json.dumps(failed), encoding="utf-8")
     if recovery_window in {"terminal_host_cold", "terminal_validation_cold", "terminal_host_replaced", "terminal_validation_replaced"}:
-        import os
-        import subprocess
-        from tests.control_plane.test_quota_settlement_cli import REPO_ROOT
         wrapper = project / "lose_revalidation_checkpoint.py"
         phase_count = 2 if recovery_window in {"terminal_host_cold", "terminal_host_replaced"} else 3
         wrapper.write_text(f'''import os
@@ -564,9 +648,6 @@ raise SystemExit(main())
             result_work_context(registry_path=registry, runtime_root=runtime,
                 identity=SettlementIdentity.from_runtime_payload(failed["result_work_context"]["settlement_identity"]), reread=True)
     if recovery_window in {"commit_response_lost", "terminal_commit_response_lost", "commit_receipt_deleted", "commit_receipt_damaged", "terminal_receipt_deleted", "terminal_receipt_damaged"}:
-        import os
-        import subprocess
-        from tests.control_plane.test_quota_settlement_cli import REPO_ROOT
         wrapper = project / "lose_completion_response.py"
         wrapper.write_text('''import os
 import loopx.cli_commands.turn_run_once as turn
@@ -613,7 +694,7 @@ raise SystemExit(main())
         assert _spend_run_count(runtime) == 0
         assert json.loads(journal_path.read_text(encoding="utf-8")) == failed
         return
-    if recovery_window in {"terminal_validation_failed", "terminal_stop"}:
+    if fail_validator_once or recovery_window == "terminal_stop":
         assert rc == 1 and resumed["status"] == "failed", resumed
         pending = json.loads(journal_path.read_text(encoding="utf-8"))
         assert pending["completed_phases"] == failed["completed_phases"]
@@ -630,7 +711,7 @@ raise SystemExit(main())
     assert rc == 0 and resumed["status"] == "committed", resumed
     committed = json.loads(journal_path.read_text(encoding="utf-8"))
     assert committed["turn_key"] == failed["turn_key"]
-    assert committed["host_attempt_count"] == (3 if recovery_window in {"terminal_validation_failed", "terminal_host_replaced", "terminal_validation_replaced"} else 2)
+    assert committed["host_attempt_count"] == (3 if fail_validator_once or recovery_window in {"terminal_host_replaced", "terminal_validation_replaced"} else 2)
     if terminal_race:
         assert {key: value for key, value in committed["writeback"].items() if key != "completion"} == failed["writeback"]
         assert committed["quota_spend"] == failed["quota_spend"]

@@ -1295,6 +1295,7 @@ def _terminal_result_validation_stage(
     argv: Sequence[str] | None, project: Path, timeout_seconds: float | None,
     task_validator: TaskValidator | None,
     confirm_start: Callable[[], None] | None, runtime_root: Path, goal_id: str,
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Revalidate an uncommitted terminal result while retaining settled phases."""
     retry = journal["result_revalidation"]
@@ -1330,7 +1331,8 @@ def _terminal_result_validation_stage(
     result, phases, terminal = _host_result_stage(plan, request, host_runner=host_runner,
         argv=argv, completion_lifecycle_configured=True, project=project,
         timeout_seconds=timeout_seconds, journal=view, persist_journal=persist_view,
-        effects=effects, confirm_start=confirm_start, usage_runtime_root=runtime_root, usage_goal_id=goal_id)
+        effects=effects, confirm_start=confirm_start, usage_runtime_root=runtime_root, usage_goal_id=goal_id,
+        host_launch_guard=host_launch_guard)
     if terminal is not None:
         return None, failed(str(view.get("reason") or "Terminal result revalidation failed"))
     assert result is not None
@@ -1893,7 +1895,12 @@ def run_loopx_turn_once(
             )
             persist_journal(journal)
 
-        reset_failed_turn_for_retry(journal, persist_journal)
+        # Keep the known failure durable until we publish the new Host attempt.
+        # A separate in-progress snapshot would make the old attempt ambiguous.
+        revalidating_result = (validation_reinvokes_host and journal is not None
+                               and journal.get("validation_stage") == "result_freshness")
+        persist_pre_dispatch = None if revalidating_result else persist_journal
+        reset_failed_turn_for_retry(journal, persist_pre_dispatch)
         reserved_start = admission is not None and admission.get("reserved") is True
         if journal is None or reserved_start:
             journal = journal or {
@@ -1910,10 +1917,11 @@ def run_loopx_turn_once(
                 journal["admission"] = admission
             # The accepted reservation belongs to the initial snapshot. Keep
             # the later durable Host-attempt checkpoint and confirmation separate.
-            persist_journal(journal)
+            if persist_pre_dispatch is not None:
+                persist_pre_dispatch(journal)
 
         original_result_committed = (result_work.prepare_request(journal, request,
-            post_result_checkpoint=post_result_checkpoint, persist_journal=persist_journal)
+            post_result_checkpoint=post_result_checkpoint, persist_journal=persist_pre_dispatch)
             if result_work is not None else False)
 
         effects = dict(empty_effects)
@@ -1937,7 +1945,7 @@ def run_loopx_turn_once(
                 persist_journal=persist_journal, effects=effects, host_runner=host_runner, argv=argv,
                 project=project, timeout_seconds=timeout_seconds, task_validator=task_validator,
                 confirm_start=confirm_start if admission is not None and admission.get("reserved") is True else None,
-                runtime_root=runtime_root, goal_id=goal_id)
+                runtime_root=runtime_root, goal_id=goal_id, host_launch_guard=host_launch_guard)
             if terminal is not None:
                 return finish_recovery(terminal)
 
