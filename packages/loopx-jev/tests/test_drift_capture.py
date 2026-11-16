@@ -775,6 +775,21 @@ def test_hard_link_to_a_tracked_file_is_not_its_alias(icase_repo):
     assert after["index_digest"] == before["index_digest"]
 
 
+def test_case_alias_of_a_hard_link_ignores_the_other_entry(icase_repo):
+    repo = icase_repo
+    _stage(repo, "record.txt", b"tracked\n")
+    try:
+        os.link(repo / "record.txt", repo / "selected.txt")
+    except OSError:
+        pytest.skip("hard links are unavailable on this volume")
+    # SELECTED.TXT opens the untracked selected.txt entry, not the tracked record.txt.
+    before = drift_capture.stable_capture(repo, ["SELECTED.TXT"])
+    _index_blob_change(repo, "record.txt", b"staged\n")
+    after = drift_capture.stable_capture(repo, ["SELECTED.TXT"])
+    assert after["content_digest"] == before["content_digest"]
+    assert after["index_digest"] == before["index_digest"]
+
+
 def test_posix_keeps_nofollow_open(repo, monkeypatch):
     (repo / "file.txt").write_bytes(b"original\n")
     platform = SimpleNamespace(**vars(os))

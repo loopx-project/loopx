@@ -244,6 +244,23 @@ def _listed(target: Path, leaf: str) -> bool:
         return False
 
 
+def _entry_leaves(target: Path) -> set[str] | None:
+    """Spell the directory entry that target opens; None when hard links hide which one."""
+    try:
+        names = os.listdir(target.parent)
+    except OSError:
+        return None
+    if target.name in names:
+        return {target.name}
+    same = [name for name in names if _same_file(target.parent / name, target)]
+    if len(same) > 1:
+        # Several entries share the file: only the caseless name tells them apart.
+        same = [name for name in same if _caseless(name) == _caseless(target.name)]
+        if len(same) != 1:
+            return None
+    return set(same)
+
+
 def _disk_parent(repo: Path, name: str) -> str:
     """Spell the existing leading directories of name as their parents list them."""
     parts = name.split("/")[:-1]
@@ -336,6 +353,10 @@ def _index(repo: Path, paths: list[str]) -> str:
         aliased = {
             name: not _listed(repo / name, name.rsplit("/", 1)[-1]) for name in existing
         }
+        # An alias names one directory entry; another entry sharing its file is not it.
+        entries = {name: _entry_leaves(repo / name) for name in existing if aliased[name]}
+        if None in entries.values():
+            raise ValueError("capture_identity_unavailable")
         missing: dict[str, list[str]] = {}
         for name in pending:
             if name in existing:
@@ -366,7 +387,14 @@ def _index(repo: Path, paths: list[str]) -> str:
             leaf = path.rsplit("/", 1)[-1]
             if any(
                 leaf == name.rsplit("/", 1)[-1]
-                or (aliased[name] and _same_file(repo / path, repo / name))
+                or (
+                    aliased[name]
+                    and _same_file(repo / path, repo / name)
+                    and (
+                        (opened := _entry_leaves(repo / path)) is None
+                        or opened & entries[name]
+                    )
+                )
                 for name in same_directory[directory]
             ):
                 records.add(record)
