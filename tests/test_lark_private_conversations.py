@@ -7509,8 +7509,11 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
 
 
 @pytest.mark.parametrize("background_slots", [0, 2])
-@pytest.mark.parametrize("origin", ["lark", "web"])
-def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_path, monkeypatch, background_slots, origin):
+@pytest.mark.parametrize("origin", ["lark", "web", "card"])
+@pytest.mark.parametrize("backlog", ["failed_turn", "sent_card", "unknown_card_send"])
+def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(
+    tmp_path, monkeypatch, background_slots, origin, backlog,
+):
     from loopx.extensions.lark import goal_topic_runtime_service as worker
 
     release_old, release_rest = threading.Event(), threading.Event()
@@ -7528,8 +7531,15 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     transport._web_projection_paths = lambda: [web] if web.exists() else []
     fresh = web if origin == "web" else tmp_path / "z-current.json"
     for index in range(slots * 3):
-        (tmp_path / f"old-{index:02}.json").write_text(json.dumps({"status": "delivered",
-            "request_ref": str(index), "session_id": "original", "turn_id": "failed"}))
+        if backlog == "failed_turn":
+            row = {"status": "delivered", "request_ref": str(index),
+                   "session_id": "original", "turn_id": "failed"}
+        else:
+            stamp = {"send_started_at": "2026-01-01T00:00:00+00:00"}
+            if backlog == "sent_card":
+                stamp["message_id"] = f"om_{index:032x}"
+            row = {"status": "captured", "triage": stamp}
+        (tmp_path / f"old-{index:02}.json").write_text(json.dumps(row))
 
     def reconcile(path):
         with changed:
@@ -7561,7 +7571,10 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         with changed:
             assert len(started) == slots
         fresh.parent.mkdir(exist_ok=True)
-        fresh.write_text(json.dumps({"status": "pending" if origin == "web" else "accepted"}))
+        fresh_row = {"status": "pending" if origin == "web" else "accepted"}
+        if origin == "card":
+            fresh_row = {"status": "captured", "triage": {"action": {"operation": "menu"}}}
+        fresh.write_text(json.dumps(fresh_row))
         step()  # Retain the new discovery while every existing slot is held.
         release_old.set()
         with changed:
@@ -7589,6 +7602,59 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         release_rest.set()
     assert len(started) == slots * 2 and len(set(started)) == len(started)
     assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
+
+
+def test_unreadable_recovery_hint_does_not_delay_new_private_reply(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+
+    old = tmp_path / "old-card.json"
+    new = tmp_path / "new-reply.json"
+    old_row = {"status": "captured", "triage": {"message_id": "om_already_sent"}}
+    old.write_text(json.dumps(old_row), encoding="utf-8")
+    new.write_text(json.dumps({"status": "accepted"}), encoding="utf-8")
+    new_delivered, old_recovered = threading.Event(), threading.Event()
+    attempts = []
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: False)
+
+    discover = transport.pending_body_paths
+
+    def discover_then_lose_old_hint():
+        paths = discover()
+        if not new_delivered.is_set():
+            assert set(paths) == {old, new}
+            old.write_bytes(b"\xff")
+        return paths
+
+    def reconcile(path):
+        attempts.append(path)
+        path.write_text(json.dumps({"status": "delivered"}), encoding="utf-8")
+        (new_delivered if path == new else old_recovered).set()
+        return 1
+
+    transport.pending_body_paths = discover_then_lose_old_hint
+    transport.reconcile_request = reconcile
+    service = worker.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport,
+    )
+
+    def drive(step, **_):
+        step()
+        assert new_delivered.wait(1), "the unreadable card held the new reply"
+        assert old.read_bytes() == b"\xff"
+        old.write_text(json.dumps(old_row), encoding="utf-8")
+        step()
+        assert old_recovered.wait(1)
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    service._reconcile_private()
+    assert attempts == [new, old]
 
 
 @pytest.mark.parametrize(("initial", "body_scan_fails"), [

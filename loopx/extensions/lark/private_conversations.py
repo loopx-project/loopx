@@ -1866,15 +1866,15 @@ class LarkPrivateConversations:
         return [*paths, *self._web_projection_paths()]
 
     def is_recovery_path(self, path: Path) -> bool:
-        """Local scheduling hint; reconciliation still rechecks every effect.
-
-        A verified old notice may need a native recovery probe, but must not
-        precede an unsent body just because both have zero worker attempts.
-        """
+        """Schedule recovery of persisted attempts after fresh replies."""
         if path.parent == self.root / "web-projections":
             return False
         row = _read_json(path)
-        return row.get("status") == "delivered" or _is_answer_image_followup(row)
+        card = row.get("triage") or {}
+        return (
+            row.get("status") == "delivered" or _is_answer_image_followup(row)
+            or bool(card.get("send_started_at") or card.get("message_id"))
+        )
 
     def _pending_web_projection_paths(self) -> list[Path]:
         paths = []

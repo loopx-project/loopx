@@ -224,7 +224,14 @@ class LarkGoalTopicRuntimeService:
                     # full. Attempts retain fairness within each class. This
                     # local hint never admits/replays a request or skips its
                     # original grant and provider-attempt checks.
-                    recovering = {path: recovery_path(path) for path in ready}
+                    recovering: dict[Path, bool] = {}
+                    for path in tuple(ready):
+                        try:
+                            recovering[path] = recovery_path(path)
+                        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                            # A journal can become unreadable after discovery.
+                            # Keep it on disk for a later scan and schedule the other replies.
+                            del ready[path]
                     active_background = sum(job is not None for job in (feedback, reports, attention, ingress, discovery))
                     due_background = sum((reports_ready, attention_ready, ingress_ready))
                     scheduled_body = False
