@@ -27,7 +27,7 @@ const select = async (page, title, mobile) => {
   if (mobile) await page.waitForFunction(() => getComputedStyle(document.querySelector('.sidebar')).visibility === 'hidden', null, { timeout: 5000 });
 };
 const dialog = async page => {
-  await page.getByLabel('这个线程的更多操作').click();
+  await page.getByLabel('这个对话的更多操作').click();
   await page.getByRole('menuitem', { name: '交接', exact: true }).click();
   const value = page.getByRole('dialog', { name: '交接', exact: true });
   await value.locator('.handover-summary').waitFor(); return value;
@@ -45,7 +45,7 @@ const uiSend = async (page, id, text) => {
   await idle(id);
 };
 const chainDialog = async page => {
-  await page.getByLabel('这个线程的更多操作').click();
+  await page.getByLabel('这个对话的更多操作').click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
   await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
 };

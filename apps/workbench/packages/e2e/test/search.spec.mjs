@@ -26,7 +26,7 @@ before(async () => {
   deep = await post('/api/threads', { agent: 'claude', cwd: daemon.workdir, title: '长对话' });
   await say(deep.id, '先确认独角鲸迁徙路线的数据来源');
   for (let n = 1; n <= 8; n++) await say(deep.id, `第 ${n} 件别的事\n${'这一段只是为了把前面的内容顶出屏幕。\n'.repeat(6)}`);
-  shelved = await post('/api/threads', { agent: 'claude', cwd: daemon.workdir, title: '放进归档的线程' });
+  shelved = await post('/api/threads', { agent: 'claude', cwd: daemon.workdir, title: '放进归档的对话' });
   await say(shelved.id, '记一下：灯塔水母的养殖笔记');
 });
 after(async () => { await browser?.close(); await daemon?.stop(); });
@@ -42,7 +42,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
     try {
       await openUi(page, daemon);
       if (phone) await page.locator('.menu-btn').click();
-      await page.getByRole('button', { name: '搜索线程', exact: true }).click();
+      await page.getByRole('button', { name: '搜索对话', exact: true }).click();
       const box = page.getByRole('searchbox');
       const hits = page.getByRole('region', { name: '对话内容' });
 
@@ -56,7 +56,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       assert.equal(await hit.count(), 1);
       assert.match(await hit.innerText(), /长对话[\s\S]*我：[\s\S]*独角鲸迁徙路线/);
       assert.deepEqual(await hit.locator('mark').allInnerTexts(), ['独角鲸', '迁徙']);
-      await page.getByText('没有标题或目录匹配的线程。').waitFor();
+      await page.getByText('没有标题或目录匹配的对话。').waitFor();
       await shot('hits');
 
       // Opening it shows that turn, though the thread opens at its end and the turn is far above.

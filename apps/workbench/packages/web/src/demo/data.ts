@@ -471,7 +471,7 @@ export function demoData(now = Date.now()): DemoData {
         '| 用户 | 7 | 登录失败次数限制；头像裁剪 |',
         '| 基础设施 | 5 | 分页越界修复；CI 缓存命中率提高 |',
         '',
-        '下周重点：路由迁移（方案已在另一个线程里定好）。',
+        '下周重点：路由迁移（方案已在另一个对话里定好）。',
       ].join('\n'),
     });
     weekly.add(turn, at(60 * 26 - 1), 'turn.done', { stopReason: 'end_turn' });

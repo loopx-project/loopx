@@ -113,7 +113,7 @@ test('on a phone the terminal opens from the thread menu', async () => {
   const page = await ctx.newPage();
   try {
     await openThreadWithTerminalButton(page, '终端手机');
-    await page.getByLabel('这个线程的更多操作').click();
+    await page.getByLabel('这个对话的更多操作').click();
     await page.getByRole('menuitem', { name: '打开终端' }).click();
     await page.locator('.term-panel').waitFor();
 

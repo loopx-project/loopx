@@ -92,8 +92,8 @@ test('the compact thread menu preserves nested actions, keyboard return and the 
 
         await open();
         await root.getByRole('menuitem', named('重命名')).click();
-        const dialog = page.getByRole('dialog', named('重命名线程'));
-        await dialog.getByLabel('线程名称').fill(thread.title + ' renamed');
+        const dialog = page.getByRole('dialog', named('重命名对话'));
+        await dialog.getByLabel('对话名称').fill(thread.title + ' renamed');
         await dialog.getByRole('button', named('保存')).click();
         await page.locator('.topbar-title', { hasText: thread.title + ' renamed' }).waitFor();
 

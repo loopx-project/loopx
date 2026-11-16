@@ -21,7 +21,7 @@ test('settings pages preserve navigation, guard drafts and load details on entry
       page.on('request', req => requests.push(new URL(req.url()).pathname + new URL(req.url()).search));
       await openUi(page, daemon);
       await page.addStyleTag({ content: '*,*::before,*::after{animation:none!important;transition:none!important}' });
-      if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      if (mobile) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       await page.locator('.sidebar').getByRole('button', { name: '配置', exact: true }).click();
       await page.locator('.settings-page').waitFor();
       await page.waitForFunction(() => Math.abs(document.querySelector('.main').getBoundingClientRect().x - document.querySelector('.shell').getBoundingClientRect().x) < 2);
@@ -120,7 +120,7 @@ test('settings pages preserve navigation, guard drafts and load details on entry
       await page.mouse.wheel(0, -400);
       await page.waitForFunction(() => { const el = document.querySelector('.scroller'); return el.scrollHeight - el.scrollTop - el.clientHeight >= 390; });
       const scroll = await page.locator('.scroller').evaluate(el => el.scrollTop);
-      if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      if (mobile) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       await page.locator('.sidebar').getByRole('button', { name: '配置', exact: true }).click();
       await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
       assert.equal(await page.locator('.composer textarea').inputValue(), 'Draft survives settings');
@@ -147,7 +147,7 @@ test('the back swipe and the back control share one trail, and no old page is le
       page.on('pageerror', error => errors.push(error.message));
       await openUi(page, daemon);
       const where = mobile ? 'phone' : 'desktop';
-      const openList = () => page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      const openList = () => page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       const openThread = async () => {
         if (mobile) await openList();
         await page.locator('.sidebar .thread-item', { hasText: 'Swipe return' }).click();

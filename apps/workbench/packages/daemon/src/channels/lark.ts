@@ -534,7 +534,7 @@ export class LarkChannel {
     const reminders = completed.map(todo => ({ ...referencedSignal, matterId: todo.id }));
     const unhandled = active.filter(todo => !deliveries.some(delivery => delivery.matterId === todo.id));
     const lines = deliveries.length
-      ? [{ delivered: true, summary: `已交给在跟的线程：${deliveries.map(d => this.store.getTodo(d.matterId)?.text ?? d.matterId).join('、')}` },
+      ? [{ delivered: true, summary: `已交给在跟的对话：${deliveries.map(d => this.store.getTodo(d.matterId)?.text ?? d.matterId).join('、')}` },
         ...(unhandled.length ? [{ ...referencedSignal, matterIds: unhandled.map(todo => todo.id) }] : []), ...reminders]
       : reminders.length && !active.length ? reminders : matches.length || !(previous.matterIds?.length) ? [routedSignal, ...reminders] : [];
     return { lines, disposition: disposition() };

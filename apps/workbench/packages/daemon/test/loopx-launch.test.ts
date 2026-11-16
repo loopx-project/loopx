@@ -47,7 +47,7 @@ before(async () => {
 });
 after(() => server.close());
 
-type Manager = { threads: { id: string; cwd: string }[]; turns: string[]; events: Map<string, { type: string; turnId: string }[]>; fail: 'none' | 'before' | 'after' };
+type Manager = { threads: { id: string; cwd: string }[]; turns: string[]; events: Map<string, { type: string; turnId: string; data?: Record<string, unknown> }[]>; fail: 'none' | 'before' | 'after' };
 
 function fakeManager(fail: Manager['fail'] = 'none'): Manager & { api: unknown } {
   const m: Manager = { threads: [], turns: [], events: new Map(), fail };
@@ -158,6 +158,35 @@ test('after a restart, a first message that already went out is not sent again',
   assert.equal(done.turnId, 'turn-1');
   assert.equal(first.turns.length, 1);
   assert.equal(again.service.binding(done.threadId)!.firstMessage, undefined);
+});
+
+test('after a restart that cut the first turn off before the agent saw it, confirming again sends it', async () => {
+  const first = harness();
+  const preview = await first.service.preview({ ...launch, cwd: granted, permission: 'read_only' });
+  const done = await first.service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' });
+  // What the restart leaves behind: the turn began, nothing reached the agent, and it was ended as interrupted.
+  first.manager.events.get(done.threadId)!.push({ type: 'turn.error', turnId: done.turnId!, data: { code: 'interrupted' } });
+  const again = harness('none', { dataDir: first.dataDir, manager: first.manager });
+  const retried = await again.service.apply({ proposalId: preview.proposalId });
+  assert.equal(retried.turnId, 'turn-2');
+  assert.deepEqual(first.turns, [done.threadId, done.threadId]);
+  assert.equal(again.service.binding(done.threadId)!.firstMessage !== undefined, true, 'kept until the new turn is seen to arrive');
+  const settled = await again.service.apply({ proposalId: preview.proposalId });
+  assert.equal(settled.turnId, 'turn-2');
+  assert.equal(first.turns.length, 2, 'not sent a third time');
+  assert.equal(again.service.binding(done.threadId)!.firstMessage, undefined);
+});
+
+test('a first turn the agent had begun answering is not sent again after a restart', async () => {
+  const first = harness();
+  const preview = await first.service.preview({ ...launch, cwd: granted, permission: 'read_only' });
+  const done = await first.service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' });
+  first.manager.events.get(done.threadId)!.push(
+    { type: 'message.delta', turnId: done.turnId! }, { type: 'turn.error', turnId: done.turnId!, data: { code: 'interrupted' } });
+  const again = harness('none', { dataDir: first.dataDir, manager: first.manager });
+  const retried = await again.service.apply({ proposalId: preview.proposalId });
+  assert.equal(retried.turnId, 'turn-1');
+  assert.equal(first.turns.length, 1);
 });
 
 test('the granted directories carry where they are here, so a Goal can be pointed at one', async () => {

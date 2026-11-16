@@ -181,7 +181,7 @@ const runTurn = (text, turnId, done) => {
   notify('item/completed', { item: userItem, turnId });
 
   if (text.startsWith('[语音结束总结]')) {
-    say('## 这次语音里定下的事\n\n已根据本次对话整理。\n\n### 任务结果\n请参阅线程中的任务结果。\n\n### 下一步\n继续处理待办。');
+    say('## 这次语音里定下的事\n\n已根据本次对话整理。\n\n### 任务结果\n请参阅对话中的任务结果。\n\n### 下一步\n继续处理待办。');
     done(); return;
   }
   if (text === 'voice-final-news' || text === 'completed-only') {

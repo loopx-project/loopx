@@ -17,7 +17,7 @@ test('temporary images, reports and files elsewhere open from answers on desktop
     // A file outside both the thread and the temp folders, as an answer about a sibling worktree names one.
     const elsewhere = join(dirname(fileURLToPath(import.meta.url)), '..', 'harness.mjs');
     writeFileSync(picture, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 300"><rect width="640" height="300" rx="16" fill="#25322f"/><text x="30" y="48" fill="#dae6dc" font-size="24">TPM</text><path d="M30 240 L110 210 L190 225 L270 100 L350 160 L430 70 L510 115 L610 45" stroke="#b2cf80" stroke-width="5" fill="none"/><script>window.artifactScriptRan = true</script></svg>');
-    writeFileSync(report, '# 临时报告\n\n这份报告可以直接在当前线程中阅读。\n');
+    writeFileSync(report, '# 临时报告\n\n这份报告可以直接在当前对话中阅读。\n');
     const post = (path, body) => api(daemon, path, { method: 'POST', body: JSON.stringify(body) });
     const thread = await (await post('/api/threads', { agent: 'pi', cwd: daemon.workdir })).json();
     await post(`/api/threads/${thread.id}/turns`, { text: `临时产物预览\n\n[查看截图](<${picture}>)\n\n[阅读报告](${report})\n\n[已清理的截图](${artifacts}/removed.png)\n\n[别处的脚本](${elsewhere})\n\n[已删除的报告](${artifacts}/removed.md)` });
@@ -48,7 +48,7 @@ test('temporary images, reports and files elsewhere open from answers on desktop
         await page.locator('.lightbox').waitFor({ state: 'detached' });
         await page.locator('.markdown a', { hasText: '阅读报告' }).click();
         const panel = page.locator('.files-panel');
-        await panel.getByText('这份报告可以直接在当前线程中阅读。', { exact: true }).waitFor();
+        await panel.getByText('这份报告可以直接在当前对话中阅读。', { exact: true }).waitFor();
         await shot('temporary-report');
         if (mobile) {
           // On a phone the folder view is a step behind the file's own "more" menu; the popover

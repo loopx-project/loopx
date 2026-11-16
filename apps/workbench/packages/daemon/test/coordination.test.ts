@@ -313,7 +313,7 @@ test('members start with the model and effort chosen for their instance, unless 
     assert.deepEqual((await h.team.setDefaults(h.root.id, { claude: { model: 'gone' } }))!.defaults, { claude: { model: 'gone', effort: null } });
     assert.equal((await member('later')).model, null);
     const member2 = h.team.view(h.root.id)!.members[0].id;
-    await assert.rejects(h.team.setDefaults(member2, {}), /主线程/);
+    await assert.rejects(h.team.setDefaults(member2, {}), /主对话/);
   } finally { await h.close(); }
 });
 
@@ -374,7 +374,7 @@ test('members run with full access unless the team says otherwise, and a change 
     assert.deepEqual((await h.team.setPermission(h.root.id, 'full_access'))!.defaults, { claude: { model: null, effort: null } });
     assert.equal(h.manager.threadView(first).permissionMode, 'full_access');
     await assert.rejects(h.team.setDefaults(h.root.id, { claude: { permission: 'root' } }), /权限/);
-    await assert.rejects(h.team.setPermission(first, 'ask'), /主线程/);
+    await assert.rejects(h.team.setPermission(first, 'ask'), /主对话/);
     await assert.rejects(h.team.setPermission(h.root.id, 'root'), /权限/);
   } finally { await h.close(); }
 });

@@ -69,7 +69,7 @@ test('meeting settings edits preserve other keys and the global switch, without 
 });
 
 test('a signal says where it went, and why it was filtered', () => {
-  assert.equal(signalDestination({ outcome: 'delivered' }), '已直投给工作线程');
+  assert.equal(signalDestination({ outcome: 'delivered' }), '已直投给工作对话');
   assert.equal(signalDestination({ outcome: 'router', reason: 'legacy-seen' }), '送了助手');
   assert.equal(signalDestination({ outcome: 'filtered', reason: 'not-a-request' }), '被过滤：不是在找你');
   assert.equal(signalDestination({ outcome: 'filtered', reason: 'bot-message' }), '被过滤：bot-message', 'a reason this client has no words for still shows');

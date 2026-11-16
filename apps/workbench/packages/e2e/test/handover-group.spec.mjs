@@ -27,7 +27,7 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
       page.on('pageerror', (e) => errors.push(e.message));
       await page.addInitScript((token) => localStorage.setItem('calli.token', token), hub.token);
       await openUi(page, hub);
-      if (phone) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      if (phone) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       await page.locator('.handover-group').waitFor();
       assert.equal(await page.locator('.handover-group').count(), 1);
       assert.equal(await page.locator('.handover-group .thread-item').count(), 1);
@@ -50,7 +50,7 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
       await page.waitForTimeout(250);
       await page.screenshot({ path: `/tmp/loochat-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-sidebar.png` });
       await page.locator('.handover-group > .thread-row .thread-item').click();
-      await page.getByLabel('这个线程的更多操作').click();
+      await page.getByLabel('这个对话的更多操作').click();
       await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
       await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
       await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
@@ -58,7 +58,7 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
       await page.screenshot({ path: `/tmp/loochat-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-trail.png` });
       await page.locator('.handover-entry').filter({ hasText: '原始会话' }).click();
       await page.locator('.topbar-title').filter({ hasText: original.title }).waitFor();
-      await page.getByLabel('这个线程的更多操作').click();
+      await page.getByLabel('这个对话的更多操作').click();
       await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
       await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
       await page.locator('.handover-entry').filter({ hasText: '接手会话' }).first().click();
@@ -95,7 +95,7 @@ test('a turn stopped by a plan that ran out offers another account of the same t
       page.on('pageerror', (e) => errors.push(e.message));
       await page.addInitScript((token) => localStorage.setItem('calli.token', token), hub.token);
       await openUi(page, hub);
-      if (phone) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      if (phone) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       await page.locator('.thread-item').filter({ hasText: '额度用完的任务' }).first().click();
       const go = page.locator('.exhausted-note .exhausted-hand');
       await go.waitFor();

@@ -81,8 +81,8 @@ test("the section group's + files the new thread into the section", async () => 
 
 test('search sits behind a button, and Escape puts it away', async () => {
   const list = page.locator('.sidebar');
-  assert.equal(await list.getByLabel('搜索线程').evaluate((el) => el.tagName), 'BUTTON');
-  await list.getByRole('button', { name: '搜索线程' }).click();
+  assert.equal(await list.getByLabel('搜索对话').evaluate((el) => el.tagName), 'BUTTON');
+  await list.getByRole('button', { name: '搜索对话' }).click();
   // The field takes the focus, so typing can start at once.
   await page.keyboard.type('section');
   await list.locator('.thread-title', { hasText: 'a section thread' }).waitFor();
@@ -95,7 +95,7 @@ test('search sits behind a button, and Escape puts it away', async () => {
 
 test('the settings button holds what is not an everyday thing, and signing out asks first', async () => {
   const list = page.locator('.sidebar');
-  for (const name of ['计划', '新对话', '搜索线程', '配置']) {
+  for (const name of ['计划', '新对话', '搜索对话', '配置']) {
     assert.equal(await list.getByRole('button', { name, exact: true }).isVisible(), true, name);
   }
   assert.equal(await list.getByRole('button', { name: '已归档', exact: true }).count(), 0);
@@ -120,7 +120,7 @@ test('the settings button holds what is not an everyday thing, and signing out a
 test('an open thread names its agent and directory in the top bar, not on the composer', async () => {
   await page.locator('.sidebar .thread-title', { hasText: 'hello' }).click();
   await page.getByText('hi there hello').waitFor({ timeout: 15_000 });
-  await page.getByRole('button', { name: '线程所在位置', exact: true }).click();
+  await page.getByRole('button', { name: '对话所在位置', exact: true }).click();
   assert.match(await page.locator('.place-panel').innerText(), /pi/);
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('.composer-context').count(), 0, 'the strip is only for choosing, before the thread exists');
@@ -136,15 +136,15 @@ test('filed by project a row is its title; activity and search add the latest as
     return t;
   };
   await make('一行标题', 'hello rows');
-  const broken = await make('会出错的线程', 'please fail');
+  const broken = await make('会出错的对话', 'please fail');
   for (let i = 0; i < 100 && (await (await api(daemon, `/api/threads/${broken.id}`)).json()).status !== 'error'; i++) await new Promise((r) => setTimeout(r, 50));
   await openUi(page, daemon);
 
   const rowOf = (title) => page.locator('.thread-row', { has: page.locator('.thread-title', { hasText: title }) });
   await rowOf('一行标题').waitFor();
   assert.equal(await rowOf('一行标题').locator('.thread-preview').count(), 0, 'no second line in the project view');
-  assert.equal(await rowOf('会出错的线程').locator('.thread-note').innerText(), '出错了');
-  assert.equal(await rowOf('会出错的线程').locator('.thread-preview').count(), 0);
+  assert.equal(await rowOf('会出错的对话').locator('.thread-note').innerText(), '出错了');
+  assert.equal(await rowOf('会出错的对话').locator('.thread-preview').count(), 0);
 
   // By activity: the latest ask comes back.
   await page.getByRole('button', { name: '按活动查看' }).click();
@@ -152,7 +152,7 @@ test('filed by project a row is its title; activity and search add the latest as
   await page.getByRole('button', { name: '按活动查看' }).click();
 
   // In a search too.
-  await page.getByRole('button', { name: '搜索线程' }).click();
+  await page.getByRole('button', { name: '搜索对话' }).click();
   await page.locator('.sidebar-search').fill('一行');
   assert.equal(await rowOf('一行标题').locator('.thread-preview').innerText(), 'hello rows');
   await page.keyboard.press('Escape');

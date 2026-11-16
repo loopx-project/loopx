@@ -116,7 +116,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       // The fixture invokes the actual injected CLI, creating a normal member thread.
       const directive = Buffer.from(JSON.stringify({ args: ['spawn', '--agent', 'claude', '--name', '文档审查', '--message-file', '-', '--request-id', 'review'], text: '检查接口与异常处理 LOOCHAT_REPORT' })).toString('base64');
       await post(`/api/threads/${root.id}/turns`, { text: `LOOCHAT_COMMAND:${directive}` });
-      await box.fill('保留这段主线程草稿');
+      await box.fill('保留这段主对话草稿');
       await openCollaboration(page);
       await page.getByRole('button', { name: '协作设置', exact: true }).click();
       await page.getByRole('button', { name: '查看智能体', exact: true }).click();
@@ -201,7 +201,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       await card.waitFor();
       await panel.getByRole('button', { name: '关闭智能体面板' }).click();
       await panel.waitFor({ state: 'detached' });
-      assert.equal(await box.inputValue(), '保留这段主线程草稿');
+      assert.equal(await box.inputValue(), '保留这段主对话草稿');
       // What the member returned sits in the thread as a folded card, opened to its text as Markdown.
       const delivered = page.locator('.row.delivered', { hasText: '文档审查' });
       await delivered.waitFor();
@@ -265,7 +265,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       await panel.getByRole('button', { name: '让主智能体调整', exact: true }).click();
       await panel.waitFor({ state: 'detached' });
       // The words land in the lead's box a render after the panel goes.
-      const carried = '请调整「文档审查」的任务：补一条测试要求\n\n保留这段主线程草稿';
+      const carried = '请调整「文档审查」的任务：补一条测试要求\n\n保留这段主对话草稿';
       for (let n = 0; n < 50 && await box.inputValue() !== carried; n++) await page.waitForTimeout(50);
       assert.equal(await box.inputValue(), carried);
       await page.screenshot({ path: `${shots}/${phone ? 'phone' : 'desktop'}-${colorScheme}-via-lead.png` });

@@ -34,7 +34,7 @@ async function panelClip(page) {
 
 try {
   await api(daemon, '/api/threads', {
-    method: 'POST', body: JSON.stringify({ agent: 'claude', cwd: daemon.workdir, title: '空线程' }),
+    method: 'POST', body: JSON.stringify({ agent: 'claude', cwd: daemon.workdir, title: '空对话' }),
   });
   const readings = await (await api(daemon, '/api/threads', {
     method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title: '只有读数' }),
@@ -78,7 +78,7 @@ try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
     const page = await context.newPage();
     await openUi(page, daemon);
-    await page.locator('.thread-row', { hasText: '空线程' }).click();
+    await page.locator('.thread-row', { hasText: '空对话' }).click();
     await page.locator('.overview-panel.overview-dock').waitFor();
     await page.locator('.overview-empty').filter({ hasText: '还没有产出' }).waitFor();
     await page.waitForTimeout(400);
@@ -94,7 +94,7 @@ try {
     // The outputs request never answers, so the panel stays in its first-read state.
     await page.route('**/api/threads/*/outputs', () => {});
     await openUi(page, daemon);
-    await page.locator('.thread-row', { hasText: '空线程' }).click();
+    await page.locator('.thread-row', { hasText: '空对话' }).click();
     await page.locator('.overview-panel.overview-dock').waitFor();
     await page.locator('.overview-empty').filter({ hasText: '读取中' }).waitFor();
     await page.waitForTimeout(400);

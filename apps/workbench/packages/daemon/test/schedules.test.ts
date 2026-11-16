@@ -269,7 +269,7 @@ test('schedules: a bound thread that is gone says so, in the list and in the run
   assert.ok(run?.threadId);
   await api(`/api/threads/${run.threadId}`, { method: 'DELETE' });
   const listed = ((await (await api('/api/schedules')).json()) as ScheduleJson[]).find((x) => x.id === s.id);
-  assert.equal(listed?.problem, '绑定的线程已删除');
+  assert.equal(listed?.problem, '绑定的对话已删除');
   const fired = (await (await api(`/api/schedules/${s.id}/run`, { method: 'POST' })).json()) as { status: string };
   assert.equal(fired.status, 'error');
 });

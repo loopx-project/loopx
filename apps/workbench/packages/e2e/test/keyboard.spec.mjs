@@ -170,7 +170,7 @@ test('with the keyboard up, the terminal and its input line stay on the visible 
   await openUi(page, daemon);
   await page.locator('.menu-btn').click();
   await page.locator('.thread-item', { hasText: '键盘终端' }).click();
-  await page.getByLabel('这个线程的更多操作').click();
+  await page.getByLabel('这个对话的更多操作').click();
   await page.getByRole('menuitem', { name: '打开终端' }).click();
   await page.locator('.term-panel').waitFor();
 

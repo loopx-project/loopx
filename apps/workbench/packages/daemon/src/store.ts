@@ -819,7 +819,7 @@ export class Store {
       if (typeof text !== 'string') continue;
       const envelope = text.match(/^(?:来源机器：本机（当前 hub）\s+)?# 交接信息\r?\n([\s\S]*?)\r?\n## 接手要求(?:\r?\n|$)/);
       if (!envelope) continue;
-      const ids = [...envelope[1].matchAll(/^- Hub 线程 ID：([^\r\n]+)$/gm)];
+      const ids = [...envelope[1].matchAll(/^- Hub 对话 ID：([^\r\n]+)$/gm)];
       if (ids.length !== 1) continue;
       const source = this.getThread(ids[0][1].trim());
       if (!source || source.id === candidate.id || source.cwd !== candidate.cwd || source.createdAt >= candidate.created_at) continue;

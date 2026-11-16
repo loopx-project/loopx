@@ -212,7 +212,7 @@ test('「重新取名」 renames any thread at once, the preview renames nothing
 test('a naming agent that does not answer in time is stopped, and the title stays', async () => {
   const h = await setup();
   try {
-    await assert.rejects(h.manager.askOnce('claude', '给下面这段对话起一个线程标题。slow name', { timeoutMs: 300 }), /too long/);
+    await assert.rejects(h.manager.askOnce('claude', '给下面这段对话起一个对话标题。slow name', { timeoutMs: 300 }), /too long/);
     await wait(() => h.manager.listThreads({ archived: true }).every(t => t.status !== 'running'));
     assert.equal(h.manager.listThreads().length, 0, 'the question never showed in the list');
     assert.equal((h.manager as unknown as { sessions: Map<string, unknown> }).sessions.size, 0, 'a stopped question closes its agent process');
@@ -225,7 +225,7 @@ test('a naming agent that does not answer in time is stopped, and the title stay
 test('a background question leaves no live session and no scratch folder behind', async () => {
   const h = await setup();
   try {
-    const answer = await h.manager.askOnce('claude', '给下面这段对话起一个线程标题。', { title: '一问' });
+    const answer = await h.manager.askOnce('claude', '给下面这段对话起一个对话标题。', { title: '一问' });
     assert.match(answer, /修复登录超时/);
     assert.equal((h.manager as unknown as { sessions: Map<string, unknown> }).sessions.size, 0, 'the agent process is closed after the answer');
     assert.equal(readdirSync(join(h.dir, 'scratch')).length, 0, 'its scratch folder is removed');
@@ -274,7 +274,7 @@ test('「重新取名」 does not overwrite a title the person set while the age
   } finally { await h.close(); }
 });
 
-test('「整理现有线程」 names the backlog, one title the person set stays, a second click while running is refused', async () => {
+test('「整理现有对话」 names the backlog, one title the person set stays, a second click while running is refused', async () => {
   const h = await setup();
   try {
     await h.api('/api/extensions/autotitle/settings', 'PUT', { agent: 'claude' });

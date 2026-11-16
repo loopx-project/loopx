@@ -25,8 +25,8 @@ before(async () => {
 
   hub = await startDaemon();
 
-  await api(node, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: node.workdir, title: '开发机上的线程' }) });
-  await api(hub, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: hub.workdir, title: '本机的线程' }) });
+  await api(node, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: node.workdir, title: '开发机上的对话' }) });
+  await api(hub, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: hub.workdir, title: '本机的对话' }) });
 
   browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
@@ -50,7 +50,7 @@ async function openMachines(p = page) {
 
 test('with no other machine, the list has no switcher', async () => {
   await openUi(page, hub);
-  await page.getByText('本机的线程').waitFor({ timeout: 10_000 });
+  await page.getByText('本机的对话').waitFor({ timeout: 10_000 });
   assert.equal(await page.locator('.host-switch').count(), 0);
 });
 
@@ -78,8 +78,8 @@ test('a machine gets join settings once and appears online when the node connect
 
 test('switching shows that machine, and a thread started there runs there', async () => {
   await page.getByRole('tab', { name: 'devbox' }).click();
-  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的线程$/ }).waitFor({ timeout: 10_000 });
-  assert.equal(await page.getByText('本机的线程').count(), 0);
+  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的对话$/ }).waitFor({ timeout: 10_000 });
+  assert.equal(await page.getByText('本机的对话').count(), 0);
   assert.equal(await page.getByRole('tab', { name: 'devbox' }).getAttribute('aria-selected'), 'true');
 
   // The draft is for a directory over there, and the agents are that machine's.
@@ -89,53 +89,53 @@ test('switching shows that machine, and a thread started there runs there', asyn
   await page.keyboard.type('hello from the hub');
   await page.keyboard.press('Enter');
   await page.getByText('hi there hello from the hub').waitFor({ timeout: 15_000 });
-  await page.getByRole('button', { name: '线程所在位置', exact: true }).click();
+  await page.getByRole('button', { name: '对话所在位置', exact: true }).click();
   await page.locator('.place-row', { hasText: 'devbox' }).waitFor();
   await page.keyboard.press('Escape');
 
   const there = await (await api(node, '/api/threads')).json();
   assert.ok(there.some((t) => t.preview?.includes('hello from the hub') || t.title.includes('hello from the hub')), 'the thread is on the other machine');
   const here = await (await api(hub, '/api/threads')).json();
-  assert.deepEqual(here.map((t) => t.title), ['本机的线程']);
+  assert.deepEqual(here.map((t) => t.title), ['本机的对话']);
 
   // The device remembers which machine it was looking at.
   await page.reload();
-  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的线程$/ }).waitFor({ timeout: 10_000 });
+  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的对话$/ }).waitFor({ timeout: 10_000 });
   assert.equal(await page.getByRole('tab', { name: 'devbox' }).getAttribute('aria-selected'), 'true');
 
   await page.getByRole('tab', { name: '本机' }).click();
-  await page.getByText('本机的线程').waitFor({ timeout: 10_000 });
-  assert.equal(await page.locator('.sidebar .thread-title', { hasText: /^开发机上的线程$/ }).count(), 0);
+  await page.getByText('本机的对话').waitFor({ timeout: 10_000 });
+  assert.equal(await page.locator('.sidebar .thread-title', { hasText: /^开发机上的对话$/ }).count(), 0);
 });
 
 test('new drafts belong to their machine and survive switching and reloading', async () => {
   const composer = page.locator('.composer textarea');
   await composer.fill('只发给本机的草稿');
   await page.getByRole('tab', { name: 'devbox' }).click();
-  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的线程$/ }).waitFor();
+  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的对话$/ }).waitFor();
   assert.equal(await composer.inputValue(), '');
   await composer.fill('只发给开发机的草稿');
   await page.getByRole('tab', { name: '本机' }).click();
-  await page.getByText('本机的线程').waitFor();
+  await page.getByText('本机的对话').waitFor();
   assert.equal(await composer.inputValue(), '只发给本机的草稿');
   await page.reload();
-  await page.getByText('本机的线程').waitFor();
+  await page.getByText('本机的对话').waitFor();
   assert.equal(await composer.inputValue(), '只发给本机的草稿');
   await composer.fill('');
   await page.getByRole('tab', { name: 'devbox' }).click();
-  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的线程$/ }).waitFor();
+  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的对话$/ }).waitFor();
   assert.equal(await composer.inputValue(), '只发给开发机的草稿');
   await composer.fill('');
 });
 
 test('images sent through the hub are stored and displayed on the other machine', async () => {
-  await page.locator('.thread-item', { hasText: /^开发机上的线程$/ }).click();
+  await page.locator('.thread-item', { hasText: /^开发机上的对话$/ }).click();
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64');
   await page.setInputFiles('.composer input[type=file]', { name: 'dot.png', mimeType: 'image/png', buffer: png });
   await page.locator('.composer textarea').fill('remote image');
   await page.locator('.composer textarea').press('Enter');
   await page.getByText('hi there remote image').waitFor({ timeout: 15_000 });
-  const thread = (await (await api(node, '/api/threads')).json()).find((t) => t.title === '开发机上的线程');
+  const thread = (await (await api(node, '/api/threads')).json()).find((t) => t.title === '开发机上的对话');
   const events = await (await api(node, `/api/threads/${thread.id}/events`)).json();
   assert.ok(events.some((e) => e.type === 'turn.started' && e.data.images?.length === 1));
   const img = page.locator('.sent-images img').first();
@@ -147,7 +147,7 @@ test('images sent through the hub are stored and displayed on the other machine'
 });
 
 test('a terminal opened through the hub runs in the other machine directory', async () => {
-  await page.getByLabel('这个线程的更多操作').click();
+  await page.getByLabel('这个对话的更多操作').click();
   await page.getByRole('menuitem', { name: '打开终端', exact: true }).click();
   await page.locator('.term-panel').waitFor();
   await page.locator('.term-body').click();
@@ -166,7 +166,7 @@ test('on a phone, switching machines stays on the thread list', async () => {
     await phone.locator('.menu-btn').click();
     await phone.locator('.drawer-open').waitFor({ timeout: 5000 });
     await phone.getByRole('tab', { name: 'devbox' }).tap();
-    await phone.getByText('开发机上的线程').waitFor({ timeout: 10_000 });
+    await phone.getByText('开发机上的对话').waitFor({ timeout: 10_000 });
     assert.equal(await phone.locator('.drawer-open').count(), 1, 'still the list, now of the other machine');
   } finally {
     await phone.context().close();
@@ -175,10 +175,10 @@ test('on a phone, switching machines stays on the thread list', async () => {
 
 test('handover creates and persists a draft only on the selected remote machine', async () => {
   await page.getByRole('tab',{name:'devbox'}).click();
-  await page.locator('.sidebar .thread-item',{hasText:'开发机上的线程'}).click();
+  await page.locator('.sidebar .thread-item',{hasText:'开发机上的对话'}).click();
   const beforeLocal=await (await api(hub,'/api/threads')).json();
   const beforeRemote=await (await api(node,'/api/threads')).json();
-  await page.getByLabel('这个线程的更多操作').click();
+  await page.getByLabel('这个对话的更多操作').click();
   await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
   await page.getByRole('menuitem',{name:'交接',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'交接',exact:true});
@@ -187,7 +187,7 @@ test('handover creates and persists a draft only on the selected remote machine'
   assert.ok(summary.includes('远端机器（ID：devbox）'));
   await dialog.getByRole('button',{name:'新建接手对话'}).click();
   await dialog.waitFor({state:'detached'});
-  await page.locator('.topbar-title',{hasText:'开发机上的线程（接手）'}).waitFor();
+  await page.locator('.topbar-title',{hasText:'开发机上的对话（接手）'}).waitFor();
   assert.equal(await page.locator('.composer textarea').inputValue(),summary);
   const created=(await (await api(node,'/api/threads')).json()).filter(t=>!beforeRemote.some(old=>old.id===t.id));
   assert.equal(created.length,1);assert.equal(created[0].cwd,node.workdir);assert.equal(created[0].agentSessionId,null);
@@ -195,16 +195,16 @@ test('handover creates and persists a draft only on the selected remote machine'
   const key=`host:devbox:${created[0].id}`;
   assert.equal(await page.evaluate(key=>JSON.parse(localStorage.getItem('calli.drafts'))[key].text,key),summary);
   await page.getByRole('tab',{name:'本机'}).click();
-  await page.locator('.sidebar .thread-title',{hasText:'本机的线程'}).waitFor();
+  await page.locator('.sidebar .thread-title',{hasText:'本机的对话'}).waitFor();
   assert.equal(await page.locator('.composer textarea').inputValue(),'');
   await page.getByRole('tab',{name:'devbox'}).click();
-  await page.locator('.sidebar .handover-group .thread-item',{hasText:'开发机上的线程'}).click();
+  await page.locator('.sidebar .handover-group .thread-item',{hasText:'开发机上的对话'}).click();
   assert.equal(await page.locator('.composer textarea').inputValue(),summary);
 });
 
 test('a machine that drops says so in place of its threads, and is back after a retry', async () => {
   await page.getByRole('tab', { name: 'devbox' }).click();
-  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的线程$/ }).waitFor({ timeout: 10_000 });
+  await page.locator('.sidebar .thread-title', { hasText: /^开发机上的对话$/ }).waitFor({ timeout: 10_000 });
   await node.stop();
 
   const down = page.locator('.host-down');
@@ -217,10 +217,10 @@ test('a machine that drops says so in place of its threads, and is back after a 
   assert.equal(await page.getByRole('tab', { name: '本机' }).count(), 1);
 
   node = await startDaemon({ LOOCHAT_SOCKET: nodeSocket });
-  await api(node, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: node.workdir, title: '回来以后的线程' }) });
+  await api(node, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: node.workdir, title: '回来以后的对话' }) });
   await node.connectRelay(hub, joinToken);
   await down.getByRole('button', { name: '重试' }).click();
-  await page.getByText('回来以后的线程').waitFor({ timeout: 20_000 });
+  await page.getByText('回来以后的对话').waitFor({ timeout: 20_000 });
   assert.equal(await page.locator('.host-down').count(), 0);
   assert.equal(await page.locator('.composer').count(), 1);
 });
@@ -235,7 +235,7 @@ test('removing the machine on screen goes back to the hub, and the switcher goes
   if (await panel.getByRole('button', { name: '添加机器', exact: true }).getAttribute('aria-expanded') === 'false') await panel.getByRole('button', { name: '添加机器', exact: true }).click();
   await panel.getByRole('textbox', { name: '机器名称，如 开发机' }).waitFor();
   await closeSettings(page);
-  await page.getByText('本机的线程').waitFor({ timeout: 10_000 });
+  await page.getByText('本机的对话').waitFor({ timeout: 10_000 });
   assert.equal(await page.locator('.host-switch').count(), 0);
   assert.deepEqual(await (await api(hub, '/api/hosts')).json(), []);
 });

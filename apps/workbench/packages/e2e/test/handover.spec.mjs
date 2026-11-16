@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const chainDialog = async page => {
-  await page.getByLabel('这个线程的更多操作').click();
+  await page.getByLabel('这个对话的更多操作').click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
   await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
 };
@@ -39,7 +39,7 @@ for (const mobile of [false,true]) for (const theme of ['light','dark']) {
       await page.getByText('echo:修复登录页并补测试',{exact:true}).waitFor();
       assert.equal(await page.getByText('unknown agent: claude',{exact:true}).count(),0,'custom instance ids do not query a nonexistent default');
       const before = await (await api(daemon,`/api/threads/${thread.id}/events`)).json();
-      await page.getByLabel('这个线程的更多操作').click();
+      await page.getByLabel('这个对话的更多操作').click();
       await page.getByRole('menuitem',{name:'交接',exact:true}).click();
       const dialog = page.getByRole('dialog',{name:'交接',exact:true});
       await dialog.locator('.handover-summary').waitFor();
@@ -85,11 +85,11 @@ for (const mobile of [false,true]) {
       assert.ok((await sourceRow.getAttribute('title')).includes(source.worktree.branch));
       await sourceRow.click();
       await page.getByText('echo:保留工作树完成任务',{exact:true}).waitFor();
-      await box.fill('原线程未发送的草稿');
+      await box.fill('原对话未发送的草稿');
       const eventsBefore=await (await api(daemon,`/api/threads/${source.id}/events`)).json();
       const treesBefore=git(['worktree','list','--porcelain']);
       const idsBefore=new Set((await (await api(daemon,'/api/threads')).json()).map(t=>t.id));
-      await page.getByLabel('这个线程的更多操作').click();
+      await page.getByLabel('这个对话的更多操作').click();
       await page.getByRole('menuitem',{name:'交接',exact:true}).click();
       const dialog=page.getByRole('dialog',{name:'交接',exact:true});
       await dialog.locator('.handover-summary').waitFor();
@@ -120,8 +120,8 @@ for (const mobile of [false,true]) {
       await chainDialog(page);
       await page.getByRole('menuitem').filter({hasText:'Claude 工作号'}).click();
       assert.equal(await page.locator('.handover-readonly, .merged-history').count(), 0);
-      assert.equal(await box.inputValue(),'原线程未发送的草稿');
-      assert.equal(await page.evaluate(id=>JSON.parse(localStorage.getItem('calli.drafts'))[id].text,source.id),'原线程未发送的草稿');
+      assert.equal(await box.inputValue(),'原对话未发送的草稿');
+      assert.equal(await page.evaluate(id=>JSON.parse(localStorage.getItem('calli.drafts'))[id].text,source.id),'原对话未发送的草稿');
       await chainDialog(page);
       await page.getByRole('menuitem').filter({hasText:'Claude 个人号'}).click();
       assert.equal(await box.inputValue(),edited);

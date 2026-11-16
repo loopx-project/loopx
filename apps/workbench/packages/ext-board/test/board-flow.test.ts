@@ -156,7 +156,7 @@ test('the summary leaves backlog cards out and says how many', () => {
   const text = buildSummary(columns, ctx);
   assert.doesNotMatch(text, /\[l1\]/);
   assert.match(text, /2 more threads put off until later are not listed\./);
-  assert.match(buildSummary(columns, { ...ctx, locale: 'zh' }), /另有 2 个以后再做的线程没有列出。/);
+  assert.match(buildSummary(columns, { ...ctx, locale: 'zh' }), /另有 2 个以后再做的对话没有列出。/);
 });
 
 test('the summary stops at about 80 cards', () => {
@@ -166,5 +166,5 @@ test('the summary stops at about 80 cards', () => {
   assert.equal(picked.cards.length, SUMMARY_LIMIT);
   assert.equal(picked.omitted.review, 20);
   assert.equal(picked.cards[0].thread.id, 't0', 'latest first');
-  assert.match(buildSummary(columns, { ...ctx, locale: 'zh' }), /另有 20 个线程没有列出（待验收 20 个）/);
+  assert.match(buildSummary(columns, { ...ctx, locale: 'zh' }), /另有 20 个对话没有列出（待验收 20 个）/);
 });

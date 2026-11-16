@@ -3080,13 +3080,13 @@ test('title and preview are what was asked, not the notes or quote in front of i
 });
 
 test('GET /api/search finds what was said in any thread, and needs the token', async () => {
-  const thread = await newThread({ agent: 'claude', title: '搜索用的线程' });
+  const thread = await newThread({ agent: 'claude', title: '搜索用的对话' });
   await api(`/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: '请看一下独角鲸迁徙路线' }) });
   await finishedEvents(thread.id);
   const hits = (await (await api(`/api/search?q=${encodeURIComponent('独角鲸迁徙')}`)).json()) as Array<Record<string, unknown>>;
   // The fixture answers with the question in it, so the answer may be found as well.
   const asked = hits.find((h) => h.role === 'user')!;
-  assert.deepEqual([asked.threadId, asked.title, asked.archived], [thread.id, '搜索用的线程', false]);
+  assert.deepEqual([asked.threadId, asked.title, asked.archived], [thread.id, '搜索用的对话', false]);
   assert.match(String(asked.snippet), /独角鲸迁徙路线/);
   assert.ok(hits.every((h) => h.threadId === thread.id));
   assert.deepEqual(await (await api('/api/search?q=x')).json(), []);

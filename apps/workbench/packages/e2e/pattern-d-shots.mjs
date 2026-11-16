@@ -41,7 +41,7 @@ try {
   // A finished thread nobody has opened, beside the one on screen: the dot on the list button.
   // The button exists below 900px, where the sidebar folds away; on a wide screen there is no list
   // button to dot, the sidebar itself carries the marks.
-  const quiet = await request('/api/threads', 'POST', { agent: 'pi', cwd: daemon.workdir, title: '后台线程' });
+  const quiet = await request('/api/threads', 'POST', { agent: 'pi', cwd: daemon.workdir, title: '后台对话' });
   await request(`/api/threads/${quiet.id}/turns`, 'POST', { text: '做完了' });
   const work = await request('/api/threads', 'POST', { agent: 'pi', cwd: daemon.workdir, title: '正在干的活' });
   await request(`/api/threads/${work.id}/turns`, 'POST', { text: '第一步' });

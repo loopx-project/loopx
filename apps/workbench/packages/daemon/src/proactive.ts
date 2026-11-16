@@ -246,7 +246,7 @@ export class ProactiveService {
     for (const run of this.runs()) {
       if (run.status !== 'running' || this.finishing.has(run.id) || this.store.getThread(run.threadId)?.status === 'running') continue;
       this.turns.delete(run.id);
-      this.update(run.id, { status: 'failed', endedAt: now.toISOString(), summary: '主动行动被中断，工作线程已结束；请查看线程后重试' });
+      this.update(run.id, { status: 'failed', endedAt: now.toISOString(), summary: '主动行动被中断，工作对话已结束；请查看对话后重试' });
     }
   }
 
@@ -301,7 +301,7 @@ export class ProactiveService {
               if (runs.some(run => run.needsRepo && run.matterId === todo.id && now.getTime() - Date.parse(run.startedAt) < 7 * DAY)) continue;
               if (await this.handledAlready(todo, '在沙盒里继续', now)) return;
               this.saveRun({ id: randomUUID(), matterId: todo.id, kind: 'sandbox', needsRepo: true, repo, threadId: '', startedAt: now.toISOString(), status: 'observed',
-                summary: `这件事的线程在 ${repo.split('/').pop()} 里，允许它在沙盒里继续吗？` });
+                summary: `这件事的对话在 ${repo.split('/').pop()} 里，允许它在沙盒里继续吗？` });
               return;
             }
             if (canOpen && !observed(todo, 'sandbox')) { if (!await this.handledAlready(todo, '在沙盒里继续', now)) await this.prepareOrObserve(todo, 'sandbox', now, repo); return; }
@@ -409,7 +409,7 @@ export class ProactiveService {
     for (const run of this.runs()) {
       if (run.kind === 'dispatch' || !['waiting', 'asking'].includes(run.status) || run.precheck || threadId && run.threadId !== threadId) continue;
       if (threadId || this.store.recentLifecycle(run.threadId, 1)[0]?.turnId !== run.turnId) {
-        this.update(run.id, { status: 'discarded', discardReason: '线程已继续' });
+        this.update(run.id, { status: 'discarded', discardReason: '对话已继续' });
       }
     }
   }
@@ -497,13 +497,13 @@ export class ProactiveService {
           run.wakeAt = new Date(now.getTime() + delay * 60_000).toISOString();
         }
       } else if (reason === 'done' || reason === 'user') run.status = 'asking';
-      run.summary = reason === 'transient' ? '会在退避后续跑临时出错的线程' : reason === 'external' ? `会定时检查：${decision.wait!.what}`
+      run.summary = reason === 'transient' ? '会在退避后续跑临时出错的对话' : reason === 'external' ? `会定时检查：${decision.wait!.what}`
         : reason === 'user' ? `会请你回答：${decision.question!.text}` : reason === 'done' ? `看起来做完了：${decision.line}` : '无法确定下一步，保留记录';
       if (this.settings().mode === 'observe' && run.status === 'waiting') run.status = 'observed';
       const currentTodo = todo ? this.store.getTodo(todo.id) : null;
       if (this.settings().mode === 'off' || this.quiet(new Date(now.getTime() + Date.now() - began)) || (todo && (!currentTodo || currentTodo.done || currentTodo.state === 'done' || currentTodo.proposed))
         || this.store.getThread(threadId)?.archivedAt || (todo && this.busy(todo.id)) || this.store.getThread(threadId)?.status === 'running' || this.latest(threadId)?.turnId !== latest.turnId) {
-        run.status = 'discarded'; run.discardReason = '线程或主动行动设置已改变';
+        run.status = 'discarded'; run.discardReason = '对话或主动行动设置已改变';
       }
       this.saveRun(run);
       if (run.status === 'asking') this.manager.notice(threadId, `需要你：${todo?.text ?? thread.title}`, false, true);
@@ -519,9 +519,9 @@ export class ProactiveService {
       if (!todo || todo.done || todo.state === 'done' || todo.proposed) throw new HttpError(409, '事项已结束或尚未确认');
       return;
     }
-    if (!thread || thread.archivedAt) throw new HttpError(409, '线程已归档或不存在');
-    if (thread.status === 'running' || (run.matterId && this.busy(run.matterId))) throw new HttpError(409, '线程正在运行');
-    if (this.latest(run.threadId)?.turnId !== run.turnId) throw new HttpError(409, '线程已继续');
+    if (!thread || thread.archivedAt) throw new HttpError(409, '对话已归档或不存在');
+    if (thread.status === 'running' || (run.matterId && this.busy(run.matterId))) throw new HttpError(409, '对话正在运行');
+    if (this.latest(run.threadId)?.turnId !== run.turnId) throw new HttpError(409, '对话已继续');
     if (run.matterId && (!todo || todo.done || todo.state === 'done' || todo.proposed)) throw new HttpError(409, '事项已结束或尚未确认');
     if (automatic && (this.settings().mode !== 'auto' || this.quiet(now))) throw new HttpError(409, '主动行动已关闭或进入安静时段');
   }
@@ -613,7 +613,7 @@ export class ProactiveService {
       if (sandbox) this.update(run.id, { branch: sandbox.branch });
       // Settings and threads may change while preparing git or discovering the agent.
       if (this.settings().mode !== 'auto' || repo && !this.settings().repos.includes(repo)) throw new HttpError(409, '主动行动已关闭或该仓库已移出允许列表');
-      if (this.busy(todo.id) || this.atCapacity()) throw new HttpError(409, '有工作线程正在运行，本次主动行动未启动');
+      if (this.busy(todo.id) || this.atCapacity()) throw new HttpError(409, '有工作对话正在运行，本次主动行动未启动');
       const thread = await this.manager.createThread({ agent: settings.agent!, cwd: sandbox?.root ?? settings.directory,
         title: todo.text, permissionMode: adapter.capabilities.defaultPermissionMode, ...(settings.model ? { model: settings.model } : {}) });
       this.update(run.id, { threadId: thread.id });
@@ -624,7 +624,7 @@ export class ProactiveService {
         : `由 LoopX 发起的沙盒动手。\n事项：${todo.text}\nID：${todo.id}\n接续说明：\n${note}\n\n这是独立 worktree 沙盒；只按接续说明推进已由人开始的工作。每个提交必须带 git trailer：\nLooChat-Proactive: ${todo.id}\n\n跑该仓库测试；只改当前沙盒，不动主工作区、不推送远端、不发消息、不做其他对外动作。只在此沙盒提交改动。不要查看其他 agent 会话，也不要修改它们的目录或配置。结束回复按「## 改动摘要」「## 测试结果」两段写清实际改动、执行的测试和结果；没有运行测试也要写清原因。`;
       if (variant === 'plan') prompt += `\n本轮是笼统事项拆解：把事项拆成 3–7 步，写出第一步的具体方案（要改哪里、怎么验证、要问人什么），写入 ${artifacts}/plan.md。可以只读查看相关仓库，不改任何仓库、不对外。用 loochat todo update 在接续说明记一句「已备好 拆解与第一步方案」。`;
       await this.manager.startTurn(thread.id, { text: prompt, scheduled: true, proactive: true }, undefined, false, undefined, turnId => {
-        if (this.busy(todo.id) || this.atCapacity()) throw new HttpError(409, '有工作线程正在运行，本次主动行动未启动');
+        if (this.busy(todo.id) || this.atCapacity()) throw new HttpError(409, '有工作对话正在运行，本次主动行动未启动');
         if (this.settings().mode !== 'auto' || this.quiet(new Date(now.getTime() + Date.now() - began)) || repo && !this.settings().repos.includes(repo)) throw new HttpError(409, '主动行动设置或安静时段已改变，本次未启动');
         this.personal.linkWorkThread(todo.id, thread.id, todo.rev);
         this.turns.set(run.id, turnId);
@@ -658,10 +658,10 @@ export class ProactiveService {
     }
     const answer = turnAnswer(this.store.voiceAnswerEvents(run.threadId, event.turnId!), event.turnId!).trim();
     if (run.kind === 'prepare' && this.store.getThread(run.threadId)?.cwd !== this.personal.directory()) {
-      throw new HttpError(409, '私人目录已改变，材料仍在原工作线程目录中，尚未自动提交');
+      throw new HttpError(409, '私人目录已改变，材料仍在原工作对话目录中，尚未自动提交');
     }
     const files = run.kind === 'prepare' ? await this.personal.commitArtifacts(run.matterId) : (await this.sandbox.changes(run.repo!, run.matterId)).files;
-    const testReport = run.kind === 'sandbox' ? answer.match(/(?:^|\n)## 测试结果\s*\n([\s\S]*?)(?=\n## |$)/)?.[1]?.trim() || '工作线程未报告测试结果' : undefined;
+    const testReport = run.kind === 'sandbox' ? answer.match(/(?:^|\n)## 测试结果\s*\n([\s\S]*?)(?=\n## |$)/)?.[1]?.trim() || '工作对话未报告测试结果' : undefined;
     const summary = answer.replace(/(?:^|\n)## 测试结果[\s\S]*$/, '').replace(/^## 改动摘要\s*/, '').trim().slice(0, 4000);
     const extras = testReport ? { testReport: testReport.slice(0, 4000) } : {};
     // A silent trial: failing tests or nothing reviewable ends quietly — an audit record, no card, no notice.
@@ -693,7 +693,7 @@ export class ProactiveService {
     if (run.kind !== 'sandbox' || !run.repo) throw new HttpError(400, '这次行动是准备材料，没有代码沙盒');
     const allowed = action === 'revert' ? run.status === 'merged' : action === 'discard' ? ['ready', 'failed'].includes(run.status) : run.status === 'ready';
     if (!allowed) throw new HttpError(409, action === 'revert' ? '只有已合入的主动行动才能撤回' : '当前状态不能执行此操作，请刷新后查看');
-    if (this.store.getThread(run.threadId)?.status === 'running') throw new HttpError(409, '沙盒工作线程仍在运行，请等它结束后再操作');
+    if (this.store.getThread(run.threadId)?.status === 'running') throw new HttpError(409, '沙盒工作对话仍在运行，请等它结束后再操作');
     if (this.acting.has(run.repo)) throw new HttpError(409, '这个仓库正在处理另一项操作，请稍后重试');
     if (!isWithinWorkdirs(run.repo, this.manager.allowedWorkdirs)) throw new HttpError(403, '仓库已不在允许的工作目录内');
     this.acting.add(run.repo);

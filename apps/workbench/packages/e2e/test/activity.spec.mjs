@@ -168,7 +168,7 @@ test('the list by activity: what wants attention first, then by day; the choice 
   await toggle.waitFor({ timeout: 10_000 });
   assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
   assert.equal(await toggle.locator('.activity-badge').count(), 0, 'no dot on the button');
-  assert.match(await toggle.getAttribute('title'), /1 个线程有新动静/, 'a thread finished out of sight is counted in the hint');
+  assert.match(await toggle.getAttribute('title'), /1 个对话有新动静/, 'a thread finished out of sight is counted in the hint');
   assert.ok(await page.locator('.group-head').count(), 'by project to begin with');
 
   await toggle.click();

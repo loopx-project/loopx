@@ -367,7 +367,7 @@ rl.on('line', (line) => {
       // A naming request from 自动取名: a title wrapped the way real agents sometimes answer, with an
       // emoji only when the rules ask for one. `slow name` keeps it waiting until cancelled;
       // `later name` answers after a moment, so a test can act while the naming agent thinks.
-      if (text.includes('给下面这段对话起一个线程标题')) {
+      if (text.includes('给下面这段对话起一个对话标题')) {
         if (text.includes('slow name')) { pendingPrompt = { id: msg.id }; return; }
         // A rule that asks for distinct emojis gets a fitting one instead of the robot; a plain emoji
         // rule still gets the robot; no emoji rule gets none.

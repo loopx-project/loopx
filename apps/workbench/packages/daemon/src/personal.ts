@@ -71,9 +71,9 @@ function delegationPrompt(todo: TodoRecord, note: string, personal: boolean): st
 再用 loochat notify --text-file FILE 发一句话提醒人来回答，然后结束本轮。人回复后再按回答推进。
 目标清楚时直接推进：有接续说明就按说明的「下一步」推进；没有说明也直接推进，并在结束前写第一版接续说明，已有说明则更新。需要人确认完成时用 loochat todo propose-done。`
     : `${clarify}
-本线程没有事项管理凭证：需要澄清时只在回复中提问并结束本轮，人回复后再按回答推进。
+本对话没有事项管理凭证：需要澄清时只在回复中提问并结束本轮，人回复后再按回答推进。
 目标清楚时直接推进：有接续说明就按说明的「下一步」推进；没有说明也直接推进，并在结束前于回复中写进展和第一版接续说明，已有说明则更新。需要人确认完成时向人提议确认。`;
-  return `这是一件新交给你的事，不是交接；这个线程就是它的工作线程，没有更早的对话需要读。
+  return `这是一件新交给你的事，不是交接；这个对话就是它的工作对话，没有更早的对话需要读。
 由 LoopX 交给你的事项。
 事项：${todo.text}
 ID：${todo.id}；状态：${todo.state}；归属：${todo.owner}
@@ -81,7 +81,7 @@ ID：${todo.id}；状态：${todo.state}；归属：${todo.owner}
 ${note.trim() ? note : '尚未写入。'}
 
 ${workflow}
-关联线程只是记录；不要用 handover/history 查关联线程，也不要翻本地会话文件找上下文。
+关联对话只是记录；不要用 handover/history 查关联对话，也不要翻本地会话文件找上下文。
 事项涉及不可逆操作（提交、付款、发消息、删除、推送代码）时，先停下来问人，得到明确同意后再操作。例如回邮件，可先起草给人看，发送前再问。`;
 }
 
@@ -619,7 +619,7 @@ export class PersonalService {
     if (!todos.length) return '';
     return '\n\n## 关联事项与接续说明\n改了事项后，请在这一轮结束前更新接续说明。\n' + todos.map(t => {
       const note = this.store.todoNote(t.id);
-      return `### ${t.text}\nID：${t.id}；状态：${t.state}；归属：${t.owner}\n说明更新时间：${note.updatedAt ?? '尚未写入'}；写入线程：${note.threadId ?? '无'}\n${note.text}`;
+      return `### ${t.text}\nID：${t.id}；状态：${t.state}；归属：${t.owner}\n说明更新时间：${note.updatedAt ?? '尚未写入'}；写入对话：${note.threadId ?? '无'}\n${note.text}`;
     }).join('\n\n');
   }
   async command(owner: string, input: Record<string, unknown>) {

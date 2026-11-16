@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openCollaboration, api, startDaemon, openUi, launchBrowser, repoRoot, closeSettings } from '../harness.mjs';
 const chainDialog = async page => {
-  await page.getByLabel('这个线程的更多操作').click();
+  await page.getByLabel('这个对话的更多操作').click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
   await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
 };
@@ -213,7 +213,7 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
       await dialog.getByRole('button', { name: '保存交接设置' }).click(); await dialog.getByRole('status').filter({ hasText: '已保存' }).waitFor(); await closeSettings(page);
       assert.equal((await request('/api/handover-settings')).orders.agy[0].model, 'claude-sonnet');
       await select(page, source.title, mobile);
-      await page.getByLabel('这个线程的更多操作').click(); await page.getByRole('menuitem', { name: '交接', exact: true }).click();
+      await page.getByLabel('这个对话的更多操作').click(); await page.getByRole('menuitem', { name: '交接', exact: true }).click();
       const handover = page.getByRole('dialog', { name: '交接', exact: true });
       await handover.locator('.auto-choice').getByRole('button').click();
       await page.getByRole('menuitemradio', { name: '关闭', exact: true }).click();

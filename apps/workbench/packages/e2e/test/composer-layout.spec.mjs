@@ -32,7 +32,7 @@ test('the simplified composer fits narrow screens and keeps permission, collabor
       try {
         await post(`/api/threads/${thread.id}/turns`, { text: 'slow' });
         await openUi(page, daemon);
-        if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+        if (mobile) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
         await page.locator('.sidebar .thread-item', { hasText: thread.title }).click();
         const input = page.locator('.composer textarea'); await input.fill('这段草稿需要保留');
         const permission = page.getByRole('button', { name: '权限：完全访问权限', exact: true });

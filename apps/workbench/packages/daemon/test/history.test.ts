@@ -459,7 +459,7 @@ test('the handover of a successor says how the work was carried over, and previe
     f.store.updateThread('next', {});
     // The link is what the hub writes when it creates the successor.
     (f.store as any).db.prepare('UPDATE threads SET handover = ? WHERE id = ?').run(JSON.stringify({ sourceId: 'thread', title: 'thread', agent: 'pi', mode: 'continue', method: 'summary' }), 'next');
-    const brief = `# 接手\n\n你接手 pi 在 hub 线程 thread 里的任务。\n\n工作目录 /work。\n\n## 任务\n${'写文章。'.repeat(400)}`;
+    const brief = `# 接手\n\n你接手 pi 在 hub 对话 thread 里的任务。\n\n工作目录 /work。\n\n## 任务\n${'写文章。'.repeat(400)}`;
     f.store.appendEvent('next', 'turn-1', 'turn.started', { text: brief, displayText: brief });
     const folded = f.store.history.handoverInfo('next');
     assert.equal(folded.method, 'summary');

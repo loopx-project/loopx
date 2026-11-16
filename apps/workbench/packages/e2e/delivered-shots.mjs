@@ -101,7 +101,7 @@ try {
       if (opened.padding !== '15px') throw new Error(`the body sits at ${opened.padding}, not under the name`);
       if (!opened.says.includes('按 seq 排序')) throw new Error('the opened body lost the message');
       if (opened.says.includes('[进度]')) throw new Error('the protocol line is shown in the body');
-      if (!opened.foot?.includes('打开成员线程')) throw new Error('the way into the member thread is missing');
+      if (!opened.foot?.includes('打开成员对话')) throw new Error('the way into the member thread is missing');
     }
     await settle(page);
     await shot(page, `expanded-1440-${look}`);

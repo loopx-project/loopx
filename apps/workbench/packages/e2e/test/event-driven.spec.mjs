@@ -97,7 +97,7 @@ test('a matter reads its received messages only when asked; failure can be retri
     await signals.locator('li').first().waitFor();
     await toggle.getByText('收到过的消息 3').waitFor();
     const rows = await signals.locator('li').allTextContents();
-    assert.match(rows[0], /老板问周报什么时候给.*已直投给工作线程/);
+    assert.match(rows[0], /老板问周报什么时候给.*已直投给工作对话/);
     assert.match(rows[1], /群里闲聊.*被过滤：不是在找你/);
     assert.match(rows[2], /有人提到这件事.*送了助手/);
     await toggle.click();

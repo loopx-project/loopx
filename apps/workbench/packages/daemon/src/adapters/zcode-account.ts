@@ -99,6 +99,6 @@ export class ZcodeAccounts {
       const apiKey = decryptZcodeCredential(credentials[credentialKey(provider, identity)], this.env);
       if (!apiKey) throw new Error('Missing credential');
       return { headersApplied: true, requestAuth: { apiKey } };
-    } catch { return { headersApplied: false, errorMessage: 'zcode 登录已失效或账号已切换，请在 zcode 中登录后重新打开线程' }; }
+    } catch { return { headersApplied: false, errorMessage: 'zcode 登录已失效或账号已切换，请在 zcode 中登录后重新打开对话' }; }
   }
 }

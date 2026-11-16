@@ -945,7 +945,7 @@ export class ThreadManager {
     const thread = this.getThread(threadId);
     const turns = this.store.listTurns(threadId);
     const turn = turnId ? turns.find((t) => t.turnId === turnId) : turns[turns.length - 1];
-    if (!turn) throw new HttpError(404, '这个线程没有这一轮');
+    if (!turn) throw new HttpError(404, '这个对话没有这一轮');
     const trace = buildTrace(this.store.turnEvents(threadId, turn.turnId));
     return {
       threadId,
@@ -976,7 +976,7 @@ export class ThreadManager {
     if (!adapter?.capabilities.systemPrompt || !adapter.readSystemPrompt) {
       throw new HttpError(400, `${thread.agent} 的会话文件不保存系统提示词`);
     }
-    if (!thread.agentSessionId) throw new HttpError(400, '这个线程还没有会话');
+    if (!thread.agentSessionId) throw new HttpError(400, '这个对话还没有会话');
     const prompt = await adapter.readSystemPrompt(thread.agentSessionId, thread.cwd);
     if (!prompt) throw new HttpError(404, '会话文件里没有系统提示词');
     return prompt;
@@ -996,7 +996,7 @@ export class ThreadManager {
     if (!adapter?.capabilities.history || !adapter.loadHistory) {
       throw new HttpError(400, `${thread.agent} 的会话历史不能从这里读取`);
     }
-    if (!thread.agentSessionId) throw new HttpError(400, '这个线程还没有会话');
+    if (!thread.agentSessionId) throw new HttpError(400, '这个对话还没有会话');
     const turns = await adapter.loadHistory(thread.agentSessionId, thread.cwd);
     for (const turn of turns) {
       for (const ev of turn.events) {
@@ -1891,7 +1891,7 @@ export class ThreadManager {
   async deleteThread(id: string, opts: { agentSession?: boolean; worktree?: boolean; force?: boolean } = {}): Promise<void> {
     const thread = this.getThread(id);
     if (this.running.has(id)) throw new HttpError(409, 'cancel the running turn before deleting this thread');
-    if (this.coordination?.metadata(id)) throw new HttpError(409, '协作线程请先归档，保留成员关系与消息记录');
+    if (this.coordination?.metadata(id)) throw new HttpError(409, '协作对话请先归档，保留成员关系与消息记录');
     let doomed: { main: string; tree: ThreadWorktree } | null = null;
     if (opts.worktree) {
       const tree = thread.worktree;

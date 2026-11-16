@@ -327,7 +327,7 @@ export class Scheduler {
   private sweep(): void {
     for (const run of this.store.runningScheduleRuns()) {
       if (run.threadId && !this.store.getThread(run.threadId)) {
-        this.store.updateScheduleRun(run.id, { status: 'error', finishedAt: new Date().toISOString(), message: '线程已删除' });
+        this.store.updateScheduleRun(run.id, { status: 'error', finishedAt: new Date().toISOString(), message: '对话已删除' });
       }
     }
   }
@@ -345,8 +345,8 @@ export class Scheduler {
     if (this.store.runningScheduleRun(s.id)) return record('skipped', '上一轮还没有结束，这次跳过');
     let threadId: string;
     const bound = s.mode === 'same' && s.threadId ? this.store.getThread(s.threadId) : null;
-    if (s.mode === 'same' && s.threadId && !bound) return record('error', '绑定的线程已删除', s.threadId);
-    if (bound?.archivedAt) return record('error', '绑定的线程已归档，恢复它或换一个', bound.id);
+    if (s.mode === 'same' && s.threadId && !bound) return record('error', '绑定的对话已删除', s.threadId);
+    if (bound?.archivedAt) return record('error', '绑定的对话已归档，恢复它或换一个', bound.id);
     if (bound) {
       threadId = bound.id;
     } else {
@@ -367,7 +367,7 @@ export class Scheduler {
     const text = s.prompt.replace(/\{\{date\}\}/g, localDate(at, s.timezone));
     try {
       const started = await this.manager.startTurn(threadId, { text, scheduled: true });
-      if (!('turnId' in started)) return record('skipped', '线程里已有一轮在运行', threadId);
+      if (!('turnId' in started)) return record('skipped', '对话里已有一轮在运行', threadId);
       const run = this.store.insertScheduleRun({
         id: randomUUID(),
         scheduleId: s.id,
@@ -386,7 +386,7 @@ export class Scheduler {
       }
       return { status: 'running' };
     } catch (err) {
-      if (err instanceof HttpError && err.status === 409) return record('skipped', '线程里已有一轮在运行', threadId);
+      if (err instanceof HttpError && err.status === 409) return record('skipped', '对话里已有一轮在运行', threadId);
       return record('error', err instanceof Error ? err.message : String(err), threadId);
     }
   }
@@ -413,8 +413,8 @@ export class Scheduler {
       if (!this.adapters.has(s.agent)) problem ??= 'agent 实例已不存在';
       if (s.mode === 'same' && s.threadId) {
         const bound = this.store.getThread(s.threadId);
-        if (!bound) problem ??= '绑定的线程已删除';
-        else if (bound.archivedAt) problem ??= '绑定的线程已归档';
+        if (!bound) problem ??= '绑定的对话已删除';
+        else if (bound.archivedAt) problem ??= '绑定的对话已归档';
       }
       const next = fields && s.enabled ? nextCron(fields, new Date(), s.timezone) : null;
       return {

@@ -380,7 +380,7 @@ export function turnsFromCodexHistory(turns: any[]): HistoryTurn[] {
  */
 export const CODEX_LOCAL_COMMANDS: SlashCommand[] = [
   { name: 'goal', description: '设置原生目标并持续执行；可查看、暂停、继续或清除', hint: '[目标 | pause | resume | clear]', kind: 'command' },
-  { name: 'compact', description: '压缩当前线程的上下文', kind: 'command' },
+  { name: 'compact', description: '压缩当前对话的上下文', kind: 'command' },
   { name: 'review', description: '审查未提交的修改，或按说明审查代码', hint: '[审查说明]', kind: 'command' },
   { name: 'skills', description: '查看当前目录可用的技能', kind: 'command' },
   { name: 'mcp', description: '查看 MCP 服务、工具数量和认证状态', kind: 'command' },

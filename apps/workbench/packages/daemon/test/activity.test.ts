@@ -62,7 +62,7 @@ test('asks are newest first with their thread, and a flooded day says how much w
     h.thread('a', 'claude', '长任务');
     h.thread('b', 'codex', '另一个');
     for (let i = 0; i < 55; i++) h.ask('a', `t${i}`, localTs(0, 9 + Math.floor(i / 30)), `第 ${i} 个问题`);
-    h.ask('b', 'only', localTs(0, 12), '另一个线程的问题');
+    h.ask('b', 'only', localTs(0, 12), '另一个对话的问题');
     const [day] = new Activity(h.db).read(1);
     assert.equal(day.turns, 56);
     assert.equal(day.threads, 2);

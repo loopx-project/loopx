@@ -74,7 +74,7 @@ test('plans and sub-items are added, each on its own line, and ticked off', asyn
 
 test('a plan links to a thread; the chip opens it', async () => {
   await plan('发布 0.2').locator('.row-more').first().click();
-  await page.getByRole('menuitem', { name: '关联线程' }).click();
+  await page.getByRole('menuitem', { name: '关联对话' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'write the release notes' }).click();
   const chip = plan('发布 0.2').locator('.todo-chip', { hasText: 'write the release notes' });
   await chip.waitFor();

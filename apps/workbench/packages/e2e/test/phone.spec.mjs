@@ -78,7 +78,7 @@ test('the list has its pages as rows, and search behind a button', async () => {
   await page.locator('.menu-btn').click();
   await settle();
   const list = page.locator('.sidebar');
-  for (const name of ['计划', '新对话', '搜索线程', '配置']) {
+  for (const name of ['计划', '新对话', '搜索对话', '配置']) {
     assert.equal(await list.getByRole('button', { name, exact: true }).isVisible(), true, name);
   }
   // What is not an everyday thing sits behind the settings button: the archive, importing, signing out.
@@ -98,7 +98,7 @@ test('the list has its pages as rows, and search behind a button', async () => {
   assert.equal(await listOpen(), true);
   assert.equal(await list.locator('.thread-row .row-more').first().isVisible(), false, 'rows carry no button on a touch screen');
 
-  await list.getByRole('button', { name: '搜索线程' }).click();
+  await list.getByRole('button', { name: '搜索对话' }).click();
   await page.keyboard.type('second');
   await list.locator('.thread-title', { hasText: 'second thread' }).waitFor();
   assert.equal(await list.locator('.thread-title', { hasText: 'first thread' }).count(), 0);

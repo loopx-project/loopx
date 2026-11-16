@@ -58,9 +58,9 @@ for (const width of [1440, 390]) for (const colorScheme of ['light', 'dark']) {
           assert.deepEqual(sizes.fonts, ['12px', '12px', '12px']);
           assert.equal(sizes.sameRow, true);
           assert.equal(await card.getByRole('button', { name: '发送回答', exact: true }).isEnabled(), false);
-          data.failNext.answer = '线程正在运行';
+          data.failNext.answer = '对话正在运行';
           await card.getByRole('button', { name: '先到预发', exact: true }).click();
-          await card.getByRole('alert').getByText('线程正在运行').waitFor();
+          await card.getByRole('alert').getByText('对话正在运行').waitFor();
           await card.getByRole('button', { name: '先到预发', exact: true }).click();
           await card.getByText('已回答', { exact: true }).waitFor();
           assert.deepEqual(data.requests.answers.at(-1), { answer: '先到预发' });

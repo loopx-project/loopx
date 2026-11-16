@@ -263,7 +263,7 @@ export class AutoCompact {
     return [
       '# 上下文压缩',
       '',
-      `线程 ${threadId} 的上下文已由 ${label} 压缩；你继续的是同一个任务，不是新任务。`,
+      `对话 ${threadId} 的上下文已由 ${label} 压缩；你继续的是同一个任务，不是新任务。`,
       `工作目录 ${cwd}。先运行 git status、git diff 对齐现状，再从「未完成·下一步」继续。`,
       '',
       compressed,

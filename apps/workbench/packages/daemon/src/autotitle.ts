@@ -78,7 +78,7 @@ export function namingPrompt(rules: string, question: string, answer: string | n
   // Code points, not UTF-16 units: a cut must not take an emoji apart.
   const cut = (text: string) => (text.length > EXCERPT ? `${[...text].slice(0, EXCERPT).join('')}…` : text);
   return [
-    '给下面这段对话起一个线程标题。',
+    '给下面这段对话起一个对话标题。',
     '',
     '规则：',
     rules.trim() || DEFAULT_RULES,
@@ -246,7 +246,7 @@ export class AutoTitle implements DaemonExtension {
       throw new HttpError(409, '先在自动取名的设置里选一个取名用的 agent');
     }
     const first = this.userTurns(threadId)[0];
-    if (!first) throw new HttpError(409, '这个线程还没有对话');
+    if (!first) throw new HttpError(409, '这个对话还没有对话');
     // On send the answer is still streaming; a finished turn, the second pass and a manual ask see it.
     const firstAnswer = answer ? turnAnswer(this.store.listEvents(threadId, 0, -1), first.turnId).trim() || null : null;
     try {

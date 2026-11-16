@@ -242,7 +242,7 @@ test('proactive runs drive review and blocked, and a ready run reports', async (
     const report = reported(h.routerTurns()[0].data.text);
     assert.equal(report.stage, 'review'); assert.match(report.summary, /已备好/);
 
-    const other = h.personal.create({ text: '没线程的事' });
+    const other = h.personal.create({ text: '没对话的事' });
     h.store.saveHubSetting('personalProactiveRuns', [...h.personal.proactive.runs(), { id: 'r2', matterId: other.id, kind: 'prepare', threadId: '', startedAt: new Date().toISOString(), status: 'failed' }]);
     assert.equal(await h.stageOf(other), 'blocked');
   } finally { await h.close(); }
@@ -261,7 +261,7 @@ test('stage: a waiting thread and a matter waiting on the person are answer; wai
     await h.turn(thread, 'work fail');
     h.store.updateTodo(done.id, { done: true });
     assert.equal(await h.stageOf(done), null, 'a finished matter has no stage');
-    const newest = h.personal.create({ text: '换了线程' });
+    const newest = h.personal.create({ text: '换了对话' });
     const failed = await h.worker(newest);
     await h.turn(failed, 'work fail');
     await new Promise(r => setTimeout(r, 5));

@@ -7,7 +7,7 @@ import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 
 const shots = '/tmp/loochat-handover-merged-shots';
 const chainDialog = async page => {
-  await page.getByLabel('这个线程的更多操作').click();
+  await page.getByLabel('这个对话的更多操作').click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
   await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
 };
@@ -51,7 +51,7 @@ test('three handover segments load on upward navigation, keep their action targe
         const page = await context.newPage(); const requests = [], errors = [];
         page.on('request', req => requests.push(req.url())); page.on('pageerror', error => errors.push(error.message));
         const openLatest = async () => {
-          if (phone) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+          if (phone) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
           await page.locator('.handover-group > .thread-row .thread-item').click();
           await page.getByText('C 问题 10', { exact: true }).waitFor();
           await page.waitForTimeout(150);
@@ -121,7 +121,7 @@ test('three handover segments load on upward navigation, keep their action targe
         await page.getByText('C 问题 10', { exact: true }).waitFor();
         assert.equal(await page.locator('.bubble', { hasText: 'DEFERRED_HANDOVER' }).count(), 0);
         // Sidebar member navigation opens that segment's merged view, with C as input recipient.
-        if (phone) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+        if (phone) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
         await page.locator('.handover-toggle').click();
         await page.locator('.handover-member').filter({ hasText: '原始' }).click();
         await page.getByText('A 问题 4', { exact: true }).waitFor();

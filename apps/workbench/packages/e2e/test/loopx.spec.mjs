@@ -60,7 +60,7 @@ test('install an independent LoopX package, configure and inspect shared work in
   await page.getByRole('button', { name: '关联目标', exact: true }).click();
   await page.getByLabel('外部目标 ID', { exact: true }).fill('sample-goal');
   await page.getByLabel('Registry 文件路径').fill(join(daemon.workdir, 'registry.json'));
-  await page.getByRole('button', { name: '已选 0 个线程' }).click();
+  await page.getByRole('button', { name: '已选 0 个对话' }).click();
   await page.getByRole('button', { name: 'Plugin validation', exact: true }).click();
   await page.keyboard.press('Escape');
   // The popover owns Escape; the settings dialog must remain usable.

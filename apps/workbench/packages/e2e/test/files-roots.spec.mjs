@@ -92,7 +92,7 @@ test(`the file browser moves between the thread folder, projects and home; folde
     await menu.waitFor();
     assert.deepEqual(
       (await menu.locator('.files-roots-text-kind').allTextContents()).sort(),
-      ['线程目录', '项目目录', '家目录'].sort(),
+      ['对话目录', '项目目录', '家目录'].sort(),
     );
     await menu.getByRole('menuitemradio', { name: /另一个项目/ }).click();
     await panel.locator('.files-row', { hasText: 'src' }).click();
@@ -144,7 +144,7 @@ test(`on a phone the root switcher sits on the folder page: phone-${colorScheme}
     await panel.locator('.files-row', { hasText: '笔记.md' }).waitFor();
     assert.equal(await panel.locator('.files-roots-name').innerText(), 'home', 'the chip names the root, not the folder');
     await panel.locator('.files-roots').click();
-    await page.getByRole('menu', { name: '切换浏览位置' }).getByRole('menuitemradio', { name: /线程目录/ }).click();
+    await page.getByRole('menu', { name: '切换浏览位置' }).getByRole('menuitemradio', { name: /对话目录/ }).click();
     await panel.locator('.files-row', { hasText: '说明.pdf' }).waitFor();
     if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
       mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });

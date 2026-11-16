@@ -26,12 +26,12 @@ function open() {
 test('words are found in what was asked and in an answer that streamed in pieces', () => {
   const h = open();
   try {
-    h.create('a', '线程甲');
-    h.create('b', '线程乙');
+    h.create('a', '对话甲');
+    h.create('b', '对话乙');
     h.turn('a', 't1', '额度看板怎么排序', '当前智能体排在最前面，其余保持原来的顺序。');
     h.turn('b', 't2', '改一下 README', 'Updated the Quota Board section.');
     const asked = h.store.searchText('额度看板');
-    assert.deepEqual(asked.map((x) => [x.threadId, x.turnId, x.role, x.title]), [['a', 't1', 'user', '线程甲']]);
+    assert.deepEqual(asked.map((x) => [x.threadId, x.turnId, x.role, x.title]), [['a', 't1', 'user', '对话甲']]);
     // The phrase straddles several stored pieces; it is found whole, with the words around it.
     const [said] = h.store.searchText('保持原来');
     assert.deepEqual([said.threadId, said.turnId, said.role], ['a', 't1', 'assistant']);

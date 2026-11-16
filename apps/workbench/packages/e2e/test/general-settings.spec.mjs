@@ -22,7 +22,7 @@ test('general startup preference is shared, respects recent activity and explici
       const page = await context.newPage();
       await openUi(page, daemon);
       await page.locator('.topbar-title', { hasText: '新对话' }).waitFor();
-      if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      if (mobile) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       await page.locator('.sidebar').getByRole('button', { name: '配置', exact: true }).click();
       const menu = page.locator('.settings-nav');
       assert.equal(await menu.getByRole('button').first().innerText(), '常规');
@@ -60,7 +60,7 @@ test('general startup preference is shared, respects recent activity and explici
       await page.reload();
       await page.locator('.topbar-title', { hasText: 'Latest conversation' }).waitFor();
       // An explicit new-thread action is not undone by subsequent list updates.
-      if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      if (mobile) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       await page.locator('.sidebar').getByRole('button', { name: '新对话', exact: true }).click();
       await page.locator('.topbar-title', { hasText: '新对话' }).waitFor();
       await page.goto(`${daemon.base}/#/thread/${older.id}`);

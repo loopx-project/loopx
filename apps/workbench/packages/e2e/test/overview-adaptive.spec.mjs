@@ -132,7 +132,7 @@ test('cancelled cold opens stay closed; failures can retry, and another thread n
   const browser = await launchBrowser();
   try {
     const make = async title => (await (await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title }) })).json());
-    const first = await make('缓存来源'); const second = await make('另一个线程');
+    const first = await make('缓存来源'); const second = await make('另一个对话');
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     const page = await context.newPage(); page.setDefaultTimeout(10000);
     const releases = [];

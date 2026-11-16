@@ -27,7 +27,7 @@ test('glass chrome has scrolling content behind it without hiding either end of 
       const errors = []; page.on('pageerror', error => errors.push(error.message));
       await openUi(page, daemon);
       await page.addStyleTag({ content: '*,*::before,*::after{transition:none!important;animation:none!important}' });
-      if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      if (mobile) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       await page.locator('.sidebar .thread-item', { hasText: thread.title }).click();
       await page.locator('.thread .markdown').first().waitFor();
       const scroller = page.locator('.main > .scroller');
@@ -132,7 +132,7 @@ test('focusing the composer keeps its glass edge, and floating buttons share the
     const edge = () => page.locator('.composer-box').evaluate(el => { const s = getComputedStyle(el); return { shadow: s.boxShadow, border: s.borderTopColor }; });
     const sidebar = await page.locator('.round-btn').first().evaluate(el => getComputedStyle(el).backdropFilter);
     assert.notEqual(sidebar, 'none', 'the sidebar round buttons are glass');
-    await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+    await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
     await page.locator('.sidebar .thread-item', { hasText: thread.title }).click();
     await page.locator('.composer-box').waitFor();
     const resting = await edge();
@@ -165,7 +165,7 @@ test('the phone edges wash only where text scrolls out, and the read-only handov
     await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 59, right: 0, bottom: 34, left: 0 } });
     await openUi(page, daemon);
     await page.addStyleTag({ content: '*,*::before,*::after{transition:none!important;animation:none!important}' });
-    await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+    await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
     await page.locator('.handover-group > .thread-row .thread-item').click();
     await page.locator('.composer-box').waitFor();
     const edges = () => page.evaluate(() => {
@@ -186,7 +186,7 @@ test('the phone edges wash only where text scrolls out, and the read-only handov
     assert.notEqual(plain.blurFilter, 'none', 'the fade above the composer is blurred');
     assert.ok(Math.abs(plain.barWashHeight - (plain.bar + 30)) <= 1, 'the top wash eases out 30px below the bar');
     // Open the earlier segment: its note joins the slot, but the wash still follows the composer alone.
-    await page.getByLabel('这个线程的更多操作').click();
+    await page.getByLabel('这个对话的更多操作').click();
     await page.getByRole('menuitem', { name: '分叉与交接' }).click();
     await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
     await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();

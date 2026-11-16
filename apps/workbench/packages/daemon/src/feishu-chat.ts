@@ -441,7 +441,7 @@ export class FeishuChat {
     const record = this.record(randomUUID(), 'out', null, 'LoopX', 'failed', owner ? null : 'owner_missing');
     if (!owner) return record;
     try {
-      await this.run(['im', '+messages-send', '--as', 'bot', '--user-id', owner, '--markdown', '-', '--idempotency-key', record.key.slice(0, 50)], '[LoopX] 飞书对话已连通。直接发消息给我即可开始一个新线程。');
+      await this.run(['im', '+messages-send', '--as', 'bot', '--user-id', owner, '--markdown', '-', '--idempotency-key', record.key.slice(0, 50)], '[LoopX] 飞书对话已连通。直接发消息给我即可开始一个新对话。');
       record.result = 'sent';
     } catch (e) { record.reason = (e as Error).message; }
     return record;

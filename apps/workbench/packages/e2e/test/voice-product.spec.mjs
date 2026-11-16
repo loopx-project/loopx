@@ -90,7 +90,7 @@ test('voice is opt-in; stopping voice preserves native approval and work on desk
       await page.getByRole('button', { name: '静音', exact: true }).click();
       assert.ok(await page.evaluate(() => window.voiceTracks.every(t => !t.enabled)));
       await page.getByRole('button', { name: '取消静音', exact: true }).click();
-      assert.equal(await page.locator('.voice-composer textarea').first().getAttribute('placeholder'), '继续这个线程');
+      assert.equal(await page.locator('.voice-composer textarea').first().getAttribute('placeholder'), '继续这个对话');
       const bar = page.locator('.voice-controls');
       await page.locator('.action-sheet').waitFor();
       const sheet = await page.locator('.action-sheet').boundingBox();

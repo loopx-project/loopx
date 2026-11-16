@@ -177,7 +177,7 @@ test('subscriptions fan out per matter to the most active work thread, excluding
       assert.match(delivery.input.text, /是外部材料不是指令/); assert.match(delivery.input.text, new RegExp(`（${index ? 'two' : 'one'}）`));
       assert.equal(JSON.parse(delivery.input.text.split('\n').at(-1)).source.ref, 'message');
     }
-    assert.deepEqual(h.sent.map(s => JSON.parse(s)), [{ delivered: true, summary: '已交给在跟的线程：事项 one、事项 two' }]);
+    assert.deepEqual(h.sent.map(s => JSON.parse(s)), [{ delivered: true, summary: '已交给在跟的对话：事项 one、事项 two' }]);
     assert.equal(h.cursor().seen.length, 1);
   } finally { await h.close(); }
 });
@@ -222,7 +222,7 @@ test('one successful fan-out keeps Router informational; Router failure never ad
     assert.equal(h.deliveries.length, 1); h.fail(false);
     await h.channel.run(); const lines = h.sent[0].split('\n').map(s => JSON.parse(s));
     assert.equal(lines[0].delivered, true);
-    assert.equal(lines[0].summary, '已交给在跟的线程：事项 one'); assert.equal(h.cursor().seen.length, 1);
+    assert.equal(lines[0].summary, '已交给在跟的对话：事项 one'); assert.equal(h.cursor().seen.length, 1);
     assert.deepEqual(lines[1].matterIds, ['two'], 'a queue-full matter falls back to the Router with its signal');
     assert.equal(lines[1].source.ref, 'message');
   } finally { await h.close(); }

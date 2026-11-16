@@ -49,7 +49,7 @@ test('delegation destinations, searchable mobile models, compact empty notes and
       await page.locator('.todo-delegate-new').click();
       await page.getByRole('menuitem', { name: '关联已有对话…', exact: true }).click();
       const picker = page.getByRole('dialog', { name: '关联已有对话', exact: true });
-      await picker.getByLabel('搜索线程', { exact: true }).fill('发布');
+      await picker.getByLabel('搜索对话', { exact: true }).fill('发布');
       await page.screenshot({ animations: 'disabled', path: join(shots, `link-existing-${suffix}.png`) });
       await picker.getByRole('button', { name: '讨论发布安排', exact: true }).click();
       await picker.waitFor({ state: 'detached' });
@@ -105,7 +105,7 @@ test('delegation destinations, searchable mobile models, compact empty notes and
     await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
     await page.locator('.settings-topbar').getByRole('button', { name: '返回', exact: true }).click();
     await page.route('**/api/push/settings', route => route.fulfill({ status: 404, json: { error: 'not found' } }));
-    await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+    await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
     await page.getByRole('button', { name: '配置', exact: true }).click();
     await page.locator('.settings-nav').getByRole('button', { name: '推送', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: '后台还没更新到这个版本，重启 hub 后再试' }).waitFor();

@@ -135,7 +135,7 @@ test('questions answer from the sheet, leave a faint line, and the plan opens at
       if (shots) await page.screenshot({ path: join(shots, `trace-${device}-${colorScheme}.png`), animations: 'disabled' });
       await page.locator('.proposal').getByText('实施计划', { exact: true }).last().waitFor();
       // The plan is in: plan mode is over (the box may be hidden behind the sheet asking about it).
-      await page.locator('.composer textarea[placeholder="继续这个线程"]').waitFor({ state: 'attached' });
+      await page.locator('.composer textarea[placeholder="继续这个对话"]').waitFor({ state: 'attached' });
       // The plan is in: plan mode is over, and whether to run it is asked in the sheet.
       await planSheet(page).getByText('是否执行该方案？', { exact: true }).waitFor();
       // The plan is a document in the thread: cut where it runs long, opened to the whole of it
@@ -162,7 +162,7 @@ test('questions answer from the sheet, leave a faint line, and the plan opens at
       // Plan mode on again in a thread with history: nothing to start until there is a new plan.
       assert.equal(await page.getByRole('button', { name: '确认执行该方案', exact: true }).count(), 0);
       await page.locator('.plan-pill[aria-label="退出计划模式"]').click();
-      await page.locator('.composer textarea[placeholder="继续这个线程"]').waitFor();
+      await page.locator('.composer textarea[placeholder="继续这个对话"]').waitFor();
       assert.equal(await (await api(daemon, `/api/threads/${thread.id}`)).json().then(t => t.workMode), 'execute');
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
     } finally { await context.close(); }
@@ -356,7 +356,7 @@ test('a phone folds the empty composer to one line while a turn runs, and opens 
       // Idle, it folds the same way: nothing being written is one line.
       await page.locator('.composer textarea').focus();
       await page.locator('.composer textarea').blur();
-      await page.locator('.composer-box.collapsed textarea[placeholder="继续这个线程"]').waitFor();
+      await page.locator('.composer-box.collapsed textarea[placeholder="继续这个对话"]').waitFor();
       assert.equal(await page.getByRole('button', { name: '协作', exact: true }).count(), 0);
       if (shots) await page.screenshot({ path: join(shots, `composer-collapsed-idle-phone-${colorScheme}.png`), animations: 'disabled' });
       await page.locator('.composer-box.collapsed textarea').tap();

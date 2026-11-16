@@ -94,7 +94,7 @@ export function handoverBrief(info: {
   return [
     '# 接手',
     '',
-    `你接手 ${info.from} 在 hub 线程 ${info.threadId} 里的任务，看不到原对话。需要时自己读（找不到 loochat 就用 "$LOOCHAT_BIN_DIR/loochat"）：`,
+    `你接手 ${info.from} 在 hub 对话 ${info.threadId} 里的任务，看不到原对话。需要时自己读（找不到 loochat 就用 "$LOOCHAT_BIN_DIR/loochat"）：`,
     '- `loochat handover`：来源会话信息',
     `- \`loochat history ${info.threadId}\`：按轮读问答和工具调用，按返回的 command 翻页`,
     '',

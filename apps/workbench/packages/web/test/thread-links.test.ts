@@ -48,8 +48,8 @@ test('half-width parentheses around the id prefix link as well', () => {
 
 test('a whole thread id in prose becomes a jump link', () => {
   assert.equal(
-    render('接手 hub 线程 0de90e6b-578f-4ca8-b4fb-34bd0ca29051 的任务'),
-    '<p>接手 hub 线程 <a href="thread://0de90e6b-578f-4ca8-b4fb-34bd0ca29051" title="🗂️盘点Calli会话未完事项与待办">0de90e6b-578f-4ca8-b4fb-34bd0ca29051</a> 的任务</p>',
+    render('接手 hub 对话 0de90e6b-578f-4ca8-b4fb-34bd0ca29051 的任务'),
+    '<p>接手 hub 对话 <a href="thread://0de90e6b-578f-4ca8-b4fb-34bd0ca29051" title="🗂️盘点Calli会话未完事项与待办">0de90e6b-578f-4ca8-b4fb-34bd0ca29051</a> 的任务</p>',
   );
 });
 

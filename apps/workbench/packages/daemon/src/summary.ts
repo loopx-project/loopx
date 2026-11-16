@@ -30,7 +30,7 @@ function summaryPrompt(since: string, days: number, heading: string): string {
   const range = days === 1 ? '今天' : `今天和近 ${days} 天`;
   return `由 LoopX 发起的近期总结。
 范围：${range}，即 ${since} 起。
-1. 运行 loochat threads --since ${since}，看这段时间的会话概况。self: true 是本线程，跳过。概况不够判断时，用 loochat threads show ID 读那个会话，只读需要的部分。
+1. 运行 loochat threads --since ${since}，看这段时间的会话概况。self: true 是本对话，跳过。概况不够判断时，用 loochat threads show ID 读那个会话，只读需要的部分。
 2. 把会话按目标归并成 3～8 件大事：这段时间做了的，和还没做完的（done 为 false，或进度是进行中、需要你、待验收）。每件一句话、20 字以内，人一眼认得出，不写会话编号。
 3. 运行 loochat todo，找文字是「${heading}」的事项；没有就用 loochat todo add --owner me --text-file - 建一个，文字就是「${heading}」。
 4. 在它下面写子项：loochat todo add --owner me --parent 父项ID --thread 会话ID [--thread 会话ID …] --text-file -。会话的 todos 里已有这个父项的子项（parentId 是父项 ID）时，不再写它；同一件事有了新会话，用 loochat todo update 子项ID --rev N --thread 会话ID 追加。不删除、不改写已有子项。新子项关联的会话都已被人标完成时，LoopX 会把它记为完成。

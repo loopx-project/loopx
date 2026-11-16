@@ -17,8 +17,8 @@ test('switching machines shows the remembered list at once and never an empty on
   const hub = await startDaemon();
   let browser;
   try {
-    await api(node, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: node.workdir, title: 'devbox上的线程' }) });
-    await api(hub, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: hub.workdir, title: '本机的线程' }) });
+    await api(node, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: node.workdir, title: 'devbox上的对话' }) });
+    await api(hub, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: hub.workdir, title: '本机的对话' }) });
     await linkDaemon(hub, node);
     browser = await launchBrowser();
     for (const mobile of [false, true]) {
@@ -41,18 +41,18 @@ test('switching machines shows the remembered list at once and never an empty on
         if (mobile) await page.locator('.menu-btn').click();
         const title = text => page.locator('.sidebar .thread-title', { hasText: new RegExp(`^${text}$`) });
         const tab = name => page.getByRole('tab', { name });
-        await title('本机的线程').waitFor({ timeout: 10_000 });
+        await title('本机的对话').waitFor({ timeout: 10_000 });
         await seen();
         await names();
 
         // The first visit to devbox: nothing remembered, so it reads, and says so rather than "no threads".
         await tab('devbox').click();
-        await title('devbox上的线程').waitFor({ timeout: 10_000 });
+        await title('devbox上的对话').waitFor({ timeout: 10_000 });
         const first = await seen();
-        assert.ok(!first.some(l => l.includes('还没有线程')), `first visit claimed an empty list: ${first}`);
+        assert.ok(!first.some(l => l.includes('还没有对话')), `first visit claimed an empty list: ${first}`);
 
         // Back and forth: each machine's list is there at once.
-        for (const [name, thread] of [['本机', '本机的线程'], ['devbox', 'devbox上的线程'], ['本机', '本机的线程']]) {
+        for (const [name, thread] of [['本机', '本机的对话'], ['devbox', 'devbox上的对话'], ['本机', '本机的对话']]) {
           await tab(name).click();
           await title(thread).waitFor({ timeout: 10_000 });
           assert.deepEqual(await seen(), [], `switching to ${name} drew an empty list first`);
@@ -63,7 +63,7 @@ test('switching machines shows the remembered list at once and never an empty on
         // A reload remembers too.
         await page.reload();
         if (mobile) await page.locator('.menu-btn').click();
-        await title('本机的线程').waitFor({ timeout: 10_000 });
+        await title('本机的对话').waitFor({ timeout: 10_000 });
         assert.deepEqual(await seen(), [], 'a reload drew an empty list first');
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal overflow');
       } finally { await context.close(); }

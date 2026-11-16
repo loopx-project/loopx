@@ -68,7 +68,7 @@ test('Enter on a focused thread link opens the thread too', async t => {
   const source = await create('键盘跳转源');
   await send(source.id, '起点'); await idle(source.id);
   const citing = await create('键盘引用会话');
-  await send(citing.id, `接手 hub 线程 ${source.id} 的任务`); await idle(citing.id);
+  await send(citing.id, `接手 hub 对话 ${source.id} 的任务`); await idle(citing.id);
 
   const page = await setup(t);
   await pickThread(page, citing.title);

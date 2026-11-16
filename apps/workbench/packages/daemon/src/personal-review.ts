@@ -59,13 +59,13 @@ export function watchFacts(input: WatchInput, now: number): WatchFact[] {
 /** Read-only review instructions, separate from the work delegated after the person's reply. */
 function reviewPrompt(summary: unknown[]): string {
   return `由 LoopX 发起的私人事项盘点。
-这轮只读、只问，不自己开工，不做不可逆操作，也不是交接；不读关联线程的历史或本地会话文件。
+这轮只读、只问，不自己开工，不做不可逆操作，也不是交接；不读关联对话的历史或本地会话文件。
 查看未完成事项摘要：笼统的事提 1～3 个具体问题，每个附建议默认；挑今天最值得做的 1～2 件，问要不要开始；卡住、逾期、已停止跟进的事项提醒人。
-把以上合成一条 loochat notify --text-file FILE（不超过 500 字）；一次自动盘点最多一条 notify，不要分开发。没有需要人的事就 loochat quiet，线程会自动归档。
-摘要只有说明预览，需要全文才用 loochat todo show ID；关联线程是否运行只是状态，不是接手旧会话的入口。
+把以上合成一条 loochat notify --text-file FILE（不超过 500 字）；一次自动盘点最多一条 notify，不要分开发。没有需要人的事就 loochat quiet，对话会自动归档。
+摘要只有说明预览，需要全文才用 loochat todo show ID；关联对话是否运行只是状态，不是接手旧会话的入口。
 带 watch 字段的事项列出了可疑事实（长时间运行、多轮无进展、连续失败）；逐个判断是否空转或跑偏，值得人介入的写进 notify 并点名，正常的不提。
 结束前用 loochat review next TIME 决定下次何时再看，依据截止、跟进、等待和人的回复节奏；时间至少 30 分钟后、最多 3 天后，LoopX 会调整安静时段、每日上限和连续无回复的长间隔。没设置时默认下一个 09:00。
-人会在这条线程回复。按回答更新事项、接续说明、等待或跟进；只有人明确说「开始 X」后，才用 loochat todo delegate ID 新开私人工作线程。本盘点线程不做事项的实际工作，自动盘点轮禁止 delegate，不得把“有待办”当作人的授权。
+人会在这条对话回复。按回答更新事项、接续说明、等待或跟进；只有人明确说「开始 X」后，才用 loochat todo delegate ID 新开私人工作对话。本盘点对话不做事项的实际工作，自动盘点轮禁止 delegate，不得把“有待办”当作人的授权。
 未完成事项摘要：
 ${JSON.stringify(summary, null, 2)}`;
 }

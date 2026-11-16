@@ -324,18 +324,21 @@ export class LoopxService implements LoopxHooks {
   }
 
   /**
-   * Sends a launch's first message; only once it has gone out does the binding stop carrying it.
-   * A thread that already holds a turn (the message went out but the daemon stopped before saying
-   * so) is not sent it again.
+   * Sends a launch's first message. The binding keeps carrying it until a later look finds a turn
+   * that reached the agent: one still open, ended, or with anything the agent said. A turn that the
+   * restart cut off before it produced anything never got there, so the message is sent again.
    */
   private async dispatch(threadId: string, text: string) {
-    const sent = this.manager!.listEvents(threadId, 0).find((e) => e.type === 'turn.started');
+    const events = this.manager!.listEvents(threadId, 0);
+    const lost = (turnId: string | null) => events.every((e) => e.turnId !== turnId || e.type === 'turn.started'
+      || (e.type === 'turn.error' && e.data?.code === 'interrupted'))
+      && events.some((e) => e.turnId === turnId && e.type === 'turn.error');
+    const sent = events.find((e) => e.type === 'turn.started' && !lost(e.turnId));
     if (sent) {
       this.bindings.update(threadId, { firstMessage: undefined });
       return { threadId, turnId: sent.turnId };
     }
     const started = await this.manager!.startTurn(threadId, { text, fromUser: true } as never);
-    this.bindings.update(threadId, { firstMessage: undefined });
     return { threadId, turnId: 'turnId' in started ? started.turnId : null };
   }
 

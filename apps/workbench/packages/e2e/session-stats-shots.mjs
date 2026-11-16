@@ -108,7 +108,7 @@ try {
       await page.keyboard.press('Escape');
       await page.waitForTimeout(200);
       // Back out of the trace page for the next theme.
-      await page.getByRole('button', { name: '返回主线程' }).click();
+      await page.getByRole('button', { name: '返回主对话' }).click();
       await page.locator('.trace-side.phone').waitFor({ state: 'detached', timeout: 5_000 });
     }
     await page.close();

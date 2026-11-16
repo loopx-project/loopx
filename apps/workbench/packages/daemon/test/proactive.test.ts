@@ -309,7 +309,7 @@ test('a sandbox round with nothing to review ends silently too', async () => {
     await h.service.tick(now);
     const run = await h.settled(h.service.runs().at(-1)!.id);
     assert.equal(run.status, 'discarded'); assert.equal(run.discardReason, '没有可审阅的改动');
-    assert.equal(run.testReport, '工作线程未报告测试结果');
+    assert.equal(run.testReport, '工作对话未报告测试结果');
     assert.deepEqual(run.files, []);
     assert.equal(h.store.listEventsOfType(run.threadId, 'agent.notice').length, 0);
     assert.deepEqual(h.service.counts(), {});
@@ -753,7 +753,7 @@ test('automatic send rechecks settings and latest turn in startTurn claim; new t
     await h.service.save({ mode: 'auto' }); await h.service.tick(now);
     assert.equal(h.service.runs()[0].status, 'asking');
     await h.manager.startTurn(thread.id, { text: '人自己接着说' });
-    assert.equal(h.service.runs()[0].status, 'discarded'); assert.equal(h.service.runs()[0].discardReason, '线程已继续');
+    assert.equal(h.service.runs()[0].status, 'discarded'); assert.equal(h.service.runs()[0].discardReason, '对话已继续');
   } finally { await h.close(); }
 });
 

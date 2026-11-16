@@ -12,7 +12,7 @@ test('legacy handovers recover only from explicit local first-turn coordinates a
   try {
     const create = (id: string, cwd = '/project') => store.createThread({ id, cwd, agent: 'test', title: 'Same title', permissionMode: 'auto_edit', model: null, effort: null });
     create('source');
-    const envelope = '# 交接信息\n\n- Hub 线程 ID：source\n\n## 接手要求\nContinue';
+    const envelope = '# 交接信息\n\n- Hub 对话 ID：source\n\n## 接手要求\nContinue';
     for (const [id, text, cwd] of [
       ['valid', '来源机器：本机（当前 hub）\n\n' + envelope, '/project'],
       ['remote', '来源机器：开发机\n\n' + envelope, '/project'],

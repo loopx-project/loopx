@@ -233,7 +233,7 @@ test('new chat opens a draft in the filtered project; the assistant button hands
 test('a pinned project becomes a pill that narrows the board, and the pin survives a reload', { timeout: 60000 }, async () => {
   mkdirSync(join(daemon.workdir, 'elsewhere'), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: join(daemon.workdir, 'elsewhere') });
-  const other = await post('/api/threads', { agent: 'claude', title: '别的目录里的线程', cwd: join(daemon.workdir, 'elsewhere') });
+  const other = await post('/api/threads', { agent: 'claude', title: '别的目录里的对话', cwd: join(daemon.workdir, 'elsewhere') });
   const page = await openBoard();
   try {
     const bar = page.getByRole('toolbar', { name: '项目快捷切换' });
@@ -247,9 +247,9 @@ test('a pinned project becomes a pill that narrows the board, and the pin surviv
     await pill.waitFor();
     await pill.click();
     assert.equal(await pill.getAttribute('aria-pressed'), 'true');
-    await page.locator('.ext-board-page').getByText('别的目录里的线程').first().waitFor({ state: 'detached', timeout: 3000 });
+    await page.locator('.ext-board-page').getByText('别的目录里的对话').first().waitFor({ state: 'detached', timeout: 3000 });
     await pill.click();
-    await page.locator('.ext-board-page').getByText('别的目录里的线程').first().waitFor();
+    await page.locator('.ext-board-page').getByText('别的目录里的对话').first().waitFor();
     assert.equal(await bar.getByRole('button', { name: '全部' }).getAttribute('aria-pressed'), 'true');
     await page.reload();
     await bar.getByRole('button', { name: new RegExp(name) }).first().waitFor();

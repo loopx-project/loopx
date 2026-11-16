@@ -34,7 +34,7 @@ test('chat quota and account pages share refreshes and preserve the conversation
         ] } });
       });
       await openUi(page, daemon); await page.addStyleTag({ content: '*,*::before,*::after{transition:none!important;animation:none!important}' });
-      if (mobile) await page.getByRole('button', { name: '打开线程列表', exact: true }).click();
+      if (mobile) await page.getByRole('button', { name: '打开对话列表', exact: true }).click();
       await page.locator('.sidebar .thread-item', { hasText: 'Quota navigation return' }).click();
       await page.locator('.composer textarea').fill('Draft survives quota');
       assert.equal(requests.length, 0, 'chat does not subscribe to quotas before opening the menu');
@@ -47,7 +47,7 @@ test('chat quota and account pages share refreshes and preserve the conversation
       await page.locator('.scroller').hover(); await page.mouse.wheel(0, -350);
       await page.waitForTimeout(150); const scroll = await page.locator('.scroller').evaluate(el => el.scrollTop);
       const openQuick = async () => {
-        await page.getByRole('button', { name: '这个线程的更多操作', exact: true }).click();
+        await page.getByRole('button', { name: '这个对话的更多操作', exact: true }).click();
       };
       await openQuick(); const quick = page.locator('.quota-menu-preview');
       await quick.getByRole('meter').filter({ hasText: '18%' }).waitFor();

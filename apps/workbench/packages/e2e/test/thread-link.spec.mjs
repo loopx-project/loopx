@@ -29,7 +29,7 @@ test('thread deep links survive connection, open on desktop/mobile in both theme
       await page.getByText('Notice recorded.', { exact: true }).first().waitFor();
       await page.screenshot({ path: join(shots, `thread-${mobile ? 'mobile' : 'desktop'}-${theme}.png`), fullPage: true });
       await page.evaluate(() => { location.hash = '#/thread/missing-thread'; });
-      await page.getByText('找不到这个线程，它可能已被删除。', { exact: true }).waitFor();
+      await page.getByText('找不到这个对话，它可能已被删除。', { exact: true }).waitFor();
       assert.ok((await page.locator('.topbar-title').innerText()).includes('Deep link thread'));
       await context.close();
     }
