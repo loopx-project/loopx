@@ -6,9 +6,8 @@
   },
   "module_metric_ceilings": {
     "loopx/bootstrap_command_pack.py": {
-      "any_count": 32,
-      "dict_any_count": 0,
-      "lines": 2240
+      "any_count": 26,
+      "dict_any_count": 0
     },
     "loopx/canary/planner.py": {
       "any_count": 22,
