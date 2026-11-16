@@ -11,10 +11,9 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject } from "../runtime_decode.ts";
 import {
+  admitsAutonomousReplan,
   heartbeatReceiptBinding,
-  heartbeatReceiptDetails,
   heartbeatReceiptFactFromEvent,
-  normalizeHeartbeatReplanObligationId,
   selectEffectiveHeartbeatReceipt,
   type HeartbeatReceiptBinding,
   type HeartbeatReceiptFact,
@@ -54,15 +53,6 @@ function candidate(
     settlement_effect_id: binding.settlement_effect_id,
     ...(admittedTodoReplan ? {admitted_todo_replan: true as const} : {}),
   };
-}
-
-function admitsAutonomousReplan(event: JsonObject, fact: HeartbeatReceiptFact): boolean {
-  const guard = heartbeatReceiptDetails(event);
-  const obligationId = normalizeHeartbeatReplanObligationId(guard.semantic_replan_obligation_id);
-  return fact.settlement_effect_id !== null && obligationId !== null
-    && (fact.todo_id !== null || obligationId === fact.replan_obligation_id)
-    && guard.interaction_mode === "autonomous_replan" && guard.ok === true && guard.should_run === true
-    && guard.must_attempt_work === true && guard.delivery_allowed === false && guard.quiet_noop_allowed === false;
 }
 
 /**

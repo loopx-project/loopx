@@ -6,6 +6,7 @@ from enum import Enum
 import hashlib
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from ..projects.registry_codec import (
     activation_upgrade_registry_transaction,
@@ -20,12 +21,13 @@ from ...global_registry import sync_project_registry_to_global
 from ...history import load_registry
 from ...registry import registry_goals
 from ...registry_writability import probe_registry_write_path
-from ..actor_identity import normalize_owner_controller_actor
+from ..actor_identity import OwnerControllerActorKind, normalize_owner_controller_actor
 from ..runtime.time import now_local_iso
 from .activation import (
     GoalActivationState,
     build_goal_activation,
     goal_activation_state,
+    goal_owner_resume_id,
     normalize_goal_activation_state,
 )
 from ..content_digest import BARE_SHA256_PATTERN
@@ -231,12 +233,18 @@ def _readback(
     target_registry: Path,
     goal_id: str,
     expected_state: GoalActivationState,
+    expected_owner_resume_id: str | None,
 ) -> dict[str, Any]:
     source_goal = _goal(load_registry(source_registry), goal_id)
     target_goal = _goal(load_registry(target_registry), goal_id)
     source_state = goal_activation_state(source_goal)
     target_state = goal_activation_state(target_goal)
-    verified = source_state is expected_state and target_state is expected_state
+    verified = (
+        source_state is expected_state
+        and target_state is expected_state
+        and goal_owner_resume_id(source_goal) == expected_owner_resume_id
+        and goal_owner_resume_id(target_goal) == expected_owner_resume_id
+    )
     return {
         "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
         "status": "verified" if verified else "mismatch",
@@ -461,7 +469,17 @@ def set_goal_activation_state(
                     }
                 )
                 return payload
+            owner_resume_id = goal_owner_resume_id(locked_goal)
             if changed:
+                # Preserve the owner resume across later lifecycle writes.
+                # Mint it inside the source lock for an actual owner resume.
+                if (
+                    target_state is GoalActivationState.ACTIVE
+                    and actor is OwnerControllerActorKind.OWNER
+                ):
+                    owner_resume_id = uuid4().hex
+                if owner_resume_id is not None:
+                    proposed_activation["owner_resume_id"] = owner_resume_id
                 locked_goal["activation"] = proposed_activation
                 transaction.commit(source_payload)
                 payload["written"] = True
@@ -488,6 +506,7 @@ def set_goal_activation_state(
                     target_registry=target_registry,
                     goal_id=normalized_goal_id,
                     expected_state=target_state,
+                    expected_owner_resume_id=owner_resume_id,
                 )
             )
     payload["readback"] = readback

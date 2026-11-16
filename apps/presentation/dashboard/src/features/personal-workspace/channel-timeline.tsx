@@ -116,12 +116,10 @@ export const ChannelTimeline = memo(function ChannelTimeline({
   useLayoutEffect(() => {
     if (!findMessageId) return;
     readMessage();
-    const frame = requestAnimationFrame(() => {
-      const row = Array.from(timeline.current?.querySelectorAll<HTMLElement>("[data-timeline-id]") ?? [])
-        .find(node => node.dataset.timelineId === findMessageId);
-      row?.scrollIntoView({block: "start"});
-    });
-    return () => cancelAnimationFrame(frame);
+    // Keep the scroll with the selection so a later user scroll stays put.
+    const row = Array.from(timeline.current?.querySelectorAll<HTMLElement>("[data-timeline-id]") ?? [])
+      .find(node => node.dataset.timelineId === findMessageId);
+    row?.scrollIntoView({block: "start"});
   }, [findMessageId, findNavigation]);
   const presentedItems = items.filter(item => {
     // The visible draft already owns this confirmation and recovery entry.
