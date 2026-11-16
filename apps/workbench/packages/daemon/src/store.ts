@@ -1836,10 +1836,10 @@ export class Store {
     this.db
       .prepare('INSERT INTO schedule_runs (id, schedule_id, status, thread_id, turn_id, started_at, finished_at, message, todo_id, new_thread, note_before_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(run.id, run.scheduleId, run.status, run.threadId, run.turnId, run.startedAt, run.finishedAt, run.message, run.todoId ?? null, run.newThread ? 1 : 0, noteBefore === null ? null : noteHash(noteBefore));
-    // History is for looking at, not bookkeeping: keep the newest slice only.
+    // Keep active runs for completion and overlap checks; only finished history is bounded.
     const column = run.todoId ? 'todo_id' : 'schedule_id';
     this.db
-      .prepare(`DELETE FROM schedule_runs WHERE ${column} = ? AND id NOT IN (SELECT id FROM schedule_runs WHERE ${column} = ? ORDER BY started_at DESC, id DESC LIMIT ?)`)
+      .prepare(`DELETE FROM schedule_runs WHERE ${column} = ? AND finished_at IS NOT NULL AND id NOT IN (SELECT id FROM schedule_runs WHERE ${column} = ? AND finished_at IS NOT NULL ORDER BY started_at DESC, id DESC LIMIT ?)`)
       .run(run.todoId ?? run.scheduleId, run.todoId ?? run.scheduleId, SCHEDULE_RUN_HISTORY);
     return run;
   }

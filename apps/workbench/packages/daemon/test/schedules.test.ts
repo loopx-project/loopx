@@ -251,6 +251,33 @@ test('schedules: a previous run still going means the next one is skipped', asyn
   assert.equal(run?.status, 'done');
 });
 
+test('schedules: history trimming preserves a running task after more than 50 skips', async () => {
+  const s = await createSchedule({ ...scheduleBody, enabled: false });
+  hold();
+  let turnId: string | null = null;
+  try {
+    assert.equal((await scheduler.runNow(s.id)).status, 'running');
+    const active = store.runningScheduleRun(s.id)!;
+    turnId = active.turnId;
+    assert.ok(active.threadId);
+    // Give the active row a distinct older timestamp, independently of clock resolution.
+    store.db.prepare('UPDATE schedule_runs SET started_at = ? WHERE id = ?').run('2026-01-01T00:00:00.000Z', active.id);
+    for (let i = 0; i < 60; i++) assert.equal((await scheduler.runNow(s.id)).status, 'skipped');
+    assert.equal(store.runningScheduleRun(s.id)?.id, active.id);
+    assert.equal(store.getThread(active.threadId)?.status, 'running');
+    assert.equal(store.listThreads().filter(t => t.schedule?.id === s.id).length, 1);
+    const runs = store.listScheduleRuns(s.id, 100);
+    assert.equal(runs.filter(r => r.status === 'skipped').length, 50);
+    assert.equal(runs.filter(r => r.status === 'running').length, 1);
+  } finally {
+    release();
+  }
+  for (let i = 0; i < 100 && store.findScheduleRunByTurn(turnId!)?.status === 'running'; i++) {
+    await new Promise(r => setTimeout(r, 20));
+  }
+  assert.equal(store.findScheduleRunByTurn(turnId!)?.status, 'done');
+});
+
 test('schedules: deleting a schedule keeps its threads', async () => {
   const s = await createSchedule({ ...scheduleBody, name: '将被删除' });
   await scheduler.tick();
