@@ -57,6 +57,7 @@ export class LoopxService implements LoopxHooks {
    * What each preview was asked for, by proposal. Confirming a preview dispatches exactly this, never what
    * the confirmation request says. Held in memory: after a restart the person previews again.
    */
+  private readonly launching = new Map<string, Promise<unknown>>();
   private readonly previews = new Map<string, { agent: string; goalAgentId: string; permission: LoopxPermission; path: string; ref: string }>();
 
   constructor(private readonly deps: LoopxDeps) {
@@ -158,9 +159,20 @@ export class LoopxService implements LoopxHooks {
    * names different ones is refused. A launch that failed after the core created the Goal is safe to retry.
    */
   async apply(input: any) {
-    const manager = this.manager;
-    if (!manager) throw new HttpError(503, 'loopx adapter is not attached');
+    if (!this.manager) throw new HttpError(503, 'loopx adapter is not attached');
     const proposalId = asText(input.proposalId, 'proposalId', 200);
+    // Confirmations of one proposal run one at a time: a second that arrives while the first is
+    // still opening the thread waits for it and then finds that thread, instead of opening another.
+    const before = this.launching.get(proposalId) ?? Promise.resolve();
+    const run = before.catch(() => undefined).then(() => this.applyOnce(proposalId, input));
+    const tail = run.catch(() => undefined);
+    this.launching.set(proposalId, tail);
+    void tail.then(() => { if (this.launching.get(proposalId) === tail) this.launching.delete(proposalId); });
+    return run;
+  }
+
+  private async applyOnce(proposalId: string, input: any) {
+    const manager = this.manager!;
     const known = this.bindings.byProposal(proposalId);
     if (known) {
       const bound = this.bindings.get(known)!;
@@ -205,8 +217,17 @@ export class LoopxService implements LoopxHooks {
     } catch (err) { return this.fail(err); }
   }
 
-  /** Sends a launch's first message; only once it has gone out does the binding stop carrying it. */
+  /**
+   * Sends a launch's first message; only once it has gone out does the binding stop carrying it.
+   * A thread that already holds a turn (the message went out but the daemon stopped before saying
+   * so) is not sent it again.
+   */
   private async dispatch(threadId: string, text: string) {
+    const sent = this.manager!.listEvents(threadId, 0).find((e) => e.type === 'turn.started');
+    if (sent) {
+      this.bindings.update(threadId, { firstMessage: undefined });
+      return { threadId, turnId: sent.turnId };
+    }
     const started = await this.manager!.startTurn(threadId, { text, fromUser: true } as never);
     this.bindings.update(threadId, { firstMessage: undefined });
     return { threadId, turnId: 'turnId' in started ? started.turnId : null };

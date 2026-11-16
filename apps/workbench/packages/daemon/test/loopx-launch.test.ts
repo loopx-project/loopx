@@ -47,26 +47,43 @@ before(async () => {
 });
 after(() => server.close());
 
-function harness(failFirstTurn = false) {
+type Manager = { threads: { id: string; cwd: string }[]; turns: string[]; events: Map<string, { type: string; turnId: string }[]>; fail: 'none' | 'before' | 'after' };
+
+function fakeManager(fail: Manager['fail'] = 'none'): Manager & { api: unknown } {
+  const m: Manager = { threads: [], turns: [], events: new Map(), fail };
+  const api = {
+    // Slow enough that two confirmations of one proposal overlap here.
+    createThread: async (o: { cwd: string }) => { await new Promise((r) => setTimeout(r, 20)); const t = { id: `t${m.threads.length + 1}`, cwd: o.cwd }; m.threads.push(t); return t; },
+    startTurn: async (id: string) => {
+      if (m.fail === 'before') { m.fail = 'none'; throw new Error('agent offline'); }
+      m.turns.push(id);
+      const turnId = `turn-${m.turns.length}`;
+      m.events.set(id, [...(m.events.get(id) ?? []), { type: 'turn.started', turnId }]);
+      // The turn went out, then the daemon stopped before the launch could record it.
+      if (m.fail === 'after') { m.fail = 'none'; throw new Error('daemon stopped'); }
+      return { turnId };
+    },
+    listEvents: (id: string) => m.events.get(id) ?? [],
+    announceLoopx: () => {},
+    autoHandover: { setOverride: () => {} },
+  };
+  return Object.assign(m, { api });
+}
+
+function harness(fail: Manager['fail'] = 'none', opts: { dataDir?: string; manager?: ReturnType<typeof fakeManager> } = {}) {
   const registry = join(mkdtempSync(join(tmpdir(), 'loopx-reg-')), 'registry.json');
   writeFileSync(registry, JSON.stringify({ goals: [{ id: 'g-a', repo: granted }] }));
   const fake = fileURLToPath(new URL('./fixtures/fake-loopx.mjs', import.meta.url));
+  const dataDir = opts.dataDir ?? mkdtempSync(join(tmpdir(), 'loopx-data-'));
   const service = new LoopxService({
-    dataDir: mkdtempSync(join(tmpdir(), 'loopx-data-')), core,
+    dataDir, core,
     adapters: new Map([['codex', { id: 'codex' }], ['claude', { id: 'claude' }]]) as never,
     dirs: { all: () => [root] } as never,
     cli: { command: [process.execPath, fake], registry },
   });
-  const threads: { id: string; cwd: string }[] = [];
-  const turns: string[] = [];
-  let failing = failFirstTurn;
-  service.attach({
-    createThread: async (o: { cwd: string }) => { const t = { id: `t${threads.length + 1}`, cwd: o.cwd }; threads.push(t); return t; },
-    startTurn: async (id: string) => { if (failing) { failing = false; throw new Error('agent offline'); } turns.push(id); return { turnId: `turn-${turns.length}` }; },
-    announceLoopx: () => {},
-    autoHandover: { setOverride: () => {} },
-  } as never);
-  return { service, threads, turns };
+  const manager = opts.manager ?? fakeManager(fail);
+  service.attach(manager.api as never);
+  return { service, threads: manager.threads, turns: manager.turns, manager, dataDir };
 }
 
 const launch = { agent: 'codex', objective: 'Ship it' };
@@ -93,7 +110,7 @@ test('a confirmation cannot raise the permission it was previewed with', async (
 });
 
 test('a launch whose first message failed sends it on retry instead of reporting success', async () => {
-  const { service, threads, turns } = harness(true);
+  const { service, threads, turns } = harness('before');
   const preview = await service.preview({ ...launch, cwd: granted, permission: 'workspace_auto' });
   const before = applies;
   await assert.rejects(service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'workspace_auto' }));
@@ -116,4 +133,29 @@ test('joining a Goal works in its registered root, read-only unless the Goal was
   assert.equal(joined.permission, 'read_only');
   assert.equal(threads.at(-1)!.cwd, granted);
   await rejects(service.join({ goalId: 'g-unknown', agent: 'codex' }), 409, 'goal_root_unknown');
+});
+
+test('two confirmations of one proposal at once open one thread and send one first message', async () => {
+  const { service, threads, turns } = harness();
+  const preview = await service.preview({ ...launch, cwd: granted, permission: 'read_only' });
+  const before = applies;
+  const [a, b] = await Promise.all([
+    service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' }),
+    service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' }),
+  ]);
+  assert.equal(a.threadId, b.threadId);
+  assert.equal(threads.length, 1);
+  assert.equal(turns.length, 1);
+  assert.equal(applies, before + 1);
+});
+
+test('after a restart, a first message that already went out is not sent again', async () => {
+  const first = harness('after');
+  const preview = await first.service.preview({ ...launch, cwd: granted, permission: 'read_only' });
+  await assert.rejects(first.service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' }));
+  const again = harness('none', { dataDir: first.dataDir, manager: first.manager });
+  const done = await again.service.apply({ proposalId: preview.proposalId, agent: 'codex', permission: 'read_only' });
+  assert.equal(done.turnId, 'turn-1');
+  assert.equal(first.turns.length, 1);
+  assert.equal(again.service.binding(done.threadId)!.firstMessage, undefined);
 });
