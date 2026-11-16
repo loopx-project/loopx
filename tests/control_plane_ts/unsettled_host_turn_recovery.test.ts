@@ -948,8 +948,15 @@ test("typed lifecycle closeouts are accepted and other open Todos are not", asyn
         assert.equal(verdict.accepted_closeout, accepted);
       }
       const ordinaryPending = reduce(candidate, ["quota_spend_receipt"], READ_TODO(todo));
-      assert.equal(ordinaryPending.status, verdict.status);
-      assert.equal(ordinaryPending.accepted_closeout, verdict.accepted_closeout);
+      if (todo.status === "done") {
+        assert.equal(ordinaryPending.status, "recovery_required");
+        const recovery = ordinaryPending.recovery as JsonObject;
+        assert.equal(recovery.repair, "resume_prior_turn");
+        assert.equal(recovery.defer_successor_admission, true);
+      } else {
+        assert.equal(ordinaryPending.status, verdict.status);
+        assert.equal(ordinaryPending.accepted_closeout, verdict.accepted_closeout);
+      }
 
       const replanPending = reduce(
         {...candidate, admitted_todo_replan: true},
