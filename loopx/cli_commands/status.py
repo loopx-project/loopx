@@ -5,6 +5,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..cli_runtime import PrintPayload
+
 from ..contract import check_contract, render_contract_markdown
 from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from ..control_plane.runtime.status_projection_cache import (
@@ -19,6 +21,8 @@ from ..control_plane.status.agent_lane_projection import (
     compact_agent_lane_status_payload_for_display,
 )
 from ..control_plane.todos.contract import normalize_todo_claimed_by
+from ..control_plane.projection_envelope_facts import seal_projection_envelope, source_fact
+from ..control_plane.runtime.time import now_utc_iso
 from ..control_plane.quota.goal_boundary import registry_goal_by_id
 from ..control_plane.todos.quota_summary import (
     compact_agent_lane_todos_for_status_display,
@@ -39,10 +43,6 @@ from ..review_packet import (
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from .status_registration import register_status_commands as register_status_commands
 
-PrintPayload = Callable[
-    [dict[str, object], str, Callable[[dict[str, object]], str]],
-    None,
-]
 FormatSelector = Callable[..., str]
 
 
@@ -676,6 +676,7 @@ def attach_agent_lane_next_actions(
         0,
     )
     current_agent_next_action: dict[str, Any] | None = None
+    unavailable_goal_ids: list[str] = []
     goals = registry_goal_by_id(payload)
     for item in items:
         if not isinstance(item, dict):
@@ -704,6 +705,7 @@ def attach_agent_lane_next_actions(
             if selected.get("capability_guard") and selected.get("obligation_id") == obligation.get("obligation_id"):
                 guard["autonomous_replan_obligation"] = obligation
         except Exception:
+            unavailable_goal_ids.append(goal_id)
             continue
         next_action = guard.get("agent_lane_next_action")
         if isinstance(next_action, dict) and next_action.get("next_action_basis"):
@@ -754,6 +756,19 @@ def attach_agent_lane_next_actions(
                 guard=guard,
             )
         latest_action = guard.get("latest_run_recommended_action")
+        delivery_progress = guard.get("first_delivery_progress")
+        if isinstance(delivery_progress, dict):
+            item["first_delivery_progress"] = delivery_progress
+        if (
+            isinstance(delivery_progress, dict)
+            and guard.get("recommended_action") == delivery_progress["next_action"]
+        ):
+            item["recommended_action"] = delivery_progress["next_action"]
+            if isinstance(project_asset, dict):
+                project_asset["next_action"] = delivery_progress["next_action"]
+            goal_channel = item.get("goal_channel_projection")
+            if isinstance(goal_channel, dict):
+                goal_channel["next_action"] = delivery_progress["next_action"]
         for target in (item, project_asset):
             if not isinstance(target, dict):
                 continue
@@ -787,7 +802,7 @@ def attach_agent_lane_next_actions(
                 target["latest_run_recommended_action_source"] = (
                     "agent_lane_recommendation"
                 )
-    if any(projection_counts.values()):
+    if any(projection_counts.values()) or unavailable_goal_ids:
         projection: dict[str, object] = {
             "schema_version": "agent_lane_next_action_projection_v0",
             "agent_id": safe_agent_id,
@@ -827,6 +842,28 @@ def attach_agent_lane_next_actions(
             if confidence:
                 projection["confidence"] = confidence
         payload["agent_lane_next_action_projection"] = projection
+        if unavailable_goal_ids:
+            projection["unavailable_count"] = len(unavailable_goal_ids)
+            # Keep diagnostics out of the display surface. The typed envelope
+            # owns partial-read health; the Goal's base data remains available.
+            envelope = payload.get("projection_envelope")
+            coverage = dict(envelope["coverage"]) if isinstance(envelope, dict) else {
+                "scope": "goal", "expected_count": len(items), "included_count": len(items),
+            }
+            coverage["omitted"] = [
+                *coverage.get("omitted", []),
+                {"reason": "agent_lane_next_action_unreadable",
+                 "count": len(unavailable_goal_ids), "refs": unavailable_goal_ids[:8]},
+            ]
+            payload["projection_envelope"] = seal_projection_envelope(
+                projection="status", observed_at=now_utc_iso(),
+                sources=[source_fact(
+                    "agent_lane_next_action", read_status="unreadable",
+                    unreadable_count=len(unavailable_goal_ids),
+                )],
+                coverage=coverage,
+                upstream=[envelope] if isinstance(envelope, dict) else [],
+            )
     if projection_counts["agent_member"]:
         payload["agent_member_projection"] = {
             "schema_version": "agent_member_projection_v0",
@@ -885,6 +922,8 @@ def handle_diagnose_command(
                 ],
             },
         }
+    # Preserve the full reasoning evidence packet; JSON indentation carries no
+    # decision information and grows with every diagnosis collection row.
     print_payload(payload, output_format(args), render_diagnosis_markdown)
     return 0 if payload.get("ok") else 1
 

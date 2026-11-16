@@ -312,6 +312,7 @@ def build_scheduler_hint(
     available_capabilities: Any = None,
     codex_app_current_rrule: Any = None,
     codex_app_automation_id: Any = None,
+    codex_app_observation_error: str | None = None,
     scheduler_execution_context: Mapping[str, Any]
     | SchedulerExecutionContextResolution
     | None = None,
@@ -336,6 +337,7 @@ def build_scheduler_hint(
         "available_capabilities": _capability_values(available_capabilities),
         "observed_host_rrule": codex_app_current_rrule,
         "automation_id": codex_app_automation_id,
+        "codex_app_observation_error": codex_app_observation_error,
         "current_time": current_time.isoformat(),
         "generated_at": utc_isoformat(current_time),
         "frontier_deadlines": deadlines,

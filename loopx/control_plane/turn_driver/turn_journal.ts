@@ -322,7 +322,7 @@ function preparedEffectCheck(
   };
 }
 
-function hostRetryPolicyCheck(journal: JsonObject): TurnRecoveryCheck | null {
+export function hostRetryPolicyCheck(journal: JsonObject): TurnRecoveryCheck | null {
   if (!Object.hasOwn(journal, "host_failure")) return null;
   let failure: JsonObject;
   try { failure = normalizeHostFailure(journal.host_failure); }

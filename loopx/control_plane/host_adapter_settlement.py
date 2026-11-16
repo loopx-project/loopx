@@ -24,12 +24,16 @@ HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION = (
     "loopx_host_todo_completion_reduction_v0"
 )
 _RUNTIME_METHOD = "turn.host_todo_completion.evaluate"
+# Preserve the registered Python owner and ordinary step prefix. Context-read
+# plans use their own checked sequences in _decode_provider_steps.
 HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE = (
     "guard",
     "lifecycle_completion",
     "durable_writeback",
     "quota_spend",
     "terminal_closeout",
+    "delivery_context",
+    "direction_context",
 )
 _MISSING = object()
 
@@ -62,7 +66,14 @@ class HostTodoSettlementRequest:
     vision_path: str | None = None
     vision_unchanged_reason: str | None = None
     checkpoint_read_context_id: str | None = None
+    first_delivery: bool = False
+    delivery_read_context_id: str | None = None
     goal_ref: Mapping[str, str] | None = None
+    turn_instance_id: str | None = None
+    current_agent_checkpoint: bool = False
+    retained_result_present: bool | None = None
+    legacy_first_delivery_enrolled: bool | None = None
+    original_completion_recorded: bool = False
 
 
 class HostCliRunner(Protocol):
@@ -80,6 +91,7 @@ class _ProviderStep:
     args: tuple[str, ...]
     legacy_args: tuple[str, ...] | None
     continue_when: Mapping[str, Any] | None
+    argument_bindings: tuple[Mapping[str, Any], ...] = ()
 
 
 def _request_payload(
@@ -105,13 +117,36 @@ def _request_payload(
         payload["provider_outcomes"] = provider_outcomes
     if request.goal_ref is not None:
         payload["goal_ref"] = dict(request.goal_ref)
-    if request.vision_path or request.vision_unchanged_reason or phase in {"vision_refresh", "vision_context"}:
+    if request.turn_instance_id is not None:
+        payload["turn_instance_id"] = request.turn_instance_id
+    if request.retained_result_present is not None:
+        payload["retained_result_present"] = request.retained_result_present
+    if request.legacy_first_delivery_enrolled is not None:
+        payload["legacy_first_delivery_enrolled"] = request.legacy_first_delivery_enrolled
+    if request.original_completion_recorded:
+        payload["original_completion_recorded"] = True
+    if (
+        request.vision_path
+        or request.vision_unchanged_reason
+        or request.checkpoint_read_context_id
+        or phase in {"vision_refresh", "vision_context"}
+        or request.first_delivery
+    ):
         payload.update(
             schema_version="loopx_host_todo_completion_transaction_v1",
             vision_path=request.vision_path,
             vision_unchanged_reason=request.vision_unchanged_reason,
             checkpoint_read_context_id=request.checkpoint_read_context_id,
         )
+    if request.first_delivery or request.current_agent_checkpoint:
+        payload.update(
+            schema_version="loopx_host_todo_completion_transaction_v2",
+            first_delivery=True,
+            delivery_read_context_id=request.delivery_read_context_id,
+            current_agent_checkpoint=request.current_agent_checkpoint,
+        )
+    elif request.delivery_read_context_id:
+        payload["delivery_read_context_id"] = request.delivery_read_context_id
     return payload
 
 
@@ -136,15 +171,52 @@ def host_vision_request(
         allow_terminal_stride_path=allow_terminal_stride_path)
     with tempfile.TemporaryDirectory(prefix="loopx-host-vision-") as directory:
         path = Path(directory) / "vision.json"
-        path.write_text(json.dumps(vision, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+        path.write_text(
+            json.dumps(vision, ensure_ascii=False, allow_nan=False), encoding="utf-8"
+        )
         yield replace(request, vision_path=str(path))
 
 
-def refresh_host_todo_vision(request: HostTodoSettlementRequest, *, run_cli: HostCliRunner) -> str:
+def settle_host_todo_wait(
+    request: HostTodoSettlementRequest,
+    reason: str,
+    *,
+    run_cli: HostCliRunner,
+) -> str:
+    """Transport a typed quiet wait on the original admitted unfinished work."""
+    payload = {**_request_payload(request, phase="wait"), "wait_reason": reason}
+    plan = _runtime_reduction(payload, phase="wait")
+    if isinstance(plan.get("result"), Mapping):
+        return json.dumps(dict(plan["result"]), ensure_ascii=False, sort_keys=True)
+    args = _string_tuple(plan.get("args"), label="wait args")
+    legacy = plan.get("legacy_args")
+    output = run_cli(
+        list(args),
+        legacy_args=list(_string_tuple(legacy, label="wait legacy args"))
+        if legacy
+        else None,
+    )
+    result = _runtime_reduction({**payload, "guard_output": output}, phase="wait").get(
+        "result"
+    )
+    if not isinstance(result, Mapping):
+        raise RuntimeError("TypeScript host wait result shape mismatch")
+    return json.dumps(dict(result), ensure_ascii=False, sort_keys=True)
+
+
+def refresh_host_todo_vision(
+    request: HostTodoSettlementRequest, *, run_cli: HostCliRunner
+) -> str:
     """Repair the original checkpoint; no lifecycle operation, new Turn or spend."""
-    phase = "vision_refresh" if (
-        request.vision_path or request.vision_unchanged_reason or request.checkpoint_read_context_id
-    ) else "vision_context"
+    phase = (
+        "vision_refresh"
+        if (
+            request.vision_path
+            or request.vision_unchanged_reason
+            or request.checkpoint_read_context_id
+        )
+        else "vision_context"
+    )
     plan = _runtime_reduction(_request_payload(request, phase=phase), phase=phase)
     _runtime_identity(plan.get("identity"))
     args = plan.get("args")
@@ -161,10 +233,14 @@ def project_host_interaction(output: str) -> str:
         return output
     if not isinstance(packet, dict):
         return output
-    projection = _runtime_reduction({
-        "schema_version": "loopx_host_todo_completion_transaction_v1",
-        "phase": "project_guard", "packet": packet,
-    }, phase="project_guard")
+    projection = _runtime_reduction(
+        {
+            "schema_version": "loopx_host_todo_completion_transaction_v1",
+            "phase": "project_guard",
+            "packet": packet,
+        },
+        phase="project_guard",
+    )
     if not isinstance(projection.get("packet"), dict):
         raise RuntimeError("TypeScript host interaction projection shape mismatch")
     return json.dumps(projection["packet"], ensure_ascii=False)
@@ -172,7 +248,15 @@ def project_host_interaction(output: str) -> str:
 
 def _runtime_reduction(params: Mapping[str, Any], *, phase: str) -> dict[str, Any]:
     try:
-        value = effect_runtime_result(_RUNTIME_METHOD, params)
+        from .effect_runtime import MAX_REQUEST_BYTES
+
+        # Finalize carries the complete original CLI outputs. Use the existing
+        # private, digest-checked local snapshot transport for large sequences;
+        # neither truncate evidence nor increase the RPC wire ceiling. Keep the
+        # ordinary small-request path and its compatibility contract unchanged.
+        large = phase == "finalize" and len(json.dumps(params, ensure_ascii=False).encode("utf-8")) > MAX_REQUEST_BYTES - 4096
+        value = (effect_runtime_result(_RUNTIME_METHOD, params, large_local_snapshot=True)
+                 if large else effect_runtime_result(_RUNTIME_METHOD, params))
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
     if not isinstance(value, Mapping):
@@ -276,10 +360,19 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
         value.get("provider_id") != "loopx_cli"
         or value.get("kind") != "ordered_cli_sequence"
         or not isinstance(raw_steps, list)
-        or len(raw_steps) not in {4, 5}
+        or len(raw_steps) not in {2, 3, 4, 5}
     ):
         raise RuntimeError("TypeScript host provider plan shape mismatch")
-    expected = HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE[: len(raw_steps)]
+    expected = (
+        ("guard", "delivery_context")
+        if len(raw_steps) == 2
+        else ("guard", "lifecycle_completion", "direction_context")
+        if len(raw_steps) == 3
+        else ("guard", "lifecycle_completion", "durable_writeback", "direction_context")
+        if len(raw_steps) == 4 and isinstance(raw_steps[-1], Mapping)
+        and raw_steps[-1].get("step_kind") == "direction_context"
+        else HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE[: len(raw_steps)]
+    )
     steps: list[_ProviderStep] = []
     for index, raw in enumerate(raw_steps):
         if not isinstance(raw, Mapping) or raw.get("step_kind") != expected[index]:
@@ -291,16 +384,42 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
         condition_required = index < len(raw_steps) - 1
         if condition_required != isinstance(condition, Mapping):
             raise RuntimeError("TypeScript host provider condition shape mismatch")
+        args = _string_tuple(raw.get("args"), label="args")
+        bindings = raw.get("argument_bindings", [])
+        if not isinstance(bindings, list):
+            raise RuntimeError("TypeScript host provider argument bindings shape mismatch")
+        bound_arguments: set[str] = set()
+        for binding in bindings:
+            if (not isinstance(binding, Mapping) or
+                    set(binding) - {"argument", "step_kind", "path", "fallback_when"} or
+                    not {"argument", "step_kind", "path"} <= set(binding)):
+                raise RuntimeError("TypeScript host provider argument binding shape mismatch")
+            argument, path = binding["argument"], binding["path"]
+            if (not isinstance(argument, str) or argument in bound_arguments
+                    or args.count(argument) != 1 or args.index(argument) + 1 == len(args)
+                    or binding["step_kind"] not in expected[:index]
+                    or not isinstance(path, list) or not path
+                    or any(not isinstance(part, str) for part in path)
+                    or legacy_value is not None):
+                raise RuntimeError("TypeScript host provider argument binding is invalid")
+            fallback = binding.get("fallback_when")
+            if fallback is not None and (not isinstance(fallback, Mapping) or
+                    set(fallback) != {"step_kind", "condition"} or
+                    fallback["step_kind"] not in expected[:index] or
+                    not isinstance(fallback["condition"], Mapping)):
+                raise RuntimeError("TypeScript host provider argument fallback is invalid")
+            bound_arguments.add(argument)
         steps.append(
             _ProviderStep(
                 step_kind=expected[index],
-                args=_string_tuple(raw.get("args"), label="args"),
+                args=args,
                 legacy_args=(
                     _string_tuple(legacy_value, label="legacy_args")
                     if legacy_value is not None
                     else None
                 ),
                 continue_when=dict(condition) if condition is not None else None,
+                argument_bindings=tuple(dict(binding) for binding in bindings),
             )
         )
     return tuple(steps)
@@ -374,8 +493,23 @@ def _run_provider_plan(
 ) -> list[dict[str, str]]:
     outcomes: list[dict[str, str]] = []
     for step in steps:
+        args = list(step.args)
+        for binding in step.argument_bindings:
+            previous = next(item for item in outcomes if item["step_kind"] == binding["step_kind"])
+            payload = json.loads(previous["output"])
+            value = _path_value(payload, binding["path"])
+            if value is _MISSING:
+                fallback = binding.get("fallback_when")
+                if fallback is not None:
+                    earlier = next(item for item in outcomes if item["step_kind"] == fallback["step_kind"])
+                    if _provider_condition_matches(earlier["output"], fallback["condition"]):
+                        continue
+                raise RuntimeError("TypeScript host provider required argument binding is unavailable")
+            if not isinstance(value, str) or not value:
+                raise RuntimeError("TypeScript host provider bound argument must be a nonempty string")
+            args[args.index(binding["argument"]) + 1] = value
         output = run_cli(
-            list(step.args),
+            args,
             legacy_args=(list(step.legacy_args) if step.legacy_args else None),
         )
         outcomes.append({"step_kind": step.step_kind, "output": output})
@@ -404,6 +538,24 @@ def settle_host_todo_completion(
         ),
         phase="finalize",
     )
+    if finalized.get("decision") == "execute":
+        token = finalized.get("resume_checkpoint_read_context_id")
+        if (
+            not request.current_agent_checkpoint
+            or request.checkpoint_read_context_id is not None
+            or not isinstance(token, str)
+            or not token
+            or finalized.get("identity") != prepared["identity"]
+        ):
+            raise RuntimeError("Committed direction recovery binding is invalid")
+        request = replace(request, checkpoint_read_context_id=token)
+        outcomes = _run_provider_plan(
+            _decode_provider_steps(finalized["provider_effect"]), run_cli=run_cli
+        )
+        finalized = _runtime_reduction(
+            _request_payload(request, phase="finalize", provider_outcomes=outcomes),
+            phase="finalize",
+        )
     result = finalized.get("result")
     if (
         finalized.get("decision") not in {"complete", "blocked", "provider_result"}

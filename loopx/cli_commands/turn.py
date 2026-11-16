@@ -5,6 +5,7 @@ import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+from ..cli_runtime import PrintPayload
 
 from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
@@ -33,10 +34,6 @@ from .turn_selection import (
     resolve_turn_resume_session_binding,
 )
 
-PrintPayload = Callable[
-    [dict[str, object], str, Callable[[dict[str, object]], str]],
-    None,
-]
 FormatSelector = Callable[..., str]
 
 

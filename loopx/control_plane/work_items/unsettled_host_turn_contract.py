@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+import os
+import re
 import shlex
 from collections.abc import Mapping
 from typing import Any
+
+from ...project_prompt import shell_arg_for_host
+
+
+def _powershell_turn_id(value: str) -> str:
+    # An ISO Turn ID is a bare argument in both shells. Keep the original
+    # command's spelling while quoting IDs with shell-sensitive characters.
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z?", value):
+        return value
+    return shell_arg_for_host(value)
 
 
 def recovery_cli_actions(
@@ -66,6 +78,43 @@ def recovery_cli_actions(
         ]
     if recovery.get("repair") == "resume_prior_turn":
         prior_turn_id = str(recovery["prior_turn_instance_id"])
+        requested_todo = None
+        successor_selection = ""
+        rerun_instruction = "after the original Turn is legally settled, rerun the current Turn below"
+        if recovery.get("defer_successor_admission") is True:
+            qualification = payload.get("action_selection_qualification")
+            requested_todo = qualification.get("requested_todo_id") if isinstance(qualification, Mapping) else None
+            if isinstance(requested_todo, str) and requested_todo:
+                successor_selection = f" --todo-id {shlex.quote(requested_todo)}"
+            rerun_instruction = (
+                "after settling the original Turn, rerun the successor Turn below. "
+                "Confirm a pending scheduler follow-up only while the original receipt is current "
+                "and the host schedule matches. Continue to the successor guard if ACK is rejected "
+                "or unavailable"
+            )
+        original_guard = (
+            f"{typed_quota_guard} --turn-instance-id {shlex.quote(prior_turn_id)}"
+            f" --todo-id {shlex.quote(prior_todo_id)}"
+        )
+        successor_guard = f"{typed_quota_guard}{current_turn_arg}{successor_selection}"
+        if (recovery.get("defer_successor_admission") is True and os.name == "nt"
+                and typed_quota_guard.startswith(f"{command_prefix} --format json quota should-run ")):
+            from ..quota.settlement import render_owed_host_command
+
+            native_guard = render_owed_host_command(shlex.split(typed_quota_guard))
+            original_guard = (
+                f"{native_guard} --turn-instance-id {_powershell_turn_id(prior_turn_id)}"
+                f" --todo-id {shell_arg_for_host(prior_todo_id)}"
+            )
+            native_turn = (
+                f" --turn-instance-id {_powershell_turn_id(turn_instance_id)}"
+                if turn_instance_id else current_turn_arg
+            )
+            native_successor = (
+                f" --todo-id {shell_arg_for_host(requested_todo)}"
+                if isinstance(requested_todo, str) and requested_todo else ""
+            )
+            successor_guard = f"{native_guard}{native_turn}{native_successor}"
         return [
             (
                 "inspect existing effects and persisted outcomes before retrying; "
@@ -74,16 +123,11 @@ def recovery_cli_actions(
                 "fresh eligibility and settlement contract; record only verified "
                 "outcomes, never fabricate progress to clear recovery"
             ),
+            original_guard,
             (
-                f"{typed_quota_guard} --turn-instance-id "
-                f"{shlex.quote(prior_turn_id)} --todo-id "
-                f"{shlex.quote(prior_todo_id)}"
+                f"{rerun_instruction}; recovery itself does not spend quota"
             ),
-            (
-                "after the original Turn is legally settled, rerun the current "
-                "Turn below; recovery itself does not spend quota"
-            ),
-            f"{typed_quota_guard}{current_turn_arg}",
+            successor_guard,
         ]
     if recovery.get("repair") == "monitor_poll":
         prior_turn_id = str(

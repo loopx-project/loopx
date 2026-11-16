@@ -566,7 +566,12 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
   }
 
   const replanSpendOwed = selected.admitted_replan === true && awaitingQuotaSpend(missingReceipts);
-  const lifecycleCloseout = replanSpendOwed ? null : acceptedLifecycleCloseout(todo);
+  // Completing the Todo cannot waive debit for an already verified writeback.
+  const completedWritebackOwesSpend = selected.binding_kind === "todo" &&
+    todo?.task_class === "advancement_task" && todo.status === "done" &&
+    missingReceipts.length === 1 && missingReceipts[0] === "quota_spend_receipt";
+  const spendOwed = replanSpendOwed || completedWritebackOwesSpend;
+  const lifecycleCloseout = spendOwed ? null : acceptedLifecycleCloseout(todo);
   if (lifecycleCloseout !== null) {
     return {
       schema_version: UNSETTLED_HOST_TURN_RECOVERY_RESULT_SCHEMA,
@@ -595,7 +600,8 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     recovery.binding_target_key = todo.target_key;
     recovery.binding_cadence = todo.cadence;
   }
-  const repair = replanSpendOwed ? "resume_prior_turn" : recoveryRepair(selected.binding_kind, todo);
+  const repair = spendOwed ? "resume_prior_turn" : recoveryRepair(selected.binding_kind, todo);
+  if (completedWritebackOwesSpend) recovery.defer_successor_admission = true;
   // The typed repair lane lets the CLI renderer project its command list
   // without re-deriving which closeout family the Turn belongs to.
   recovery.repair = repair;

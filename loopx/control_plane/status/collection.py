@@ -89,6 +89,7 @@ def collect_status(
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
     include_presentation_projections: bool = True,
+    registry_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect the status read model.
 
@@ -108,7 +109,7 @@ def collect_status(
         if activation_state_filter is not None
         else None
     )
-    registry = context.load_registry(registry_path)
+    registry = registry_data if registry_data is not None else context.load_registry(registry_path)
     registry_read_at = now_utc_iso()
     runtime_root = context.resolve_runtime_root(
         registry,
@@ -139,6 +140,7 @@ def collect_status(
     history = history_collection.status_history
     history_read_at = now_utc_iso()
     source_snapshots: dict[Path, bytes | None] = {}
+    source_routes: dict[str, dict[str, Any]] = {}
 
     def canonical_runtime_for_goal(current_goal_id: str) -> Path:
         try:
@@ -147,6 +149,7 @@ def collect_status(
                 runtime_root_override=runtime_root_override, registry=registry,
                 source_snapshots=source_snapshots,
             )
+            source_routes[current_goal_id] = route
         except (OSError, ValueError) as error:
             raise LocalCoordinationAuthorityUnavailable(
                 "Canonical Todo source route is unavailable",
@@ -155,6 +158,13 @@ def collect_status(
                          "legacy_fallback_used": False},
             ) from error
         return Path(route["source_runtime_root"])
+
+    def settlement_source_for_goal(goal: dict[str, Any]) -> dict[str, Any]:
+        root = canonical_runtime_for_goal(goal["id"])
+        return {"runtime_root": str(root), "goal_id": goal["id"],
+            "registry_path": Path(source_routes[goal["id"]]["source_registry"]),
+            **({"goal_ref": {"goal_id": goal["id"], "goal_instance_id": goal["goal_instance_id"]}}
+               if goal.get("goal_instance_id") else {})}
 
     todo_snapshot = CanonicalTodoSnapshot(runtime_root_for_goal=canonical_runtime_for_goal)
     contract = context.check_contract(
@@ -173,6 +183,7 @@ def collect_status(
     contract_read_at = now_utc_iso()
     contract = project_contract_health_for_goal(contract, goal_id=goal_filter)
     queue = context.build_attention_queue(
+        settlement_source_for_goal=settlement_source_for_goal,
         todo_snapshot=todo_snapshot,
         contract=contract,
         history=history,
@@ -277,6 +288,11 @@ def collect_status(
         "attention_queue": queue,
         **runtime_summaries,
     }
+    if registry.get("profile_id") == "source_session_v1" and goal_filter:
+        from ..goals.goal_ref_validation import exact_goal_ref
+
+        source_goal = next(goal for goal in registry_goals(registry) if goal["id"] == goal_filter)
+        payload["goal_ref"] = exact_goal_ref(goal_filter, source_goal.get("goal_instance_id"))
     if include_presentation_projections:
         payload["promotion_gate"] = promotion_gate
     if activation_filter is not None:
@@ -343,6 +359,9 @@ def collect_status(
         )
     attach_goal_acceptance_observations(payload, history=history)
     attach_goal_artifact_lifecycle_projections(payload, history=history)
+    from .first_delivery import attach_first_delivery_status
+
+    attach_first_delivery_status(payload, runtime_root=runtime_root, agent_id=agent_lane_id)
     payload["projection_envelope"] = seal_projection_envelope(
         projection="status",
         observed_at=now_utc_iso(),

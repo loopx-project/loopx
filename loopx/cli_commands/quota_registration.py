@@ -312,6 +312,7 @@ def register_quota_command(
         ),
     )
     quota_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
+    quota_parser.add_argument("--automation-id", help=argparse.SUPPRESS)
     quota_parser.add_argument(
         "--scheduler-host-facts-chunk",
         dest="scheduler_host_facts_chunks",

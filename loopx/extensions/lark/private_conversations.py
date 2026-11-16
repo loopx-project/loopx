@@ -426,7 +426,8 @@ class LarkPrivateConversations:
             }
 
         def delivered_requests() -> Iterator[dict[str, Any]]:
-            paths = [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]
+            request_file = "[0-9a-f]" * 24 + ".json"
+            paths = [*self.root.glob(request_file), *self.root.glob("web-projections/" + request_file)]
             for path, row in self._health_delivery_discovery.rows(
                 self.root, paths, read=_read_json, project=health_fields,
             ):

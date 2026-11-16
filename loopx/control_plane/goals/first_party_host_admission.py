@@ -24,6 +24,7 @@ from ..effect_runtime import (
 from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
+    load_registry,
     project_registry_transaction,
 )
 from ..effect_program import TurnProviderStepKind
@@ -47,12 +48,25 @@ from .source_session_turn_effects import (
 T = TypeVar("T")
 
 
+def load_first_party_registry_metadata(
+    registry_path: Path, goal_ref: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Read metadata only; exact-source admission still owns every effect.
+
+    A planned source permits reading its lifecycle registry, not executing it.
+    Callers must adopt the original protected receipt and current lifetime.
+    Generic callers retain the lifecycle-only profile refusal.
+    """
+    return load_registry(registry_path) if goal_ref is None else load_project_registry(registry_path)
+
+
 class FirstPartyHostRuntimeRejected(RuntimeError):
     """Refusal to reuse Host state or accept a stale Host result."""
 
     def __init__(self, code: str) -> None:
         super().__init__(f"first-party Host runtime rejected: {code}")
         self.code = code
+        self.launch_not_started = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -592,12 +606,16 @@ class FirstPartyHostGoalAdmission:
                 raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
             authority = _legacy_goal_authority(transaction.payload_copy(), self.goal_id, self.agent_id)
             if launch:
-                self._decision(
-                    "launch", legacy_authority=authority,
-                    registry_witness=transaction.source_read_witness(),
-                    launch_decision=(self.launch_decision_reader(self.registry_path)
-                        if self.launch_decision_reader is not None else None),
-                )
+                try:
+                    self._decision(
+                        "launch", legacy_authority=authority,
+                        registry_witness=transaction.source_read_witness(),
+                        launch_decision=(self.launch_decision_reader(self.registry_path)
+                            if self.launch_decision_reader is not None else None),
+                    )
+                except FirstPartyHostRuntimeRejected as error:
+                    error.launch_not_started = True
+                    raise
             else:
                 self._decision("require_current", legacy_authority=authority)
             yield

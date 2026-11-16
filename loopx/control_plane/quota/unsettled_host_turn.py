@@ -540,6 +540,18 @@ def _apply_recovery_projection(
         from .settlement_precedence import clear_quota_action_projections
 
         clear_quota_action_projections(payload)
+
+    delivery = payload.get("first_delivery_progress")
+    if (recovery.get("defer_successor_admission") is True
+            and isinstance(delivery, dict) and delivery.get("stage") == "settlement_pending"
+            and recovery.get("settlement_effect_id")
+            and (delivery.get("settlement_identity") or {}).get("effect_id")
+                == recovery["settlement_effect_id"]):
+        # Both views describe the same original Turn. Keep the receipt-owned
+        # recovery guidance when projecting its pending delivery.
+        payload["first_delivery_progress"] = {
+            **delivery, "next_action": obligation["recommended_action"],
+        }
     payload.pop("selected_todo", None)
     payload.pop("todo_id", None)
     payload.pop("action_portfolio", None)

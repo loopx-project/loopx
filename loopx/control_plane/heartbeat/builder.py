@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 from typing import Any
@@ -312,7 +313,6 @@ def _heartbeat_context_capture_activation(*, context_delivery: str | None, delta
         decision_handoff_socket: str | None, codex_context_dir: str | None,
         codex_context_root: str | None) -> tuple[dict[str, Any], str, str | None, str | None]:
     from ..turn_driver.codex_context import context_delivery_activation
-    import os
 
     activation = context_delivery_activation(context_delivery or "off", runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context, delta_delivery=delta_delivery,

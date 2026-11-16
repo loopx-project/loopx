@@ -62,6 +62,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     "--cli-bin", // Invocation routing only; never a scheduler authority fact.
     "--goal-id",
     "--agent-id",
+    "--automation-id",
     "--surface",
     "--state-key",
     "--applied-rrule",
@@ -225,6 +226,9 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
     );
   }
   const values = parsed.values;
+  if (expectedOperation === "ack" && (facts.automation_id || values["--automation-id"])) {
+    matchingText(facts, "automation_id", values["--automation-id"] ?? "", "--automation-id");
+  }
   if (expectedOperation === "ack" &&
       parsed.booleans.has("--host-match-observed") !== (facts.host_match_observed === true)) {
     throw new EffectRuntimeRequestError(

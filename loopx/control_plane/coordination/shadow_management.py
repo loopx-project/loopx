@@ -21,6 +21,7 @@ from .coordination_state_contract_generated import (
 )
 from .local_authority_shadow_projection import sha256_digest
 from ..content_digest import ENVELOPED_SHA256_PATTERN
+from ..runtime.file_paths import windows_extended_path
 
 SHADOW_CAPTURE_PROFILE = "file_outbox_v1"
 _DIGEST = ENVELOPED_SHA256_PATTERN
@@ -107,7 +108,7 @@ def _binding(
 def read_shadow_management_state(runtime_root: Path, goal_id: str) -> dict[str, Any] | None:
     """Validate the closed local journal shape without performing any writes."""
     try:
-        raw = shadow_management_state_path(runtime_root, goal_id).read_text(encoding="utf-8")
+        raw = windows_extended_path(shadow_management_state_path(runtime_root, goal_id)).read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
     except UnicodeError as exc:
@@ -192,7 +193,7 @@ def read_shadow_bootstrap_source_path(
     directory = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
     path = shadow_management_directory(runtime_root, goal_id) / "operations" / directory / "manifest.json"
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest = json.loads(windows_extended_path(path).read_text(encoding="utf-8"))
         expected_manifest_schema = (
             SHADOW_MANAGEMENT_EXACT_MANIFEST_SCHEMA
             if state["schema_version"] == SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA

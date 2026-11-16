@@ -195,13 +195,16 @@ def action_selection_context(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def _selection_projection(method: str, payload: Mapping[str, Any], *,
                           agent_must_attempt: bool, agent_delivery_allowed: bool | None,
-                          requested_todo_id: str | None = None) -> dict[str, Any]:
+                          requested_todo_id: str | None = None,
+                          replan_source: Mapping[str, Any] | None = None) -> dict[str, Any]:
     from ..effect_runtime import effect_runtime_result
 
     request = {"packet": action_selection_context(payload), "agent_must_attempt": agent_must_attempt,
                "agent_delivery_allowed": agent_delivery_allowed}
     if requested_todo_id is not None:
         request["requested_todo_id"] = requested_todo_id
+    if replan_source is not None:
+        request["replan_source"] = dict(replan_source)
     result = effect_runtime_result(method, request)
     if not isinstance(result, dict):
         raise TypeError("typed action selection returned an invalid projection")
@@ -219,6 +222,28 @@ def current_action_selection_admission(
     if (selected is not None and not isinstance(selected, str)) or type(admitted) is not bool:
         raise TypeError("typed action selection returned invalid admission facts")
     return selected, admitted
+
+
+def todo_replan_source_admitted(
+    payload: Mapping[str, Any], *, identity: Mapping[str, Any], obligation_id: str,
+) -> bool:
+    """Transport the selected binding; TypeScript qualifies source capture."""
+    interaction = payload.get("interaction_contract") or {}
+    agent = interaction.get("agent_channel") or {}
+    cli = interaction.get("cli_channel") or {}
+    result = _selection_projection("work_item.action_selection.admission.project", payload,
+        requested_todo_id=identity["todo_id"], agent_must_attempt=agent.get("must_attempt") is True,
+        agent_delivery_allowed=agent.get("delivery_allowed"), replan_source={
+            "identity": dict(identity), "obligation_id": obligation_id,
+            "goal_id": payload.get("goal_id"),
+            "agent_id": (payload.get("agent_identity") or {}).get("agent_id"),
+            "contract": cli.get("replan_settlement_contract"),
+            "plan_identity": (cli.get("settlement_plan") or {}).get("identity"),
+        })
+    admitted = result.get("replan_source_admitted")
+    if type(admitted) is not bool:
+        raise TypeError("typed action selection returned an invalid source admission")
+    return admitted
 
 
 def action_selection_needs_recovery(

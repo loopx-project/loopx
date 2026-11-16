@@ -1,4 +1,5 @@
 import type { JsonObject } from "../effect_program.ts";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   requireBoolean,
@@ -118,7 +119,11 @@ export function evaluateTodoCompletionValidationPlan(
     goal_id: request.goal_id,
     todo_id: request.todo_id,
   });
-  if (fence.outcome === "replay") {
+  // The typed fence admits only a bound upgrade of an already committed
+  // RESULT. Closeout reuses that result's validation; it is not new work.
+  if (fence.outcome === "replay" ||
+      fence.reason === "same_turn_terminal_upgrade" ||
+      fence.reason === "lifecycle_reentry_terminal_upgrade") {
     return {
       schema_version: TODO_COMPLETION_VALIDATION_PLAN_RESULT_SCHEMA,
       effect: "skip",
@@ -154,4 +159,59 @@ export function evaluateTodoCompletionValidationPlan(
     validation_label: declaration.value.validation_label,
     validation_timeout_seconds: declaration.value.validation_timeout_seconds,
   };
+}
+
+
+/** Recover an admitted validation effect, never a new completion authority. */
+export function terminalValidationRecovery(request: JsonObject, receipt: JsonObject): JsonObject {
+  const input = requireJsonObject(request.terminal_input, "terminal validation request");
+  const issued = requireJsonObject(request.execution_result, "issued validation effects");
+  if (issued.status !== "execute_validation") throw new EffectRuntimeRequestError("Validation recovery requires native effect admission");
+  const transient = new Set(["observed_at", "delivery_context", "validation_source_provider_revision",
+    "validation_receipt", "goal_acceptance_validation_receipts", "result_validation_binding"]);
+  const binding = canonicalAuthoritySha256({read_context_id: receipt.read_context_id,
+    request: Object.fromEntries(Object.entries(input).filter(([key]) => !transient.has(key))),
+    validation_effect: issued.validation_effect ?? null,
+    acceptance_effects: issued.goal_acceptance_validation_effects ?? null,
+    acceptance_source: issued.goal_acceptance_source_binding ?? null});
+  const previous = receipt.terminal_validation_effect == null ? null
+    : requireJsonObject(receipt.terminal_validation_effect, "terminal validation recovery record");
+  const reject = (code: string): JsonObject => ({ok: false, error_code: code,
+    error: "Retain the original validation effect and candidate; reconcile its outcome before retrying."});
+  if (previous !== null && (previous.schema_version !== "terminal_validation_effect_v1" || previous.binding_sha256 !== binding)) {
+    return reject("delivery_validation_binding_mismatch");
+  }
+  if (previous !== null && previous.status !== "pending" &&
+      (!["passed", "failed"].includes(String(previous.status)) ||
+       previous.updates_sha256 !== canonicalAuthoritySha256(previous.updates))) {
+    return reject("delivery_validation_receipt_corrupt");
+  }
+  if (request.phase === "begin_terminal_validation") {
+    if (previous?.status === "pending") return reject("delivery_validation_outcome_unknown");
+    if (previous?.status === "passed") return {ok: true, effect: "replay", updates: previous.updates};
+    return {ok: true, effect: "run", receipt: {...receipt, terminal_validation_effect: {
+      schema_version: "terminal_validation_effect_v1", binding_sha256: binding, status: "pending"}}};
+  }
+  if (request.phase !== "finish_terminal_validation" || previous?.status !== "pending") {
+    return reject("delivery_validation_outcome_unknown");
+  }
+  const updates = requireJsonObject(request.updates, "validation outcome updates");
+  if (Object.keys(updates).some(key => !["validation_receipt", "goal_acceptance_source_binding", "goal_acceptance_validation_receipts"].includes(key))) {
+    throw new EffectRuntimeRequestError("Validation outcome contains non-effect fields");
+  }
+  const outcomes: JsonObject[] = [];
+  if (issued.validation_effect != null) outcomes.push(requireJsonObject(updates.validation_receipt, "caller validation outcome"));
+  if (issued.goal_acceptance_validation_effects != null) {
+    if (!Array.isArray(updates.goal_acceptance_validation_receipts)) throw new EffectRuntimeRequestError("Acceptance outcomes missing");
+    for (const row of updates.goal_acceptance_validation_receipts) {
+      outcomes.push(requireJsonObject(requireJsonObject(row, "criterion outcome").receipt, "criterion validation outcome"));
+    }
+  }
+  if (!outcomes.length) throw new EffectRuntimeRequestError("Validation outcome missing");
+  // A known failed check remains retryable under the existing completion rule.
+  // Only an issued, fully successful effect group is recovered without running.
+  const passed = outcomes.every(outcome => outcome.passed === true);
+  return {ok: true, receipt: {...receipt, terminal_validation_effect: {
+    schema_version: "terminal_validation_effect_v1", binding_sha256: binding,
+    status: passed ? "passed" : "failed", updates, updates_sha256: canonicalAuthoritySha256(updates)}}};
 }

@@ -603,6 +603,8 @@ def bind_action_selection_cli_routes(
         tokens = shlex.split(route_prefix)
     except ValueError:
         return
+    if not tokens:
+        return
     if len(tokens) >= 3 and tokens[0] == "loopx":
         try:
             format_index = tokens.index("--format")
@@ -618,7 +620,14 @@ def bind_action_selection_cli_routes(
                 "--runtime-root",
                 str(runtime_root.expanduser().resolve()),
             ]
-        selection_command["route_prefix"] = shlex.join(tokens)
+    # The producer's template is tokenized internally with shlex. Only its
+    # final CLI exposure chooses the native shell; a quoted PowerShell
+    # executable needs the call operator, not another POSIX serialization.
+    from ...project_prompt import host_command, shell_arg_for_host
+
+    selection_command["route_prefix"] = " ".join(
+        [host_command(tokens[0]), *(shell_arg_for_host(token) for token in tokens[1:])]
+    )
 
 
 def _receipt_bound_recovery_todo(
@@ -715,6 +724,7 @@ def build_live_quota_should_run_decision(
     )
     observed_rrule = str(codex_app_current_rrule or "").strip()
     observed_automation_id = ""
+    codex_app_observation_error = None
     if (
         codex_app_host
         and not observed_rrule
@@ -724,6 +734,8 @@ def build_live_quota_should_run_decision(
         if observation.get("available") is True:
             observed_rrule = str(observation.get("rrule") or "")
             observed_automation_id = str(observation.get("automation_id") or "").strip()
+        else:
+            codex_app_observation_error = str(observation.get("reason") or "Codex App heartbeat could not be read")
     decision_status_payload = {
         **status_payload,
         "runtime_root": str(runtime_root),
@@ -850,6 +862,10 @@ def build_live_quota_should_run_decision(
         nonlocal app_scheduler_state
         app_scheduler_state = readback.get("state")
 
+    from .heartbeat_receipt import guard_source_for_turn
+    retained_source = guard_source_for_turn(runtime_root, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=turn_instance_id, goal_ref=goal_ref) if agent_id and turn_instance_id else None
+    decision_status_payload = {**decision_status_payload, "_receipt_bound_semantic_source": (retained_source or {}).get("obligation")}
     payload: dict[str, Any] = build_quota_should_run(
         decision_status_payload,
         goal_id=goal_id,
@@ -859,6 +875,7 @@ def build_live_quota_should_run_decision(
         include_agent_todo_detail=include_agent_todo_detail,
         codex_app_current_rrule=observed_rrule,
         codex_app_automation_id=observed_automation_id or None,
+        codex_app_observation_error=codex_app_observation_error,
         scheduler_execution_context=resolved_context,
         operator_inbox_urgency_projector=(
             _fresh_read_covers_all_pending_material(

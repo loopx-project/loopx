@@ -92,6 +92,7 @@ const TODO_CONTRACT_REVISION_FIELDS: readonly (readonly string[])[] = [
   ["completion_result"],
   ["completion_receipt_id"],
   ["material_change_scope", "material_change_scope_generations"],
+  ["completion_requested_continuation"],
 ];
 
 interface HistoricalTodoContract {

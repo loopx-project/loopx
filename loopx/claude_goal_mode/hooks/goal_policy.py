@@ -148,7 +148,7 @@ def should_run(registry, goal_id, agent_id=None) -> bool | None:
     cmd = list(_gh_prefix())
     if registry:
         cmd += ["--registry", registry]
-    cmd += ["--format", "json", "quota", "should-run", "--goal-id", goal_id]
+    cmd += ["--format", "json", "quota", "should-run", "--dry-run", "--goal-id", goal_id]
     if agent_id:
         cmd += ["--agent-id", agent_id]
     try:

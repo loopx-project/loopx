@@ -14,6 +14,12 @@ import {
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository} from "../work_items/task_lease_repository.ts";
 
+/** Maintenance does not replace an execution. Unknown fields stay significant. */
+export function taskLeaseExecutionFacts(lease: JsonObject): JsonObject {
+  return Object.fromEntries(Object.entries(lease)
+    .filter(([key]) => !["version", "expires_at", "updated_at"].includes(key)));
+}
+
 export function canonicalTaskLease(value: JsonObject, goalId: string, todoId: string): LeaseRecord {
   if ((value.schema_version !== undefined && value.schema_version !== TASK_LEASE_SCHEMA_VERSION) ||
       (value.goal_id !== undefined && value.goal_id !== goalId) || value.todo_id !== todoId ||

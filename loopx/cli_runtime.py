@@ -112,6 +112,9 @@ class _SelectedArgumentParser(LoopXArgumentParser):
 		raise _SelectedParseRejected(message)
 
 
+PrintPayload = Callable[[dict[str, object], str, Callable[[dict[str, object]], str]], None]
+
+
 def print_payload(
 	payload: dict[str, object],
 	fmt: str,
@@ -640,13 +643,27 @@ def _dispatch_common_command(
 		)
 		from .paths import effective_runtime_root
 
+		hooks = ()
+		if args.command == "refresh-state" and getattr(args, "goal_instance_id", None):
+			from .control_plane.goals.first_party_host_admission import load_first_party_registry_metadata
+			from .control_plane.goals.goal_ref_validation import exact_goal_ref
+			from .paths import resolve_runtime_root
+
+			registry = load_first_party_registry_metadata(registry_path, exact_goal_ref(args.goal_id, args.goal_instance_id))
+			hook_root = resolve_runtime_root(registry, args.runtime_root, registry_path=registry_path)
+			hooks = periodic_report_post_writeback_hooks_for_goal(
+				registry_path=registry_path, goal_id=args.goal_id,
+				runtime_root=hook_root, registry_data=registry,
+			)
+		elif args.command == "refresh-state":
+			hook_root = effective_runtime_root(registry_path, args.runtime_root)
+			hooks = periodic_report_post_writeback_hooks_for_goal(
+				registry_path=registry_path, goal_id=args.goal_id, runtime_root=hook_root,
+			)
 		return handle_project_lifecycle_command(
 			args, registry_path=registry_path, print_payload=print_payload,
 			output_format=output_format, append_cli_rollout_event=append_cli_rollout_event,
-			post_writeback_hooks=(periodic_report_post_writeback_hooks_for_goal(
-				registry_path=registry_path, goal_id=args.goal_id,
-				runtime_root=effective_runtime_root(registry_path, args.runtime_root),
-			) if args.command == "refresh-state" else ()),
+			post_writeback_hooks=hooks,
 			post_writeback_projection_builder=(build_periodic_report_post_writeback_projection
 				if args.command == "refresh-state" else None),
 		)

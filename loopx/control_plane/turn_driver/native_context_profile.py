@@ -1,6 +1,13 @@
 """Native context transport defaults, independent of capture and quota IO."""
 from __future__ import annotations
 
+import os
+
+
+def private_capture_supported() -> bool:
+    """Whether private IO can verify a POSIX identity or native Windows DACL."""
+    return os.name == "nt" or (os.name == "posix" and callable(getattr(os, "getuid", None)))
+
 
 # Use the configured output profile for every native caller, including App
 # shells that do not inherit the generated environment override. Smaller

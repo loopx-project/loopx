@@ -227,6 +227,7 @@ def _scheduler_hint(
     payload: dict[str, Any], *, arbitration: SchedulerArbitration | None = None, include_detail: bool = False,
     codex_app_scheduler_state: dict[str, Any] | None = None, available_capabilities: Any = None, codex_app_current_rrule: Any = None,
     codex_app_automation_id: Any = None,
+    codex_app_observation_error: str | None = None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None = None,
 ) -> dict[str, Any]:
     return build_scheduler_hint(
@@ -237,6 +238,7 @@ def _scheduler_hint(
         codex_app_scheduler_state=codex_app_scheduler_state,
         available_capabilities=available_capabilities, codex_app_current_rrule=codex_app_current_rrule,
         codex_app_automation_id=codex_app_automation_id,
+        codex_app_observation_error=codex_app_observation_error,
         scheduler_execution_context=scheduler_execution_context,
     )
 
@@ -1766,6 +1768,7 @@ def _build_quota_should_run_payload(
         ),
         codex_app_current_rrule=prepared.codex_app_current_rrule,
         codex_app_automation_id=prepared.codex_app_automation_id,
+        codex_app_observation_error=prepared.codex_app_observation_error,
         scheduler_execution_context=prepared.resolved_scheduler_context,
     )
     finalize_user_gate_notification_cooldown(

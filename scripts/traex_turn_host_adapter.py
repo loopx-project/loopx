@@ -6,7 +6,7 @@ LoopX supplies the versioned Turn Host request on stdin. The adapter:
 1. checks the recorded request version and renders the governed Turn input,
 2. invokes one headless ``traex exec`` in the governed workspace,
 3. asks TraeX for one schema-constrained public-safe result file,
-4. emits exactly one ``loopx_turn_result_v0`` JSON object on stdout.
+4. emits one typed work result or checkpoint direction object on stdout.
 
 It does not read goal/todo state, build prompts from todo ids, write LoopX
 state, spend quota, or validate its own work. Task body delivery and authority
@@ -46,8 +46,10 @@ from loopx.control_plane.turn_driver.host_candidate import (  # noqa: E402
     LOOPX_TURN_RESULT_SCHEMA as LOOPX_TURN_RESULT_SCHEMA,
     TEXT_LIMITS,
     build_result as build_host_result,
+    checkpoint_direction_result_schema,
     extract_action_text as extract_action_text,
     extract_turn_authority,
+    render_checkpoint_prompt,
     render_prompt as render_host_prompt,
 )
 
@@ -131,13 +133,25 @@ def traex_result_schema(*, complete: bool = False) -> dict[str, Any]:
     }
 
 
-def read_structured_result(path: Path, *, complete: bool = False) -> dict[str, Any] | None:
+def read_structured_result(
+    path: Path, *, complete: bool = False, checkpoint_id: str | None = None,
+) -> dict[str, Any] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(value, dict):
+        return None
+    if checkpoint_id is not None:
+        fields = checkpoint_direction_result_schema()["properties"]
+        if value.keys() != fields.keys() or any(
+            not isinstance(value[name], str) or ("maxLength" in spec and len(value[name]) > spec["maxLength"])
+            for name, spec in fields.items()
+        ):
+            return None
+        return value if value["read_context_id"] == checkpoint_id else None
     accepted_kinds = COMPLETE_RESULT_KINDS if complete else ACCEPTED_RESULT_KINDS
-    if not isinstance(value, dict) or str(value.get("result_kind") or "") not in accepted_kinds:
+    if str(value.get("result_kind") or "") not in accepted_kinds:
         return None
     return value
 
@@ -230,6 +244,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("Host request must be an object")
         assert_turn_host_request_version(request)
         authority = extract_turn_authority(request)
+        checkpoint_id = None
+        if request.get("phase") == "checkpoint_direction":
+            context = request.get("checkpoint_context")
+            checkpoint_id = context.get("read_context_id") if isinstance(context, dict) else None
+            if not isinstance(checkpoint_id, str) or not checkpoint_id:
+                raise ValueError("checkpoint direction requires a read context")
     except (ValueError, RuntimeError) as exc:
         print(f"adapter: invalid LoopX Turn Host request: {exc}", file=sys.stderr)
         return 2
@@ -241,7 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_path = temporary / "last-message.json"
         schema_path.write_text(
             json.dumps(
-                traex_result_schema(complete=complete),
+                checkpoint_direction_result_schema() if checkpoint_id else traex_result_schema(complete=complete),
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -250,13 +270,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         try:
             completed = run_traex(
-                render_prompt(authority),
+                render_checkpoint_prompt(request) if checkpoint_id else render_prompt(authority),
                 traex_bin=args.traex_bin,
                 workspace=Path(args.workspace),
                 schema_path=schema_path,
                 output_path=output_path,
-                permission_mode=args.permission_mode,
-                sandbox=args.sandbox,
+                permission_mode=None if checkpoint_id else args.permission_mode,
+                sandbox="read-only" if checkpoint_id else args.sandbox,
                 model=args.model,
                 timeout_seconds=args.timeout_seconds,
                 skip_git_repo_check=args.skip_git_repo_check,
@@ -278,8 +298,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return completed.returncode if completed.returncode > 0 else 1
 
-        candidate = read_structured_result(output_path, complete=complete)
-    result = build_result(request, candidate)
+        candidate = read_structured_result(output_path, complete=complete, checkpoint_id=checkpoint_id)
+    if checkpoint_id is not None and candidate is None:
+        print("adapter: invalid checkpoint direction result", file=sys.stderr)
+        return 2
+    result = candidate if checkpoint_id is not None else build_result(request, candidate)
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":")), flush=True)
     return 0
 

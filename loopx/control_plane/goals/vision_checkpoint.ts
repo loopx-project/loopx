@@ -2,6 +2,7 @@ import {settlementIdentityPayload, type JsonObject, type SettlementIdentity} fro
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {jsonObject} from "../runtime_decode.ts";
 import { isAcceptedProgressWriteback, isBoundedBlockedRetry } from "../quota/settlement_phase.ts";
+import {TODO_COMPLETION_VALIDATION_PLAN_RESULT_SCHEMA} from "../todos/completion_validation_plan.ts";
 import {
   DELIVERY_BOUNDARIES,
   type DeliveryBoundary,
@@ -456,6 +457,12 @@ function normalizeGoalVisionState(value: unknown): string {
 export function goalVisionStateIsOpen(value: unknown): boolean {
   try { return !lifecycle.closed_states.includes(normalizeGoalVisionState(value)); }
   catch { return false; }
+}
+
+/** The existing progress predicate is semantic; completion owns its validators. */
+export function openTodoProgressValidationContract(): JsonObject {
+  return {required: false, owner: "settlement.open_todo_semantic_checkpoint",
+    completion_validation_contract: TODO_COMPLETION_VALIDATION_PLAN_RESULT_SCHEMA};
 }
 
 /** Qualify an open Todo's evidence checkpoint without accepting its deliverable.

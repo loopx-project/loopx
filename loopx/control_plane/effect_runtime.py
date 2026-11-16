@@ -393,6 +393,8 @@ def _source_digest_location(
 
 
 def _private_directory(path: Path) -> bool:
+    if sys.platform == "win32":
+        return False
     try:
         metadata = os.lstat(path)
     except OSError:
@@ -402,6 +404,8 @@ def _private_directory(path: Path) -> bool:
 
 
 def _read_source_digest(path: Path, key: str) -> str | None:
+    if sys.platform == "win32":
+        return None
     if not _private_directory(path.parent):
         return None
     try:
@@ -435,6 +439,8 @@ def _write_source_digest(
 ) -> None:
     """Best-effort publication into an existing private runtime namespace."""
 
+    if sys.platform == "win32":
+        return
     settled_before = time.time_ns() - _SOURCE_DIGEST_SETTLE_NS
     if any(max(mtime, ctime) > settled_before for _name, mtime, ctime, _size in snapshot):
         return
@@ -619,7 +625,7 @@ def _reap_exited_runtime_child(info: Mapping[str, Any] | None) -> None:
     nothing for a live child or a runtime owned by another process.
     """
 
-    if os.name == "nt" or not isinstance(info, Mapping):
+    if sys.platform == "win32" or not isinstance(info, Mapping):
         return
     pid = info.get("pid")
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:

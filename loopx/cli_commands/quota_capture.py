@@ -188,7 +188,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             full = view("full", current, current_raw)
             # Every full page contains the original bytes plus JSON framing.
             # This lower bound avoids paging a large body when delta wins already.
-            if delta_cost is None or len(_native_output_bytes(full)) + len(current_raw) <= delta_cost:
+            if delta_cost is None or len(_native_output_bytes(full)) + len(os.linesep) - 1 + len(current_raw) <= delta_cost:
                 full_cost = _native_context_read_bytes(full, current_raw,
                     page_bytes=page_bytes, output_bytes=output_bytes, stop_after=delta_cost,
                     reader_argv=reader_argv)
@@ -691,6 +691,8 @@ def budgeted_settlement_result(
     payload: dict[str, object], *, runtime_root: Path, output_bytes: int,
     reader_argv: list[str] | None = None,
     supporting_fields: tuple[str, ...] | None = None,
+    deferred_fields: tuple[str, ...] = ('before', 'after'),
+    read_instruction: str | None = None,
 ) -> dict[str, object]:
     """Present one evaluated result with its complete immutable diagnostic.
 
@@ -702,19 +704,24 @@ def budgeted_settlement_result(
 
     def fits(value: dict[str, object]) -> bool:
         # Match the JSON CLI serializer, including print's newline.
-        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= output_bytes
+        return len(_native_output_bytes(value)) + len(os.linesep) - 1 <= output_bytes
 
     if supporting_fields is None and fits(payload):
         return payload
     try:
-        uid = private_capture_uid()
+        from ..control_plane.runtime.private_permissions import protect_private_path, require_private_path
+
+        private_capture_uid()
         root = runtime_root.expanduser().resolve() / "context-delivery"
-        root.mkdir(mode=0o700, exist_ok=True)
-        metadata = root.lstat()
-        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid
-                or metadata.st_mode & 0o077):
-            raise ValueError("result capture requires a private physical directory owned by this user")
+        try:
+            root.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        else:
+            protect_private_path(root, directory=True)
+        require_private_path(root, directory=True)
         directory = Path(tempfile.mkdtemp(prefix="settlement-", dir=root))
+        protect_private_path(directory, directory=True)
         saved = directory / "result.json"
         digest = write_decision_capture(saved, payload)
         if saved.stat().st_size > MAX_REQUEST_BYTES:
@@ -724,17 +731,17 @@ def budgeted_settlement_result(
             "command": context_capture_read_command(saved, digest, reference_file=reference,
                 page_bytes=min(NATIVE_CONTEXT_PAGE_BYTES, output_bytes),
                 max_page_output_bytes=output_bytes, reader_argv=reader_argv)}
-        deferred = [key for key in (supporting_fields if supporting_fields is not None else ("before", "after")) if key in payload]
+        deferred = [key for key in (supporting_fields if supporting_fields is not None else deferred_fields) if key in payload]
         view = {key: value for key, value in payload.items() if key not in deferred}
         view["result_details"] = {**details, "deferred_fields": deferred}
-        view["instruction"] = (
+        view["instruction"] = read_instruction or ((
             "The exact Turn is settled. Supporting snapshots are complete in result_details; read only needed details. "
             "Keep every returned warning and unresolved control. No additional spend or admission is required for this result."
         ) if supporting_fields is not None else (
             "The operation was already evaluated. before/after are complete in the immutable result; "
             "read only needed details with context-read --select. Preserve the original Turn and effect "
             "identity during recovery; do not repeat admission or infer authority from this presentation."
-        )
+        ))
         if fits(view) and "result_details" not in payload and "instruction" not in payload:
             return view
         # Large or unknown controls are mandatory selected reads, never cut text.
@@ -749,7 +756,7 @@ def budgeted_settlement_result(
             "command": context_capture_read_command(saved, digest, reference_file=reference, select=pointers,
                 page_bytes=min(NATIVE_CONTEXT_PAGE_BYTES, output_bytes),
                 max_page_output_bytes=output_bytes, reader_argv=reader_argv),
-            "instruction": "Read the complete selected result controls before acting. The operation was "
+            "instruction": read_instruction or "Read the complete selected result controls before acting. The operation was "
                 "already evaluated; preserve its original Turn/effect identity. No execution authority "
                 "or context baseline is granted." + snapshot_note}
         if fits(view):

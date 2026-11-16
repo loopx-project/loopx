@@ -5,10 +5,10 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256, AuthorityStoreProtocolError} from "../coordination/authority_store_codec.ts";
 import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "../coordination/coordination_projection.ts";
 import {loadLegacyCoordinationWriterFence} from "../coordination/legacy_writer_fence.ts";
-import {canonicalLeaseTodoFact, canonicalTaskLease} from "../coordination/task_lease_state.ts";
+import {canonicalLeaseTodoFact, canonicalTaskLease, taskLeaseExecutionFacts} from "../coordination/task_lease_state.ts";
 import {openLocalAuthorityStoreHandle, localAuthorityOpenFailure,
   type LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
-import {decodeTaskLeaseAuthority, leaseIsActive, normalizeGoalId, normalizeTodoId, normalizeHandoffMode,
+import {decodeTaskLeaseAuthority, leaseIsActive, leaseVersion, normalizeGoalId, normalizeTodoId, normalizeHandoffMode,
   readLease, revalidateAuthoritySources, TaskLeaseAcquireError, TASK_LEASE_SCHEMA_VERSION,
   type LeaseRecord, type TodoFact} from "./task_lease_acquire.ts";
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "../coordination/handoff_mode_policy.ts";
@@ -33,7 +33,7 @@ export async function inspectTaskLease(value: unknown,
     const input = requireJsonObject(value, "task lease inspection");
     if (input.schema_version !== TASK_LEASE_INSPECT_REQUEST ||
         (input.source !== "canonical" && input.source !== "legacy") ||
-        Object.keys(input).some(key => !["schema_version", "source", "goal_id", "todo_id", "runtime_root", "authority"].includes(key))) {
+        Object.keys(input).some(key => !["schema_version", "source", "goal_id", "todo_id", "runtime_root", "authority", "original_lease"].includes(key))) {
       throw new TaskLeaseAcquireError("invalid task lease inspection request", "invalid_inspection_request");
     }
     goalId = normalizeGoalId(input.goal_id); todoId = normalizeTodoId(input.todo_id);
@@ -106,9 +106,24 @@ export async function inspectTaskLease(value: unknown,
     if (canonicalAuthoritySha256(afterFence) !== canonicalAuthoritySha256(beforeFence)) {
       throw new TaskLeaseAcquireError("lease authority route changed; retry inspection", "authority_source_changed");
     }
+    let executionProof: JsonObject | null = null;
+    if (input.original_lease !== undefined) {
+      const original = canonicalTaskLease(requireJsonObject(input.original_lease, "original execution lease"), goalId, todoId);
+      if (!canonical || mode !== "hard_lease" || !timeActive || constraint?.effective !== true || lease === null) {
+        throw new TaskLeaseAcquireError("the original task execution is not currently effective", "original_execution_unavailable");
+      }
+      if (leaseVersion(lease) < leaseVersion(original) ||
+          canonicalAuthoritySha256(taskLeaseExecutionFacts(lease)) !== canonicalAuthoritySha256(taskLeaseExecutionFacts(original))) {
+        throw new TaskLeaseAcquireError("the original task execution lease changed", "original_execution_changed");
+      }
+      // Observation refreshes this already held execution's proof. The later
+      // native mutation must still check current version, expiry and CAS.
+      executionProof = {idempotency_key: lease.idempotency_key, expected_version: leaseVersion(lease)};
+    }
     return {ok: true, schema_version: TASK_LEASE_SCHEMA_VERSION, action: "inspect",
       goal_id: goalId, todo_id: todoId, active: timeActive && constraint?.effective === true,
       lease, lease_path: leasePath, ...evidence,
+      ...(executionProof === null ? {} : {execution_proof: executionProof}),
       execution_policy: {supported: canonical && retired === null, execution_authority_granted: false,
         ...(!canonical ? {reason_code: "canonical_authority_required",
           reason: "Source leases are historical only. Use reviewed canonical import before starting execution."}

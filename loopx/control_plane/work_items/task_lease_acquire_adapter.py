@@ -427,6 +427,7 @@ def execute_native_task_lease_lifecycle(
 
 def inspect_native_task_lease(
     *, registry_path: Path, runtime_root: Path, goal_id: str, todo_id: str,
+    original_lease: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project source facts; the typed reader owns lease interpretation."""
     from ..coordination.local_authority import (
@@ -446,6 +447,7 @@ def inspect_native_task_lease(
             "source": "canonical",
             "runtime_root": str(runtime_root.resolve()), "goal_id": goal_id,
             "todo_id": todo_id, "authority": authority,
+            **({"original_lease": original_lease} if original_lease is not None else {}),
         }
         result = effect_runtime_result(
             "task_lease.inspect.native", request,

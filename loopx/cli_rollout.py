@@ -51,7 +51,12 @@ def append_cli_rollout_event(
         if runtime_root_value:
             runtime_root = Path(str(runtime_root_value)).expanduser()
         else:
-            registry = load_registry(registry_path)
+            if goal_ref is not None:
+                from .control_plane.goals.first_party_host_admission import load_first_party_registry_metadata
+
+                registry = load_first_party_registry_metadata(registry_path, goal_ref)
+            else:
+                registry = load_registry(registry_path)
             runtime_root = resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path)
         event = build_rollout_event(
             goal_id=goal_id,

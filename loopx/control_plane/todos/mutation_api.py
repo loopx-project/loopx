@@ -445,6 +445,8 @@ def complete_goal_todo(
     completion_result_file: Path | None = None,
     completion_turn_key: str | None = None,
     completion_identity_source: str | None = None,
+    delivery_read_context_id: str | None = None,
+    delivery_settlement_identity: Mapping[str, Any] | None = None,
     terminal_review_basis: Mapping[str, Any] | None = None,
     expected_todo_text_sha256: str | None = None,
     require_captured_todo_text: bool = False,
@@ -455,6 +457,7 @@ def complete_goal_todo(
     claim_operation_id: str | None = None,
     note: str | None = None,
     no_followup: bool = False,
+    defer_no_followup: bool = False,
     successor_todo_ids: list[str] | None = None,
     claimed_by: str | None = None,
     clear_claim: bool = False,
@@ -479,6 +482,8 @@ def complete_goal_todo(
 
 def supersede_goal_todo(
     *,
+    completion_turn_key: str | None = None,
+    completion_identity_source: str | None = None,
     registry_path: Path,
     goal_id: str,
     runtime_root_arg: str | None = None,

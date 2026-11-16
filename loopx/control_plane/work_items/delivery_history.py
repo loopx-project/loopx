@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from ..effect_runtime import effect_runtime_result
@@ -50,17 +51,48 @@ def _run_facts(run: Mapping[str, Any]) -> dict[str, Any]:
 
 def project_delivery_history(
     runs: list[dict[str, Any]], *, outcome_floor_configured: bool = False,
+    settlement_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project a caller-selected history batch with one managed-runtime request.
 
     Do not send raw trajectories, evidence bodies, recommendations or profiles.
     The profile adapter passes only whether the legacy outcome floor is enabled.
     """
-    result = effect_runtime_result("work_item.delivery_history.project", {
+    request: dict[str, Any] = {
         "schema_version": "delivery_history_request_v0",
-        "runs": [_run_facts(run) for run in runs],
+        "runs": [{**_run_facts(run),
+            **{key: _identifier_fact(run.get(key)) for key in (
+                "goal_id", "agent_id", "turn_instance_id", "generated_at",
+            )},
+            "receipt_required": run.get("settlement_identity") is not None or run.get("vision_checkpoint") is not None,
+            "effect_id": _text((run.get("settlement_identity") or {}).get("effect_id"))[:1024]
+                if isinstance(run.get("settlement_identity"), Mapping) else "",
+            "vision_request_digest": _bounded_text(_text(run["refresh_recovery"].get("vision_request_digest")))
+                if isinstance(run.get("refresh_recovery"), Mapping) else "",
+            **({"goal_ref": {key: _identifier_fact(run["goal_ref"].get(key))
+                             for key in ("goal_id", "goal_instance_id")}
+                if isinstance(run.get("goal_ref"), Mapping)
+                    and set(run["goal_ref"]) == {"goal_id", "goal_instance_id"}
+                    and all(isinstance(value, str) for value in run["goal_ref"].values()) else None}
+               if "goal_ref" in run else {}),
+        } for run in runs],
         "outcome_floor_configured": outcome_floor_configured,
-    })
+    }
+    if settlement_source is None or not any(row["receipt_required"] or row["turn_instance_id"] for row in request["runs"]):
+        result = effect_runtime_result("work_item.delivery_history.project", request)
+    else:
+        from ..quota.accounting_admission import quota_accounting_admission
+
+        source = {key: settlement_source[key] for key in ("runtime_root", "goal_id", "goal_ref")
+                  if key in settlement_source}
+        with quota_accounting_admission(
+            runtime_root=Path(source["runtime_root"]), registry_path=settlement_source.get("registry_path"),
+            goal_id=source["goal_id"], goal_ref=source.get("goal_ref"),
+            operation="delivery-history-read", lock_legacy_index=False,
+        ) as admission:
+            if admission is not None:
+                source["source_admission"] = admission
+            result = effect_runtime_result("work_item.delivery_history.project", {**request, "settlement_source": source})
     if (not isinstance(result, dict) or result.get("schema_version") != "delivery_history_v0"
         or not isinstance(result.get("runs"), list) or len(result["runs"]) != len(runs)):
         raise RuntimeError("TypeScript delivery history shape mismatch")

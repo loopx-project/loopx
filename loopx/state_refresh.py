@@ -39,6 +39,7 @@ from .control_plane.quota.accounting_admission import quota_accounting_admission
 from .control_plane.coordination.local_authority import local_authority_is_promoted
 from .control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from .control_plane.quota.settlement import (
+    QuotaSettlementReadback,
     SettlementIdentity,
     attach_settlement_progress,
     read_heartbeat_settlement,
@@ -90,7 +91,7 @@ from .control_plane.runtime.runtime_projection_route import (
     resolve_runtime_projection_route,
 )
 from .feedback import validate_local_control_text, validate_public_safe_text
-from .file_lock import exclusive_file_lock
+from .file_lock import exclusive_file_lock, exclusive_cross_runtime_file_lock
 from .global_registry import sync_project_registry_to_global
 from .history import (
     append_run_index_record,
@@ -111,8 +112,12 @@ from .control_plane.goals.goal_frontier.outcome_continuity import (
     outcome_vision_checkpoint_from_run,
 )
 from .control_plane.goals.checkpoint_context_io import (
+    CheckpointReadContextRejected,
     checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
+    first_delivery_context_enrolled, result_work_required, checkpoint_continuation_required, result_work_read_id, TurnResultWork,
+    read_retained_result_for_replay, require_checkpoint_source_recovery,
 )
+from .control_plane.goals.first_party_host_admission import load_first_party_registry_metadata
 from .registry import registry_goals as registry_goals, resolve_state_file as resolve_state_file
 from .runtime import validate_goal_id_path_segment
 from .state_projection import (
@@ -717,6 +722,35 @@ def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _attach_pending_cli_direction(
+    payload: dict[str, Any],
+    readback: QuotaSettlementReadback,
+    *,
+    registry_path: Path,
+    runtime_root: Path,
+    sync_global: bool,
+    suppress_external_sinks: bool,
+) -> None:
+    identity = readback.identity.value
+    if (
+        payload.get("ok") is not True or identity is None or identity.todo_id is None
+        or (payload.get("first_delivery_progress") or {}).get("stage") != "direction_pending"
+        or readback.progress.get("next_step") != "durable_writeback"
+        or readback.progress.get("work_authority_hold")
+    ):
+        return
+
+    from .control_plane.goals.checkpoint_context_io import pending_checkpoint_cli_actions
+    from .control_plane.work_items.action_selection_contract import render_cli_command_prefix
+
+    # Only show the two direction steps until the typed owner qualifies the debit.
+    payload["next_cli_actions"] = pending_checkpoint_cli_actions(
+        readback,
+        command_prefix=render_cli_command_prefix(registry_path=str(registry_path), runtime_root=str(runtime_root)),
+        sync_global=sync_global, suppress_external_sinks=suppress_external_sinks, host_shell=True,
+    )[:2]
+
+
 def refresh_state_run(
     *,
     registry_path: Path,
@@ -744,6 +778,8 @@ def refresh_state_run(
     merge_agent_vision_patch: bool = False,
     vision_unchanged_reason: str | None = None,
     checkpoint_read_context_id: str | None = None,
+    delivery_read_context_id: str | None = None,
+    first_delivery: bool = False,
     progress_observation: dict[str, Any] | None = None,
     explore_result: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
@@ -763,8 +799,14 @@ def refresh_state_run(
         raise ValueError("prospective acceptance facts are valid only for dry-run planning")
     if next_action_basis and not next_action:
         raise ValueError("--next-action-basis requires --next-action")
+    if delivery_read_context_id is not None and not (delivery_read_context_id.strip() and turn_instance_id and agent_id and todo_id):
+        raise ValueError("--delivery-read-context requires a read ID and the original Goal/Agent/Todo/Turn")
+    if delivery_read_context_id is not None and (checkpoint_read_context_id or first_delivery):
+        raise ValueError("--delivery-read-context is only for delivery_result writeback")
     if checkpoint_read_context_id and not turn_instance_id:
         raise ValueError("--checkpoint-read-context requires the original Turn identity")
+    if first_delivery and not (turn_instance_id and agent_id and (todo_id or replan_obligation_id)):
+        raise ValueError("--first-delivery requires the original Goal/Agent/Todo or obligation/Turn")
     validate_public_safe_text("classification", classification)
     if usage_measurement is not None and usage_codex_session is not None:
         raise ValueError("--usage-json cannot be combined with --usage-codex-session")
@@ -802,7 +844,7 @@ def refresh_state_run(
         # Reuse only this exact committed guard. Missing input cannot select a
         # Todo or manufacture a request; the original receipt owns restoration.
         from .control_plane.quota.heartbeat_receipt import find_heartbeat_receipt, heartbeat_receipt_request_subject
-        request_registry = load_registry(registry_path)
+        request_registry = load_first_party_registry_metadata(registry_path, goal_ref) if goal_ref is not None else load_registry(registry_path)
         request_runtime = resolve_runtime_root(request_registry, runtime_root_override, registry_path=registry_path)
         request_receipt = find_heartbeat_receipt(request_runtime, goal_id=safe_goal_id,
             agent_id=normalized_agent_id, turn_instance_id=turn_instance_id, goal_ref=goal_ref)
@@ -849,7 +891,9 @@ def refresh_state_run(
             "--delivery-workspace-path requires a progress outcome or a typed "
             "blocked outcome_gap settlement: " + turn_scoped_settlement_gap
         )
-    registry = load_registry(registry_path)
+    if goal_ref is not None and not turn_scoped_settlement_qualified:
+        raise ValueError("Source checkpoint recovery requires the original qualified Turn: " + turn_scoped_settlement_gap)
+    registry = load_first_party_registry_metadata(registry_path, goal_ref) if goal_ref is not None else load_registry(registry_path)
     runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
     # State-dependent admission through the final append remains serialized.
     # Only pure input validation runs before this transitional persistence lock.
@@ -869,7 +913,11 @@ def refresh_state_run(
         settlement_readback = None
         refresh_recovery = None
         prior_writeback_run = None
+        default_checkpoint = False
         checkpoint_supplement = False
+        first_delivery_checkpoint = False
+        result_work_checkpoint = False
+        work_read_id = None
         if todo_id or normalized_replan_obligation_id or turn_instance_id:
             if checkpoint_read_context_id or agent_vision_packet or vision_unchanged_reason:
                 require_complete_checkpoint_index(runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl")
@@ -896,6 +944,11 @@ def refresh_state_run(
                 # a different Todo or obligation.
                 resolve_original_binding=True,
                 refresh_retry=(refresh_retry_request := {
+                    **({"first_delivery_request": {
+                        "classification": classification, "recommended_action": recommended_action,
+                        "agent_lane": agent_lane, "progress_scope": progress_scope,
+                        "completion_todo_id": completion_todo_id, "completion_turn_key": completion_turn_key,
+                    }} if first_delivery else {}),
                     "checkpoint_read_context_id": checkpoint_read_context_id,
                     "external_delivery": external_delivery,
                     "vision": agent_vision_packet,
@@ -921,6 +974,8 @@ def refresh_state_run(
             )
             if settlement_readback is None:
                 raise RuntimeError("exact settlement readback unexpectedly returned not-found")
+            if goal_ref is not None:
+                require_checkpoint_source_recovery(settlement_readback)
             settlement_result = settlement_readback.identity
             if settlement_result.failure is not None:
                 raise ValueError(settlement_result.failure.reason)
@@ -935,18 +990,78 @@ def refresh_state_run(
             checkpoint_supplement = bool(
                 refresh_recovery["decision"] == "supplement_checkpoint"
             )
-            if refresh_recovery.get("decision") in {"replay", "repair_receipt"} and prior_writeback_run:
+            replay_result = None
+            if refresh_recovery["decision"] in {"replay", "repair_receipt"} and prior_writeback_run:
                 inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
+            if delivery_read_context_id is not None and prior_writeback_run:
+                recorded_context = prior_writeback_run.get("result_work_context") or {}
+                if not recorded_context and refresh_recovery["decision"] == "replay":
+                    direction_context = (prior_writeback_run.get("vision_checkpoint") or {}).get("read_context") or {}
+                    retained = direction_context.get("retained_result_binding") or {}
+                    if retained.get("index_record_sha256"):
+                        replay_result = read_retained_result_for_replay(
+                            runtime_root, settlement_identity, index_sha256=retained["index_record_sha256"],
+                            goal_ref=goal_ref,
+                        )
+                        recorded_context = replay_result["result_work_context"]
+                if recorded_context.get("read_context_id") != delivery_read_context_id:
+                    raise ValueError("result replay requires the original committed delivery read ID")
             recovery_payload = refresh_recovery_payload(
                 settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=safe_goal_id, dry_run=dry_run, goal_ref=goal_ref,
             )
             if recovery_payload is not None:
-                return recover_refresh_todo_projection(
+                recovered = recover_refresh_todo_projection(
                     recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=safe_goal_id, project=project, state_file=state_file,
+                    registry_data=registry,
+                    source_admission=source_admission,
                 )
-            if checkpoint_read_context_id and not checkpoint_supplement:
+                if replay_result is not None and recovered.get("idempotent_replay"):
+                    # Direction and settlement are projected from the latest writeback.
+                    # Only the explicit result fields come from the verified original.
+                    recovered.update(replay_result)
+                if (
+                    goal_ref is None and not dry_run and recovered.get("idempotent_replay")
+                    and (recovered.get("first_delivery_progress") or {}).get("stage") == "direction_pending"
+                    and checkpoint_continuation_required(settlement_readback)
+                ):
+                    _attach_pending_cli_direction(
+                        recovered, settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
+                        sync_global=sync_global, suppress_external_sinks=bool((external_delivery or {}).get("suppress")),
+                    )
+                return recovered
+            first_delivery_checkpoint = (
+                refresh_recovery["decision"] == "append"
+                and first_delivery_context_enrolled(runtime_root, settlement_identity,
+                    result_only=result_work_required(settlement_readback))
+            )
+            default_checkpoint = checkpoint_continuation_required(settlement_readback)
+            result_work_checkpoint = (
+                refresh_recovery["decision"] == "append" and not first_delivery_checkpoint
+                and result_work_required(settlement_readback)
+            )
+            if (result_work_checkpoint and completion_todo_id == settlement_identity.todo_id
+                    and completion_turn_key == settlement_identity.turn_instance_id
+                    and TurnResultWork(registry_path, runtime_root, settlement_identity, goal_ref).result_committed()):
+                # The typed Todo fence already proves this original result.
+                # A disposable work read cannot reopen its completed validation.
+                # Existing writeback recovery still owns the remaining effects.
+                result_work_checkpoint = False
+            if delivery_read_context_id is not None and not result_work_checkpoint:
+                raise ValueError("--delivery-read-context is only for a bound delivery_result writeback")
+            if result_work_checkpoint:
+                work_read_id = delivery_read_context_id or result_work_read_id(runtime_root, settlement_identity)
+            if first_delivery != first_delivery_checkpoint and not default_checkpoint:
+                raise ValueError("first delivery requires matching --first-delivery and persisted first_delivery context; "
+                    "read and judge checkpoint-context --purpose first_delivery on the original Turn")
+            if first_delivery_checkpoint and not (agent_vision_packet or vision_unchanged_reason):
+                raise ValueError("first delivery direction is pending; read checkpoint-context --purpose first_delivery "
+                    "for this original Turn, judge the returned state, then submit its context and direction")
+            if first_delivery_checkpoint and (next_action or usage_codex_session is not None):
+                raise ValueError("first delivery checkpoint does not support combined next-action or session usage booking; "
+                    "retain the original Turn and use separately owned stages")
+            if checkpoint_read_context_id and not (checkpoint_supplement or first_delivery_checkpoint):
                 raise ValueError("--checkpoint-read-context applies only to a missing-checkpoint supplement")
             settlement_workspace_requirement = resolve_settlement_workspace_requirement(
                 delivery_workspace_causality, settlement_binding_kind=settlement_identity.binding_kind.value
@@ -1058,6 +1173,8 @@ def refresh_state_run(
             existing_runs, _ = load_index(
                 runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl"
             )
+            if goal_ref is not None:
+                existing_runs = [run for run in existing_runs if run.get("goal_ref") == goal_ref]
             newest_first_runs = [
                 run
                 for _, run in sorted(
@@ -1138,13 +1255,31 @@ def refresh_state_run(
                 review_pages=((agent_vision or {}).get("stride_decision") or {}).get(
                     "explore_review", {}).get("result_pages"))
 
+        from .control_plane.quota.heartbeat_receipt import guard_source_for_turn, guard_cadence
+        retained_source = guard_source_for_turn(runtime_root, goal_id=safe_goal_id,
+            agent_id=normalized_agent_id, turn_instance_id=turn_instance_id, goal_ref=goal_ref) if settlement_readback else None
+        # Retained identity cannot override a later explicit policy revision.
+        usable_source = retained_source if retained_source and retained_source.get("cadence") == guard_cadence(registry_path,runtime_root,safe_goal_id) else None
+        from .control_plane.goals.checkpoint_context_io import _checkpoint_effect
+        requested_replan = autonomous_replan_recorded or bool(settlement_replan_guard.get('selected_obligation_id'))
+        replan_stage = _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
+            "phase": "replan_stage", "heartbeat_receipt": settlement_readback.heartbeat_receipt if settlement_readback else None,
+            "prior": prior_writeback_run, "requested": requested_replan,
+            "explicit_ack": autonomous_replan_recorded,
+            "has_read_context": bool(checkpoint_read_context_id),
+        }) if default_checkpoint and (requested_replan or
+            (prior_writeback_run or {}).get("vision_checkpoint", {}).get("replan_stage")) else {
+                "deferred": False, "qualify": autonomous_replan_recorded}
         replan_qualification = qualify_refresh_replan_writeback(
+            defer_until_direction=replan_stage['deferred'],
             replan_explore_reader=read_explore_context,
-            replan_source_route={"registry": str(registry_path), "runtime_root": str(runtime_root)},
+            replan_source_route={"registry": str(registry_path), "runtime_root": str(runtime_root),
+                **({"goal_ref": goal_ref} if goal_ref is not None else {})},
             capability_evidence=capability_evidence,
             guard_capability=settlement_replan_guard.get("selected_capability_guard"),
             todo_fields=todo_fields,
-            autonomous_replan_recorded=autonomous_replan_recorded,
+            receipt_bound_source=(usable_source or {}).get("obligation"),
+            autonomous_replan_recorded=replan_stage["qualify"],
             requested_delta_kinds=normalized_repair_delta_kinds,
             active_state_next_action_update=None,
             agent_vision=agent_vision,
@@ -1243,6 +1378,7 @@ def refresh_state_run(
         if (
             normalized_delivery_outcome in ACCOUNTABLE_DELIVERY_OUTCOMES
             and not checkpoint_supplement
+            and not replan_stage["deferred"]
         ):
             require_accountable_completion_validation(
                 state_text,
@@ -1265,6 +1401,47 @@ def refresh_state_run(
                     "completion_todo_id": completion_todo_id,
                 } if settlement_identity is not None else None),
             )
+        if replan_stage["deferred"]:
+            vision_checkpoint["replan_stage"] = "awaiting_direction"
+        # The native result commit owns the narrow same-Todo direction check.
+        # Broader decisions still require their separate direction basis.
+        submitted_path = (agent_vision_packet or {}).get("path_delta")
+        inline_replan = (
+            autonomous_replan_recorded and effective_autonomous_replan_recorded
+            and isinstance(replan_semantic_delta, dict)
+            and isinstance(settlement_replan_guard.get("selected_obligation_id"), str)
+            and replan_semantic_delta.get("obligation_id") == settlement_replan_guard["selected_obligation_id"]
+            and "fresh_vision_path_outcome" in (replan_semantic_delta.get("satisfying_outcomes") or ())
+            and isinstance(submitted_path, dict) and submitted_path.get("outcome") == "replan"
+        )
+        inline_direction = (
+            default_checkpoint and result_work_checkpoint and not dry_run
+            and goal_ref is None
+            and vision_checkpoint.get("required") is True
+            and vision_checkpoint.get("satisfied") is True
+            and (inline_replan or (
+                not requested_replan and isinstance(submitted_path, dict)
+                and submitted_path.get("outcome") == "continue"
+            ))
+        )
+        if (settlement_readback is not None and checkpoint_continuation_required(settlement_readback)
+                and vision_checkpoint.get("required") is True
+                and vision_checkpoint.get("satisfied") is True
+                and not (checkpoint_supplement or first_delivery_checkpoint or inline_direction)):
+            raise CheckpointReadContextRejected({
+                "ok": False,
+                "error_code": "checkpoint_read_context_required",
+                "error": "Default checkpoint requires a post-result read and a newly authored decision on the original Turn; old Vision cannot be rebound to a new context.",
+                "settlement_identity": settlement_readback.identity.value.as_dict(),
+                "settlement_progress": settlement_readback.progress,
+                "reread_required": False,
+                "instructions": (
+                    "Retain the result with refresh-state on the original Turn using the same result and evidence "
+                    "options. Omit the Vision patch or unchanged reason and defer any direction-only replan acknowledgement. "
+                    "After result writeback, use the same Turn's quota guard to obtain the supplement_checkpoint read "
+                    "and writeback commands. Read the current basis and author the direction before settling quota."
+                ),
+            })
         if checkpoint_supplement and not vision_checkpoint.get("satisfied"):
             raise ValueError(
                 "checkpoint supplement did not satisfy the missing decision; "
@@ -1272,6 +1449,7 @@ def refresh_state_run(
                 "patch on the same Turn; the original writeback and quota are unchanged."
             )
         delivery_workspace = None
+        retry_workspace_path = None
         workspace_requirement = str(
             (settlement_workspace_requirement or {}).get("requirement") or "unknown"
         )
@@ -1294,8 +1472,9 @@ def refresh_state_run(
                 }
             )
         ):
+            workspace_observation_path = delivery_workspace_path or Path.cwd()
             delivery_workspace = capture_delivery_workspace(
-                current_path=delivery_workspace_path,
+                current_path=workspace_observation_path,
                 peer_independent_worktree_required=False,
                 local_goal_id=safe_goal_id,
                 local_project_root=resolved_project,
@@ -1344,6 +1523,8 @@ def refresh_state_run(
                     "For a selected repository delivery, use the actual producing worktree; "
                     "the registered Goal workspace does not replace that requirement."
                 )
+            if peer_independent_worktree_required:
+                retry_workspace_path = workspace_observation_path.resolve()
         explore_result_recorded_at = None
         if checkpoint_supplement:
             # The supplemental row must not reattribute the original delivery to
@@ -1361,7 +1542,9 @@ def refresh_state_run(
             explore_result_recorded_at = prior_writeback_run.get(
                 "explore_result_recorded_at", prior_writeback_run["generated_at"]
             )
-            classification = prior_writeback_run["classification"]
+            classification = (
+                "goal_vision_checkpoint" if checkpoint_read_context_id else prior_writeback_run["classification"]
+            )
         elif normalized_explore_result is not None:
             # Attachment recovery orders committed decisions within one wall second.
             explore_result_recorded_at = now_local_iso(timespec="microseconds")
@@ -1475,7 +1658,10 @@ def refresh_state_run(
         compact_route["projection_marker_field"] = "shared_runtime_projection"
         record["runtime_projection_route"] = compact_route
 
-        runs_dir = runtime_root / "goals" / safe_goal_id / "runs"
+        # Produce physical artifact paths before record/index fingerprints are
+        # constructed. Historical aliases remain immutable and are verified by
+        # the checkpoint owner against this same directory identity.
+        runs_dir = runtime_root.resolve() / "goals" / safe_goal_id / "runs"
         json_path, markdown_path = unique_run_paths(runs_dir, generated_at)
         index_path = runs_dir / "index.jsonl"
         index_record, payload = _build_state_refresh_output_projections(
@@ -1497,11 +1683,71 @@ def refresh_state_run(
         # fails the whole refresh instead of entering run history. The booking lock
         # spans ledger-basis read + row append so concurrent refreshes cannot fund
         # two deltas from one stale basis; the appended row advances the basis.
+        blocked_wait = None
+        if (
+            result_work_checkpoint
+            and delivery_read_context_id is None
+            and isinstance(blocked_retry, dict)
+            and (
+                blocked_retry.get("schema_version") == "quota_blocked_retry_v0"
+                or (blocked_retry.get("schema_version") == "quota_blocked_causal_wait_v0"
+                    and blocked_retry.get("source") == "todo"
+                    and (normalized_progress_observation or {}).get("blocker_id") == blocked_retry["target_todo"]["todo_id"])
+            )
+            and not any((agent_vision_packet, vision_unchanged_reason, next_action, normalized_explore_result,
+                         autonomous_replan_recorded, usage_measurement, usage_codex_session,
+                         completion_todo_id, completion_turn_key, (external_delivery or {}).get("resume_key")))
+        ):
+            blocked_wait = blocked_retry
         with ExitStack() as usage_booking_guard:
+            checkpoint_purpose = ("delivery_result" if result_work_checkpoint else
+                "first_delivery" if first_delivery_checkpoint else "supplement_checkpoint")
+            checkpoint_locked = checkpoint_supplement or first_delivery_checkpoint or result_work_checkpoint
+            if checkpoint_locked:
+                assert settlement_identity is not None
+                # Recommendation and checkpoint share registry/state locks.
+                # Acquire one ordered source section, retaining the extra source
+                # registry first when the current projection routes elsewhere.
+                if normalized_next_action and next_action_source_registry != registry_path.resolve():
+                    usage_booking_guard.enter_context(exclusive_cross_runtime_file_lock(
+                        next_action_source_registry, operation="recommendation-writeback"))
+                context = usage_booking_guard.enter_context(checkpoint_commit_guard(
+                    runtime_root=runtime_root, registry_path=registry_path,
+                    state_file=resolved_state_file, identity=settlement_identity,
+                    read_context_id=work_read_id if result_work_checkpoint else checkpoint_read_context_id,
+                    goal_ref=goal_ref, source_admission=source_admission, purpose=checkpoint_purpose,
+                    blocked_wait=blocked_wait,
+                    retry_workspace_path=retry_workspace_path,
+                    decision_scope=normalized_progress_scope if first_delivery_checkpoint and not default_checkpoint else None,
+                ))
+                if (
+                    inline_direction and inline_replan and usable_source is not None
+                    and usable_source["cadence"] != guard_cadence(registry_path, runtime_root, safe_goal_id)
+                ):
+                    raise CheckpointReadContextRejected({
+                        "ok": False, "error_code": "checkpoint_read_context_required",
+                        "reread_required": False,
+                        "error": "Replan cadence changed before writeback; retain the original result and read the current direction basis.",
+                    })
+                if not context.pop("blocked_wait_validated", False):
+                    blocked_wait = None
+                for projection in (record, index_record, payload):
+                    if result_work_checkpoint:
+                        projection["result_work_context"] = context
+                    else:
+                        projection["vision_checkpoint"] = {
+                            **projection["vision_checkpoint"], "read_context": context,
+                        }
             if normalized_next_action:
-                current_goal, current_text = usage_booking_guard.enter_context(
-                    recommendation_source_guard(registry_path, resolved_state_file, safe_goal_id,
-                        source_registry=next_action_source_registry))
+                if checkpoint_locked:
+                    current_source, current_goal = load_recommendation_source_goal(registry_path, safe_goal_id)
+                    if current_source != next_action_source_registry.resolve():
+                        raise ValueError("Next Action source registry changed; read current status and rejudge before retrying")
+                    current_text = resolved_state_file.read_text(encoding="utf-8") if resolved_state_file.exists() else ""
+                else:
+                    current_goal, current_text = usage_booking_guard.enter_context(
+                        recommendation_source_guard(registry_path, resolved_state_file, safe_goal_id,
+                            source_registry=next_action_source_registry))
                 if current_goal is None:
                     raise ValueError("Next Action source Goal disappeared; reread status")
                 current_planning = load_refresh_planning_source(
@@ -1516,18 +1762,6 @@ def refresh_state_run(
                     source_context=recommendation_source_context(current_goal, current_text,
                         source_registry=next_action_source_registry, todo_fields=current_planning.todo_fields),
                     runs=newest_first_runs)
-            if checkpoint_supplement:
-                assert settlement_identity is not None
-                context = usage_booking_guard.enter_context(checkpoint_commit_guard(
-                    runtime_root=runtime_root, registry_path=registry_path,
-                    state_file=resolved_state_file, identity=settlement_identity,
-                    read_context_id=checkpoint_read_context_id,
-                    goal_ref=goal_ref,
-                ))
-                for projection in (record, index_record, payload):
-                    projection["vision_checkpoint"] = {
-                        **projection["vision_checkpoint"], "read_context": context,
-                    }
             if usage_codex_session is not None:
                 if not dry_run:
                     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -1590,14 +1824,22 @@ def refresh_state_run(
                 index_record["markdown_path"] = str(markdown_path)
                 payload["json_path"] = str(json_path)
                 payload["markdown_path"] = str(markdown_path)
-                if checkpoint_supplement:
+                if checkpoint_supplement or first_delivery_checkpoint or result_work_checkpoint:
                     saved = commit_checkpoint_run(runtime_root=runtime_root, registry_path=registry_path,
                         state_file=resolved_state_file, identity=settlement_identity,
                         refresh_retry=refresh_retry_request, record=record, index_record=index_record,
                         markdown=render_state_refresh_markdown(payload) + "\n",
-                        goal_ref=goal_ref, source_admission=source_admission)
+                        goal_ref=goal_ref, source_admission=source_admission,
+                        purpose=checkpoint_purpose, read_context_id=work_read_id, blocked_wait=blocked_wait,
+                        retry_workspace_path=retry_workspace_path,
+                        decision_scope=normalized_progress_scope if first_delivery_checkpoint and not default_checkpoint else None)
                     for projection in (record, index_record, payload):
-                        projection["vision_checkpoint"]["read_context"] = saved["context"]
+                        if result_work_checkpoint:
+                            projection["result_work_context"] = saved["context"]
+                            if inline_direction:
+                                projection["vision_checkpoint"]["read_context"] = saved["context"]
+                        else:
+                            projection["vision_checkpoint"]["read_context"] = saved["context"]
                     for projection in (index_record, payload):
                         projection.update({key: saved[key] for key in ("json_path", "markdown_path")})
                     if saved["replayed"]:
@@ -1706,6 +1948,15 @@ def refresh_state_run(
                 payload, committed_readback, registry_path=registry_path,
                 runtime_root=runtime_root, goal_ref=goal_ref,
             )
+            if (
+                goal_ref is None and default_checkpoint
+                and (result_work_checkpoint or (refresh_recovery or {}).get("decision") == "supplement_workspace")
+                and payload.get("appended") is True
+            ):
+                _attach_pending_cli_direction(
+                    payload, committed_readback, registry_path=registry_path, runtime_root=runtime_root,
+                    sync_global=sync_global, suppress_external_sinks=bool((external_delivery or {}).get("suppress")),
+                )
         return recover_refresh_todo_projection(
             finish_external_delivery_refresh(
                 payload,
@@ -1717,4 +1968,6 @@ def refresh_state_run(
             registry_path=registry_path, runtime_root=runtime_root, goal_id=safe_goal_id,
             project=resolved_project, state_file=resolved_state_file,
             canonical_snapshot=planning_source.canonical_snapshot,
+            registry_data=registry,
+            source_admission=source_admission,
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from pathlib import Path
+from ..cli_runtime import PrintPayload
 
 from ..cli_runtime import (
     _handle_registry_inspection_command,
@@ -61,10 +62,6 @@ from .support_control_update import (
     register_update_command,
 )
 
-PrintPayload = Callable[
-    [dict[str, object], str, Callable[[dict[str, object]], str]],
-    None,
-]
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 

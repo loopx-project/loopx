@@ -327,10 +327,12 @@ def inspect_task_lease(
     runtime_root: Path,
     goal_id: str,
     todo_id: str,
+    original_lease: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .task_lease_acquire_adapter import inspect_native_task_lease
 
     return inspect_native_task_lease(
         registry_path=registry_path, runtime_root=runtime_root,
         goal_id=normalize_goal_id(goal_id), todo_id=normalize_lease_todo_id(todo_id),
+        original_lease=original_lease,
     )

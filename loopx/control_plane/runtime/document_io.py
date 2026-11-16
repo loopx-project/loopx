@@ -76,3 +76,16 @@ def atomic_write_private_json(path: Path, payload: dict[str, Any]) -> None:
     """Publish private complete JSON after enforcing platform access controls."""
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     atomic_write_state_text(path, text, private=True)
+
+
+if __name__ == "__main__":
+    # Fixed package-owned OS IO for the native checkpoint writer. No Goal,
+    # validation, permission grant or command selection is decided here.
+    import sys
+
+    if len(sys.argv) != 3 or sys.argv[1] != "--write-private-json":
+        raise SystemExit(2)
+    document = json.load(sys.stdin)
+    if not isinstance(document, dict):
+        raise ValueError("private JSON document must be an object")
+    atomic_write_private_json(Path(sys.argv[2]), document)

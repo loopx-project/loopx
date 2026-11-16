@@ -66,7 +66,7 @@ def build_accountable_work_item_settlement_plan(
             autonomous_replan=autonomous_replan,
             handoff_mode=handoff_mode,
         )
-    if runtime_profile is not SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP:
+    if runtime_profile is not None and runtime_profile is not SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP:
         return None
     normalized_turn_instance_id = normalize_turn_instance_id(turn_instance_id)
     if normalized_turn_instance_id is None:

@@ -27,6 +27,7 @@ from ...state_backup import (
     build_scoped_state_backup_plan,
     execute_state_backup_plan,
 )
+from ..runtime.file_paths import windows_extended_path
 
 
 WITNESS_SCHEMA = "loopx_state_backup_source_witness_v1"
@@ -119,6 +120,7 @@ def _safe_link(name: str, target: str, *, hardlink: bool) -> str:
         raise ColdSourceBackupError("cold_import_backup_link_unsafe")
     if hardlink:
         return _member_name(target)
+    # Archive member names retain POSIX semantics on every host.
     resolved = posixpath.normpath(str(PurePosixPath(name).parent / target))
     if resolved == ".." or resolved.startswith("../"):
         raise ColdSourceBackupError("cold_import_backup_link_unsafe")
@@ -197,6 +199,7 @@ def _matches(name: str, prefixes: list[str] | None) -> bool:
 def _scan_archive(
     archive: BinaryIO, *, execution: dict[str, Any], selected: list[str] | None, workspace: Path
 ) -> tuple[dict[str, Any], list[dict[str, Any]], int, int, int, str, int]:
+    workspace = windows_extended_path(workspace)
     workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
     workspace_info = workspace.lstat()
     if not stat.S_ISDIR(workspace_info.st_mode):

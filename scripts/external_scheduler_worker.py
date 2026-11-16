@@ -680,6 +680,7 @@ def build_should_run_command(args: argparse.Namespace) -> list[str]:
         [
             "quota",
             "should-run",
+            "--dry-run",
             "--goal-id",
             args.goal_id,
             "--agent-id",

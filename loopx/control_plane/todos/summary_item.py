@@ -197,9 +197,12 @@ def todo_text_content_revision(value: Any) -> str | None:
 def _project(request: dict[str, Any]) -> list[dict[str, Any]]:
     from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
+    params = {"summary_display": request}
+    # Small pure displays leave ample frame room for generated handoff fields.
+    # Keep private response transport for larger carriers; never trim their data.
+    snapshot = len(json.dumps(params, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 64 * 1024
     try:
-        result = effect_runtime_result("todo.context.page", {"summary_display": request},
-                                       large_local_snapshot=True)
+        result = effect_runtime_result("todo.context.page", params, large_local_snapshot=snapshot)
     except EffectRuntimeRejected as error:
         raise ValueError(str(error)) from error
     rows = result.get("items") if isinstance(result, dict) else None

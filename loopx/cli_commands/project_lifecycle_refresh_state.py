@@ -28,6 +28,7 @@ from ..control_plane.goals.goal_vision_policy import (
 )
 from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
+    load_first_party_registry_metadata,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
 from ..control_plane.goals.vision_checkpoint import prepare_vision_refresh
@@ -51,7 +52,6 @@ from ..extensions.lark.goal_channel_lifecycle import (
     blocked_notice_sync_failure,
     sync_blocked_notice_after_refresh,
 )
-from ..history import load_registry
 from ..paths import resolve_runtime_root
 from ..state_refresh import (
     DEFAULT_REFRESH_ACTION,
@@ -90,11 +90,11 @@ def register_refresh_state_command(
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     context_parser = subparsers.add_parser(
-        "checkpoint-context", help="Recover a missing checkpoint after a committed Turn writeback.",
+        "checkpoint-context", help="Read the original Turn's result or checkpoint basis.",
         description=(
-            "Recovery only: requires the original committed refresh-state writeback. "
-            "For the first writeback, supply the vision with refresh-state directly. "
-            "Use this command only when recovery requests a fresh checkpoint context; "
+            "New supported Turns read direction after result completion, before settlement. "
+            "Historical supplement recovery requires the original committed writeback. "
+            "Judge the returned basis and echo its read identity with the new decision; "
             "reuse the original Turn identity."
         ),
     )
@@ -105,14 +105,23 @@ def register_refresh_state_command(
     binding.add_argument("--todo-id")
     binding.add_argument("--replan-obligation-id")
     context_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
+    context_parser.add_argument("--purpose", choices=("supplement_checkpoint", "first_delivery", "delivery_result"),
+        default="supplement_checkpoint",
+        help="Read result requirements, post-result direction, or the original missing checkpoint; new supported Turns are protected by default.")
+    context_parser.add_argument("--decision-scope", choices=("agent_lane", "goal"), default=None,
+        help="Complete work collection used by the first direction judgment; reading grants no write authority.")
     context_parser.add_argument("--project")
     context_parser.add_argument("--state-file")
+    context_parser.add_argument("--max-page-output-bytes", type=int,
+        help="Bound JSON delivery using a complete private capture; pages retain this same read identity.")
     context_parser.add_argument("--dependency-todo-id", action="append", default=[],
         help="Additional upstream Todo result used in the judgment; declared dependencies are included automatically.")
     refresh_state_parser = subparsers.add_parser(
         "refresh-state",
         help="Append a read-only run from active goal state after state-only updates.",
     )
+    refresh_state_parser.add_argument("--first-delivery", action="store_true",
+        help="Commit an explicitly enrolled first direction using its fresh checkpoint-context receipt.")
     add_subcommand_format(refresh_state_parser)
     refresh_state_parser.add_argument("--goal-outcome-update-json", type=Path,
         help="Optional changed outcome/Agent review envelope (operation_id, expected_provider_revision, refinement). Apply once before normal writeback; unchanged work needs no update. Independent checks remain separate.")
@@ -348,6 +357,10 @@ def register_refresh_state_command(
         ),
     )
     refresh_state_parser.add_argument(
+        "--delivery-read-context", metavar="READ_CONTEXT_ID",
+        help="Bind a result writeback to the delivery_result basis you read for this Turn.",
+    )
+    refresh_state_parser.add_argument(
         "--checkpoint-read-context", metavar="READ_CONTEXT_ID",
         help="Echo the fresh checkpoint-context receipt when supplementing a missing checkpoint on the original Turn.",
     )
@@ -453,6 +466,9 @@ def handle_refresh_state_command(
     if args.command == "checkpoint-context":
         from ..control_plane.goals.checkpoint_context_io import read_checkpoint_context, render_checkpoint_context
         try:
+            output_limit = getattr(args, "max_page_output_bytes", None)
+            if output_limit is not None and (output_limit <= 0 or output_format(args) != "json"):
+                raise ValueError("max-page-output-bytes requires a positive JSON output budget")
             goal_instance_id = str(
                 getattr(args, "goal_instance_id", None) or ""
             ).strip()
@@ -471,8 +487,22 @@ def handle_refresh_state_command(
                 project=Path(args.project).expanduser() if args.project else None,
                 state_file=Path(args.state_file).expanduser() if args.state_file else None,
                 dependency_todo_ids=args.dependency_todo_id,
+                purpose=args.purpose, decision_scope=args.decision_scope,
                 goal_ref=goal_ref,
             )
+            if payload.get("ok") and output_limit is not None:
+                from .quota_capture import budgeted_settlement_result
+                from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
+
+                registry = json.loads(registry_path.read_text(encoding="utf-8"))
+                payload = budgeted_settlement_result(payload,
+                    runtime_root=resolve_runtime_root(registry, args.runtime_root, registry_path=registry_path),
+                    output_bytes=min(output_limit, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES),
+                    deferred_fields=("basis", "context", "replan_context"),
+                    read_instruction=(
+                        "Read result_details.command to reconstruct the complete saved result and its basis before judging direction. "
+                        "Do not request a new checkpoint-context to page this saved read. "
+                        "Preserve the original read_context_id and Turn. The capture grants no authority or freshness."))
         except Exception as exc:
             payload = {"ok": False, "error": str(exc),
                 **({"error_code": exc.code, **getattr(exc, "payload", {})}
@@ -497,6 +527,8 @@ def handle_refresh_state_command(
         ):
             raise ValueError("--settle-turn requires --agent-id, --turn-instance-id and exactly one Todo/obligation binding")
         outcome_path = getattr(args, "goal_outcome_update_json", None)
+        if outcome_path and getattr(args, "delivery_read_context", None) is not None:
+            raise ValueError("Apply the Goal outcome update separately, then reread delivery_result before refresh-state.")
         if outcome_path:
             if not args.agent_id:
                 raise ValueError("--goal-outcome-update-json requires the bound --agent-id")
@@ -643,6 +675,8 @@ def handle_refresh_state_command(
             merge_agent_vision_patch=merge_agent_vision_patch,
             vision_unchanged_reason=args.vision_unchanged_reason,
             checkpoint_read_context_id=getattr(args, "checkpoint_read_context", None),
+            delivery_read_context_id=getattr(args, "delivery_read_context", None),
+            first_delivery=bool(getattr(args, "first_delivery", False)),
             progress_observation=progress_observation,
             explore_result=explore_result,
             usage_measurement=usage_measurement,
@@ -682,7 +716,7 @@ def handle_refresh_state_command(
                 from .context_machine import capture_context_recovery
 
                 reference = capture_context_recovery(recovery,
-                    runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root))
+                    runtime_root=resolve_runtime_root(load_first_party_registry_metadata(registry_path, goal_ref), args.runtime_root))
                 transition["context_recovery"] = {
                     "received_context_id": recovery["received_context_id"],
                     "current_context_id": recovery["replan_context"]["context_id"],
@@ -729,7 +763,7 @@ def handle_refresh_state_command(
             payload,
             registry_path=registry_path,
             runtime_root=resolve_runtime_root(
-                load_registry(registry_path), args.runtime_root
+                load_first_party_registry_metadata(registry_path, goal_ref), args.runtime_root
             ),
             goal_id=args.goal_id,
             agent_id=str(args.agent_id),
@@ -832,7 +866,7 @@ def handle_refresh_state_command(
             or getattr(args, "replan_obligation_id", None)
         ):
             runtime_root = resolve_runtime_root(
-                load_registry(registry_path),
+                load_first_party_registry_metadata(registry_path, goal_ref),
                 args.runtime_root,
             )
             settlement_readback = read_heartbeat_settlement(
@@ -877,6 +911,10 @@ def handle_refresh_state_command(
             elif settlement_receipt_repair:
                 payload["receipt_repair_required"] = False
                 payload["receipt_repaired"] = True
+            if settlement_readback.spend_qualification.failure is not None:
+                # TS verifies the original receipt and direction qualification.
+                # Retention remains readable, without success hooks or sinks.
+                material_refresh_ready = False
             candidate = payload.get("reward_memory_outcome_candidate")
             if (material_refresh_ready and isinstance(candidate, Mapping)
                     and candidate.get("validation_bound") is True):
@@ -915,7 +953,9 @@ def handle_refresh_state_command(
                     projection_builder=post_writeback_projection_builder,
                 )
             )
-        if not material_refresh_ready:
+        if not material_refresh_ready or (
+            goal_ref is not None and payload["external_sink_delivery_authorized"] is not True
+        ):
             settle_requested_refresh(payload, args, registry_path, goal_ref)
             attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)
             print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)

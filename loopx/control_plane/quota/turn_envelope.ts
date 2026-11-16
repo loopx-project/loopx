@@ -1230,6 +1230,10 @@ function scheduler(payload: JsonObject, turn: ReturnType<typeof interpretQuotaSh
   ]) {
     if (sourceApp[field] !== null && sourceApp[field] !== undefined) app[field] = sourceApp[field];
   }
+  const observation = object(sourceApp.host_observation);
+  if (observation.available === false && typeof observation.reason === "string") {
+    app.host_observation = {available: false, reason: observation.reason};
+  }
   const state = object(sourceApp.stateful_backoff);
   if (Object.keys(state).length > 0) {
     const compactState: JsonObject = {};
@@ -1695,6 +1699,14 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+function capturedFileReadCommand(path: string): string {
+  if (process.platform !== "win32") return `cat -- ${shellQuote(path)}`;
+  // PowerShell recognizes the four Unicode single-quote forms as delimiters too.
+  const literal = `'${path.replace(/['\u2018-\u201b]/gu, (quote) => quote + quote)}'`;
+  return `& { $loopxCaptureBytes = [System.IO.File]::ReadAllBytes(${literal}); ` +
+    "[Console]::OpenStandardOutput().Write($loopxCaptureBytes, 0, $loopxCaptureBytes.Length) }";
+}
+
 function commandPrefix(runtimeRoot: unknown, registry?: unknown): string {
   const runtimeRootText = scalarString(runtimeRoot, "quota payload runtime_root").trim();
   const registryText = scalarString(registry, "quota payload registry").trim();
@@ -1712,7 +1724,7 @@ function coldPath(
   const agentArg = agentId ? ` --agent-id ${agentId}` : "";
   const prefix = commandPrefix(payload.runtime_root, payload.registry);
   return {
-    full_decision: capturedDecisionPath ? `cat -- ${shellQuote(capturedDecisionPath)}` : schedulerExecutionArgs
+    full_decision: capturedDecisionPath ? capturedFileReadCommand(capturedDecisionPath) : schedulerExecutionArgs
       ? `${prefix} --format json quota should-run --goal-id ${goalId}${agentArg}${schedulerExecutionArgs}`
       : "rerun the typed quota_guard from the current host packet",
     ...(capturedDecisionPath ? {
@@ -2221,7 +2233,7 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   const goal = reads ? replanGoalContext(payload, reads, undefined,
     replanReadPrecision(payload, request.source_number_tokens)) : null;
   const boundDetail = {...detail,
-    full_decision: `cat -- ${shellQuote(path)}`,
+    full_decision: capturedFileReadCommand(path),
     ...(reads ? {replan_action_packet: replanActionPacket(payload, reads), replan_read_argv: readerArgv,
       core_goal: goal!.core, planning_horizon: payload.planning_horizon == null ? null : goal!.horizon,
     } : {}),

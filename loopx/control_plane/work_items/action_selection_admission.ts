@@ -6,6 +6,7 @@ import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.t
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {isCanonicalTodoId} from "../todos/identity.ts";
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "./execution_preparation.ts";
+import {REPLAN_SETTLEMENT_CONTRACT_SCHEMA} from "./replan_settlement.ts";
 
 interface AgentAdmissionFacts {must_attempt: boolean; delivery_allowed: boolean | null}
 interface SelectionAdmission {selected_todo_id: string | null; admitted: boolean}
@@ -86,7 +87,34 @@ function admissionRequest(request: JsonObject) {
 export function projectCurrentActionSelectionAdmission(request: JsonObject): JsonObject {
   const {packet, agent} = admissionRequest(request);
   if (typeof request.requested_todo_id !== "string") throw new EffectRuntimeRequestError("requested_todo_id must be a string");
-  return {...currentActionSelectionAdmission(packet, request.requested_todo_id, agent)};
+  const selection = currentActionSelectionAdmission(packet, request.requested_todo_id, agent);
+  if (request.replan_source === undefined) return {...selection};
+  const source = requireJsonObject(request.replan_source, "replan_source");
+  const identity = jsonObject(source.identity) ?? {}, plan = jsonObject(source.plan_identity) ?? {};
+  const contract = jsonObject(source.contract) ?? {};
+  const binding = jsonObject(contract.settlement_binding) ?? {};
+  const obligation = jsonObject(contract.semantic_obligation) ?? {};
+  const qualification = jsonObject(packet.action_selection_qualification) ?? {};
+  const pending = jsonObject(packet.selected_todo)?.selection_binding === "pending_action_selection";
+  // Replan work can be admitted without granting ordinary delivery. Require
+  // the actual selected-work qualification and its one causal settlement plan.
+  const selected = selection.admitted || (pending && qualification.state === "qualified"
+    && selectionTodoId(qualification.requested_todo_id) === request.requested_todo_id);
+  const admitted = packet.ok === true && packet.should_run === true && agent.must_attempt
+    && selected && selection.selected_todo_id === identity.todo_id
+    && identity.todo_id === request.requested_todo_id && !identity.replan_obligation_id
+    && typeof identity.goal_id === "string" && identity.goal_id === source.goal_id
+    && typeof identity.agent_id === "string" && identity.agent_id === source.agent_id
+    && ["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id"]
+      .every(field => typeof identity[field] === "string" && identity[field] === plan[field])
+    && !plan.replan_obligation_id
+    && contract.schema_version === REPLAN_SETTLEMENT_CONTRACT_SCHEMA
+    && contract.single_binding_required === true
+    && binding.kind === "todo" && binding.id === identity.todo_id && binding.cli_argument === "--todo-id"
+    && obligation.kind === "autonomous_replan" && typeof source.obligation_id === "string"
+    && obligation.id === source.obligation_id && obligation.settlement_bound === false
+    && obligation.discharge === "todo_bound_writeback";
+  return {...selection, replan_source_admitted: admitted};
 }
 
 export function projectActionSelectionRecovery(request: JsonObject): JsonObject {

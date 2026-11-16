@@ -170,6 +170,7 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
       "no_followup",
       "successor_todo_ids",
       "completion_continuation",
+      "completion_requested_continuation",
       "completion_recovery",
       "completion_receipt_id",
       "replan_obligation_id",
