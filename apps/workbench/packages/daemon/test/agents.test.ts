@@ -15,7 +15,6 @@ const defaults = defaultInstances({
   agyCommand: ['node', join(here, 'fixtures', 'fake-agy.mjs')],
   traexCommand: ['node', join(here, 'fixtures', 'fake-acp.mjs'), 'acp', 'serve'],
   dshCommand: ['node', join(here, 'fixtures', 'fake-acp.mjs'), '--profile', 'acp'],
-  doubaoCommand: ['node', join(here, 'fixtures', 'fake-doubao.mjs')],
   codexCommand: ['node', join(here, 'fixtures', 'fake-codex.mjs')],
 });
 
@@ -31,7 +30,7 @@ after(() => {
 
 test('the built-in instances are one adapter each, keyed by instance id', () => {
   const registry = new AgentRegistry(defaults, null);
-  assert.deepEqual([...registry.adapters.keys()].sort(), ['agy', 'claude', 'codex', 'doubao', 'dsh', 'pi', 'traex', 'zcode']);
+  assert.deepEqual([...registry.adapters.keys()].sort(), ['agy', 'claude', 'codex', 'dsh', 'pi', 'traex', 'zcode']);
   assert.equal(registry.adapters.get('claude')!.capabilities.approvals, true);
   // The traex default command carries "acp serve"; the adapter keeps the plain CLI for deletions.
   assert.equal(registry.adapters.get('traex')!.label, 'TRAE CLI');
@@ -60,7 +59,7 @@ test('add persists to agents.json and a later fromEnv reads it back', async () =
   // The file holds every instance, including the built-ins it was seeded with.
   assert.deepEqual(
     reloaded.list().map((i) => i.id),
-    ['claude', 'pi', 'agy', 'traex', 'codex', 'zcode', 'dsh', 'doubao', 'agy2'],
+    ['claude', 'pi', 'agy', 'traex', 'codex', 'zcode', 'dsh', 'agy2'],
   );
   rmSync(dataDir, { recursive: true, force: true });
 });
@@ -241,25 +240,6 @@ test('discover offers zcode for existing installations and add makes it availabl
   }
 });
 
-test('discover offers Doubao and numbered copies but not similarly named helpers', async () => {
-  const bin = join(dir, 'doubao-bin');
-  mkdirSync(bin);
-  for (const name of ['doubao', 'doubao-2', 'doubao2', 'doubao-helper', 'doubaox']) {
-    writeFileSync(join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  }
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${bin}:${oldPath}`;
-  try {
-    const registry = new AgentRegistry(defaults.filter(instance => instance.adapter !== 'doubao'), null);
-    const found = (await registry.discover()).filter(item => item.command.startsWith(bin));
-    assert.deepEqual(found.map(item => [item.id, item.adapter]), [['doubao', 'doubao'], ['doubao-2', 'doubao'], ['doubao2', 'doubao']]);
-    assert.equal(found[0].label, 'Doubao CLI');
-    await registry.add({ id: found[0].id, adapter: found[0].adapter, command: [found[0].command] });
-    assert.equal(await registry.adapters.get('doubao')!.available(), true);
-    assert.equal((await registry.discover()).some(item => item.id === 'doubao'), false);
-  } finally { process.env.PATH = oldPath; }
-});
-
 // The stub claude the account-discovery tests point the adapter at: it answers `auth status`
 // from the config directory it was given, so each directory below stands for one account.
 function fakeClaudeHome(): string {
@@ -378,9 +358,9 @@ test('account discovery skips accounts an instance already links, and ids keep c
 test('supported lists all built-in adapters with labels and install guides', () => {
   const registry = new AgentRegistry(defaults, null);
   const supported = registry.supported();
-  assert.equal(supported.length, 8);
+  assert.equal(supported.length, 7);
   const adapters = supported.map((s) => s.adapter);
-  assert.deepEqual(adapters, ['claude', 'codex', 'pi', 'agy', 'traex', 'zcode', 'dsh', 'doubao']);
+  assert.deepEqual(adapters, ['claude', 'codex', 'pi', 'agy', 'traex', 'zcode', 'dsh']);
   for (const item of supported) {
     assert.ok(item.label, `adapter ${item.adapter} has a label`);
     assert.ok(item.icon, `adapter ${item.adapter} has an icon`);
@@ -392,7 +372,6 @@ test('supported lists all built-in adapters with labels and install guides', () 
   assert.equal(supported.find((s) => s.adapter === 'traex')?.installGuide, undefined);
   assert.equal(supported.find((s) => s.adapter === 'zcode')?.installGuide, undefined);
   assert.equal(supported.find((s) => s.adapter === 'dsh')?.installGuide, 'npm install -g @deepseek-ai/dsh');
-  assert.equal(supported.find((s) => s.adapter === 'doubao')?.installGuide, 'npm install -g @bytedance/doubao-cli');
 });
 
 test('AgentRegistry.fromEnv supports an explicitly empty agents array', () => {

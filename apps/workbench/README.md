@@ -60,9 +60,8 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 | TRAE CLI | app-server 执行，ACP 模型与历史接口 | 有 | 有 | 有 |
 | zcode | `zcode app-server` 精简接入 | 有 | 按原生模型能力 | 暂无 |
 | DeepSeek Harness | `dsh --profile acp`（ACP） | 有（仅允许一次/拒绝） | 有（按当前模型路由） | 暂无 |
-| Doubao CLI | `doubao -p` / `--resume`，可选实验流式桥 | 无（无界面下需要批准的操作由 CLI 拒绝） | 暂无 | 暂无 |
 
-各家 agent CLI 需要先在主机上装好并完成登录或鉴权。没装的 agent 在界面里显示为不可用；各家的能力和接入边界见 [架构说明](docs/PLAN.md)。Doubao CLI 使用原生默认模型，可通过 `LOOCHAT_DOUBAO_BIN` 指定入口；已有安装可从 Agent 管理的添加入口接入，在添加页或实例「接入设置」里可开启版本限定的实验流式桥（2.31.2 / Linux x64，原安装不变）；也支持 `LOOCHAT_DOUBAO_STREAM=1`，具体范围见 [Doubao CLI 接入](docs/doubao-cli-design.md)。
+各家 agent CLI 需要先在主机上装好并完成登录或鉴权。没装的 agent 在界面里显示为不可用；各家的能力和接入边界见 [架构说明](docs/PLAN.md)。
 
 ## 插件与参与
 

@@ -18,7 +18,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const cli = join(here, '../bin/loochat');
 async function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'loochat-handover-reader-'));
-  const registry = new AgentRegistry(['pi', 'claude', 'codex', 'agy', 'traex', 'zcode', 'doubao'].map(adapter => ({
+  const registry = new AgentRegistry(['pi', 'claude', 'codex', 'agy', 'traex', 'zcode'].map(adapter => ({
     id: adapter, adapter, label: adapter,
     command: [process.execPath, join(here, 'fixtures', `fake-${['claude', 'traex'].includes(adapter) ? 'acp' : adapter}.mjs`)],
     env: { CLAUDE_CONFIG_DIR: join(dir, 'claude'), ZCODE_DATA_BASE_DIR: join(dir, 'zcode') },
@@ -289,7 +289,7 @@ test('all adapters inject handover credentials and run loochat in their fake age
   const h = await setup();
   try {
     const source = await h.manager.createThread({ agent: 'pi', cwd: h.dir });
-    for (const agent of ['pi', 'claude', 'codex', 'agy', 'traex', 'zcode', 'doubao']) {
+    for (const agent of ['pi', 'claude', 'codex', 'agy', 'traex', 'zcode']) {
       const next = await h.manager.createHandoverThread(source.id, agent);
       await h.manager.startTurn(next.id, { text: 'LOOCHAT_HANDOVER_ENV' });
       await waitIdle(h.manager, next.id);

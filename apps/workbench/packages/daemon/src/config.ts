@@ -23,8 +23,6 @@ export interface Config {
   codexCommand: string[];
   /** argv that starts DeepSeek Harness as an ACP server. */
   dshCommand: string[];
-  /** Executable of the Doubao CLI, driven through its public print mode. */
-  doubaoCommand: string[];
   /** Executable that runs in a web terminal. */
   termShell: string | null;
   /** Directory of the built web UI, served at `/` when present. */
@@ -136,7 +134,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const traexCommand = [env.LOOCHAT_TRAEX_BIN || 'traex', 'acp', 'serve'];
   const codexCommand = [env.LOOCHAT_CODEX_BIN || 'codex', 'app-server'];
   const dshCommand = [env.LOOCHAT_DSH_BIN || 'dsh', '--profile', 'acp'];
-  const doubaoCommand = [env.LOOCHAT_DOUBAO_BIN || 'doubao'];
   const termShell = env.LOOCHAT_TERM_SHELL || null;
 
   // Serve the built UI from the sibling web package when it exists; LOOCHAT_WEB_DIR overrides.
@@ -162,7 +159,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     traexCommand,
     codexCommand,
     dshCommand,
-    doubaoCommand,
     termShell,
     webDir,
     socket,

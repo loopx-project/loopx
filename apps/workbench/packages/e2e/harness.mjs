@@ -86,13 +86,6 @@ export async function startDaemon(env = {}, opts = {}) {
   shim(binDir, 'fake-pi', 'fake-pi.mjs');
   shim(binDir, 'fake-claude', 'fake-acp.mjs');
   shim(binDir, 'fake-agy', 'fake-agy.mjs');
-  shim(binDir, 'fake-doubao', 'fake-doubao.mjs');
-  let doubaoRuntime = '';
-  if (env.LOOCHAT_DOUBAO_STREAM === '1' || env.LOOCHAT_E2E_DOUBAO_RUNTIME === '1') {
-    const { createFakeDoubaoRuntime } = await import('../daemon/test/fixtures/doubao-runtime.mjs');
-    doubaoRuntime = join(dataDir, 'doubao-runtime');
-    createFakeDoubaoRuntime(doubaoRuntime);
-  }
   // The dsh adapter wants the same fake ACP agent shaped the way DeepSeek Harness answers.
   writeFileSync(
     join(binDir, 'fake-dsh'),
@@ -101,7 +94,6 @@ export async function startDaemon(env = {}, opts = {}) {
   );
   // An extra CLI for the discovery tests: looks like another copy of agy on PATH.
   if (env.LOOCHAT_E2E_DISCOVER_AGY2 === '1') shim(binDir, 'agy2', 'fake-agy.mjs');
-  if (env.LOOCHAT_E2E_DISCOVER_DOUBAO2 === '1') shim(binDir, 'doubao2', 'fake-doubao.mjs');
 
   const port = await freePort();
   const daemonEnv = {
@@ -125,9 +117,6 @@ export async function startDaemon(env = {}, opts = {}) {
     LOOCHAT_CLAUDE_ACP_BIN: 'fake-claude',
     LOOCHAT_AGY_BIN: 'fake-agy',
     LOOCHAT_DSH_BIN: 'fake-dsh',
-    LOOCHAT_DOUBAO_BIN: 'fake-doubao',
-    LOOCHAT_DOUBAO_STREAM: '',
-    LOOCHAT_DOUBAO_RUNTIME: doubaoRuntime,
     PI_CODING_AGENT_DIR: join(dataDir, 'pi-agent'),
     LOOCHAT_AGY_HOME: join(dataDir, 'agy-home'),
     ZCODE_DATA_BASE_DIR: dataDir,

@@ -8,7 +8,6 @@ import { ClaudeAcpAdapter, CLAUDE_METADATA } from './adapters/claude.js';
 import { ZcodeAdapter, ZCODE_METADATA } from './adapters/zcode.js';
 import { CodexAppServerAdapter, CODEX_METADATA } from './adapters/codex.js';
 import { DshAcpAdapter, DSH_METADATA } from './adapters/dsh.js';
-import { DoubaoAdapter, DOUBAO_METADATA } from './adapters/doubao.js';
 import { PiRpcAdapter, PI_METADATA } from './adapters/pi.js';
 import { TraexAcpAdapter, TRAEX_METADATA } from './adapters/traex.js';
 import type { AgentAdapter, DiscoveredAccount, LoginSession } from './adapters/types.js';
@@ -22,7 +21,7 @@ import { HttpError } from './errors.js';
 export interface AgentInstance {
   /** What threads store; also the key in the adapter map. */
   id: string;
-  adapter: 'claude' | 'pi' | 'agy' | 'traex' | 'codex' | 'zcode' | 'dsh' | 'doubao';
+  adapter: 'claude' | 'pi' | 'agy' | 'traex' | 'codex' | 'zcode' | 'dsh';
   label?: string;
   /** Hidden from the new-thread picker; threads and settings keep working. */
   hidden?: boolean;
@@ -58,7 +57,6 @@ const ADAPTER_LABELS: Record<AgentInstance['adapter'], string> = {
   codex: 'Codex',
   zcode: 'ZCode',
   dsh: 'DeepSeek Harness',
-  doubao: DOUBAO_METADATA.label,
 };
 
 /** How each adapter is built. One line per protocol; instances differ only in command and env. */
@@ -92,9 +90,6 @@ function buildAdapter(
     case 'dsh':
       adapter = new DshAcpAdapter(command, env);
       break;
-    case 'doubao':
-      adapter = new DoubaoAdapter(command, env);
-      break;
   }
   // An instance may carry its own name ("Claude 工作号"); otherwise the adapter's own label stands.
   if (instance.label) (adapter as { label: string }).label = instance.label;
@@ -110,7 +105,6 @@ export function defaultInstances(opts: {
   codexCommand: string[];
   zcodeCommand?: string[];
   dshCommand?: string[];
-  doubaoCommand?: string[];
 }): AgentInstance[] {
   return [
     { id: 'claude', adapter: 'claude', command: opts.claudeCommand },
@@ -120,7 +114,6 @@ export function defaultInstances(opts: {
     { id: 'codex', adapter: 'codex', command: opts.codexCommand },
     { id: 'zcode', adapter: 'zcode', command: opts.zcodeCommand ?? ['zcode', 'app-server'] },
     { id: 'dsh', adapter: 'dsh', command: opts.dshCommand ?? ['dsh', '--profile', 'acp'] },
-    { id: 'doubao', adapter: 'doubao', command: opts.doubaoCommand ?? ['doubao'] },
   ];
 }
 
@@ -140,7 +133,6 @@ export const SUPPORTED_AGENTS: SupportedAgent[] = [
   TRAEX_METADATA,
   ZCODE_METADATA,
   DSH_METADATA,
-  DOUBAO_METADATA,
 ];
 
 /** An executable on PATH that looks like another copy of a known agent CLI. */
@@ -178,7 +170,6 @@ const KNOWN_PREFIXES: Array<[AgentInstance['adapter'], RegExp]> = [
   ['codex', copyOf('codex')],
   ['zcode', copyOf('zcode')],
   ['dsh', copyOf('dsh')],
-  ['doubao', copyOf('doubao')],
   // traex and the compatibility names its installer creates for the same CLI
   ['traex', copyOf('traex')],
   ['traex', copyOf('traecli')],
@@ -197,7 +188,6 @@ const PREFERRED_NAMES: Record<AgentInstance['adapter'], string[]> = {
   codex: ['codex'],
   zcode: ['zcode'],
   dsh: ['dsh'],
-  doubao: ['doubao'],
 };
 
 /**
