@@ -33,7 +33,7 @@ from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINA
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.effect_runtime import effect_runtime_request_scope
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from ...presentation.markdown import markdown_scalar
 from ...presentation.renderers.conversation_status_markdown import render_conversation_status
 from .conversation_identity import identity_ref, lark_private_source
@@ -41,7 +41,9 @@ from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
 from .event_collector_runtime import enrich_lark_event_reply_context
 from .goal_channel_transport import call, json_payload, lark_args, lark_provider_mention_identities, record_event_timing
 from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN, LARK_MESSAGE_ID_PATTERN
-from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
+from .inbox_reply import (
+    SourceAuthorityVerifier, _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply,
+)
 from .manager_context import manager_failure_reply
 from .inbox_reactions import (_reconcile_outbound_input_reactions,
                              mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
@@ -1265,6 +1267,7 @@ class LarkPrivateConversations:
 
     def _deliver(self, path: Path, record: dict[str, Any], phase: str, text: str, *, inbox: Callable[[], Path],
                  edit_only: bool = False, authorization_check: Callable[[], bool] | None = None,
+                 source_authority_verifier: SourceAuthorityVerifier | None = None,
                  reply_placement: str | None = None, delivery_id: str | None = None,
                  finalize_source: bool = True, image_attachments: list[dict[str, Any]] | None = None,
                  historical_source_check: Callable[[], bool] | None = None) -> bool:
@@ -1279,9 +1282,8 @@ class LarkPrivateConversations:
         if historical_source_check is not None and phase != "answer_images.historical":
             raise ValueError("historical source verification requires a media repair")
         phase = presentation_phase(record, phase)
-        source_authority = partial(self._source_authority, record)
-        if kind == "answer_images":
-            source_authority = partial(source_authority, expected_text=record["event"]["content"])
+        expected_text = record["event"]["content"] if kind == "answer_images" else None
+        source_authority = source_authority_verifier or partial(self._source_authority, record, expected_text=expected_text)
         phase_state = record["deliveries"].get(phase, {})
         if phase_state.get("verified"):
             return True
@@ -1292,10 +1294,12 @@ class LarkPrivateConversations:
             text = _presentation_text(text)
         if phase_state.get("text") not in (None, text):
             raise ValueError("delivery content changed after an attempt")
-        if image_attachments and (authorization_check is None or edit_only
-                or not ((kind == "web" and reply_placement == "chat_root")
+        if image_attachments and (edit_only
+                or not ((kind == "web" and reply_placement == "chat_root"
+                         and (authorization_check is not None or source_authority_verifier is not None))
                         or (kind == "answer_images" and record["event"].get("chat_type") == "p2p"
-                            and record["source"].get("private_human_message") is True))):
+                            and record["source"].get("private_human_message") is True
+                            and authorization_check is not None))):
             raise ValueError("Image projection requires its original private outbox")
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_started")
         config = inbox()
@@ -1321,8 +1325,9 @@ class LarkPrivateConversations:
 
         def image_authorized() -> bool:
             # A provider read can overlap Stop, Close, or an edit to the old reply.
-            return authorization_check is not None and (provider_images_current() and authorization_check()
-                if kind == "answer_images" else authorization_check() and verified_source())
+            if kind == "answer_images":
+                return provider_images_current() and authorization_check is not None and authorization_check()
+            return (authorization_check is None or authorization_check()) and verified_source()
 
         image_keys = ()
         if image_attachments:
@@ -2117,11 +2122,17 @@ class LarkPrivateConversations:
                         for message in messages) else "delivered"
                     _atomic_write_json(path, row)
                     return 0
-                def authorized() -> bool:
+                def authorized_source(profile: str, chat_id: str, message_id: str) -> tuple[str | None, bool]:
+                    # Check the original provider source first. The fresh App
+                    # grant and canonical body checks then cover any changes
+                    # during that read, both before preview and before dispatch.
+                    name, verified = self._source_authority(row, profile, chat_id, message_id)
+                    if not name or not verified:
+                        return None, False
                     try:
-                        return pending in self._web_projection_messages(row)
+                        return name, pending in self._web_projection_messages(row)
                     except (OSError, ValueError, KeyError):
-                        return False
+                        return None, False
                 who = "你" if pending["role"] == "user" else "LoopX"
                 text = f"**{who}（App）**\n\n{pending['text']}"
                 if self.reaction_feedback and pending["role"] == "user":
@@ -2130,7 +2141,7 @@ class LarkPrivateConversations:
                     row["deliveries"].setdefault("web." + pending["message_id"], {}).setdefault("feedback", {})
                     _atomic_write_json(path, row)
                 delivered = self._deliver(path, row, "web." + pending["message_id"], text,
-                    inbox=lambda: self._inbox(row), authorization_check=authorized,
+                    inbox=lambda: self._inbox(row), source_authority_verifier=authorized_source,
                     reply_placement="chat_root", delivery_id=self._web_projection_delivery_id(row, pending), finalize_source=False,
                     image_attachments=pending.get("attachments"))
                 if delivered:
@@ -2143,18 +2154,17 @@ class LarkPrivateConversations:
                 return 0
 
     def reconcile_app_feedback(self) -> int:
-        """Reconcile optional reactions independently of the body outbox.
-
-        The live service reserves at most one existing reply worker for this
-        pass. A slow reaction must never own the body-delivery fence or prevent
-        a later canonical answer from reaching the same audience.
-        """
+        """Reconcile optional reactions independently of the body outbox."""
         if not self.reaction_feedback:
             return 0
         for path in sorted((self.root / "web-projections").glob("*.json")):
             with exclusive_file_lock(path.with_suffix(".feedback"), operation="reconcile_web_input_feedback"):
                 try:
-                    with exclusive_file_lock(path, operation="read_web_input_feedback"):
+                    # Leave a busy body outbox for the next feedback pass so
+                    # independent Sessions can still acknowledge their inputs.
+                    with try_exclusive_file_lock(path, operation="read_web_input_feedback") as lock:
+                        if lock is None:
+                            continue
                         row = self._read_web_projection_journal(path)
                 except (OSError, ValueError):
                     continue
@@ -2179,7 +2189,11 @@ class LarkPrivateConversations:
                     self._web_projection_feedback(row, message)
                     if "feedback" not in phase or phase["feedback"] == prior_feedback:
                         continue
-                    with exclusive_file_lock(path, operation="record_web_input_feedback"):
+                    # The reaction has its own receipt. Defer writeback when
+                    # a body worker acquired the journal during provider I/O.
+                    with try_exclusive_file_lock(path, operation="record_web_input_feedback") as lock:
+                        if lock is None:
+                            continue
                         try:
                             current = self._read_web_projection_journal(path)
                         except (OSError, ValueError):
