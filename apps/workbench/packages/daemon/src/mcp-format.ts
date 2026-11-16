@@ -162,10 +162,10 @@ function splitKeyPath(text: string): string[] | null {
     const quote = text[pos];
     let segment: string;
     if (quote === '"' || quote === "'") {
-      const close = text.indexOf(quote, pos + 1);
-      if (close === -1) return null;
-      segment = text.slice(pos + 1, close);
-      pos = close + 1;
+      const parsed = parseTomlString(text, pos, text.length);
+      if (!parsed) return null;
+      segment = parsed.value;
+      pos = parsed.end;
     } else {
       const match = /^[^\s.]+/.exec(text.slice(pos));
       if (!match) return null;
@@ -199,23 +199,33 @@ function parseBasicString(body: string): string {
   });
 }
 
+/** Basic strings escape quotes and backslashes; literal strings do not. */
+function parseTomlString(text: string, pos: number, limit: number): { value: string; end: number } | null {
+  const c = text[pos];
+  const triple = text.startsWith(c.repeat(3), pos);
+  const width = triple ? 3 : 1;
+  const start = pos + width;
+  for (let close = start; close < limit; close++) {
+    if (c === '"' && text[close] === '\\') { close++; continue; }
+    if (!triple && /[\r\n]/.test(text[close])) return null;
+    if (!text.startsWith(c.repeat(width), close) || close + width > limit) continue;
+    // A multiline string may end with one or two content quotes before its delimiter.
+    if (triple) for (let extra = 0; extra < 2 && close + width < limit && text[close + width] === c; extra++) close++;
+    let body = text.slice(start, close);
+    if (triple) {
+      body = body.replace(/^\r?\n/, '');
+      if (c === '"') body = body.replace(/\\[ \t]*\r?\n\s*/g, '');
+    }
+    return { value: c === '"' ? parseBasicString(body) : body, end: close + width };
+  }
+  return null;
+}
+
 /** One TOML value; `end` is where parsing stopped. Null where the shape is not one we read. */
 function parseTomlValue(text: string, pos: number, limit: number): { value: unknown; end: number } | null {
   if (pos >= limit) return null;
   const c = text[pos];
-  if (c === '"' || c === "'") {
-    const triple = text.startsWith(c.repeat(3), pos);
-    if (triple) {
-      const close = text.indexOf(c.repeat(3), pos + 3);
-      if (close === -1 || close >= limit) return null;
-      const body = text.slice(pos + 3, close).replace(/^[ \t]*\r?\n/, '').replace(/\\\r?\n[ \t]*/g, '');
-      return { value: c === '"' ? parseBasicString(body) : body, end: close + 3 };
-    }
-    const escaped = text.indexOf(c, pos + 1);
-    if (escaped === -1 || escaped >= limit) return null;
-    const body = text.slice(pos + 1, escaped);
-    return { value: c === '"' ? parseBasicString(body) : body, end: escaped + 1 };
-  }
+  if (c === '"' || c === "'") return parseTomlString(text, pos, limit);
   if (c === '[') {
     pos = skipSpace(text, pos + 1, limit, true);
     const items: unknown[] = [];
@@ -268,10 +278,10 @@ function readKeyPath(text: string, pos: number, limit: number): { segments: stri
     pos = skipSpace(text, pos, limit, false);
     const c = text[pos];
     if (c === '"' || c === "'") {
-      const close = text.indexOf(c, pos + 1);
-      if (close === -1 || close >= limit) return null;
-      segments.push(text.slice(pos + 1, close));
-      pos = close + 1;
+      const parsed = parseTomlString(text, pos, limit);
+      if (!parsed) return null;
+      segments.push(parsed.value);
+      pos = parsed.end;
     } else {
       const match = /^[^\s=,.{}[\]]+/.exec(text.slice(pos, limit));
       if (!match) return null;
