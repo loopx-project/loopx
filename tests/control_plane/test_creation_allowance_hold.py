@@ -325,10 +325,10 @@ def test_final_native_quota_refusal_cannot_be_replaced_by_preparation_read(
     result = finished["response"]["native_loopx"]
     assert guard_boundary_reached is True
     assert result["ok"] is False and result["error_code"] == "stale_goal_authority", result
-    assert all(value is None for value in result["effects"].values()), result
-    recovery = result["journal_observation"]["recovery_decision"]
-    assert recovery["action"] == "blocked" and recovery["can_continue"] is False
-    assert recovery["reinvoke_host"] is False and recovery["reason"] == "host_outcome_unknown"
+    assert result["status"] == "failed" and not any(result["effects"].values()), result
+    assert result["effects"]["host_invoked"] is False
+    assert result["host_failure"]["kind"] == "contract_rejected"
+    assert result["host_failure"]["retryable"] is False
     assert task_row(runtime, saved["todo_id"])["status"] == "open"
     calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
     assert not any(row.get("method") == "turn/start" for row in calls)

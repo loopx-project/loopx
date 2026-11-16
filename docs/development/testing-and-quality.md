@@ -294,6 +294,20 @@ and the service admission suite against a disposable server, so the path stays
 qualified in CI as well as locally. If no safe real environment is available,
 hold delivery.
 
+Timeout recovery tests distinguish expiry before a Session event from expiry
+after an observed event. A short wall deadline alone establishes neither
+observation nor a resumable binding. A known-observed case may control only the
+supervisor clock after the real event reaches its output pipe, retaining actual
+spawn, parsing, cleanup and persistence. Keep a separate real-deadline case that
+cannot receive the event and rejects a fabricated binding. A fixture readiness
+watchdog does not qualify the runtime's wall deadline or explain an earlier
+failure whose event evidence is unavailable.
+
+超时恢复分别验证事件前到期和已观察到 Session 事件后到期。短墙钟时限不能证明事件
+已被观察或存在可恢复绑定。已知事件的用例可以只控制 supervisor 时钟，保留实际
+进程、管道、解析、清理和持久化；另用真实截止时间覆盖事件前超时并拒绝虚构绑定。
+fixture 就绪看门狗不认证运行时的墙钟时限，也不能解释已丢失事件证据的历史失败。
+
 重构交付前必须验证受影响的真实生产入口和真实后端。单测、mock 与内存 conformance
 不能替代这项证据。影响 PostgreSQL authority 时，配置指向隔离临时实例的
 `LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store`；跳过不算
@@ -1399,6 +1413,46 @@ workflow costs less.
 
 ### Budget Failure Decisions
 
+The default quota source and its detail selectors now carry complete v1 in both
+JSON and Markdown. The same frozen public fixture with context delivery Off
+measures the following characters at `main@0c3b2fd2` and C1's default-source
+tree integrated with that main revision:
+
+| Fixture | Main JSON / Markdown | Complete v1 JSON / Markdown | Markdown allowance |
+| --- | ---: | ---: | ---: |
+| Small | 23,289 / 7,476 | 22,931 / 22,954 | 24,000 |
+| Crowded | 42,349 / 8,143 | 42,223 / 42,325 | 43,000 |
+| Multi-agent | 25,514 / 6,441 | 26,239 / 26,339 | 27,000 |
+
+Retain the original 10,000 / 17,000 / 7,000 Markdown failures. The small native
+Windows observation is 23,254, leaving 746 characters under its new allowance.
+The six detail selectors measure 23,066, 23,889 or 23,927 Markdown characters; their
+allowances are 24,000 or 24,500 respectively. JSON, line, collection-growth and
+explicit v0 compatibility limits retain their existing values. Production
+output retains the measured complete source and its cost.
+
+Qualification requires the complete source version and binding in both formats,
+including rejection of a heading without its JSON carrier, an old version and
+missing binding or interaction fields. The differential recognizes the exact
+v0-to-v1 quota cutover with its reversible derived v2 projection only when all
+19 current-control witnesses match; it still reports a review signal. Changed
+controls, unknown/mixed projection versions and later growth remain rejected.
+These fixture measurements characterize the presentation change. Full native
+Windows qualification, actual model use and outcome/cost comparisons remain
+separate evidence.
+
+默认 quota 及其 detail 选择器的 JSON、Markdown 都承载完整 v1。上表使用同一冻结
+公开夹具并关闭渐进交付，保留原 Markdown 10,000 / 17,000 / 7,000 超限事实。
+原生 Windows 小场景实测 23,254，新 24,000 呈现预算留 746 字符余量。六个 detail
+选择器实测 23,066、23,889 或 23,927，对应预算 24,000 或 24,500。JSON、行数、集合增长、
+显式 v0 兼容上限及生产正文保留，完整来源的实际交付成本按实测展示。
+
+两种格式均检查当前完整版本及绑定，拒绝仅有标题、旧版本、缺少绑定或交互合同。
+差分仅在 19 项当前控制见证一致时识别 quota v0→v1 及其可逆的 derived v2 投影，
+仍输出人工评审信号；控制变化、未知或混合投影版本及后续增长继续拒绝。
+这些证据限定于呈现夹具。完整原生 Windows、模型实际采用及成果与完整成本仍需
+各自验证。
+
 The thin heartbeat's 4,500-character presentation allowance did not cover the
 complete combination of a 320-character scope, all five runtime capability
 flags, Codex App transport and an explicit CLI route. The existing public CLI
@@ -1681,6 +1735,19 @@ Heartbeat 的正文回归计量先归一化已选择的 runtime、registry 和 a
    budget-only change need not force unrelated code cleanup. Frozen experiment
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
+
+The capture cursor fixture uses a 2,048-byte positive page budget. The old
+1,600-byte success case fails on both the matched main and C1: with the same
+137-byte capture path, mandatory recovery guidance and a one-character
+continuation already require 1,759 JSON bytes. Keep the guidance and original
+failure; the separate oversized-reader case still requires refusal at 1,600
+bytes without changing the caller's limit. This changes only the positive test
+fixture, not production page budgets, UTF-8/digest checks or recovery authority.
+
+capture 游标成功用例使用 2,048 字节页预算。同一 137 字节路径下，main 与 C1 的
+必需恢复说明和一个字符的续页已需 1,759 JSON 字节，原 1,600 字节成功用例均失败。
+保留说明、原失败及超长 reader 在原 1,600 字节下拒绝且不修改调用方预算的负例；
+仅调整成功场景 fixture，不改变生产预算、UTF-8／digest 校验或恢复权限。
 
 The auxiliary-monitor recovery fixture measures the complete original
 writeback step with indented JSON, using fixed-width disposable routes on
@@ -2387,15 +2454,16 @@ and fresh terminal checks; `vision_closed` + `stop` is not Goal closure.
 
 ### MCP vision authoring and recovery / MCP vision 写入与恢复
 
-The MCP guard projects `interaction_contract.mcp_channel`. For admitted normal
-Todo delivery, it replaces the raw CLI writeback/spend instructions with
-`complete_task` ownership; those are alternate transports, not two obligations.
-Replan-only and blocked lanes preserve their live CLI actions and binding.
+The MCP guard returns the original complete decision and a separate
+`mcp_channel`. For admitted Todo delivery the channel names `complete_task`
+as the executor for writeback and quota spending. Replan-only and blocked
+lanes preserve their live CLI actions and binding.
 Vision field and total limits come from the same TS validator, not copied prompt
 constants. Quota admission, permission and workspace facts are unchanged.
 
-MCP 的普通 Todo 交付不再同时要求模型执行 CLI 记账和 MCP 结算两套流程；独立 replan
-仍使用动态 CLI 契约。vision 字段与预算直接来自 TS 校验器，不要求模型猜格式或翻测试。
+MCP 原样交付完整决定，单独的 `mcp_channel` 指定普通 Todo 由
+`complete_task` 写回和扣额。独立重规划沿用当前 CLI 契约，vision 字段与预算直接
+来自 TypeScript 校验器。
 
 `complete_task` accepts either `agent_vision` (the existing bounded
 `goal_vision_replan_contract_v0` JSON packet) or `vision_unchanged_reason`.

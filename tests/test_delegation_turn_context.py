@@ -297,7 +297,7 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("delivery", ["host_envelope", pytest.param("native_files",
+@pytest.mark.parametrize("delivery", ["raw_envelope", "unified_inline", pytest.param("native_files",
     marks=pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX"))])
 @pytest.mark.parametrize("partial", [False, True], ids=["unanswered", "partial"])
 @pytest.mark.parametrize("parent_context", ["off", "on"])
@@ -382,11 +382,16 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         codex_context_hook(directory, {"session_id": "agenda-session", "cwd": str(tmp_path),
             "hook_event_name": "SessionStart", "source": "startup"})
     for turn_id in ("agenda-turn-one", "agenda-turn-two"):
-        # This branch consumes machine JSON; the model-facing branch below must
-        # exercise the real capture transport even under an inline parent.
-        presentation = ["--turn-envelope", "--context-delivery", "off"] if delivery == "host_envelope" else [
-            "--codex-app", "--context-delivery", "on", "--decision-output-root", str(tmp_path / "captures"),
-            "--codex-context-root", str(tmp_path / "context")]
+        # Explicit legacy display and canonical machine JSON have different
+        # read shapes. Native must exercise capture even under an inline parent.
+        if delivery == "raw_envelope":
+            presentation = ["--turn-envelope", "--context-delivery", "off"]
+        elif delivery == "unified_inline":
+            presentation = ["--context-delivery", "off"]
+        else:
+            presentation = ["--codex-app", "--context-delivery", "on",
+                "--decision-output-root", str(tmp_path / "captures"),
+                "--codex-context-root", str(tmp_path / "context")]
         code, packet = run(*prefix, "quota", "should-run", "--goal-id", "research",
             "--agent-id", "worker",  "--turn-instance-id", turn_id,
             *presentation)
@@ -424,10 +429,15 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
                 "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
             required_reads = values["/interaction_contract/agent_channel/required_reads"]
         else:
-            assert packet["schema_version"] == "loopx_turn_envelope_v0"
-            source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
-            content, required_reads = source["content"], packet["required_reads"]
-            assert packet["work_context"]["complete"] is True
+            if delivery == "raw_envelope":
+                assert packet["schema_version"] == "loopx_turn_envelope_v0"
+                channel = packet
+            else:
+                channel = packet["interaction_contract"]["agent_channel"]
+            work_context = channel["work_context"]
+            source = next(row for row in work_context["sources"] if row.get("hook_id") == "manager.context_inbox")
+            content, required_reads = source["content"], channel["required_reads"]
+            assert work_context["complete"] is True
         assert content["read_complete"] is False
         rows = {row["request_id"]: row for row in content["unfinished_delegations"]["items"]}
         assert set(rows) == {receipt["request_id"], queued["request_id"], peer["request_id"]}
@@ -444,7 +454,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
     if delivery == "native_files":
-        result = subprocess.run(shlex.split(manager_read["command"]), cwd=tmp_path, env=environment,
+        words = shlex.split(manager_read["command"])
+        assert words[:3] == [sys.executable, "-m", "loopx.entrypoint"]
+        result = subprocess.run(words, cwd=tmp_path, env=environment,
             capture_output=True, text=True, encoding="utf-8", timeout=90)
         assert result.returncode == 0, result.stderr
         body = result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n")

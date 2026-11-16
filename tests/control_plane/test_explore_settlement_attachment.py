@@ -51,7 +51,8 @@ def test_settlement_attachment_preserves_commands_and_off_plan(tmp_path, mode):
 @pytest.mark.parametrize("mode", ["evidence", "planning"])
 @pytest.mark.parametrize("profile", ["--codex-app", "generic_cli"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, mode, profile, provider):
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, mode, profile, provider, context_delivery):
     from loopx.configure_goal import configure_goal
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture, _initialize_fixture_authority, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
@@ -63,16 +64,31 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
     profile_args = [profile] if profile.startswith("--") else ["--runtime-profile", profile]
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID]
-    command = ["quota", "should-run", *profile_args, *binding, ]
+    command = ["quota", "should-run", *profile_args, *binding,
+               "--context-delivery", context_delivery]
+    if context_delivery == "on":
+        (tmp_path / "captures").mkdir(mode=0o700)
+        command.extend(("--defer-context-presentation", "--decision-output-root", str(tmp_path / "captures")))
     rc, guard = _run_cli(path, runtime, *command, cwd=project)
-    assert rc == 0, guard
+    if context_delivery == "on" and profile == "generic_cli":
+        assert rc != 0 and guard["ok"] is False
+        assert "supported declared run mode" in guard["reason"]
+        assert not explore_result_log_path(runtime, GOAL_ID).exists()
+        return  # Unsupported native Hosts must not enter the deferred capture path.
+    assert rc == 0, json.dumps(guard, ensure_ascii=False)
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
     writeback = plan["ordered_steps"][1]
     assert writeback["optional_attachments"][0]["required"] is False
     assert "--explore-result-json" not in writeback["command_template"]
     rc, compact = _run_cli(path, runtime, *command, "--turn-envelope", cwd=project)
     assert rc == 0, compact
-    assert compact["writeback"]["settlement_plan"] == plan
+    if context_delivery == "off":
+        assert compact["schema_version"] == "loopx_turn_envelope_v0"
+        assert compact["writeback"]["settlement_plan"] == plan
+    else:
+        assert compact["schema_version"] == "loopx_turn_envelope_v1"
+        assert compact["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
     rc, completed = _run_cli(path, runtime, "todo", "complete", *binding,
                             "--evidence", "Synthetic deliverable validated", "--no-follow-up", cwd=project)
     assert rc != 0 and completed["settlement_blocked_completion"], completed
@@ -112,6 +128,8 @@ def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path,
     ], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     packet = json.loads(result.stdout)
+    assert packet["schema_version"] == "loopx_turn_plan_v1"
+    assert "turn_envelope" not in packet
     assert "settlement_plan" not in packet["work_contract"]["interaction_contract"]["cli_channel"]
     # Inspection is pure. Execute the original driver-owned path to observe its
     # activation-bound hook and the exact input actually received by the Host.

@@ -67,6 +67,26 @@ def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_
     return payload
 
 
+def _read_capture_fields(reader, *pointers):
+    selected = [arg for pointer in pointers for arg in ("--select", pointer)]
+    result = subprocess.run([*reader, *selected], check=True, capture_output=True, text=True, timeout=90)
+    page = json.loads(result.stdout)
+    assert page["ok"] is True and page["offset"] == 0 and page["eof"] is True
+    assert len(page["content"].encode()) == page["total_bytes"]
+    selections = json.loads(page["content"])["selections"]
+    assert [entry["pointer"] for entry in selections] == list(pointers)
+    return [entry["value"] for entry in selections]
+
+
+def _read_progressive_poll_fields(runtime, registry, agent, *pointers, record=False):
+    # Keep the emitted navigation: _poll's default is the decoded source.
+    emitted = _poll(runtime, registry, agent, record=record, wire=True)
+    if emitted["schema_version"] == "context_capture_selection_page_v1":
+        emitted = emitted["navigation"]
+    assert emitted["schema_version"] == "context_capture_navigation_v1"
+    return _read_capture_fields(shlex.split(emitted["recovery"]["command"]), *pointers)
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("wire", ["quota", "envelope", "native"])
 @pytest.mark.parametrize("observation", ["recorded", "unreadable", "off"])
@@ -163,14 +183,8 @@ def test_original_capture_retains_the_emitted_poll_observation(
             assert_complete_turn_decision(recovered)
         assert recovered["host_poll_receipt"] == expected
     else:
-        page = subprocess.run([*reader, "--select", "/host_poll_receipt"],
-                              check=True, capture_output=True, text=True, timeout=90)
-        recovered = json.loads(page.stdout)
-        assert recovered["ok"] is True and recovered["offset"] == 0 and recovered["eof"] is True
-        assert len(recovered["content"].encode()) == recovered["total_bytes"]
-        selections = json.loads(recovered["content"])["selections"]
-        assert [entry["pointer"] for entry in selections] == ["/host_poll_receipt"]
-        assert selections[0]["value"] == expected
+        recovered, = _read_capture_fields(reader, "/host_poll_receipt")
+        assert recovered == expected
     if wire != "native":
         assert emitted["host_poll_receipt"] == expected
     assert receipt.read_bytes() == before, "Recovery must not record a second poll"
@@ -190,10 +204,10 @@ def test_failed_capture_discloses_the_already_recorded_poll(
     runtime, registry, count, _ = _worker_fixture(tmp_path, monkeypatch, provider)
     original_capture = quota_capture.capture_decision
 
-    def failed_publication(directory, payload, *, args, native_context):
+    def failed_publication(directory, payload, **kwargs):
         # Only the capture publisher fails; admission and receipt IO are real.
         with patch.object(quota_capture.os, "replace", side_effect=OSError("synthetic capture outage")):
-            original_capture(directory, payload, args=args, native_context=native_context)
+            original_capture(directory, payload, **kwargs)
 
     monkeypatch.setattr(quota, "capture_decision", failed_publication)
     monkeypatch.chdir(tmp_path / "project")
@@ -218,9 +232,10 @@ def test_failed_capture_discloses_the_already_recorded_poll(
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_canonical_quota_identity_survives_worker_main_and_alias_restart(tmp_path, monkeypatch, provider):
     runtime, registry, count, host = _worker_fixture(tmp_path, monkeypatch, provider)
-    admitted = _poll(runtime, registry, AGENT.upper())
-    assert admitted["agent_identity"]["agent_id"] == AGENT
-    assert admitted["effective_action"] == "autonomous_replan_required"
+    identity, action = _read_progressive_poll_fields(
+        runtime, registry, AGENT.upper(), "/agent_identity", "/effective_action")
+    assert identity["agent_id"] == AGENT
+    assert action == "autonomous_replan_required"
     first = _run_worker(runtime, registry, count, host, AGENT.upper())
     assert first.returncode == 1, first.stdout + first.stderr  # The controlled Host ran and failed.
     files = list((tmp_path / "worker-state").rglob("*.json"))
@@ -251,9 +266,10 @@ def test_actual_liveness_poll_keeps_corrupt_receipt_and_original_unknown(tmp_pat
     receipt = receipt_path_for_goal(goal, state)
     for damaged in (b"{broken", b"\xff", b'{"schema_version":"unrecognized"}'):
         receipt.write_bytes(damaged)
-        polled = _poll(runtime, registry, AGENT, record=True)
-        assert polled["host_poll_receipt"]["recorded"] is False
-        assert "unreadable" in polled["host_poll_receipt"]["error"]
+        observation_receipt, = _read_progressive_poll_fields(
+            runtime, registry, AGENT, "/host_poll_receipt", record=True)
+        assert observation_receipt["recorded"] is False
+        assert "unreadable" in observation_receipt["error"]
         observation = read_host_worker_observations(goal, state, registry_goal_digest="unavailable", runtime_root=runtime)
         assert observation == {"goal_id": GOAL, "read_status": "unreadable", "rows": []}
         assert receipt.read_bytes() == damaged

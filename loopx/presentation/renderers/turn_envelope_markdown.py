@@ -42,10 +42,24 @@ def turn_envelope_budget_warning_lines(payload: dict[str, Any]) -> list[str]:
     ]
 
 
+def render_turn_context_markdown(payload: dict[str, Any]) -> str:
+    """Render the current complete carrier or progressive reference verbatim."""
+    # Keep one root field per line without padding. JSON escaping preserves
+    # arbitrary source text and reader commands in one parseable block.
+    fields = ",\n".join(
+        json.dumps(key, ensure_ascii=False) + ":"
+        + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        for key, value in payload.items()
+    )
+    return "# LoopX Turn Envelope\n\n```json\n{\n" + fields + "\n}\n```"
+
+
 def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:
     from ...control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        return render_turn_context_markdown(payload)
     action_value = payload.get("action")
     user_value = payload.get("user")
     writeback_value = payload.get("writeback")

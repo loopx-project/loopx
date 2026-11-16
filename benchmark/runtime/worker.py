@@ -14,7 +14,9 @@ from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 
-from benchmark.runtime.codex import Execution, explicit_turn_display, prepare_codex_home, process_environment
+from benchmark.runtime.codex import (
+    Execution, explicit_turn_display, prepare_codex_home, process_environment, turn_envelope_receipt,
+)
 
 from benchmark.runtime.scheduler import PHASE_WORK_RESERVE_SECONDS as PHASE_WORK_RESERVE_SECONDS
 from benchmark.runtime.scheduler import phase_work_reserve
@@ -99,19 +101,19 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     context_dir = env.get("LOOPX_CODEX_CONTEXT_DIR") if env.get("LOOPX_CONTEXT_DELIVERY") == "on" else None
     if display.complete_turn or display.turn_envelope or decision_handoff_socket is not None or context_dir:
         if native_goal:
-            raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
+            raise ValueError("Quota capture requires a host-owned heartbeat Turn")
         # Wake identity comes from this worker, never from model-authored text.
         root = Path(env["LOOPX_WAKE_LOG_DIR"]) / turn_id / "decisions"
         root.mkdir(mode=0o700, exist_ok=False)
         command += ["--decision-output-root", str(root)]
-        if display.turn_envelope:
-            command += ["--turn-envelope"]
-        if display.complete_turn:
-            command += ["--complete-turn"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
         if context_dir:
             command += ["--context-delivery", "on", "--codex-context-dir", context_dir]
+    if not native_goal:
+        command += ["--turn-envelope" if display.turn_envelope else "--complete-turn"]
+        if env.get("LOOPX_CONTEXT_DELIVERY") == "off":
+            command += ["--context-delivery", "off"]
     result = subprocess.run(
         command,
         cwd=env["LOOPX_PROJECT"],
@@ -585,10 +587,7 @@ def run_once(env: dict[str, str]) -> dict:
         "task_entry": execution.task_entry,
         **({"execution_observation": observation_producer}
            if observation_producer is not None else {}),
-        **({"turn_envelope": True, "turn_envelope_source": "explicit"}
-           if execution.turn_envelope else {}),
-        **({"complete_turn": True, "complete_turn_source": "explicit"}
-           if execution.complete_turn else {}),
+        **turn_envelope_receipt(execution),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),

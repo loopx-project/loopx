@@ -83,6 +83,19 @@ def test_full_and_selected_dispatch_reset_their_program_route(tmp_path, monkeypa
     assert loopx_cli_argv() == ["loopx"]
 
 
+def test_resolve_explicit_powershell_script_without_execute_permission(tmp_path, monkeypatch):
+    folder = tmp_path / "script folder"
+    folder.mkdir()
+    script = folder / "launcher.ps1"
+    script.write_text("exit 0", encoding="utf-8")
+    script.chmod(0o600)
+    monkeypatch.chdir(folder)
+
+    assert resolve_command_path(str(script)) == script
+    assert resolve_command_path(f".{os.sep}launcher.ps1") == Path("launcher.ps1")
+    assert resolve_command_path(str(folder / "missing.ps1")) is None
+
+
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell script discovery is Windows-specific")
 def test_resolve_and_run_powershell_script_from_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

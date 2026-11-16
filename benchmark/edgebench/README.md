@@ -956,7 +956,7 @@ count (1–6); `--replan-after-turns 3` retains the previous benchmark default.
 Use `--replan-after-todos 3` for the previous completed-Todo cadence
 as an explicit ablation. The two options are mutually exclusive and require a
 heartbeat profile. This default is independent of `--task-entry`, feedback mode,
-and `--turn-envelope`. Official, single and native-goal profiles are unchanged.
+and context delivery. Official, single and native-goal retain their existing cadence.
 
 The shared control plane counts settled work Turns, not tool calls or idle wakes;
 other replan reasons may trigger sooner. Both runtime and worker-profile receipts
@@ -969,7 +969,7 @@ New `heartbeat-resume` and `heartbeat-explore` trials include the same-source
 original Goal and acceptance in preselection planning context by default.
 `--no-planning-horizon-goal` disables it for rollback or comparison;
 `--planning-horizon-goal` explicitly enables it. Plain and native-Goal workers reject
-this setting. It does not enable stride, Explore or TurnEnvelope.
+this setting. Stride and Explore retain their own settings.
 
 The adapter writes the shared `execution_profile.planning_horizon_goal` through
 `configure-goal`, checks the effective readback before work, and records an
@@ -1003,30 +1003,32 @@ budget or submissions. Freeze it with exact sources under a new run ID; do not
 change live workers. Receipts qualify requested configuration, while actual
 review, proposal adoption and task gains require trajectory evidence.
 
-## Optional short-context treatment
+## Complete Turn contract
 
-Add `--turn-envelope` to an otherwise identical `heartbeat-resume` or
-`heartbeat-explore` command to use the product's short normal packet and local
-same-invocation full detail. Other workers reject the option before creating a
-trial. The default remains off; the runtime and worker-profile receipts record
-it explicitly. Use a new run ID and freeze this as a separate context treatment,
-keeping objective guidance, task/scorer version, model and budgets matched.
-Omit the flag on the next run to disable it. No active experiment is changed by
-installing this code. Inspect wake receipts and the saved decisions before
-claiming adoption; score countability still requires the usual integrity review.
+The default for `heartbeat-resume` and `heartbeat-explore` is the complete
+v1 decision (C1) with the original ready claim, receipt and single-command
+settlement. `--complete-turn` records an explicit selection in the worker
+and runtime receipts. `--context-delivery off` disables native context
+delivery while keeping the same decision contract.
 
-For an explicitly complete v1 Host contract, choose `--complete-turn` instead
-on either heartbeat profile. The shared worker forwards that choice through
-the real heartbeat renderer and guard; it retains the original ready claim,
-receipt and single-command settlement. It cannot be combined with the legacy
-short-envelope option. Context delivery remains independent, and unselected
-runs keep their existing behavior. See the [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
-for source readback, failure recovery and rollback. User task time requirements
-remain readable; private Host deadlines stay outside model context.
+Heartbeat workers still accept explicit `--turn-envelope`. With context delivery
+off, it presents the bounded v0 view and links to the complete C1 capture.
+With context delivery on, the native reader presents that same capture. Pin the
+recorded runner and LoopX revisions for a historical short-view control.
+Checkpoint recovery verifies the original command and reads its captured
+source. To compare C1 with the original quota path, pin a pre-C1 runner and
+LoopX revision for the baseline. Match the task, scorer, model
+and budget in both arms. Verify actual delivery in native tool output and
+recovery reads alongside the wake receipts. See the
+[Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
+for source readback and recovery.
 
-中文：heartbeat profile 可显式选择 `--complete-turn` 以消费完整 v1，不能与旧短包
-选项同时启用；共用原 ready claim、回执和单条结算 owner，不改变未选择的运行。
-按原 source reader 核实采用与恢复；该开关不新增模型、子 worker、时钟或权限。
+新 heartbeat 统一使用 C1 完整契约。显式 `--turn-envelope` 在关闭上下文交付时
+输出有界 v0 短视图，并链接完整 C1 捕获。开启上下文交付时由原生 reader
+呈现该捕获。重跑旧短包对照时固定原 runner 与 LoopX 版本，历史 checkpoint
+按原命令和同一捕获恢复。与原 quota
+比较时固定 pre-C1 基线版本，并匹配题目、评估器、模型和预算。实际交付须核对
+原生工具输出和恢复读取。
 
 ## Close a managed native attempt
 

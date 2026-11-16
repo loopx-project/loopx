@@ -87,22 +87,26 @@ def test_mcp_and_typed_completion_guards_use_raw_transport(machine, completion):
     if completion:
         request = HostTodoSettlementRequest(
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
-            runtime_profile="codex_app_ssh_goal", legacy_host_surface="codex_app_ssh",
-            scheduler_owner="agent_cli_loop", execution_mode="interactive",
+            runtime_profile="codex_app_ssh_goal",
             completion_args=(),
         )
         plan = _prepare(request)
         step = plan["provider_effect"]["steps"][0]
-        args, legacy = step["args"], step["legacy_args"]
+        raw = control.run_cli(step["args"])
+        assert json.loads(raw) == {
+            "ok": True,
+            "schema_version": "loopx_host_todo_settlement_guard_v0",
+            "settlement_identity": plan["identity"],
+        }
+        assert len(raw.encode()) < 768
+        assert _spend_run_count(runtime) == 0
+        assert not (runtime / "context-delivery").exists()
     else:
-        args, legacy = control.should_run_args(GOAL_ID, AGENT_ID)
-    payload = json.loads(control.run_cli(args, legacy_args=legacy))
-    assert_decision(payload, runtime)
-    if completion:
-        assert payload["heartbeat_receipt"]["settlement_identity"] == plan["identity"]
-    # Both current and legacy host declarations use the same machine contract.
-    legacy_payload = json.loads(control.run_cli(legacy))
-    assert_decision(legacy_payload, runtime)
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        payload = json.loads(control.run_cli(control.should_run_args(GOAL_ID, AGENT_ID)))
+        assert_decision(payload, runtime)
+        assert_complete_turn_decision(payload)
 
 
 def test_rejected_guard_never_completes_or_spends_with_machine_on(machine):
@@ -127,26 +131,24 @@ def test_rejected_guard_never_completes_or_spends_with_machine_on(machine):
     assert not (runtime / "context-delivery").exists()
 
 
-def test_mcp_legacy_retry_keeps_raw_transport_without_new_parser_flags(monkeypatch):
+def test_mcp_completion_blocks_an_older_cli_without_retry(monkeypatch):
     import loopx.goal_mode_mcp as mcp
 
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
     calls = []
 
     def run(argv, **kwargs):
-        calls.append((argv, kwargs["env"]))
-        assert "--context-delivery" not in argv
+        calls.append(argv)
+        assert "--host-todo-settlement" in argv
         assert kwargs["env"]["LOOPX_CONTEXT_DELIVERY"] == "off"
-        if "--runtime-profile" in argv:
-            return SimpleNamespace(returncode=2, stdout="", stderr="unrecognized arguments: --runtime-profile")
-        return SimpleNamespace(returncode=0, stdout='{"ok":true,"should_run":false}', stderr="")
+        return SimpleNamespace(returncode=2, stdout="", stderr="unrecognized arguments: --host-todo-settlement")
 
-    monkeypatch.setattr(mcp.subprocess, "run", run)
+    monkeypatch.setattr(mcp, "subprocess", SimpleNamespace(run=run))
     control = GoalModeMCPControlPlane(
         GoalModeMCPConfig(server_name="fixture", runtime_profile="claude_code", legacy_host_surface="claude_code"),
         lambda: {"goal_id": GOAL_ID, "agent_id": AGENT_ID},
     )
-    args, legacy = control.should_run_args(GOAL_ID, AGENT_ID)
-    result = json.loads(control.run_cli(args, legacy_args=legacy))
-    assert result == {"ok": True, "should_run": False}
-    assert len(calls) == 2 and os.environ["LOOPX_CONTEXT_DELIVERY"] == "on"
+    result = json.loads(control.complete_task(TODO_ID, AGENT_ID, "must not complete"))
+    assert result["ok"] is False
+    assert result["settlement"]["failed_stage"] == "guard"
+    assert len(calls) == 1 and os.environ["LOOPX_CONTEXT_DELIVERY"] == "on"

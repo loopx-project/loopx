@@ -273,6 +273,23 @@ def test_posix_heartbeat_turn_identity_keeps_shell_assignment(
     assert '--turn-instance-id "${LOOPX_TURN:?}"' in guard
 
 
+def test_exact_turn_binding_keeps_the_rendered_settlement_instruction_once() -> None:
+    from loopx.control_plane.heartbeat.rules import HOST_LOOP_QUOTA_DISPATCH_RULE
+
+    original = f"{render_turn_bootstrap()}\n{HOST_LOOP_QUOTA_DISPATCH_RULE}"
+    turn = "2026-10-23T00:00:00Z"
+    bound = bind_exact_turn_settlement_task_body(original, turn_instance_id=turn)
+
+    assert render_turn_bootstrap(value=turn) in bound
+    assert bound.count("settlement_plan.ordered_steps") == 1
+    assert "Settle current settlement_plan.ordered_steps in order" in bound
+    assert "Settlement source:" not in bound
+    assert "else next_cli_actions" in bound
+    assert "preserve exact identities/effect ids and actual outcomes" in bound
+    assert "ambiguous effects need readback/recovery, not blind retry" in bound
+    assert bind_exact_turn_settlement_task_body(original, turn_instance_id=None) == original
+
+
 @pytest.mark.skipif(
     os.name == "nt" or SH is None,
     reason="requires a POSIX shell to parse the printed command",

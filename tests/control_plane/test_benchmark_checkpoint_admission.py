@@ -13,7 +13,6 @@ from benchmark.runtime.checkpoint_wake import CheckpointWake
 from benchmark.runtime.codex import Execution, prepare_codex_home, process_environment
 from benchmark.runtime.sessions import BenchmarkSessionWake
 from loopx.configure_goal import configure_goal
-from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.goals import activation_service
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from tests.control_plane import test_quota_settlement_cli as fixture
@@ -312,10 +311,10 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
         original = held["quota"]["heartbeat_receipt"]
         assert original["closeout_required"] is True
         assert original["settlement_identity"]["todo_id"] == fixture.TODO_ID
-        assert effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action":"select_replan", "quota":held["quota"], "goal_id":fixture.GOAL_ID,
-            "agent_id":fixture.AGENT_ID, "turn_instance_id":HELD_TURN,
-        }, large_local_snapshot=True) == {
+        from loopx.hosts.research_checkpoint import select_checkpoint_replan
+
+        assert select_checkpoint_replan(held["quota"], goal_id=fixture.GOAL_ID,
+            agent_id=fixture.AGENT_ID, turn_instance_id=HELD_TURN) == {
             "capture":False, "reason":"no_fresh_replan", "execution_authority_granted":False,
         }
     else:

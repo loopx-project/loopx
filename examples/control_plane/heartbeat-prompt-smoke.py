@@ -32,6 +32,12 @@ from loopx.heartbeat_prompt import (  # noqa: E402
 )
 
 
+QUIET_CHAT_AND_HOST_RESULT = "DONT_NOTIFY: no chat text. Return any required host quiet result in full."
+SHORT_NOTIFICATION_AUTHORITY = (
+    "`user_channel.notify` controls OUTPUT only: NOTIFY=show; " + QUIET_CHAT_AND_HOST_RESULT
+)
+
+
 def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
     body = normalized(task_body)
     assert "sync state if needed, and `NOTIFY`." not in body, (
@@ -44,9 +50,10 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
         f"{mode}: brief artifact-gated return overrides user_channel.notify authority"
     )
     if mode == "compact":
+        assert QUIET_CHAT_AND_HOST_RESULT in body, mode
         policy_start = body.index("Output policy:") + len("Output policy:")
-        policy_end = body.index("If `should_run=false`:", policy_start)
-        policy = {}
+        policy_end = body.index(QUIET_CHAT_AND_HOST_RESULT, policy_start)
+        policy = {"quiet": "DONT_NOTIFY"}
         for item in body[policy_start:policy_end].strip(" .").split(";"):
             key, value = item.strip().split("=", maxsplit=1)
             policy[key] = value.strip("`")
@@ -65,8 +72,7 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
             "full: bare 'report, write back' (old form outside NOTIFY)"
         )
     else:
-        assert "`user_channel.notify` controls OUTPUT only" in body
-        assert "NOTIFY=show; DONT_NOTIFY=no output" in body
+        assert SHORT_NOTIFICATION_AUTHORITY in body
         assert "Due/peer work is not a user prompt" in body
         assert "Missing NOTIFY action:" in body
         assert "user Todo unprojected" in body
@@ -102,7 +108,7 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
     if mode == "compact":
         assert (
             "Only under `NOTIFY`, `state=operator_gate`/"
-            "`notify_user_on_open_todo=true` permit concrete blocker-push; else quiet."
+            "`notify_user_on_open_todo=true` permit concrete blocker-push."
         ) in body, body
         assert "Follow the output policy above." in body
         return
@@ -112,10 +118,7 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
         return
 
     assert mode == "thin", mode
-    assert (
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; "
-        "DONT_NOTIFY=no output."
-    ) in body
+    assert SHORT_NOTIFICATION_AUTHORITY in body
 
 
 def assert_peer_scope_notification_authority(task_body: str) -> None:
@@ -125,6 +128,16 @@ def assert_peer_scope_notification_authority(task_body: str) -> None:
         "or record no in-scope work internally. Only `NOTIFY` reports it; "
         "`DONT_NOTIFY` stays quiet."
     ) in body, body
+
+
+def assert_quiet_result_is_required(task_body: str, *, mode: str) -> None:
+    altered = task_body.replace(" Return any required host quiet result in full.", "", 1)
+    assert altered != task_body, mode
+    try:
+        user_output_policy(altered, mode=mode)
+    except AssertionError:
+        return
+    raise AssertionError(f"{mode}: accepted a quiet policy without the required host result")
 
 
 def user_output_outcome(
@@ -448,6 +461,8 @@ def main() -> int:
     for mode_label, mode_payload in mode_payloads:
         mode_body = str(mode_payload["task_body"])
         assert_sole_notification_authority(mode_body, mode=mode_label)
+        if mode_label != "full":
+            assert_quiet_result_is_required(mode_body, mode=mode_label)
         for label, decision, expected in notification_cases:
             assert user_output_outcome(
                 mode_body,
@@ -457,20 +472,15 @@ def main() -> int:
     assert_peer_scope_notification_authority(str(full_scoped_payload["task_body"]))
 
     assert "`state=operator_gate` / `notify_user_on_open_todo=true` /" not in compact_task
-    assert (
-        "Only under `NOTIFY`, `state=operator_gate`/"
-        "`notify_user_on_open_todo=true` permit concrete blocker-push; "
-        "else quiet."
-    ) in compact_task
     for phrase in (
         "Detail:",
         "loopx heartbeat-prompt --full --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
         'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "state=operator_gate",
         "notify_user_on_open_todo=true",
-        "external=`NOTIFY`; quiet=`DONT_NOTIFY`",
+        "external=`NOTIFY`; quiet_missing_action=`internal_repair`",
         "concrete blocker-push",
-        "else quiet",
+        QUIET_CHAT_AND_HOST_RESULT,
         "safe_bypass_allowed=true",
         "safe_bypass_kind=outcome_floor_recovery",
         "receipts do not self-stop",
@@ -487,7 +497,7 @@ def main() -> int:
         "steering audit",
         "bottleneck lens",
         "no-progress self-repair",
-        "Gate only the affected path; continue independent allowed work",
+        "Gate only the affected path; continue other allowed work",
         "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_gate|user_action",
         "owner todos and `--role agent` for agent todos, not prose",
         "Todo done≠Turn settled; no invented successor/--no-follow-up",
@@ -576,19 +586,19 @@ def main() -> int:
         "Agent-facing CLI output budgets, deterministic control-plane qualification, "
         "model-behavior shadow evaluation, and release outcome baseline correctness",
         "current quota claim/lease and workspace contract plus repository rules",
-        "Read agent_channel.work_context and required_reads (or envelope) before work",
+        "Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops)",
         "Size by task/evidence/risk within authority/budget, not ops/files/wakes",
-        "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, never wake counts",
+        "calls/writeback ≠ completion. Fix locally; obey projected replan/stop, never wake counts",
         "Task-scoped coordination grants no authority over other agents",
         "Keep scope in this prompt, not todo metadata",
-        "Normal turns use CLI `interaction_contract`; use `loopx-project` for "
-        "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
-        "use selection_command when required",
+        "Normal turns follow CLI `interaction_contract`",
+        "lifecycle/registry: loopx-project; runtime/projection drift: loopx-self-repair",
+        "use selection_command if required",
         "heartbeat-prequota",
         'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run '
         "--goal-id loopx-meta --agent-id codex-product-capability --available-capability network "
         "--available-capability external_evidence_poll",
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        SHORT_NOTIFICATION_AUTHORITY,
         "Due/peer work is not a user prompt",
         "Missing NOTIFY action:",
         "user Todo unprojected",
@@ -601,9 +611,10 @@ def main() -> int:
         "re-enter as instructed, do/verify authorized work.",
         "`agent_read_required`",
         "drain/read/triage before work; settle/ACK",
-        "P0 blocked: admitted P1/P2; no wait spend",
+        "P0 blocked: admitted P1/P2",
+        "No spend for waiting alone",
         "No learning queue unless asked",
-        "Destructive Git/production requires explicit authorization",
+        "Destructive Git/production needs explicit authorization",
     ):
         assert phrase in live_peer_task, phrase
     for phrase in (
@@ -643,9 +654,9 @@ def main() -> int:
     for phrase in (
         "Brief detail:",
         "loopx heartbeat-prompt --compact --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
-        "Run assignment and guard as separate statements in one shell",
+        "Assign and guard in one shell, not a command-prefix assignment",
         'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        SHORT_NOTIFICATION_AUTHORITY,
         "Due/peer work is not a user prompt",
         "Todo done≠Turn settled",
         "Missing NOTIFY action:",
@@ -669,7 +680,7 @@ def main() -> int:
         "Finish Goal only on terminal no-follow-up",
         "Do not spend for quiet skips, preflight failures, blocker-only turns",
         "No learning queue unless asked.",
-        "Reuse existing authorization for the current action",
+        "Reuse existing authorization. Ask only if needed authority is missing.",
     ):
         assert phrase in brief_task, phrase
     for command_key in ("quota_spend_command", "refresh_state_command", "progress_refresh_state_command"):
@@ -688,11 +699,11 @@ def main() -> int:
     thin_task = normalized(str(thin_payload["task_body"]))
     for phrase in (
         "Advance `public-heartbeat-goal` from /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
-        "Normal turns use CLI `interaction_contract`; use `loopx-project` for "
-        "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
-        "use selection_command when required",
+        "Normal turns follow CLI `interaction_contract`",
+        "lifecycle/registry: loopx-project; runtime/projection drift: loopx-self-repair",
+        "use selection_command if required",
         "quota should-run",
-        "`user_channel.notify` controls OUTPUT only: NOTIFY=show; DONT_NOTIFY=no output",
+        SHORT_NOTIFICATION_AUTHORITY,
         "Due/peer work is not a user prompt",
         "Missing NOTIFY action:",
         "user Todo unprojected",
@@ -703,9 +714,9 @@ def main() -> int:
         "unchanged->truthful --vision-unchanged-reason",
         "re-enter as instructed, do/verify authorized work.",
         "P0 blocked: admitted P1/P2",
-        "no wait spend",
+        "No spend for waiting alone",
         "No learning queue unless asked",
-        "Destructive Git/production requires explicit authorization",
+        "Destructive Git/production needs explicit authorization",
     ):
         assert phrase in thin_task, phrase
     for label, task in (
@@ -748,14 +759,14 @@ def main() -> int:
         "safe_bypass_allowed=true", "gate blocks only the gated delivery path",
         "monitor_quiet_skip", "On receipt write failure, retry same id",
         "exact monitor settlement never refreshes/spends",
-        "required_reads (or envelope) before work", "negative cases and readback",
-        "preserve evidence and next action for recovery/resume",
+        "required_reads (or envelope) before work", "Continue feasible integration/negative cases/readback",
+        "keep recovery/resume evidence+next action",
         "autonomous_replan_obligation", "with original settlement still owed",
         "settlement_plan.ordered_steps", "next_cli_actions",
         "Accountable progress precedes its spend", "Never reconstruct static refresh/spend",
         "ambiguous effects need readback/recovery, not blind retry",
-        "Reuse existing authorization for the current action",
-        "Destructive Git/production requires explicit authorization",
+        "Reuse existing authorization. Ask only if needed authority is missing.",
+        "Destructive Git/production needs explicit authorization",
     ):
         assert phrase in compact_generated, phrase
     assert "ranker/cross-domain" not in generated

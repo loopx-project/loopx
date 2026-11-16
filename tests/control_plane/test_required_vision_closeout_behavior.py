@@ -17,6 +17,7 @@ from loopx.control_plane.testing.replan_semantic_action_behavior import (
 )
 from loopx.control_plane.testing import replan_semantic_action_behavior, vision_shell_host
 from loopx.control_plane.testing.vision_shell_host import VisionShellHost, shell_isolation_available
+from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 
 pytestmark = pytest.mark.skipif(not shell_isolation_available(), reason="Native shell needs sandbox-exec or bubblewrap")
 
@@ -42,8 +43,16 @@ def _packet(request: Mapping[str, Any]) -> dict[str, Any]:
             if "replan_action_packet" in value:
                 packet = value
             elif value.get("stage") == "writeback" and packet:
-                packet["interaction_contract"]["cli_channel"].update(value["writeback"])
-                packet["stride_control"] = value["stride_control"]
+                action = packet["replan_action_packet"]
+                assert value["obligation_id"] == action["obligation_id"]
+                packet["replan_action_packet"] = {
+                    **action, "stride_control": value["stride_control"],
+                    "writeback_contract": value["writeback_contract"],
+                }
+                original_cli = packet["interaction_contract"]["cli_channel"]
+                packet["interaction_contract"]["cli_channel"] = {
+                    **original_cli, **value["writeback"],
+                }
     if packet:
         return packet
     raise AssertionError("quota was not observed")
@@ -119,38 +128,41 @@ def projected_spend(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     return ScriptedExecToolAction(cli["next_cli_actions"][1])
 
 
-def _vision_transport(actions: list[Any]) -> ScriptedDoubaoExecTransport:
+def _read_current_vision(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+    navigation = json.loads(request["messages"][-1]["content"])
+    assert navigation["schema_version"] == "context_capture_navigation_v1"
+    return ScriptedExecToolAction(navigation["recovery"]["command"] +
+        " --select /autonomous_replan_obligation --select /replan_action_packet"
+        " --select /interaction_contract/cli_channel")
+
+
+def _vision_transport(actions: list[Any], *, exhaust_before_spend: bool | None = None) -> ScriptedDoubaoExecTransport:
     remaining = list(actions)
-    writeback: str | None = None
-    review_read = False
-    writeback_read = False
 
     def choose(request: Mapping[str, Any]) -> Any:
-        nonlocal writeback, review_read, writeback_read
         latest = request["messages"][-1]
         try:
             value = json.loads(latest["content"]) if latest["role"] == "tool" else None
         except json.JSONDecodeError:
             value = None
-        if isinstance(value, dict):
-            if value.get("schema_version") == "context_capture_navigation_v1":
-                return ScriptedExecToolAction(value["recovery"]["command"] +
-                    " --select /autonomous_replan_obligation --select /replan_action_packet"
-                    " --select /interaction_contract/cli_channel")
-            if value.get("schema_version") in {"context_capture_selection_page_v1", "context_capture_page_v1"}:
-                packet = _packet(request)
-                writeback = packet["replan_action_packet"].get("writeback")
-                reader = packet["autonomous_replan_obligation"].get("context_read")
-                if reader:
-                    return ScriptedExecToolAction(reader)
-            if value.get("stage") == "review":
-                review_read = True
-            if value.get("stage") == "writeback":
-                writeback_read = True
-            if value.get("error_code") == "shell_nonzero" and writeback and not review_read:
-                return ScriptedAssistantAction("The projected reader did not return its review.")
-        if writeback and review_read and not writeback_read:
-            return ScriptedExecToolAction(writeback)
+        if isinstance(value, dict) and value.get("schema_version") == "context_capture_navigation_v1":
+            return _read_current_vision(request)
+        if isinstance(value, dict) and value.get("schema_version") == "context_capture_selection_page_v1":
+            if not value.get("eof"):
+                return ScriptedExecToolAction(value["next_command"])
+            action = _packet(request)["replan_action_packet"]
+            if isinstance(action.get("review"), str):
+                return ScriptedExecToolAction(action["review"])
+        if isinstance(value, dict) and value.get("stage") == "review":
+            action = _packet(request)["replan_action_packet"]
+            if isinstance(action.get("writeback"), str):
+                return ScriptedExecToolAction(action["writeback"])
+        if exhaust_before_spend is not None and len(remaining) == 3:
+            # Leave the last three calls for authoring, writeback and spend.
+            # Count delivered reader calls too; staged paths need less padding.
+            call = sum(message["role"] == "tool" for message in request["messages"]) + 1
+            if call < 38 + int(exhaust_before_spend):
+                return ScriptedExecToolAction("printf inspected")
         if not remaining:
             return ScriptedAssistantAction("No further scripted action.")
         action = remaining.pop(0)
@@ -166,7 +178,12 @@ def _qualify(tmp_path: Path, actions: list[Any]) -> dict[str, Any]:
     )
 
 
-def test_projected_module_readers_complete_native_shell_closeout(
+def _run_history(tmp_path: Path) -> list[dict[str, Any]]:
+    index = tmp_path / "actor/runtime/goals/replan-semantic-action-fixture/runs/index.jsonl"
+    return [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
+
+
+def test_current_capture_reader_completes_native_shell_closeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
@@ -183,25 +200,29 @@ def test_projected_module_readers_complete_native_shell_closeout(
     outputs = [json.loads(message["content"])
                for message in transport.requests[-1]["messages"]
                if message["role"] == "tool" and message["content"].startswith("{")]
-    assert [value["stage"] for value in outputs if "stage" in value] == ["review", "writeback"]
-    writer = next(value for value in outputs if value.get("stage") == "writeback")
-    assert "agent_vision.stride_decision" in writer["writeback_contract"]["required_fields"]
-    assert "fields" in writer["writeback_contract"]["vision_authoring"]
-    assert "refresh-state" in shlex.split(writer["writeback"]["next_cli_actions"][0])
+    navigation = outputs[0]
+    reader = shlex.split(navigation["recovery"]["command"])
+    assert reader[1:3] == ["-m", "loopx.entrypoint"]
+    page = outputs[1]
+    assert page["schema_version"] == "context_capture_selection_page_v1" and page["eof"] is True
     packet = _packet(transport.requests[-1])
-    reader = packet["autonomous_replan_obligation"]["context_read"]
-    assert shlex.split(reader)[1:3] == ["-m", "loopx.entrypoint"]
+    action = packet["replan_action_packet"]
+    assert "agent_vision.stride_decision" in action["writeback_contract"]["required_fields"]
+    assert "fields" in action["writeback_contract"]["vision_authoring"]
+    plan = packet["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["identity"]["replan_obligation_id"] == packet["autonomous_replan_obligation"]["obligation_id"]
+    writer = next(value for value in outputs if value.get("appended") is True)
+    assert writer["settlement_identity"] == plan["identity"]
+    assert writer["settlement_progress"]["state"] == "spend_required"
     assert result["qualification_passed"] is True, result
     assert result["execution_host"] == "os_isolated_shell"
     assert result["vision_closeout"]["settled"] is True
     assert result["vision_closeout"]["spend_count"] == 1
     assert result["tool_call_limit"] == 40
-    history = tmp_path / "actor/runtime/goals/replan-semantic-action-fixture/runs/index.jsonl"
-    rows = [json.loads(line) for line in history.read_text().splitlines()]
     decisions = [row["agent_vision"]["stride_decision"]
-                 for row in rows if isinstance(row.get("agent_vision"), dict)]
+                 for row in _run_history(tmp_path) if isinstance(row.get("agent_vision"), dict)]
     assert len(decisions) == 1
-    control = packet["stride_control"]
+    control = action["stride_control"]
     assert decisions[0]["reference_context_id"] == control["reference_context_id"]
     assert decisions[0]["reference_obligation_id"] == control["reference_obligation_id"]
     assert decisions[0]["schema_version"] == "stride_decision_v2"
@@ -268,37 +289,54 @@ def test_native_shell_reader_bridge_does_not_expand_authority(
 ) -> None:
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
+    reader: ScriptedExecToolAction | None = None
 
-    def capture(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-        navigation = json.loads(request["messages"][-1]["content"])
-        return ScriptedExecToolAction(navigation["recovery"]["command"] +
-            " --select /autonomous_replan_obligation --select /replan_action_packet"
-            " --select /interaction_contract/cli_channel")
+    def read_allowed(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+        nonlocal reader
+        reader = _read_current_vision(request)
+        return reader
 
     def invalid_reader(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-        tokens = shlex.split(_packet(request)["autonomous_replan_obligation"]["context_read"])
+        assert reader is not None
+        allowed = json.loads(request["messages"][-1]["content"])
+        assert allowed["ok"] is True and allowed["eof"] is True
+        tokens = shlex.split(reader.command)
         if change == "other_module":
+            assert tokens[1:3] == ["-m", "loopx.entrypoint"]
             tokens[2] = "loopx"
         else:
-            option = "--source-hash" if change == "source_hash" else "--decision-file"
-            tokens[tokens.index(option) + 1] = "0" * 64 if change == "source_hash" else "foreign.json"
+            index = tokens.index("--reference-file")
+            _, reference = read_context_read_reference(tokens[index + 1])
+            capture = Path(reference["path"])
+            digest = reference["sha256"]
+            if change == "source_hash":
+                digest = "0" * 64
+            else:
+                # The copy contains the same valid bytes but has no current capture binding.
+                other = capture.with_name("foreign.json")
+                other.write_bytes(capture.read_bytes())
+                capture = other
+            tokens[index:index + 2] = ["--capture-file", str(capture), "--capture-sha256", digest]
         return ScriptedExecToolAction(shlex.join(tokens))
 
     def rejected(request: Mapping[str, Any]) -> ScriptedAssistantAction:
         error = json.loads(request["messages"][-1]["content"])
         assert error["exit_code"] != 0
         assert error["error_code"] == "shell_nonzero"
+        if change != "other_module":
+            assert "context reader does not match the current quota capture" in error["output"]
         return ScriptedAssistantAction("No accepted reader or state mutation.")
 
     result = DoubaoReplanSemanticActionBehaviorActor(
         api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport([
-            ScriptedExecToolAction(fixture.quota_guard_command), capture, invalid_reader, rejected,
+            ScriptedExecToolAction(fixture.quota_guard_command), read_allowed, invalid_reader, rejected,
         ]),
     ).qualify(qualification_id="native-reader-boundary",
               fixture_root=tmp_path / "actor", required_vision=True)
     assert result["qualification_passed"] is False
     assert result["semantic_action_accepted"] is False
     assert not result.get("vision_closeout")
+    assert not _run_history(tmp_path)
 
 
 @pytest.mark.parametrize("policy", ["as_needed", "repeat_until_closed"])
@@ -430,18 +468,23 @@ def test_native_host_does_not_qualify_unproven_closeout(tmp_path: Path, invalid:
 @pytest.mark.parametrize("passed", [True, False])
 def test_budget_boundary_still_requires_the_final_spend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, context_mode: str, passed: bool) -> None:
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_mode)
-    # Native capture/review/writeback consume the original forty-call budget.
-    extra_reads = (32 if context_mode == "on" else 35) + (0 if passed else 1)
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
-    result = _qualify(tmp_path, [
+    # The only difference is whether spend would be call 40 or call 41.
+    transport = _vision_transport([
         ScriptedExecToolAction(fixture.quota_guard_command),
         ScriptedExecToolAction("cat fixture/permission-config.json"),
-        *[ScriptedExecToolAction("printf inspected") for _ in range(extra_reads)],
         vision_patch_action, projected_refresh, projected_spend,
-    ])
+    ], exhaust_before_spend=not passed)
+    result = DoubaoReplanSemanticActionBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="native-vision-closeout", fixture_root=tmp_path / "actor", required_vision=True)
     assert result["qualification_passed"] is passed
     assert result["tool_call_count"] == result["tool_call_limit"] == 40
+    assert result["failure_code"] == (None if passed else "tool_call_budget_exhausted")
+    assert result["vision_closeout"]["bound_writeback"] is True
     assert result["vision_closeout"]["settled"] is passed
+    spends = [row for row in _run_history(tmp_path) if row.get("classification") == "quota_slot_spent"]
+    assert len(spends) == int(passed)
 
 
 @pytest.mark.parametrize("context_mode", ["on", "off"])
