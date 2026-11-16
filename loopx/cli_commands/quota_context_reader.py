@@ -458,16 +458,23 @@ def _compact_context_restart(path: Path, digest: str, *, limit: int, page_bytes:
     """Reuse the private reader protocol; never expose a new or unverified capture."""
     if limit < 128:
         return None  # A command and the minimum successful page cannot fit.
-    # The existing private recovery transport uses a short same-user POSIX
-    # directory. The source directory or CLI path can consume most of the
-    # caller's budget; the private descriptor keeps the exact source digest.
-    from ..control_plane.turn_driver.decision_capture import private_capture_uid
+    from ..control_plane.runtime.private_permissions import require_private_path
+    from ..control_plane.turn_driver.decision_capture import (
+        private_capture_subdirectory, private_capture_uid, require_private_capture_directory,
+    )
 
     directory = None
     try:
         route = validate_context_reader_route(reader_argv or current_loopx_cli_argv())
-        private_capture_uid()
-        directory = Path(tempfile.mkdtemp(prefix="lx-", dir="/tmp"))
+        temp_root = Path("/tmp")
+        if os.name == "nt":
+            # A Windows reference reader also requires an owned source.
+            require_private_capture_directory(path.parent)
+            require_private_path(path)
+            temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
+        else:
+            private_capture_uid()
+        directory = private_capture_subdirectory(temp_root, "lx-")
         locator = directory / "r"
         expected = locator.with_name("r." + "0" * 16) if pinned else locator
         validate_compact_recovery_budget(expected, limit, route, page_bytes=page_bytes,

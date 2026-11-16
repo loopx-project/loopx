@@ -3244,3 +3244,19 @@ The separate direct CLI fixture without a revised Goal still attributes
 about 10.6 KB of the full-read difference against main to the added
 settlement plan. These observations measure CLI output and reader calls.
 Matched model outcomes and complete costs still require qualification.
+
+### Recover bounded context reads through a private Windows reference
+
+When a stale selection cursor requires a restart and the output cap excludes
+the full command, the Windows path uses the existing private capture
+allocator. It checks the source file and its containing directory before
+emitting a reference. The reference preserves the capture digest, reader
+route, and selection so the reader can restart at offset zero.
+
+The CLI fixture used the Windows branch with private macOS files and a
+700-byte cap. At `dead3c8ce709` the refusal for the owned capture omitted
+the restart command. The updated reader returned and followed that command
+through every page of the original selection. Shared source files and
+directories produced no reference, and modifying the original bytes caused
+the emitted command to refuse the read. Native Windows DACL and PowerShell
+execution still require verification on a Windows host.

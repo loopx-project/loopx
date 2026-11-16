@@ -544,6 +544,98 @@ def test_stale_selected_cursor_restarts_in_the_same_scope(tmp_path, reader):
     assert capture.read_bytes() == raw and not registry.exists() and not runtime.exists()
 
 
+@pytest.mark.parametrize("shared", [None, "file", "directory"])
+def test_bounded_windows_restart_recovers_only_the_original_selection(monkeypatch, capsys, shared):
+    import os
+    import shutil
+    import tempfile
+    from types import SimpleNamespace
+
+    from loopx.cli import main
+    from loopx.cli_commands import quota_context_reader as reader
+    from loopx.control_plane.turn_driver import decision_capture as captures
+
+    native = os.name == "nt"
+    pwsh = shutil.which("pwsh") if native else None
+    if native and pwsh is None:
+        pytest.skip("requires PowerShell 7 to follow the native restart command")
+
+    with tempfile.TemporaryDirectory(prefix="lx-win-", dir=None if native else "/tmp") as directory:
+        root = Path(directory).resolve()
+        # Keep the source path long enough to require the compact reader.
+        source_dir = captures.private_capture_subdirectory(
+            root, "original-" + "x" * max(40, 180 - len(str(root))))
+        path = source_dir / "decision.json"
+        receipt = {"event_id": "fixture-receipt", "turn_instance_id": "original-turn", "note": "原回执" * 480}
+        digest = captures.write_decision_capture(
+            path, {"heartbeat_receipt": receipt, "other_material": "outside this selection"})
+        if shared:
+            target = path if shared == "file" else source_dir
+            if native:
+                from test_windows_snapshot_privacy import broaden
+
+                broaden(target)
+            else:
+                target.chmod(0o644 if shared == "file" else 0o755)
+        registry, runtime = root / "unused.json", root / "unused"
+        limit = 700
+        with monkeypatch.context() as platform:
+            platform.setattr(tempfile, "tempdir", str(root))
+            if not native:
+                # Exercise the Windows choice through the CLI using real POSIX
+                # private files. Native runs instead exercise the DACL owner.
+                platform.setattr(reader, "os", SimpleNamespace(name="nt", linesep="\r\n"))
+
+                def unavailable_uid():
+                    raise ValueError("POSIX identity is unavailable")
+
+                platform.setattr(captures, "private_capture_uid", unavailable_uid)
+            code = main(["--registry", str(registry), "--runtime-root", str(runtime),
+                "--format", "json", "quota", "context-read", "--capture-file", str(path),
+                "--capture-sha256", digest, "--select", "/heartbeat_receipt",
+                "--selection-sha256", "0" * 64, "--offset", "256", "--page-bytes", "512",
+                "--max-page-output-bytes", str(limit)])
+            stdout = capsys.readouterr().out
+        refused = json.loads(stdout)
+        assert code == 1 and refused["ok"] is False
+        assert len(stdout.encode()) <= limit and "content" not in refused
+        if shared:
+            assert "recovery_command" not in refused and not list(root.glob("lx-*"))
+        else:
+            command = refused["recovery_command"]
+            reference, = root.glob("lx-*/r")
+            assert "--reference-file" in command
+            _, metadata = captures.read_context_read_reference(str(reference))
+            assert metadata["sha256"] == digest and metadata["path"] == str(path)
+
+            def invoke(command):
+                argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", command] if pwsh else shlex.split(command)
+                return subprocess.run(argv, cwd=root, capture_output=True, timeout=30, check=False)
+
+            content = bytearray()
+            while command:
+                response = invoke(command)
+                page = json.loads(response.stdout)
+                assert response.returncode == 0 and page["ok"], page
+                assert len(response.stdout) <= limit and page["offset"] == len(content)
+                content.extend(page["content"].encode())
+                command = page.get("next_command")
+            assert page["eof"] and len(content) == page["total_bytes"]
+            assert json.loads(content)["selections"] == [{"pointer": "/heartbeat_receipt", "value": receipt}]
+
+            raw = path.read_bytes()
+            try:
+                path.write_bytes(raw + b" ")
+                response = invoke(refused["recovery_command"])
+                failure = json.loads(response.stdout)
+                assert response.returncode == 1 and failure["ok"] is False
+                assert "content" not in failure and "recovery_command" not in failure
+            finally:
+                path.write_bytes(raw)
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+        assert not registry.exists() and not runtime.exists()
+
+
 @pytest.mark.parametrize("bound", [False, True])
 def test_first_read_delivers_current_task_operation_with_its_continuation(tmp_path, decision, bound):
     action = {"operation": "read_private_source", "target_ref": "fixture/private-source.json",
