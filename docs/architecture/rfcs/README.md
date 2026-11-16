@@ -212,7 +212,8 @@ Paired diffs do not certify translation accuracy.
     remain unqualified; no runtime, default or experiment change.
 - [Sparse Working Memory at Context Compaction v0](sparse-compaction-working-memory-v0.md)
   ([中文版](sparse-compaction-working-memory-v0.zh-CN.md))
-  - **Delivery on `main`:** Proposal only; no runtime or default change.
+  - **Delivery on `main`:** Experimental proposal only; independently opt-in,
+    off by default, with no runtime or default change in this RFC.
   - **Current boundary:** A bounded T02 companion to history working sets:
     consolidate source-bound working memory at compaction and retain or restore
     a short recognizable structure. Compare deterministic sparse selection,

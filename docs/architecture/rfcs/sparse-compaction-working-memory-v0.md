@@ -3,10 +3,11 @@
 - **RFC status:** Accepted (upon merge)
 - **Supersedes / closes:** none
 - **Delivery maturity:** Proposal
+- **Feature status:** Experimental proposal; independently opt-in and off by default.
 - **Authors / owners:** AI-assisted proposal; context presentation, native-host, history-working-set and T02 maintainers.
 - **Created:** 2026-11-16
-- **Last normative revision:** 2026-11-16
-- **Implementation baseline:** [`0c3b2fd21800a536ccaa61bad85c4dd8257aad8e`](https://github.com/loopx-project/loopx/commit/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e).
+- **Last normative revision:** 2026-11-17
+- **Implementation baseline:** [`b9f2e2a516b58e62cbb0da6978625388322b5a90`](https://github.com/loopx-project/loopx/commit/b9f2e2a516b58e62cbb0da6978625388322b5a90).
 - **Related contracts:** [History working sets](history-working-set-context-policy-v0.md), [unified work contract](controller-executor-unified-contract-v0.md), [explicit continuation](cross-session-memory-substrate-v0.md), [required work context](../../reference/required-work-context.md), [T02 research](long-horizon-harness-benchmark-research-program-v0.md).
 - **Language mirror:** [中文版 — semantic mirror](sparse-compaction-working-memory-v0.zh-CN.md).
 
@@ -14,7 +15,7 @@
 
 Sections 1–12 define this bounded proposal; §4 records audited code facts. The appendices contain sources and decision attribution. Accepted status takes effect only upon merge and accepts a design basis, not implemented behavior or measured benefit. This PR ships documentation only. Future execution records follow the [ledger contract](ledger/README.md); maintain both language mirrors together.
 
-**Request versus proposal:** The requester asks to retain LoopX-recognizable structured information during context compaction, expects a sparser representation, identifies **FSoft-AI4Code/CodeWiki** as a reference, and raises Manus's use of compression as memory as a research lead. These are the requested direction, not approval of the schema, integration or claimed improvement below. All concrete design choices and experimental targets in this RFC are AI proposals pending review. “Compaction” here means conversation-context reduction, not model-weight compression.
+**Request versus proposal:** The requester asks to retain LoopX-recognizable structured information during context compaction, expects a sparser representation, identifies **FSoft-AI4Code/CodeWiki** as a reference, raises Manus's use of compression as memory as a research lead, and confirms that this is an **experimental feature**. These are the requested direction, not approval of the schema, integration or claimed improvement below. All concrete design choices and experimental targets in this RFC are AI proposals pending review. “Compaction” here means conversation-context reduction, not model-weight compression.
 
 ## 1. Decision summary
 
@@ -25,7 +26,7 @@ Recommend a two-part design within existing owners:
 1. A persisted working-memory view contains sourced findings, rejected approaches, decision rationale and unresolved questions that are useful to continued work. It is derived material, not another Goal/Todo or permission ledger.
 2. A short model-facing structure identifies that view and exposes its current decision frontier. The host retains it during compaction where a qualified integration permits, or the existing recovery adapter restores it afterward. An ordinary summary that mentions LoopX does not qualify as a recognized structure.
 
-Begin with one local native-host profile and existing capture/read infrastructure. The feature defaults off. First compare deterministic selection with current delivery; add semantic consolidation only if it yields additional benefit. This RFC starts no paid runs, changes no runtime default, approves no source deletion and promises no cost reduction.
+Begin with one local native-host profile and existing capture/read infrastructure. This is an independently enabled experiment, off by default; accepting its design does not promote it. First qualify persistence/restoration without replacing required content, then compare eligible deterministic selection with current delivery; add semantic consolidation only if it yields additional benefit. This RFC starts no paid runs, changes no runtime default, approves no source deletion and promises no cost reduction.
 
 ## 2. Problem and motivation
 
@@ -65,6 +66,8 @@ At the implementation baseline, source inspection confirms:
 | [`codex_context.py`][LX2], `codex_context_hook()` and `_context_continuation_instructions()` | Journals exact recovery refs; SessionStart can deliver recovery instructions; baseline loss does not invalidate the admitted Turn or require full rereading | No fixed sparse working-memory object is produced by these functions. Host-generated summary retention is not proved by hook output. |
 | [`codex_context_history.py`][LX3] | Qualifies supported native replay metadata and observed read intervals; rejects unsupported/incomplete histories | A recognized memory object cannot replace these checks or extend the host qualification list. |
 | [`progressive_context.ts`][LX4] and [`context_delivery.ts`][LX5] | Deterministic selected views and exact, source-bound full/Delta delivery, including saved-file continuity | A smaller representation is already possible; compare against this path, not an invented always-full baseline. Exact delivery does not prove summary fidelity. |
+| [`decision_capture.py`][LX6], capture writer and reader | Write-once complete captures; reader checks the exact byte digest; the projection helper accepts only its existing filenames | Memory must be a separate immutable derived artifact, not fields appended to an already-published source or an assumed new helper argument. |
+| [`machine_configuration/context_delivery.py`][LX7] and [`context_machine.py`][LX8] | Current template is `mode:on`, `delta_delivery:auto`; its v0/v1 normalizer rejects unknown keys. Explicit saved-file reads bypass unrelated configuration discovery; a read-only query creates no Turn | Existing context enablement cannot enable experimental memory. New settings need an independently scoped gate and compatibility design, not an unversioned extra key. |
 | [History-working-set RFC](history-working-set-context-policy-v0.md), §§5/9/11 | Accepted design for source-bound historical views, retention, optional generation and full-cost controls; Proposal maturity | Reuse its owners and gates. This RFC narrows the consolidation trigger and post-compaction representation; it does not replace that RFC or complete its milestones. |
 
 These are static code/design findings, not installed-host, final-model-input or task-effectiveness measurements. The current-source audit and [related open work](https://github.com/loopx-project/loopx/pull/8266) must be refreshed before implementation; candidate changes are not main facts.
@@ -86,7 +89,9 @@ flowchart LR
 
 The shared TypeScript presentation boundary owns selection and validation. Existing capture/artifact IO owns persistence and exact readers; native-host adapters own event translation and delivery. Goal, request, Todo, claim/lease, admission, authorization and settlement retain their current owners. Placement is an internal extension of existing context delivery: **no new capability id, provider id or extension distribution in v0**. Later semantic generation reuses the history-working-set provider boundary rather than adding model IO to synchronous hooks.
 
-The persisted memory view reuses existing source identities, revisions, scope and trust. Bind it to the original Goal/Agent, execution/capture, session/profile, observed compaction generation and schema/producer version. Store that binding once in the capture metadata rather than repeating all fields in the short block. A digest proves byte identity, not authorship or authorization; the reader must resolve an owner-issued reference under current access checks.
+The persisted memory view reuses existing source identities, revisions, scope and trust. Bind it to the original Goal/Agent, source capture, session/profile and schema/producer version; preserve the original Turn/settlement identity **when one exists**, without manufacturing a Turn for a read-only/unbound caller. Put this binding in a **new immutable derived artifact/reference**, using existing private writer/reader primitives. Never append metadata to or replace an already-published `projection.json`, `required-context.json` or reader reference. The current projection helper is not an API for an arbitrary memory filename. A digest proves byte identity, not authorship or authorization; the reader must resolve an owner-issued reference under current access checks.
+
+Memory revision and native `context_epoch` have different lifetimes. Derive memory identity from its source coverage and producer/schema version; use the existing lifecycle observation for deduplication, without making a memory write rotate the Delta epoch. Native compaction invalidation still runs even if memory preparation fails. A surviving memory never restores `candidate`, `pending`, consumed-pointer evidence, a claim or a Delta baseline; missing memory does not invalidate original saved work. Root/child and supported-replay restrictions remain attached to the native adapter.
 
 Retain only useful sourced increments: a conclusion plus its applicability basis, why a rejected attempt should not be retried unchanged, a changed assumption and contrary evidence, or an unresolved distinction. Canonical goals, Todo bodies, permissions and completed tool transcripts are referenced through their existing sources. A current decision is not inferred from a remembered historical one. Where the source has no typed classification, retain it verbatim or leave it in the ordinary context; do not classify prose as authority.
 
@@ -123,11 +128,30 @@ The five top-level fields are a starting proposal, not a field-count target. Emp
 
 Repeated Pre/PostCompact and SessionStart events map to one observed boundary. Missing events, reordered events, abrupt context loss or invalid output fall back through existing recovery. A parseable object in a disk transcript proves neither that the host replayed it nor that the model saw it. Record persistence, host submission, observed model-visible delivery, decision adoption and accepted outcome separately; mark unobservable layers unknown.
 
+**Compaction is a trigger, not removal eligibility.** M1 may restore an advisory memory view while retaining the existing required input. Replacement is limited to historical support that satisfies the accepted [history eligibility contract](history-working-set-context-policy-v0.md#52-historical-eligibility): typed ended attempt and recorded result, exact retained sources, protected current obligations, and no outstanding complete-first-read requirement. Current work, live corrections, unknown shapes, signed envelopes and machine/off paths do not become replaceable merely because their information appears in memory. Saving a correction alone does not satisfy its reading obligation. If no such source adapter is available, preserve the original context instead of claiming capture or extraction succeeded.
+
 ### 5.3 Extraction and sparsity policy
 
-First use deterministic selection of existing typed findings and exact references, without an extra model call. This establishes what selection and structure alone buy. Where relevant knowledge exists only in conversation, a later bounded model/host-compactor contribution can propose sourced memory, with exact input coverage and explicit observation-versus-interpretation attribution. It cannot manufacture a canonical decision or edit authorization.
+First use deterministic selection of existing typed attempt/result/evidence facts **where available**, with exact references and without an extra model call. This does not assume main already has a standalone findings store or a structured host-compaction result. It establishes what selection and structure alone buy. Where relevant knowledge exists only in conversation, a later bounded model/host-compactor contribution can propose sourced memory, with exact input coverage and explicit observation-versus-interpretation attribution. It cannot manufacture a canonical decision or edit authorization.
 
 Do not call another LLM synchronously from a compaction hook. Reuse a verified existing preparation/execution boundary or the host compactor only after its actual contract is qualified. If no legal source or execution boundary exists, that semantic mode remains unavailable and the original context path continues. Critical missing meaning is not repaired by pretending an empty deterministic view is sufficient.
+
+### 5.4 Compatibility with main and experimental activation
+
+Activation must independently bind the selected Goal, Agent, root session and qualified host profile **before** memory-specific selection, IO, instructions or model calls. Existing Progressive/Delta settings, installed hooks, readable captures, provider readiness and an object naming this schema are not activation. Absent/disabled activation and enabled-but-out-of-scope callers keep their previous schema, guidance, accepted inputs and effects. The first experiment should use an explicit scope-local profile; persist settings only after their registered producer/reader version and downgrade behavior are qualified. Do not add a key to current `context_delivery_machine_defaults_v0/v1` and assume old readers accept it, or make experimental configuration failure disable ordinary context delivery.
+
+| Main boundary | Required experimental behavior | Decisive qualification |
+| --- | --- | --- |
+| Progressive on / Delta auto is the current default [LX7] | Memory remains off independently; existing off preferences stay off | Gate absent/off, enabled in scope and enabled outside scope; compare with main on the same input |
+| Exact capture bytes and references are immutable [LX6] | Publish a separate derived artifact; original body/digest/reader remain unchanged | Read the old capture before/after publication and downgrade; reject overwrite and substituted refs |
+| `context_epoch` is not work identity [LX1]/[LX2] | Keep existing invalidation and original recovery; memory revision grants no continuity | Duplicate Pre/PostCompact, failed preparation and later SessionStart preserve the native transition |
+| Same-Turn continuation versus a new guard [LX2] | Within a Turn recover needed facts from its original capture; a new Turn obtains its current guard | No second admission, repeated settlement or substitution of a newer capture on transport retry |
+| A saved-file read may have no admitted Turn [LX8] | Read/inspect never creates a Turn, claim or lease; unqualified callers retain their existing path | Explicit historical file read with no Goal/default discovery or begin-turn side effect |
+| Parent/child hooks and native replay qualification [LX1]/[LX3] | Preserve child rejection and existing unsupported/forked-history fallback | A child cannot write or restore the parent's memory/journal; unknown hosts remain unqualified |
+| Required reads and historical eligibility [LX4] | Memory is advisory; reduce only qualified historical support, never current required content | Pending read, live correction, unknown fields and signed/off/machine cases keep their original obligations |
+| Path-bound retained originals [LX6] | Claim only verified same-machine lifetime; source loss uses existing dependency/fallback rules | Restart, cleanup, deletion and revocation within the explicitly claimed scope |
+
+These are implementation acceptance obligations, not a claim that an unimplemented feature has passed compatibility tests. They add no parser to main and do not expand the default host or product surface.
 
 ## 6. Alternatives and trade-offs
 
@@ -149,7 +173,7 @@ An unavailable optional memory falls back to ordinary delivery. An unavailable r
 
 ## 8. Migration and rollback
 
-Opt in one explicitly qualified local host/profile without rewriting existing sources. During shadow inspection, persist the candidate but do not reduce model input; that phase validates bindings, not effectiveness. Then replace eligible active-context material with the short representation on that profile, retaining required controls and exact expansion.
+Opt in one explicitly qualified local host/profile without rewriting existing sources. During shadow inspection, persist the candidate but do not reduce model input; that phase validates bindings, not effectiveness. Then replace only historical support qualified under §5.2 on that profile, retaining required controls, original reading obligations and exact expansion. Where eligibility is unproved, restoration stays additive and cannot be reported as input reduction.
 
 Disablement stops new consolidation and adoption; later input uses existing delivery. Already promised references remain readable for their declared lifecycle, subject to explicit deletion/revocation. Retention must survive compaction, process restart and normal cleanup for every claimed scope; current temporary captures are not automatically durable memory. Extend the existing retention owner if necessary. No destructive migration or source GC change is authorized here.
 
@@ -167,6 +191,8 @@ Disablement stops new consolidation and adoption; later input uses existing deli
 | A6 | Off, no-benefit and mixed-version paths | Feature-off parity; no new model IO when off; preserve unknown material and existing machine/capture contracts. |
 | A7 | Declared restart/cleanup scope | Promised sources remain resolvable; invalidate visibly when an explicit deletion/revocation supersedes retention. |
 | A8 | Packaged enable → compact → inspect source/failure → disable | Existing settings and readback share the typed owner; qualify affected frontend/Lark/CLI entrypoints before product promotion. A single-host prototype is partial delivery. |
+| A9 | Independent experimental gate with identical inputs | Absent/off and enabled-but-out-of-scope paths match main, including settings failure, instructions, accepted inputs and IO; Progressive/Delta on alone never activates memory. |
+| A10 | Separate immutable memory and original readers | Original capture/reference bytes and original read obligations survive publication, retry and downgrade; memory cannot acknowledge native retention or invent a missing Turn. |
 
 Structural conformance cannot prove semantic usefulness. No A-row is passed by this documentation PR.
 
@@ -197,7 +223,7 @@ Expose effective enablement and supported host, current source binding/coverage,
 | Milestone | Reviewable outcome | Entry / decisive exit evidence | Rollback |
 | --- | --- | --- | --- |
 | M0: Review | Agreed compaction-memory hypothesis, owner split and bounded profile | Current-source audit; D1–D3 decisions at their dependent boundaries; design acceptance does not start execution | Documentation only |
-| M1: One real compaction path | Deterministic sparse view survives or is restored and expands exact originals on one supported host | Qualified host contract and retention; A1–A7 plus observed final delivery and original-identity recovery | Existing host/recovery delivery |
+| M1: One real compaction path | Deterministic sparse view survives or is restored and expands exact originals on one supported host; required content remains intact | Independent scope-local activation, qualified host contract and retention; A1–A7/A9/A10 plus observed final delivery and original-identity recovery | Existing host/recovery delivery |
 | M2: Utility comparison | B0/T1 outcome and full-cost comparison; T2 only for demonstrated missing semantic knowledge | Frozen sample/budgets/thresholds; §9.2 evidence, including negative results | Keep B0 or T1; no forced promotion |
 | M3: Product qualification | Enablement, inspection, failure/recovery and disablement through affected surfaces | A8, mixed-version/off parity; separately qualify broader hosts and retention | Disable optional view; preserve valid refs |
 
@@ -211,19 +237,23 @@ First implementation candidates are narrow changes to `quota/progressive_context
 | D2 | Which findings, source coverage, retention scope and sparse budget: start with typed investigation results and unresolved distinctions on one Goal; exact unrecorded corrections remain mandatory. Choose schema/limits from measured workload, not field-count aesthetics | Context / history / source owners, before M1 |
 | D3 | Whether semantic extraction is needed and when it runs: deterministic T1 first; reuse a bounded verified execution boundary for T2 if conversation-only knowledge makes T1 insufficient | History / runtime owners, before semantic implementation or runs |
 | D4 | Task sample, non-inferiority margin and material benefit: predeclare complete-cost and outcome criteria; do not import CodeWiki/Manus numbers or infer success from fewer bytes | T02 / evaluation owners, before any model experiment |
+| D5 | Experimental activation/configuration: prefer an explicit scope-local profile first; qualify any persistent registered settings separately from Progressive/Delta, including older readers and gate-off/out-of-scope parity | Configuration / native-host owners, before M1 activation |
 
 ## Appendix A: Evidence and decision record
 
-- Static audit: named LoopX sources at `0c3b2fd21800`; CodeWiki README/update guide at `7fcf9354f70a5468bc739d849055f8cbab9d46aa`; Manus's dated primary article. This does not certify current proprietary Manus internals or upstream implementation quality.
-- Request-confirmed direction: recognizable, sparser structure at compaction; AI4Code reference. Manus's exact compression-time memory-write behavior remains a lead, not a verified premise.
+- Static audit: named LoopX sources rechecked against main `b9f2e2a516b58e62cbb0da6978625388322b5a90`; the original five source files are unchanged since `0c3b2fd21800`. CodeWiki README/update guide remains pinned at `7fcf9354f70a5468bc739d849055f8cbab9d46aa`; Manus uses its dated primary article. This does not certify current proprietary Manus internals or upstream implementation quality.
+- Request-confirmed direction: recognizable, sparser structure at compaction; AI4Code reference; experimental feature. Manus's exact compression-time memory-write behavior remains a lead, not a verified premise.
 - Proposed, unapproved: schema, field selection, host profile, lifecycle details, thresholds and implementation sequence. No runtime/default change, paid/model experiment, measured saving, host-install acceptance or product promotion has been performed.
 - No RFC is superseded, stored field removed or existing acceptance milestone closed. Future dated execution evidence belongs in the ledger only after real work exists.
 
 [CW1]: https://github.com/FSoft-AI4Code/CodeWiki/blob/7fcf9354f70a5468bc739d849055f8cbab9d46aa/README.md
 [CW2]: https://github.com/FSoft-AI4Code/CodeWiki/blob/7fcf9354f70a5468bc739d849055f8cbab9d46aa/guides/incremental-updates.md
 [M1]: https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus
-[LX1]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/quota/native_context_lifecycle.ts
-[LX2]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/turn_driver/codex_context.py
-[LX3]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/turn_driver/codex_context_history.py
-[LX4]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/quota/progressive_context.ts
-[LX5]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/quota/context_delivery.ts
+[LX1]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/quota/native_context_lifecycle.ts
+[LX2]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/turn_driver/codex_context.py
+[LX3]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/turn_driver/codex_context_history.py
+[LX4]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/quota/progressive_context.ts
+[LX5]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/quota/context_delivery.ts
+[LX6]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/turn_driver/decision_capture.py
+[LX7]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/capabilities/machine_configuration/context_delivery.py
+[LX8]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/cli_commands/context_machine.py

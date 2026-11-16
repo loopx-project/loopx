@@ -3,10 +3,11 @@
 - **RFC status:** Accepted (upon merge)
 - **替代 / 关闭：** 无
 - **Delivery maturity:** Proposal
+- **功能状态：** 实验性提案；独立显式开启，默认关闭。
 - **作者 / 负责人：** AI 辅助提案；上下文呈现、原生宿主、历史工作集与 T02 维护者。
 - **创建日期：** 2026-11-16
-- **最近规范修订：** 2026-11-16
-- **实现基线：** [`0c3b2fd21800a536ccaa61bad85c4dd8257aad8e`](https://github.com/loopx-project/loopx/commit/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e)。
+- **最近规范修订：** 2026-11-17
+- **实现基线：** [`b9f2e2a516b58e62cbb0da6978625388322b5a90`](https://github.com/loopx-project/loopx/commit/b9f2e2a516b58e62cbb0da6978625388322b5a90)。
 - **相关契约：** [历史工作集](history-working-set-context-policy-v0.zh-CN.md)、[统一工作契约](controller-executor-unified-contract-v0.zh-CN.md)、[显式接续](cross-session-memory-substrate-v0.zh-CN.md)、[必需工作上下文](../../reference/required-work-context.md)、[T02 研究](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)。
 - **语言镜像：** [English（语义镜像）](sparse-compaction-working-memory-v0.md)。
 
@@ -14,7 +15,7 @@
 
 第 1–12 节定义本次有界提案；第 4 节记录已核对的代码事实。附录记录来源与观点归属。Accepted 仅在合入时生效，表示设计基础被接受，不代表功能已实现或收益已验证。本 PR 只交付文档。未来执行记录遵循[账本契约](ledger/README.zh-CN.md)，中英镜像同步维护。
 
-**用户方向与 AI 方案：** 用户希望在上下文压缩时保留 LoopX 可识别的结构化信息，预期表示更稀疏；明确参考 **FSoft-AI4Code/CodeWiki**，并提出 Manus 将压缩作为记忆的研究线索。这些是请求方向，不表示用户已批准下文的 schema、集成方式或收益结论。本文具体设计和实验目标均为 AI 提案，待评审。“压缩”指对话上下文缩减，不指模型权重压缩。
+**用户方向与 AI 方案：** 用户希望在上下文压缩时保留 LoopX 可识别的结构化信息，预期表示更稀疏；明确参考 **FSoft-AI4Code/CodeWiki**，提出 Manus 将压缩作为记忆的研究线索，并确认这是**实验性功能**。这些是请求方向，不表示用户已批准下文的 schema、集成方式或收益结论。本文具体设计和实验目标均为 AI 提案，待评审。“压缩”指对话上下文缩减，不指模型权重压缩。
 
 ## 1. 决策摘要
 
@@ -25,7 +26,7 @@
 1. 持久化工作记忆视图，包含有来源的发现、已否定路径、决策理由和未决问题，服务继续工作。它是派生材料，不是另一套 Goal/Todo 或权限账本。
 2. 面向模型的短结构，标识该视图并展示当前最需要处理的决策问题。已资格化的宿主集成可以在压缩时保留它，也可以由现有恢复适配器在压缩后恢复它。普通摘要提到 LoopX，不等于存在可识别结构。
 
-从一个本地原生宿主 profile 和现有 capture/read 链路开始，默认关闭。先比较确定性选取与现有交付，只有语义整理带来额外价值时才加入。本文不启动付费实验、不改变运行时默认、不批准删除来源，也不承诺成本下降。
+从一个本地原生宿主 profile 和现有 capture/read 链路开始。这是独立开启、默认关闭的实验；接受设计不表示功能晋升。先资格化持久化/恢复而不替换必需内容，再比较合格的确定性选取与现有交付，只有语义整理带来额外价值时才加入。本文不启动付费实验、不改变运行时默认、不批准删除来源，也不承诺成本下降。
 
 ## 2. 问题与动机
 
@@ -65,6 +66,8 @@
 | [`codex_context.py`][LX2] 的 `codex_context_hook()` 与 `_context_continuation_instructions()` | journal 保留精确恢复引用；SessionStart 可交付恢复指令；baseline 丢失不使已准入 Turn 失效，也不要求全量重读 | 这些函数尚不产生固定的稀疏工作记忆对象。hook 输出不能证明宿主摘要保留了它。 |
 | [`codex_context_history.py`][LX3] | 检查支持的原生重放元数据与已观察读取区间，拒绝不支持或不完整的历史 | 记忆结构被识别，不能替代这些检查或扩大宿主资格范围。 |
 | [`progressive_context.ts`][LX4] 与 [`context_delivery.ts`][LX5] | 确定性选读视图、有来源绑定的精确 full/Delta 交付，包括保存文件的连续性 | 当前已有缩减表示；必须与此路径比较，不能虚构“当前总是全量”的基线。精确交付不证明语义摘要忠实。 |
+| [`decision_capture.py`][LX6] 的 capture writer/reader | 完整 capture 只写一次，reader 校验精确字节 digest；projection helper 只接受现有文件名 | 记忆必须是独立不可变派生产物，不能向已发布来源追加字段，也不能假定 helper 已支持新参数。 |
+| [`machine_configuration/context_delivery.py`][LX7] 与 [`context_machine.py`][LX8] | 当前模板为 `mode:on`、`delta_delivery:auto`，v0/v1 normalizer 拒绝未知字段；显式保存文件读取绕过无关配置发现，只读查询不创建 Turn | 现有上下文开关不能启用实验记忆；新设置需要独立作用域开关及兼容设计，不能直接追加无版本字段。 |
 | [历史工作集 RFC](history-working-set-context-policy-v0.zh-CN.md) 第 5/9/11 节 | 已接受来源绑定历史视图、保留、可选生成与完整成本对照的设计；成熟度为 Proposal | 复用其 owner 与门槛。本 RFC 收窄整理触发点和压缩后表示，不替代旧 RFC，也不完成其里程碑。 |
 
 以上是静态代码/设计事实，不是已安装宿主、最终模型输入或任务效果测量。实施前须重查当前来源与[相关开放工作](https://github.com/loopx-project/loopx/pull/8266)，候选分支能力不等于 main 事实。
@@ -86,7 +89,9 @@ flowchart LR
 
 共享 TypeScript 呈现边界负责选取与校验；现有 capture/artifact IO 负责持久化与精确读取；原生宿主适配器负责事件转换和交付。Goal、请求、Todo、claim/lease、准入、权限和结算保留原 owner。归属是现有上下文交付的内部扩展：**v0 不新增 capability id、provider id 或 extension 发行包**。后续语义生成复用历史工作集 provider 边界，不在同步 hook 中加入模型 IO。
 
-持久记忆视图复用现有来源身份、revision、范围和信任级别，绑定原始 Goal/Agent、执行/capture、session/profile、已观察压缩代际和 schema/producer 版本。绑定在 capture 元数据中保存一次，短结构不重复全部字段。digest 证明字节相同，不证明作者或权限；reader 仍须按当前访问检查解析 owner 签发的引用。
+持久记忆视图复用现有来源身份、revision、范围和信任级别，绑定原始 Goal/Agent、来源 capture、session/profile 和 schema/producer 版本；**已有** Turn/结算身份时保留它，不为只读/未绑定调用者制造 Turn。使用现有私有 writer/reader 原语，把绑定放在**新建的不可变派生产物/引用**中。不能向已发布 `projection.json`、`required-context.json` 或 reader reference 追加元数据或覆盖它们；当前 projection helper 也不是任意 memory 文件名的 API。digest 证明字节相同，不证明作者或权限；reader 仍须按当前访问检查解析 owner 签发的引用。
+
+记忆 revision 与原生 `context_epoch` 生命周期不同。记忆身份从来源覆盖与 producer/schema 版本导出，沿用现有生命周期观察去重，不因写记忆而轮换 Delta epoch。即使记忆准备失败，原生压缩失效逻辑仍执行。记忆保留不能恢复 `candidate`、`pending`、已消费 pointer 证据、claim 或 Delta baseline；记忆缺失也不使原保存工作失效。根/子会话与支持的重放限制继续由原生适配器承担。
 
 只保留有用且有来源的增量：结论与适用依据、已否定尝试为何不能原样重试、改变的假设与反证、未决区别。权威目标、Todo 正文、权限和已完成工具轨迹通过已有来源引用。不能从记住的历史决策推断当前决策。来源缺少类型化分类时，保留原文或留在普通上下文，不把自然语言分类为权限依据。
 
@@ -123,11 +128,30 @@ flowchart LR
 
 重复 Pre/PostCompact 与 SessionStart 映射到同一次已观察边界。事件丢失、乱序、突然上下文丢失或输出无效时，经现有恢复回退。磁盘轨迹里有可解析对象，既不证明宿主重放了它，也不证明模型看见了它。持久化、提交宿主、观察到的模型可见交付、决策采用、验收结果分别记录，不可观察层标 unknown。
 
+**压缩是触发点，不是移出资格。** M1 可在保留原必需输入的同时恢复建议性记忆视图。替换只限满足已接受[历史材料资格契约](history-working-set-context-policy-v0.zh-CN.md#52-哪些材料允许进入候选集)的支持材料：类型化已结束尝试与已记录结果、精确保留来源、当前义务受保护、没有未完成的完整首读要求。当前工作、实时纠正、未知形状、签名 envelope、机器/off 路径，不因信息出现在记忆里就可被替换。保存纠正本身不完成读取义务。没有相应来源适配器时，保留原上下文，不能宣称已成功捕获或提取。
+
 ### 5.3 提取与稀疏策略
 
-第一步确定性选取已有类型化发现与精确引用，不增加模型调用，先弄清选取与结构本身的价值。相关知识只存在对话时，后续有界模型/宿主 compactor 贡献可提议有来源记忆，标明精确输入覆盖和观察/解释归属，不能制造权威决策或改写权限。
+第一步从**实际可用**的已有类型化 attempt/result/evidence 事实中确定性选取，并保留精确引用，不增加模型调用。不假定 main 已有独立 findings store 或结构化宿主压缩结果，先弄清选取与结构本身的价值。相关知识只存在对话时，后续有界模型/宿主 compactor 贡献可提议有来源记忆，标明精确输入覆盖和观察/解释归属，不能制造权威决策或改写权限。
 
 不在压缩 hook 内同步调用另一个 LLM。复用已验证的准备/执行边界，或在实际契约资格化后复用宿主 compactor。没有合法来源或执行边界时，该语义模式保持不可用，沿用原上下文路径。不能把空的确定性视图假称为已补足关键含义。
+
+### 5.4 与 main 的兼容及实验启用
+
+开启必须独立绑定选定 Goal、Agent、根 session 和已资格化宿主 profile，并发生在记忆特有的选取、IO、指令或模型调用**之前**。现有 Progressive/Delta 设置、已安装 hook、可读 capture、provider 就绪、对象声明本 schema，都不是启用。未配置/关闭，以及已开启但不在作用域内的调用者，保持原 schema、指令、可接受输入与效果。首个实验建议使用显式且局部作用域的 profile；持久化设置前，先资格化注册后的 producer/reader 版本及降级行为。不能向现有 `context_delivery_machine_defaults_v0/v1` 加字段后假定旧 reader 接受，也不能让实验配置失败关闭普通上下文交付。
+
+| main 边界 | 实验必须保持的行为 | 决定性验证 |
+| --- | --- | --- |
+| Progressive on / Delta auto 是当前默认 [LX7] | 记忆独立默认关闭，已有 off 偏好仍为 off | 未配置/关闭、开启且命中范围、开启但范围外，与 main 对比同一输入 |
+| capture 精确字节与引用不可变 [LX6] | 发布独立派生产物，原正文/digest/reader 不变 | 发布及降级前后读原 capture；拒绝覆盖与替换引用 |
+| `context_epoch` 不是工作身份 [LX1]/[LX2] | 保留原失效与恢复语义，记忆 revision 不授予连续性 | 重复 Pre/PostCompact、准备失败、后续 SessionStart 保持原生迁移 |
+| 同 Turn 接续与新 guard 分开 [LX2] | Turn 内从原 capture 恢复必要事实，新 Turn 获取当前 guard | 传输重试不二次准入、不重复结算、不换成更新 capture |
+| 保存文件读取可能没有已准入 Turn [LX8] | 读取/查看不创建 Turn、claim 或 lease；未资格化调用者保持原路径 | 无 Goal/default 发现、无 begin-turn 效果的显式历史文件读取 |
+| 父/子 hook 与原生重放资格 [LX1]/[LX3] | 保留子会话拒绝及未知/派生历史的原有回退 | 子会话不能写入或恢复父会话记忆/journal，未知宿主仍未资格化 |
+| 必需读取与历史材料资格 [LX4] | 记忆仅为建议，只缩减合格历史支持材料，不缩减当前必需内容 | 待读、实时纠正、未知字段、签名/off/机器场景保留原义务 |
+| 绑定路径的保留原文 [LX6] | 只宣称已验证的同机生命周期；来源丢失沿用原依赖/回退 | 验证所声明范围内的重启、清理、删除与撤销 |
+
+以上是实施验收义务，不是尚未实现功能已经通过兼容测试的结论。本文不向 main 加 parser，也不扩大默认宿主或产品入口。
 
 ## 6. 替代方案与取舍
 
@@ -149,7 +173,7 @@ flowchart LR
 
 ## 8. 迁移与回滚
 
-对一个明确资格化的本地宿主/profile 显式开启，不重写现有来源。shadow 检查阶段保存候选但不减少模型输入；该阶段只验证绑定，不验证效果。随后才在该 profile 上以短表示替换有资格移出的活动上下文材料，保留必需控制与精确展开。
+对一个明确资格化的本地宿主/profile 显式开启，不重写现有来源。shadow 检查阶段保存候选但不减少模型输入；该阶段只验证绑定，不验证效果。随后才在该 profile 上替换满足第 5.2 节资格的历史支持材料，保留必需控制、原读取义务与精确展开。资格未证明时，恢复仅是附加，不得报告为输入缩减。
 
 关闭后停止新的整理与采用，后续输入沿用现有交付。已承诺引用按声明生命周期可读，显式删除/撤销优先。所有宣称范围都要验证跨压缩、进程重启与正常清理后的保留；当前临时 capture 不自动成为持久记忆。必要时扩展现有保留 owner。本文不授权破坏性迁移或来源 GC 变更。
 
@@ -167,6 +191,8 @@ flowchart LR
 | A6 | 关闭、无收益、混合版本 | 关闭行为等价，无新增模型 IO；保留未知材料与机器/capture 契约。 |
 | A7 | 声明的重启/清理范围 | 承诺来源仍可解析；显式删除/撤销覆盖保留时，可见失效。 |
 | A8 | 打包后开启 → 压缩 → 查看来源/失败 → 关闭 | 现有设置与读回复用 typed owner；产品晋升前资格化受影响 frontend/Lark/CLI。单宿主原型仅为部分交付。 |
+| A9 | 同输入下的独立实验开关 | 未配置/关闭、开启但作用域外路径与 main 一致，覆盖设置失败、指令、可接受输入和 IO；仅 Progressive/Delta 开启不启用记忆。 |
+| A10 | 记忆独立不可变，原 reader 保留 | 发布、重试与降级后原 capture/reference 字节和读取义务不变；记忆不能确认原生 retention，也不能创建缺失 Turn。 |
 
 结构正确不能证明语义有用。本次文档 PR 不通过任何 A 项。
 
@@ -197,7 +223,7 @@ flowchart LR
 | 里程碑 | 可评审成果 | 进入条件与决定性退出证据 | 回滚 |
 | --- | --- | --- | --- |
 | M0：评审 | 明确压缩记忆假设、owner 分工与有界 profile | 当前源码核对；在相关步骤前解决 D1–D3；接受设计不启动执行 | 仅文档 |
-| M1：一条真实压缩路径 | 确定性稀疏视图在一个支持宿主保留或恢复，并精确展开原文 | 已资格化宿主契约与保留；A1–A7，加实际最终交付和原身份恢复 | 原宿主/恢复交付 |
+| M1：一条真实压缩路径 | 确定性稀疏视图在一个支持宿主保留或恢复，并精确展开原文；必需内容完整保留 | 独立局部作用域开关、已资格化宿主契约与保留；A1–A7/A9/A10，加实际最终交付和原身份恢复 | 原宿主/恢复交付 |
 | M2：效果比较 | B0/T1 成果与完整成本比较；只为已证明缺失的语义知识加入 T2 | 冻结样本/预算/阈值；第 9.2 节证据包含负结果 | 保留 B0 或 T1，不强制晋升 |
 | M3：产品资格 | 受影响入口可开启、查看、处理失败/恢复与关闭 | A8，混合版本与关闭等价；其他宿主和保留范围分别验收 | 关闭可选视图，保留有效引用 |
 
@@ -211,19 +237,23 @@ flowchart LR
 | D2 | 哪些发现、来源覆盖、保留范围与稀疏预算：从单 Goal 类型化调查结果与未决区别开始；未记录的精确纠正必须保留。schema/限额依据实测负载，不按字段数审美决定 | 上下文/历史/来源 owner，M1 前 |
 | D3 | 是否需要语义提取、何时执行：先做确定性 T1；对话独有知识使 T1 不足时，T2 复用有界且验证过的执行边界 | 历史/运行时 owner，语义实现或运行前 |
 | D4 | 样本、非劣界与实质收益标准：预先声明完整成本与结果标准，不照搬 CodeWiki/Manus 数字，不从更少字节推断成功 | T02/评估 owner，任何模型实验前 |
+| D5 | 实验开启/配置：优先显式局部作用域 profile；持久注册设置与 Progressive/Delta 分别资格化，覆盖旧 reader、关闭及作用域外等价 | 配置/原生宿主 owner，M1 开启前 |
 
 ## 附录 A：证据与决策记录
 
-- 静态核对：LoopX 指定来源位于 `0c3b2fd21800`；CodeWiki README/更新指南位于 `7fcf9354f70a5468bc739d849055f8cbab9d46aa`；Manus 使用已注明日期的一手文章。这不认证 Manus 当前闭源内部实现或上游实现质量。
-- 用户确认方向：压缩时保留可识别、更稀疏的结构，参考 AI4Code。Manus 在压缩时写记忆的确切行为仍是线索，不是已验证前提。
+- 静态核对：LoopX 指定来源已对 main `b9f2e2a516b58e62cbb0da6978625388322b5a90` 重查；最初五个源码文件从 `0c3b2fd21800` 起未变化。CodeWiki README/更新指南仍固定为 `7fcf9354f70a5468bc739d849055f8cbab9d46aa`；Manus 使用已注明日期的一手文章。这不认证 Manus 当前闭源内部实现或上游实现质量。
+- 用户确认方向：压缩时保留可识别、更稀疏的结构，参考 AI4Code，属于实验性功能。Manus 在压缩时写记忆的确切行为仍是线索，不是已验证前提。
 - AI 提议、尚未批准：schema、字段选取、宿主 profile、生命周期细节、阈值与实施顺序。未实施运行时/默认变更、付费/模型实验、收益测量、宿主安装验收或产品晋升。
 - 不替代 RFC、不删除已存字段、不关闭已有验收里程碑。真正执行后才创建对应日期账本。
 
 [CW1]: https://github.com/FSoft-AI4Code/CodeWiki/blob/7fcf9354f70a5468bc739d849055f8cbab9d46aa/README.md
 [CW2]: https://github.com/FSoft-AI4Code/CodeWiki/blob/7fcf9354f70a5468bc739d849055f8cbab9d46aa/guides/incremental-updates.md
 [M1]: https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus
-[LX1]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/quota/native_context_lifecycle.ts
-[LX2]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/turn_driver/codex_context.py
-[LX3]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/turn_driver/codex_context_history.py
-[LX4]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/quota/progressive_context.ts
-[LX5]: https://github.com/loopx-project/loopx/blob/0c3b2fd21800a536ccaa61bad85c4dd8257aad8e/loopx/control_plane/quota/context_delivery.ts
+[LX1]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/quota/native_context_lifecycle.ts
+[LX2]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/turn_driver/codex_context.py
+[LX3]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/turn_driver/codex_context_history.py
+[LX4]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/quota/progressive_context.ts
+[LX5]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/quota/context_delivery.ts
+[LX6]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/control_plane/turn_driver/decision_capture.py
+[LX7]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/capabilities/machine_configuration/context_delivery.py
+[LX8]: https://github.com/loopx-project/loopx/blob/b9f2e2a516b58e62cbb0da6978625388322b5a90/loopx/cli_commands/context_machine.py
