@@ -15,7 +15,7 @@ export const privateStewardScopeScenario = {
       beforeGoto: async (_api, page) => {
         await page.route("**/api/chat/projects", route => route.fulfill({json: projectsAvailable ? {ok: true,
           projects: [{project_ref: row.project_ref, title: row.project_title, grant: "workspace_write"}]} : {ok: true}}));
-        await page.route("**/api/chat/lark/private-conversations", async route => {
+        await page.route(url => url.pathname === "/api/chat/lark/private-conversations", async route => {
           if (route.request().method() === "POST") {
             const body = route.request().postDataJSON();
             if (body.app_ref !== row.app_ref || body.project_ref !== row.project_ref
@@ -29,7 +29,19 @@ export const privateStewardScopeScenario = {
             }
             Object.assign(row, {goal_scope: "all_registered", goal_count: 150});
           }
-          await route.fulfill({json: {ok: true, revision: writes.length + 1, connections: hasConnection ? [row, ...extraRows] : []}});
+          const revision = writes.length + 1;
+          const connections = hasConnection ? [row, ...extraRows] : [];
+          const query = new URL(route.request().url()).searchParams;
+          if (query.get("view") === "diagnostics") {
+            if (query.get("revision") !== String(revision)) {
+              throw new Error("Diagnostics did not use the displayed authorization revision");
+            }
+            const diagnostics = connections.map(({binding_id, listener_status, pending_count, recovery_count, ingress, owner_attention}) =>
+              ({binding_id, listener_status, pending_count, recovery_count, ingress, owner_attention}));
+            await route.fulfill({json: {ok: true, revision, connections: diagnostics, stop_recoveries: []}});
+            return;
+          }
+          await route.fulfill({json: {ok: true, revision, connections}});
         });
       },
     });
