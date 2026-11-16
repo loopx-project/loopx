@@ -4081,7 +4081,10 @@ def test_app_projection_checks_current_authority_after_reading_original_source(o
         runtime.close()
 
 
-def test_busy_app_body_does_not_delay_feedback_for_another_session(ordinary):  # noqa: F811
+@pytest.mark.parametrize("lock_at", ["read", "writeback"])
+def test_busy_app_body_does_not_delay_feedback_for_another_session(ordinary, monkeypatch, lock_at):  # noqa: F811
+    from contextlib import ExitStack
+
     from loopx.file_lock import exclusive_file_lock, lock_incident_path
 
     _store, runtime, provider, transport = connect(ordinary)
@@ -4107,13 +4110,34 @@ def test_busy_app_body_does_not_delay_feedback_for_another_session(ordinary):  #
             assert phase["verified"] and phase["feedback"] == {}
             targets[path] = (row["profile"], phase["attempt"]["message_ref"], "Get")
 
-        with exclusive_file_lock(busy, operation="deliver_web_conversation_projection"):
+        with ExitStack() as body_worker, monkeypatch.context() as patch:
+            body_lock = exclusive_file_lock(busy, operation="deliver_web_conversation_projection")
+            if lock_at == "read":
+                body_worker.enter_context(body_lock)
+            else:
+                feedback = transport._web_projection_feedback
+                busy_session = transport._read_web_projection_journal(busy)["session_id"]
+
+                def hold_body_after_feedback(row, message):
+                    feedback(row, message)
+                    if row["session_id"] == busy_session:
+                        assert targets[busy] in provider.reaction_creates
+                        body_worker.enter_context(body_lock)
+
+                patch.setattr(transport, "_web_projection_feedback", hold_body_after_feedback)
+
             transport.reconcile_app_feedback()
             assert not lock_incident_path(busy).exists()
-            assert targets[busy] not in provider.reaction_creates
+            busy_phase, = transport._read_web_projection_journal(busy)["deliveries"].values()
+            assert busy_phase["feedback"] == {}
+            assert (targets[busy] in provider.reaction_creates) == (lock_at == "writeback")
             assert targets[ready] in provider.reaction_creates
+            ready_phase, = transport._read_web_projection_journal(ready)["deliveries"].values()
+            assert ready_phase["feedback"]["ok"]
         transport.reconcile_app_feedback()
         assert all(provider.reaction_creates.count(target) == 1 for target in targets.values())
+        busy_phase, = transport._read_web_projection_journal(busy)["deliveries"].values()
+        assert busy_phase["feedback"]["ok"]
     finally:
         runtime.close()
 

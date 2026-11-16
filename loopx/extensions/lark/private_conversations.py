@@ -2151,12 +2151,7 @@ class LarkPrivateConversations:
                 return 0
 
     def reconcile_app_feedback(self) -> int:
-        """Reconcile optional reactions independently of the body outbox.
-
-        The live service reserves at most one existing reply worker for this
-        pass. A slow reaction must never own the body-delivery fence or prevent
-        a later canonical answer from reaching the same audience.
-        """
+        """Reconcile optional reactions independently of the body outbox."""
         if not self.reaction_feedback:
             return 0
         for path in sorted((self.root / "web-projections").glob("*.json")):
@@ -2191,7 +2186,11 @@ class LarkPrivateConversations:
                     self._web_projection_feedback(row, message)
                     if "feedback" not in phase or phase["feedback"] == prior_feedback:
                         continue
-                    with exclusive_file_lock(path, operation="record_web_input_feedback"):
+                    # The reaction has its own receipt. Defer writeback when
+                    # a body worker acquired the journal during provider I/O.
+                    with try_exclusive_file_lock(path, operation="record_web_input_feedback") as lock:
+                        if lock is None:
+                            continue
                         try:
                             current = self._read_web_projection_journal(path)
                         except (OSError, ValueError):
