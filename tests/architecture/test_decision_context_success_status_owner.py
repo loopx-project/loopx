@@ -9,16 +9,17 @@ Both consumers *already import* from ``freshness``, so borrowing the owner objec
 adds no new import edge and cannot introduce a cycle. Every site now references
 the single owner and the restated name is retired.
 
-Blocking checks are bound to the two known consumers' membership decisions:
-an ``in`` / ``not in`` comparand stating the folded set inline, or a name whose
-lexical binding -- resolved from the innermost enclosing scope outward -- is
-such a literal. Scope matters: two functions may reuse one spelling, one for
-display columns and one for the owner object, and only the binding visible at
-the decision counts. A binding alone decides nothing, and a name whose
-provenance cannot be resolved locally (an import, a parameter) is not evidence,
-so both stay with the whole-tree folded-value census as advisory output, never
-a failure (semantic-vocabulary-convergence-v0: equal value is not proof of one
-concept).
+Blocking checks are behavioural rather than shape-based. Both consumers import
+the owner object by identity, and every real decision site is exercised against
+an owner that accepts one extra status: the coverage counts, the freshness
+``last_read_at`` projection, the legacy spool status projection, and a full
+capture tick. A restated literal anywhere on those paths freezes at the stock
+two members, so the widened status falls back to "not success" (1 vs 0) and the
+probe fails. That is also why display-only memberships, locals rebound later in
+the same function, and bindings whose provenance cannot be proven are safe
+here: they decide nothing and stay with the whole-tree folded-value census as
+advisory output (equal value is not proof of one concept --
+semantic-vocabulary-convergence-v0).
 
 Behavioural parity runs through the owner's own ``source_freshness_row`` gate
 and the real ``_source_coverage`` report, so a migration that silently changed
@@ -28,7 +29,9 @@ which statuses count as success -- or reordered the report keys -- fails here.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
+import sqlite3
 import warnings
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -41,16 +44,23 @@ from loopx.capabilities.decision_context import (
     freshness as owner,
     sources as sources_mod,
 )
+from loopx.capabilities.decision_context.capture import capture_profile_sources
+from loopx.capabilities.decision_context.providers import (
+    LocalFileDecisionSourceProvider,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "loopx"
 OWNER_PATH = "loopx/capabilities/decision_context/freshness.py"
 CAPTURE_PATH = "loopx/capabilities/decision_context/capture.py"
-ASSEMBLER_PATH = "loopx/capabilities/decision_context/assembler.py"
 
 SUCCESS = frozenset({"completed", "no_change"})
 FAILURE = frozenset({"provider_failed", "failed", "unavailable"})
 SCAN_VOCABULARY = frozenset({"completed", "failed", "no_change", "unavailable"})
+
+# One vocabulary status the stock owner rejects. The probes widen the owner by
+# exactly this member: borrowers follow, a frozen copy keeps reporting 0.
+WIDENED_STATUS = "unavailable"
 
 
 def _members(node: ast.expr) -> frozenset[str] | None:
@@ -105,177 +115,6 @@ def _status_literal_sites(source: str) -> list[int]:
     ]
 
 
-class _Scope:
-    """One lexical scope: the module, a function, or a class body."""
-
-    def __init__(self, node: ast.AST, parent: "_Scope | None") -> None:
-        self.node = node
-        self.parent = parent
-        self.bindings: dict[str, ast.expr | None] = {}
-
-
-def _membership_sites(tree: ast.Module) -> list[tuple[ast.Compare, _Scope]]:
-    """Every ``in`` / ``not in`` comparison paired with its enclosing scope."""
-
-    found: list[tuple[ast.Compare, _Scope]] = []
-
-    def record(expr: ast.AST | None, scope: _Scope) -> None:
-        if expr is None:
-            return
-        for node in ast.walk(expr):
-            if isinstance(node, ast.Compare):
-                found.append((node, scope))
-
-    def bind(target: ast.expr, scope: _Scope, value: ast.expr | None = None) -> None:
-        if isinstance(target, ast.Name):
-            scope.bindings[target.id] = value
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for element in target.elts:
-                bind(element, scope)
-        elif isinstance(target, ast.Starred):
-            bind(target.value, scope)
-
-    def visit(body: list[ast.stmt], scope: _Scope) -> None:
-        for stmt in body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                scope.bindings[stmt.name] = None
-                # A class body is not a closure scope for the functions it
-                # defines, so skip it when building the lexical chain.
-                parent = scope
-                while isinstance(parent.node, ast.ClassDef):
-                    parent = parent.parent
-                inner = _Scope(stmt, parent)
-                for arg in (
-                    *stmt.args.posonlyargs,
-                    *stmt.args.args,
-                    *stmt.args.kwonlyargs,
-                    stmt.args.vararg,
-                    stmt.args.kwarg,
-                ):
-                    if arg is not None:
-                        inner.bindings[arg.arg] = None
-                for expr in (*stmt.decorator_list, *stmt.args.defaults):
-                    record(expr, scope)
-                for expr in stmt.args.kw_defaults:
-                    record(expr, scope)
-                visit(stmt.body, inner)
-            elif isinstance(stmt, ast.ClassDef):
-                scope.bindings[stmt.name] = None
-                inner = _Scope(stmt, scope)
-                for expr in (*stmt.decorator_list, *stmt.bases):
-                    record(expr, scope)
-                for keyword in stmt.keywords:
-                    record(keyword.value, scope)
-                visit(stmt.body, inner)
-            elif isinstance(stmt, ast.Assign):
-                record(stmt.value, scope)
-                for target in stmt.targets:
-                    bind(target, scope, stmt.value if isinstance(target, ast.Name) else None)
-            elif isinstance(stmt, ast.AnnAssign):
-                record(stmt.value, scope)
-                bind(stmt.target, scope, stmt.value if isinstance(stmt.target, ast.Name) else None)
-            elif isinstance(stmt, ast.AugAssign):
-                record(stmt.value, scope)
-                if isinstance(stmt.target, ast.Name) and stmt.target.id not in scope.bindings:
-                    scope.bindings[stmt.target.id] = None
-            elif isinstance(stmt, (ast.For, ast.AsyncFor)):
-                record(stmt.iter, scope)
-                bind(stmt.target, scope)
-                visit(stmt.body, scope)
-                visit(stmt.orelse, scope)
-            elif isinstance(stmt, ast.While):
-                record(stmt.test, scope)
-                visit(stmt.body, scope)
-                visit(stmt.orelse, scope)
-            elif isinstance(stmt, ast.If):
-                record(stmt.test, scope)
-                visit(stmt.body, scope)
-                visit(stmt.orelse, scope)
-            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
-                for item in stmt.items:
-                    record(item.context_expr, scope)
-                    if item.optional_vars is not None:
-                        bind(item.optional_vars, scope)
-                visit(stmt.body, scope)
-            elif isinstance(stmt, ast.Try):
-                visit(stmt.body, scope)
-                for handler in stmt.handlers:
-                    record(handler.type, scope)
-                    if handler.name:
-                        scope.bindings[handler.name] = None
-                    visit(handler.body, scope)
-                visit(stmt.orelse, scope)
-                visit(stmt.finalbody, scope)
-            elif isinstance(stmt, ast.Match):
-                record(stmt.subject, scope)
-                for case in stmt.cases:
-                    record(case.guard, scope)
-                    visit(case.body, scope)
-            elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
-                for alias in stmt.names:
-                    scope.bindings[alias.asname or alias.name.split(".")[0]] = None
-            else:
-                for child in ast.iter_child_nodes(stmt):
-                    if isinstance(child, ast.expr):
-                        record(child, scope)
-
-    module = _Scope(tree, None)
-    visit(tree.body, module)
-    return found
-
-
-def _binds_success_literal(name: str, scope: _Scope | None) -> bool:
-    """Whether ``name`` resolves, lexically, to a SUCCESS-folding literal.
-
-    The innermost enclosing scope wins, so two functions may reuse one spelling
-    for different things and only the binding visible at the decision counts.
-    Imports, parameters, and anything else without a literal binding anywhere
-    up the chain are unknown provenance: never a hard finding.
-    """
-
-    seen: set[tuple[str, int]] = set()
-    for _ in range(8):
-        holder = scope
-        while holder is not None and name not in holder.bindings:
-            holder = holder.parent
-        if holder is None or (name, id(holder)) in seen:
-            return False
-        seen.add((name, id(holder)))
-        value = holder.bindings[name]
-        if value is None:
-            return False
-        if _members(value) == SUCCESS:
-            return True
-        if not isinstance(value, ast.Name):
-            return False
-        name, scope = value.id, holder
-    return False
-
-
-def _decision_slot_sites(source: str) -> list[int]:
-    """SUCCESS restatements in status-decision slots, counted once.
-
-    A decision slot is an ``in`` / ``not in`` membership comparand: either a
-    collection literal folding to SUCCESS, or a name whose lexical binding is
-    such a literal. Bindings alone (display columns), iteration order, and
-    memberships over names of unknown provenance decide nothing and are left
-    to the advisory census.
-    """
-
-    sites: list[int] = []
-    for compare, scope in _membership_sites(ast.parse(source)):
-        for op, comparand in zip(compare.ops, compare.comparators):
-            if not isinstance(op, (ast.In, ast.NotIn)):
-                continue
-            if _members(comparand) == SUCCESS:
-                sites.append(comparand.lineno)
-            elif isinstance(comparand, ast.Name) and _binds_success_literal(
-                comparand.id, scope
-            ):
-                sites.append(comparand.lineno)
-    return sorted(sites)
-
-
 @pytest.fixture(scope="module")
 def tree_offenders() -> dict[str, list[int]]:
     offenders: dict[str, list[int]] = {}
@@ -316,13 +155,6 @@ def test_assembler_borrows_the_owner_object() -> None:
 def test_capture_retired_its_restated_name() -> None:
     assert not hasattr(capture_mod, "_READ_SUCCESS_STATUSES")
     source = (REPO_ROOT / CAPTURE_PATH).read_text(encoding="utf-8")
-    assert _decision_slot_sites(source) == []
-    assert "_SUCCESS_STATUSES" in source
-
-
-def test_assembler_has_no_restated_success_decision() -> None:
-    source = (REPO_ROOT / ASSEMBLER_PATH).read_text(encoding="utf-8")
-    assert _decision_slot_sites(source) == []
     assert "_SUCCESS_STATUSES" in source
 
 
@@ -446,89 +278,216 @@ def test_successful_read_consumers_keep_observable_semantics() -> None:
     assert report["complete"] is False
 
 
-def test_same_value_without_same_slot_remains_advisory() -> None:
-    # The reviewer counterexamples: each folds to SUCCESS somewhere in display
-    # data, so the advisory census sees the literal -- but no decision is on a
-    # restated set, so the hard check stays silent.
-    starred_report = (
-        'for status in (*("completed", "no_change"), "failed", "unavailable"):\n'
-        "    pass\n"
-    )
-    assert _status_literal_sites(starred_report) == [1]
-    assert _decision_slot_sites(starred_report) == []
-    named_columns = (
-        'success_columns = ("completed", "no_change")\n'
-        'for status in (*success_columns, "failed", "unavailable"):\n'
-        "    pass\n"
-    )
-    assert _status_literal_sites(named_columns) == [1]
-    assert _decision_slot_sites(named_columns) == []
-    # One spelling, two functions, two roles: the report keeps display columns
-    # in a local ``statuses`` while freshness aliases the owner under the same
-    # name. Resolution is per scope, so neither site is a restatement.
-    shared_spelling = (
-        "def report():\n"
-        '    statuses = ("completed", "no_change")\n'
-        '    return (*statuses, "failed", "unavailable")\n'
-        "\n"
-        "def fresh(attempt):\n"
-        "    statuses = _SUCCESS_STATUSES\n"
-        "    return attempt in statuses\n"
-    )
-    assert _status_literal_sites(shared_spelling) == [2]
-    assert _decision_slot_sites(shared_spelling) == []
-    # A parameter shadows any outer binding of the same spelling: unknown
-    # provenance at the decision, so it stays advisory.
-    shadowed_parameter = (
-        '_statuses = ("completed", "no_change")\n'
-        "def f(_statuses):\n"
-        "    return status in _statuses\n"
-    )
-    assert _decision_slot_sites(shadowed_parameter) == []
+# --- the widened-owner probes: every real decision site must borrow, not copy ----------
 
 
-# --- the census bites every restatement form; the hard check bites decisions only -------
+@pytest.fixture
+def widened_owner(monkeypatch) -> frozenset[str]:
+    """Model the owner accepting one more status; only borrowers can follow.
+
+    Rebinding each module attribute is the runtime equivalent of editing the
+    owner definition: consumers hold the same object in production, so a new
+    literal copy at a decision site is the only thing that stays behind.
+    """
+
+    widened = frozenset({*SUCCESS, WIDENED_STATUS})
+    assert capture_mod._SUCCESS_STATUSES is owner._SUCCESS_STATUSES
+    assert assembler_mod._SUCCESS_STATUSES is owner._SUCCESS_STATUSES
+    for module in (owner, capture_mod, assembler_mod):
+        monkeypatch.setattr(module, "_SUCCESS_STATUSES", widened)
+    return widened
+
+
+def _collected(status: str):
+    return assembler_mod._CollectedSource(
+        source=_spec(),
+        scan=sources_mod.DecisionSourceScan(
+            provider_id="source-provider",
+            source_id="source:owner",
+            status=status,
+            observed_at=OBSERVED_AT.isoformat(),
+            requested_limit=1,
+        ),
+        exact_reads=(),
+        exact_read_failed=False,
+        receipt={},
+    )
+
+
+def test_the_widened_status_is_not_success_for_the_stock_owner() -> None:
+    # The premise of the probe: the stock owner rejects this status, so a
+    # borrower reports 1 after widening while a frozen copy keeps reporting 0.
+    report = assembler_mod._source_coverage((_collected(WIDENED_STATUS),))
+    assert report["priority_rows"][0]["complete_count"] == 0
+    assert report["incomplete_required_source_ids"] == ["source:owner"]
+    assert report["status"] == "incomplete"
+
+
+def test_coverage_follows_the_owner_when_it_widens(widened_owner) -> None:
+    report = assembler_mod._source_coverage((_collected(WIDENED_STATUS),))
+    assert report["priority_rows"][0]["complete_count"] == 1
+    assert report["incomplete_required_source_ids"] == []
+    assert report["status"] == "complete"
+
+
+def test_freshness_follows_the_owner_when_it_widens(widened_owner) -> None:
+    report = assembler_mod._assembly_source_freshness(
+        collected_sources=(_collected(WIDENED_STATUS),),
+        coverage_sources=(_spec(),),
+        assembly_time=OBSERVED_AT,
+    )
+    row = report["sources"][0]
+    assert row["last_attempt_status"] == WIDENED_STATUS
+    assert row["last_read_at"] == OBSERVED_AT.isoformat()
+    assert row["alert"] is False
+
+
+def _legacy_spool(status: str) -> sqlite3.Connection:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        """
+        CREATE TABLE sources (
+            source_id TEXT PRIMARY KEY,
+            checked_at TEXT,
+            status TEXT,
+            cursor TEXT,
+            binding_digest TEXT
+        );
+        CREATE TABLE batches (id INTEGER PRIMARY KEY, source_id TEXT);
+        """
+    )
+    db.execute(
+        "INSERT INTO sources VALUES (?, ?, ?, ?, ?)",
+        ("source:owner", OBSERVED_AT.isoformat(), status, None, None),
+    )
+    return db
+
+
+def test_legacy_spool_projection_follows_the_owner_when_it_widens(
+    widened_owner,
+) -> None:
+    projection = capture_mod._status(
+        _legacy_spool(WIDENED_STATUS), (_spec(),), now=OBSERVED_AT, capacity=10
+    )
+    row = projection["sources"][0]
+    assert row["status"] == WIDENED_STATUS
+    assert row["last_read_at"] == OBSERVED_AT.isoformat()
+    assert row["freshness"] == "fresh"
+
+
+def _capture_profile(authority: pathlib.Path) -> dict[str, object]:
+    return {
+        "schema_version": "decision_context_profile_v0",
+        "goal_id": "example-decision-goal",
+        "enabled": True,
+        "enabled_agents": ["example-agent"],
+        "source_provider_bindings": [
+            {
+                "provider_id": "local-authority",
+                "adapter": "local-file",
+                "config": {"max_bytes": 4096},
+            }
+        ],
+        "sources": [
+            {
+                "source_id": "source:authority:baseline",
+                "provider_id": "local-authority",
+                "source_kind": "artifact",
+                "priority": "p0",
+                "evidence_level": "s3",
+                "objectives": ["delivery-quality", "product-adoption"],
+                "scan_mode": "incremental",
+                "exact_read_policy": "material_change",
+                "freshness_seconds": 3 * 24 * 60 * 60,
+                "private_locator": str(authority),
+                "max_changes": 8,
+                "enabled": True,
+            }
+        ],
+        "context_provider": None,
+        "automation": {
+            "automatic_capture": True,
+            "fail_open": True,
+            "source_ids": ["source:authority:baseline"],
+        },
+    }
+
+
+class _WidenedStatusProvider(LocalFileDecisionSourceProvider):
+    """Report the widened status on a scan the capture tick otherwise accepts."""
+
+    def scan(self, **kwargs):
+        base = super().scan(**kwargs)
+        return replace(
+            base,
+            status=WIDENED_STATUS,
+            reason_code="owner_widened_probe",
+            items=(),
+            cursor_after=f"{base.cursor_after}:owner-probe",
+        )
+
+
+def test_capture_tick_follows_the_owner_when_it_widens(
+    widened_owner, tmp_path
+) -> None:
+    authority = tmp_path / "authority.txt"
+    authority.write_text("private-body-not-for-spool")
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_capture_profile(authority)))
+    spool_path = tmp_path / "spool.sqlite"
+
+    result = capture_profile_sources(
+        goal_id="example-decision-goal",
+        agent_id="example-agent",
+        profile_path=profile_path,
+        spool_path=spool_path,
+        cursor_path=tmp_path / "reviewed.json",
+        execute=True,
+        source_provider_overrides={
+            "local-authority": _WidenedStatusProvider(
+                provider_id="local-authority", max_bytes=4096
+            )
+        },
+    )
+    # A frozen copy of the stock set advances neither the cursor nor the
+    # success time: the batch count and last_read_at both fall to 0/None.
+    assert result["sources"][0]["status"] == WIDENED_STATUS
+    assert result["pending_batch_count"] == 1
+    assert result["sources"][0]["last_read_at"] is not None
+    with sqlite3.connect(spool_path) as db:
+        cursor = db.execute("SELECT cursor FROM sources").fetchone()[0]
+    assert cursor.endswith(":owner-probe")
+
+
+# --- the advisory census folds every same-value form -----------------------------------
 
 POISON_CORPUS = (
-    ("inline membership restatement", 'def f(status):\n    return status in {"completed", "no_change"}\n', 1, 1),
-    ("negative membership is a decision too", 'def f(status):\n    return status not in {"completed", "no_change"}\n', 1, 1),
-    ("frozenset call in membership", 'def f(status):\n    return status in frozenset({"completed", "no_change"})\n', 1, 1),
-    ("set call over a list in membership", 'def f(status):\n    return status in set(["completed", "no_change"])\n', 1, 1),
-    ("list comparand", 'def f(status):\n    return status in ["completed", "no_change"]\n', 1, 1),
-    ("tuple comparand", 'def f(status):\n    return status in ("completed", "no_change")\n', 1, 1),
-    ("reordered members fold the same", 'def f(status):\n    return status in {"no_change", "completed"}\n', 1, 1),
-    ("renamed binding decided through is still caught", '_ANY = {"completed", "no_change"}\ndef f(status):\n    return status in _ANY\n', 1, 1),
-    ("annotated binding decided through is still caught", '_ANY: frozenset = frozenset({"completed", "no_change"})\ndef f(status):\n    return status in _ANY\n', 1, 1),
-    ("the retired capture shape is still caught", '_READ_SUCCESS_STATUSES = frozenset({"completed", "no_change"})\nif source["status"] in _READ_SUCCESS_STATUSES:\n    pass\n', 1, 1),
-    ("a display binding alone is advisory only", 'X = {"completed", "no_change"}\n', 1, 0),
-    ("a renamed display binding alone is advisory only", '_ANY = {"completed", "no_change"}\n', 1, 0),
-    ("the starred report regrouping is advisory only", 'for status in (*("completed", "no_change"), "failed", "unavailable"):\n    pass\n', 1, 0),
-    ("named display columns are advisory only", 'success_columns = ("completed", "no_change")\nfor status in (*success_columns, "failed", "unavailable"):\n    pass\n', 1, 0),
-    ("iterating the success pair for display is advisory only", 'for status in ("completed", "no_change"):\n    pass\n', 1, 0),
-    ("a function-local literal is still a restatement", 'def f(status):\n    _R = ("completed", "no_change")\n    return status in _R\n', 1, 1),
-    ("a local alias of a restated literal is still caught", '_ANY = ("completed", "no_change")\ndef f(status):\n    _R = _ANY\n    return status in _R\n', 1, 1),
-    ("a closure sees the module restatement", '_ANY = ("completed", "no_change")\ndef outer():\n    def inner(status):\n        return status in _ANY\n', 1, 1),
-    ("importing the owner is not a restatement", "from .m import _SUCCESS_STATUSES\n", 0, 0),
-    ("alias rebind is not a restatement", "_READ_SUCCESS_STATUSES = _SUCCESS_STATUSES\n", 0, 0),
-    ("deciding through an alias of the owner is legal", "_ALIAS = _SUCCESS_STATUSES\ndef f(status):\n    return status in _ALIAS\n", 0, 0),
-    ("a local alias of the owner is not a restatement", 'from .freshness import _SUCCESS_STATUSES\ndef f(status):\n    statuses = _SUCCESS_STATUSES\n    return status in statuses\n', 0, 0),
-    ("an attribute of the owner is not a restatement", 'import freshness\ndef f(status):\n    return status in freshness._SUCCESS_STATUSES\n', 0, 0),
-    ("two functions share one spelling for different roles", 'def report():\n    statuses = ("completed", "no_change")\n    return (*statuses, "failed", "unavailable")\n\ndef fresh(attempt):\n    statuses = _SUCCESS_STATUSES\n    return attempt in statuses\n', 1, 0),
-    ("a parameter shadows a module restatement", 'X = ("completed", "no_change")\ndef f(X):\n    return status in X\n', 1, 0),
-    ("the full scan vocabulary is not this set", '_SCAN = {"completed", "failed", "no_change", "unavailable"}\n', 0, 0),
-    ("the ordered report tuple is not this set", 'X = ("completed", "no_change", "failed", "unavailable")\n', 0, 0),
-    ("a superset is not this set", 'X = {"completed", "no_change", "failed"}\n', 0, 0),
-    ("a single status is not this set", 'X = {"completed"}\n', 0, 0),
+    ("bare set restatement", 'X = {"completed", "no_change"}\n', 1),
+    ("frozenset call", 'X = frozenset({"completed", "no_change"})\n', 1),
+    ("set call over a list", 'X = set(["completed", "no_change"])\n', 1),
+    ("list literal", 'X = ["completed", "no_change"]\n', 1),
+    ("tuple literal", 'X = ("completed", "no_change")\n', 1),
+    ("reordered members fold the same", 'X = {"no_change", "completed"}\n', 1),
+    ("nested inside a function", 'def f():\n    return {"completed", "no_change"}\n', 1),
+    ("display filter over column names", 'cols = [s for s in all_statuses if s in {"completed", "no_change"}]\n', 1),
+    ("named display columns expanded into the report", 'success_columns = ("completed", "no_change")\nfor status in (*success_columns, "failed", "unavailable"):\n    pass\n', 1),
+    ("starred inline report", 'for status in (*("completed", "no_change"), "failed", "unavailable"):\n    pass\n', 1),
+    ("importing the owner is not a restatement", "from .m import _SUCCESS_STATUSES\n", 0),
+    ("alias rebind of the owner is not a restatement", "_READ_SUCCESS_STATUSES = _SUCCESS_STATUSES\n", 0),
+    ("the full scan vocabulary is not this set", '_SCAN = {"completed", "failed", "no_change", "unavailable"}\n', 0),
+    ("the ordered report tuple is not this set", 'X = ("completed", "no_change", "failed", "unavailable")\n', 0),
+    ("a superset is not this set", 'X = {"completed", "no_change", "failed"}\n', 0),
+    ("a single status is not this set", 'X = {"completed"}\n', 0),
 )
 
 
 @pytest.mark.parametrize(
-    "label,source,census_expected,slots_expected",
+    "label,source,expected",
     POISON_CORPUS,
     ids=[case[0] for case in POISON_CORPUS],
 )
-def test_census_and_decision_slots_classify_every_form(
-    label: str, source: str, census_expected: int, slots_expected: int
+def test_the_census_names_every_form_and_leaves_the_others(
+    label: str, source: str, expected: int
 ) -> None:
-    assert len(_status_literal_sites(source)) == census_expected, label
-    assert len(_decision_slot_sites(source)) == slots_expected, label
+    assert len(_status_literal_sites(source)) == expected, label
