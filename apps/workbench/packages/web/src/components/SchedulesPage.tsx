@@ -88,12 +88,13 @@ function presetFromCron(cron: string): { preset: Preset; time: string; weekday: 
   if (parts.length !== 5) return base;
   const [m, h, dom, mon, dow] = parts;
   if (mon !== '*' || dom !== '*' || m === '*') return base;
-  const time = `${pad(Number(h))}:${pad(Number(m))}`;
-  if (/^\*\/\d+$/.test(m) && h === '*' && dow === '*') return { ...base, preset: 'minutes', interval: m.slice(2) };
-  const shaped = { ...base, time: parseTime(`${h}:${m}`) ? time : '09:00' };
-  if (h !== '*' && dow === '*') return { ...shaped, preset: 'daily' };
+  if (/^\*\/\d+$/.test(m) && Number(m.slice(2)) >= 1 && Number(m.slice(2)) <= 59 && h === '*' && dow === '*') return { ...base, preset: 'minutes', interval: m.slice(2) };
+  const at = parseTime(`${h}:${m}`);
+  if (!at) return base;
+  const shaped = { ...base, time: `${pad(at[0])}:${pad(at[1])}` };
+  if (dow === '*') return { ...shaped, preset: 'daily' };
   if (dow === '1-5') return { ...shaped, preset: 'weekdays' };
-  if (/^\d$/.test(dow)) return { ...shaped, preset: 'weekly', weekday: Number(dow) };
+  if (/^[0-6]$/.test(dow)) return { ...shaped, preset: 'weekly', weekday: Number(dow) };
   return base;
 }
 
