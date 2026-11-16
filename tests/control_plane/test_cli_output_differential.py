@@ -2255,6 +2255,9 @@ def _quota_source_rows(output_format="json", *, variant=None, scenario="small"):
         head.update(action_signature_sha256=None, action_signature_coverages=[],
             semantic_json_keys=["schema_version", "contract_binding", "interaction_contract", "selected_todo"])
     head["quota_controls"]["source_schema"] = "loopx_turn_envelope_v1"
+    if not legacy:
+        base["projection_envelope_schema_versions"] = ["loopx_projection_envelope_v0"]
+        head["projection_envelope_schema_versions"] = ["loopx_projection_envelope_v2"]
     return base, head
 
 
@@ -2297,7 +2300,8 @@ def test_complete_quota_migration_never_waives_explicit_off_carrier(output_forma
 
 
 @pytest.mark.parametrize("damage", ["wrong-goal", "dropped-read", "missing-field", "missing-witness", "wrong-carrier",
-    "same-source-version", "other-surface", "other-variant", "wrong-heading", "split-format"])
+    "same-source-version", "other-surface", "other-variant", "wrong-heading", "split-format",
+    "unknown-projection", "mixed-projection"])
 def test_complete_quota_migration_never_waives_changed_or_unknown_controls(damage):
     from loopx.control_plane.testing.cli_output_differential import _compare_row
     base, head = _quota_source_rows()
@@ -2323,6 +2327,10 @@ def test_complete_quota_migration_never_waives_changed_or_unknown_controls(damag
         head["markdown_anchor"] = "# Unrelated heading"
     elif damage == "split-format":
         head["format"] = "markdown"
+    elif damage == "unknown-projection":
+        head["projection_envelope_schema_versions"] = ["loopx_projection_envelope_v3"]
+    elif damage == "mixed-projection":
+        head["projection_envelope_schema_versions"].append("loopx_projection_envelope_v0")
     assert _compare_row(base, head)["failures"]
 
 

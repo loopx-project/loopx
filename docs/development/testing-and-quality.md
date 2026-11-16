@@ -1413,6 +1413,46 @@ workflow costs less.
 
 ### Budget Failure Decisions
 
+The default quota source and its detail selectors now carry complete v1 in both
+JSON and Markdown. The same frozen public fixture with context delivery Off
+measures the following characters at `main@0c3b2fd2` and C1's default-source
+tree integrated with that main revision:
+
+| Fixture | Main JSON / Markdown | Complete v1 JSON / Markdown | Markdown allowance |
+| --- | ---: | ---: | ---: |
+| Small | 23,289 / 7,476 | 22,931 / 22,954 | 24,000 |
+| Crowded | 42,349 / 8,143 | 42,223 / 42,325 | 43,000 |
+| Multi-agent | 25,514 / 6,441 | 26,239 / 26,339 | 27,000 |
+
+Retain the original 10,000 / 17,000 / 7,000 Markdown failures. The small native
+Windows observation is 23,254, leaving 746 characters under its new allowance.
+The six detail selectors measure 23,066, 23,889 or 23,927 Markdown characters; their
+allowances are 24,000 or 24,500 respectively. JSON, line, collection-growth and
+explicit v0 compatibility limits retain their existing values. Production
+output retains the measured complete source and its cost.
+
+Qualification requires the complete source version and binding in both formats,
+including rejection of a heading without its JSON carrier, an old version and
+missing binding or interaction fields. The differential recognizes the exact
+v0-to-v1 quota cutover with its reversible derived v2 projection only when all
+19 current-control witnesses match; it still reports a review signal. Changed
+controls, unknown/mixed projection versions and later growth remain rejected.
+These fixture measurements characterize the presentation change. Full native
+Windows qualification, actual model use and outcome/cost comparisons remain
+separate evidence.
+
+默认 quota 及其 detail 选择器的 JSON、Markdown 都承载完整 v1。上表使用同一冻结
+公开夹具并关闭渐进交付，保留原 Markdown 10,000 / 17,000 / 7,000 超限事实。
+原生 Windows 小场景实测 23,254，新 24,000 呈现预算留 746 字符余量。六个 detail
+选择器实测 23,066、23,889 或 23,927，对应预算 24,000 或 24,500。JSON、行数、集合增长、
+显式 v0 兼容上限及生产正文保留，完整来源的实际交付成本按实测展示。
+
+两种格式均检查当前完整版本及绑定，拒绝仅有标题、旧版本、缺少绑定或交互合同。
+差分仅在 19 项当前控制见证一致时识别 quota v0→v1 及其可逆的 derived v2 投影，
+仍输出人工评审信号；控制变化、未知或混合投影版本及后续增长继续拒绝。
+这些证据限定于呈现夹具。完整原生 Windows、模型实际采用及成果与完整成本仍需
+各自验证。
+
 The thin heartbeat's 4,500-character presentation allowance did not cover the
 complete combination of a 320-character scope, all five runtime capability
 flags, Codex App transport and an explicit CLI route. The existing public CLI

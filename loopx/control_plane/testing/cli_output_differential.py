@@ -805,6 +805,12 @@ def _projection_envelope_migration(
             else migration_allowance.markdown
         )
         return allowance, [], ["projection envelope schema migrated: none -> loopx_projection_envelope_v0"]
+    if (before == ("loopx_projection_envelope_v0",)
+            and after == ("loopx_projection_envelope_v2",)
+            and _complete_quota_source_migration(base, candidate)):
+        return {}, [], [
+            "Complete quota source uses the derived v2 projection; matching fixture controls require review"
+        ]
     return {}, ["projection envelope schema coverage changed"], []
 
 
