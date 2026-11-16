@@ -195,6 +195,7 @@ rl.on('line', (line) => {
     return;
   }
 
+  if (process.env.FAKE_ACP_REQUEST_LOG) appendFileSync(process.env.FAKE_ACP_REQUEST_LOG, JSON.stringify({ method: msg.method }) + '\n');
   switch (msg.method) {
     case 'initialize':
       return out({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: {} } });
@@ -344,6 +345,7 @@ rl.on('line', (line) => {
       out({ jsonrpc: '2.0', id: msg.id, result: {} }); return;
     }
     case 'session/prompt': {
+      if (process.env.FAKE_ACP_HOLD_PROMPT === '1') return;
       recordSession(dsh ? 'dsh' : traex ? 'traex' : 'claude', msg.params.sessionId);
       const blocks = msg.params.prompt;
       const text = blocks.filter((p) => p.type === 'text').map((p) => p.text).join('');

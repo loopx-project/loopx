@@ -98,7 +98,8 @@ test('ClaudeAcpAdapter: prompt streams events and returns end_turn', async () =>
   const result = await session.prompt(turn('hello'), hooks);
   assert.deepEqual(result, { stopReason: 'end_turn' });
   const types = events.map((e) => e.type);
-  assert.deepEqual(types, ['reasoning.delta', 'tool.start', 'tool.end', 'message.delta']);
+  assert.deepEqual(types, ['turn.phase', 'reasoning.delta', 'tool.start', 'tool.end', 'message.delta']);
+  assert.deepEqual(events[0].data, { phase: 'prompt_sent' });
   assert.equal(events.at(-1)?.data.text, 'echo:hello');
   await session.close();
 });

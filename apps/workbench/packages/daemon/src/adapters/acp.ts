@@ -506,6 +506,7 @@ export class AcpSession implements AgentSession {
     this.costReported = false;
     try {
       await live?.start();
+      hooks.emit({ type: 'turn.phase', data: { phase: 'prompt_sent' } });
       const response = this.peer.request('session/prompt', {
         sessionId: this.agentSessionId,
         prompt: [
@@ -548,6 +549,7 @@ export class AcpSession implements AgentSession {
 
 /** Everything an ACP agent has in common. The agent-specific parts are the abstract members. */
 export abstract class AcpAdapter implements AgentAdapter {
+  readonly reportsPromptSent = true;
   protected liveUsage(_id: string, _cwd: string, _emit: (sample: UsageSample) => void): LiveUsage | undefined { return undefined; }
   /** Plan usage observed in-band, as the agent answers; wired by whoever owns the adapter. */
   onQuotaObserved?: (quota: PlanQuota) => void;
