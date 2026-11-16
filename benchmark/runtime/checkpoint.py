@@ -285,10 +285,23 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         view_path = capture_root / "checkpoint-start-view.json"
         view = guard_run.stdout
         atomic_write_state_text(view_path, view, private=True)
-        reader = bounded_read(view_path, view.encode("utf-8"))
-        reading = ("Read the saved CLI view before work and follow its action, required reads and settlement instructions. "
-            "Use the original capture for selection, replan or omitted details.\n```sh\n" + reader + "\n```\n"
-            + CONTEXT_CAPTURE_PAGE_GUIDANCE + " ")
+        view_reader = f"```sh\n{bounded_read(view_path, view.encode('utf-8'))}\n```\n"
+        if display.turn_envelope:
+            source_reader = bounded_read(source_path, raw_guard)
+            reading = (
+                "Read the saved CLI view before work and follow its action, required reads and settlement instructions.\n"
+                + view_reader
+                + "Use the original capture for selection, replan or omitted details. For Todo selection, append "
+                "`--select /interaction_contract/cli_channel/selection_command` to this reader.\n"
+                f"```sh\n{source_reader}\n```\n"
+            )
+        else:
+            reading = (
+                "Read the complete saved CLI view before work, then follow its interaction_contract "
+                "and complete the replan review and writeback reads when present.\n"
+                + view_reader
+            )
+        reading += CONTEXT_CAPTURE_PAGE_GUIDANCE + " "
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)

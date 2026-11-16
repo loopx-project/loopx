@@ -206,10 +206,12 @@ With context delivery off, the worker supplies a bounded, digest-checked reader
 for the saved CLI view. Each preflight stores its view in its own
 capture directory, so a retry of the same Turn preserves previously issued
 page cursors. Follow those cursors before using the original Turn's instructions.
-An explicit short envelope keeps its v0 display and same-Turn selection flags.
-The checkpoint selector uses the original signed capture in all cases.
-The short view also supplies a paged read of that source for required
-fields such as the original Todo selection command.
+The default full view supplies the interaction contract, including any required
+replan review and writeback reads. An explicit short envelope keeps its v0
+display and same-Turn selection flags. Its prompt also supplies a bounded reader
+for the original signed capture. For Todo selection, append
+`--select /interaction_contract/cli_channel/selection_command` to that reader.
+The checkpoint selector uses the original signed capture in both cases.
 Reading the saved view requires no hooks and performs no new admission.
 Include the projection command, descriptor, recovery and page reads in subsequent
 total-cost comparisons.

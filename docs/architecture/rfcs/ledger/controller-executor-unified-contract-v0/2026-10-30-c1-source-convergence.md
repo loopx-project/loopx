@@ -3331,6 +3331,21 @@ At `e9339babfc71`, the prompt omitted the action clause in four explicit
 legacy view cases across File and SQLite. The same cases verify the returned
 reader command, its saved source, and the prompt after one guard.
 
+At `f220690bef2f`, the default full-view prompt omitted the instruction to
+follow the interaction contract. The explicit Off short view needed a
+bounded route to its original Todo selection command. The prompt now
+preserves the full view's replan review and writeback reads when present.
+The v0 prompt supplies a digest-checked reader for specific fields in the
+original capture.
+
+On File and SQLite, a direct read of the complete original capture returned
+31,497–31,509 bytes. The reader returned the Todo selection command in
+2,049–2,055 bytes. Including the preflight prompt and saved-view pages,
+the full-source route used 47,449–47,479 bytes and the field selection used
+18,756–18,782 bytes. The CLI cases followed the selected command on the
+original Turn, refused an incorrect digest, and recorded zero debits. Model
+outcomes and end-to-end costs remain open.
+
 ### Use the explicit PowerShell launcher for bounded quota recovery
 
 The shared command resolver accepts an existing script at an explicit

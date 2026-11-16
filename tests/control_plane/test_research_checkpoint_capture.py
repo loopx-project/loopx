@@ -274,8 +274,12 @@ def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, prov
         assert page["sha256"] == hashlib.sha256(source_bytes).hexdigest()
         [field] = json.loads(page["content"])["selections"]
         assert field["pointer"] == pointer
-        assert field["value"] == original["interaction_contract"]["cli_channel"]["selection_command"]
-        assert "--turn-envelope" in field["value"]["command_args_template"]
+        selection = field["value"]
+        assert selection == original["interaction_contract"]["cli_channel"]["selection_command"]
+        assert "--turn-envelope" in selection["command_args_template"]
+        argv[argv.index("--capture-sha256") + 1] = "0" * 64
+        invalid = subprocess.run(argv, cwd=project, env=env, capture_output=True, timeout=30)
+        assert invalid.returncode == 1 and not json.loads(invalid.stdout)["ok"]
     else:
         assert not source_commands
         assert pages > 1
@@ -303,6 +307,20 @@ def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, prov
     assert invalid.returncode == 1 and not json.loads(invalid.stdout)["ok"]
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
     assert cli._spend_run_count(runtime) == 0
+    if legacy_display:
+        args = selection["command_args_template"].replace("{todo_id}", cli.ALTERNATIVE_TODO_ID)
+        argv = shlex.split(selection["route_prefix"]) + shlex.split(args)
+        selected = subprocess.run(argv, cwd=project, env=env, capture_output=True, check=True, timeout=30)
+        chosen_view = json.loads(selected.stdout)
+        assert chosen_view["schema_version"] == "loopx_turn_envelope_v0"
+        chosen_source = Path(chosen_view["detail_ref"]["captured_decision"]["path"])
+        chosen = json.loads(chosen_source.read_bytes())
+        assert_complete_turn_decision(chosen)
+        assert chosen["selected_todo"]["todo_id"] == cli.ALTERNATIVE_TODO_ID
+        assert chosen["heartbeat_receipt"]["turn_instance_id"] == turn
+        assert source.read_bytes() == source_bytes
+        assert cli._heartbeat_receipt_count(runtime, turn) == 2
+        assert cli._spend_run_count(runtime) == 0
 
 
 def test_closed_budget_never_reads_the_request_or_replays_work(monkeypatch):
