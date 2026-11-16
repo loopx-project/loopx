@@ -47,11 +47,15 @@ compile``) not rebound by a local parameter or assignment, so an independent
 object's ``.compile()`` that renders help text is not a rule, and the body is read
 from the positional arg *or* the ``pattern=`` keyword so a real
 ``re.compile(pattern=...)`` duplicate is not missed; and (3) compares the
-**compiled rule** ``(body, flags)`` with ``re.UNICODE`` normalised away (it is the
-str-pattern default, so an explicit-Unicode compile equals a flagless one), while
-a genuinely different flag such as ``re.IGNORECASE`` is a different rule. Anything
-unresolved -- a shadowed binding, ``**opts`` flags, a non-literal body -- is left
-*unknown* and never reported, so only provably-equivalent copies are flagged. A
+**compiled rule** ``(body, flags)``, folding a flag only when its source is
+confirmably the stdlib ``re`` module -- the ``re`` object itself, a module-level
+alias, or a name imported from ``re`` -- and normalising ``re.UNICODE`` away (it is
+the str-pattern default, so a stdlib explicit-Unicode compile equals a flagless
+one), while a genuinely different flag such as ``re.IGNORECASE`` is a different
+rule. Anything unresolved -- a shadowed binding, a same-named attribute on an
+independent object (``ImportFlags.UNICODE`` that really binds ``re.IGNORECASE``),
+``**opts`` flags, a non-literal body -- is left *unknown* and never reported, so
+only provably-equivalent copies are flagged. A
 true restatement -- a reward-memory module that re-compiles the identical body
 instead of importing the owner -- is still caught, and the accept/reject behaviour
 is pinned through both modules' own validators below.
@@ -279,30 +283,54 @@ def body_literal_sites(source: str, body: str) -> list[int]:
     return _sites(_analyse(source), "", "body", body)[1]
 
 
-def _flag_value(node: ast.expr) -> int | None:
-    """Statically evaluate an ``re`` flag expression to an int, or None if unknown."""
+def _flag_value(
+    node: ast.expr,
+    module_names: frozenset[str],
+    from_re_origins: dict[str, str],
+) -> int | None:
+    """Statically evaluate an ``re`` flag expression to an int, or None if unknown.
+
+    The flag's *source* must be confirmable. ``re.UNICODE`` -- or an unshadowed
+    ``import re as rx`` alias -- is read only when the object really is the ``re``
+    module; a same-named attribute on an independent object, such as
+    ``ImportFlags.UNICODE`` that actually binds ``re.IGNORECASE``, is left unknown
+    rather than mistaken for the stdlib flag. A bare name resolves only when it was
+    imported from ``re`` (``from re import UNICODE``), by its original name, so
+    ``from re import IGNORECASE as U`` is still read as IGNORECASE.
+    """
 
     if isinstance(node, ast.Constant) and isinstance(node.value, int):
         return node.value
     if isinstance(node, ast.Attribute):
+        if not (isinstance(node.value, ast.Name) and node.value.id in module_names):
+            return None
         value = getattr(re, node.attr, None)
         return value if isinstance(value, int) else None
     if isinstance(node, ast.Name):
-        value = getattr(re, node.id, None)
+        origin = from_re_origins.get(node.id)
+        if origin is None:
+            return None
+        value = getattr(re, origin, None)
         return value if isinstance(value, int) else None
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-        left, right = _flag_value(node.left), _flag_value(node.right)
+        left = _flag_value(node.left, module_names, from_re_origins)
+        right = _flag_value(node.right, module_names, from_re_origins)
         if left is not None and right is not None:
             return left | right
     return None
 
 
-def _compile_flags(node: ast.Call) -> int | None:
+def _compile_flags(
+    node: ast.Call,
+    module_names: frozenset[str],
+    from_re_origins: dict[str, str],
+) -> int | None:
     """Source-level flags of an ``re.compile`` call: 0 when none are written.
 
     A ``**opts`` expansion can carry flags we cannot see, so it returns None
-    (unknown) rather than assuming 0; an unresolvable flag expression is also
-    None. The caller strips the default ``re.UNICODE`` before comparing, so an
+    (unknown) rather than assuming 0; an unresolvable flag expression, or one
+    whose source is not confirmably the ``re`` module, is also None. The caller
+    strips the default ``re.UNICODE`` before comparing, so a stdlib
     explicit-Unicode compile is the same rule as a flagless one.
     """
 
@@ -314,7 +342,7 @@ def _compile_flags(node: ast.Call) -> int | None:
             flag_node = keyword.value
     if flag_node is None:
         return 0
-    return _flag_value(flag_node)
+    return _flag_value(flag_node, module_names, from_re_origins)
 
 
 def _locally_bound_names(tree: ast.AST) -> frozenset[str]:
@@ -342,19 +370,26 @@ def _locally_bound_names(tree: ast.AST) -> frozenset[str]:
     return frozenset(bound)
 
 
-def _re_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
-    """Names confirmably bound to the ``re`` module and to ``re.compile``.
+def _re_bindings(
+    tree: ast.AST,
+) -> tuple[frozenset[str], frozenset[str], dict[str, str]]:
+    """Names confirmably bound to ``re``, to ``re.compile``, and to re-imported
+    flags.
 
-    Only module-level imports bind the module; ``re`` is recognised by its
-    canonical stdlib name even in an isolated fragment with no import line. A
-    name shadowed by a local binding -- e.g. a function parameter ``rx`` after
-    ``import re as rx`` -- is dropped, so a call through it is left unknown rather
-    than mistaken for the module. ``renderer.compile`` and a bare builtin
-    ``compile`` are never confirmably ``re``.
+    Only module-level imports bind anything; ``re`` is recognised by its canonical
+    stdlib name even in an isolated fragment with no import line. A name shadowed
+    by a local binding -- e.g. a function parameter ``rx`` after ``import re as
+    rx`` -- is dropped, so a call through it is left unknown rather than mistaken
+    for the module. ``renderer.compile`` and a bare builtin ``compile`` are never
+    confirmably ``re``. ``from_re_origins`` maps each local name imported from
+    ``re`` back to its original attribute, so a bare flag -- ``from re import
+    IGNORECASE as U`` then ``U`` -- is read as IGNORECASE, while an unrelated bare
+    name is left unknown.
     """
 
     module_names = {"re"}
     compile_names: set[str] = set()
+    from_re_origins: dict[str, str] = {}
     for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -362,12 +397,15 @@ def _re_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
                     module_names.add(alias.asname or "re")
         elif isinstance(node, ast.ImportFrom) and node.module == "re":
             for alias in node.names:
+                local = alias.asname or alias.name
+                from_re_origins[local] = alias.name
                 if alias.name == "compile":
-                    compile_names.add(alias.asname or "compile")
+                    compile_names.add(local)
     shadowed = _locally_bound_names(tree)
     return (
         frozenset(name for name in module_names if name not in shadowed),
         frozenset(name for name in compile_names if name not in shadowed),
+        {name: origin for name, origin in from_re_origins.items() if name not in shadowed},
     )
 
 
@@ -403,14 +441,18 @@ def compiled_rule(
     node: ast.expr,
     module_names: frozenset[str] = frozenset({"re"}),
     compile_names: frozenset[str] = frozenset(),
+    from_re_origins: dict[str, str] | None = None,
 ) -> tuple[str, int | None] | None:
     """Fold a confirmable ``re.compile(<literal>[, flags])`` to ``(body, flags)``.
 
     The callee must be an unshadowed ``re.compile`` (or tracked alias / ``from re
     import compile``), so an independent object's ``.compile()`` is not a rule.
-    The body is read from the positional arg or the ``pattern=`` keyword. Flags
-    are normalised by stripping ``re.UNICODE`` -- the default for a str pattern --
-    so an explicit ``re.UNICODE`` compile is the same rule as a flagless one, while
+    The body is read from the positional arg or the ``pattern=`` keyword. A flag is
+    folded only when its source is confirmably the stdlib ``re`` module -- the
+    ``re`` object, a module-level alias, or a name imported from ``re`` -- so a
+    same-named attribute of an independent object is left unknown. Flags are then
+    normalised by stripping ``re.UNICODE`` -- the default for a str pattern -- so a
+    stdlib explicit-Unicode compile is the same rule as a flagless one, while
     ``re.IGNORECASE`` is different. An unresolved binding, ``**opts`` flags, or a
     non-literal body yields None and is left unknown, never reported.
     """
@@ -418,7 +460,7 @@ def compiled_rule(
     if isinstance(node, ast.Call) and _is_re_compile(node, module_names, compile_names):
         body = _compile_body(node)
         if body is not None:
-            flags = _compile_flags(node)
+            flags = _compile_flags(node, module_names, from_re_origins or {})
             if flags is not None:
                 flags &= ~re.UNICODE
             return (body, flags)
@@ -430,17 +472,19 @@ def scoped_matcher_sites(source: str, body: str) -> list[int]:
 
     Confirmable, unshadowed ``re.compile`` only (an independent ``.compile()``, a
     shadowed alias, or a bare help string is never counted), exact-body (a larger
-    grammar that merely embeds the body is a different rule), and flag-aware:
-    ``re.UNICODE`` is the str default so it normalises away, ``**opts`` or any
-    unresolved flag is unknown, and a genuinely different flag is a different rule.
+    grammar that merely embeds the body is a different rule), and flag-aware: a
+    stdlib ``re.UNICODE`` is the str default so it normalises away, a flag whose
+    source is not confirmably ``re`` -- a same-named attribute on an independent
+    object, ``**opts``, or an unrelated bare name -- is unknown, and a genuinely
+    different flag is a different rule.
     """
 
     tree = ast.parse(source)
-    module_names, compile_names = _re_bindings(tree)
+    module_names, compile_names, from_re_origins = _re_bindings(tree)
     return [
         node.lineno
         for node in ast.walk(tree)
-        if compiled_rule(node, module_names, compile_names) == (body, 0)
+        if compiled_rule(node, module_names, compile_names, from_re_origins) == (body, 0)
     ]
 
 
@@ -840,6 +884,16 @@ def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, 
         ("pattern keyword unicode equals flagless", '_X = re.compile(pattern=r"__BODY__", flags=re.UNICODE)\n', 1),
         ("unicode plus ignorecase is different", '_X = re.compile(r"__BODY__", re.UNICODE | re.IGNORECASE)\n', 0),
         ("ascii flag is a different rule", '_X = re.compile(r"__BODY__", re.ASCII)\n', 0),
+        # P2 round 4: a flag is folded only when its source is confirmably stdlib re.
+        ("own unicode attribute is unknown", 'ImportFlags = object()\n_X = re.compile(r"__BODY__", ImportFlags.UNICODE)\n', 0),
+        ("own ignorecase attribute is unknown", '_X = re.compile(r"__BODY__", Flags.IGNORECASE)\n', 0),
+        ("own unicode attribute bound to ignorecase is unknown", 'import re\nclass ImportFlags:\n    UNICODE = re.IGNORECASE\n_X = re.compile(r"__BODY__", ImportFlags.UNICODE)\n', 0),
+        ("bare custom unicode is unknown", 'import re\nUNICODE = re.IGNORECASE\n_X = re.compile(r"__BODY__", UNICODE)\n', 0),
+        ("from re import unicode equals flagless", 'from re import UNICODE\n_X = re.compile(r"__BODY__", UNICODE)\n', 1),
+        ("from re import unicode alias equals flagless", 'from re import UNICODE as U\n_X = re.compile(r"__BODY__", U)\n', 1),
+        ("from re import ignorecase under unicode name is different", 'from re import IGNORECASE as UNICODE\n_X = re.compile(r"__BODY__", UNICODE)\n', 0),
+        ("alias module unicode equals flagless", 'import re as rx\n_X = rx.compile(r"__BODY__", rx.UNICODE)\n', 1),
+        ("shadowed alias flag is unknown", 'import re as rx\ndef f(rx):\n    return rx.compile(r"__BODY__", rx.UNICODE)\n', 0),
     ],
     ids=[
         "renamed-restatement",
@@ -877,6 +931,15 @@ def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, 
         "pattern-keyword-unicode",
         "unicode-plus-ignorecase",
         "ascii-flag",
+        "own-unicode-attribute",
+        "own-ignorecase-attribute",
+        "own-unicode-bound-to-ignorecase",
+        "bare-custom-unicode",
+        "from-re-import-unicode",
+        "from-re-import-unicode-alias",
+        "from-re-ignorecase-as-unicode",
+        "alias-module-unicode",
+        "shadowed-alias-flag",
     ],
 )
 def test_the_scoped_census_bites_a_restatement_and_leaves_the_neighbours(
@@ -884,10 +947,11 @@ def test_the_scoped_census_bites_a_restatement_and_leaves_the_neighbours(
 ) -> None:
     # The review counterexamples are the flag-different importer, the never-compiled
     # help string, an independent object's .compile(), a shadowed re alias, **opts
-    # carrying unseen flags, and a real re.compile(pattern=) duplicate. Only a
-    # provably-equivalent copy -- confirmable unshadowed re.compile, literal body,
-    # flags equal after stripping the str-default UNICODE -- is caught; everything
-    # unresolved or genuinely different is left alone.
+    # carrying unseen flags, a same-named flag attribute on an independent object,
+    # and a real re.compile(pattern=) duplicate. Only a provably-equivalent copy --
+    # confirmable unshadowed re.compile, literal body, a stdlib-sourced flag equal
+    # after stripping the str-default UNICODE -- is caught; everything unresolved or
+    # genuinely different is left alone.
     body = PATTERN_DECISIONS[name][0]
     sites = scoped_matcher_sites(source.replace("__BODY__", body), body)
     assert len(sites) == expected, label
@@ -982,13 +1046,15 @@ def test_the_census_keys_on_real_re_compile_not_a_shared_method_name(
 def test_the_census_reports_only_provably_equivalent_copies_executed(
     name: str, tmp_path, monkeypatch
 ) -> None:
-    """The review's round-3 ask, executed in an isolated package: only provably
-    equivalent copies are reported. A flagless / explicit-UNICODE / ``pattern=``
-    recompilation of the owner body is the same rule and is caught; an independent
-    text renderer, a shadowed ``re`` alias, ``**opts`` carrying IGNORECASE, and an
-    explicit IGNORECASE compile are not provably equivalent and are left alone.
-    Running the compilers confirms the equal-flag copy matches the owner while the
-    others differ, and the shadowed alias really returns help text.
+    """The review's round-3/round-4 ask, executed in an isolated package: only
+    provably equivalent copies are reported. A flagless / stdlib explicit-UNICODE /
+    ``pattern=`` recompilation of the owner body is the same rule and is caught; an
+    independent text renderer, a shadowed ``re`` alias, ``**opts`` carrying
+    IGNORECASE, an explicit IGNORECASE compile, and a same-named ``ImportFlags
+    .UNICODE`` attribute that really binds ``IGNORECASE`` are not provably
+    equivalent and are left alone. Running the compilers confirms the equal-flag
+    copies match the owner while the own-attribute and IGNORECASE copies really
+    accept uppercase, and the shadowed alias only returns text.
     """
 
     monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
@@ -1030,6 +1096,13 @@ def test_the_census_reports_only_provably_equivalent_copies_executed(
         "RENDERER = Renderer()\n"
         f'_HELP = RENDERER.compile(r"{body}")\n',
     )
+    write(
+        "ne_own_unicode.py",
+        "import re\n"
+        "class ImportFlags:\n"
+        "    UNICODE = re.IGNORECASE\n"
+        f'_X = re.compile(r"{body}", ImportFlags.UNICODE)\n',
+    )
 
     findings = _reward_memory_matcher_scan()
     reported = {offender.split(":")[0] for offender in findings[name]}
@@ -1048,6 +1121,20 @@ def test_the_census_reports_only_provably_equivalent_copies_executed(
         upper = "0123456789ABCDEF"
         assert owner_rule.fullmatch(upper) is None
         assert re.compile(body, **{"flags": re.IGNORECASE}).fullmatch(upper)
+
+    # A same-named attribute on an independent object is not the stdlib flag: it
+    # really binds IGNORECASE, so the census leaves that file alone and running it
+    # shows the widened acceptance the owner does not have.
+    class ImportFlags:
+        UNICODE = re.IGNORECASE
+
+    assert ImportFlags.UNICODE == re.IGNORECASE
+    assert ImportFlags.UNICODE != re.UNICODE
+    own_rule = re.compile(body, ImportFlags.UNICODE)
+    assert own_rule.flags != owner_rule.flags
+    if name == "_MEMORY_REF_DIGEST_RE":
+        assert owner_rule.fullmatch("0123456789ABCDEF") is None
+        assert own_rule.fullmatch("0123456789ABCDEF")
 
     # The shadowed alias really is the renderer, not the module: it returns text.
     class Renderer:
