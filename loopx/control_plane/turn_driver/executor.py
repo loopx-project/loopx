@@ -21,6 +21,7 @@ from ..effect_program import (
 )
 from ..goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
+    FirstPartyHostLaunchRejected,
     FirstPartyHostRuntimeRejected,
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
@@ -877,7 +878,7 @@ def _run_host(
     argv: Sequence[str],
     project: Path,
     timeout_seconds: float | None,
-    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
 ) -> dict[str, Any]:
     # Dispatch has checked the source and its internal effect adapter before
     # journal/cadence admission. External stdin gets the same single complete
@@ -954,6 +955,8 @@ def _run_host_runner(
     *,
     runner: HostRunner,
 ) -> dict[str, Any]:
+    from ...extensions.process_runtime import ProcessStdinDispatchUnconfirmed
+
     try:
         value = runner(request)
     except BuiltInHostError as exc:
@@ -968,7 +971,7 @@ def _run_host_runner(
                 else {}
             ),
         }
-    except FirstPartyHostRuntimeRejected:
+    except (FirstPartyHostRuntimeRejected, ProcessStdinDispatchUnconfirmed):
         raise
     except Exception as exc:  # noqa: BLE001 - host adapters fail closed at boundary
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
@@ -1013,9 +1016,10 @@ def _host_result_stage(
     persist_journal: JournalPersist,
     effects: dict[str, bool],
     confirm_start: Callable[[], None] | None = None,
+    record_host_attempt: Callable[[str], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
-    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    host_launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -1036,6 +1040,9 @@ def _host_result_stage(
         # reservation. Confirmation failure stops before the host starts.
         if confirm_start is not None:
             confirm_start()
+        if record_host_attempt is not None:
+            record_host_attempt(str(journal["turn_key"]))
+        from ...extensions.process_runtime import ProcessStdinDispatchUnconfirmed
         from ...usage_goal import observe_goal_execution
 
         rejected_launch = None
@@ -1056,10 +1063,20 @@ def _host_result_stage(
                         launch_guard=host_launch_guard,
                     )
                 )
+        except ProcessStdinDispatchUnconfirmed as exc:
+            # The durable in-progress attempt already blocks blind replay.
+            # No Host result may enter validation or settlement without proof.
+            journal["reason"] = str(exc)
+            persist_journal(journal)
+            effects["host_invoked"] = True
+            unresolved = execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
+            unresolved["error_code"] = "host_outcome_unknown"
+            return None, [], unresolved
         except FirstPartyHostRuntimeRejected as exc:
             # Stdio checks the Goal only before spawn. A native Host can reject
             # after dispatch too, so retain reconciliation for other failures.
-            if host_runner is not None and exc.code != "current_turn_work_changed":
+            if (host_runner is not None and not isinstance(exc, FirstPartyHostLaunchRejected)
+                    and exc.code != "current_turn_work_changed"):
                 raise
             rejected_launch = exc.code
             host_observation = {"ok": False, "reason": str(exc), "failure_kind": "contract_rejected"}
@@ -1086,7 +1103,7 @@ def _host_result_stage(
             recovery_kind = host_observation.get("recovery_kind")
             if recovery_kind is not None:
                 journal["host_recovery"] = build_host_recovery_record(recovery_kind)
-            else:
+            elif rejected_launch is None:
                 journal.pop("host_recovery", None)
             persist_journal(journal)
             terminal = execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
@@ -1095,6 +1112,7 @@ def _host_result_stage(
             return None, [], terminal
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
+    journal.pop("host_recovery", None)
 
     recorded_plan = journal.get("plan")
     validation = validate_loopx_turn_host_result(
@@ -1582,8 +1600,9 @@ def run_loopx_turn_once(
     settlement_admission: Callable[[], AbstractContextManager] | None = None,
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
+    record_host_attempt: Callable[[str], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
-    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    host_launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
 ) -> dict[str, Any]:
     argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
     transaction_plan = (
@@ -1797,7 +1816,8 @@ def run_loopx_turn_once(
                 journal.pop("validation_stage", None)
             journal.pop("reason", None)
             journal.pop("receipt", None)
-            journal.pop("host_recovery", None)
+            # A launch refusal can leave the existing Host session available.
+            # Keep its recovery requirement until the next Host observation.
             journal.pop("host_failure", None)
             journal["status"] = "in_progress"
             persist_journal(journal)
@@ -1855,6 +1875,7 @@ def run_loopx_turn_once(
             persist_journal=persist_journal,
             effects=effects,
             confirm_start=confirm_start if reserved_start else None,
+            record_host_attempt=record_host_attempt,
             host_launch_guard=host_launch_guard,
         )
         if terminal is not None:

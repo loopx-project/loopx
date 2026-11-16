@@ -804,13 +804,14 @@ def execute_turn_run_once(
                 turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref,
             )
 
-        if args.host == "codex-app-server":
-            native_admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
-                registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
-            )).with_launch_decision(current_launch_decision)
+        host_admission = (goal_admission.with_launch_decision(
+            current_launch_decision, work_runtime_root=runtime_root if settlement_identity.todo_id else None,
+        ) if goal_admission is not None else None)
 
+        if args.host == "codex-app-server":
             def run_native_host(request: Mapping[str, Any]) -> dict[str, Any]:
-                return native_host_runner(request, lambda: native_admission.launch_lifetime(
+                assert host_admission is not None
+                return native_host_runner(request, lambda: host_admission.launch_lifetime(
                     operation="native_conversation_turn_launch"))
 
             host_runner = run_native_host
@@ -818,9 +819,7 @@ def execute_turn_run_once(
         elif args.host == "codex-cli":
             host_runner = build_codex_cli_host_runner(
                 args, runtime_root=runtime_root, project=project,
-                registry_path=registry_path, goal_ref=goal_ref,
-                goal_admission=goal_admission,
-                current_launch_decision=current_launch_decision,
+                registry_path=registry_path, goal_admission=host_admission,
                 run_codex_cli_host=run_codex_cli_host,
             )
 
@@ -882,7 +881,7 @@ def execute_turn_run_once(
 
             settlement_admission = codex_settlement_admission
 
-        def on_managed_start_admitted() -> None:
+        def ensure_start_receipt(turn_key: str | None = None) -> None:
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
@@ -904,6 +903,7 @@ def execute_turn_run_once(
                     else None
                 ),
                 goal_ref=goal_ref,
+                turn_key=turn_key,
             )
 
         managed_cadence = managed_cadence_start(
@@ -912,7 +912,7 @@ def execute_turn_run_once(
             agent_id=args.agent_id,
             automation_id=args.automation_id,
             manual_reason=args.manual_interval_bypass_reason,
-            on_admitted=on_managed_start_admitted,
+            on_admitted=ensure_start_receipt,
             request_id=settlement_identity.effect_id if args.host == "codex-cli" else None,
         )
 
@@ -950,11 +950,14 @@ def execute_turn_run_once(
             ) if args.execute else None),
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
+            record_host_attempt=ensure_start_receipt if args.execute and settlement_identity.todo_id and (
+                args.host == "codex-app-server" or getattr(args, "codex_operation_tools", False)
+            ) else None,
             goal_admission=goal_admission,
             host_launch_guard=(partial(
-                goal_admission.with_launch_decision(current_launch_decision).launch_lifetime,
+                host_admission.launch_lifetime,
                 operation="turn_external_host_launch",
-            ) if raw_argv is not None and goal_admission is not None else None),
+            ) if raw_argv is not None and host_admission is not None else None),
         )
         if args.execute:
             result.update(drain_committed_turn_post_writeback_hooks(

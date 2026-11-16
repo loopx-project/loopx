@@ -17,13 +17,14 @@ from benchmark.runtime.provider_request_admission import ProviderRequestAdmissio
 class _Admission:
     """Expose the lock ordering without introducing a second authority policy."""
 
-    def __init__(self):
+    def __init__(self, *, expires_at_ms=None):
         self.lock = threading.Lock()
         self.local = threading.local()
         self.entries = 0
         self.pause_second = False
         self.paused = threading.Event()
         self.resume = threading.Event()
+        self.expires_at_ms = expires_at_ms
 
     def with_launch_decision(self, _check):
         return self
@@ -37,7 +38,7 @@ class _Admission:
                 if self.pause_second and self.entries == 2:
                     self.paused.set()
                     assert self.resume.wait(timeout=10)
-                yield
+                yield self.expires_at_ms
             finally:
                 self.local.held = False
 
@@ -76,7 +77,7 @@ def _waiting_upstream():
         thread.join(timeout=5)
 
 
-def _guard(tmp_path, upstream, admission):
+def _guard(tmp_path, upstream, admission, *, process=None):
     receipt = {}
     session = SimpleNamespace(admission=admission, goal_ref={}, session_id="synthetic-session")
     guard = ProviderRequestAdmission(
@@ -84,7 +85,7 @@ def _guard(tmp_path, upstream, admission):
          "LOOPX_TURN": "synthetic-turn"},
         session, receipt, tmp_path,
     )
-    guard.started(SimpleNamespace(poll=lambda: None))
+    guard.started(process if process is not None else SimpleNamespace(poll=lambda: None))
     return guard, receipt
 
 
@@ -109,6 +110,23 @@ def _request(base_url):
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
     return thread, result
+
+
+def test_expired_host_authority_refuses_provider_post(tmp_path, monkeypatch):
+    signals = []
+    monkeypatch.setattr("benchmark.runtime.provider_request_admission.os.killpg",
+                        lambda pid, signal: signals.append((pid, signal)))
+    process = SimpleNamespace(pid=1, poll=lambda: None)
+    with _waiting_upstream() as (upstream, received, _, _):
+        guard, receipt = _guard(tmp_path, upstream, _Admission(expires_at_ms=1), process=process)
+        with guard.serve(["codex", "exec", "-"]):
+            client, result = _request(guard.base_url)
+            client.join(timeout=5)
+        assert not client.is_alive() and result.get("status") == 409, result
+        assert not received.is_set()
+        summary, = receipt["provider_request_invocations"]
+        assert summary["refusal_code"] == "goal_launch_not_allowed" and summary["sent"] == 0
+        assert len(signals) == 1 and signals[0][0] == process.pid
 
 
 def test_provider_observes_dispatch_while_upstream_response_is_pending(tmp_path, monkeypatch):

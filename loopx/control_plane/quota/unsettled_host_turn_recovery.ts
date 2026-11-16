@@ -14,8 +14,9 @@
  * whose settlement already validates is answered by the preflight, so the
  * caller reads no bound facts for it.
  */
-import type { JsonObject } from "../effect_program.ts";
+import { settlementIdentityPayload, type JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { turnJournalHasUnconfirmedHost } from "../turn_driver/turn_journal_query.ts";
 import {
   jsonObject,
   requireJsonObject,
@@ -242,13 +243,15 @@ async function preflightPriorHostTurnCloseoutForOwner(
     request.goal_id,
     request.agent_id,
     request.exclude_turn_instance_id,
+    {readTurnJournals: true},
   );
   // Resolve one snapshot on the first candidate. The empty path needs only
   // the guard log, and unwritten replans may all drop out after validation.
   let settlementSnapshot: Awaited<ReturnType<typeof readQuotaSettlementSnapshot>> | undefined;
   let newestSettledTurn: string | null = null;
   let newestAcceptedCloseout: AcceptedCloseout = "validated_writeback_and_quota_spend";
-  for (const {candidate: selected, requireWritebackForRecovery} of candidates) {
+  for (const {candidate, requireWritebackForRecovery, turnKey} of candidates) {
+    let selected = candidate;
     settlementSnapshot ??= await readQuotaSettlementSnapshot(
       request.runtime_root, request.goal_id, rolloutSnapshot,
     );
@@ -256,8 +259,7 @@ async function preflightPriorHostTurnCloseoutForOwner(
       settlementReadbackRequest(request, selected),
       settlementSnapshot,
     );
-    const missingReceipts = missingCloseoutReceipts(readback, requireWritebackForRecovery);
-    if (missingReceipts === undefined) continue;
+    let missingReceipts = missingCloseoutReceipts(readback, requireWritebackForRecovery);
     if (missingReceipts === null) {
       // A newer settled Turn cannot hide an older missing closeout. Keep
       // scanning in persisted newest-first order until the first unsettled
@@ -271,6 +273,19 @@ async function preflightPriorHostTurnCloseoutForOwner(
       }
       continue;
     }
+    if (turnKey !== null && await turnJournalHasUnconfirmedHost(
+      request.runtime_root,
+      turnKey,
+      settlementIdentityPayload({
+        goal_id: request.goal_id, agent_id: request.agent_id,
+        ...candidateReadbackBinding(selected),
+      }),
+      request.owner_projection.goal_ref,
+    )) {
+      selected = {...selected, unconfirmed_host_turn_key: turnKey};
+      missingReceipts = missingCloseoutReceipts(readback, false);
+    }
+    if (missingReceipts == null) continue;
     const monitorPoll = selected.binding_kind === "todo"
       ? committedMonitorPollFromSnapshot(settlementSnapshot, {
         goal_id: request.goal_id, agent_id: request.agent_id,
@@ -335,6 +350,14 @@ function decodeCandidate(value: unknown): PriorHostTurnCloseoutCandidate {
     );
   }
   const settlementEffectId = optionalHeartbeatString(raw.settlement_effect_id);
+  const unconfirmedHostTurnKey = optionalHeartbeatString(raw.unconfirmed_host_turn_key);
+  if (raw.unconfirmed_host_turn_key !== undefined &&
+      (bindingKind !== "todo" || settlementEffectId === null || unconfirmedHostTurnKey === null ||
+        !/^sha256:[a-f0-9]{64}$/u.test(unconfirmedHostTurnKey))) {
+    throw new EffectRuntimeRequestError(
+      "prior host Turn recovery candidate has an invalid unconfirmed dispatch locator",
+    );
+  }
   if (raw.admitted_todo_replan !== undefined &&
       (raw.admitted_todo_replan !== true || bindingKind !== "todo" || settlementEffectId === null)) {
     throw new EffectRuntimeRequestError(
@@ -350,6 +373,7 @@ function decodeCandidate(value: unknown): PriorHostTurnCloseoutCandidate {
     binding_kind: bindingKind,
     binding_id: bindingId,
     settlement_effect_id: settlementEffectId,
+    ...(unconfirmedHostTurnKey === null ? {} : {unconfirmed_host_turn_key: unconfirmedHostTurnKey}),
     ...(raw.admitted_todo_replan === true ? {admitted_todo_replan: true as const} : {}),
   };
 }
@@ -554,7 +578,9 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
   }
 
   const replanSpendOwed = selected.admitted_todo_replan === true && awaitingQuotaSpend(missingReceipts);
-  const lifecycleCloseout = replanSpendOwed ? null : acceptedLifecycleCloseout(todo);
+  const unconfirmedHostTurnKey = selected.unconfirmed_host_turn_key;
+  const lifecycleCloseout = replanSpendOwed || unconfirmedHostTurnKey
+    ? null : acceptedLifecycleCloseout(todo);
   if (lifecycleCloseout !== null) {
     return {
       schema_version: UNSETTLED_HOST_TURN_RECOVERY_RESULT_SCHEMA,
@@ -597,9 +623,22 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
   recovery.admission_checkpoint = checkpoint;
   recovery.admissions_without_progress = count;
   recovery.admission_limit = RECOVERY_ADMISSION_LIMIT;
-  const attention = count >= RECOVERY_ADMISSION_LIMIT;
+  const attention = unconfirmedHostTurnKey !== undefined || count >= RECOVERY_ADMISSION_LIMIT;
   const obligation = recoveryObligation(repair, selected.binding_id);
-  if (attention) {
+  if (unconfirmedHostTurnKey) {
+    recovery.state = "attention_required";
+    recovery.reason_code = "host_outcome_unknown";
+    recovery.turn_key = unconfirmedHostTurnKey;
+    Object.assign(obligation, {
+      must_attempt_work: false,
+      notify: "NOTIFY",
+      reason_code: "host_outcome_unknown",
+      reason: "an earlier Host dispatch has no confirmed outcome",
+      recommendation_reason: "the original Host dispatch needs reconciliation",
+      unsettled_reason: "an earlier Host dispatch remains unconfirmed",
+      recommended_action: "Inspect the original Turn journal. Restore it if unavailable, then reconcile the Host attempt before dispatching a fresh Turn.",
+    });
+  } else if (attention) {
     recovery.state = "attention_required";
     recovery.reason_code = "unsettled_recovery_admission_limit";
     Object.assign(obligation, {

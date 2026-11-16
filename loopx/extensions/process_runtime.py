@@ -9,7 +9,8 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, IO, cast
@@ -19,23 +20,118 @@ _PROCESS_TERMINATE_GRACE_SECONDS = 1.0
 _PROCESS_GROUP_STOP_TIMEOUT_SECONDS = 1.0
 
 
+class ProcessStdinLeaseExpired(TimeoutError):
+    """The lease expired before a complete frame could be published."""
+
+
+class ProcessStdinDispatchUnconfirmed(Exception):
+    """The original pipe receiver may have received the frame without timely proof."""
+
+
+@contextmanager
+def _nonblocking_pipe_writer(fd: int) -> Iterator[Callable[[memoryview], int]]:
+    if os.name == "nt":
+        # os.set_blocking only supports Windows pipes from Python 3.12.
+        import _winapi
+        import msvcrt
+
+        handle = msvcrt.get_osfhandle(fd)
+        _winapi.SetNamedPipeHandleState(handle, 1, None, None)  # PIPE_NOWAIT
+        try:
+            yield lambda data: _winapi.WriteFile(handle, data)[0]
+        finally:
+            _winapi.SetNamedPipeHandleState(handle, 0, None, None)  # PIPE_WAIT
+    else:
+        was_blocking = os.get_blocking(fd)
+        os.set_blocking(fd, False)
+        try:
+            yield lambda data: os.write(fd, data)
+        finally:
+            os.set_blocking(fd, was_blocking)
+
+
+def _retire_native_input_receiver(
+    process: subprocess.Popen[str], cancel_and_reap: Callable[[], None],
+) -> None:
+    try:
+        cancel_and_reap()
+    except BaseException as exc:
+        raise RuntimeError("native input receiver cleanup unconfirmed") from exc
+    if process.poll() is None:
+        raise RuntimeError("native input receiver was not reaped")
+
+
+def _write_lease_bound_frame(
+    process: subprocess.Popen[str], stream: IO[str], text: str, *,
+    deadline: float, expires_at_ms: int, cancel_and_reap: Callable[[], None],
+) -> None:
+    if time.time() * 1000 >= expires_at_ms:
+        raise ProcessStdinLeaseExpired("native input lease expired before dispatch")
+    frame = memoryview(text.replace("\n", os.linesep).encode(stream.encoding, errors=stream.errors))
+    try:
+        # A blocking write can publish late through backpressure. The final
+        # nonblocking write still needs a completion check because the sender
+        # can be preempted between checking time and entering the syscall.
+        with _nonblocking_pipe_writer(stream.fileno()) as write:
+            while frame:
+                chunk = frame[:_PROCESS_IO_CHUNK_BYTES]
+                remaining = (expires_at_ms - time.time() * 1000) / 1000
+                if remaining <= 0:
+                    raise ProcessStdinLeaseExpired("native input lease expired before dispatch")
+                budget = deadline - time.monotonic()
+                if budget <= 0:
+                    raise TimeoutError("native input dispatch deadline expired")
+                try:
+                    written = write(chunk)
+                except BlockingIOError:
+                    written = 0
+                if written:
+                    frame = frame[written:]
+                    if not frame and time.time() * 1000 >= expires_at_ms:
+                        raise ProcessStdinDispatchUnconfirmed(
+                            "The native frame may have reached the Host after lease expiry. "
+                            "Reconcile the original Host attempt before retrying."
+                        )
+                else:
+                    time.sleep(min(0.005, remaining, budget))
+    except BaseException:
+        # Reap before closing stdin so an incomplete line cannot become an
+        # EOF-terminated request. Unconfirmed cleanup is still an unknown effect.
+        try:
+            _retire_native_input_receiver(process, cancel_and_reap)
+        except RuntimeError as cleanup_error:
+            raise ProcessStdinDispatchUnconfirmed(
+                "The original native Host could not be confirmed stopped. "
+                "Reconcile the original Host attempt before retrying."
+            ) from cleanup_error
+        raise
+
+
 def write_process_stdin_before_deadline(
     process: subprocess.Popen[str], text: str, *, deadline: float,
-    cancel_and_reap: Callable[[], None],
+    cancel_and_reap: Callable[[], None], lease_expires_at_ms: int | None = None,
+    retire_on_expired_deadline: bool = False,
 ) -> None:
     """Finish one native frame, or cancel its peer before returning failure.
 
     The caller owns the serialization and launch fence. A bounded wait keeps a
     full pipe from stranding that fence; the same process is reaped and its
-    writer joined before the caller releases it. Use the existing text stream
-    so successful large/Unicode frames retain their original wire semantics on
-    every supported Python platform, including Windows 3.11.
+    writer joined before the caller releases it. A lease-bound send checks
+    the deadline around nonblocking publication of the complete frame.
+    Both paths preserve the text stream's wire encoding.
     """
     stream = process.stdin
     if stream is None:
         raise BrokenPipeError("native input stream is closed")
     if time.monotonic() >= deadline:
+        # Native admission can consume the RPC budget before a writer starts.
+        if retire_on_expired_deadline:
+            _retire_native_input_receiver(process, cancel_and_reap)
         raise TimeoutError("native input dispatch deadline expired")
+    if lease_expires_at_ms is not None:
+        _write_lease_bound_frame(process, stream, text, deadline=deadline,
+                                 expires_at_ms=lease_expires_at_ms, cancel_and_reap=cancel_and_reap)
+        return
     finished = threading.Event()
     failures: list[BaseException] = []
 

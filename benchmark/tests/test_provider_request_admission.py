@@ -23,14 +23,18 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from benchmark.runtime import worker
 from benchmark.runtime.provider_request_admission import (
     ProviderRequestAdmission,
     request_admission_enabled,
 )
 from loopx.capabilities.benchmark_toolkit import provider_gateway
+from loopx.control_plane.coordination.shadow_management import shadow_maintenance_lock_target
 from loopx.control_plane.goals import activation_service, first_party_host_admission
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from loopx.control_plane.projects.registry_codec import project_registry_transaction
+from loopx.control_plane.work_items.task_lease import lease_expires_at
+from loopx.file_lock import LockAcquireTimeoutError, exclusive_mutation_file_lock
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane import test_quota_settlement_cli as quota_fixture
 
@@ -44,7 +48,7 @@ class _Authority:
     api_key: str = "fixture-provider-key"
 
     def invocation(self, upstream, name, *, timeout=None, receipt=None, wake=None, turn_id=None,
-                   extra_env=None):
+                   extra_env=None, original_quota=None):
         if wake is None:
             wake = self.root / name
             wake.mkdir()
@@ -68,7 +72,9 @@ class _Authority:
         )
         if receipt is None:
             receipt = {}
-        guard = ProviderRequestAdmission(env, session, receipt, wake, timeout=timeout)
+        guard = ProviderRequestAdmission(
+            env, session, receipt, wake, timeout=timeout, original_quota=original_quota,
+        )
         return guard, receipt, wake
 
     def stop(self):
@@ -461,6 +467,226 @@ def test_real_backpressure_bounds_writer_wait_and_records_unknown_acceptance(aut
             assert 0 < len(upstream.rows[0]["body"]) < len(body), "fixture did not establish a partial send"
             assert _post(guard.base_url)[0] == 409
             assert len(upstream.rows) == 1, "unknown acceptance must not retry the POST"
+
+
+@pytest.fixture(params=["file", "sqlite"])
+def held_provider_task(tmp_path, monkeypatch, request):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = quota_fixture._write_fixture(tmp_path)
+    quota_fixture._initialize_fixture_authority(
+        project, runtime, provider=request.param, handoff_mode="hard_lease",
+    )
+    authority = _Authority(project, runtime, registry, tmp_path)
+    goal, agent, todo, turn = quota_fixture.GOAL_ID, quota_fixture.AGENT_ID, quota_fixture.TODO_ID, quota_fixture.TURN_ID
+    lease_scope = ["--goal-id", goal, "--todo-id", todo, "--owner", agent]
+
+    def lease(action, version, ttl=None, *, key="provider-original-lease"):
+        ttl_args = [] if ttl is None else ["--ttl-seconds", str(ttl)]
+        code, result = quota_fixture._run_cli(
+            registry, runtime, "task-lease", action, *lease_scope,
+            "--idempotency-key", key, "--expected-version", str(version), *ttl_args, cwd=project,
+        )
+        assert code == 0 and result["ok"], result
+        return result["lease"]
+
+    original = lease("acquire", 0, 60)
+    code, quota = quota_fixture._run_cli(
+        registry, runtime, "quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+        "--todo-id", todo, "--turn-instance-id", turn, "--runtime-profile", "generic_cli",
+        "--complete-turn", cwd=project,
+    )
+    assert code == 0 and quota["should_run"], quota
+    assert quota["interaction_contract"]["cli_channel"]["execution_preparation"]["handoff_mode"] == "hard_lease"
+    return authority, quota, original, lease
+
+
+def test_provider_request_keeps_original_soft_claim_turn(authority):
+    turn = quota_fixture.TURN_ID
+    with _upstream() as upstream, _process() as process:
+        guard, _, wake = authority.invocation(upstream.base_url, "soft-claim", turn_id=turn)
+        with guard.serve(["native", "-"]):
+            guard.started(process)
+            # The native session first binds work in its own Turn. The gateway
+            # was already created and must consume that same live authority.
+            code, quota = quota_fixture._run_cli(
+                authority.registry, authority.runtime, "quota", "should-run",
+                "--goal-id", quota_fixture.GOAL_ID, "--agent-id", quota_fixture.AGENT_ID,
+                "--todo-id", quota_fixture.TODO_ID, "--turn-instance-id", turn,
+                "--runtime-profile", "generic_cli", "--complete-turn", cwd=authority.project,
+            )
+            identity = quota["heartbeat_receipt"]["settlement_identity"]
+            assert code == 0 and quota["normal_delivery_allowed"] is True
+            assert identity["todo_id"] == quota_fixture.TODO_ID
+            assert "execution_preparation" not in quota
+
+            status, body = _post(guard.base_url)
+            assert status == 200, body
+            event, = _finished(wake)
+            assert event["turn_id"] == turn and event["forwarded"] is True
+            assert len(upstream.rows) == 1
+            assert quota_fixture._heartbeat_receipt_count(authority.runtime, turn) == 1
+            assert quota_fixture._spend_run_count(authority.runtime) == 0
+
+
+@pytest.mark.parametrize("released_before_recheck", [False, True])
+def test_bound_native_worker_serializes_original_lease_release(held_provider_task, monkeypatch, released_before_recheck):
+    authority, quota, original, lease = held_provider_task
+    turn = quota_fixture.TURN_ID
+    marker = authority.root / "checkpoint-input"
+    command = [sys.executable, "-c",
+               f"import sys; from pathlib import Path; Path({str(marker)!r}).write_text(sys.stdin.read())"]
+    env = {
+        "LOOPX_PROJECT": str(authority.project), "LOOPX_RUNTIME_ROOT": str(authority.runtime),
+        "LOOPX_GOAL_ID": quota_fixture.GOAL_ID, "LOOPX_AGENT_ID": quota_fixture.AGENT_ID,
+        "LOOPX_TURN": turn,
+    }
+    session = SimpleNamespace(
+        admission=FirstPartyHostGoalAdmission.for_plan(
+            registry_path=authority.registry, goal_id=quota_fixture.GOAL_ID, planned_goal_ref=None,
+        ),
+        goal_ref=None,
+        session_id="fixture-original",
+    )
+    launch = {
+        "env": env, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+        "session_wake": session, "receipt": {}, "wake": authority.root, "original_quota": quota,
+    }
+    real_popen = subprocess.Popen
+    mutations = []
+
+    def start_with_release(args, *extra, **kwargs):
+        if args == command:
+            target = shadow_maintenance_lock_target(authority.runtime, quota_fixture.GOAL_ID)
+            with pytest.raises(LockAcquireTimeoutError):
+                with exclusive_mutation_file_lock(target, timeout_seconds=0):
+                    pytest.fail("the original lease could be released before the child starts")
+            mutations.append(_async(lambda: lease("release", original["version"])))
+        return real_popen(args, *extra, **kwargs)
+
+    monkeypatch.setattr(worker.subprocess, "Popen", start_with_release)
+    if released_before_recheck:
+        assert lease("release", original["version"])["status"] == "released"
+        with pytest.raises(first_party_host_admission.FirstPartyHostRuntimeRejected,
+                           match="goal_launch_not_allowed"):
+            with worker.native_child_process(command, **launch):
+                pytest.fail("the released lease started another worker")
+        assert not marker.exists() and not mutations
+    else:
+        with worker.native_child_process(command, **launch) as process:
+            process.communicate(input="original checkpoint input", timeout=5)
+            assert process.returncode == 0
+        assert marker.read_text() == "original checkpoint input"
+        released, = mutations
+        assert released.result(timeout=10)["status"] == "released"
+    assert quota_fixture._heartbeat_receipt_count(authority.runtime, turn) == 1
+    assert quota_fixture._spend_run_count(authority.runtime) == 0
+
+
+@pytest.mark.parametrize("retry_lease", ["expired", "replacement"])
+def test_final_provider_write_crossing_hard_lease_preserves_unknown_attempt(
+    held_provider_task, monkeypatch, retry_lease,
+):
+    authority, quota, original, lease = held_provider_task
+    turn = quota_fixture.TURN_ID
+    suffix = b"final-provider-body"
+    body = b"x" * (64 * 1024) + suffix
+    accepted_write_at = []
+    original_connection = provider_gateway._upstream_connection
+
+    def delay_final_write(*args, **kwargs):
+        connection = original_connection(*args, **kwargs)
+        send = connection.send
+
+        def send_after_preemption(data):
+            if accepted_write_at or not isinstance(data, memoryview) or data != suffix:
+                return send(data)
+            assert 0 < connection.sock.gettimeout() < 2, "the hard lease must shorten the gateway send limit"
+            now = time.time()
+            assert now < expires_at
+            time.sleep(expires_at - now + .03)
+            send(data)
+            accepted_write_at.append(time.time())
+
+        connection.send = send_after_preemption
+        return connection
+
+    monkeypatch.setattr(provider_gateway, "_upstream_connection", delay_final_write)
+    with _upstream() as upstream, _process() as process:
+        guard, receipt, wake = authority.invocation(
+            upstream.base_url, "lease-expiry", turn_id=turn, original_quota=quota,
+        )
+        with guard.serve(["native", "-"]):
+            guard.started(process)
+            renewed = lease("renew", original["version"], 2)
+            assert renewed["lease_epoch"] == original["lease_epoch"]
+            expires_at = lease_expires_at(renewed).timestamp()
+            status, error = _post(guard.base_url, body)
+            assert upstream.body.wait(5) and upstream.rows[0]["body"] == body
+            assert len(accepted_write_at) == 1 and accepted_write_at[0] >= expires_at
+            assert status == 502 and error["error"]["code"] == "provider_gateway_upstream_unavailable", error
+            event, = _finished(wake)
+            summary, = receipt["provider_request_invocations"]
+            assert event["turn_id"] == turn and event["invocation_id"] == summary["invocation_id"]
+            assert event["forwarded"] is None and "response_status" not in event and "refusal_code" not in event
+            assert summary["requests"] == summary["unknown"] == 1 and summary["pending"] == summary["sent"] == 0
+            if retry_lease == "replacement":
+                replacement = lease("acquire", renewed["version"], 60, key="provider-replacement-lease")
+                assert replacement["lease_epoch"] > renewed["lease_epoch"]
+            status, denied = _post(guard.base_url, body)
+            assert status == 409 and denied["error"]["code"] == "goal_launch_not_allowed", denied
+            _, rejected = _finished(wake, count=2)
+            assert rejected["invocation_id"] == event["invocation_id"] and rejected["forwarded"] is False
+            assert len(upstream.rows) == 1
+            assert summary["unknown"] == summary["refused"] == 1 and summary["sent"] == 0
+            assert quota_fixture._heartbeat_receipt_count(authority.runtime, turn) == 1
+            assert quota_fixture._spend_run_count(authority.runtime) == 0
+
+
+def test_bound_provider_send_holds_lease_writer_until_dispatch(held_provider_task, monkeypatch):
+    authority, quota, original, lease = held_provider_task
+    waiting, resume = threading.Event(), threading.Event()
+    original_connection = provider_gateway._upstream_connection
+
+    def connection_at_send(*args, **kwargs):
+        connection = original_connection(*args, **kwargs)
+        send = connection.send
+
+        def pause_body(data):
+            if isinstance(data, memoryview):
+                waiting.set()
+                assert resume.wait(4), "test did not release the admitted POST"
+            return send(data)
+
+        connection.send = pause_body
+        return connection
+
+    monkeypatch.setattr(provider_gateway, "_upstream_connection", connection_at_send)
+    with _upstream(hold_response=True) as upstream, _process() as process:
+        guard, _, wake = authority.invocation(
+            upstream.base_url, "lease-release", turn_id=quota_fixture.TURN_ID, original_quota=quota,
+        )
+        with guard.serve(["native", "-"]):
+            guard.started(process)
+            response = _async(lambda: _post(guard.base_url))
+            try:
+                assert waiting.wait(5) and not upstream.body.is_set()
+                target = shadow_maintenance_lock_target(authority.runtime, quota_fixture.GOAL_ID)
+                with pytest.raises(LockAcquireTimeoutError):
+                    with exclusive_mutation_file_lock(target, timeout_seconds=0):
+                        pass
+                mutation = _async(lambda: lease("release", original["version"]))
+                resume.set()
+                released = mutation.result(timeout=5)
+                assert released["status"] == "released"
+                assert upstream.body.wait(5) and upstream.rows[0]["body"] == b"{}"
+                assert not response.done()
+            finally:
+                resume.set()
+                upstream.respond.set()
+            assert response.result(timeout=5)[0] == 200
+            assert _finished(wake)[0]["forwarded"] is True
+            assert _post(guard.base_url)[0] == 409
+            assert len(upstream.rows) == 1 and quota_fixture._spend_run_count(authority.runtime) == 0
 
 
 def test_slow_response_does_not_hold_goal_writer(authority):

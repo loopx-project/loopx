@@ -1,8 +1,11 @@
 """Real heartbeat Hosts consume current source eligibility before native launch."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -12,10 +15,12 @@ from benchmark.runtime import worker
 from benchmark.tests.test_shared_codex_runtime import worker_env
 from loopx.configure_goal import configure_goal
 from loopx.cli_commands import turn_decision
+from loopx.control_plane.coordination.shadow_management import shadow_maintenance_lock_target
 from loopx.control_plane.goals import activation_service
-from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
+from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission, FirstPartyHostRuntimeRejected
 from loopx import contract, status as status_owner
 from loopx.cli import main
+from loopx.file_lock import LockAcquireTimeoutError, exclusive_mutation_file_lock
 from loopx.global_registry import sync_project_registry_to_global
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.host_process_fixture import write_python_host_fixture
@@ -37,7 +42,7 @@ def _private_workspace(project):
     return path
 
 
-def _environment(tmp_path, monkeypatch, provider, *, replan=False):
+def _environment(tmp_path, monkeypatch, provider, *, replan=False, handoff_mode="soft_claim"):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     monkeypatch.setenv("PYTHONPATH", str(ROOT))
@@ -55,7 +60,7 @@ def _environment(tmp_path, monkeypatch, provider, *, replan=False):
         fixture._configure_selected_todo_replan_fixture(project, source)
     elif replan:
         fixture._configure_autonomous_replan_fixture(project, runtime, source)
-    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     synced = sync_project_registry_to_global(
         registry_path=source, runtime_root_override=str(runtime), goal_id=fixture.GOAL_ID,
     )
@@ -152,6 +157,88 @@ def test_heartbeat_worker_qualifies_current_source_at_actual_spawn(tmp_path, mon
         assert state.read_bytes() == state_before
     index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
     assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("expire_after_check", [False, True])
+def test_heartbeat_worker_consumes_hard_lease_deadline_at_spawn(
+    tmp_path, monkeypatch, provider, expire_after_check,
+):
+    env, project, runtime, source, _ = _environment(tmp_path, monkeypatch, provider, handoff_mode="hard_lease")
+    lease_command = ["--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID,
+        "--owner", fixture.AGENT_ID, "--idempotency-key", "benchmark-original-lease"]
+    code, acquired = fixture._run_cli(source, runtime, "task-lease", "acquire",
+        *lease_command, "--expected-version", "0", "--ttl-seconds", "300")
+    assert code == 0 and acquired["ok"], acquired
+    if expire_after_check:
+        native_command = worker.native_command
+        launch_lifetime = FirstPartyHostGoalAdmission.launch_lifetime
+
+        def shorten_lease(*args, **kwargs):
+            command = native_command(*args, **kwargs)
+            code, renewed = fixture._run_cli(source, runtime, "task-lease", "renew",
+                *lease_command, "--expected-version", str(acquired["lease"]["version"]), "--ttl-seconds", "6")
+            assert code == 0 and renewed["lease"]["lease_epoch"] == acquired["lease"]["lease_epoch"], renewed
+            return command
+
+        @contextmanager
+        def wait_after_check(admission, *, operation):
+            with launch_lifetime(admission, operation=operation) as deadline:
+                if operation == "codex_agent_host_launch":
+                    assert deadline is not None and deadline > time.time() * 1000
+                    time.sleep(max(0, deadline / 1000 - time.time()) + 0.01)
+                yield deadline
+
+        monkeypatch.setattr(worker, "native_command", shorten_lease)
+        monkeypatch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", wait_after_check)
+        with pytest.raises(FirstPartyHostRuntimeRejected, match="goal_launch_not_allowed"):
+            worker.run_once(env)
+        assert not (project / "native-starts").exists()
+        assert not (project / "model-starts").exists()
+    else:
+        assert worker.run_once(env)["ok"]
+        assert (project / "native-starts").read_text().splitlines() == ["native"]
+        assert (project / "model-starts").read_text().splitlines() == ["model"]
+    assert fixture._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_heartbeat_worker_holds_the_lease_writer_until_native_spawn(tmp_path, monkeypatch, provider):
+    env, project, runtime, source, _ = _environment(tmp_path, monkeypatch, provider, handoff_mode="hard_lease")
+    lease_args = ["--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID,
+        "--owner", fixture.AGENT_ID, "--idempotency-key", "benchmark-worker-spawn-lease"]
+    code, acquired = fixture._run_cli(source, runtime, "task-lease", "acquire",
+        *lease_args, "--expected-version", "0", "--ttl-seconds", "60", cwd=project)
+    assert code == 0 and acquired["ok"], acquired
+    real_popen = subprocess.Popen
+    mutations = []
+
+    def release():
+        code, result = fixture._run_cli(source, runtime, "task-lease", "release",
+            *lease_args, "--expected-version", str(acquired["lease"]["version"]), cwd=project)
+        assert code == 0 and result["ok"], result
+        return result["lease"]
+
+    with ThreadPoolExecutor(max_workers=1) as writer:
+        def start_with_release(args, *extra, **kwargs):
+            if isinstance(args, list) and args and args[0] == env["CODEX_BIN"]:
+                target = shadow_maintenance_lock_target(runtime, fixture.GOAL_ID)
+                with pytest.raises(LockAcquireTimeoutError):
+                    with exclusive_mutation_file_lock(target, timeout_seconds=0):
+                        pytest.fail("canonical lease writer could enter before Popen")
+                mutations.append(writer.submit(release))
+            return real_popen(args, *extra, **kwargs)
+
+        monkeypatch.setattr(worker.subprocess, "Popen", start_with_release)
+        result = worker.run_once(env)
+        assert result["ok"], result
+        released, = mutations
+        assert released.result(timeout=10)["status"] == "released"
+
+    assert (project / "native-starts").read_text().splitlines() == ["native"]
+    assert (project / "model-starts").read_text().splitlines() == ["model"]
+    assert fixture._heartbeat_receipt_count(runtime, result["turn_id"]) == 0
+    assert fixture._spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

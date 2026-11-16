@@ -697,6 +697,7 @@ def build_live_quota_should_run_decision(
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     inline_goal_source: bool = False,
+    include_launch_lease_deadline: bool = False,
 ) -> dict[str, Any]:
     """Build one live CLI decision while keeping host observation injectable."""
     resolved_context = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -881,6 +882,7 @@ def build_live_quota_should_run_decision(
         workspace_path=workspace_path,
         goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
+        include_launch_lease_deadline=include_launch_lease_deadline,
     )
     _project_receipt_replan_settlement(payload, settlement_readback,
         available_capabilities=available_capabilities, scheduler_execution_context=resolved_context,

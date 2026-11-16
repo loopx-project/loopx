@@ -1020,9 +1020,9 @@ class CodexAppServerAdapter:
             if previous_guard is None:
                 yield
             else:
-                with previous_guard():
+                with previous_guard() as expires_at_ms:
                     check()
-                    yield
+                    yield expires_at_ms
         # Native sandboxPolicy is sticky across subsequent Turns. Reassert the
         # current managed Chat read boundary without changing Session defaults.
         return {"sandbox_policy": {"type": "readOnly", "networkAccess": False},

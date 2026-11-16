@@ -1689,6 +1689,7 @@ def _build_quota_should_run_payload(
     include_agent_todo_detail: bool = False,
     runtime_root: str | Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    include_launch_lease_deadline: bool = False,
     scheduler_state_read_observer: (
         Callable[[Mapping[str, Any]], None] | None
     ) = None,
@@ -1726,6 +1727,7 @@ def _build_quota_should_run_payload(
             else None
         ),
         receipt_bound=prepared.receipt_bound_todo_id is not None,
+        include_launch_lease_deadline=include_launch_lease_deadline,
     )
     _attach_automation_cadence_readback(
         payload,

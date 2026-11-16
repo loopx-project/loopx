@@ -35,6 +35,7 @@ def project_selected_todo_execution_preparation(
     goal_id: str,
     selected_todo: Mapping[str, Any],
     agent_id: str | None,
+    include_launch_lease_deadline: bool = False,
 ) -> dict[str, Any] | None:
     """Read the selected Todo's canonical lease and project one preparation step.
 
@@ -79,9 +80,11 @@ def project_selected_todo_execution_preparation(
                 if not isinstance(lease, dict) or lease.get("todo_id") != todo_id:
                     raise ValueError("execution preparation returned a lease for a different Todo")
                 status = str(lease.get("status") or "unknown").strip().lower()
+                active = lease_is_active(lease)
                 leases.append({
                     "status": status if status in {"active", "released"} else "unknown",
-                    "active": lease_is_active(dict(lease)),
+                    "active": active,
+                    **({"expires_at": lease.get("expires_at")} if include_launch_lease_deadline and active else {}),
                     **({"owner": lease["owner"]} if normalize_todo_claimed_by(lease.get("owner")) else {}),
                     "lease_proof": {"idempotency_key": lease.get("idempotency_key"),
                                     "expected_version": lease.get("version")},
@@ -124,6 +127,7 @@ def apply_selected_todo_execution_preparation(
     obligation: dict[str, Any] | None = None,
     recommendation: dict[str, Any] | None = None,
     receipt_bound: bool = False,
+    include_launch_lease_deadline: bool = False,
 ) -> None:
     selected = payload.get("selected_todo")
     if (
@@ -146,6 +150,7 @@ def apply_selected_todo_execution_preparation(
         goal_id=goal_id,
         selected_todo=selected,
         agent_id=agent_id,
+        include_launch_lease_deadline=include_launch_lease_deadline,
     )
     # Existing receipt-bound recovery predates this projection and may be
     # reconstructed without canonical lease authority in synthetic/legacy
@@ -158,10 +163,16 @@ def apply_selected_todo_execution_preparation(
         or preparation.get("state") == "authority_unavailable"
     ):
         return
-    if preparation is None or preparation.get("state") == "not_required":
+    if preparation is None:
+        return
+    state = preparation.get("state")
+    if state == "not_required":
+        # The live Host needs the canonical soft-claim result to distinguish
+        # permission from missing authority. Ordinary quota omits this detail.
+        if include_launch_lease_deadline:
+            payload["execution_preparation"] = preparation
         return
     payload["execution_preparation"] = preparation
-    state = preparation.get("state")
     if state == "ready":
         return
     payload["normal_delivery_allowed"] = False
@@ -191,7 +202,7 @@ def attach_interaction_execution_preparation(
     contract: dict[str, Any], payload: dict[str, Any],
 ) -> None:
     preparation = payload.get("execution_preparation")
-    if not isinstance(preparation, dict):
+    if not isinstance(preparation, dict) or preparation.get("state") == "not_required":
         return
     contract["agent_channel"]["execution_preparation"] = preparation
     contract["cli_channel"]["execution_preparation"] = preparation

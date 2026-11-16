@@ -345,14 +345,13 @@ candidate so a maintainer can audit why that person was selected.
 
 `CODEOWNERS` remains the strongest repository-native signal. Commit volume is
 only evidence of familiarity; it is not proof of maintainership, availability,
-or review authority. See the [reviewer recommendation
-contract](docs/protocols/issue-fix-reviewer-recommendation-v0.md) for scoring,
-identity, and future-signal details, and the [reviewer request
-contract](docs/protocols/issue-fix-reviewer-request-v0.md) for the external-write,
+or review authority. See the
+[reviewer recommendation contract](docs/protocols/issue-fix-reviewer-recommendation-v0.md) for
+scoring, identity, and future-signal details, and the
+[reviewer request contract](docs/protocols/issue-fix-reviewer-request-v0.md) for the external-write,
 idempotency, and verification rules. Secondary delivery, dedicated-bot
 isolation, local-private identity mapping, and readback are defined by the
-[reviewer notification sink
-contract](docs/protocols/issue-fix-reviewer-notification-sinks-v0.md).
+[reviewer notification sink contract](docs/protocols/issue-fix-reviewer-notification-sinks-v0.md).
 
 ### 6. PR publication and public-write boundary
 

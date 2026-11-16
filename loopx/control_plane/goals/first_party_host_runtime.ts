@@ -1,5 +1,8 @@
 import type { JsonObject } from "../effect_program.ts";
+import { decodeTaskLeaseProof } from "../coordination/task_lease_proof.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { EffectiveAction } from "../quota/effective_action.generated.ts";
+import { normalizeHeartbeatReplanObligationId } from "../quota/heartbeat_receipt_identity.ts";
 import { assertNever, jsonObject } from "../runtime_decode.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {
@@ -185,10 +188,34 @@ function launchDecisionRejection(facts: JsonObject): FirstPartyHostRuntimeDecisi
   // health, repair, replan or scheduler policy in the Host adapter.
   // A newly selected repair/replan is not permission to launch the old action.
   // An already-admitted health repair keeps the quota owner's exception.
-  return decision?.should_run === true && typeof decision.status_health_ok === "boolean"
-    && typeof launch?.planned_effective_action === "string" && !!launch.planned_effective_action
-    && decision.effective_action === launch.planned_effective_action
-    ? null : {kind: "reject", code: "goal_launch_not_allowed"};
+  const rejected = {kind: "reject", code: "goal_launch_not_allowed"} as const;
+  if (decision?.should_run !== true || typeof decision.status_health_ok !== "boolean"
+      || typeof launch?.planned_effective_action !== "string" || !launch.planned_effective_action
+      || decision.effective_action !== launch.planned_effective_action) return rejected;
+  if (launch.receipt_bound_todo_id === undefined) return null;
+  const todoId = launch.receipt_bound_todo_id;
+  if (typeof todoId !== "string") return rejected;
+
+  if (decision.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED) {
+    // A replan can use a Todo for settlement while delivery is prohibited.
+    // Its continuation authority is the original semantic obligation.
+    const obligationId = normalizeHeartbeatReplanObligationId(launch.receipt_bound_replan_obligation_id);
+    return obligationId !== null && decision.normal_delivery_allowed === false &&
+      jsonObject(decision.replan_action_packet)?.obligation_id === obligationId &&
+      jsonObject(decision.selected_todo)?.todo_id === todoId ? null : rejected;
+  }
+
+  // A Todo-bound receipt requires the live preparation for that same Todo.
+  const preparation = jsonObject(decision.execution_preparation);
+  if (preparation?.todo_id !== todoId ||
+      preparation.delivery_allowed !== true) return rejected;
+  const planned = jsonObject(launch.planned_execution_preparation);
+  if (planned?.handoff_mode !== "hard_lease" || planned.state !== "ready") return null;
+  const original = decodeTaskLeaseProof(planned.lease_proof);
+  const current = decodeTaskLeaseProof(preparation.lease_proof);
+  return preparation.handoff_mode === "hard_lease" && preparation.state === "ready" &&
+    original && current && original.idempotency_key === current.idempotency_key &&
+    current.expected_version >= original.expected_version ? null : rejected;
 }
 
 /**

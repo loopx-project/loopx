@@ -15,6 +15,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 from urllib.request import proxy_bypass_environment
@@ -59,6 +60,11 @@ class ProviderRequestAdmission:
         captured_session = SimpleNamespace(goal_ref=copy.deepcopy(session_wake.goal_ref))
         check = heartbeat_launch_check(captured_env, captured_session,
             original_quota=copy.deepcopy(original_quota))
+        preparation = original_quota.get("execution_preparation") if original_quota is not None else None
+        launch_scope = {}
+        if isinstance(preparation, dict) and preparation.get("handoff_mode") == "hard_lease":
+            # Keep the stored work's canonical lease fence through actual POST dispatch.
+            launch_scope["work_runtime_root"] = Path(captured_env["LOOPX_RUNTIME_ROOT"])
         deadline = math.inf
         if timeout is not None:
             if not math.isfinite(timeout) or timeout < 0:
@@ -72,7 +78,7 @@ class ProviderRequestAdmission:
             deadline = min(deadline,
                 time.monotonic() + epoch - reserve - time.time())
         self._invocation = _Invocation(
-            session_wake.admission.with_launch_decision(check), captured_env["LOOPX_TURN"],
+            session_wake.admission.with_launch_decision(check, **launch_scope), captured_env["LOOPX_TURN"],
             session_wake.session_id, deadline)
         self._env = captured_env
         self._process = None
@@ -149,13 +155,20 @@ class ProviderRequestAdmission:
             self._require_live()
         entered = False
         try:
-            with self._invocation.admission.launch_lifetime(operation="provider_request_dispatch"):
+            with self._invocation.admission.launch_lifetime(operation="provider_request_dispatch") as expires_at_ms:
                 entered = True
                 with self._lock:
                     # Authority/registry contention can outlive the process or
                     # phase. Revalidate after every wait and before any POST.
                     self._require_live()
-                    yield min(time.monotonic() + 2, self._invocation.deadline)
+                    now = time.monotonic()
+                    deadline = min(now + 2, self._invocation.deadline)
+                    if expires_at_ms is not None:
+                        remaining = expires_at_ms / 1000 - time.time()
+                        if remaining <= 0:
+                            self._reject("goal_launch_not_allowed")
+                        deadline = min(deadline, now + remaining)
+                    yield deadline
         except ProviderGatewayRequestRejected:
             raise
         except FirstPartyHostRuntimeRejected as error:

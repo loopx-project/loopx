@@ -580,6 +580,7 @@ def build_quota_should_run(
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    include_launch_lease_deadline: bool = False,
     app_scheduler_state_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
@@ -690,6 +691,7 @@ def build_quota_should_run(
             include_agent_todo_detail=include_agent_todo_detail,
             runtime_root=runtime_root,
             goal_ref=goal_ref,
+            include_launch_lease_deadline=include_launch_lease_deadline,
             scheduler_state_read_observer=_app_scheduler_state_read_observer(
                 direct_sources, app_scheduler_state_observer,
             ),

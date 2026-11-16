@@ -126,20 +126,23 @@ def _dispatch_bounded(connection: http.client.HTTPConnection, path: str, body: b
     for key, value in headers.items():
         connection.putheader(key, value)
 
-    def remaining() -> None:
+    def remaining_budget() -> float:
         budget = deadline - time.monotonic()
         if not math.isfinite(budget) or budget <= 0:
             raise TimeoutError("provider request dispatch deadline exceeded")
-        connected_socket.settimeout(budget)
+        return budget
 
-    remaining()
+    connected_socket.settimeout(remaining_budget())
     connection.endheaders()
     # Recompute the absolute budget between writes; repeated successful writes
     # must not renew a socket timeout while a Goal writer is waiting.
     view = memoryview(body)
     for start in range(0, len(view), 64 * 1024):
-        remaining()
+        connected_socket.settimeout(remaining_budget())
         connection.send(view[start:start + 64 * 1024])
+    # The sender can be preempted after setting the last relative timeout.
+    # A late return may have delivered bytes, so leave the attempt unconfirmed.
+    remaining_budget()
 
 
 @contextmanager

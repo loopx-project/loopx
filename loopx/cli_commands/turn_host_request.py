@@ -95,9 +95,7 @@ def prepare_turn_host_request(
 
 def build_codex_cli_host_runner(
     args: argparse.Namespace, *, runtime_root: Path, project: Path,
-    registry_path: Path, goal_ref: Mapping[str, object] | None,
-    goal_admission: FirstPartyHostGoalAdmission | None,
-    current_launch_decision: Callable[[Path], Mapping[str, Any]],
+    registry_path: Path, goal_admission: FirstPartyHostGoalAdmission | None,
     run_codex_cli_host: Callable[..., dict[str, Any]],
 ) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
     """Bind the existing Codex adapter; resolve options/admission only at launch."""
@@ -113,13 +111,8 @@ def build_codex_cli_host_runner(
             "reasoning_effort": args.codex_reasoning_effort,
             "mcp_server": args.codex_mcp_server_json,
             "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
+            "goal_admission": goal_admission,
         }
-        options["goal_admission"] = (
-            goal_admission or FirstPartyHostGoalAdmission.for_plan(
-                registry_path=registry_path, goal_id=args.goal_id,
-                planned_goal_ref=goal_ref, agent_id=args.agent_id,
-            )
-        ).with_launch_decision(current_launch_decision)
         if getattr(args, "codex_operation_tools", False):
             from ..control_plane.turn_driver.codex_operation_host import (
                 run_codex_operation_host,

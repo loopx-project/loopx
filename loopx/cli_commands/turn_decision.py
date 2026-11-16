@@ -390,6 +390,7 @@ def current_turn_host_launch_decision(
         turn_instance_id=identity.turn_instance_id,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         workspace_path=Path(args.project).expanduser().resolve(), goal_ref=goal_ref,
+        include_launch_lease_deadline=True,
         interaction_projection_hooks=(periodic_report_pending_intent_interaction_hook(
             registry_path=registry_path, runtime_root=runtime_root,
             goal_id=identity.goal_id, agent_id=identity.agent_id,
@@ -472,7 +473,9 @@ def current_heartbeat_host_launch_decision(
             selection.receipt, turn_instance_id=original_turn, status="replayed",
         )
         if (not held.get("event_id") or current_receipt.get("event_id") != held.get("event_id")
-                or current_receipt.get("settlement_identity") != held.get("settlement_identity")):
+                or current_receipt.get("settlement_identity") != held.get("settlement_identity")
+                or current_receipt.get("semantic_replan_obligation_id")
+                != held.get("semantic_replan_obligation_id")):
             raise FirstPartyHostRuntimeRejected("heartbeat_launch_original_binding_changed")
     current = build_live_quota_should_run_decision(
         collect_turn_status_payload(args, registry_path=registry_path, runtime_root_arg=str(runtime_root)),
@@ -486,6 +489,7 @@ def current_heartbeat_host_launch_decision(
         receipt_bound_replan_obligation_id=selection.receipt_bound_replan_obligation_id,
         retained_action_selection_todo_id=selection.retained_todo_id_for_decision,
         turn_instance_id=original_turn, workspace_path=project, goal_ref=goal_ref,
+        include_launch_lease_deadline=True,
         interaction_projection_hooks=(periodic_report_pending_intent_interaction_hook(
             registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id, agent_id=agent_id,
         ),),
@@ -493,9 +497,16 @@ def current_heartbeat_host_launch_decision(
     # Initial heartbeat/planning has not chosen an action yet. Its generic
     # prompt asks the Host to consume the current decision after launch. A
     # held continuation already has an action and cannot substitute another.
-    return {"current": current, "planned_effective_action": (
+    launch = {"current": current, "planned_effective_action": (
         original_quota.get("effective_action") if original_quota is not None
         else current.get("effective_action"))}
+    if selection.receipt_bound_todo_id is not None:
+        launch["receipt_bound_todo_id"] = selection.receipt_bound_todo_id
+        if selection.receipt_bound_replan_obligation_id is not None:
+            launch["receipt_bound_replan_obligation_id"] = selection.receipt_bound_replan_obligation_id
+        if original_quota is not None:
+            launch["planned_execution_preparation"] = original_quota.get("execution_preparation")
+    return launch
 
 
 def build_fresh_envelope_for_managed_step(

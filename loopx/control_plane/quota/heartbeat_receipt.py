@@ -11,6 +11,7 @@ from ...rollout_event_log import (
     load_rollout_events,
     rollout_event_log_path,
 )
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ..todos.contract import normalize_todo_id, normalize_todo_replan_obligation_id
 from .effect_program import SettlementBindingKind, SettlementIdentity
 from .error_codes import HeartbeatReceiptIdentityConflictError
@@ -208,6 +209,7 @@ def ensure_turn_heartbeat_settlement_receipt(
     quota_spend_source: str | None = None,
     goal_ref: Mapping[str, object] | None = None,
     before_bind: Callable[[], None] | None = None,
+    turn_key: str | None = None,
 ) -> dict[str, object]:
     """Idempotently bind a Turn-created quota guard to its settlement identity.
 
@@ -215,6 +217,8 @@ def ensure_turn_heartbeat_settlement_receipt(
     obligation was selected.  Persist that explicit empty selection so an
     obligation opened while the host is running cannot retroactively reject
     the admitted Turn.  Old envelopes without the field stay legacy-unscoped.
+    A journal key links the already bound receipt to a durably recorded native
+    Host attempt. This revision preserves the original admission facts.
     """
 
     normalized_semantic_replan_obligation_id = (
@@ -253,6 +257,31 @@ def ensure_turn_heartbeat_settlement_receipt(
                 "Turn heartbeat receipt belongs to another settlement identity"
             )
         previous_details = effective.get("details") if effective is not None else None
+        if turn_key is not None:
+            if (identity.binding_kind is not SettlementBindingKind.TODO
+                    or ENVELOPED_SHA256_PATTERN.fullmatch(turn_key) is None
+                    or effective is None or observed != expected or not isinstance(previous_details, Mapping)):
+                raise HeartbeatReceiptIdentityConflictError(
+                    "Native Host attempt requires a valid journal key and the original bound receipt"
+                )
+            previous_key = previous_details.get("turn_key")
+            if previous_key == turn_key:
+                return effective
+            if "turn_key" in previous_details:
+                raise HeartbeatReceiptIdentityConflictError(
+                    "Turn heartbeat receipt already identifies another journal"
+                )
+            source_event_id = str(effective["event_id"])
+            linked = build_rollout_event(
+                goal_id=identity.goal_id, goal_ref=goal_ref, event_kind="quota_should_run",
+                agent_id=identity.agent_id, todo_id=identity.todo_id, run_id=identity.turn_instance_id,
+                status=str(effective["status"]), recorded_at=str(effective["recorded_at"]),
+                summary="Original Turn receipt linked to its durable Host attempt",
+                source_event_id=source_event_id, caused_by=source_event_id,
+                details={**previous_details, "turn_key": turn_key},
+            )
+            _append_rollout_event_line(log_path, linked)
+            return linked
         previous_source = (
             previous_details.get("quota_spend_source")
             if observed is not None and isinstance(previous_details, Mapping) else None

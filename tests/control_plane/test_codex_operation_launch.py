@@ -19,6 +19,7 @@ from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
 from loopx.control_plane.goals import activation_service, first_party_host_admission
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from loopx.control_plane.projects.registry_codec import project_registry_transaction
+from loopx.control_plane.work_items.task_lease import lease_expires_at
 from loopx.control_plane.turn_driver import codex_operation_host
 from loopx.global_registry import sync_project_registry_to_global
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -27,9 +28,9 @@ from tests.test_loopx_turn_codex_cli import _fake_codex, _request, _session_file
 from tests.test_loopx_turn_driver import _write_live_fixture
 
 
-def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
+def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, handoff_mode="soft_claim"):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode=handoff_mode)
     native, turns = tmp_path / "native-starts", tmp_path / "native-turns"
     executable = tmp_path / "fake-codex-operation"
     executable.write_text(FAKE_SERVER.replace(
@@ -559,8 +560,185 @@ def test_native_turn_dispatch_failure_drains_before_stop_writer_is_released(
     assert not index.exists() or "quota_slot_spent" not in index.read_text()
 
 
-def test_guarded_native_dispatch_preserves_large_unicode_input(tmp_path, monkeypatch):
-    _, _, _, turns, arguments = _fixture(tmp_path, monkeypatch, "sqlite")
+def _lease(arguments, action, *, version, ttl):
+    code, payload = _cli([
+        *arguments[:6], "task-lease", action, "--goal-id", "loopx-turn-fixture",
+        "--todo-id", "todo_fixture0001", "--owner", "codex-fixture",
+        "--idempotency-key", "native-input-lease", "--expected-version", str(version),
+        "--ttl-seconds", str(ttl),
+    ])
+    assert code == 0, payload
+    return payload["lease"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_lease_expiry_during_final_pipe_write_keeps_original_attempt_unconfirmed(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.extensions import process_runtime
+
+    runtime, _, native, turns, arguments = _fixture(tmp_path, monkeypatch, provider, handoff_mode="hard_lease")
+    original = _lease(arguments, "acquire", version=0, ttl=300)
+    prepare_input = codex_operation_host.prepare_codex_cli_input
+    pipe_writer = process_runtime._nonblocking_pipe_writer
+    expires_at = []
+    sent_at = []
+
+    def renew_before_dispatch(request):
+        prepared = prepare_input(request)
+        renewed = _lease(arguments, "renew", version=original["version"], ttl=10)
+        assert renewed["lease_epoch"] == original["lease_epoch"]
+        expires_at.append(lease_expires_at(renewed).timestamp())
+        return prepared
+
+    @contextlib.contextmanager
+    def preempt_final_write(fd):
+        with pipe_writer(fd) as write:
+            def delayed(chunk):
+                if chunk[-1] != ord("\n"):
+                    return write(chunk)
+                if len(chunk) > 1:
+                    # Withhold exactly the terminator so the fixture cannot
+                    # interpret the real pipe's partial frame as a request.
+                    return write(chunk[:-1])
+                assert len(expires_at) == 1 and time.time() < expires_at[0]
+                time.sleep(expires_at[0] - time.time() + .03)
+                count = write(chunk)
+                assert count == 1
+                sent_at.append(time.time())
+                limit = time.monotonic() + 2
+                while not (turns.exists() and turns.stat().st_size) and time.monotonic() < limit:
+                    time.sleep(.005)
+                return count
+
+            yield delayed
+
+    monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", renew_before_dispatch)
+    monkeypatch.setattr(process_runtime, "_nonblocking_pipe_writer", preempt_final_write)
+    code, result = _cli([*arguments, "--execute"])
+    assert len(sent_at) == 1 and sent_at[0] >= expires_at[0]
+    assert native.read_text().splitlines() == ["native"] and len(turns.read_text().splitlines()) == 1
+    assert code == 1 and result["status"] == "in_progress", result
+    assert result["error_code"] == "host_outcome_unknown", result
+    assert result["effects"] == {
+        "host_invoked": True, "state_written": False, "quota_spent": False, "scheduler_acknowledged": False,
+    }
+    assert _bindings(runtime)
+    key = result["resume_turn_key"]
+    path = turn_journal_path(runtime, goal_id="loopx-turn-fixture", turn_key=key)
+    saved = path.read_bytes()
+    journal = json.loads(saved)
+    assert journal["turn_key"] == key and journal["host_attempt_count"] == 1
+    assert journal["status"] == "in_progress" and not journal["completed_phases"]
+    capture = path.parent / "decisions" / (key.removeprefix("sha256:") + ".json")
+    original_capture = capture.read_bytes()
+    index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+    resume = list(arguments)
+    index_of_turn = resume.index("--turn-instance-id")
+    resume[index_of_turn:index_of_turn + 2] = ["--resume-turn-key", key]
+    code, replay = _cli([*resume, "--retry-failed-turn", "--execute"])
+    assert code == 1 and replay["recovery_decision"]["reason"] == "host_outcome_unknown", replay
+    assert replay["recovery_decision"]["reinvoke_host"] is False
+    assert native.read_text().splitlines() == ["native"] and len(turns.read_text().splitlines()) == 1
+    assert path.read_bytes() == saved and capture.read_bytes() == original_capture
+    guard_arguments = [
+        *arguments[:6], "quota", "should-run", "--goal-id", "loopx-turn-fixture",
+        "--agent-id", "codex-fixture",
+        "--context-delivery", "off", "--delta-delivery", "off",
+    ]
+    code, guard = _cli([*guard_arguments, "--turn-instance-id", "next-after-unconfirmed-dispatch"])
+    assert code == 0, guard
+    assert guard["should_run"] is False and guard["reason_code"] == "host_outcome_unknown", guard
+    assert guard["unsettled_host_turn_recovery"]["turn_key"] == key
+    moved = path.with_suffix(".relocated")
+    path.rename(moved)
+    try:
+        code, guard = _cli([*guard_arguments, "--turn-instance-id", "next-after-original-journal-lost"])
+        assert code == 0, guard
+        assert guard["should_run"] is False and guard["reason_code"] == "host_outcome_unknown", guard
+        assert guard["unsettled_host_turn_recovery"]["turn_key"] == key
+        assert not path.exists()
+    finally:
+        moved.rename(path)
+    assert native.read_text().splitlines() == ["native"] and len(turns.read_text().splitlines()) == 1
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+    assert path.read_bytes() == saved and capture.read_bytes() == original_capture
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_expired_lease_cannot_publish_backpressured_native_frame(tmp_path, monkeypatch, provider):
+    from loopx.extensions import process_runtime
+
+    runtime, _, native, turns, arguments = _fixture(tmp_path, monkeypatch, provider, handoff_mode="hard_lease")
+    original = _lease(arguments, "acquire", version=0, ttl=300)
+    pending = tmp_path / "partial-native-frame"
+    release = tmp_path / "release-native-reader"
+    resumed = tmp_path / "native-reader-resumed"
+    executable = Path(arguments[arguments.index("--codex-bin") + 1])
+    ready = '        emit({"id": row["id"], "result": {"thread": {"id": thread}, "model": "test-model", "reasoningEffort": "xhigh"}})'
+    source = executable.read_text()
+    assert ready in source
+    executable.write_text(source.replace(
+        "for line in sys.stdin:\n    row = json.loads(line)",
+        "prefix = ''\nwhile line := sys.stdin.readline():\n"
+        "    row = json.loads(prefix + line)\n    prefix = ''", 1,
+    ).replace(ready, ready + "\n"
+        "        import time\n"
+        "        prefix = sys.stdin.read(2048)\n"
+        f"        pathlib.Path({str(pending)!r}).touch()\n"
+        f"        while not pathlib.Path({str(release)!r}).exists(): time.sleep(.005)\n"
+        f"        pathlib.Path({str(resumed)!r}).touch()", 1))
+    original_input = codex_operation_host.prepare_codex_cli_input
+    original_cancel = process_runtime.force_terminate_process
+    deadline = []
+
+    def oversized_input(request):
+        text, schema = original_input(request)
+        renewed = _lease(arguments, "renew", version=original["version"], ttl=8)
+        assert renewed["lease_epoch"] == original["lease_epoch"]
+        deadline.append(lease_expires_at(renewed).timestamp())
+        return text + "\n" + "界" * (1024 * 1024), schema
+
+    def delay_retirement(process, **kwargs):
+        # Let the receiver start draining after expiry but before termination.
+        # An outstanding blocking write could still publish the complete line.
+        limit = time.monotonic() + 2
+        while not resumed.exists() and time.monotonic() < limit:
+            time.sleep(.005)
+        limit = time.monotonic() + .25
+        while not turns.exists() and time.monotonic() < limit:
+            time.sleep(.005)
+        original_cancel(process, **kwargs)
+
+    monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", oversized_input)
+    monkeypatch.setattr(process_runtime, "force_terminate_process", delay_retirement)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        host = executor.submit(_cli, [*arguments, "--execute"])
+        try:
+            limit = time.monotonic() + 20
+            while not pending.exists() and not host.done() and time.monotonic() < limit:
+                time.sleep(.01)
+            assert pending.exists() and time.time() < deadline[0], "the active lease must reach real pipe backpressure"
+            time.sleep(max(0, deadline[0] - time.time()) + .025)
+            release.touch()
+            code, payload = host.result(timeout=12)
+        finally:
+            release.touch()
+
+    assert native.exists() and resumed.exists() and not turns.exists()
+    assert code == 1 and payload.get("error_code") == "goal_launch_not_allowed", payload
+    assert payload["host_failure"]["kind"] == "contract_rejected"
+    assert not any(payload["effects"].values()), payload
+    index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
+def test_guarded_native_dispatch_preserves_large_unicode_input(tmp_path, monkeypatch, handoff_mode):
+    _, _, _, turns, arguments = _fixture(tmp_path, monkeypatch, "sqlite", handoff_mode=handoff_mode)
+    if handoff_mode == "hard_lease":
+        _lease(arguments, "acquire", version=0, ttl=300)
     observed = tmp_path / "accepted-native-input"
     monkeypatch.setenv("FAKE_OPERATION_PROMPT_FILE", str(observed))
     original_input = codex_operation_host.prepare_codex_cli_input

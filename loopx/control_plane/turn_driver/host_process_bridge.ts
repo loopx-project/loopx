@@ -3,7 +3,8 @@ import {once} from "node:events";
 import {decodeHostProcessRequest, runHostProcess} from "./host_process.ts";
 const owner = new AbortController();
 // Private transport observations; none grants Goal or execution authority.
-type LaunchObservation = {kind: "ready"} | {kind: "not_launched"};
+type LaunchObservation = {kind: "ready"} | {kind: "not_launched"; reason?: "goal_launch_not_allowed"};
+class HostLaunchLeaseExpired extends Error {}
 const launchDeadline = process.argv[2] === "--guarded-launch" ? Number(process.argv[3]) : null;
 if (launchDeadline !== null && (!Number.isFinite(launchDeadline) || launchDeadline <= 0))
   throw new TypeError("invalid guarded Host bridge deadline");
@@ -41,18 +42,31 @@ process.stdin.on("data", (chunk: Buffer) => {
         }
         if (raw.timeout_ms !== null) raw.timeout_ms = Math.min(raw.timeout_ms, remaining);
       }
+      const expiresAt = raw.launch_lease_expires_at_ms;
+      delete raw.launch_lease_expires_at_ms;
+      if (expiresAt !== undefined && (launchDeadline === null || !Number.isSafeInteger(expiresAt)))
+        throw new TypeError("invalid guarded Host lease deadline");
+      const beforeSpawn = expiresAt === undefined ? undefined : () => {
+        if (Date.now() >= expiresAt) throw new HostLaunchLeaseExpired();
+      };
       const lease = raw.delegated_lease;
       delete raw.delegated_lease;
       const request = decodeHostProcessRequest(raw);
       // The owned process group is reported before either path can run unaccounted.
-      if (lease === undefined) await emit(await runHostProcess(request, emit, owner.signal, undefined, {spawned: emit}));
+      if (lease === undefined) {
+        await emit(await runHostProcess(request, emit, owner.signal, undefined, {beforeSpawn, spawned: emit}));
+      }
       else {
         // Ordinary Hosts do not load canonical lease/provider modules.
         const {decodeDelegatedHostLease, runLeasedHostProcess} = await import("./leased_host_process.ts");
-        await emit(await runLeasedHostProcess(request, decodeDelegatedHostLease(lease), emit, owner.signal, emit));
+        await emit(await runLeasedHostProcess(request, decodeDelegatedHostLease(lease), emit, owner.signal, emit, beforeSpawn));
       }
     }
-    catch { process.exitCode = 1; }
+    catch (error) {
+      if (error instanceof HostLaunchLeaseExpired) {
+        await emit({kind: "not_launched", reason: "goal_launch_not_allowed"} satisfies LaunchObservation);
+      } else process.exitCode = 1;
+    }
     finally { process.stdin.destroy(); }
   })();
 });

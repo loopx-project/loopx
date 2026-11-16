@@ -594,14 +594,12 @@ def test_typed_result_recovery_does_not_start_a_pending_goal_host(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize(("first_attempt_fails", "restore_live_work"), [
-    pytest.param(False, False, id="committed"),
-    pytest.param(True, True, id="restore-live-work"),
-    pytest.param(True, False, id="changed-live-work"),
+@pytest.mark.parametrize("attempt", [
+    "committed", "restored_before_retry", "changed_before_retry", "missing_capability_before_retry",
 ])
 @pytest.mark.parametrize("legacy_pretty", [False, True])
 def test_real_host_reads_original_capture_after_source_change(
-    tmp_path, monkeypatch, provider, first_attempt_fails, restore_live_work, legacy_pretty,
+    tmp_path, monkeypatch, provider, attempt, legacy_pretty,
 ):
     from loopx.cli_commands import turn_decision
 
@@ -647,9 +645,29 @@ def test_real_host_reads_original_capture_after_source_change(
         build_todo_runtime_shadow_projection(goal_id=f.GOAL_ID, handoff_mode="soft_claim",
                                              todos=summary["agent_todos"]["items"]),
         state_path=state, provider=provider)
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+
+    def current_todo():
+        code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
+        assert code == 0, current
+        return current
+
+    def update_current_todo(operation, *changes):
+        # Change the real provider through its native CAS CLI.
+        current = current_todo()
+        code, update = f._run_cli([*prefix, "todo", "update", "--goal-id", f.GOAL_ID,
+            "--todo-id", f.TODO_ID, "--agent-id", f.AGENT_ID, *changes,
+            "--update-operation-id", operation, "--update-expected-provider-revision",
+            current["authority_read"]["provider_revision"], "--execute"])
+        assert code == 0, update
+
+    capability_case = attempt == "missing_capability_before_retry"
+    if capability_case:
+        update_current_todo("require-shell", "--required-capability", "shell")
     executable = f._write_fake_codex(tmp_path)
     source = executable.read_text().replace("#!/usr/bin/env python3", "#!" + sys.executable)
     source = source.replace("prompt = sys.stdin.read()", 'prompt = sys.stdin.read()\npathlib.Path("received.txt").write_text(prompt)')
+    first_attempt_fails = attempt != "committed"
     if first_attempt_fails:
         source = source.replace("marker = pathlib.Path(",
             'failed = pathlib.Path("failed-once")\n'
@@ -659,10 +677,16 @@ def test_real_host_reads_original_capture_after_source_change(
             '    print("Selected model is at capacity. Please try a different model.", file=sys.stderr)\n'
             '    raise SystemExit(9)\n'
             'marker = pathlib.Path(')
+    if capability_case:
+        source = source.replace("marker = pathlib.Path(",
+            'assert "resume" in args and "session-fixture-0001" in args\n'
+            'marker = pathlib.Path(')
     executable.write_text(source)
     base = f._base_argv(registry=registry, runtime=runtime, workspace=workspace,
         codex_bin=executable, model=None, timeout_seconds=20,
         expected_marker=f._marker_value(1), turn_instance_id="original-observation")
+    if capability_case:
+        base.extend(["--available-capability", "shell"])
     # Preview must not allocate a capture or invoke the provider.
     code, preview = f._run_cli(base)
     assert code == 0, preview
@@ -701,22 +725,20 @@ def test_real_host_reads_original_capture_after_source_change(
     for field in ("work_lane_contract", "execution_obligation"):
         assert source_a[field]
         assert request["task_context"][field] == source_a[field]
-    # Change the real provider through its native CAS CLI, not the projection.
-    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
-    code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
-    assert code == 0
-    original_text = current["todo"]["text"]
-    code, update = f._run_cli([*prefix, "todo", "update", "--goal-id", f.GOAL_ID,
-        "--todo-id", f.TODO_ID, "--agent-id", f.AGENT_ID, "--text", original_text + " SOURCE_B",
-        "--update-operation-id", "source-b", "--update-expected-provider-revision",
-        current["authority_read"]["provider_revision"], "--execute"])
-    assert code == 0, update
+
+    original_text = current_todo()["todo"]["text"]
+
+    def change_current_task(operation):
+        updated_text = original_text + " SOURCE_B"
+        update_current_todo(operation, "--text", updated_text)
+        assert current_todo()["todo"]["text"] == updated_text
+
+    if attempt in {"committed", "restored_before_retry", "changed_before_retry"}:
+        change_current_task("source-b")
     # Execute precisely what the actual subprocess received.
     detail_bytes = subprocess.run(shlex.split(detail["full_decision"]), check=True,
                                   capture_output=True).stdout
     assert detail_bytes == original and b"SOURCE_B" not in detail_bytes
-    code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
-    assert code == 0 and "SOURCE_B" in current["todo"]["text"]
     plan = load_loopx_turn_plan_from_journal(runtime, goal_id=f.GOAL_ID, turn_key=request["turn_key"])
     journal_path = turn_journal_path(runtime, goal_id=f.GOAL_ID, turn_key=request["turn_key"])
     # An existing receipt must not let a malformed complete request bypass the
@@ -778,30 +800,52 @@ def test_real_host_reads_original_capture_after_source_change(
             assert (workspace / "received.txt").read_bytes() == received_before
             assert f._quota_spend_count(runtime) == 0
             path.write_bytes(original)
-        # The snapshot remains readable when live work changes. Launching it
-        # again also requires the current Todo to match the original work.
-        if restore_live_work:
-            code, restored = f._run_cli([*prefix, "todo", "update", "--goal-id", f.GOAL_ID,
-                "--todo-id", f.TODO_ID, "--agent-id", f.AGENT_ID, "--text", original_text,
-                "--update-operation-id", "restore-source-a", "--update-expected-provider-revision",
-                current["authority_read"]["provider_revision"], "--execute"])
-            assert code == 0 and restored["changed"], restored
+        if capability_case:
+            update_current_todo("require-network", "--required-capability", "shell",
+                                "--required-capability", "network")
+            for extra, error in (
+                ([], "goal_launch_not_allowed"),
+                (["--available-capability", "network"], "current_turn_work_changed"),
+            ):
+                code, refused = f._run_cli([*retry, *extra])
+                assert code == 1 and refused.get("error_code") == error, (
+                    error, {key: refused.get(key) for key in
+                            ("status", "reason", "error", "error_code", "host_failure", "recovery")},
+                )
+                assert refused["status"] == "failed" and not any(refused["effects"].values())
+                assert refused["host_failure"]["kind"] == "contract_rejected"
+                assert json.loads(journal_path.read_bytes())["host_recovery"]["kind"] == "resume_session"
+                assert refused["recovery"]["actual"]["host_invoked"] is False
+                assert (workspace / "received.txt").read_bytes() == received_before
+                assert not (workspace / f.MARKER_NAME).exists()
+                assert f._quota_spend_count(runtime) == 0
+            update_current_todo("restore-shell", "--required-capability", "shell")
+        if attempt == "restored_before_retry":
+            update_current_todo("restore-source-a", "--text", original_text)
+            assert current_todo()["todo"]["text"] == original_text
         code, recovered = f._run_cli(retry)
-        if restore_live_work:
+        if attempt == "changed_before_retry":
+            assert code == 1 and recovered["error_code"] == "current_turn_work_changed", recovered
+            assert recovered["status"] == "failed" and not any(recovered["effects"].values())
+            assert recovered["host_failure"]["kind"] == "contract_rejected"
+            assert recovered["recovery"]["actual"]["host_invoked"] is False
+            assert (workspace / "received.txt").read_bytes() == received_before
+        else:
             assert code == 0 and recovered["status"] == "committed", json.dumps(recovered)
             retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
             assert retried["task_context"] == request["task_context"]
             assert retried["detail_ref"] == detail
-        else:
-            assert code == 1 and recovered["error_code"] == "current_turn_work_changed", recovered
-            assert not any(recovered["effects"].values())
-            assert (workspace / "received.txt").read_bytes() == received_before
+            change_current_task("source-b-after-retry")
         assert path.read_bytes() == original
     code, repeated = f._run_cli([*replay, "--resume-turn-key", request["turn_key"], "--execute"])
-    blocked_retry = first_attempt_fails and not restore_live_work
-    assert code == (1 if blocked_retry else 0), repeated
+    if attempt == "changed_before_retry":
+        assert code == 1 and repeated["status"] == "failed", repeated
+        assert repeated["recovery"]["planned"]["reason"] == "failed_retry_not_requested"
+        assert repeated["host_failure"]["kind"] == "contract_rejected"
+    else:
+        assert code == 0, repeated
     assert repeated["replayed"] and not any(repeated["effects"].values())
-    assert f._quota_spend_count(runtime) == (0 if blocked_retry else 1)
+    assert f._quota_spend_count(runtime) == (0 if attempt == "changed_before_retry" else 1)
     assert path.read_bytes() == original
     # Admission can run between source validation and publication. It cannot
     # replace or silently recreate an original capture changed in that window.

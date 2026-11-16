@@ -145,13 +145,21 @@ def child_process(command: list[str], *, env: dict[str, str], stdout, stderr,
         if check_current_launch is not None and goal_admission is None:
             raise ValueError("current Host launch check requires its original Goal admission")
         if check_current_launch is not None:
-            goal_admission = goal_admission.with_launch_decision(check_current_launch)
+            # The live heartbeat can select hard-lease work even on a new Turn.
+            # Use its canonical writer fence for the decision and actual spawn.
+            goal_admission = goal_admission.with_launch_decision(
+                check_current_launch, work_runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]),
+            )
         # Session selection may precede rendering/capture. Serialize only actual
         # launch with the existing Goal lifetime owner, never the whole model run.
         with (goal_admission.launch_lifetime(operation="codex_agent_host_launch")
-              if goal_admission is not None else nullcontext()):
+              if goal_admission is not None else nullcontext()) as expires_at_ms:
             # The child can write a native event before Popen returns.
             launch_started_at_unix = time.time()
+            if expires_at_ms is not None and launch_started_at_unix * 1000 >= expires_at_ms:
+                from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostLaunchRejected
+
+                raise FirstPartyHostLaunchRejected("goal_launch_not_allowed")
             process = subprocess.Popen(
                 command,
                 cwd=env["LOOPX_PROJECT"],

@@ -717,7 +717,7 @@ class CodexChatAgentSession:
     read_only_review: bool = False
     answer_review: bool = False
     metadata_review: bool = False
-    _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
+    _launch_guard: Callable[[], AbstractContextManager[int | None]] | None = field(
         default=None, repr=False
     )
     _native_task_policy_used: bool = field(default=False, repr=False)
@@ -751,7 +751,7 @@ class CodexChatAgentSession:
         reasoning_effort: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
         host_config: dict[str, Any] | None = None,
-        launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        launch_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
         account_runtime_root: Path | None = None,
         account_consumer: str = "worker",
         _compatibility_catalog_path: Path | None = None,
@@ -853,7 +853,11 @@ class CodexChatAgentSession:
         try:
             # The admitting caller owns this short launch fence. Native startup
             # RPCs and model execution must not hold the Goal writer lock.
-            with launch_guard() if launch_guard is not None else nullcontext():
+            with launch_guard() if launch_guard is not None else nullcontext() as expires_at_ms:
+                if expires_at_ms is not None and time.time() * 1000 >= expires_at_ms:
+                    from .control_plane.goals.first_party_host_admission import FirstPartyHostLaunchRejected
+
+                    raise FirstPartyHostLaunchRejected("goal_launch_not_allowed")
                 try:
                     process = subprocess.Popen(
                         command,
@@ -1174,7 +1178,7 @@ class CodexChatAgentSession:
 
     def _write(
         self, payload: dict[str, Any], *,
-        write_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        write_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
         deadline: float | None = None,
     ) -> None:
         if self.process.stdin is None:
@@ -1193,10 +1197,14 @@ class CodexChatAgentSession:
             ) from exc
 
     def _guarded_write(
-        self, frame: str, write_guard: Callable[[], AbstractContextManager[None]], *,
+        self, frame: str, write_guard: Callable[[], AbstractContextManager[int | None]], *,
         deadline: float | None,
     ) -> None:
-        from .extensions.process_runtime import force_terminate_process, write_process_stdin_before_deadline
+        from .extensions.process_runtime import (
+            ProcessStdinLeaseExpired,
+            force_terminate_process,
+            write_process_stdin_before_deadline,
+        )
 
         # Serialization, delivery and response share the original RPC/Turn
         # deadline. No shorter send budget may reject an otherwise valid frame.
@@ -1204,24 +1212,20 @@ class CodexChatAgentSession:
         if not self._write_lock.acquire(timeout=max(0, dispatch_deadline - time.monotonic())):
             raise self._timeout_error("response_timeout", "Codex input dispatch timed out.")
         try:
-            with write_guard():
+            with write_guard() as expires_at_ms:
                 process = self.process
                 try:
-                    if time.monotonic() >= dispatch_deadline:
-                        # Canonical admission itself can consume the remaining
-                        # budget. No writer started, but this Session still
-                        # retires its peer before releasing the launch fence.
-                        try:
-                            force_terminate_process(process, process_tree_owned=self.process_tree_owned)
-                        except Exception as error:
-                            raise RuntimeError("native input receiver cleanup unconfirmed") from error
-                        raise TimeoutError("native input dispatch deadline expired")
                     write_process_stdin_before_deadline(
                         process, frame, deadline=dispatch_deadline,
                         cancel_and_reap=lambda: force_terminate_process(
                             process, process_tree_owned=self.process_tree_owned,
                         ),
+                        lease_expires_at_ms=expires_at_ms, retire_on_expired_deadline=True,
                     )
+                except ProcessStdinLeaseExpired as exc:
+                    from .control_plane.goals.first_party_host_admission import FirstPartyHostLaunchRejected
+
+                    raise FirstPartyHostLaunchRejected("goal_launch_not_allowed") from exc
                 except TimeoutError as exc:
                     raise self._timeout_error(
                         "response_timeout", "Codex input dispatch timed out."
@@ -1389,7 +1393,7 @@ class CodexChatAgentSession:
         *,
         request_id: int | None = None,
         deadline: float | None = None,
-        write_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        write_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
     ) -> dict[str, Any]:
         if request_id is None:
             with self._request_id_lock:
@@ -1734,7 +1738,7 @@ class CodexChatAgentSession:
         output_schema: dict[str, Any] | None = None,
         project_collaboration: bool = False,
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
-        turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        turn_start_guard: Callable[[], AbstractContextManager[int | None]] | None = None,
         check_running: Callable[[], None] | None = None,
         _native_task: bool = False,
         sandbox_policy: dict[str, object] | None = None,

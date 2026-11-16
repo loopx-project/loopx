@@ -542,16 +542,16 @@ def test_managed_work_never_commits_without_current_independent_postcondition(st
         observation.write_text("not ready")
     if fault == "stopped_after_model":
         from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
-        original_start = CodexAppServerAdapter.start_turn
+        original_start = CodexAppServerAdapter.start_native_task_turn
 
-        def stopped(adapter, message, sink):
-            response = original_start(adapter, message, sink)
+        def stopped(adapter, message, sink, policy):
+            response = original_start(adapter, message, sink, policy)
             registry = json.loads(runtime.registry_path.read_text())
             registry["goals"][0]["activation"] = dict(STOPPED_ACTIVATION)
             runtime.registry_path.write_text(json.dumps(registry))
             return response
 
-        monkeypatch.setattr(CodexAppServerAdapter, "start_turn", stopped)
+        monkeypatch.setattr(CodexAppServerAdapter, "start_native_task_turn", stopped)
     calls = capture.read_bytes()
     accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"], operation_id="unqualified", todo_id=todo_id)
     completed = finish(runtime, accepted)
@@ -561,6 +561,10 @@ def test_managed_work_never_commits_without_current_independent_postcondition(st
     if fault == "missing_validator":
         assert observation.read_text() == "ready"
         assert not [json.loads(row) for row in capture.read_bytes()[len(calls):].splitlines() if json.loads(row)["method"] == "turn/start"]
+    if fault == "stopped_after_model":
+        dispatched = [json.loads(row) for row in capture.read_bytes()[len(calls):].splitlines()]
+        assert sum(row["method"] == "turn/start" for row in dispatched) == 1
+        assert json.loads(runtime.registry_path.read_text())["goals"][0]["activation"]["state"] == "stopped"
     after = capture.read_bytes()
     assert not service.submit(session["session_id"], agent_id=actor["agent_id"], operation_id="unqualified", todo_id=todo_id)[1]
     assert capture.read_bytes() == after
@@ -1102,6 +1106,197 @@ def test_inventory_replacement_during_context_read_never_forks_the_original_nati
     calls = [json.loads(line) for line in capture.read_bytes()[len(before):].decode().splitlines()]
     assert not [row for row in calls if row["method"] in {"thread/start", "turn/start", "thread/inject_items"}]
     assert store.load_session(sid)["upstream_thread_id"] == thread
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_managed_host_keeps_canonical_deadline_through_app_server_send(steward, tmp_path, monkeypatch, provider):
+    import time
+
+    from loopx.capabilities.native_chat import steward_commands
+    from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+    from loopx.extensions import process_runtime
+
+    service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    store, runtime, *_ = steward
+    run_command = steward_commands.native_command
+    launch_lifetime = FirstPartyHostGoalAdmission.launch_lifetime
+    send_frame = process_runtime.write_process_stdin_before_deadline
+    admitted_deadlines = []
+    crossed = []
+
+    def acquire_short_lease(controller, argv):
+        if argv[:2] == ["task-lease", "acquire"] and todo_id in argv:
+            argv = list(argv)
+            argv[argv.index("--ttl-seconds") + 1] = "12"
+        return run_command(controller, argv)
+
+    @contextlib.contextmanager
+    def observe_admission(admission, *, operation):
+        with launch_lifetime(admission, operation=operation) as expires_at_ms:
+            if operation == "native_conversation_turn_launch":
+                assert type(expires_at_ms) is int
+                admitted_deadlines.append(expires_at_ms)
+            yield expires_at_ms
+
+    def send_after_expiry(process, frame, **kwargs):
+        if json.loads(frame).get("method") == "turn/start":
+            assert len(admitted_deadlines) == 1
+            remaining = admitted_deadlines[0] / 1000 - time.time()
+            assert remaining > 0, "the active lease must reach the App Server transport"
+            time.sleep(remaining + .03)
+            crossed.append(admitted_deadlines[0])
+        return send_frame(process, frame, **kwargs)
+
+    monkeypatch.setattr(steward_commands, "native_command", acquire_short_lease)
+    monkeypatch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", observe_admission)
+    monkeypatch.setattr(process_runtime, "write_process_stdin_before_deadline", send_after_expiry)
+    before = capture.read_bytes()
+    accepted, created = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="expired-at-app-server-transport", todo_id=todo_id)
+    assert created
+    completed = runtime.wait_for_turn(session_id=accepted["session_id"], turn_id=accepted["turn_id"], timeout_sec=90)
+    assert len(crossed) == 1
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert all(row["method"] != "turn/start" for row in calls), [row["method"] for row in calls]
+    result = completed["response"]["native_loopx"]
+    assert result["error_code"] == "goal_launch_not_allowed", result
+    assert result["host_failure"]["kind"] == "contract_rejected"
+    assert not any(result["effects"].values())
+    current = cli(runtime, "todo", "list", "--goal-id", actor["goal_id"], "--todo-id", todo_id)["todo"]
+    assert not current["done"]
+    assert store.load_session(session["session_id"])["upstream_thread_id"] == session["upstream_thread_id"]
+    index = runtime.coordination_runtime_root / "goals" / actor["goal_id"] / "runs/index.jsonl"
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("journal_available", [True, False], ids=["journal-present", "journal-missing"])
+def test_managed_host_reopen_with_new_request_reconciles_unconfirmed_send(
+    steward, tmp_path, monkeypatch, provider, journal_available,
+):
+    import time
+    from types import SimpleNamespace
+
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.extensions import process_runtime
+    from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+
+    service, session, actor, todo_id, _, wire = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    _, runtime, *_ = steward
+    sid = session["session_id"]
+    before = wire.stat().st_size
+    send_frame = process_runtime.write_process_stdin_before_deadline
+    pipe_writer = process_runtime._nonblocking_pipe_writer
+
+    def expire_during_send(process, frame, **kwargs):
+        if json.loads(frame).get("method") != "turn/start":
+            return send_frame(process, frame, **kwargs)
+        expires = kwargs["lease_expires_at_ms"]
+        late = False
+        assert expires > time.time() * 1000
+
+        def wall_time():
+            return (expires + 1) / 1000 if late else time.time()
+
+        @contextlib.contextmanager
+        def send_last_byte_after_expiry(fd):
+            with pipe_writer(fd) as write:
+                def send(chunk):
+                    nonlocal late
+                    if chunk[-1] != ord("\n"):
+                        return write(chunk)
+                    if len(chunk) > 1:
+                        return write(chunk[:-1])
+                    assert write(chunk) == 1
+                    late = True
+                    deadline = time.monotonic() + 3
+                    while time.monotonic() < deadline and b'"method": "turn/start"' not in wire.read_bytes()[before:]:
+                        time.sleep(.005)
+                    return 1
+                yield send
+
+        with monkeypatch.context() as patch:
+            patch.setattr(process_runtime, "time", SimpleNamespace(
+                time=wall_time, monotonic=time.monotonic, sleep=time.sleep))
+            patch.setattr(process_runtime, "_nonblocking_pipe_writer", send_last_byte_after_expiry)
+            return send_frame(process, frame, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(process_runtime, "write_process_stdin_before_deadline", expire_during_send)
+        first, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="first-late-frame", todo_id=todo_id)
+        assert created
+        original = finish(runtime, first)["response"]["native_loopx"]
+
+    assert original["status"] == "in_progress" and original["error_code"] == "host_outcome_unknown"
+    key = original["resume_turn_key"]
+    journal = turn_journal_path(runtime.coordination_runtime_root, goal_id=actor["goal_id"], turn_key=key)
+    retained_journal = journal.read_bytes()
+    capture = journal.parent / "decisions" / (key.removeprefix("sha256:") + ".json")
+    retained_capture = capture.read_bytes()
+    after_first = wire.read_bytes()
+    assert [json.loads(line)["method"] for line in after_first[before:].splitlines()].count("turn/start") == 1
+    events = load_rollout_events(rollout_event_log_path(runtime.coordination_runtime_root, actor["goal_id"]))
+    linked, = [event for event in events if event.get("event_kind") == "quota_should_run"
+               and event.get("details", {}).get("turn_key") == key]
+    source, = [event for event in events if event["event_id"] == linked["causality"]["source_event_id"]]
+    assert linked["recorded_at"] == source["recorded_at"] and linked["status"] == source["status"]
+    assert linked["details"] == {**source["details"], "turn_key": key}
+
+    adapter = runtime.adapters.pop(sid, None)
+    if adapter is not None:
+        adapter.close_session()
+    moved = journal.with_suffix(".relocated")
+    if not journal_available:
+        journal.rename(moved)
+    try:
+        second, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="new-id-after-reopen", todo_id=todo_id)
+        assert created
+        effects = finish(runtime, second)["response"]["native_loopx"]["effects"]
+        replayed, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="first-late-frame", todo_id=todo_id)
+        assert not created and replayed["turn_id"] == first["turn_id"]
+    finally:
+        if not journal_available:
+            assert not journal.exists()
+            moved.rename(journal)
+    assert not any(effects.values())
+    assert all(json.loads(line)["method"] != "turn/start" for line in wire.read_bytes()[len(after_first):].splitlines())
+    assert journal.read_bytes() == retained_journal and capture.read_bytes() == retained_capture
+    assert not cli(runtime, "todo", "list", "--goal-id", actor["goal_id"], "--todo-id", todo_id)["todo"]["done"]
+    index = runtime.coordination_runtime_root / "goals" / actor["goal_id"] / "runs/index.jsonl"
+    assert not index.is_file() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_receipt_without_durable_attempt_allows_fresh_request(steward, tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver import executor
+    from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+
+    service, session, actor, todo_id, _, wire = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    _, runtime, *_ = steward
+    sid = session["session_id"]
+    before = wire.stat().st_size
+
+    def fail_before_first_checkpoint(path, snapshot, **kwargs):
+        assert snapshot["host_attempt_count"] == 0
+        raise OSError("fixture could not persist the first journal checkpoint")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(executor, "_write_journal", fail_before_first_checkpoint)
+        first, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="unrecorded-first", todo_id=todo_id)
+        assert created
+        finish(runtime, first)
+    after_first = wire.read_bytes()
+    assert all(json.loads(line)["method"] != "turn/start" for line in after_first[before:].splitlines())
+    events = load_rollout_events(rollout_event_log_path(runtime.coordination_runtime_root, actor["goal_id"]))
+    admitted = [event for event in events if event.get("event_kind") == "quota_should_run"
+                and event.get("todo_id") == todo_id]
+    assert admitted and all("turn_key" not in event["details"] for event in admitted)
+
+    second, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="new-id-after-no-attempt", todo_id=todo_id)
+    assert created
+    effects = finish(runtime, second)["response"]["native_loopx"]["effects"]
+    assert effects["host_invoked"] is True
+    assert [json.loads(line)["method"] for line in wire.read_bytes()[len(after_first):].splitlines()].count("turn/start") == 1
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

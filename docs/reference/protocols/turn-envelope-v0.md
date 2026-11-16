@@ -483,16 +483,42 @@ an existing observation. They can contain private Goal context and must not be
 included in public logs or artifacts.
 
 Host retry validates and reuses the original journal's capture. Before native
-Codex or an external stdio Host launches with a verified selected Todo, the
-current complete contract must still match the original task body, required write scopes and
-required capabilities. Progress notes do not invalidate that work. A mismatch
-returns `current_turn_work_changed` before dispatching the model. For stdio,
-the shared process supervisor holds the launch guard through spawn. The
-journal records the refused attempt and its original capture remains readable.
-Use a fresh eligible Turn for the changed task. Keep original captures and receipts for
-readback. Reading detail does not invoke quota or spend a slot. Current source
-admission, cancellation, workspace/lease and mutation checks retain their
-existing owners; the observation grants no fresh authority.
+Codex or an external stdio Host dispatches a bound Todo, the current complete
+contract must match the original task body, required write scopes, required
+capabilities and execution lease key when present. Progress notes and renewal
+of the same lease preserve that match. A changed declaration or lease key
+returns `current_turn_work_changed` before dispatch.
+
+For local canonical work, the Todo and lease writers share the dispatch lock
+from the live check through process spawn or the native `turn/start` send. A
+writer that commits first changes the inputs to the live check. A writer that
+arrives after the check can continue once dispatch completes, while the Host
+runs. The same live hard-lease read supplies the dispatch deadline. The process
+supervisor checks it at spawn. The native sender checks the deadline before
+each nonblocking write and after the complete `turn/start` frame is accepted
+by the pipe. A proven pre-dispatch expiry returns `goal_launch_not_allowed`
+with no Host invocation, writeback or debit. If a complete frame may have been
+delivered after expiry, the sender retires the receiver and the original
+attempt stays in progress with `host_outcome_unknown`. Recovery holds retry
+pending reconciliation of that attempt. A Todo-bound native admission links
+its original receipt to the journal after the Host attempt is durable and
+before dispatch. Fresh admission returns the original Turn key for reconciliation
+if that attempt is unconfirmed or its linked journal is missing. An admission
+that stops before recording an attempt has no journal link. Registry contention
+can refuse dispatch with `goal_authority_unavailable`.
+The journal retains the original capture, identity and saved session recovery
+for retry or readback.
+
+硬租约的派发截止时间来自同一次权威读。进程启动前检查到期时间。原生
+`turn/start` 每次非阻塞写入前都检查时限，管道接受完整帧后再检查一次。
+确认未派发即到期时，返回 `goal_launch_not_allowed`，不启动模型工作、不写回、
+不扣额。完整帧可能在到期后送达时，发送方终止接收进程，原尝试保留在执行中并
+标为 `host_outcome_unknown`。绑定 Todo 的原生执行在尝试落盘后、派发前，将日志索引
+附到原准入回执。结果未确认或已绑定日志缺失时，新准入返回原 Turn 索引供核对，先核查
+原尝试再派发。止于尝试落盘前的准入没有绑定日志索引。
+Use a fresh eligible Turn for changed work. Reading detail consumes no quota.
+Source admission, cancellation, workspace and mutation authority remain with
+their existing owners.
 Missing, corrupt, wrong-identity or source-hash-mismatched captures refuse Host
 reinvocation. Restore the original evidence rather than reconstructing it from
 a new guard. A capture published before a journal write failure is retained;
@@ -514,10 +540,16 @@ blocks resume. Journal inspection can report the invalid work contract without
 performing recovery or a debit. Retain the historical reader until the last
 supported journal and its recovery window are reconciled.
 
-原生 Codex 和外部 stdio Host 启动前会用当前完整契约复核所选 Todo 的已验证正文、
-所需写入范围和能力。只改进度备注可以继续。改变工作声明会在模型调用前返回
-`current_turn_work_changed`。stdio 进程由共用的进程管理器在准入锁内启动。
-journal 记录已拒绝的尝试。变更后的工作使用新的合格 Turn，原捕获与回执仍可读回。
+原生 Codex 和外部 stdio Host 派发已绑定 Todo 前，使用当前完整契约复核原正文、
+所需写入范围、能力和已有执行租约键。只改进度备注或续期同一租约仍可继续。
+工作声明或租约键改变时，在派发前返回 `current_turn_work_changed`。
+
+对本地权威工作，从实时检查到进程启动或发送原生 `turn/start`，派发与 Todo 和
+租约写入共用同一锁。写入先提交时，实时检查读取变更后的事实。写入在检查后到达时，
+可以在派发完成、Host 仍运行时继续。遇到 registry 写入竞争，派发可以返回
+`goal_authority_unavailable`。journal 保留原捕获、身份和已保存的会话恢复信息，用于重试或读回。
+变更后的工作通过新的合格 Turn 执行。读取详情不扣额。来源准入、取消、工作区和
+写入权限继续由原模块维护。
 
 恢复预览和 journal 解释共用同一个 typed plan reader。受支持的历史记录保留原版本和
 字节。显式声明不支持的 plan、envelope 或动作签名版本及覆盖范围时，恢复会停止。
