@@ -1837,12 +1837,15 @@ def spend_quota_slot(
                 ),
             }
         if settlement_readback.spend_run_present:
+            # The precheck verified these terms against the retained debit.
+            # Carry them to the existing receipt writer without charging again.
             return {
                 "ok": True,
                 "mode": "spend-slot",
                 "dry_run": not execute,
                 "appended": False,
                 "receipt_repair_required": bool(execute),
+                **spend_request,
                 "goal_id": safe_goal_id,
                 "agent_id": identity.agent_id,
                 "todo_id": identity.todo_id,
