@@ -8,8 +8,9 @@
  * walks HEAD for commits carrying that trailer, newest first.
  */
 import { execFile } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { HttpError } from './errors.js';
 
 /** Where every sandbox worktree of a repository lives. */
@@ -290,7 +291,8 @@ export class ProactiveSandbox {
     // reachable and conflicts on the already-absent changes — that refusal (whole rollback,
     // clear error) is deliberate; reverted commits carry no marker, and none is added, since
     // that would mean messages the contract does not specify.
-    const log = await git(repo, ['log', '--no-merges', '--format=%H%x1f%B%x1e']);
+    const head = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+    const log = await git(repo, ['log', '--no-merges', '--format=%H%x1f%B%x1e', head]);
     const victims: string[] = [];
     for (const record of log.split('\x1e')) {
       const separator = record.indexOf('\x1f');
@@ -299,17 +301,27 @@ export class ProactiveSandbox {
       if (carriesTrailer(record.slice(separator + 1), trailer)) victims.push(sha);
     }
     if (victims.length === 0) return { commits: [] }; // git log listed them newest first; nothing to undo
-    const reverted: string[] = [];
-    for (const sha of victims) {
-      try {
-        await committing(repo, ['revert', '--no-edit', sha]);
-      } catch (err) {
-        // One conflict undoes the whole undo: no half-reverted history is left behind.
-        await git(repo, ['revert', '--abort']).catch(() => undefined);
-        throw new HttpError(409, `撤回 ${sha} 时冲突，整次撤回已回滚：${err instanceof Error ? err.message : String(err)}`);
+    // Publish only a complete batch: aborting one revert cannot undo earlier revert commits.
+    const root = mkdtempSync(join(tmpdir(), 'loochat-revert-'));
+    try {
+      await git(repo, ['worktree', 'add', '--quiet', '--detach', root, head]);
+      for (const sha of victims) {
+        try {
+          await committing(root, ['revert', '--no-edit', sha]);
+        } catch (err) {
+          throw new HttpError(409, `撤回 ${sha} 时冲突，整次撤回已回滚：${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-      reverted.push(sha);
+      await assertReadyForHead(repo, base, '撤回改动');
+      if ((await git(repo, ['rev-parse', 'HEAD'])).trim() !== head) {
+        throw new HttpError(409, '撤回期间目标分支已变化，未应用撤回，请重试');
+      }
+      const tip = (await git(root, ['rev-parse', 'HEAD'])).trim();
+      await git(repo, ['merge', '--ff-only', tip]);
+      return { commits: victims };
+    } finally {
+      await git(repo, ['worktree', 'remove', '--force', root]).catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
     }
-    return { commits: reverted };
   }
 }

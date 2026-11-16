@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProactiveSandbox } from '../src/proactive-sandbox.js';
@@ -281,6 +281,25 @@ test('a conflicting revert is rolled back whole', async () => {
   assert.equal(git(dir, 'rev-parse', 'HEAD'), headBefore, 'no half revert stays');
   assert.equal(git(dir, 'status', '--porcelain'), '', 'and nothing is left in progress');
   assert.equal(ancestor(dir, sandboxCommit, 'HEAD'), true);
+});
+
+test('a later conflict leaves an earlier successful revert off the target branch', async () => {
+  const dir = repo();
+  const tree = await sandbox.prepare(dir, 'm-batch');
+  commitIn(tree.root, 'README.md', 'sandbox edit\n', 'm-batch');
+  commitIn(tree.root, 'b.md', 'keep this until the whole batch succeeds\n', 'm-batch');
+  await sandbox.merge(dir, 'm-batch');
+  writeFileSync(join(dir, 'README.md'), 'user edit after merge\n');
+  git(dir, 'commit', '--quiet', '-am', 'user edits readme');
+  const headBefore = git(dir, 'rev-parse', 'HEAD');
+  const worktreesBefore = git(dir, 'worktree', 'list', '--porcelain');
+
+  await assert.rejects(sandbox.revert(dir, 'm-batch'), /已回滚/);
+  assert.equal(git(dir, 'rev-parse', 'HEAD'), headBefore, 'no earlier revert is published');
+  assert.equal(readFileSync(join(dir, 'b.md'), 'utf8'), 'keep this until the whole batch succeeds\n');
+  assert.equal(readFileSync(join(dir, 'README.md'), 'utf8'), 'user edit after merge\n');
+  assert.equal(git(dir, 'status', '--porcelain'), '');
+  assert.equal(git(dir, 'worktree', 'list', '--porcelain'), worktreesBefore);
 });
 
 test('revert with nothing to undo does nothing', async () => {
