@@ -6,9 +6,8 @@ from hashlib import sha256
 from pathlib import Path
 
 from ...heartbeat_prompt import build_heartbeat_prompt
-from ..quota.cli_projection import compact_quota_should_run_cli_payload
 from ..quota.effective_action import EffectiveAction
-from .action_portfolio_scenarios import external_wait_fallback_scenario_source
+from .action_portfolio_scenarios import compose_scenario_decision, external_wait_fallback_scenario_source
 from .model_tool_behavior import DoubaoExecToolClient
 
 
@@ -47,7 +46,7 @@ def cases() -> list[dict]:
     } for name, work, notify, replan, action in rows]
     probes.append({
         "id": "wait_fallback_work",
-        "packet": compact_quota_should_run_cli_payload(external_wait_fallback_scenario_source()),
+        "packet": compose_scenario_decision(external_wait_fallback_scenario_source()),
         "expected": {"action": "work", "notify": True, "finish_goal": False},
     })
     return probes

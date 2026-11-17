@@ -622,6 +622,11 @@ Vision prepare 在既有 TypeScript owner 中集中报告可独立发现的数�
 首条错误兼容性和写前拒绝保持。File/SQLite CLI 拒绝、修正包独立回读与固定调用者的
 base/head 对照只验收该恢复边界；模型采纳、账单、已安装行为与持续长程收益分别保留待验收。
 
+C1 完整来源调用方也沿其返回的组合结算命令验证这些诊断。File/SQLite 负例保留原始
+撰写包、run index 与配额；明确修正及重放保留原 Turn、三份回执和一次扣额。配对恢复
+对照包含记账子进程，排除两边相同的 fixture admission 与独立验证；它只验收该重试
+片段，不证明原 quota 完整任务的整体净收益或模型输出减少。
+
 ### 交付语义：先修正规则，再迁移
 
 Replan 的义务结果规则现收敛到 `work_items/replan_semantics.ts`：接受结果选择、

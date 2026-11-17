@@ -1,5 +1,7 @@
 """Real CLI and conversation effects; scripted callers are not model evidence."""
 import json
+import shlex
+import subprocess
 
 import pytest
 
@@ -7,6 +9,9 @@ from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 from test_goal_acceptance_prepared_action import conversation_check as conversation_check
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
+from loopx.control_plane.testing.canary_harness import run_json_cli_result
+from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
 
 def prepare_source(project):
@@ -30,6 +35,77 @@ def apply_objective(project, cli, objective):
         registry_path=project.parent / "registry.json",
     )
     assert service.apply(prepared["proposal"]["proposal_id"])["proposal"]["status"] == "applied"
+
+
+@pytest.mark.parametrize("host", ["generic_cli", "codex_app"])
+def test_progressive_admission_delivers_current_objective_before_old_goal(acceptance_goal, monkeypatch, host):
+    from test_codex_context_lifecycle import setup
+
+    project, _, cli, _ = acceptance_goal
+    prepare_source(project)
+    revised_objective = "Maintain the usable export. Stop before publishing it."
+    apply_objective(project, cli, revised_objective)
+    basis = cli("inspect", "--agent-id", "agent-a")[1]
+    objective = basis["goal_acceptance_contract"]["goal_objective"]
+    adoption = project / "objective-adoption.json"
+    adoption.write_text(json.dumps({
+        "revision": objective["revision"], "digest": objective["digest"],
+        "work_digest": basis["objective_work_digest"],
+        "review_summary": "Reviewed the export work and the publication stop.",
+    }))
+    code, adopted = cli("adopt-objective", "--agent-id", "agent-a", "--document", str(adoption),
+        "--operation-id", "first-read-objective-adoption",
+        "--expected-provider-revision", basis["provider_revision"], "--execute")
+    assert code == 0 and adopted["ok"]
+
+    runtime = project.parent / "runtime"
+    capture = project.parent / "admitted"
+    host_args = []
+    if host == "codex_app":
+        journal = project.parent / "journal"
+        journal.mkdir(mode=0o700)
+        setup(journal, monkeypatch)
+        host_args = ["--codex-app", "--codex-context-dir", str(journal)]
+    turn = "first-read-objective"
+    code, view = run_json_cli_result("quota", "should-run", "--goal-id", "goal-acceptance",
+        "--agent-id", "agent-a", "--todo-id", "todo_export", "--turn-instance-id", turn,
+        "--context-delivery", "auto", "--decision-output-dir", str(capture), *host_args,
+        registry_path=project.parent / "registry.json", runtime_root=runtime, cwd=project)
+    assert code == 0 and view["ok"], view
+    log = rollout_event_log_path(runtime, "goal-acceptance")
+    original_log = log.read_bytes()
+
+    facts = {}
+    for command in (view["first_read_command"], view.get("remaining_read_command")):
+        if command is None:
+            continue
+        body = bytearray()
+        while command:
+            stdout = subprocess.check_output(shlex.split(command), cwd=project)
+            page = json.loads(stdout)
+            assert page["ok"] and page["offset"] == len(body)
+            body.extend(page["content"].encode())
+            command = page.get("next_command")
+        assert page["eof"] and len(body) == page["total_bytes"]
+        facts.update(selected_context_values(body.decode()))
+
+    objective_pointer, = (
+        pointer for pointer in facts if pointer.endswith("/goal_acceptance_contract/goal_objective/objective")
+    )
+    objective_root = objective_pointer.rsplit("/", 1)[0]
+    assert facts[objective_pointer] == revised_objective
+    for key in ("revision", "digest"):
+        assert facts[f"{objective_root}/{key}"] == objective[key]
+    previous_goal_pointer, = (
+        pointer for pointer, value in facts.items()
+        if pointer.endswith("/content/text") and isinstance(value, str) and "Bootstrap the project" in value
+    )
+    assert list(facts).index(objective_pointer) < list(facts).index(previous_goal_pointer)
+    assert facts["/heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == turn
+    assert log.read_bytes() == original_log
+    kinds = [event["event_kind"] for event in load_rollout_events(log)
+             if event.get("run_id") == turn and event.get("agent_id") == "agent-a"]
+    assert kinds == ["quota_should_run"]
 
 
 @pytest.mark.parametrize("peer_id", ["later-peer", "later@host"])

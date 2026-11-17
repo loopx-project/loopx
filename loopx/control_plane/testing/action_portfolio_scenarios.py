@@ -3,11 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..quota.cli_projection import compact_quota_should_run_cli_payload
 from ..quota.effective_action import EffectiveAction
 from ..quota.should_run import build_quota_should_run
 from ..work_items.interaction_contract import build_interaction_contract
-from ..quota.turn_envelope import quota_action_signature_document
+from ..quota.turn_envelope import compose_turn_decision, quota_action_signature_document
 from ..scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
 )
@@ -16,6 +15,14 @@ from .quota_fixtures import quota_status_payload, quota_todo_item
 
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID = "portfolio-goal"
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID = "codex-portfolio"
+
+
+def compose_scenario_decision(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the inline full-packet arm. Native tool actors run their own quota CLI."""
+    scheduler = source.get("scheduler_hint") or {}
+    return compose_turn_decision(
+        source, scheduler_execution_context=scheduler.get("execution_context"),
+    )
 
 
 def accepted_replan_successor_status() -> dict[str, Any]:
@@ -357,7 +364,7 @@ def validate_future_primary_fallback_scenario(
 
 
 def validate_external_wait_fallback_scenario(
-    source_packet: Mapping[str, Any],
+    source_packet: Mapping[str, Any], actor_packet: Mapping[str, Any],
 ) -> None:
     signature = quota_action_signature_document(source_packet)
     action = dict(signature.get("action") or {})
@@ -369,9 +376,8 @@ def validate_external_wait_fallback_scenario(
     resume_blocked = list(summary.get("resume_blocked_items") or [])
     first_resume_blocked = dict(resume_blocked[0]) if resume_blocked else {}
     condition = dict(first_resume_blocked.get("resume_condition") or {})
-    compact = compact_quota_should_run_cli_payload(dict(source_packet))
-    compact_portfolio = dict(compact.get("action_portfolio") or {})
-    suggested = list(compact_portfolio.get("suggested_actions") or [])
+    actor_portfolio = dict(actor_packet.get("action_portfolio") or {})
+    suggested = list(actor_portfolio.get("suggested_actions") or [])
     first_suggested = dict(suggested[0]) if suggested else {}
     if not (
         selected.get("todo_id") == "todo_external_wait_fallback"
@@ -391,7 +397,7 @@ def validate_external_wait_fallback_scenario(
     ):
         raise ValueError(
             "external-wait scenario must expose the pending P0 condition while "
-            "executing the bounded fallback from the compact default packet"
+            "executing the bounded fallback from the actor packet"
         )
 
 

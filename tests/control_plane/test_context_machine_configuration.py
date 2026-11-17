@@ -37,7 +37,8 @@ def test_rejected_context_snapshot_uses_private_generic_transport_without_native
         target.mkdir()
         root.symlink_to(target, target_is_directory=True)
     elif unsafe == "public":
-        root.mkdir(mode=0o755)
+        root.mkdir()
+        root.chmod(0o755)
     value = {"current": {"goal": "Retain scope", "stop": "No new authority"},
         "optional_evidence": "完整材料" * 20000}
     result = capture_context_recovery(value, runtime_root=runtime)

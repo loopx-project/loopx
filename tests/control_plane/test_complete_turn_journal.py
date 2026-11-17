@@ -267,7 +267,7 @@ def test_legacy_journal_refuses_unknown_recorded_versions(complete_journal):
 
 
 def test_managed_retry_reads_complete_source_with_original_numbers(complete_journal):
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
     from loopx.control_plane.turn_driver.host_failure import build_host_failure_record
     from loopx.control_plane.turn_driver.managed_step import decide_managed_step
     from loopx.control_plane.turn_driver.transaction import validate_loopx_turn_receipt
@@ -281,7 +281,7 @@ def test_managed_retry_reads_complete_source_with_original_numbers(complete_jour
         legacy=plan["schema_version"] == "loopx_turn_plan_v0", goal_ref=plan.get("goal_ref"))
     # The managed controller's current quota preview remains a distinct input;
     # never recreate a second carrier inside the current journal to supply it.
-    quota = build_turn_envelope(plan["work_contract"])
+    quota = compose_turn_decision(source)
     result = {"schema_version": "loopx_turn_result_v0", "turn_key": journal["turn_key"],
         "result_kind": "host_failure", "completed_phases": [], "failed_phase": "host_execute"}
     journal.update(status="failed", result_kind="host_failure", host_attempt_count=1,

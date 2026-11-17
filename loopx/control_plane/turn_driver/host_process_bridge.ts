@@ -3,7 +3,7 @@ import {once} from "node:events";
 import {decodeHostProcessRequest, runHostProcess} from "./host_process.ts";
 const owner = new AbortController();
 // Private transport observations; none grants Goal or execution authority.
-type LaunchObservation = {kind: "ready"} | {kind: "not_launched"};
+type LaunchObservation = {kind: "ready"} | {kind: "not_launched"; reason?: "task_lease_expired"};
 const launchDeadline = process.argv[2] === "--guarded-launch" ? Number(process.argv[3]) : null;
 if (launchDeadline !== null && (!Number.isFinite(launchDeadline) || launchDeadline <= 0))
   throw new TypeError("invalid guarded Host bridge deadline");
@@ -43,7 +43,19 @@ process.stdin.on("data", (chunk: Buffer) => {
       }
       const lease = raw.delegated_lease;
       delete raw.delegated_lease;
+      const leaseExpiry = raw.lease_expires_at_ms;
+      delete raw.lease_expires_at_ms;
       const request = decodeHostProcessRequest(raw);
+      // The parent holds the writer fence. Time alone can still expire a
+      // hard lease while this bridge receives and decodes its input.
+      if (leaseExpiry !== undefined) {
+        if (launchDeadline === null || !Number.isSafeInteger(leaseExpiry) || leaseExpiry <= 0)
+          throw new TypeError("invalid Host launch lease expiry");
+        if (Date.now() >= leaseExpiry) {
+          await emit({kind: "not_launched", reason: "task_lease_expired"} satisfies LaunchObservation);
+          return;
+        }
+      }
       // The owned process group is reported before either path can run unaccounted.
       if (lease === undefined) await emit(await runHostProcess(request, emit, owner.signal, undefined, {spawned: emit}));
       else {

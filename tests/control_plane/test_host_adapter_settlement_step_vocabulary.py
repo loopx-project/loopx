@@ -71,7 +71,6 @@ def _plan(step_kinds: list[str]) -> dict:
         steps.append({
             "step_kind": step_kind,
             "args": ["todo", "complete"],
-            "legacy_args": None,
             "continue_when": {"all": []} if index < len(step_kinds) - 1 else None,
         })
     return {"provider_id": "loopx_cli", "kind": "ordered_cli_sequence", "steps": steps}

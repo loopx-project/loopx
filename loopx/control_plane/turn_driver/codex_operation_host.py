@@ -20,6 +20,7 @@ from ...chat_agent import CodexChatAgentError, CodexChatAgentSession
 from ...extensions.codex_native_child import native_child_observer
 from ..goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
+    FirstPartyHostLaunchRejected,
     FirstPartyHostRuntimeRejected,
 )
 from . import managed_operation_host as operations
@@ -246,6 +247,12 @@ def run_codex_operation_host(
         )
         check_running(final=True)
         return normalize_codex_result(request, result)
+    except FirstPartyHostLaunchRejected as exc:
+        if session is None:
+            raise
+        # The app-server may have opened and bound the session before the
+        # turn/start guard refused model dispatch. Retry must resume it.
+        raise FirstPartyHostLaunchRejected(exc.code, session_prepared=True) from exc
     except FirstPartyHostRuntimeRejected:
         if session is not None and native_turn_id:
             try:

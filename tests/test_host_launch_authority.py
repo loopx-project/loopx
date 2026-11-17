@@ -9,8 +9,10 @@ import json
 import os
 import signal
 import sys
+import textwrap
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,10 @@ from loopx.control_plane.turn_driver import codex_cli, codex_operation_host
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from loopx.control_plane.turn_driver import host_process_transport
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.host_process_fixture import (
+    WAIT_FOR_FIXTURE_LEASE_RELEASE,
+    expect_lease_release_after_dispatch,
+)
 from tests.control_plane.test_effect_turn_live_quota_decision import (
     _material_review_urgency,
     _turn_start_dispatch,
@@ -194,7 +200,8 @@ def _host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation_tools: bool
             f"pathlib.Path({str(native_start)!r}).write_text('started')", 1,
         ).replace(
             'elif method == "turn/start":', 'elif method == "turn/start":\n'
-            f"        pathlib.Path({str(turn_start)!r}).write_text('started')", 1,
+            f"        pathlib.Path({str(turn_start)!r}).write_text('started')\n"
+            + textwrap.indent(WAIT_FOR_FIXTURE_LEASE_RELEASE.rstrip(), "        "), 1,
         ))
         executable.chmod(0o700)
     else:
@@ -202,6 +209,8 @@ def _host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation_tools: bool
         executable.write_text(executable.read_text().replace(
             "args = sys.argv[1:]",
             f"pathlib.Path({str(native_start)!r}).write_text('started')\nargs = sys.argv[1:]", 1,
+        ).replace(
+            "turn_key = re.search", WAIT_FOR_FIXTURE_LEASE_RELEASE + "\nturn_key = re.search", 1,
         ))
         monkeypatch.setenv("FAKE_CODEX_LOG", str(turn_start))
     arguments = ["--codex-bin", str(executable)]
@@ -211,13 +220,14 @@ def _host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation_tools: bool
     return arguments, native_start, turn_start
 
 
-def _run(registry: Path, runtime: Path, project: Path, host_arguments: list[str]):
+def _run(registry: Path, runtime: Path, project: Path, host_arguments: list[str], *, resume_key: str | None = None):
+    turn = (["--turn-instance-id", "launch-authority-fixture"] if resume_key is None
+            else ["--resume-turn-key", resume_key, "--retry-failed-turn"])
     return _cli(registry, runtime,
         "turn", "run-once", "--goal-id", GOAL, "--agent-id", AGENT,
         "--host", "codex-cli", "--project", str(project),
         "--codex-sandbox", "read-only", "--no-global-sync", "--iteration-context", "fresh",
-        "--turn-instance-id", "launch-authority-fixture",
-        "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]),
+        *turn, "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]),
         *host_arguments, "--execute",
     )
 
@@ -347,6 +357,188 @@ def test_first_normal_turn_with_declared_state_needs_no_global_registry(
     assert native_start.exists() and turn_start.exists(), payload
     assert payload["effects"]["quota_spent"] is True, payload
     assert not (runtime / "registry.global.json").exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("operation_tools", [False, True])
+@pytest.mark.parametrize("change", ["renew", "replace", "release_during_dispatch"])
+def test_actual_launch_preserves_original_task_lease_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, operation_tools: bool, change: str,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease")
+    host_arguments, native_start, turn_start = _host(tmp_path, monkeypatch, operation_tools)
+    lease_scope = ["--goal-id", GOAL, "--todo-id", "todo_fixture0001", "--owner", AGENT]
+
+    def lease(action, key, version, *options):
+        code, payload = _cli(registry, runtime, "task-lease", action, *lease_scope,
+            "--idempotency-key", key, "--expected-version", str(version), *options)
+        assert code == 0, payload
+        return payload["lease"]
+
+    original = lease("acquire", "first-generation", 0, "--ttl-seconds", "300")
+    if change == "release_during_dispatch":
+        operation = "codex_operation_turn_start" if operation_tools else "codex_cli_host_launch"
+        with expect_lease_release_after_dispatch(monkeypatch, operation=operation,
+            registry=registry, runtime=runtime, goal_id=GOAL, todo_id="todo_fixture0001",
+            lease=original, dispatch_marker=turn_start,
+        ):
+            code, result = _run(registry, runtime, project, host_arguments)
+        assert native_start.exists() and turn_start.exists(), result
+        assert code == 0 and result["status"] == ("stopped" if operation_tools else "committed"), result
+        return
+    owner = codex_operation_host if operation_tools else codex_cli
+    prepare_input = owner.prepare_codex_cli_input
+    changes = []
+
+    def change_lease_before_dispatch(request):
+        if change == "renew":
+            current = lease("renew", original["idempotency_key"], original["version"],
+                            "--ttl-seconds", "600")
+            assert current["lease_epoch"] == original["lease_epoch"]
+        else:
+            released = lease("release", original["idempotency_key"], original["version"])
+            current = lease("acquire", "next-generation", released["version"], "--ttl-seconds", "300")
+            assert current["lease_epoch"] > original["lease_epoch"]
+        assert current["version"] > original["version"]
+        changes.append(current)
+        return prepare_input(request)
+
+    monkeypatch.setattr(owner, "prepare_codex_cli_input", change_lease_before_dispatch)
+    code, result = _run(registry, runtime, project, host_arguments)
+    assert len(changes) == 1, result
+    if change == "replace":
+        assert code == 1 and result.get("error_code") == "current_turn_work_changed", (
+            code, result.get("status"), result.get("error_code"), result.get("effects"),
+        )
+        assert result["host_failure"]["kind"] == "contract_rejected"
+        assert result["effects"]["host_invoked"] is False and not turn_start.exists()
+        assert native_start.exists() is operation_tools
+        _assert_no_settlement(runtime, result)
+        monkeypatch.setattr(owner, "prepare_codex_cli_input", prepare_input)
+        code, retry = _run(registry, runtime, project, host_arguments, resume_key=result["resume_turn_key"])
+        assert code == 1 and retry.get("error_code") == "current_turn_work_changed", retry
+        assert retry["resume_turn_key"] == result["resume_turn_key"]
+        assert retry["effects"]["host_invoked"] is False and not turn_start.exists()
+        _assert_no_settlement(runtime, retry)
+    else:
+        assert code == 0 and result["status"] == ("stopped" if operation_tools else "committed"), result
+        assert native_start.exists() and turn_start.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("dispatch", ["codex-cli", "app-server", "bridge"])
+def test_bound_host_cannot_dispatch_after_lease_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, dispatch: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease")
+    operation_tools = dispatch == "app-server"
+    arguments, _process, turn_start = _host(tmp_path, monkeypatch, operation_tools)
+    subject = ["--goal-id", GOAL, "--todo-id", "todo_fixture0001"]
+    code, acquired = _cli(
+        registry, runtime, "task-lease", "acquire", *subject, "--owner", AGENT,
+        "--idempotency-key", "original-lease", "--expected-version", "0", "--ttl-seconds", "300",
+    )
+    assert code == 0, acquired
+    original = acquired["lease"]
+    owner = codex_operation_host if operation_tools else codex_cli
+    prepare_input = owner.prepare_codex_cli_input
+    renewals = []
+
+    def renew_before_dispatch(request):
+        prepared = prepare_input(request)
+        code, renewed = _cli(
+            registry, runtime, "task-lease", "renew", *subject, "--owner", AGENT,
+            "--idempotency-key", original["idempotency_key"],
+            "--expected-version", str(original["version"]), "--ttl-seconds", "6",
+        )
+        assert code == 0 and renewed["lease"]["lease_epoch"] == original["lease_epoch"], renewed
+        renewals.append(renewed["lease"])
+        return prepared
+
+    def wait_past_expiry(expiry_ms):
+        assert not turn_start.exists() and len(renewals) == 1
+        expiry = datetime.fromisoformat(renewals[0]["expires_at"]).timestamp()
+        assert expiry_ms == round(expiry * 1000) and time.time() < expiry
+        time.sleep(max(0, expiry - time.time()) + 0.05)
+        code, inspected = _cli(registry, runtime, "task-lease", "inspect", *subject)
+        assert code == 0 and inspected["active"] is False and not turn_start.exists()
+
+    monkeypatch.setattr(owner, "prepare_codex_cli_input", renew_before_dispatch)
+    if dispatch == "bridge":
+        send = host_process_transport.GuardedHostBridge.send
+        cancel = host_process_transport.GuardedHostBridge.cancel
+        acknowledged_processes = []
+        terminated_processes = []
+
+        def deliver_after_expiry(bridge, frame):
+            wait_past_expiry(json.loads(frame)["lease_expires_at_ms"])
+            return send(bridge, frame)
+
+        def observe_rejected_bridge_close(bridge):
+            if bridge.not_launched:
+                acknowledged_processes.append(bridge.process)
+                terminate = bridge.process.terminate
+
+                def observe_terminate():
+                    terminated_processes.append(bridge.process)
+                    terminate()
+
+                monkeypatch.setattr(bridge.process, "terminate", observe_terminate)
+            return cancel(bridge)
+
+        monkeypatch.setattr(host_process_transport.GuardedHostBridge, "send", deliver_after_expiry)
+        monkeypatch.setattr(host_process_transport.GuardedHostBridge, "cancel", observe_rejected_bridge_close)
+    else:
+        launch_lifetime = FirstPartyHostGoalAdmission.launch_lifetime
+        target = "codex_operation_turn_start" if operation_tools else "codex_cli_host_launch"
+
+        @contextlib.contextmanager
+        def pause_before_dispatch(admission, *, operation):
+            with launch_lifetime(admission, operation=operation) as expiry_ms:
+                if operation == target:
+                    wait_past_expiry(expiry_ms)
+                yield expiry_ms
+
+        monkeypatch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", pause_before_dispatch)
+    code, result = _run(registry, runtime, project, arguments)
+    assert code == 1 and result.get("error_code") == "task_lease_expired", result
+    assert not turn_start.exists() and result["effects"]["host_invoked"] is False, result
+    _assert_no_settlement(runtime, result)
+    if dispatch == "bridge":
+        assert len(acknowledged_processes) == 1 and acknowledged_processes[0].poll() == 0
+        assert not terminated_processes
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_busy_registry_refuses_bound_dispatch_and_retains_original_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    arguments, native_start, turn_start = _host(tmp_path, monkeypatch, False)
+    original = FirstPartyHostGoalAdmission.launch_lifetime
+
+    @contextlib.contextmanager
+    def hold_registry(admission, *, operation):
+        registry_writer = (project_registry_transaction(registry, operation="synthetic_registry_writer")
+                           if operation == "codex_cli_host_launch" else contextlib.nullcontext())
+        with registry_writer, original(admission, operation=operation):
+            yield
+
+    with monkeypatch.context() as patch:
+        patch.setattr(FirstPartyHostGoalAdmission, "launch_lifetime", hold_registry)
+        code, result = _run(registry, runtime, project, arguments)
+    assert code == 1 and result["error_code"] == "goal_authority_unavailable", result
+    assert result["host_failure"]["kind"] == "contract_rejected", result
+    assert not result["effects"]["host_invoked"] and not native_start.exists() and not turn_start.exists()
+    _assert_no_settlement(runtime, result)
+
+    code, retry = _run(registry, runtime, project, arguments, resume_key=result["resume_turn_key"])
+    assert code == 0 and retry["status"] == "committed", retry
+    assert retry["resume_turn_key"] == result["resume_turn_key"] and turn_start.exists()
+    assert retry["effects"]["quota_spent"] is True, retry
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

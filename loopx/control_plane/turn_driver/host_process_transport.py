@@ -9,12 +9,15 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager, ExitStack
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
 from ...file_lock import lock_holder_host_label
 from ..effect_runtime import _node_executable
+from ..goals.first_party_host_admission import (
+    FirstPartyHostLaunchRejected, HostLaunchGuard, require_host_launch_lease,
+)
 from .host_bridge_transport import GuardedHostBridge
 
 # Keep Python's Windows executable/batch launcher compatibility. No timeout,
@@ -306,7 +309,7 @@ def run_host_process(
     on_stderr: Callable[[str], None] | None = None,
     delegated_lease: dict[str, Any] | None = None,
     environment: dict[str, str] | None = None,
-    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    launch_guard: HostLaunchGuard | None = None,
     check_running: Callable[[], None] | None = None,
     interrupt_before_terminate: bool = False,
 ) -> dict[str, Any]:
@@ -369,14 +372,18 @@ def run_host_process(
         try:
             if windows_job is not None:
                 windows_job.assign(proc)
+            lease_expires_at_ms = None
             if launch_guard is not None:
-                launch_scope.enter_context(launch_guard())
+                lease_expires_at_ms = launch_scope.enter_context(launch_guard())
             record = _begin_host_process_record(record_path, record_value=record_value,
                 supervises=supervises, supervision=supervision, bridge_pid=proc.pid)
             if record is not None and windows_job is not None:
                 record["windows_job"] = windows_job.name
                 _write_host_process_record(record_path, record)
+            if lease_expires_at_ms is not None:
+                request["lease_expires_at_ms"] = lease_expires_at_ms
             frame = json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n"
+            require_host_launch_lease(lease_expires_at_ms)
             if guarded is not None:
                 guarded.send(frame)
             else:
@@ -417,6 +424,8 @@ def run_host_process(
                     launch_scope.close()
                 elif kind == "not_launched" and guarded is not None:
                     guarded.not_launched = True
+                    if event.get("reason") == "task_lease_expired":
+                        raise FirstPartyHostLaunchRejected("task_lease_expired")
                     raise TimeoutError("managed Host bridge launch deadline expired")
                 else:
                     raise RuntimeError("Invalid managed Host process observation")

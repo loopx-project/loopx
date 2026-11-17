@@ -3,9 +3,11 @@
  * scope it covers. `ok`, a passing check, or a cache hit never implies fresh
  * or complete sources; consumers read this envelope before stating current
  * state. */
+import { isDeepStrictEqual } from "node:util";
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
 import {
+  jsonObject,
   requireBoolean,
   requireInteger,
   requireJsonObject,
@@ -15,6 +17,8 @@ import {
 import { parseIsoTimestamp } from "./runtime_timestamp.ts";
 
 export const PROJECTION_ENVELOPE_SCHEMA_VERSION = "loopx_projection_envelope_v0";
+const SHARED_SOURCE_ENVELOPE_VERSION = "loopx_projection_envelope_v1";
+const DERIVED_SOURCE_ENVELOPE_VERSION = "loopx_projection_envelope_v2";
 export const PROJECTION_ENVELOPE_SEAL_REQUEST = "loopx_projection_envelope_seal_request_v0";
 export const PROJECTION_ENVELOPE_SERVE_REQUEST = "loopx_projection_envelope_serve_request_v0";
 export const DEFAULT_SOURCE_WINDOW_SECONDS = 300;
@@ -63,6 +67,117 @@ interface UpstreamSummary {
   projection: string;
   observed_at: string;
   complete: boolean;
+}
+
+// Store repeated input facts. Derived fields are restored by the same
+// sealer at the original serve time. Identity and future facts stay local.
+const SHAREABLE_SOURCE_FIELDS = [
+  "required", "read_status", "last_read_at", "source_updated_at",
+  "window_seconds", "item_count", "missing_count", "unreadable_count",
+];
+const DERIVED_SOURCE_FIELDS = ["staleness_seconds", "status", "alert", "alert_reasons"];
+
+/** Share repeated inputs and omit derived fields only when the sealer
+ * reproduces their original values exactly. */
+export function shareProjectionSourceFields(
+  envelope: JsonObject,
+  identity: (value: unknown, path: (string | number)[]) => string,
+  sourcePath: string[],
+): JsonObject {
+  if (envelope.schema_version !== PROJECTION_ENVELOPE_SCHEMA_VERSION
+      || Object.hasOwn(envelope, "source_defaults") || !Array.isArray(envelope.sources)
+      || envelope.sources.length > MAX_SOURCES) return envelope;
+  const rows = envelope.sources.map(jsonObject);
+  if (rows.length < 2 || rows.some(row => row === null)) return envelope;
+  const originals = rows as JsonObject[];
+  const sources = originals.map(row => ({...row}));
+  try {
+    const servedMillis = timestamp(envelope.served_at, "served_at").millis;
+    for (const [index, row] of originals.entries()) {
+      const sealed = sealSource(decodeSource(row, index), servedMillis);
+      // A historical or extended row may not use today's derivation. Keep
+      // its original shape unless every field, including numeric IO, matches.
+      if (Object.entries(sealed).some(([field, fact]) => !isDeepStrictEqual(row[field], fact))) return envelope;
+      for (const field of DERIVED_SOURCE_FIELDS) {
+        if (identity(row[field], [...sourcePath, "sources", index, field]) !==
+            identity(sealed[field], [...sourcePath, "source_defaults", field])) return envelope;
+        delete sources[index][field];
+      }
+    }
+  } catch (error) {
+    if (error instanceof EffectRuntimeRequestError) return envelope;
+    throw error;
+  }
+  const defaults: JsonObject = {};
+  for (const field of SHAREABLE_SOURCE_FIELDS) {
+    // A shared field is present in every source, including when its value is
+    // null. An absent value can never become a default fact.
+    if (!originals.every(row => Object.hasOwn(row, field))) continue;
+    const matches = new Map<string, number[]>();
+    originals.forEach((row, index) => {
+      const key = identity(row[field], [...sourcePath, "sources", index, field]);
+      const indices = matches.get(key);
+      if (indices) indices.push(index);
+      else matches.set(key, [index]);
+    });
+    const common = [...matches.values()].reduce((best, indices) =>
+      indices.length > best.length ? indices : best, [] as number[]);
+    if (common.length < 2) continue;
+    const fact = originals[common[0]][field];
+    // A numeric fact with a source-only spelling would lose its original
+    // token at the new path. Keep that field on its original rows.
+    if (!shareableSourceFact(fact) ||
+        identity(fact, [...sourcePath, "sources", common[0], field]) !==
+          identity(fact, [...sourcePath, "source_defaults", field])) continue;
+    defaults[field] = fact;
+    for (const index of common) delete sources[index][field];
+  }
+  const packed = {...envelope, schema_version: DERIVED_SOURCE_ENVELOPE_VERSION, source_defaults: defaults, sources};
+  return Buffer.byteLength(JSON.stringify(packed)) < Buffer.byteLength(JSON.stringify(envelope)) ? packed : envelope;
+}
+
+/** Restore the same sealed rows, preserving explicit overrides and row order. */
+export function expandProjectionSourceFields(value: JsonObject): JsonObject {
+  const storesDerivedFacts = value.schema_version === SHARED_SOURCE_ENVELOPE_VERSION;
+  if (!storesDerivedFacts && value.schema_version !== DERIVED_SOURCE_ENVELOPE_VERSION) return value;
+  const defaults = requireJsonObject(value.source_defaults, "projection source defaults");
+  const allowedDefaults = storesDerivedFacts
+    ? [...SHAREABLE_SOURCE_FIELDS, ...DERIVED_SOURCE_FIELDS]
+    : SHAREABLE_SOURCE_FIELDS;
+  if ((storesDerivedFacts && !Object.keys(defaults).length) ||
+      Object.entries(defaults).some(([field, fact]) => !allowedDefaults.includes(field) || !shareableSourceFact(fact))) {
+    throw new EffectRuntimeRequestError("projection source defaults must name registered sealed source fields");
+  }
+  const servedMillis = timestamp(value.served_at, "served_at").millis;
+  const rows = boundedArray(value.sources, MAX_SOURCES, "sources");
+  if (rows.length < 2) throw new EffectRuntimeRequestError("shared projection facts require at least two source rows");
+  const sources = rows.map((row, index) => {
+    const source = {...defaults, ...requireJsonObject(row, `sources[${index}]`)};
+    const decoded = decodeSource(source, index);
+    const sealed = sealSource(decoded, servedMillis);
+    if (!storesDerivedFacts) {
+      for (const field of DERIVED_SOURCE_FIELDS) {
+        if (Object.hasOwn(source, field)) {
+          throw new EffectRuntimeRequestError("shared projection source cannot override derived source facts");
+        }
+        source[field] = sealed[field];
+      }
+    }
+    // Keep original and future values. Reject missing or malformed known input
+    // fields instead of treating a decoder's fallback as a recorded fact.
+    if (Object.entries(sealed).some(([field, fact]) => !isDeepStrictEqual(source[field], fact))) {
+      throw new EffectRuntimeRequestError("shared projection source does not reconstruct a sealed source row");
+    }
+    return source;
+  });
+  const {source_defaults: _defaults, ...rest} = value;
+  return {...rest, schema_version: PROJECTION_ENVELOPE_SCHEMA_VERSION, sources};
+}
+
+function shareableSourceFact(value: unknown): boolean {
+  return value === null || typeof value === "string" || typeof value === "boolean"
+    || typeof value === "number" && Number.isSafeInteger(value) && !Object.is(value, -0)
+    || Array.isArray(value) && value.every(item => typeof item === "string");
 }
 
 function timestamp(value: unknown, label: string): { text: string; millis: number } {
@@ -276,7 +391,7 @@ function decodeSealedEnvelope(value: unknown, label: string): {
   upstream: UpstreamSummary[];
   complete: boolean;
 } {
-  const envelope = requireJsonObject(value, label);
+  const envelope = expandProjectionSourceFields(requireJsonObject(value, label));
   if (envelope.schema_version !== PROJECTION_ENVELOPE_SCHEMA_VERSION) {
     throw new EffectRuntimeRequestError(`${label} schema mismatch`);
   }

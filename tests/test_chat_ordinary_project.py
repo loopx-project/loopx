@@ -16,6 +16,8 @@ from loopx.chat_store import ChatSessionStore
 
 @pytest.fixture
 def ordinary(tmp_path, monkeypatch):
+    # This synthetic host has no operator-configured provider inventory.
+    monkeypatch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
     workspace = tmp_path / "notes"
     workspace.mkdir()
     capture = tmp_path / "requests.jsonl"

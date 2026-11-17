@@ -32,9 +32,8 @@ INTERFACE_BUDGET_CHARS = {
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]
 
-# Opt-in captured envelopes retain transport routes and same-capture recovery.
-# Keep captured-envelope transport headroom separate from ordinary thin.
-CAPTURED_ENVELOPE_PROMPT_HEADROOM_CHARS = 400
+# Explicit captured Turn guards retain transport routes and same-capture recovery.
+CAPTURED_TURN_PROMPT_HEADROOM_CHARS = 400
 
 # Reward Memory's outcome contract is intentionally readable rather than
 # squeezed into the ordinary heartbeat allowance.  Keep this fixed and tied to
@@ -95,7 +94,7 @@ def build_interface_budget(
     brief: bool = False,
     thin: bool = False,
     native_goal_host: bool = False,
-    captured_envelope: bool = False,
+    explicit_captured_turn: bool = False,
 ) -> dict[str, Any]:
     mode = (
         "visible_goal"
@@ -112,15 +111,15 @@ def build_interface_budget(
         if mode != "visible_goal" and _REWARD_MEMORY_PROMPT_MARKER in task_body
         else 0
     )
-    captured_envelope_headroom = (
-        CAPTURED_ENVELOPE_PROMPT_HEADROOM_CHARS
-        if mode == "thin" and captured_envelope
+    captured_turn_headroom = (
+        CAPTURED_TURN_PROMPT_HEADROOM_CHARS
+        if mode == "thin" and explicit_captured_turn
         else 0
     )
     max_chars = (
         INTERFACE_BUDGET_CHARS[mode]
         + reward_memory_headroom
-        + captured_envelope_headroom
+        + captured_turn_headroom
     )
     return {
         "mode": mode,
