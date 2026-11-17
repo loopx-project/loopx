@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Protocol, Sequence
 
 from .agent_registry import (
     agent_profile_for_goal,
@@ -72,11 +72,28 @@ _MONITOR_CADENCE = re.compile(
 )
 
 
+class _RuntimeController(Protocol):
+    def capabilities(self) -> Sequence[Mapping[str, object]]: ...
+
+    def open_session(
+        self, *, goal_id: str, goal_instance_id: str | None = None, agent_id: str, work_dir: Path,
+        objective: str, mode: str, session_id: str | None = None, channel_id: str,
+        agent_goal_id: str, managed_agent_id: str = ...,
+    ) -> tuple[dict[str, object], bool]: ...
+
+    def submit_turn(
+        self, *, session_id: str, client_turn_id: str, message: str, work_dir: Path,
+        objective: str, display_message: str = ...,
+    ) -> tuple[dict[str, object], bool]: ...
+
+    def resume_session_queue(self, *, session_id: str, work_dir: Path, objective: str) -> object: ...
+
+
 class ProtectedActionGate(ActionConflictError):
     """A typed preview is valid while its canonical write needs an explicit gate."""
 
     def __init__(
-        self, action_kind: str, *, gate: Mapping[str, Any] | None = None
+        self, action_kind: str, *, gate: Mapping[str, object] | None = None
     ) -> None:
         self.action_kind = action_kind
         self.gate = dict(
@@ -87,8 +104,8 @@ class ProtectedActionGate(ActionConflictError):
                 "next_action": "Keep this preview and complete the protected transition through its canonical LoopX service.",
             }
         )
-        self.proposal: dict[str, Any] | None = None
-        super().__init__(self.gate["summary"])
+        self.proposal: dict[str, object] | None = None
+        super().__init__(str(self.gate["summary"]))
 
 
 class _AgentUnavailableError(ValueError):
@@ -98,26 +115,30 @@ class _AgentUnavailableError(ValueError):
     callers must not infer this narrower condition from their message text.
     """
 
-    def __init__(self, message: str, *, capability: Mapping[str, Any] | None = None) -> None:
+    def __init__(self, message: str, *, capability: Mapping[str, object] | None = None) -> None:
         self.capability = dict(capability) if capability is not None else None
         super().__init__(message)
 
 
-def _opaque(value: Any, *, field: str) -> str:
+def _as_dict(value: object) -> dict[str, object]:
+    return {str(key): item for key, item in value.items()} if isinstance(value, Mapping) else {}
+
+
+def _opaque(value: object, *, field: str) -> str:
     token = str(value or "").strip()
     if not _OPAQUE_ID.fullmatch(token):
         raise ValueError(f"{field} must be a compact opaque id")
     return token
 
 
-def _text(value: Any, *, field: str, limit: int = 1000) -> str:
+def _text(value: object, *, field: str, limit: int = 1000) -> str:
     text = " ".join(str(value or "").split()).strip()
     if not text or len(text) > limit:
         raise ValueError(f"{field} must be bounded visible text")
     return text
 
 
-def _digest(payload: Any) -> str:
+def _digest(payload: object) -> str:
     stable = json.dumps(
         payload,
         allow_nan=False,
@@ -126,6 +147,10 @@ def _digest(payload: Any) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()
+
+
+def _receipt_id(payload: object) -> str:
+    return _digest(payload)[:32]
 
 
 def goal_workspace_ref(root: Path) -> str:
@@ -158,7 +183,7 @@ def goal_workspace_labels(directories: Sequence[Path]) -> dict[Path, str]:
             depth[path] += 1
 
 
-def _normalize_cadence(value: Any) -> str:
+def _normalize_cadence(value: object) -> str:
     candidate = str(value or "").strip().lower().replace("-", "_")
     aliases = {
         "hourly": "1h",
@@ -182,7 +207,7 @@ def _normalize_cadence(value: Any) -> str:
     raise ValueError("cadence must look like 30m, 2h, 1d, hourly, or daily")
 
 
-def _monitor_metadata(parameters: Mapping[str, Any], *, schedule: bool = True) -> dict[str, str]:
+def _monitor_metadata(parameters: Mapping[str, object], *, schedule: bool = True) -> dict[str, str]:
     metadata = {
         key: str(parameters[key])
         for key in ("target_key", "cadence")
@@ -211,7 +236,7 @@ def _monitor_metadata(parameters: Mapping[str, Any], *, schedule: bool = True) -
     return metadata
 
 
-def _monitor_text(parameters: Mapping[str, Any]) -> str | None:
+def _monitor_text(parameters: Mapping[str, object]) -> str | None:
     target = str(parameters.get("target") or "").strip()
     stop_condition = str(parameters.get("stop_condition") or "").strip()
     if target and stop_condition:
@@ -239,7 +264,7 @@ class ChatActionService(
         store: ChatActionStore,
         registry_path: Path,
         chat_store: ChatSessionStore | None = None,
-        runtime_controller: Any | None = None,
+        runtime_controller: _RuntimeController | None = None,
         workspace_roots: Sequence[Path] = (),
         runtime_root_override: str | Path | None = None,
     ) -> None:
@@ -248,7 +273,7 @@ class ChatActionService(
         self.chat_store = chat_store
         self.runtime_controller = runtime_controller
         if runtime_controller is not None:
-            runtime_controller.original_task_action_store = store
+            setattr(runtime_controller, "original_task_action_store", store)
         # The runtime root the serving Chat selected (its --runtime-root). A
         # creation on a registry that does not exist yet has no recorded root
         # to follow, so the first Goal must persist where the service already
@@ -260,7 +285,19 @@ class ChatActionService(
             Path(root).expanduser().resolve() for root in workspace_roots
         )
 
-    def project_team_plan_preview(self, preview: Mapping[str, Any]) -> dict[str, Any]:
+    def _turn_store(self) -> ChatSessionStore | None:
+        if self.chat_store is not None:
+            return self.chat_store
+        raw_store = getattr(self.runtime_controller, "store", None)
+        return raw_store if isinstance(raw_store, ChatSessionStore) else None
+
+    def _stale_proposal(self, proposal_id: str, fingerprint: str) -> dict[str, object]:
+        return {
+            "proposal": self.store.apply(proposal_id, current_state_fingerprint=fingerprint, receipt={}),
+            "turn": None,
+        }
+
+    def project_team_plan_preview(self, preview: Mapping[str, object]) -> dict[str, object]:
         """Offer an admitted steward team preview as the card a surface lists.
 
         An admitted preview is a validated proposal, not yet a confirmation: the
@@ -297,10 +334,10 @@ class ChatActionService(
             }
         )
 
-    def _registry(self) -> dict[str, Any]:
+    def _registry(self) -> dict[str, object]:
         return load_registry(self.registry_path)
 
-    def _goal(self, goal_id: str) -> dict[str, Any]:
+    def _goal(self, goal_id: str) -> dict[str, object]:
         goal = next(
             (
                 goal
@@ -339,7 +376,7 @@ class ChatActionService(
 
     def _creation_agent_eligibility(
         self, agent_id: str, *, project: Path | None = None
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Availability refusal for a Goal's first Agent becomes a typed gate.
 
         A fresh install often has no usable Agent yet. The owner who clicks
@@ -354,7 +391,7 @@ class ChatActionService(
             return self._agent_eligibility(agent_id, project=project)
         except _AgentUnavailableError as exc:
             row = exc.capability
-            gate: dict[str, Any] = {
+            gate: dict[str, object] = {
                 "kind": "agent_unavailable",
                 "agent_id": agent_id,
                 "registered": row is not None,
@@ -375,7 +412,7 @@ class ChatActionService(
         *,
         project: Path | None = None,
         requires_tools: bool = True,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         if self.runtime_controller is None:
             return {
                 "agent_id": agent_id,
@@ -509,14 +546,14 @@ class ChatActionService(
 
     @staticmethod
     def _allowed_parameters(
-        parameters: Mapping[str, Any],
+        parameters: Mapping[str, object],
         *,
         allowed: set[str],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         unknown = set(parameters) - allowed
         if unknown:
             raise ValueError(f"unknown typed action parameter: {sorted(unknown)[0]}")
-        return dict(parameters)
+        return {str(key): value for key, value in parameters.items()}
 
     def _session_fingerprint(self, session_id: str, goal_id: str) -> str:
         if self.chat_store is None:
@@ -537,8 +574,8 @@ class ChatActionService(
         )
 
     def _project_for_goal_create(
-        self, proposal: Mapping[str, Any], *, progress: Mapping[str, Any] | None = None
-    ) -> tuple[Path, dict[str, Any]]:
+        self, proposal: Mapping[str, object], *, progress: Mapping[str, object] | None = None
+    ) -> tuple[Path, dict[str, object]]:
         parameters = proposal.get("normalized_parameters")
         context = proposal.get("context")
         if not isinstance(parameters, Mapping) or not isinstance(context, Mapping):
@@ -547,12 +584,16 @@ class ChatActionService(
         if context.get("binding_id"):
             # The native steward freezes its configured workspace. Existing
             # Goals and the single-Goal fallback cannot redirect a commission.
-            candidates = [root for root in self.workspace_roots if root.is_dir() and (root / ".git").exists()
-                          and workspace_ref == goal_workspace_ref(root)]
-            if len(candidates) != 1:
+            steward_roots = [
+                root for root in self.workspace_roots
+                if root.is_dir() and (root / ".git").exists() and workspace_ref == goal_workspace_ref(root)
+            ]
+            if len(steward_roots) != 1:
                 raise ValueError("the bound steward workspace is unavailable")
-            return candidates[0], {"id": "", "repo": str(candidates[0]), "domain": "project-goal-control-plane",
-                                  "adapter": {"kind": "generic_project_goal_v0"}}
+            return steward_roots[0], {
+                "id": "", "repo": str(steward_roots[0]), "domain": "project-goal-control-plane",
+                "adapter": {"kind": "generic_project_goal_v0"},
+            }
         goals = registry_goals(self._registry())
         # Resume from server-owned identity, before mutable single-Goal routing.
         # No caller path or a different creation operation can redirect it.
@@ -568,32 +609,25 @@ class ChatActionService(
         # A missing/stale choice must ask again, never silently select another root.
         context_goal_id = str(context.get("goal_id") or "").strip()
         source_id = context_goal_id if workspace_ref == "current" else workspace_ref
-        source_goal = next(
-            (goal for goal in goals if str(goal.get("id") or "") == source_id),
-            None,
-        )
+        source_goal = next((goal for goal in goals if str(goal.get("id") or "") == source_id), None)
         if source_goal is None and workspace_ref == "current" and len(goals) == 1:
             source_goal = goals[0]
         if source_goal is None:
             workspace_candidates = [root for root in self.workspace_roots if root.is_dir()]
             token_map = {goal_workspace_ref(root): root for root in workspace_candidates}
-            selected = (workspace_candidates[0]
-                        if workspace_ref == "current" and len(workspace_candidates) == 1
-                        else token_map.get(workspace_ref))
+            selected = (
+                workspace_candidates[0]
+                if workspace_ref == "current" and len(workspace_candidates) == 1
+                else token_map.get(workspace_ref)
+            )
             if selected is not None:
                 return selected, {
-                    "id": "",
-                    "domain": "project-goal-control-plane",
-                    "repo": str(selected),
+                    "id": "", "domain": "project-goal-control-plane", "repo": str(selected),
                     "adapter": {"kind": "generic_project_goal_v0"},
                 }
-        if source_goal is None:
             available = [root for root in self.workspace_roots if root.is_dir()]
-            labels = self.workspace_labels()
-            candidates = [
-                {"workspace_ref": goal_workspace_ref(root), "label": labels[root]}
-                for root in available
-            ]
+            labels = self._workspace_labels_for(available)
+            gate_candidates = [{"workspace_ref": goal_workspace_ref(root), "label": labels[root]} for root in available]
             raise ProtectedActionGate(
                 "goal.create",
                 gate={
@@ -601,10 +635,9 @@ class ChatActionService(
                     "summary": "Select one server-configured workspace before creating this Goal.",
                     "next_action": (
                         "Choose an available workspace or a registered Goal workspace, then review again. "
-                        "To use another directory, restart the Dashboard with "
-                        "`loopx dashboard --scan-path <directory>`, once per project."
+                        "To use another directory, restart the Dashboard with `loopx dashboard --scan-path <directory>`, once per project."
                     ),
-                    "candidates": candidates,
+                    "candidates": gate_candidates,
                 },
             )
         if workspace_ref not in {"current", str(source_goal.get("id") or "")}:
@@ -621,6 +654,14 @@ class ChatActionService(
             )
         return project, source_goal
 
+    def _workspace_labels_for(self, available: Sequence[Path]) -> dict[Path, str]:
+        directories = list(available)
+        for goal in registry_goals(self._registry()):
+            repo = str(goal.get("repo") or "").strip()
+            if repo:
+                directories.append(Path(repo).expanduser().resolve())
+        return goal_workspace_labels(directories)
+
     def workspace_labels(self) -> dict[Path, str]:
         """Names for every directory a Goal creation can target.
 
@@ -628,16 +669,11 @@ class ChatActionService(
         two choices never read the same in the form, a gate or a review.
         """
 
-        directories = [root for root in self.workspace_roots if root.is_dir()]
-        for goal in registry_goals(self._registry()):
-            repo = str(goal.get("repo") or "").strip()
-            if repo:
-                directories.append(Path(repo).expanduser().resolve())
-        return goal_workspace_labels(directories)
+        return self._workspace_labels_for([root for root in self.workspace_roots if root.is_dir()])
 
     def _goal_workspace_binding(
-        self, project: Path, source_goal: Mapping[str, Any], *, requested_ref: str
-    ) -> dict[str, Any]:
+        self, project: Path, source_goal: Mapping[str, object], *, requested_ref: str
+    ) -> dict[str, object]:
         """The workspace a confirmed creation will use, as the owner reviews it.
 
         ``workspace_ref`` is the explicit reference apply resolves, so a
@@ -656,11 +692,11 @@ class ChatActionService(
         }
 
     def _apply_goal_create(
-        self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, proposal_id: str, proposal: dict[str, object], parameters: dict[str, object]
+    ) -> dict[str, object]:
         from .control_plane.effect_runtime import effect_runtime_result
 
-        def require_first_turn_readback(turn: dict[str, Any]) -> None:
+        def require_first_turn_readback(turn: Mapping[str, object]) -> None:
             plan = effect_runtime_result("presentation.action_review_plan.compile", {
                 "proposal": {**proposal, "first_turn_readback": turn},
             })
@@ -668,23 +704,16 @@ class ChatActionService(
                 raise ValueError("The original first Turn ended before Host dispatch; inspect its original Session instead of starting another")
 
         current_fingerprint = self._registry_fingerprint()
-        heartbeat = (
-            parameters.get("heartbeat")
-            if isinstance(parameters.get("heartbeat"), dict)
-            else {}
-        )
+        heartbeat = _as_dict(parameters.get("heartbeat"))
         goal_id = str(parameters["goal_id"])
         existing_goal = next(
-            (
-                goal
-                for goal in registry_goals(self._registry())
-                if str(goal.get("id") or "") == goal_id
-            ),
+            (goal for goal in registry_goals(self._registry()) if str(goal.get("id") or "") == goal_id),
             None,
         )
         creation_plan = effect_runtime_result("presentation.action_review_plan.compile", {"proposal": proposal})
-        progress = creation_plan.get("creationProgress") or {}
-        if (proposal.get("checkpoint") or {}).get("steps") and not progress:
+        progress = _as_dict(creation_plan.get("creationProgress"))
+        checkpoint_steps = _as_dict(_as_dict(proposal.get("checkpoint")).get("steps"))
+        if checkpoint_steps and not progress:
             raise ValueError("Goal creation checkpoints do not match the original request; inspect the recorded operation")
         project, source_goal = self._project_for_goal_create(proposal, progress=progress)
         workspace_digest = _digest(str(project))
@@ -697,9 +726,7 @@ class ChatActionService(
             },
         )
         if existing_goal is not None:
-            workspace_receipt = (
-                (proposal.get("checkpoint") or {}).get("steps", {}).get("workspace_validated", {})
-            )
+            workspace_receipt = _as_dict(checkpoint_steps.get("workspace_validated"))
             if (
                 Path(str(existing_goal.get("repo") or "")).expanduser().resolve() != project
                 or existing_goal.get("creation_operation_id") != proposal_id
@@ -707,15 +734,8 @@ class ChatActionService(
             ):
                 raise conflict
         elif current_fingerprint != proposal.get("expected_state_fingerprint"):
-            stale = self.store.apply(
-                proposal_id,
-                current_state_fingerprint=current_fingerprint,
-                receipt={},
-            )
-            return {"proposal": stale, "turn": None}
-        self._agent_eligibility(
-            str(parameters.get("agent_id") or "codex"), project=project
-        )
+            return self._stale_proposal(proposal_id, current_fingerprint)
+        self._agent_eligibility(str(parameters.get("agent_id") or "codex"), project=project)
         self.store.save_checkpoint(
             proposal_id,
             step="workspace_validated",
@@ -725,9 +745,8 @@ class ChatActionService(
                 "workspace_digest": workspace_digest,
             },
         )
-        registry = self._registry()
         runtime_root = resolve_runtime_root(
-            registry, self.runtime_root_override, registry_path=self.registry_path
+            self._registry(), self.runtime_root_override, registry_path=self.registry_path
         ).resolve()
         objective = str(parameters.get("objective") or parameters["title"])
         if existing_goal is not None:
@@ -735,38 +754,21 @@ class ChatActionService(
             # frozen target through its TS owner before any downstream effects;
             # re-running Markdown bootstrap could overwrite a promoted Goal.
             initialize_goal_storage_target(runtime_root, existing_goal, registry_path=self.registry_path)
-            result = {"ok": True}
+            result: dict[str, object] = {"ok": True}
         else:
             try:
                 from .bootstrap import bootstrap_project
 
                 result = bootstrap_project(
-                    project=project,
-                    creation_operation_id=proposal_id,
-                    registry_path=self.registry_path,
-                    runtime_root=runtime_root,
-                    goal_id=goal_id,
-                    objective=objective,
+                    project=project, creation_operation_id=proposal_id, registry_path=self.registry_path,
+                    runtime_root=runtime_root, goal_id=goal_id, objective=objective,
                     domain=str(source_goal.get("domain") or "project-goal-control-plane"),
-                    role="primary",
-                    parent_goal_id=str(source_goal.get("id") or "") or None,
-                    state_file=None,
-                    goal_doc=None,
-                    adapter_kind=str(
-                        (source_goal.get("adapter") or {}).get("kind")
-                        or "generic_project_goal_v0"
-                    ),
-                    adapter_status="connected",
-                    display_name=str(parameters.get("title") or "").strip() or None,
-                    next_probe=None,
-                    spawn_allowed=False,
-                    max_children=0,
-                    allowed_domains=[],
-                    write_scope=[],
-                    preserve_todos=True,
-                    force=False,
-                    dry_run=False,
-                    sync_global=False,
+                    role="primary", parent_goal_id=str(source_goal.get("id") or "") or None,
+                    state_file=None, goal_doc=None,
+                    adapter_kind=str(_as_dict(source_goal.get("adapter")).get("kind") or "generic_project_goal_v0"),
+                    adapter_status="connected", display_name=str(parameters.get("title") or "").strip() or None,
+                    next_probe=None, spawn_allowed=False, max_children=0, allowed_domains=[],
+                    write_scope=[], preserve_todos=True, force=False, dry_run=False, sync_global=False,
                 )
             except GoalCreationConflictError as exc:
                 raise conflict from exc
@@ -779,70 +781,49 @@ class ChatActionService(
                     "next_action": "Repair the project registry write path and retry this preview.",
                 },
             )
-        self.store.save_checkpoint(
-            proposal_id,
-            step="goal_bootstrapped",
-            receipt={"outcome": "goal_bootstrapped", "goal_id": goal_id},
-        )
+        self.store.save_checkpoint(proposal_id, step="goal_bootstrapped", receipt={"outcome": "goal_bootstrapped", "goal_id": goal_id})
         agent_id = str(parameters.get("agent_id") or "").strip()
         if agent_id and not progress.get("agentId"):
-            configure_goal(
-                registry_path=self.registry_path,
-                goal_id=goal_id,
-                registered_agents=[agent_id],
-                execute=True,
-            )
+            configure_goal(registry_path=self.registry_path, goal_id=goal_id, registered_agents=[agent_id], execute=True)
             self.store.save_checkpoint(
-                proposal_id,
-                step="agent_bound",
-                receipt={
-                    "outcome": "agent_bound",
-                    "goal_id": goal_id,
-                    "agent_id": agent_id,
-                },
+                proposal_id, step="agent_bound", receipt={"outcome": "agent_bound", "goal_id": goal_id, "agent_id": agent_id}
             )
-        todo_ids: list[str] = list(progress.get("todoIds") or [])
-        if creation_plan.get("creationExecution"):
+        raw_todo_ids = progress.get("todoIds")
+        todo_ids: list[str] = [str(item) for item in raw_todo_ids] if isinstance(raw_todo_ids, Sequence) and not isinstance(raw_todo_ids, (str, bytes)) else []
+        creation_execution = _as_dict(creation_plan.get("creationExecution"))
+        if creation_execution:
             from .chat.goal_creation_execution import retain_creation_write_approval
-            retain_creation_write_approval(self, proposal_id, creation_plan["creationExecution"])
+            retain_creation_write_approval(self, proposal_id, creation_execution)
         # Canonical File/SQLite own replay after a committed write loses its
         # response. Historical target-only creation retains its old adapter.
-        pending_todos = (parameters.get("initial_todos") or []) if "todoIds" not in progress else []
+        raw_initial = parameters.get("initial_todos")
+        initial_todos = list(raw_initial) if isinstance(raw_initial, Sequence) and not isinstance(raw_initial, (str, bytes)) else []
+        pending_todos = initial_todos if "todoIds" not in progress else []
         authority = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id) if pending_todos else None
+        raw_write_scope = creation_execution.get("writeScope")
+        write_scopes = [str(item) for item in raw_write_scope] if isinstance(raw_write_scope, Sequence) and not isinstance(raw_write_scope, (str, bytes)) else None
         for index, todo_text in enumerate(pending_todos):
             todo = add_goal_todo(
-                registry_path=self.registry_path,
-                goal_id=goal_id,
-                role="agent",
-                text=str(todo_text),
-                task_class="advancement_task",
-                action_kind="advance",
-                claimed_by=agent_id or None,
-                agent_id=agent_id or None,
-                dry_run=False,
+                registry_path=self.registry_path, goal_id=goal_id, role="agent", text=str(todo_text),
+                task_class="advancement_task", action_kind="advance",
+                claimed_by=agent_id or None, agent_id=agent_id or None, dry_run=False,
                 operation_id=f"goal-create:{proposal_id}:todo:{index}" if authority is not None else None,
-                **({"required_write_scopes": creation_plan["creationExecution"]["writeScope"]}
-                   if creation_plan.get("creationExecution", {}).get("writeScope") else {}),
+                required_write_scopes=write_scopes or None,
             )
             if todo.get("todo_id"):
                 todo_ids.append(str(todo["todo_id"]))
-        self.store.save_checkpoint(
-            proposal_id,
-            step="todos_created",
-            receipt={"outcome": "todos_created", "todo_ids": todo_ids},
-        )
-        completion_plan = effect_runtime_result("presentation.action_review_plan.compile", {
-            "proposal": self.store.load(proposal_id),
-        })
-        completion = completion_plan.get("creationOutcome")
-        completion_progress = completion_plan.get("creationProgress") or {}
+        self.store.save_checkpoint(proposal_id, step="todos_created", receipt={"outcome": "todos_created", "todo_ids": todo_ids})
+        completion_plan = effect_runtime_result("presentation.action_review_plan.compile", {"proposal": self.store.load(proposal_id)})
+        completion = _as_dict(completion_plan.get("creationOutcome"))
+        completion_progress = _as_dict(completion_plan.get("creationProgress"))
         if completion and not completion_progress.get("completionRecorded"):
             from .control_plane.goals.acceptance import inspect_goal_acceptance, refine_goal_outcome
 
-            basis = completion_progress.get("completionBasis")
-            if basis is None:
-                current = inspect_goal_acceptance(registry_path=self.registry_path,
-                    runtime_root=str(runtime_root), goal_id=goal_id, agent_id=agent_id)
+            basis = _as_dict(completion_progress.get("completionBasis"))
+            if not basis:
+                current = inspect_goal_acceptance(
+                    registry_path=self.registry_path, runtime_root=str(runtime_root), goal_id=goal_id, agent_id=agent_id
+                )
                 basis = {"providerRevision": current["provider_revision"], "operationId": completion["operationId"]}
                 # Persist the original CAS before sending the canonical write.
                 # An uncertain response must replay this request, not new intent.
@@ -850,40 +831,48 @@ class ChatActionService(
                     "outcome": "goal_completion_prepared", "goal_id": goal_id,
                     "operation_id": basis["operationId"], "provider_revision": basis["providerRevision"],
                 })
-            retained = refine_goal_outcome(registry_path=self.registry_path, runtime_root=str(runtime_root),
-                goal_id=goal_id, agent_id=agent_id, refinement=completion["refinement"],
-                operation_id=basis["operationId"], expected_provider_revision=basis["providerRevision"], execute=True)
+            retained = refine_goal_outcome(
+                registry_path=self.registry_path, runtime_root=str(runtime_root),
+                goal_id=goal_id, agent_id=agent_id, refinement=_as_dict(completion["refinement"]),
+                operation_id=str(basis["operationId"]), expected_provider_revision=str(basis["providerRevision"]), execute=True,
+            )
             self.store.save_checkpoint(proposal_id, step="goal_completion_recorded", receipt={
                 "outcome": "goal_completion_recorded", "goal_id": goal_id,
                 "operation_id": basis["operationId"], "provider_revision": retained["provider_revision"],
             })
         projected = self._goal(goal_id)
         if agent_id and agent_id not in registered_agent_ids_for_goal(projected):
-            raise ValueError(
-                "Goal projection did not retain the selected Agent binding"
-            )
+            raise ValueError("Goal projection did not retain the selected Agent binding")
         from functools import partial
         from .chat.session_open import read_goal_creation_session, recover_goal_creation_session, require_regular_session_paths, goal_creation_display_message
 
-        read_original_session = partial(read_goal_creation_session,
-            self.store, self.chat_store or getattr(self.runtime_controller, "store", None),
+        turn_store = self._turn_store()
+        raw_goal_instance_id = projected.get("goal_instance_id")
+        read_original_session = partial(
+            read_goal_creation_session, self.store, turn_store,
             proposal_id=proposal_id, goal_id=goal_id, agent_id=agent_id,
-            workspace=project, goal_instance_id=projected.get("goal_instance_id"))
+            workspace=project, goal_instance_id=str(raw_goal_instance_id) if raw_goal_instance_id is not None else None,
+        )
 
-        turn_result: dict[str, Any] | None = None
+        turn_result: dict[str, object] | None = None
         session_id = ""
         # A caller that owns its conversation layer opens the first Session itself.
         open_session = parameters.get("open_session") is not False
-        first_turn_message = (f"/goal start --tokens {parameters['native_token_budget']} {objective}"
-            if parameters.get("native_token_budget") else (
-            f"开始推进 Goal {goal_id}。先核对目标边界和现有 Todo，"
-            f"首个 Todo：{'；'.join(str(item) for item in (parameters.get('initial_todos') or [])[:3]) or '按目标边界建立首个可验证进展'}。"
-            "然后直接推进并报告可验证结果；遇到权限边界时停止并提出明确 Gate。"
-        ))
-        opening_session_id = _digest({"goal_create": proposal_id, "goal_id": goal_id})[:32]
-        expected_managed_agent = (creation_plan.get("creationSession") or {}).get("managedAgentId")
-        turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
-        if open_session and not progress.get("firstTurn") and not progress.get("sessionId") and turn_store is not None:
+        first_turn_message = (
+            f"/goal start --tokens {parameters['native_token_budget']} {objective}"
+            if parameters.get("native_token_budget")
+            else (
+                f"开始推进 Goal {goal_id}。先核对目标边界和现有 Todo，"
+                f"首个 Todo：{'；'.join(str(item) for item in initial_todos[:3]) or '按目标边界建立首个可验证进展'}。"
+                "然后直接推进并报告可验证结果；遇到权限边界时停止并提出明确 Gate。"
+            )
+        )
+        opening_session_id = _receipt_id({"goal_create": proposal_id, "goal_id": goal_id})
+        managed_agent_raw = _as_dict(creation_plan.get("creationSession")).get("managedAgentId")
+        expected_managed_agent = str(managed_agent_raw) if managed_agent_raw else None
+        first_turn_info = _as_dict(progress.get("firstTurn"))
+        progress_session_id = str(progress.get("sessionId") or "")
+        if open_session and not first_turn_info and not progress_session_id and turn_store is not None:
             require_regular_session_paths(turn_store, opening_session_id)
             original = turn_store.load_session(opening_session_id)
             if original is not None:
@@ -893,71 +882,58 @@ class ChatActionService(
             elif existing_goal is not None:
                 # Historical opening responses carried no operation-bound id.
                 # Recover only an unambiguous original; never choose latest.
-                original = recover_goal_creation_session(turn_store,
-                    client_turn_id=f"goal-start-{proposal_id}", goal_id=goal_id, agent_id=agent_id)
+                original = recover_goal_creation_session(
+                    turn_store, client_turn_id=f"goal-start-{proposal_id}", goal_id=goal_id, agent_id=agent_id
+                )
             if original is not None:
                 read_original_session(session_id=original["session_id"])
-                progress = {**progress, "sessionId": original["session_id"]}
+                progress_session_id = str(original["session_id"])
+        session: dict[str, object] = {}
         if not open_session:
             pass
-        elif progress.get("firstTurn"):
-            session_id = progress["firstTurn"]["sessionId"]
-            turn_id = progress["firstTurn"]["turnId"]
-            turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
+        elif first_turn_info:
+            session_id = str(first_turn_info["sessionId"])
+            turn_id = str(first_turn_info["turnId"])
             session = read_original_session(session_id=session_id)
             turn = turn_store.load_turn(session_id, turn_id) if turn_store is not None else None
             if turn is None:
                 raise ValueError("The recorded first Turn is unavailable; restore its original Session instead of starting another")
-            if (turn.get("message") != first_turn_message
-                    or turn.get("client_turn_id") != f"goal-start-{proposal_id}"):
+            if turn.get("message") != first_turn_message or turn.get("client_turn_id") != f"goal-start-{proposal_id}":
                 raise ValueError("The original first Turn request changed; retain its recorded operation")
             require_first_turn_readback(turn)
             turn_result = {"turn_id": turn_id, "status": str(turn["status"]), "created": False}
-        elif progress.get("sessionId"):
-            turn_store = self.chat_store or getattr(self.runtime_controller, "store", None)
+        elif progress_session_id:
             if turn_store is None:
                 raise ValueError("The original first Session is unavailable; restore it before retrying")
-            original_session = read_original_session(session_id=progress["sessionId"])
-            session, turn = self._read_task_start(
+            original_session = read_original_session(session_id=progress_session_id)
+            recovered_session, turn = self._read_task_start(
                 turn_store, goal_id=goal_id, agent_id=agent_id, channel_id=original_session["channel_id"],
-                client_turn_id=f"goal-start-{proposal_id}", checkpoint={"session_id": progress["sessionId"]},
+                client_turn_id=f"goal-start-{proposal_id}", checkpoint={"session_id": progress_session_id},
             )
+            if recovered_session is not None:
+                session = recovered_session
             if turn is not None:
                 if turn.get("message") != first_turn_message:
                     raise ValueError("The original first Turn request changed; retain its recorded operation")
                 require_first_turn_readback(turn)
                 if turn.get("status") in TERMINAL_TURN_STATES or turn.get("started_at") or turn.get("upstream_turn_id"):
-                    session_id = session["session_id"]
+                    session_id = str(session["session_id"])
                     turn_result = {"turn_id": turn["turn_id"], "status": str(turn["status"]), "created": False}
                     self.store.save_checkpoint(proposal_id, step="first_turn_started", receipt={
                         "outcome": "first_turn_started", "session_id": session_id, "turn_id": turn["turn_id"],
                     })
-        first_turn_gate: dict[str, Any] | None = None
+        first_turn_gate: dict[str, object] | None = None
         if open_session and agent_id and self.runtime_controller is not None and turn_result is None:
             try:
                 from .status import collect_status
 
+                caps = self.runtime_controller.capabilities()
                 status_payload = collect_status(
                     registry_path=self.registry_path,
                     runtime_root_override=str(runtime_root) if runtime_root else None,
-                    limit=5,
-                    goal_id=goal_id,
-                    available_capabilities=(
-                        self.runtime_controller.capabilities()
-                        if self.runtime_controller is not None
-                        else None
-                    ),
+                    limit=5, goal_id=goal_id, available_capabilities=caps,
                 )
-                guard = build_quota_should_run(
-                    status_payload,
-                    goal_id=goal_id,
-                    agent_id=agent_id or None,
-                    available_capabilities=(
-                        self.runtime_controller.capabilities()
-                        if self.runtime_controller is not None
-                        else None
-                    ),
-                )
+                guard = build_quota_should_run(status_payload, goal_id=goal_id, agent_id=agent_id or None, available_capabilities=caps)
             except Exception as exc:
                 raise ValueError(
                     "The first Turn's Goal admission could not be verified. "
@@ -966,58 +942,39 @@ class ChatActionService(
             if guard.get("should_run") is not True:
                 first_turn_gate = {
                     "kind": "goal_quota_gate",
-                    "summary": str(
-                        guard.get("reason")
-                        or "The new Goal is not eligible for its first Agent Turn."
-                    )[:600],
-                    "next_action": str(
-                        guard.get("recommended_action")
-                        or "Resolve the projected Goal Gate and retry the first Turn."
-                    )[:600],
+                    "summary": str(guard.get("reason") or "The new Goal is not eligible for its first Agent Turn.")[:600],
+                    "next_action": str(guard.get("recommended_action") or "Resolve the projected Goal Gate and retry the first Turn.")[:600],
                     "quota_state": str(guard.get("state") or "waiting"),
                 }
         if open_session and agent_id and self.runtime_controller is not None and first_turn_gate is None and turn_result is None:
-            if progress.get("sessionId"):
-                session = read_original_session(session_id=progress["sessionId"])
+            if progress_session_id:
+                session = read_original_session(session_id=progress_session_id)
             else:
                 session, _resumed = self.runtime_controller.open_session(
                     goal_id=goal_id,
-                    goal_instance_id=(
-                        str(projected["goal_instance_id"])
-                        if projected.get("goal_instance_id")
-                        else None
-                    ),
-                    agent_id=agent_id,
-                    work_dir=project,
-                    objective=objective,
-                    mode="new",
-                    session_id=opening_session_id,
-                    channel_id=f"goal.{goal_id}",
-                    agent_goal_id=goal_id,
-                    **({"managed_agent_id": creation_plan["creationSession"]["managedAgentId"]}
-                       if creation_plan.get("creationSession") else {}),
+                    goal_instance_id=str(projected["goal_instance_id"]) if projected.get("goal_instance_id") else None,
+                    agent_id=agent_id, work_dir=project, objective=objective, mode="new",
+                    session_id=opening_session_id, channel_id=f"goal.{goal_id}", agent_goal_id=goal_id,
+                    **({"managed_agent_id": expected_managed_agent} if expected_managed_agent else {}),
                 )
             session_id = _opaque(session.get("session_id"), field="session_id")
-            if not progress.get("sessionId") and session_id != opening_session_id:
+            if not progress_session_id and session_id != opening_session_id:
                 raise ValueError("The original first Session opening returned another operation")
-            session = read_original_session(session_id=session_id,
-                expected_managed_agent=expected_managed_agent if not progress.get("sessionId") else None)
-            self.store.save_checkpoint(proposal_id, step="first_session_opened",
-                receipt={"outcome": "first_session_opened", "session_id": session_id,
-                         "channel_id": session["channel_id"],
-                         **({"managed_agent_id": session["managed_agent_id"],
-                             "goal_instance_id": session.get("goal_instance_id")}
-                            if session.get("managed_agent_id") is not None else {}),
-                         **({"upstream_thread_id": session.get("upstream_thread_id")}
-                            if creation_plan.get("creationExecution") else {})})
+            session = read_original_session(
+                session_id=session_id, expected_managed_agent=expected_managed_agent if not progress_session_id else None,
+            )
+            self.store.save_checkpoint(proposal_id, step="first_session_opened", receipt={
+                "outcome": "first_session_opened", "session_id": session_id, "channel_id": session["channel_id"],
+                **({"managed_agent_id": session["managed_agent_id"], "goal_instance_id": session.get("goal_instance_id")}
+                   if session.get("managed_agent_id") is not None else {}),
+                **({"upstream_thread_id": session.get("upstream_thread_id")} if creation_execution else {}),
+            })
             first_turn, created = self.runtime_controller.submit_turn(
-                session_id=session_id,
-                client_turn_id=f"goal-start-{proposal_id}",
-                message=first_turn_message,
-                work_dir=project,
-                objective=objective,
-                **({"display_message": goal_creation_display_message(turn_store, session_id=session_id,
-                    client_turn_id=f"goal-start-{proposal_id}", objective=objective)} if expected_managed_agent else {}),
+                session_id=session_id, client_turn_id=f"goal-start-{proposal_id}",
+                message=first_turn_message, work_dir=project, objective=objective,
+                **({"display_message": goal_creation_display_message(
+                    turn_store, session_id=session_id, client_turn_id=f"goal-start-{proposal_id}", objective=objective
+                )} if expected_managed_agent and turn_store is not None else {}),
             )
             require_first_turn_readback(first_turn)
             turn_result = {
@@ -1025,104 +982,68 @@ class ChatActionService(
                 "status": str(first_turn.get("status") or "queued"),
                 "created": created,
             }
-            self.store.save_checkpoint(
-                proposal_id,
-                step="first_turn_started",
-                receipt={
-                    "outcome": "first_turn_started",
-                    "session_id": session_id,
-                    "turn_id": turn_result["turn_id"],
-                },
-            )
+            self.store.save_checkpoint(proposal_id, step="first_turn_started", receipt={
+                "outcome": "first_turn_started", "session_id": session_id, "turn_id": turn_result["turn_id"],
+            })
         elif first_turn_gate is not None:
-            self.store.save_checkpoint(
-                proposal_id,
-                step="first_turn_gated",
-                receipt={"outcome": "first_turn_gated", "gate": first_turn_gate},
-            )
-            if creation_plan.get("creationExecution"):
+            self.store.save_checkpoint(proposal_id, step="first_turn_gated", receipt={"outcome": "first_turn_gated", "gate": first_turn_gate})
+            if creation_execution:
                 # An applied receipt is immutable. Keep this confirmed start
                 # retryable until its original Session/request is retained;
                 # quota denial cannot silently discard the requested work.
-                raise ValueError("The original Goal and Task are retained, but their first Turn admission is held. "
-                    + first_turn_gate["summary"] + " Retry this same creation when its allowance is ready.")
+                raise ValueError(
+                    "The original Goal and Task are retained, but their first Turn admission is held. "
+                    + str(first_turn_gate["summary"])
+                    + " Retry this same creation when its allowance is ready."
+                )
         if session_id:
             session = read_original_session(session_id=session_id)
         original_task_request = None
         if session_id and parameters.get("start_execution") is True:
             from .chat.goal_creation_execution import retain_original_task_request
             original_task_request = retain_original_task_request(self, proposal_id, session)
-        child_gate: dict[str, Any] | None = first_turn_gate
+        child_gate: dict[str, object] | None = first_turn_gate
         if heartbeat.get("enabled") is True:
-            heartbeat_parameters = {
-                "goal_id": goal_id,
-                "agent_id": agent_id or "codex",
-                "operation": "bind",
-                "cadence": str(heartbeat.get("cadence") or "1d"),
-                "timezone": str(heartbeat.get("timezone") or "UTC"),
-                "stop_condition": str(
-                    parameters.get("stop_condition") or "goal_complete"
-                ),
+            heartbeat_parameters: dict[str, object] = {
+                "goal_id": goal_id, "agent_id": agent_id or "codex", "operation": "bind",
+                "cadence": str(heartbeat.get("cadence") or "1d"), "timezone": str(heartbeat.get("timezone") or "UTC"),
+                "stop_condition": str(parameters.get("stop_condition") or "goal_complete"),
             }
             child_gate = self._heartbeat_gate(heartbeat_parameters).gate
-            self.store.save_checkpoint(
-                proposal_id,
-                step="heartbeat_gate_ready",
-                receipt={"outcome": "heartbeat_gate_ready", "gate": child_gate},
-            )
-        managed_agent_id = (creation_plan.get("creationSession") or {}).get("managedAgentId")
-        receipt = {
-            "receipt_id": _digest({"proposal_id": proposal_id, "goal_id": goal_id})[
-                :32
-            ],
+            self.store.save_checkpoint(proposal_id, step="heartbeat_gate_ready", receipt={"outcome": "heartbeat_gate_ready", "gate": child_gate})
+        resource_ids: dict[str, object] = {
+            "goal_id": goal_id,
+            **({"goal_instance_id": str(projected["goal_instance_id"])} if projected.get("goal_instance_id") else {}),
+            **({"creation_operation_id": str(projected["creation_operation_id"])} if projected.get("creation_operation_id") else {}),
+            **({"agent_id": agent_id} if agent_id else {}),
+            **({"todo_ids": todo_ids} if todo_ids else {}),
+            **({"session_id": session_id} if session_id else {}),
+            **({"managed_agent_id": session["managed_agent_id"], "channel_id": session["channel_id"],
+                "goal_instance_id": session.get("goal_instance_id")}
+               if session_id and session.get("managed_agent_id") is not None else {}),
+            **({"turn_id": turn_result["turn_id"]} if turn_result else {}),
+            # Without an opened Session the caller still needs the managed Agent's address.
+            **({"managed_agent_id": expected_managed_agent, "channel_id": f"agent.{expected_managed_agent}",
+                "goal_instance_id": projected.get("goal_instance_id")}
+               if not session_id and not open_session and expected_managed_agent else {}),
+        }
+        receipt: dict[str, object] = {
+            "receipt_id": _receipt_id({"proposal_id": proposal_id, "goal_id": goal_id}),
             "outcome": "goal_created",
             "projection_verified": True,
-            "resource_ids": {
-                "goal_id": goal_id,
-                **(
-                    {"goal_instance_id": str(projected["goal_instance_id"])}
-                    if projected.get("goal_instance_id")
-                    else {}
-                ),
-                **(
-                    {
-                        "creation_operation_id": str(
-                            projected["creation_operation_id"]
-                        )
-                    }
-                    if projected.get("creation_operation_id")
-                    else {}
-                ),
-                **({"agent_id": agent_id} if agent_id else {}),
-                **({"todo_ids": todo_ids} if todo_ids else {}),
-                **({"session_id": session_id} if session_id else {}),
-                **({"managed_agent_id": session["managed_agent_id"], "channel_id": session["channel_id"],
-                    "goal_instance_id": session.get("goal_instance_id")}
-                   if session_id and session.get("managed_agent_id") is not None else {}),
-                **({"turn_id": turn_result["turn_id"]} if turn_result else {}),
-                # Without an opened Session the caller still needs the managed Agent's address.
-                **({"managed_agent_id": managed_agent_id, "channel_id": f"agent.{managed_agent_id}",
-                    "goal_instance_id": projected.get("goal_instance_id")}
-                   if not session_id and not open_session and managed_agent_id else {}),
-            },
+            "resource_ids": resource_ids,
             **({"child_gate": child_gate} if child_gate else {}),
-            "step_receipts": (
-                (self.store.load(proposal_id) or {}).get("checkpoint") or {}
-            ).get("steps", {}),
+            "step_receipts": _as_dict(_as_dict(self.store.load(proposal_id)).get("checkpoint")).get("steps", {}),
             **({"original_task_request": original_task_request} if original_task_request is not None else {}),
         }
-        stored = self.store.apply(
-            proposal_id,
-            current_state_fingerprint=str(proposal["expected_state_fingerprint"]),
-            receipt=receipt,
-        )
-        if original_task_request is not None:
+        stored = self.store.apply(proposal_id, current_state_fingerprint=str(proposal["expected_state_fingerprint"]), receipt=receipt)
+        if original_task_request is not None and self.runtime_controller is not None:
             self.runtime_controller.resume_session_queue(session_id=session_id, work_dir=project, objective=objective)
         return {"proposal": stored, "turn": turn_result, "gate": child_gate}
 
     def _apply_agent_bind(
-        self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, proposal_id: str, proposal: dict[str, object], parameters: dict[str, object]
+    ) -> dict[str, object]:
         goal_id = str(parameters["goal_id"])
         agent_id = str(parameters["agent_id"])
         expected_revision = str(proposal["expected_state_fingerprint"])
@@ -1134,37 +1055,18 @@ class ChatActionService(
             expected_revision=expected_revision,
         )
         if result.get("status") == "stale":
-            stale = self.store.apply(
-                proposal_id,
-                current_state_fingerprint=str(result["actual_revision"]),
-                receipt={},
-            )
-            return {"proposal": stale, "turn": None}
+            return self._stale_proposal(proposal_id, str(result["actual_revision"]))
         if not result.get("ok") or not result.get("projection_verified"):
-            raise ValueError(
-                str(
-                    result.get("error")
-                    or "Agent binding did not verify in source and shared registries"
-                )
-            )
-        receipt = {
-            "receipt_id": _digest(
-                {"proposal_id": proposal_id, "goal_id": goal_id, "agent_id": agent_id}
-            )[:32],
-            "outcome": "agent_bound"
-            if result.get("status") == "bound"
-            else "agent_already_bound",
+            raise ValueError(str(result.get("error") or "Agent binding did not verify in source and shared registries"))
+        receipt: dict[str, object] = {
+            "receipt_id": _receipt_id({"proposal_id": proposal_id, "goal_id": goal_id, "agent_id": agent_id}),
+            "outcome": "agent_bound" if result.get("status") == "bound" else "agent_already_bound",
             "projection_verified": True,
             "resource_ids": {"goal_id": goal_id, "agent_id": agent_id},
         }
-        stored = self.store.apply(
-            proposal_id,
-            current_state_fingerprint=expected_revision,
-            receipt=receipt,
-        )
-        return {"proposal": stored, "turn": None}
+        return {"proposal": self.store.apply(proposal_id, current_state_fingerprint=expected_revision, receipt=receipt), "turn": None}
 
-    def _heartbeat_gate(self, parameters: dict[str, Any]) -> ProtectedActionGate:
+    def _heartbeat_gate(self, parameters: dict[str, object]) -> ProtectedActionGate:
         goal_id = str(parameters["goal_id"])
         agent_id = str(parameters["agent_id"])
         registered = registered_agent_ids_for_goal(self._goal(goal_id))
@@ -1177,14 +1079,7 @@ class ChatActionService(
             registered_agents=registered,
         )
         operation = str(parameters.get("operation") or "bind")
-        gate_receipt = _digest(
-            {
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "operation": operation,
-                "packet": packet,
-            }
-        )[:32]
+        gate_receipt = _receipt_id({"goal_id": goal_id, "agent_id": agent_id, "operation": operation, "packet": packet})
         return ProtectedActionGate(
             "heartbeat.bind",
             gate={
@@ -1195,12 +1090,7 @@ class ChatActionService(
                 "gate_receipt": gate_receipt,
                 "desired_configuration": {
                     key: parameters[key]
-                    for key in (
-                        "cadence",
-                        "timezone",
-                        "stop_condition",
-                        "notification_policy",
-                    )
+                    for key in ("cadence", "timezone", "stop_condition", "notification_policy")
                     if parameters.get(key) is not None
                 },
                 "activation_packet": packet,
@@ -1208,16 +1098,13 @@ class ChatActionService(
         )
 
     def _apply_monitor_create(
-        self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, proposal_id: str, proposal: dict[str, object], parameters: dict[str, object]
+    ) -> dict[str, object]:
         goal_id = str(parameters["goal_id"])
         source = resolve_chat_todo_source(self, goal_id)
         current_fingerprint = self._monitor_create_fingerprint(source)
         if current_fingerprint != proposal.get("expected_state_fingerprint"):
-            stale = self.store.apply(
-                proposal_id, current_state_fingerprint=current_fingerprint, receipt={}
-            )
-            return {"proposal": stale, "turn": None}
+            return self._stale_proposal(proposal_id, current_fingerprint)
         agent_id = str(parameters["agent_id"])
         if agent_id not in registered_agent_ids_for_goal(source.goal):
             raise ValueError("monitor Agent must be registered for the Goal")
@@ -1226,18 +1113,14 @@ class ChatActionService(
         if not isinstance(revision, str) or not revision:
             raise ValueError("The Goal's Todo authority revision is unavailable")
         stop_condition = str(parameters.get("stop_condition") or "").strip()
-        resume_when = None
-        if (
+        resume_when = (
             stop_condition
-            and parse_timestamp(stop_condition) is None
-            and stop_condition.lower()
-            not in {"watch_only", "watch-only", "watch", "continuous", "never"}
-        ):
-            resume_when = stop_condition
+            if stop_condition and parse_timestamp(stop_condition) is None
+            and stop_condition.lower() not in {"watch_only", "watch-only", "watch", "continuous", "never"}
+            else None
+        )
         metadata = _monitor_metadata(parameters, schedule=False)
-        if not (
-            metadata.get("expires_at") or resume_when or metadata.get("watch_only")
-        ):
+        if not (metadata.get("expires_at") or resume_when or metadata.get("watch_only")):
             metadata["watch_only"] = "true"
         try:
             result = add_goal_todo(
@@ -1250,7 +1133,11 @@ class ChatActionService(
                 text=_monitor_text(parameters) or str(parameters["target"]),
                 task_class="continuous_monitor",
                 action_kind="observe",
-                task_repository=parameters.get("task_repository"),
+                task_repository=(
+                    str(parameters["task_repository"])
+                    if parameters.get("task_repository")
+                    else None
+                ),
                 claimed_by=agent_id,
                 agent_id=agent_id,
                 resume_when=resume_when,
@@ -1260,33 +1147,22 @@ class ChatActionService(
         except LocalCoordinationAuthorityUnavailable as error:
             if error.code not in {"provider_revision_mismatch", "authority_source_changed"}:
                 raise
-            stale = self.store.apply(proposal_id, current_state_fingerprint=_digest({
-                "conflict": error.code, "expected": current_fingerprint,
-            }), receipt={})
-            return {"proposal": stale, "turn": None}
+            return self._stale_proposal(
+                proposal_id,
+                _digest({"conflict": error.code, "expected": current_fingerprint}),
+            )
         todo_id = _opaque(result.get("todo_id"), field="todo_id")
-        receipt = {
-            "receipt_id": _digest(
-                {"proposal_id": proposal_id, "goal_id": goal_id, "todo_id": todo_id}
-            )[:32],
-            "outcome": "monitor_already_exists"
-            if result.get("already_exists")
-            else "monitor_created",
+        receipt: dict[str, object] = {
+            "receipt_id": _receipt_id({"proposal_id": proposal_id, "goal_id": goal_id, "todo_id": todo_id}),
+            "outcome": "monitor_already_exists" if result.get("already_exists") else "monitor_created",
             "projection_verified": True,
-            "resource_ids": {
-                "goal_id": goal_id,
-                "todo_id": todo_id,
-                "agent_id": agent_id,
-            },
+            "resource_ids": {"goal_id": goal_id, "todo_id": todo_id, "agent_id": agent_id},
         }
-        stored = self.store.apply(
-            proposal_id, current_state_fingerprint=current_fingerprint, receipt=receipt
-        )
-        return {"proposal": stored, "turn": None}
+        return {"proposal": self.store.apply(proposal_id, current_state_fingerprint=current_fingerprint, receipt=receipt), "turn": None}
 
     def _apply_team_plan(
-        self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, proposal_id: str, proposal: dict[str, object], parameters: dict[str, object]
+    ) -> dict[str, object]:
         """Create each ready lane's first bounded Todo through the Todo owner."""
 
         from .control_plane.work_items.governed_transition_proposal import (
@@ -1310,9 +1186,7 @@ class ChatActionService(
             error_code = getattr(error, "diagnostic_code", None) or getattr(error, "code", None)
             observed = getattr(error, "current_fingerprint", None)
             if error_code == "team_plan_preview_stale" and observed and observed != expected:
-                stale = self.store.apply(proposal_id,
-                    current_state_fingerprint=observed, receipt={})
-                return {"proposal": stale, "turn": None}
+                return self._stale_proposal(proposal_id, str(observed))
             if error_code == "team_plan_no_staffable_lane":
                 # The typed owner refused a plan whose every lane is a gap:
                 # confirming it could only create nothing, so the outcome is
@@ -1341,14 +1215,8 @@ class ChatActionService(
             outcome = "team_plan_partially_applied"
         else:
             outcome = "team_plan_applied"
-        receipt = {
-            "receipt_id": _digest(
-                {
-                    "proposal_id": proposal_id,
-                    "goal_id": goal_id,
-                    "lane_todo_ids": lane_todo_ids,
-                }
-            )[:32],
+        receipt: dict[str, object] = {
+            "receipt_id": _receipt_id({"proposal_id": proposal_id, "goal_id": goal_id, "lane_todo_ids": lane_todo_ids}),
             "outcome": outcome,
             "projection_verified": True,
             "resource_ids": {
@@ -1370,12 +1238,16 @@ class ChatActionService(
             # The canonical revision these lanes were created against, so the
             # owner's readback can name what the work advances.
             receipt["intent_basis"] = intent_basis
-        stored = self.store.apply(
-            proposal_id, current_state_fingerprint=current_fingerprint, receipt=receipt
-        )
-        return {"proposal": stored, "turn": None}
+        return {"proposal": self.store.apply(proposal_id, current_state_fingerprint=current_fingerprint, receipt=receipt), "turn": None}
 
-    def preview(self, request: Mapping[str, Any]) -> dict[str, Any]:
+    def _basis_or_goal_fingerprint(self, goal_id: str, basis: object) -> str:
+        return (
+            _digest({"goal_id": goal_id, "canonical_update_basis": basis})
+            if basis is not None
+            else self._goal_state_fingerprint(goal_id)
+        )
+
+    def preview(self, request: Mapping[str, object]) -> dict[str, object]:
         unknown = set(request) - {
             "action_kind",
             "summary",
@@ -1504,9 +1376,7 @@ class ChatActionService(
                             or "Todo transition failed canonical dry-run validation"
                         )
                     )
-            goal_fingerprint = (_digest({"goal_id": normalized["goal_id"],
-                "canonical_update_basis": canonical_update_basis}) if canonical_update_basis is not None
-                else self._goal_state_fingerprint(normalized["goal_id"]))
+            goal_fingerprint = self._basis_or_goal_fingerprint(normalized["goal_id"], canonical_update_basis)
             if (
                 action_kind == "monitor.update"
                 and normalized.get("operation") == "run_now"
@@ -1543,9 +1413,7 @@ class ChatActionService(
             if canonical_preview.get("ok") is not True:
                 raise ValueError(str(canonical_preview.get("error")
                                      or "Decision failed canonical dry-run validation"))
-            fingerprint = (_digest({"goal_id": normalized["goal_id"],
-                "canonical_update_basis": canonical_update_basis}) if canonical_update_basis is not None
-                else self._goal_state_fingerprint(normalized["goal_id"]))
+            fingerprint = self._basis_or_goal_fingerprint(normalized["goal_id"], canonical_update_basis)
             evidence = ["Canonical LoopX User completion dry-run validated this decision."]
             permission = "durable_write"
         elif action_kind == "pr.merge":
@@ -1603,13 +1471,13 @@ class ChatActionService(
             else proposal
         )
 
-    def load(self, proposal_id: str) -> dict[str, Any] | None:
+    def load(self, proposal_id: str) -> dict[str, object] | None:
         return self.store.load(proposal_id)
 
-    def cancel(self, proposal_id: str) -> dict[str, Any]:
+    def cancel(self, proposal_id: str) -> dict[str, object]:
         return self.store.cancel(proposal_id)
 
-    def reject(self, proposal_id: str) -> dict[str, Any]:
+    def _reject_or_defer(self, proposal_id: str, *, verb: str, mark: bool) -> dict[str, object]:
         proposal = self.store.load(proposal_id)
         if proposal is not None and proposal.get("action_kind") == "operation.execute":
             raise ProtectedActionGate(
@@ -1617,25 +1485,18 @@ class ChatActionService(
                 gate={
                     "kind": "authenticated_operation_decision_required",
                     "summary": "Operation decisions must come from a bound authenticated surface.",
-                    "next_action": "Use the original operation card to confirm or reject this request.",
+                    "next_action": f"Use the original operation card to {verb} this request.",
                 },
             )
-        return self.store.mark_rejected(proposal_id)
+        return self.store.mark_rejected(proposal_id) if mark else self.store.mark_deferred(proposal_id)
 
-    def defer(self, proposal_id: str) -> dict[str, Any]:
-        proposal = self.store.load(proposal_id)
-        if proposal is not None and proposal.get("action_kind") == "operation.execute":
-            raise ProtectedActionGate(
-                "operation.execute",
-                gate={
-                    "kind": "authenticated_operation_decision_required",
-                    "summary": "Operation decisions must come from a bound authenticated surface.",
-                    "next_action": "Use the original operation card to decide this request.",
-                },
-            )
-        return self.store.mark_deferred(proposal_id)
+    def reject(self, proposal_id: str) -> dict[str, object]:
+        return self._reject_or_defer(proposal_id, verb="confirm or reject", mark=True)
 
-    def regenerate(self, proposal_id: str) -> dict[str, Any]:
+    def defer(self, proposal_id: str) -> dict[str, object]:
+        return self._reject_or_defer(proposal_id, verb="decide", mark=False)
+
+    def regenerate(self, proposal_id: str) -> dict[str, object]:
         proposal = self.store.load(proposal_id)
         if proposal is None:
             raise KeyError("typed Chat action proposal was not found")
@@ -1648,11 +1509,11 @@ class ChatActionService(
                     "next_action": "Prepare a new operation instead of regenerating this one.",
                 },
             )
-        checkpoint = proposal.get("checkpoint")
-        steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else None
+        steps = _as_dict(proposal.get("checkpoint")).get("steps")
         action_kind = proposal.get("action_kind")
         if (action_kind == "goal.create" and steps) or (
-                action_kind == "todo.create" and isinstance(steps, dict) and "todo_created" in steps):
+            action_kind == "todo.create" and isinstance(steps, dict) and "todo_created" in steps
+        ):
             raise ActionConflictError("Creation already recorded effects; recover the original operation instead of regenerating")
         if proposal.get("status") not in {"stale", "failed", "gated", "rejected"}:
             raise ActionConflictError(
@@ -1671,15 +1532,16 @@ class ChatActionService(
             str(regenerated["proposal_id"]), regenerated_from=proposal_id
         )
 
-    def apply(self, proposal_id: str, *, steward_context: dict[str, Any] | None = None,
-              steward_confirmed_at: str | None = None) -> dict[str, Any]:
+    def apply(self, proposal_id: str, *, steward_context: dict[str, object] | None = None,
+              steward_confirmed_at: str | None = None) -> dict[str, object]:
         result = self._apply_owner_action(proposal_id, steward_context=steward_context,
             steward_confirmed_at=steward_confirmed_at)
         # A committed action changes current facts. Existing queue readers may
         # reobserve their retained requests; this content-free hint performs no
         # transport, Task admission, permission change or new submission.
         wakeup = getattr(self.runtime_controller, "turn_release_wakeup", None)
-        if (result.get("proposal") or {}).get("status") == "applied" and wakeup is not None:
+        proposal_payload = result.get("proposal")
+        if isinstance(proposal_payload, Mapping) and proposal_payload.get("status") == "applied" and wakeup is not None:
             wakeup.notify()
         return result
 
@@ -1796,12 +1658,7 @@ class ChatActionService(
                 str(parameters["session_id"]), str(parameters["goal_id"])
             )
             if current_fingerprint != proposal.get("expected_state_fingerprint"):
-                stale = self.store.apply(
-                    proposal_id,
-                    current_state_fingerprint=current_fingerprint,
-                    receipt={},
-                )
-                return {"proposal": stale, "turn": None}
+                return self._stale_proposal(proposal_id, current_fingerprint)
             goal = self._goal(str(parameters["goal_id"]))
             project = Path(str(goal.get("repo") or ".")).expanduser().resolve()
             if not project.is_dir():
@@ -1817,14 +1674,10 @@ class ChatActionService(
                 objective=str(goal.get("domain") or parameters["goal_id"]),
             )
             turn_id = _opaque(turn.get("turn_id"), field="turn_id")
-            receipt = {
-                "receipt_id": _digest(
-                    {
-                        "proposal_id": proposal_id,
-                        "session_id": parameters["session_id"],
-                        "turn_id": turn_id,
-                    }
-                )[:32],
+            run_receipt: dict[str, object] = {
+                "receipt_id": _receipt_id(
+                    {"proposal_id": proposal_id, "session_id": parameters["session_id"], "turn_id": turn_id}
+                ),
                 "outcome": "turn_created" if created else "turn_already_exists",
                 "projection_verified": True,
                 "resource_ids": {
@@ -1836,7 +1689,7 @@ class ChatActionService(
             stored = self.store.apply(
                 proposal_id,
                 current_state_fingerprint=current_fingerprint,
-                receipt=receipt,
+                receipt=run_receipt,
             )
             return {
                 "proposal": stored,
@@ -1848,7 +1701,7 @@ class ChatActionService(
             }
         raise ValueError(f"unsupported action_kind: {action_kind}")
 
-    def _turn_from_receipt(self, receipt: Any) -> dict[str, Any] | None:
+    def _turn_from_receipt(self, receipt: object) -> dict[str, object] | None:
         if not isinstance(receipt, dict) or not isinstance(
             receipt.get("resource_ids"), dict
         ):
@@ -1860,7 +1713,7 @@ class ChatActionService(
         turn_id = str(resource_ids["turn_id"])
         status = "accepted"
         if receipt.get("outcome") == "task_execution_started" and session_id:
-            chat = getattr(self.runtime_controller, "store", None) or self.chat_store
+            chat = self._turn_store()
             turn = chat.load_turn(str(session_id), turn_id) if chat is not None else None
             if turn and turn.get("session_id") == session_id and turn.get("turn_id") == turn_id:
                 status = str(turn.get("status") or status)
