@@ -33,6 +33,8 @@ READ_TOOL = {
         "or a typed unavailable gap naming why it could not be derived. Use that to state where "
         "the Goal stands before listing detail. Use concrete evidence "
         "to answer progress and priority questions. Paginate with next_offset. "
+        "An oversized portfolio row is incomplete; resolve attention read_reference "
+        "to recover complete decision terms before deciding or acting. "
         "Use view=report_source with a closed window_start/window_end for a frozen periodic-report "
         "source over all authorized local Goals including stopped ones, current tasks, window deliveries "
         "and their associated tasks, and handoff receipts. Copy source.source_revision when paging. "
@@ -382,6 +384,36 @@ def handoff_receipt_readbacks(root, registry, rows):
     return page
 
 
+def _oversized_portfolio_index(row: dict[str, Any], gap: dict[str, Any]) -> dict[str, Any]:
+    """Keep recoverable decision references without lifting the row budget.
+
+    These are already scoped, public-safe portfolio fields. The existing typed
+    attention owner makes directory excerpts; exact Todo reads retain the full
+    terms, current authority check and original source. Other views keep their
+    existing oversized-record response.
+    """
+    reference = {"view": "todos", "goal_id": row["goal_id"]}
+    preview = effect_runtime_result("presentation.goal_attention.bound", {
+        "goals": [{"goal_id": row["goal_id"], "attention": row.get("attention")}],
+        "preview": True,
+    })["goals"][0]
+    index = {
+        **gap,
+        **{key: row[key] for key in (
+            "goal_instance_id", "description", "activation_state", "quality",
+            "progress", "source", "warnings", "goal_lifecycle",
+        ) if key in row},
+        "attention": preview.get("attention"),
+        "details_omitted": True,
+        "read_reference": reference,
+    }
+    if len(json.dumps(index, ensure_ascii=False)) <= 24000:
+        return index
+    # Even metadata can exceed the budget. Keep an explicit unknown gap and
+    # the existing scoped read route, never malformed JSON or a partial term.
+    return {**gap, "details_omitted": True, "read_reference": reference}
+
+
 class ManagerInspection:
     def __init__(
         self,
@@ -720,13 +752,18 @@ class ManagerInspection:
         for i, row in enumerate(page):
             if len(json.dumps(row, ensure_ascii=False)) > 24000:
                 oversized.append(offset + i)
-                page[i] = {
+                gap = {
                     "status": "oversized_record",
                     "row_index": offset + i,
                     "goal_id": row.get("goal_id"),
                     "todo_id": row.get("todo_id"),
                     "details": "omitted_due_to_size",
                 }
+                page[i] = _oversized_portfolio_index(row, gap) if view == "portfolio" else gap
+        # Building an oversized index crosses the typed presentation owner;
+        # a grant revoked during that read must suppress the entire response.
+        if view == "portfolio" and oversized and not self.scope_valid():
+            return {"ok": False, "error": "authorization_changed"}
         end = offset + len(page)
         result = {
             "ok": True,
@@ -740,7 +777,7 @@ class ManagerInspection:
             "next_offset": end
             if isinstance(matched, int) and page and end < matched
             else None,
-            "unknown": matched is None or portfolio_unknown
+            "unknown": matched is None or portfolio_unknown or (view == "portfolio" and bool(oversized))
             or ("window_start" in arguments and (
                 source.get("window_complete") is False
                 or bool(source.get("coverage", {}).get("invalid_delivery_records"))

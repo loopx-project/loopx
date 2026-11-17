@@ -310,6 +310,131 @@ def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path, monke
     assert len(json.dumps(result)) < 2000
 
 
+def test_oversized_portfolio_preserves_redaction_and_unavailable_lifecycle(tmp_path, monkeypatch):
+    tool, _ = inspector(tmp_path)
+    row = {"goal_id": "alpha", "quality": "stale", "progress": "unknown",
+           "source": {"revision": "original-source"}, "warnings": ["current_progress_unknown_stale_source"],
+           "goal_lifecycle": {"status": "unavailable", "reason": "goal_read_incomplete"},
+           "attention": {"status": "unavailable", "reason": "content_redacted", "items": []},
+           "current_todos": {"body": "excluded" * 5000}}
+    original = json.dumps(row, sort_keys=True)
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: {
+        "goals": [row], "coverage": {"complete": False},
+    })
+    result = tool.read(TOOL_NAME, {"view": "portfolio"})
+    index = result["rows"][0]
+    assert result["unknown"] is True and result["oversized_rows"] == [0]
+    assert index["attention"]["status"] == "unavailable"
+    assert index["attention"]["reason"] == "content_redacted"
+    assert index["goal_lifecycle"] == row["goal_lifecycle"]
+    assert index["source"] == row["source"] and index["warnings"] == row["warnings"]
+    assert index["read_reference"] == {"view": "todos", "goal_id": "alpha"}
+    assert "excluded" not in json.dumps(result)
+    assert json.dumps(row, sort_keys=True) == original
+
+
+def test_oversized_portfolio_metadata_still_obeys_the_record_budget(tmp_path, monkeypatch):
+    tool, _ = inspector(tmp_path)
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: {
+        "goals": [{"goal_id": "alpha", "source": {"metadata": "x" * 40000}}],
+        "coverage": {"complete": True},
+    })
+    result = tool.read(TOOL_NAME, {"view": "portfolio"})
+    assert result["unknown"] is True and result["oversized_rows"] == [0]
+    assert result["rows"][0]["status"] == "oversized_record"
+    assert result["rows"][0]["read_reference"] == {"view": "todos", "goal_id": "alpha"}
+    assert len(json.dumps(result)) < 2000
+
+
+def test_revocation_during_oversized_portfolio_index_suppresses_result(tmp_path, monkeypatch):
+    from loopx.capabilities.manager_context import inspection
+
+    grants = {"current": True}
+    tool, records = inspector(tmp_path, lambda: grants["current"])
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: {
+        "goals": [{"goal_id": "alpha", "current_todos": {"body": "x" * 40000}}],
+        "coverage": {"complete": True},
+    })
+    native = inspection.effect_runtime_result
+
+    def revoke_during_projection(method, arguments):
+        result = native(method, arguments)
+        if arguments.get("preview") is True:
+            grants["current"] = False
+        return result
+
+    monkeypatch.setattr(inspection, "effect_runtime_result", revoke_during_projection)
+    assert tool.read(TOOL_NAME, {"view": "portfolio"}) == {
+        "ok": False, "error": "authorization_changed",
+    }
+    assert not records
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_oversized_portfolio_retains_recoverable_owner_decisions(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.chat_manager_context import manager_turn_context
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
+    expected = {}
+    for i in range(4):
+        text = f"[P0] Review proposal {i}. " + "Compare the evidence. " * 280 + "Only proceed after owner acceptance."
+        note = ("Preserve the original audience and stop condition. " * 12).strip()
+        created = add_goal_todo(
+            registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a",
+            role="user", text=text, note=note, task_class="user_gate",
+            operation_id=f"large-portfolio-owner-request-{i}",
+        )
+        assert created["ok"], created
+        expected[text] = note
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    context = manager_turn_context(
+        registry, {"channel_id": "manager"}, runtime, include_details=False,
+    )
+    assert context["goals"][0]["attention"]["status"] == "read", context
+    # Freeze a real provider's decision projection beside oversized associated
+    # history. The history payload is synthetic; exact decision recovery below
+    # still uses the original File/SQLite records through the production reader.
+    context["goals"][0]["deliveries"] = [{"recorded_details": "Evidence. " * 4000}]
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: context)
+    original = json.dumps(context, sort_keys=True)
+    grants = {"current": True}
+    tool = ManagerInspection(
+        context=context, registry_path=registry, runtime_root=runtime, owner_scope=True,
+        scope_valid=lambda: grants["current"], record=lambda _: None,
+    )
+    result = tool.read(TOOL_NAME, {"view": "portfolio", "goal_id": "goal-a"})
+    assert result["oversized_rows"] == [0], result
+    assert result["unknown"] is True
+    row = result["rows"][0]
+    assert row["status"] == "oversized_record" and row["details_omitted"] is True
+    assert row["quality"] == context["goals"][0]["quality"]
+    assert row["source"] == context["goals"][0]["source"]
+    assert row["goal_lifecycle"] == context["goals"][0]["goal_lifecycle"]
+    assert row["attention"]["coverage"] == {"known": 4, "included": 4, "omitted": 0}
+    assert len(json.dumps(row, ensure_ascii=False)) <= 24000
+    recovered = {}
+    for item in row["attention"]["items"]:
+        assert item["details_omitted"] is True and item["owner_must_act"] is True
+        reference = item["read_reference"]
+        assert reference["goal_id"] == "goal-a" and reference["todo_id"]
+        full = tool.read(TOOL_NAME, reference)
+        assert full["ok"] and full["rows"][0]["content_truncated"] is False
+        recovered[full["rows"][0]["title"]] = full["rows"][0]["continuation"]
+    assert recovered == expected
+    assert json.dumps(context, sort_keys=True) == original
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+    grants["current"] = False
+    assert tool.read(TOOL_NAME, reference) == {"ok": False, "error": "authorization_changed"}
+    grants["current"] = True
+    assert tool.read(TOOL_NAME, reference)["rows"][0]["title"] in expected
+
+
 def test_agent_work_summary_bounds_content_without_inventing_execution():
     summary = agent_work_summary({"agent_id": "worker", "source_verified": True,
                                   "todos": [{"todo_id": "todo_1", "title": "x" * 25000,
@@ -356,7 +481,7 @@ def test_portfolio_bounds_collection_and_keeps_every_page(monkeypatch, tmp_path,
     while offset is not None:
         collected.clear()
         page = tool.read(TOOL_NAME, {"view": "portfolio", "limit": 8, "offset": offset})
-        assert page["ok"] and not page["unknown"]
+        assert page["ok"] and page["unknown"] is (body_size > 24000)
         assert len(page["rows"]) == min(first_page, len(ids) - offset)
         # One lookahead can establish the existing page budget, but later
         # projects must not be read and discarded on every page.
