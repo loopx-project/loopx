@@ -850,3 +850,81 @@ def test_antigravity_ambient_conversation_id_facade_and_bound_hooks_sync(
     assert patrol_contract["min_duration_seconds"] == 180
     assert patrol_contract["backoff_progression_minutes"] == [3, 6, 10]
     assert patrol_contract["detached_sidecar_required"] is False
+
+    # CLI unbind-agent-thread reads back with exact_surface=True even when a sibling surface shares (thread_id, agent_id)
+    bind_app = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "bind-agent-thread",
+        "--goal-id", "resident-goal",
+        "--thread-id", conv_id,
+        "--host-surface", "antigravity-app",
+        "--agent-id", "antigravity",
+        "--execute",
+        cwd=project,
+    )
+    assert bind_app.returncode == 0, bind_app.stderr
+    assert json.loads(bind_app.stdout)["ok"] is True
+
+    unbind_app = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "unbind-agent-thread",
+        "--goal-id", "resident-goal",
+        "--thread-id", conv_id,
+        "--host-surface", "antigravity-app",
+        "--agent-id", "antigravity",
+        "--execute",
+        cwd=project,
+    )
+    assert unbind_app.returncode == 0, unbind_app.stderr
+    unbind_payload = json.loads(unbind_app.stdout)
+    assert unbind_payload["ok"] is True
+    assert unbind_payload["registration_readback"] == {"verified": True}
+
+    # Sibling agy binding remains intact after unbinding antigravity-app
+    resolve_agy = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "resolve-agent-thread",
+        "--thread-id", conv_id,
+        "--host-surface", "agy",
+        cwd=project,
+    )
+    assert resolve_agy.returncode == 0, resolve_agy.stderr
+    assert json.loads(resolve_agy.stdout)["status"] == "bound"
+
+    # slash-commands --with-agy-hooks run from an empty directory without --registry omits nonexistent CWD .loopx/registry.json
+    empty_cwd = tmp_path / "empty-cwd"
+    empty_cwd.mkdir()
+    sc_no_reg_dir = tmp_path / "sc-agy-no-reg"
+    env_no_reg = {k: v for k, v in os.environ.items() if k != "LOOPX_REGISTRY"}
+    sc_no_reg = run_cli(
+        "--runtime-root", str(runtime_root),
+        "slash-commands", "--install",
+        "--surface", "antigravity-app",
+        "--agy-home", str(sc_no_reg_dir),
+        "--with-agy-hooks",
+        "--goal-id", "resident-goal",
+        "--agent-id", "antigravity",
+        "--conversation-id", conv_id,
+        cwd=empty_cwd,
+        env=env_no_reg,
+    )
+    assert sc_no_reg.returncode == 0, sc_no_reg.stderr
+    no_reg_hooks = json.loads((sc_no_reg_dir / "hooks.json").read_text(encoding="utf-8"))
+    no_reg_stop = no_reg_hooks["loopx"]["Stop"][0]["command"]
+    assert f"--conversation-id {conv_id}" in no_reg_stop
+    assert "--registry" not in no_reg_stop
+    assert str(empty_cwd) not in no_reg_stop
+
+    # Antigravity installed skill facades match doctor readback when scoped to antigravity-app
+    from loopx.slash_command_install import inspect_skill_facades
+
+    agy_facades = inspect_skill_facades(
+        sc_no_reg_dir / "skills",
+        host_surface="antigravity-app",
+    )
+    assert agy_facades["loopx"]["readback_status"] == "ready"
+    monkeypatch.setenv("AGY_HOME", str(sc_no_reg_dir))
+    assert collect_doctor(agent_type="antigravity-app")["antigravity"]["command_facades_ready"] is True

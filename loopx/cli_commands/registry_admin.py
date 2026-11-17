@@ -712,11 +712,13 @@ def handle_registry_admin_command(
                     _registry_goal(source_path, args.goal_id),
                     host_surface=args.host_surface,
                     thread_id=args.thread_id,
+                    exact_surface=True,
                 )
                 global_binding = resolve_thread_agent_binding(
                     _registry_goal(global_path, args.goal_id),
                     host_surface=args.host_surface,
                     thread_id=args.thread_id,
+                    exact_surface=True,
                 )
                 if args.command == "bind-agent-thread":
                     readback_verified = all(

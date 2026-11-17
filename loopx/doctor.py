@@ -803,7 +803,7 @@ def collect_doctor(
             project_skill = skills["loopx-project"]
         elif (agy_cfg_skills / "loopx" / "SKILL.md").exists():
             skill_roots = (agy_cfg_skills,)
-            skills = inspect_skill_facades(agy_cfg_skills)
+            skills = inspect_skill_facades(agy_cfg_skills, host_surface="antigravity-app")
             project_skill = skills["loopx"]
         else:
             skill_roots = (agy_cfg_skills, *codex_skill_roots())
@@ -1303,7 +1303,10 @@ def collect_doctor(
             required_skill_ids=ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
             source_root=repo_root,
         )
-        agy_facades = inspect_skill_facades(agy_cfg_home / "skills")
+        agy_facades = inspect_skill_facades(
+            agy_cfg_home / "skills",
+            host_surface="antigravity-app",
+        )
         workflow_skill_ids = set(
             agy_workflow_readback.get("materialized_skill_ids") or ()
         )

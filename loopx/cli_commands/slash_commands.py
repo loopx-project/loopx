@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+import os
 from pathlib import Path
 
 from ..pi_goal_mode.installation import inspect_pi_installations, render_pi_installation_markdown
@@ -174,6 +175,8 @@ def handle_slash_commands_command(
     *,
     output_format: FormatSelector,
     print_payload: PrintPayload,
+    registry_path: Path | None = None,
+    registry_was_configured: bool | None = None,
 ) -> int | None:
     if args.command != "slash-commands":
         return None
@@ -192,9 +195,23 @@ def handle_slash_commands_command(
             else (getattr(args, "control_cli_bin", None) or args.cli_bin)
         )
         agy_goal_id = getattr(args, "goal_id", None)
+        if registry_was_configured is None:
+            from ..paths import default_registry_path
+
+            raw_reg = getattr(args, "registry", None)
+            configured_registry = bool(os.environ.get("LOOPX_REGISTRY")) or (
+                bool(raw_reg) and str(raw_reg) != str(default_registry_path())
+            )
+        else:
+            configured_registry = registry_was_configured
+        resolved_registry = (
+            registry_path
+            if registry_path is not None
+            else (Path(args.registry).expanduser() if getattr(args, "registry", None) else None)
+        )
         agy_registry = (
-            str(Path(args.registry).expanduser().resolve())
-            if agy_goal_id and getattr(args, "registry", None)
+            str(resolved_registry.resolve())
+            if agy_goal_id and configured_registry and resolved_registry is not None
             else None
         )
         agy_runtime_root = (
