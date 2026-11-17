@@ -86,7 +86,7 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
 
 
 @pytest.mark.parametrize("version", ["0.163.0-alpha.11.2", "0.166.0-alpha.5.1", "0.167.0-alpha.3.2",
-    "0.167.0-alpha.4.1"])
+    "0.167.0-alpha.4.1", "0.169.0-alpha.11.1"])
 def test_failed_tool_result_cannot_qualify_new_native_writer(tmp_path, monkeypatch, version):
     """A successful page nested in a failed tool result is not replay evidence."""
     event = setup(tmp_path, monkeypatch)
@@ -129,7 +129,7 @@ def test_failed_tool_result_cannot_qualify_new_native_writer(tmp_path, monkeypat
 
 @pytest.mark.parametrize("shell_wrapper", [False, True])
 @pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1", "0.163.0-alpha.11.2",
-    "0.166.0-alpha.5.1", "0.167.0-alpha.3.2", "0.167.0-alpha.4.1"])
+    "0.166.0-alpha.5.1", "0.167.0-alpha.3.2", "0.167.0-alpha.4.1", "0.169.0-alpha.11.1"])
 def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_path, monkeypatch, shell_wrapper, version):
     event, history, payload = observed_read(tmp_path, monkeypatch, shell_wrapper=shell_wrapper, version=version)
     before = context._state(tmp_path)
