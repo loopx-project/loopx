@@ -645,8 +645,8 @@ reader。本文不单独授权破坏性迁移。
 
 #### Turn 消费方准备与指令保真
 
-已独立合入的 Turn 切片让普通 quota producer 保持已记录契约；本 C1 父提案给 quota
-及 thin heartbeat 新增显式完整来源入口，普通 quota 仍沿用已记录契约。
+早期独立合入的 Turn 切片让普通 quota producer 保持已记录契约；当前 C1 候选已让
+新的普通 quota、Turn 及 thin heartbeat 工作默认使用完整来源。
 已记录的请求仍由原版本 reader 解读。当前 Turn 规划直接消费完整来源，
 发布自己的不可变 capture；新组合来源与较早 executor envelope 错配时继续拒绝。
 
@@ -673,6 +673,18 @@ Host 输入、缓存结果的任务校验和结算都使用日志里的原计划
 结算绑定。重试沿用日志里的 Turn key，匹配 Session 时不再返回或重算完整 action
 的哈希。新计划仍在生成 key 前规整 adaptive primary，并使用原有数字编码。旧格式
 及混合格式 reader 保留到未结工作及受支持的恢复窗口核清。
+
+当前规划、controller 接续、journal 检查／能力读取、原生准入探针和执行条件，共用从
+已校验完整来源提取的必要内部工作事实。这个内部视图复用既有路由、选择和写回 owner，
+不是另一份来源或模型契约。它保留完整编排和来源拥有的任务约束，不构造展示 capsule、
+模型 work context 或裁剪后的 peer 清单。controller 的当前工作身份也来自同一 typed
+选择 owner。
+
+历史 action-signature 前像仍明确保留为新建及待处理 v1 plan 的身份编码：在现有版本下
+改变由 Python 序列化的哈希，可能让同一已准入工作得到不同 Turn key。其构造仅用于
+生成 key、核验显式旧 adapter 和恢复已记录 capability 结果，不再提供当前执行事实。
+最后这一编码的退出需要带版本的 key／恢复迁移，不能仅因名字旧就删除。历史 v0 decoder、
+原来源数字精度、capture／Session 绑定、Off 和一次结算继续保留。
 升级验证用 File 和 SQLite 各恢复了两种原 writer 格式。Agent 不匹配、Session 缺失
 或 capture 被改动均在调用 Host 或扣额度前拒绝。有效重试续回原 Session，只结算一次；
 再次重放没有新效果。两份完整格式样本的 Session 匹配响应分别由 10,692 和 10,738

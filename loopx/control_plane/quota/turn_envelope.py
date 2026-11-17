@@ -200,6 +200,10 @@ def complete_turn_host_source(
                                  **({"recorded_capability_result": True} if recorded_capability_result else {}),
                                  **({"include_model_context": True} if include_model_context else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
+    if "complete_host_request" in wire and operation in {"execution_context", "plan_work"}:
+        # Materialize source-owned fields from their exact original Python
+        # values rather than round-tripping them through JS number encoding.
+        return _apply_context_projection_changes(dict(request["work_contract"]), checked, base={})
     if include_model_context:
         changes = checked.pop("model_context_changes", None)
         if not isinstance(changes, dict):

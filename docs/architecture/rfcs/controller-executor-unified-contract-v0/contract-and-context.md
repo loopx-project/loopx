@@ -894,9 +894,9 @@ the complete-source path; they do not increase the historical reader's budget.
 
 #### Turn consumer preparation and instruction parity
 
-The separately landed Turn slice left the ordinary quota producer on its recorded
-contract. This parent C1 proposal adds explicit complete-source quota and thin
-heartbeat entrypoints; ordinary quota stays on the recorded contract.
+The separately landed Turn slice initially left the ordinary quota producer on
+its recorded contract. This C1 candidate now makes the complete source the
+default for new ordinary quota, Turn and thin-heartbeat work.
 Recorded requests retain their original version-specific reader. Current Turn planning consumes
 its complete source directly and publishes its own immutable capture; pairing a
 newly composed source with an older executor envelope is rejected.
@@ -935,6 +935,23 @@ Turn key and no longer returns or hashes the full action to match a Session.
 New planning still uses the persisted number codec and normalizes the adaptive
 primary before deriving a key. Keep the raw and mixed historical readers
 until outstanding work and the supported recovery window are reconciled.
+
+Current planning, controller continuation, journal inspection/capability reads,
+native admission probes and execution conditions use one narrow internal work
+view from the checked complete source. This view reuses the existing route,
+selection and writeback owners; it is not another source or model contract.
+It keeps complete orchestration and source-owned task constraints, without
+constructing the display capsule, model work context or compact peer inventory.
+The controller takes current work identity from that same typed selection owner.
+
+The historical action-signature preimage remains an explicit identity codec for
+new and pending v1 plans: changing its Python-serialized hash under the existing
+version could give the same admitted work a different Turn key. Its construction
+is confined to key generation, explicit old-adapter verification and recorded
+capability-result recovery. It no longer supplies current execution facts.
+Retiring this last codec requires a versioned key/recovery migration; deleting it
+by name is not safe retirement. Historical v0 decoders, original source precision,
+capture/Session bindings, Off and once-only settlement remain unchanged.
 The upgrade check resumed two original writer formats on File and SQLite.
 Wrong Agent, missing Session and altered capture stopped before the Host or
 spend. A valid retry resumed the original Session, settled once and replayed

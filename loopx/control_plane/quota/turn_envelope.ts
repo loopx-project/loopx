@@ -1424,53 +1424,12 @@ function turnPrimaryAction(payload: JsonObject, reads: JsonObject | null) {
       : primaryAction || null};
 }
 
-function actionProjection(payload: JsonObject, deferSettlement = true, precision?: ReplanReadPrecision, verifiedSourceHash?: string): JsonObject {
-  // Reader identity belongs to the original captured source. Expanding shared
-  // diagnostic lanes for the historical executor must not hash that local view.
-  const reads = replanReadCommands(payload, payload.replan_read_path, payload.replan_read_argv ?? ["loopx"], verifiedSourceHash);
-  if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) payload = resolveQuotaSummaryLanes(payload);
-  const agentIdentity = object(payload.agent_identity);
-  const semanticAgentId = scalarString(
-    payload.agent_id || agentIdentity.agent_id,
-    "quota payload agent_id",
-  ).trim() || null;
-  const turn = interpretQuotaShouldRunPacket(payload, {
-    goal_id: scalarString(payload.goal_id, "quota payload goal_id") || null,
-    agent_id: semanticAgentId,
-  });
-  const interaction = object(payload.interaction_contract);
-  const agentChannel = object(interaction.agent_channel);
-  const cliChannel = object(interaction.cli_channel);
-  const {capabilityIntent, turnBindingRequired, replanPacket, replanSettlementOnly, primaryAction} =
-    turnPrimaryAction(payload, reads);
-  const recommendedAction = replanPacket
-    ? replanSettlementOnly
-      ? scalarString(object(object(payload.replan_action_packet).writeback_contract).rule, "replan settlement rule")
-      : reads ? "read replan_action_packet.review, decide from state, then follow review.next"
-      : "apply replan_action_packet and emit one required semantic outcome"
-    : text(turn.observation.recommended_action || payload.recommended_action, 480);
-  // The signed host action is executable authority, not a display summary.
-  // Budget diagnostics may warn on long commands but must not cut them.
-  const action: JsonObject = {
-    recommended_action: recommendedAction,
-    primary_action: primaryAction,
-    must_attempt: Boolean(agentChannel.must_attempt),
-    delivery_allowed: Boolean(agentChannel.delivery_allowed),
-    quiet_noop_allowed: Boolean(agentChannel.quiet_noop_allowed),
-    selected_todo: selectedTodo(payload, recommendedAction),
-  };
-  if (capabilityIntent) action.capability_intent = capabilityIntent;
-  if (turn.observation.action_portfolio !== null) {
-    action.action_portfolio = { ...turn.observation.action_portfolio };
-  }
-  if (turn.observation.planning_horizon !== null) action.planning_horizon = {...turn.observation.planning_horizon};
-  if (reads && deferSettlement) {
-    const goal = replanGoalContext(payload, reads, "$.action.core_goal", precision);
-    action.core_goal = goal.core;
-    if (turn.observation.planning_horizon !== null) action.planning_horizon = goal.horizon;
-  }
-  const user = userChannel(interaction, payload);
-  const schedulerValue = scheduler(payload, turn);
+/** Shared effect conditions for complete consumers and recorded envelope codecs.
+ * Display summaries and reader navigation never decide settlement ownership. */
+function turnWriteback(payload: JsonObject, turn: ReturnType<typeof interpretQuotaShouldRunPacket>,
+  action: JsonObject, inputs: ReturnType<typeof turnPrimaryAction>, deferSettlement: boolean): JsonObject {
+  const cliChannel = object(object(payload.interaction_contract).cli_channel);
+  const {capabilityIntent, turnBindingRequired, replanPacket, replanSettlementOnly} = inputs;
   let nextCliActions = capabilityIntent
     ? [scalarString(capabilityIntent.command, "pending capability intent command")]
     : [...turn.next_effect.cli_actions];
@@ -1532,6 +1491,56 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
     const value = jsonObject(cliChannel[field]);
     if (value && Object.keys(value).length > 0) writeback[field] = value;
   }
+  return writeback;
+}
+
+function actionProjection(payload: JsonObject, deferSettlement = true, precision?: ReplanReadPrecision, verifiedSourceHash?: string): JsonObject {
+  // Reader identity belongs to the original captured source. Expanding shared
+  // diagnostic lanes for the historical executor must not hash that local view.
+  const reads = replanReadCommands(payload, payload.replan_read_path, payload.replan_read_argv ?? ["loopx"], verifiedSourceHash);
+  if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) payload = resolveQuotaSummaryLanes(payload);
+  const agentIdentity = object(payload.agent_identity);
+  const semanticAgentId = scalarString(
+    payload.agent_id || agentIdentity.agent_id,
+    "quota payload agent_id",
+  ).trim() || null;
+  const turn = interpretQuotaShouldRunPacket(payload, {
+    goal_id: scalarString(payload.goal_id, "quota payload goal_id") || null,
+    agent_id: semanticAgentId,
+  });
+  const interaction = object(payload.interaction_contract);
+  const agentChannel = object(interaction.agent_channel);
+  const inputs = turnPrimaryAction(payload, reads);
+  const {capabilityIntent, replanPacket, replanSettlementOnly, primaryAction} = inputs;
+  const recommendedAction = replanPacket
+    ? replanSettlementOnly
+      ? scalarString(object(object(payload.replan_action_packet).writeback_contract).rule, "replan settlement rule")
+      : reads ? "read replan_action_packet.review, decide from state, then follow review.next"
+      : "apply replan_action_packet and emit one required semantic outcome"
+    : text(turn.observation.recommended_action || payload.recommended_action, 480);
+  // The signed host action is executable authority, not a display summary.
+  // Budget diagnostics may warn on long commands but must not cut them.
+  const action: JsonObject = {
+    recommended_action: recommendedAction,
+    primary_action: primaryAction,
+    must_attempt: Boolean(agentChannel.must_attempt),
+    delivery_allowed: Boolean(agentChannel.delivery_allowed),
+    quiet_noop_allowed: Boolean(agentChannel.quiet_noop_allowed),
+    selected_todo: selectedTodo(payload, recommendedAction),
+  };
+  if (capabilityIntent) action.capability_intent = capabilityIntent;
+  if (turn.observation.action_portfolio !== null) {
+    action.action_portfolio = { ...turn.observation.action_portfolio };
+  }
+  if (turn.observation.planning_horizon !== null) action.planning_horizon = {...turn.observation.planning_horizon};
+  if (reads && deferSettlement) {
+    const goal = replanGoalContext(payload, reads, "$.action.core_goal", precision);
+    action.core_goal = goal.core;
+    if (turn.observation.planning_horizon !== null) action.planning_horizon = goal.horizon;
+  }
+  const user = userChannel(interaction, payload);
+  const schedulerValue = scheduler(payload, turn);
+  const writeback = turnWriteback(payload, turn, action, inputs, deferSettlement);
   const projection: JsonObject = {
     agent_id: semanticAgentId,
     decision: payload.decision ?? null,
@@ -1889,12 +1898,47 @@ function requireCompleteHostDecision(request: JsonObject): JsonObject {
   return decision;
 }
 
-/** Check a source for consumers that still use the executor projection. An
- * explicit historical adapter cannot redirect the admitted work or identity. */
+/** Private execution facts share the route/settlement IR with recorded inputs.
+ * They are not a source, a model view or a second signed envelope. Keep the
+ * full admitted source with the caller; never compact orchestration for use by
+ * planning, journal recovery or an execution consumer. */
+function completeExecutionWork(decision: JsonObject): JsonObject {
+  const identity = completeWorkIdentity(decision);
+  const interaction = object(decision.interaction_contract);
+  const agent = object(interaction.agent_channel);
+  const orchestration = jsonObject(decision.task_orchestration_contract);
+  const context = jsonObject(interaction.agent_context);
+  const turn = interpretQuotaShouldRunPacket(decision, {
+    goal_id: scalarString(identity.goal_id, "Turn Goal identity") || null,
+    agent_id: scalarString(identity.agent_id, "Turn Agent identity") || null,
+  });
+  const reads = replanReadCommands(decision);
+  const inputs = turnPrimaryAction(decision, reads);
+  const action: JsonObject = {
+    selected_todo: decision.selected_todo ?? null,
+    must_attempt: Boolean(agent.must_attempt),
+    delivery_allowed: Boolean(agent.delivery_allowed),
+    quiet_noop_allowed: Boolean(agent.quiet_noop_allowed),
+    ...(inputs.capabilityIntent ? {capability_intent: inputs.capabilityIntent} : {}),
+    ...(turn.observation.action_portfolio ? {action_portfolio: turn.observation.action_portfolio} : {}),
+  };
+  const writeback = turnWriteback(decision, turn, action, inputs, true);
+  return {...identity, should_run: Boolean(decision.should_run),
+    effective_action: decision.effective_action ?? null, state: decision.state ?? null,
+    action, user: userChannel(interaction, decision),
+    writeback: reads ? deferredReplanWriteback(writeback) : writeback,
+    replan_action_packet: inputs.replanPacket, boundary: projectTurnBoundary(decision),
+    ...(orchestration && Object.keys(orchestration).length ? {task_orchestration_contract: orchestration} : {}),
+    ...(context && Object.keys(context).length ? {agent_context: context} : {}),
+  };
+}
+
+/** Check one source before deriving private execution facts. Only an explicit
+ * recorded adapter needs the historical signature projection to prove agreement. */
 export function completeHostSource(request: JsonObject): {decision: JsonObject; projection: JsonObject} {
   if (Object.hasOwn(request, "complete_host_request")) {
     const decision = requireCompleteHostDecision(request);
-    return {decision, projection: turnActionProjection(decision)};
+    return {decision, projection: completeExecutionWork(decision)};
   }
   const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
   const envelope = requireJsonObject(request.envelope, "complete Turn executor envelope");
@@ -1992,45 +2036,61 @@ export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
   return {...source, scopedIdentity};
 }
 
-function admittedDriverLineage(work: JsonObject, decision: JsonObject | null,
-  complete: boolean, historical?: JsonObject): JsonObject {
+function driverActionSignature(work: JsonObject, signature: JsonObject, historical?: JsonObject): JsonObject {
   const selected = selectedWorkTodo({selected_todo: object(work.action).selected_todo,
     task_orchestration_contract: work.task_orchestration_contract},
     historical && Object.hasOwn(historical, "primary_todo_id")
       ? scalarString(historical.primary_todo_id, "historical primary Todo") : undefined);
-  const signature = turnEnvelopeActionSignatureDocument(work);
-  signature.action = {...object(signature.action), selected_todo: selected};
-  return {
-    ...(decision ? completeWorkIdentity(decision) : {}),
-    route: complete ? admittedTurnRoute(work, () => scopedTurnSettlementIdentity(work))
-      : turnEnvelopeRoute(work, historical),
-    action_signature: signature,
-    ...(complete ? {scoped_settlement_identity: scopedTurnSettlementIdentity(work)} : {}),
-  };
+  return {...signature, action: {...object(signature.action), selected_todo: selected}};
 }
 
-export function completePlanningFacts(request: JsonObject): JsonObject {
+/** Continuation needs the checked route and identity, not a new Turn key. */
+export function completeTurnRoutingFacts(request: JsonObject): {
+  decision: JsonObject; work: JsonObject; route: LoopXTurnRouteValue;
+} {
   if (Object.hasOwn(request, "envelope")) {
     throw new EffectRuntimeRequestError("complete Turn planning requires one source without an executor adapter");
   }
   const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
-  const work = {goal_id: decision.goal_id ?? null, ...turnActionProjection(decision)};
-  const lineage = admittedDriverLineage(work, decision, true);
+  const work = completeExecutionWork(decision);
+  let scopedIdentity: JsonObject | null | undefined;
+  const identity = () => scopedIdentity === undefined
+    ? scopedIdentity = scopedTurnSettlementIdentity(work) : scopedIdentity;
+  const route = admittedTurnRoute(work, identity);
+  // A conflicting scoped binding used to be refused even on a non-replan route.
+  identity();
+  return {decision, work, route};
+}
+
+function completePlanningFacts(request: JsonObject): JsonObject {
+  const {decision, work, route} = completeTurnRoutingFacts(request);
+  const identity = completeWorkIdentity(decision);
+  // Recorded v1 Turn keys use this Python-serialized preimage. Retain the
+  // identity codec until its versioned migration; it no longer supplies route,
+  // child execution, recovery or settlement facts to current consumers.
+  const identityWork = turnActionProjection(decision);
+  const signature = turnEnvelopeActionSignatureDocument(identityWork);
   let scopedIdentity: JsonObject | null = null, identityError: string | null = null;
-  if (lineage.route === "replan_required" || lineage.route === "ready_for_host" && !lineage.todo_id) {
+  if (route === "replan_required" || route === "ready_for_host" && !identity.todo_id) {
     try { scopedIdentity = scopedTurnSettlementIdentity(work, request.turn_instance_id); }
     catch (error) {
       if (!(error instanceof EffectRuntimeRequestError)) throw error;
       identityError = error.message;
     }
   }
-  return {...lineage, work, source_decision_hash: decisionSourceHash(decision),
-    action_source_hash: canonicalHash(turnEnvelopeActionSignatureDocument(work)),
+  return {...identity, route, action_signature: driverActionSignature(identityWork, signature),
+    source_decision_hash: decisionSourceHash(decision), action_source_hash: canonicalHash(signature),
     scoped_settlement_identity: scopedIdentity, scoped_identity_error: identityError,
+    ...(route === "capability_action_required" ? {capability_intent: object(work.action).capability_intent} : {}),
+    ...(Object.keys(object(work.agent_context)).length > 0 &&
+      Array.isArray(object(work.task_orchestration_contract).eligible_child_lanes) ? {
+        delegation_context_source: {agent_context: work.agent_context,
+          boundary: {orchestration: object(work.boundary).orchestration}},
+      } : {}),
     ...(request.include_selected_work_basis === true ? {selected_work_basis: selectedWorkLaunchBasis(decision)} : {}),
     ...(request.inspect_plan === true &&
-      (lineage.route === "ready_for_host" || lineage.route === "replan_required")
-      ? {inspection_paths: turnPlanInspectionPaths(decision, lineage.route)} : {})};
+      (route === "ready_for_host" || route === "replan_required")
+      ? {inspection_paths: turnPlanInspectionPaths(decision, route)} : {})};
 }
 
 function completeHostDecision(request: JsonObject): JsonObject {
@@ -2661,7 +2721,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   }
   if (operation === "plan_work") {
     const {decision, projection} = completeHostSource(request);
-    return {goal_id: decision.goal_id ?? null, ...projection};
+    const result = {goal_id: decision.goal_id ?? null, ...projection};
+    return Object.hasOwn(request, "complete_host_request")
+      ? contextProjectionChanges(decision, result, undefined, {}) : result;
   }
   if (operation === "capability_automation_source") {
     // Optional provider participation needs checked identity and capability
@@ -2802,7 +2864,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const historical = !decision && request.historical_route_text !== undefined
       ? requireJsonObject(request.historical_route_text, "historical route text") : undefined;
     // Historical carriers retain their signed envelope and version-pinned proof.
-    return admittedDriverLineage(work, decision, false, historical);
+    return {...(decision ? completeWorkIdentity(decision) : {}), route: turnEnvelopeRoute(work, historical),
+      action_signature: driverActionSignature(work, turnEnvelopeActionSignatureDocument(work), historical)};
   }
   if (operation === "execution_context") {
     // The CLI consumes one checked source for execution, not the historical
@@ -2812,13 +2875,15 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const work = {selected_todo: object(projection.action).selected_todo,
       task_orchestration_contract: projection.task_orchestration_contract};
     const sha256 = completeTaskTextSha256(decision, selectedWorkTodoId(work) ?? "");
-    return {selected_todo: selectedWorkTodo(work), sha256,
+    const result = {selected_todo: selectedWorkTodo(work), sha256,
       selected_work_basis: selectedWorkLaunchBasis(decision, sha256),
       effective_action: decision.effective_action ?? null,
       writeback: object(projection.writeback),
       task_lease_proof: object(object(decision.execution_preparation).lease_proof),
       replan_guard_scoped: Object.hasOwn(projection, "replan_action_packet"),
       replan_action_packet: projection.replan_action_packet ?? null};
+    return Object.hasOwn(request, "complete_host_request")
+      ? contextProjectionChanges(decision, result, undefined, {}) : result;
   }
   if (operation === "captured_todo_text") {
     const envelope = requireJsonObject(request.envelope, "Turn completion envelope");
