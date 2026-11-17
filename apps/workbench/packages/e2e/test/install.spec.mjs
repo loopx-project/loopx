@@ -22,24 +22,26 @@ function fixture(t) {
   const home = join(dir, 'home');
   const state = join(dir, 'state');
   const source = join(dir, 'source');
-  for (const d of [home, state, join(source, 'scripts')]) mkdirSync(d, { recursive: true });
-  for (const f of ['.env.example', 'scripts/setup.mjs', 'scripts/install-service.sh']) copyFileSync(join(repo, f), join(source, f));
-  copyFileSync(join(fakes, 'restart.sh'), join(source, 'scripts/restart.sh'));
+  for (const d of [home, state, join(source, 'apps/workbench/scripts')]) mkdirSync(d, { recursive: true });
+  for (const f of ['.env.example', 'scripts/setup.mjs', 'scripts/install-service.sh']) copyFileSync(join(repo, f), join(source, 'apps/workbench', f));
+  copyFileSync(join(fakes, 'restart.sh'), join(source, 'apps/workbench/scripts/restart.sh'));
+  writeFileSync(join(source, 'apps/workbench/package.json'), '{}');
   git(source, 'init', '-q', '-b', 'main');
   git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '.');
   git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'loochat');
   const env = {
     PATH: `${fakes}:${process.env.PATH}`, HOME: home, USER: process.env.USER ?? 'user', SHELL: '/bin/bash',
-    LOOCHAT_REPO: `file://${source}`, LOOCHAT_FAKE_STATE: state,
+    LOOCHAT_REPO: `file://${source}`, LOOCHAT_FAKE_STATE: state, LOOCHAT_LOOPX_CORE_URL: 'http://127.0.0.1:18792',
   };
   const run = (...args) => spawnSync('bash', [join(repo, 'install.sh'), ...args], { env, encoding: 'utf8' });
   const read = (name) => existsSync(join(state, name)) ? readFileSync(join(state, name), 'utf8') : '';
   const paths = {
-    app: join(home, '.local/share/loochat'),
+    app: join(home, '.local/share/loochat/apps/workbench'),
     env: join(home, '.config/loochat/.env'),
     unit: join(home, '.config/systemd/user/loochat.service'),
   };
-  return { run, read, state, home, paths };
+  const runRef = (ref, ...args) => spawnSync('bash', [join(repo, 'install.sh'), ...args], { env: { ...env, LOOCHAT_REF: ref }, encoding: 'utf8' });
+  return { run, runRef, source, read, state, home, paths };
 }
 
 const token = (file) => readFileSync(file, 'utf8').match(/^LOOCHAT_TOKEN=(.*)$/m)?.[1];
@@ -129,4 +131,45 @@ test('uninstall removes the service and the code, and keeps the settings', (t) =
   assert.equal(existsSync(paths.app), false);
   assert.equal(existsSync(paths.unit), false);
   assert.equal(existsSync(paths.env), true);
+});
+
+
+test('branch updates advance, while tags and full commit refs select exact versions', t => {
+  const { run, runRef, source, paths } = fixture(t);
+  assert.equal(run('--no-service').status, 0);
+  const checkout = join(paths.app, '../..');
+  const head = cwd => spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
+  const first = head(source);
+  git(source, 'tag', 'release-test');
+  writeFileSync(join(source, 'apps/workbench/revision.txt'), 'next');
+  git(source, 'add', '.');
+  git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'next');
+  const second = head(source);
+  assert.notEqual(first, second);
+  assert.equal(run('--no-service').status, 0);
+  assert.equal(head(checkout), second);
+  assert.equal(runRef('release-test', '--no-service').status, 0);
+  assert.equal(head(checkout), first);
+  const pinned = runRef(second, '--no-service');
+  assert.equal(pinned.status, 0, pinned.stderr);
+  assert.equal(head(checkout), second);
+  assert.match(pinned.stdout, new RegExp('Installed Workbench revision: ' + second));
+});
+
+test('local edits and commits stop an update without overwriting the checkout', t => {
+  const { run, paths } = fixture(t);
+  assert.equal(run('--no-service').status, 0);
+  const checkout = join(paths.app, '../..');
+  const file = join(paths.app, 'package.json');
+  writeFileSync(file, '{"local":true}');
+  const dirty = run('--no-service');
+  assert.notEqual(dirty.status, 0);
+  assert.match(dirty.stderr, /local changes/);
+  assert.equal(readFileSync(file, 'utf8'), '{"local":true}');
+  git(checkout, 'add', file);
+  git(checkout, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'local');
+  const committed = run('--no-service');
+  assert.notEqual(committed.status, 0);
+  assert.match(committed.stderr, /local commits/);
+  assert.equal(readFileSync(file, 'utf8'), '{"local":true}');
 });
