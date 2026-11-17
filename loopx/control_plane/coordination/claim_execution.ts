@@ -11,7 +11,9 @@ import {leaseEpoch, leaseVersion, leaseIsActive, normalizeTtl, type LeaseRecord}
 import {sameLeaseWorkspace, type LeaseWorkspace} from "../work_items/task_lease_workspace.ts";
 import {leaseWriteRepository} from "../work_items/task_lease_repository.ts";
 import {evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
-import {decideTaskLeaseLifecycle, materializeTaskLeaseLifecycle} from "../work_items/task_lease_lifecycle_decision.ts";
+import {decideTaskLeaseLifecycle, materializeTaskLeaseLifecycle,
+  releasedTaskLeaseRecord} from "../work_items/task_lease_lifecycle_decision.ts";
+import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 
 export function claimExecutionReference(id: unknown, key: unknown, version: unknown): string | undefined {
   if (id == null) return undefined;
@@ -25,6 +27,47 @@ type ExecutionInput = {goal_id: string; todo_id: string; actor_agent_id: string 
   registered_agents: readonly string[]; now: Date};
 
 export type ClaimWorkspaceObserver = (writeScopes: readonly string[]) => Promise<LeaseWorkspace>;
+
+export const SETTLED_EXECUTION_SWITCH_PROOF_SCHEMA =
+  "todo_settled_execution_switch_proof_v0";
+
+export interface ClaimExecutionSwitchProof extends JsonObject {
+  readonly schema_version: typeof SETTLED_EXECUTION_SWITCH_PROOF_SCHEMA;
+  readonly goal_id: string;
+  readonly source_todo_id: string;
+  readonly target_todo_id: string;
+  readonly agent_id: string;
+  readonly source_lease_idempotency_key: string;
+  readonly source_lease_version: number;
+  readonly source_lease_epoch: number;
+  readonly settlement_identity: JsonObject;
+}
+
+export type ClaimExecutionSwitchVerifier = (input: {
+  readonly goal_id: string;
+  readonly source_todo_id: string;
+  readonly target_todo_id: string;
+  readonly agent_id: string;
+  readonly source_lease_idempotency_key: string;
+  readonly source_lease_version: number;
+  readonly source_lease_epoch: number;
+}) => Promise<ClaimExecutionSwitchProof>;
+
+export interface PreparedClaimExecution {
+  readonly lease: LeaseRecord;
+  readonly changed: boolean;
+  readonly overlapAdvisories?: JsonObject[];
+  readonly releasedSourceLease?: LeaseRecord;
+  readonly switchProof?: ClaimExecutionSwitchProof;
+}
+
+export class ClaimExecutionSwitchRejected extends AuthorityStoreProtocolError {
+  readonly reasonCode: string;
+  constructor(reasonCode: string, message: string) {
+    super(message);
+    this.reasonCode = reasonCode;
+  }
+}
 
 /** A diagnostic distinction, never permission to renew or adopt another grant. */
 export class ClaimExecutionUnavailable extends AuthorityStoreProtocolError {
@@ -99,8 +142,10 @@ export function maintainClaimExecution(head: JsonObject, input: ExecutionInput, 
  * transfer grant). Expired execution is reclaimable without the old process;
  * acquisition still validates scope, eligibility and generation under one CAS. */
 export async function prepareClaimExecution(head: JsonObject,
-  input: ExecutionInput & {operation_id: string; claimed_by: string},
-  observeWorkspace?: ClaimWorkspaceObserver): Promise<{lease: LeaseRecord; changed: boolean; overlapAdvisories?: JsonObject[]}> {
+  input: ExecutionInput & {operation_id: string; claimed_by: string;
+    allow_settled_execution_switch?: boolean},
+  observeWorkspace?: ClaimWorkspaceObserver,
+  verifySettledSwitch?: ClaimExecutionSwitchVerifier): Promise<PreparedClaimExecution> {
   const index = indexCoordinationProjection(head, input.goal_id);
   const facts = canonicalTaskLeaseAcquireFacts(index, input.goal_id, input.todo_id, input.registered_agents, input.now);
   const current = facts.current;
@@ -121,14 +166,101 @@ export async function prepareClaimExecution(head: JsonObject,
       owner: input.claimed_by, operation_id: input.operation_id})}`,
     expected_version: current ? leaseVersion(current) : 0, ttl_seconds: normalizeTtl(null),
     write_scopes: writeScopes, ...(workspace ? {write_workspace: workspace} : {})};
-  const decision = evaluateTaskLeaseAcquireDecision({handoff_mode: String(head.handoff_mode),
+  let decisionOtherLeases = facts.other_leases;
+  let decision = evaluateTaskLeaseAcquireDecision({handoff_mode: String(head.handoff_mode),
     registered_agents: [...input.registered_agents], ...facts,
     // Claim admission has already authorized this assignment. Acquire and the
     // Todo owner change commit together; the old assignment is not a new gate.
     todo: facts.todo === null ? null : {...facts.todo, claimed_by: input.claimed_by}, command});
+  let releasedSourceLease: LeaseRecord | undefined;
+  let switchProof: ClaimExecutionSwitchProof | undefined;
+  if (decision.outcome === "conflict" && decision.code === "write_scope_conflict" &&
+      input.allow_settled_execution_switch === true) {
+    if (!verifySettledSwitch) {
+      throw new ClaimExecutionSwitchRejected(
+        "settled_execution_switch_settlement_unavailable",
+        "Settled execution switch requires authoritative Turn settlement readback",
+      );
+    }
+    if (decision.conflict_indexes.length !== 1) {
+      throw new ClaimExecutionSwitchRejected(
+        "settled_execution_switch_ambiguous_source",
+        "Settled execution switch requires exactly one conflicting source execution",
+      );
+    }
+    const sourceIndex = decision.conflict_indexes[0]!;
+    const sourceFact = facts.other_leases[sourceIndex];
+    if (!sourceFact || sourceFact.owner !== input.claimed_by ||
+        !sourceFact.active || !sourceFact.effective) {
+      throw new ClaimExecutionSwitchRejected(
+        "settled_execution_switch_source_mismatch",
+        "Settled execution switch cannot release another Agent or an ineffective execution",
+      );
+    }
+    const sourceTodo = index.todos.get(sourceFact.todo_id);
+    const targetRepository = normalizeTodoRepository(todo.task_repository);
+    const sourceRepository = normalizeTodoRepository(sourceTodo?.task_repository);
+    if (targetRepository === null || sourceRepository === null ||
+        targetRepository.toLowerCase() !== sourceRepository.toLowerCase()) {
+      throw new ClaimExecutionSwitchRejected(
+        "settled_execution_switch_repository_mismatch",
+        "Settled execution switch requires source and target Todos in the same declared repository",
+      );
+    }
+    const sourceRaw = index.leases.get(sourceFact.todo_id);
+    if (!sourceRaw) {
+      throw new ClaimExecutionSwitchRejected(
+        "settled_execution_switch_source_missing",
+        "Settled execution switch source lease disappeared",
+      );
+    }
+    const sourceLease = canonicalTaskLease(
+      sourceRaw,
+      input.goal_id,
+      sourceFact.todo_id,
+    );
+    switchProof = await verifySettledSwitch({
+      goal_id: input.goal_id,
+      source_todo_id: sourceFact.todo_id,
+      target_todo_id: input.todo_id,
+      agent_id: input.claimed_by,
+      source_lease_idempotency_key: String(sourceLease.idempotency_key),
+      source_lease_version: leaseVersion(sourceLease),
+      source_lease_epoch: leaseEpoch(sourceLease),
+    });
+    if (switchProof.schema_version !== SETTLED_EXECUTION_SWITCH_PROOF_SCHEMA ||
+        switchProof.goal_id !== input.goal_id ||
+        switchProof.source_todo_id !== sourceFact.todo_id ||
+        switchProof.target_todo_id !== input.todo_id ||
+        switchProof.agent_id !== input.claimed_by ||
+        switchProof.source_lease_idempotency_key !== sourceLease.idempotency_key ||
+        switchProof.source_lease_version !== leaseVersion(sourceLease) ||
+        switchProof.source_lease_epoch !== leaseEpoch(sourceLease) ||
+        switchProof.settlement_identity === null ||
+        typeof switchProof.settlement_identity !== "object") {
+      throw new ClaimExecutionSwitchRejected(
+        "settled_execution_switch_proof_mismatch",
+        "Settled execution switch proof does not match the requested handoff",
+      );
+    }
+    const remaining = facts.other_leases.filter((_, index) => index !== sourceIndex);
+    decisionOtherLeases = remaining;
+    decision = evaluateTaskLeaseAcquireDecision({
+      handoff_mode: String(head.handoff_mode),
+      registered_agents: [...input.registered_agents],
+      ...facts,
+      other_leases: remaining,
+      todo: facts.todo === null ? null : {...facts.todo, claimed_by: input.claimed_by},
+      command,
+    });
+    if (decision.outcome === "apply") {
+      releasedSourceLease = releasedTaskLeaseRecord(sourceLease, input.now);
+    }
+  }
   if (decision.outcome !== "apply") throw new AuthorityStoreProtocolError(`Task claim execution rejected: ${decision.code}`);
   const overlapAdvisories = (decision.overlap_advisory_indexes ?? []).map(index => ({
-    todo_id: facts.other_leases[index].todo_id, owner: facts.other_leases[index].owner ?? null,
-    write_scopes: facts.other_leases[index].write_scopes, reason: "independent_worktree_integration_overlap"}));
-  return {lease: materializeTaskLeaseAcquire(input, command, decision, input.now), changed: true, overlapAdvisories};
+    todo_id: decisionOtherLeases[index].todo_id, owner: decisionOtherLeases[index].owner ?? null,
+    write_scopes: decisionOtherLeases[index].write_scopes, reason: "independent_worktree_integration_overlap"}));
+  return {lease: materializeTaskLeaseAcquire(input, command, decision, input.now),
+    changed: true, overlapAdvisories, releasedSourceLease, switchProof};
 }

@@ -686,6 +686,8 @@ def handle_todo_command(
                 claim_only=True,
                 manage_execution=(args.agent_id is not None and args.agent_id == args.claimed_by
                     and args.task_lease_idempotency_key is None and args.task_lease_expected_version is None),
+                allow_settled_execution_switch=(args.agent_id is not None and args.agent_id == args.claimed_by
+                    and args.task_lease_idempotency_key is None and args.task_lease_expected_version is None),
                 claim_operation_id=args.claim_operation_id,
                 task_lease_idempotency_key=args.task_lease_idempotency_key,
                 task_lease_expected_version=args.task_lease_expected_version,
