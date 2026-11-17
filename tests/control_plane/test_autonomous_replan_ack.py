@@ -401,3 +401,49 @@ def test_same_second_candidate_keeps_the_todo_bound_writeback_order() -> None:
         runs=[sparse_run],
     )
     assert "writeback_recorded_at" not in blank
+
+
+def test_same_turn_receipt_upgrade_keeps_writeback_after_original_admission() -> None:
+    """A later same-Turn upgrade must not become the admission log index.
+
+    The compact ACK stamp is the admission second. Its refresh writeback is
+    after the original quota_should_run and before the upgrade. Passing the
+    upgrade's recorded_at, which is what the latest receipt exposes, still
+    has to order that writeback after the first bound receipt.
+    """
+
+    turn = "guided-start:later"
+    guard_turn = "guided-start:original"
+    binding = {
+        "replan_obligation_id": LONG_CHAIN_OBLIGATION_ID,
+        "settlement_effect_id": "effect-original",
+    }
+    admission = {
+        "event_kind": "quota_should_run", "event_id": "evt-admission",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "run_id": guard_turn,
+        "recorded_at": "2026-08-01T00:00:01.500000Z", "details": binding,
+    }
+    upgrade = {
+        "event_kind": "quota_should_run", "event_id": "evt-upgrade",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "run_id": guard_turn,
+        "recorded_at": "2026-08-01T00:00:05.000000Z",
+        "causality": {"source_event_id": "evt-admission", "caused_by": "evt-admission"},
+        "details": {**binding, "settlement_receipt_revision": "work_admission"},
+    }
+    todo_event = {
+        "event_kind": "refresh_state", "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "run_id": turn, "recorded_at": "2026-08-01T00:00:01.900000Z",
+        "details": {
+            "autonomous_replan_recorded": True,
+            "replan_obligation_id": LONG_CHAIN_OBLIGATION_ID,
+        },
+    }
+    candidate = {"turn_instance_id": turn, "generated_at": "2026-08-01T00:00:01Z"}
+    attach_historical_ack_writeback_order(
+        [candidate], [admission, todo_event, upgrade],
+        goal_id=GOAL_ID, agent_id=AGENT_ID, obligation_id=LONG_CHAIN_OBLIGATION_ID,
+        guard_recorded_at=upgrade["recorded_at"], guard_turn_instance_id=guard_turn,
+    )
+    assert candidate["writeback_recorded_at"] == todo_event["recorded_at"]
+    assert candidate["writeback_follows_admission"] is True
+    assert candidate["writeback_obligation_id"] == LONG_CHAIN_OBLIGATION_ID

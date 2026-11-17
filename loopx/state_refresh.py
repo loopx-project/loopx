@@ -1138,6 +1138,8 @@ def refresh_state_run(
                 review_pages=((agent_vision or {}).get("stride_decision") or {}).get(
                     "explore_review", {}).get("result_pages"))
 
+        from .control_plane.quota.heartbeat_receipt import heartbeat_admission_recorded_at
+
         replan_qualification = qualify_refresh_replan_writeback(
             replan_explore_reader=read_explore_context,
             replan_source_route={"registry": str(registry_path), "runtime_root": str(runtime_root)},
@@ -1155,7 +1157,18 @@ def refresh_state_run(
             settlement_guard_scoped=(
                 settlement_replan_guard.get("scope") == "turn_guard"
             ),
-            receipt_bound_guard_recorded_at=(settlement_readback.heartbeat_receipt or {}).get("recorded_at") if settlement_readback else None,
+            receipt_bound_guard_recorded_at=heartbeat_admission_recorded_at(
+                runtime_root,
+                goal_id=safe_goal_id,
+                agent_id=normalized_agent_id or None,
+                turn_instance_id=(
+                    settlement_identity.turn_instance_id if settlement_identity else None
+                ),
+                fallback=(
+                    (settlement_readback.heartbeat_receipt or {}).get("recorded_at")
+                    if settlement_readback else None
+                ),
+            ),
             receipt_bound_guard_turn_instance_id=(settlement_identity.turn_instance_id if settlement_identity else None),
             receipt_bound_replan_review=settlement_replan_guard.get("selected_review_source"),
             settlement_guard_semantic_replan_obligation_id=(

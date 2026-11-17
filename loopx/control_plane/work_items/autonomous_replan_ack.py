@@ -276,9 +276,28 @@ def _admission_event_index(
     events: list[dict[str, Any]], *, goal_id: str, agent_id: str,
     turn_instance_id: str, recorded_at: str,
 ) -> int | None:
-    if not turn_instance_id or not recorded_at:
+    """Log position of the Turn's original bound admission.
+
+    ``recorded_at`` alone can name a later same-Turn upgrade, or match more
+    than one row. The first bound receipt for this Turn and settlement
+    identity is the admission. Its index is that event, not another row that
+    happens to share a timestamp.
+    """
+
+    if not turn_instance_id:
         return None
-    found: int | None = None
+    from ..quota.heartbeat_receipt import first_bound_heartbeat_receipt
+
+    found = first_bound_heartbeat_receipt(
+        events,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        turn_instance_id=turn_instance_id,
+    )
+    if found is not None:
+        return found[0]
+    if not recorded_at:
+        return None
     for index, event in enumerate(events):
         if (
             event.get("event_kind") == "quota_should_run"
@@ -287,8 +306,8 @@ def _admission_event_index(
             and event.get("run_id") == turn_instance_id
             and event.get("recorded_at") == recorded_at
         ):
-            found = index
-    return found
+            return index
+    return None
 
 
 def _binding_text(value: Any) -> str:
